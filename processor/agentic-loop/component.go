@@ -1176,12 +1176,25 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
-		c.handleLoopFailure(ctx, loopID, entity, "handler_error", err)
+		c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
 		return
 	}
 
 	c.recordResponseMetrics(response, result, entity)
 	c.persistHandlerResult(ctx, result)
+}
+
+// failureReasonForHandlerError classifies a HandleModelResponse error into
+// the loop-terminal failure reason handleLoopFailure publishes. gh#529: every
+// iteration-budget-exhaustion detection path must agree on the reason
+// "max_iterations" — matched via errors.Is against the typed sentinel
+// ErrMaxIterationsReached, never by string-matching err.Error(). All other
+// handler errors keep the pre-existing generic "handler_error" reason.
+func failureReasonForHandlerError(err error) string {
+	if errors.Is(err, ErrMaxIterationsReached) {
+		return "max_iterations"
+	}
+	return "handler_error"
 }
 
 // extractAgentResponse parses an agent response message and finds its loop.

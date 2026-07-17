@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -16,6 +17,18 @@ import (
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/types"
 )
+
+// ErrMaxIterationsReached is the typed sentinel returned by
+// HandleModelResponse when a loop's iteration counter has already met or
+// exceeded its configured budget when the next model response arrives
+// (gh#529). Component.handleResponseMessage matches it via errors.Is —
+// never string matching — and maps it to the uniform loop-terminal
+// failure reason "max_iterations", the same reason handleToolsComplete's
+// tool-drain path already publishes when the budget is exhausted while
+// tools are still in flight. Before this sentinel, the model-response
+// path fell through to the generic "handler_error" reason, forcing
+// reactive rules to string-match error text to detect budget exhaustion.
+var ErrMaxIterationsReached = errors.New("max_iterations")
 
 // TaskMessage is an alias for agentic.TaskMessage for backward compatibility.
 // This allows existing code to use agenticloop.TaskMessage without modification.
@@ -676,13 +689,22 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	var loopID string
 	var err error
 
+	// Effective iteration budget: a spawn-supplied task.MaxIterations may
+	// only narrow the component-configured ceiling, never widen it —
+	// min(spawn, component). Nil task.MaxIterations uses the component
+	// default unchanged. See agentic.TaskMessage.MaxIterations (gh#528).
+	effectiveMaxIterations := h.config.MaxIterations
+	if task.MaxIterations != nil {
+		effectiveMaxIterations = min(*task.MaxIterations, h.config.MaxIterations)
+	}
+
 	if task.LoopID != "" {
-		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, h.config.MaxIterations)
+		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)
 		if err != nil {
 			return HandlerResult{}, err
 		}
 	} else {
-		loopID, err = h.loopManager.CreateLoop(task.TaskID, task.Role, task.Model, h.config.MaxIterations)
+		loopID, err = h.loopManager.CreateLoop(task.TaskID, task.Role, task.Model, effectiveMaxIterations)
 		if err != nil {
 			return HandlerResult{}, err
 		}
@@ -890,7 +912,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	// Check if max iterations reached
 	if entity.Iterations >= entity.MaxIterations {
 		return HandlerResult{}, errs.WrapFatal(
-			fmt.Errorf("max iterations (%d) reached", entity.MaxIterations),
+			fmt.Errorf("%w: loop %s at %d/%d iterations", ErrMaxIterationsReached, loopID, entity.Iterations, entity.MaxIterations),
 			"agentic-loop",
 			"HandleModelResponse",
 			"check max iterations",

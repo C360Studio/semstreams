@@ -3,6 +3,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -114,6 +115,147 @@ func TestHandleTask_CreatesLoop(t *testing.T) {
 	// Verify trajectory step was recorded
 	if len(result.TrajectorySteps) == 0 {
 		t.Error("HandleTask() should record trajectory step")
+	}
+}
+
+// intPtr returns a pointer to v — test helper for TaskMessage.MaxIterations,
+// which distinguishes "unset" (nil, use component default) from an explicit
+// spawn-supplied budget and therefore needs a pointer, not a bare int.
+func intPtr(v int) *int {
+	return &v
+}
+
+// TestHandleTask_MaxIterations_EffectiveBudget covers the gh#528 clamp
+// contract at loop-creation time: a spawn-supplied task.MaxIterations may
+// only narrow the component's configured ceiling (agenticloop.Config.
+// MaxIterations), never widen it. Table-driven over nil (component
+// default), a narrowing spawn value, and a spawn value above the ceiling
+// (must clamp down, not pass through).
+func TestHandleTask_MaxIterations_EffectiveBudget(t *testing.T) {
+	tests := []struct {
+		name              string
+		componentCeiling  int
+		spawnMaxIter      *int
+		wantEffectiveIter int
+	}{
+		{
+			name:              "nil spawn value uses component default",
+			componentCeiling:  20,
+			spawnMaxIter:      nil,
+			wantEffectiveIter: 20,
+		},
+		{
+			name:              "spawn narrows the budget below the ceiling",
+			componentCeiling:  20,
+			spawnMaxIter:      intPtr(2),
+			wantEffectiveIter: 2,
+		},
+		{
+			name:              "spawn cannot widen past the operator ceiling",
+			componentCeiling:  5,
+			spawnMaxIter:      intPtr(50),
+			wantEffectiveIter: 5,
+		},
+		{
+			name:              "spawn equal to the ceiling is a no-op clamp",
+			componentCeiling:  10,
+			spawnMaxIter:      intPtr(10),
+			wantEffectiveIter: 10,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			config := createTestConfig()
+			config.MaxIterations = tt.componentCeiling
+			handler := agenticloop.NewMessageHandler(config)
+
+			ctx := context.Background()
+			result, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+				TaskID:        "task-" + tt.name,
+				Role:          "general",
+				Model:         "qwen-32b",
+				Prompt:        "test the budget clamp",
+				MaxIterations: tt.spawnMaxIter,
+			})
+			if err != nil {
+				t.Fatalf("HandleTask() error = %v", err)
+			}
+
+			entity, err := handler.GetLoop(result.LoopID)
+			if err != nil {
+				t.Fatalf("GetLoop() error = %v", err)
+			}
+			if entity.MaxIterations != tt.wantEffectiveIter {
+				t.Errorf("effective MaxIterations = %d, want %d", entity.MaxIterations, tt.wantEffectiveIter)
+			}
+		})
+	}
+}
+
+// TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel drives the
+// production HandleModelResponse guard at the exact iteration cap (gh#529
+// scenario: "model-response guard at the cap"). The returned error must
+// satisfy errors.Is(err, agenticloop.ErrMaxIterationsReached) — the typed
+// sentinel Component.handleResponseMessage maps to the uniform failure
+// reason "max_iterations", instead of string-matching error text.
+func TestHandleModelResponse_MaxIterationsGuard_ReturnsTypedSentinel(t *testing.T) {
+	config := createTestConfig()
+	config.MaxIterations = 1
+	handler := agenticloop.NewMessageHandler(config)
+
+	ctx := context.Background()
+	taskResult, err := handler.HandleTask(ctx, agenticloop.TaskMessage{
+		TaskID: "task-cap",
+		Role:   "general",
+		Model:  "qwen-32b",
+		Prompt: "test",
+	})
+	if err != nil {
+		t.Fatalf("HandleTask() error = %v", err)
+	}
+	loopID := taskResult.LoopID
+
+	// Iteration 1: tool call + result brings entity.Iterations to the
+	// configured cap (1) via handleToolsComplete's IncrementIteration.
+	if _, err := handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: "req-001",
+		Status:    "tool_call",
+		Message: agentic.ChatMessage{
+			Role:      "assistant",
+			ToolCalls: []agentic.ToolCall{{ID: "call-001", Name: "tool1"}},
+		},
+	}); err != nil {
+		t.Fatalf("HandleModelResponse() iteration 1 error = %v", err)
+	}
+	if _, err := handler.HandleToolResult(ctx, loopID, agentic.ToolResult{
+		CallID:  "call-001",
+		Content: "Result 1",
+	}); err != nil {
+		t.Fatalf("HandleToolResult() iteration 1 error = %v", err)
+	}
+
+	entity, err := handler.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop() error = %v", err)
+	}
+	if entity.Iterations != entity.MaxIterations {
+		t.Fatalf("setup invariant broken: iterations=%d maxIterations=%d, want equal (loop at cap)", entity.Iterations, entity.MaxIterations)
+	}
+
+	// The next model response must trip the guard and return the typed
+	// sentinel — not a plain/generic error a caller would have to
+	// string-match.
+	_, err = handler.HandleModelResponse(ctx, loopID, agentic.AgentResponse{
+		RequestID: "req-002",
+		Status:    "complete",
+		Message:   agentic.ChatMessage{Role: "assistant", Content: "done"},
+	})
+	if err == nil {
+		t.Fatal("HandleModelResponse() at cap should return an error")
+	}
+	if !errors.Is(err, agenticloop.ErrMaxIterationsReached) {
+		t.Errorf("HandleModelResponse() error = %v, want errors.Is match against ErrMaxIterationsReached", err)
 	}
 }
 
