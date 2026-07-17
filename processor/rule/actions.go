@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -339,6 +340,30 @@ type Action struct {
 	// crash on nil; use the helper effectiveMaxIterations to resolve
 	// correctly.
 	MaxIterations *int `json:"max_iterations,omitempty"`
+
+	// LoopMaxIterations is the SPAWNED LOOP's iteration budget (gh#528) —
+	// entirely distinct from MaxIterations above, which caps how many
+	// times THIS ACTION may fire per rule+entity match-cycle. Do not
+	// confuse the two: MaxIterations bounds the rule engine's repeated
+	// firing of this action; LoopMaxIterations bounds the agentic-loop's
+	// iteration count inside the agent it spawns.
+	//
+	// A string (not *int) because it supports variable substitution —
+	// authors can write a literal ("3") or a triple reference
+	// (e.g. "$entity.triple.task.spec.budget") so a human-approved or
+	// upstream-computed budget can bound the spawned loop. Empty leaves
+	// TaskMessage.MaxIterations unset (nil), so the spawned loop falls
+	// back to the agentic-loop component's configured default — current
+	// behaviour, unchanged for every rule that doesn't opt in.
+	//
+	// After substitution the value MUST parse as a positive integer
+	// (>= 1); a substituted value that doesn't (e.g. "unbounded", or an
+	// unresolved template) fails the publish_agent action with a
+	// classified error and does not publish a task — never a silent
+	// skip. The agentic-loop clamps the effective budget to
+	// min(LoopMaxIterations, component ceiling): a spawn may narrow the
+	// operator's configured ceiling, never widen past it.
+	LoopMaxIterations string `json:"loop_max_iterations,omitempty" description:"Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."`
 
 	// Reason is the human-readable verdict message for deny AND approve
 	// actions, and the failure cause for lifecycle_fail. For deny it travels
@@ -1336,6 +1361,37 @@ func stampPerSpawnLLMKnobs(task *agentic.TaskMessage, action Action) {
 	}
 }
 
+// stampLoopMaxIterations resolves action.LoopMaxIterations (a
+// substitutable string — literal or a $entity.triple.* reference, e.g. a
+// human-approved task.spec.<i>.budget) and stamps it onto
+// TaskMessage.MaxIterations as the spawned loop's per-spawn iteration
+// budget (gh#528). Deliberately distinct from Action.MaxIterations, the
+// rule engine's own action-firing cap — see the field doc on Action.
+//
+// Empty action.LoopMaxIterations is a no-op: task.MaxIterations stays
+// nil, so the spawned loop falls back to the agentic-loop component's
+// configured default (current behaviour, unchanged for every rule that
+// doesn't opt in).
+//
+// A non-empty value that does not resolve to a positive integer after
+// substitution (an authoring error — a typo, an unresolved template, or
+// a triple carrying non-numeric text) returns a loud error instead of
+// silently skipping the field or falling back to the default budget;
+// the caller aborts the publish entirely (gh#529 loudness discipline,
+// matching stampRelatedLoops's role-key validation).
+func stampLoopMaxIterations(task *agentic.TaskMessage, action Action, ec *ExecutionContext, iterVarName, iterVarValue string) error {
+	if action.LoopMaxIterations == "" {
+		return nil
+	}
+	resolved := strings.TrimSpace(ec.SubstituteVariablesWithIterVar(action.LoopMaxIterations, iterVarName, iterVarValue))
+	n, convErr := strconv.Atoi(resolved)
+	if convErr != nil || n < 1 {
+		return fmt.Errorf("loop_max_iterations %q resolved to %q, which is not a positive integer", action.LoopMaxIterations, resolved)
+	}
+	task.MaxIterations = &n
+	return nil
+}
+
 // diagnoseForEachResolutionFailure returns a short human-readable
 // reason string describing why ResolveListValue returned ok=false on
 // the given reference. Three possibilities the resolver can fail on:
@@ -1635,6 +1691,14 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// Per-spawn read-only execution policy (ADR-067, gh#445). Same
 	// framework-owned Metadata path; dispatch propagates it authoritatively.
 	stampFilesystemPolicy(&task, action)
+
+	// Per-spawn loop iteration budget (gh#528). Must run — and fail loud on
+	// a bad substitution — before task.Validate() below, which also
+	// enforces the >= 1 floor as defense-in-depth for any other caller of
+	// TaskMessage.Validate.
+	if err := stampLoopMaxIterations(&task, action, ec, iterVarName, iterVarValue); err != nil {
+		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted loop_max_iterations")
+	}
 	if err := task.Validate(); err != nil {
 		return errs.WrapInvalid(err, "RuleActionExecutor", "publishAgentOnce", "validate substituted task")
 	}
