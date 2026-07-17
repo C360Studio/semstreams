@@ -98,7 +98,7 @@ func TestGetEntityRejectsPredicatePoisonWithoutCachingPartialState(t *testing.T)
 	require.NoError(t, qc.ensureBuckets(ctx))
 
 	entityID := "acme.ops.robotics.gcs.drone.001"
-	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	_, err = qc.entityBucket.Put(ctx, entityID, poisoned)
 	require.NoError(t, err)
 
@@ -134,7 +134,7 @@ func TestDirectQueryClient_LivePoisonInvalidatesCachedViews(t *testing.T) {
 	require.True(t, cached)
 
 	poisonID := "acme.ops.robotics.gcs.drone.002"
-	_, err = qc.entityBucket.Put(ctx, poisonID, []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`))
+	_, err = qc.entityBucket.Put(ctx, poisonID, []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`)) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return qc.entityStatePoison.Load() != nil }, time.Second, 10*time.Millisecond)
 

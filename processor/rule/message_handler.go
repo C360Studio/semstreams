@@ -10,6 +10,7 @@ import (
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	entitytypes "github.com/c360studio/semstreams/pkg/types"
 )
 
 // snapshotRules copies rp.rules, rp.ruleDefinitions, and rp.matchCounters
@@ -107,6 +108,11 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 
 	// Process through each rule
 	for ruleName, ruleInstance := range rules {
+		ruleDef, hasDefinition := ruleDefs[ruleName]
+		if hasDefinition && ruleDef.Entity.Pattern != "" {
+			continue
+		}
+
 		// Check if rule is interested in this subject
 		if !rp.matchesRuleSubject(ruleInstance, subject) {
 			continue
@@ -135,7 +141,6 @@ func (rp *Processor) evaluateRulesForMessage(ctx context.Context, subject string
 		}
 
 		// Get rule definition for stateful evaluation from the local snapshot.
-		ruleDef, hasDefinition := ruleDefs[ruleName]
 		hasStatefulActions := hasDefinition && hasStatefulRuleActions(ruleDef)
 
 		// Handle stateful evaluation if rule has OnEnter/OnExit/WhileTrue actions
@@ -244,46 +249,62 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 	if !rp.graphRuleEvaluationReady() {
 		return
 	}
-	// Skip evaluation for deleted entities
-	if snap.State == nil {
-		rp.logger.Debug("Skipping rule evaluation for deleted entity", "entity_key", entityKey)
-		return
-	}
-
 	atomic.AddInt64(&rp.messagesEvaluated, 1)
 
 	// Snapshot all three maps so hot-reload writes don't race with iteration.
 	rules, ruleDefs, counters := rp.snapshotRules()
+	entityID := entityKey
+	if snap.State != nil {
+		entityID = snap.State.ID
+	}
 
 	for ruleName, ruleInstance := range rules {
+		ruleDef, hasDefinition := ruleDefs[ruleName]
+		if !hasDefinition || ruleDef.Entity.Pattern == "" {
+			continue
+		}
+		matches, err := entitytypes.MatchEntityIDPattern(ruleDef.Entity.Pattern, entityID)
+		if err != nil {
+			rp.logger.Error("Validated rule entity pattern failed matching",
+				"rule_name", ruleName,
+				"entity_id", entityID,
+				"error", err)
+			continue
+		}
+		if !matches {
+			continue
+		}
+
 		// Per-rule feedback loop prevention: if this rule generated the
 		// revision that the watcher just delivered, skip the rule (the
 		// revision is consumed one-time so subsequent non-self writes still
 		// fire it). Other rules continue to evaluate.
-		if snap.Revision > 0 && rp.shouldSkipRule(ruleName, snap.State.ID, snap.Revision) {
+		if snap.Revision > 0 && rp.shouldSkipRule(ruleName, entityID, snap.Revision) {
 			rp.logger.Debug("Skipping self-generated update for rule",
 				"rule_name", ruleName,
-				"entity_id", snap.State.ID,
+				"entity_id", entityID,
 				"revision", snap.Revision)
 			continue
 		}
 
 		rp.logger.Debug("Evaluating rule against EntityState",
 			"rule_name", ruleName,
-			"entity_id", snap.State.ID,
+			"entity_id", entityID,
 			"action", snap.Action,
 			"bootstrap", bootstrap)
 
 		start := time.Now()
 		var triggered bool
 
-		entityEval, ok := ruleInstance.(EntityStateEvaluator)
-		if !ok {
-			rp.logger.Debug("Rule doesn't support EntityState evaluation, skipping",
-				"rule_name", ruleName)
-			continue
+		if snap.State != nil {
+			entityEval, ok := ruleInstance.(EntityStateEvaluator)
+			if !ok {
+				rp.logger.Debug("Rule doesn't support EntityState evaluation, skipping",
+					"rule_name", ruleName)
+				continue
+			}
+			triggered = entityEval.EvaluateEntityState(snap.State)
 		}
-		triggered = entityEval.EvaluateEntityState(snap.State)
 
 		evaluationDuration := time.Since(start)
 
@@ -297,12 +318,9 @@ func (rp *Processor) evaluateRulesForEntityState(ctx context.Context, entityKey 
 			}
 		}
 
-		ruleDef, hasDefinition := ruleDefs[ruleName]
 		hasStatefulActions := hasDefinition && hasStatefulRuleActions(ruleDef)
 
 		if hasStatefulActions && rp.statefulEvaluator != nil {
-			entityID := snap.State.ID
-
 			// entityState is passed for When-clause access; revision/bootstrap
 			// propagate the KV-watch context so SourceRevision persists and
 			// OnRecovery can fire on restart.

@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule"
@@ -33,14 +34,10 @@ const (
 )
 
 func init() {
-	for _, predicate := range []string{
-		temperaturePredicate,
-		pressurePredicate,
-		humidityPredicate,
-		vibrationPredicate,
-	} {
-		vocabulary.Register(predicate)
-	}
+	vocabulary.Register(temperaturePredicate)
+	vocabulary.Register(pressurePredicate)
+	vocabulary.Register(humidityPredicate)
+	vocabulary.Register(vibrationPredicate)
 }
 
 // TestEntityWatcher_RuleTriggerDebouncing verifies that rapid entity updates
@@ -91,13 +88,15 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 		Logic:   "and",
 		Enabled: true,
 		Entity: rule.EntityConfig{
-			Pattern: "test.debounce.>",
+			Pattern:      "test.debounce.*.*.*.*",
+			WatchBuckets: []string{gtypes.BucketEntityStates},
 		},
 	}
 
 	// Create processor with debouncing (100ms default)
 	config := rule.DefaultConfig()
-	config.EntityWatchPatterns = []string{"test.debounce.>"}
+	config.PackID = "entity-watcher-debounce-test"
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"test.debounce.*.*.*.*"}}
 	config.DebounceDelayMs = 100 * time.Millisecond
 	config.InlineRules = []rule.Definition{ruleDef}
 
@@ -315,7 +314,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.temperature.>",
+				Pattern:      "c360.logistics.environmental.sensor.temperature.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -333,7 +333,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.pressure.>",
+				Pattern:      "c360.logistics.environmental.sensor.pressure.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -351,7 +352,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.humidity.>",
+				Pattern:      "c360.logistics.environmental.sensor.humidity.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 		{
@@ -369,7 +371,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 			Logic:   "and",
 			Enabled: true,
 			Entity: rule.EntityConfig{
-				Pattern: "c360.logistics.environmental.sensor.vibration.>",
+				Pattern:      "c360.logistics.environmental.sensor.vibration.*",
+				WatchBuckets: []string{gtypes.BucketEntityStates},
 			},
 		},
 	}
@@ -377,7 +380,8 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 	// Create processor with DebounceDelayMs=0 for immediate processing
 	// This bypasses the coalescing set and processes each entity update immediately
 	config := rule.DefaultConfig()
-	config.EntityWatchPatterns = []string{"c360.logistics.environmental.sensor.>"}
+	config.PackID = "entity-watcher-bounded-test"
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.logistics.environmental.sensor.*.*"}}
 	config.DebounceDelayMs = 0 // Immediate processing - no batching
 	config.InlineRules = rules
 
@@ -431,13 +435,13 @@ func TestEntityWatcher_BoundedEvaluations(t *testing.T) {
 		var state *gtypes.EntityState
 		switch sensorType {
 		case "temperature":
-			state = createEntityStateWithTriple(entityID, temperaturePredicate, 75.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "sensor", "measurement", "temperature"), Object: 75.0 + float64(i%10)})
 		case "pressure":
-			state = createEntityStateWithTriple(entityID, pressurePredicate, 105.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "sensor", "measurement", "pressure"), Object: 105.0 + float64(i%10)})
 		case "humidity":
-			state = createEntityStateWithTriple(entityID, humidityPredicate, 85.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "sensor", "measurement", "humidity"), Object: 85.0 + float64(i%10)})
 		case "vibration":
-			state = createEntityStateWithTriple(entityID, vibrationPredicate, 55.0+float64(i%10))
+			state = createEntityStateWithTriple(entityID, message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "sensor", "measurement", "vibration"), Object: 55.0 + float64(i%10)})
 		}
 
 		stateJSON, err := json.Marshal(state)
@@ -522,16 +526,10 @@ func createEntityID(sensorType string, index int) string {
 }
 
 // createEntityStateWithTriple creates an EntityState with a single triple
-func createEntityStateWithTriple(entityID, predicate string, value any) *gtypes.EntityState {
+func createEntityStateWithTriple(entityID string, triple message.Triple) *gtypes.EntityState {
 	return &gtypes.EntityState{
-		ID: entityID,
-		Triples: []message.Triple{
-			{
-				Subject:   entityID,
-				Predicate: predicate,
-				Object:    value,
-			},
-		},
+		ID:        entityID,
+		Triples:   []message.Triple{triple},
 		Version:   1,
 		UpdatedAt: time.Now(),
 	}

@@ -34,7 +34,7 @@ func (w *recordingTodoWriter) RemoveByPredicate(_ context.Context, subject, pred
 	if w.removeErr != nil {
 		return w.removeErr
 	}
-	w.removes = append(w.removes, removeOp{subject: subject, predicate: predicate})
+	w.removes = append(w.removes, removeOp{subject: subject, predicate: predicate}) // predicate-audit:unrelated {"column":70,"surface":"go-field:predicate","value":"","basis":"reviewed:mock-captures-remove-by-predicate-argument"}
 	return nil
 }
 

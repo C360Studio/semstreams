@@ -77,13 +77,14 @@
 //	  "id": "my-rule",
 //	  "type": "my_rule",
 //	  "entity": {
-//	    "pattern": "c360.*.robotics.drone.>",
+//	    "pattern": "c360.*.robotics.*.drone.*",
 //	    "watch_buckets": ["ENTITY_STATES"]
 //	  }
 //	}
 //
-// The processor watches these buckets using the KV watch pattern and
-// converts entity state updates into messages for rule evaluation.
+// The processor watches ENTITY_STATES using canonical six-position KV
+// patterns and evaluates declared entity rules directly against EntityState.
+// An omitted entity.pattern declares a message-path rule instead.
 //
 // # Runtime Configuration
 //

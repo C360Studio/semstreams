@@ -237,7 +237,7 @@ func TestHTTPRequestExecutor_EmitObservation_HappyPath(t *testing.T) {
 		t.Fatalf("triples published = %d, want 8 (7 URL-side + 1 loop back-link)", got)
 	}
 
-	byPredicate := map[string]any{}
+	facts := map[string]any{}
 	loopBacklinkCount := 0
 	for _, tr := range pub.triples {
 		if tr.Source != "agent-http-request" {
@@ -247,7 +247,7 @@ func TestHTTPRequestExecutor_EmitObservation_HappyPath(t *testing.T) {
 			loopBacklinkCount++
 			continue
 		}
-		byPredicate[tr.Predicate] = tr.Object
+		facts[tr.Predicate] = tr.Object
 	}
 	if loopBacklinkCount != 1 {
 		t.Errorf("LoopFetchedWeb back-link count = %d, want 1", loopBacklinkCount)
@@ -261,7 +261,7 @@ func TestHTTPRequestExecutor_EmitObservation_HappyPath(t *testing.T) {
 		agvocab.WebTruncated:   false,
 	}
 	for pred, want := range checks {
-		if got := byPredicate[pred]; got != want {
+		if got := facts[pred]; got != want {
 			t.Errorf("predicate %q = %v, want %v", pred, got, want)
 		}
 	}

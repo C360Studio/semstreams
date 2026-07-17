@@ -110,7 +110,7 @@ func TestIntegration_IngestGuard_DurableSurvivesRestart(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 	require.NotNil(t, c.ingestGuardBucket, "Start must provision the durable guard bucket")
 
-	work := ingestWork{entityID: "c360.test.guard.entity.001", stream: "ENTITY", seq: 5}
+	work := ingestWork{entityID: "c360.test.guard.entity.state.001", stream: "ENTITY", seq: 5}
 
 	// Apply-time stamp: durable first, then in-memory (as processIngest does).
 	require.NoError(t, c.ingestGuardStampDurable(ctx, work))

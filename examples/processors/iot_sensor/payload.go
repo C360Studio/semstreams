@@ -30,6 +30,7 @@ var measurementPredicateByUnit = map[string]string{
 	"fahrenheit": PredicateMeasurementFahrenheit,
 	"percent":    PredicateMeasurementPercent,
 	"hpa":        PredicateMeasurementHPA,
+	"psi":        PredicateMeasurementPSI,
 }
 
 func buildSensorReading(fields map[string]any) (any, error) {
@@ -315,7 +316,7 @@ func (s *SensorReading) Validate() error {
 		return fmt.Errorf("unit is required")
 	}
 	if _, ok := measurementPredicateByUnit[s.Unit]; !ok {
-		return fmt.Errorf("unsupported unit %q; supported units are celsius, fahrenheit, percent, hpa", s.Unit)
+		return fmt.Errorf("unsupported unit %q; supported units are celsius, fahrenheit, percent, hpa, psi", s.Unit)
 	}
 	if s.OrgID == "" {
 		return fmt.Errorf("org_id is required")

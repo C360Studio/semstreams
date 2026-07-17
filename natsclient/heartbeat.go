@@ -53,6 +53,14 @@ func ConsumeWithHeartbeat(
 			}
 
 		case err := <-done:
+			// Cancellation owns the delivery outcome even when work observes the
+			// same cancellation and reports at nearly the same instant. Without
+			// this check select can choose done first and spend the normal 30s
+			// work-error NAK path instead of the one shutdown/restart NAK below.
+			if ctx.Err() != nil {
+				_ = msg.NakWithDelay(5 * time.Second)
+				return ctx.Err()
+			}
 			if err != nil {
 				_ = msg.NakWithDelay(30 * time.Second)
 				return err

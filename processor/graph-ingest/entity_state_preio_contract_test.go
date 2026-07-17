@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -19,9 +20,25 @@ func mutationRequestJSON(t *testing.T, value any) []byte {
 	return data
 }
 
+// entity-id-audit:classify intentional-malformed "bad" line=29 column=46 surface=go-triple-subject entity_id_invalid:arity malformed triple subject pre-I/O rejection fixture
+// entity-id-audit:classify intentional-malformed "bad" line=32 column=11 surface=go-triple-reference entity_id_invalid:arity malformed triple reference pre-I/O rejection fixture
+
 func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 	validID := "acme.ops.test.system.widget.001"
-	validPredicate := "test.state.value"
+	validPredicate := semantictest.Predicate(t, "test", "state", "value")
+	badSubjectTriple := message.Triple{Subject: "bad", Predicate: semantictest.Predicate(t, "test", "state", "value")}
+	badReferenceTriple := message.Triple{
+		Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"),
+		Object: "bad", Datatype: message.EntityReferenceDatatype,
+	}
+	badBatch := []message.Triple{
+		{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value")},
+		{Subject: "bad", Predicate: semantictest.Predicate(t, "test", "state", "value")},
+	}
+	emptySubjectEntity := &graph.EntityState{
+		ID:      validID,
+		Triples: []message.Triple{{Subject: "", Predicate: semantictest.Predicate(t, "test", "state", "value")}},
+	}
 
 	tests := []struct {
 		name string
@@ -30,27 +47,19 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 		{
 			name: "add triple malformed subject",
 			run: func(component *Component) error {
-				return component.AddTriple(context.Background(), message.Triple{
-					Subject: "bad", Predicate: validPredicate,
-				})
+				return component.AddTriple(context.Background(), badSubjectTriple)
 			},
 		},
 		{
 			name: "add triple malformed explicit reference",
 			run: func(component *Component) error {
-				return component.AddTriple(context.Background(), message.Triple{
-					Subject: validID, Predicate: validPredicate,
-					Object: "bad", Datatype: message.EntityReferenceDatatype,
-				})
+				return component.AddTriple(context.Background(), badReferenceTriple)
 			},
 		},
 		{
 			name: "add triples rejects whole batch",
 			run: func(component *Component) error {
-				_, _, err := component.AddTriples(context.Background(), []message.Triple{
-					{Subject: validID, Predicate: validPredicate},
-					{Subject: "bad", Predicate: validPredicate},
-				})
+				_, _, err := component.AddTriples(context.Background(), badBatch)
 				return err
 			},
 		},
@@ -63,10 +72,7 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 		{
 			name: "direct create empty subject",
 			run: func(component *Component) error {
-				return component.CreateEntity(context.Background(), &graph.EntityState{
-					ID:      validID,
-					Triples: []message.Triple{{Subject: "", Predicate: validPredicate}},
-				})
+				return component.CreateEntity(context.Background(), emptySubjectEntity)
 			},
 		},
 	}
@@ -110,7 +116,28 @@ func TestEntityDeleteHandlerValidatesBeforeExistenceRead(t *testing.T) {
 
 func TestEntityMutationHandlersValidateCompleteCandidateBeforeKVIO(t *testing.T) {
 	validID := "acme.ops.test.system.widget.001"
-	validPredicate := "test.state.value"
+	createRequest := graph.CreateEntityRequest{
+		Entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{
+			Subject: "", Predicate: semantictest.Predicate(t, "test", "state", "value"),
+		}}},
+	}
+	createWithTriplesRequest := graph.CreateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: validID},
+		Triples: []message.Triple{{
+			Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: 42, Datatype: message.EntityReferenceDatatype,
+		}},
+	}
+	updateRequest := graph.UpdateEntityRequest{
+		Entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{
+			Subject: "bad", Predicate: semantictest.Predicate(t, "test", "state", "value"),
+		}}},
+	}
+	updateWithTriplesRequest := graph.UpdateEntityWithTriplesRequest{
+		Entity: &graph.EntityState{ID: validID},
+		AddTriples: []message.Triple{{
+			Subject: "", Predicate: semantictest.Predicate(t, "test", "state", "value"),
+		}},
+	}
 
 	tests := []struct {
 		name string
@@ -119,37 +146,25 @@ func TestEntityMutationHandlersValidateCompleteCandidateBeforeKVIO(t *testing.T)
 		{
 			name: "create",
 			run: func(component *Component) ([]byte, error) {
-				return component.handleEntityCreate(context.Background(), mutationRequestJSON(t, graph.CreateEntityRequest{
-					Entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "", Predicate: validPredicate}}},
-				}))
+				return component.handleEntityCreate(context.Background(), mutationRequestJSON(t, createRequest))
 			},
 		},
 		{
 			name: "create with triples explicit reference",
 			run: func(component *Component) ([]byte, error) {
-				return component.handleEntityCreateWithTriples(context.Background(), mutationRequestJSON(t, graph.CreateEntityWithTriplesRequest{
-					Entity: &graph.EntityState{ID: validID},
-					Triples: []message.Triple{{
-						Subject: validID, Predicate: validPredicate, Object: 42, Datatype: message.EntityReferenceDatatype,
-					}},
-				}))
+				return component.handleEntityCreateWithTriples(context.Background(), mutationRequestJSON(t, createWithTriplesRequest))
 			},
 		},
 		{
 			name: "update",
 			run: func(component *Component) ([]byte, error) {
-				return component.handleEntityUpdate(context.Background(), mutationRequestJSON(t, graph.UpdateEntityRequest{
-					Entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: validPredicate}}},
-				}))
+				return component.handleEntityUpdate(context.Background(), mutationRequestJSON(t, updateRequest))
 			},
 		},
 		{
 			name: "update with triples",
 			run: func(component *Component) ([]byte, error) {
-				return component.handleEntityUpdateWithTriples(context.Background(), mutationRequestJSON(t, graph.UpdateEntityWithTriplesRequest{
-					Entity:     &graph.EntityState{ID: validID},
-					AddTriples: []message.Triple{{Subject: "", Predicate: validPredicate}},
-				}))
+				return component.handleEntityUpdateWithTriples(context.Background(), mutationRequestJSON(t, updateWithTriplesRequest))
 			},
 		},
 	}

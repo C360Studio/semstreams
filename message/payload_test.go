@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -89,7 +90,7 @@ func (p *SamplePayload) Timestamp() time.Time {
 
 func TestSamplePayloadSchema(t *testing.T) {
 	payload := &SamplePayload{
-		ID:    "test-123",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "schema"),
 		Value: "test value",
 	}
 
@@ -115,7 +116,7 @@ func TestSamplePayloadValidate(t *testing.T) {
 		{
 			name: "valid payload",
 			payload: &SamplePayload{
-				ID:    "test-123",
+				ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "valid"),
 				Value: "valid",
 			},
 			wantErr: false,
@@ -131,7 +132,7 @@ func TestSamplePayloadValidate(t *testing.T) {
 		{
 			name: "invalid latitude",
 			payload: &SamplePayload{
-				ID: "test-123",
+				ID: semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "latitude"),
 				Loc: &LocationData{
 					Lat: 91,
 					Lon: 0,
@@ -143,7 +144,7 @@ func TestSamplePayloadValidate(t *testing.T) {
 		{
 			name: "invalid longitude",
 			payload: &SamplePayload{
-				ID: "test-123",
+				ID: semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "longitude"),
 				Loc: &LocationData{
 					Lat: 0,
 					Lon: 181,
@@ -155,7 +156,7 @@ func TestSamplePayloadValidate(t *testing.T) {
 		{
 			name: "valid with location",
 			payload: &SamplePayload{
-				ID: "test-123",
+				ID: semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "located"),
 				Loc: &LocationData{
 					Lat: 25.5,
 					Lon: -80.1,
@@ -180,7 +181,7 @@ func TestSamplePayloadValidate(t *testing.T) {
 
 func TestSamplePayloadMarshalUnmarshal(t *testing.T) {
 	original := &SamplePayload{
-		ID:    "test-456",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "roundtrip"),
 		Value: "test data",
 		Data: map[string]any{
 			"key1": "value1",
@@ -223,7 +224,7 @@ func TestSamplePayloadMarshalUnmarshal(t *testing.T) {
 func TestSamplePayloadBehavioralInterfaces(t *testing.T) {
 	now := time.Now()
 	payload := &SamplePayload{
-		ID:    "entity-789",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "behavior"),
 		Value: "behavioral test",
 		Loc: &LocationData{
 			Lat: 51.5074,
@@ -233,8 +234,8 @@ func TestSamplePayloadBehavioralInterfaces(t *testing.T) {
 	}
 
 	// Test Identifiable
-	if id := payload.EntityID(); id != "entity-789" {
-		t.Errorf("EntityID() = %v, want entity-789", id)
+	if id := payload.EntityID(); id != "test.semstreams.message.payload.sample.behavior" {
+		t.Errorf("EntityID() = %v, want canonical behavior fixture", id)
 	}
 	expectedType := EntityType{Domain: "test", Type: "test_entity"}
 	if dt := payload.EntityType(); dt != expectedType {
@@ -260,11 +261,11 @@ func TestSamplePayloadInterfaceCompliance(_ *testing.T) {
 
 func TestSamplePayloadBinaryFormat(t *testing.T) {
 	payload := &SamplePayload{
-		ID:    "binary-test",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "binary"),
 		Value: "test",
 		Data: map[string]any{
 			"nested": map[string]any{
-				"field": "value",
+				"field": "value", // predicate-audit:unrelated {"column":14,"surface":"go-field:field","value":"value","basis":"reviewed:opaque-payload-field"}
 			},
 		},
 	}
@@ -296,7 +297,7 @@ func TestSamplePayloadBinaryFormat(t *testing.T) {
 
 func TestSamplePayloadNilLocationHandling(t *testing.T) {
 	payload := &SamplePayload{
-		ID:    "no-location",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "no-location"),
 		Value: "test",
 		// Location is nil
 	}
@@ -315,7 +316,7 @@ func TestSamplePayloadNilLocationHandling(t *testing.T) {
 
 func TestSamplePayloadDeterministic(t *testing.T) {
 	payload := &SamplePayload{
-		ID:    "deterministic",
+		ID:    semantictest.EntityID(t, "test", "semstreams", "message", "payload", "sample", "deterministic"),
 		Value: "same",
 	}
 

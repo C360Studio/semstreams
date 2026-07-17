@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -36,6 +37,8 @@ type testStorablePayload struct {
 	triples []message.Triple
 	ref     *message.StorageReference
 }
+
+// entity-id-audit:classify intentional-malformed "malformed" line=146 column=12 surface=go-field:EntityState.ID entity_id_invalid:arity malformed fact-lane state rejection fixture
 
 func (p *testStorablePayload) EntityID() string                      { return p.id }
 func (p *testStorablePayload) Triples() []message.Triple             { return p.triples }
@@ -199,7 +202,9 @@ func TestStorageRefExtraction_ConsumerLiftsRefOntoEntity(t *testing.T) {
 func TestStorageRefExtraction_NonStorablePayloadLeavesRefNil(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	// testGraphablePayload (indexing_profile_test.go) is Graphable but NOT Storable.
-	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{userTriple("test.fixture.value", "v")}}
+	payload := &testGraphablePayload{id: flParentID, triples: []message.Triple{{
+		Subject: flParentID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"), Object: "v", Timestamp: time.Now(),
+	}}}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
 
 	entity, err := comp.extractEntityFromMessage(msg)

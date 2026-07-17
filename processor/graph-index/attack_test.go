@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
@@ -32,6 +33,8 @@ func TestAttack_NilContext(t *testing.T) {
 		_ = comp.UpdateOutgoingIndex(nil, "entity", "target", "predicate")
 	})
 }
+
+// entity-id-audit:classify intentional-malformed "测试.プラットフォーム.тест.系统.类型.实例" line=361 column=14 surface=go-assignment:entityID entity_id_invalid:first_byte Unicode rejection fixture
 
 func TestAttack_EmptyEntityID(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
@@ -205,7 +208,7 @@ func TestAttack_CancelledContextDoesNotHang(t *testing.T) {
 func TestAttack_ConcurrentReadWriteSameEntity(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
-	entityID := "contested-entity"
+	entityID := "test.graph.index.attack.entity.contested"
 
 	const numWriters = 50
 	const numReaders = 50
@@ -408,7 +411,6 @@ func TestAttack_MultipleEntitiesSamePredicate(t *testing.T) {
 	defer graphIndex.Stop(5 * time.Second)
 
 	// Create 3 entities with the same predicate
-	predicate := "robotics.status.armed"
 	entities := []string{
 		"c360.platform.robotics.mav1.drone.001",
 		"c360.platform.robotics.mav1.drone.002",
@@ -421,7 +423,7 @@ func TestAttack_MultipleEntitiesSamePredicate(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   entityID,
-					Predicate: predicate,
+					Predicate: semantictest.Predicate(t, "robotics", "status", "armed"),
 					Object:    true,
 					Source:    "attack-test",
 					Timestamp: time.Now(),
@@ -443,7 +445,7 @@ func TestAttack_MultipleEntitiesSamePredicate(t *testing.T) {
 	// the raw bucket — see ADR-065). Composite per-(predicate,entity) keys
 	// mean there is no longer a "last writer wins" collision: every entity
 	// gets its own key, so all 3 must be present, not just one.
-	request := map[string]string{"predicate": predicate}
+	request := map[string]string{"predicate": semantictest.Predicate(t, "robotics", "status", "armed")}
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 

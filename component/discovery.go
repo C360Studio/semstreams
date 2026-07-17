@@ -56,12 +56,18 @@ type PropertySchema struct {
 	Enum        []string                  `json:"enum,omitempty"`        // Valid string values
 	Minimum     *int                      `json:"minimum,omitempty"`     // For numeric types
 	Maximum     *int                      `json:"maximum,omitempty"`     // For numeric types
+	MinLength   *int                      `json:"minLength,omitempty"`   // Minimum string length
+	MaxLength   *int                      `json:"maxLength,omitempty"`   // Maximum string length
+	Pattern     string                    `json:"pattern,omitempty"`     // Regular expression for string values
 	Category    string                    `json:"category,omitempty"`    // "basic" or "advanced" for UI organization
 	PortFields  map[string]PortFieldInfo  `json:"portFields,omitempty"`  // Metadata for port fields (when type is "ports")
 	CacheFields map[string]CacheFieldInfo `json:"cacheFields,omitempty"` // Metadata for cache fields (when type is "cache")
 	Properties  map[string]PropertySchema `json:"properties,omitempty"`  // Nested properties for object types
-	Required    []string                  `json:"required,omitempty"`    // Required nested fields for object types
-	Items       *PropertySchema           `json:"items,omitempty"`       // Item schema for array types
+	// AdditionalProperties controls whether object fields outside Properties
+	// are accepted. nil preserves JSON Schema's permissive default.
+	AdditionalProperties *bool           `json:"additionalProperties,omitempty"`
+	Required             []string        `json:"required,omitempty"` // Required nested fields for object types
+	Items                *PropertySchema `json:"items,omitempty"`    // Item schema for array types
 }
 
 // HealthStatus describes the current health state of a component

@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,12 @@ import (
 // in question.
 func TestPredicateIndex_LoadScale(t *testing.T) {
 	const hotPredicateMembers = 5000
-	const otherPredicates = 20
+	const otherTagCount = 20
+	validatedTags := make([]string, otherTagCount)
+	for i := range validatedTags {
+		predicate := semantictest.Predicate(t, "code", "artifact", fmt.Sprintf("tag%d", i))
+		validatedTags[i] = predicate
+	}
 
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
@@ -84,19 +90,19 @@ func TestPredicateIndex_LoadScale(t *testing.T) {
 			require.NoError(t, graphIndex.UpdatePredicateIndex(ctx, entityID, "code.artifact.type"))
 		}(i)
 	}
-	for i := 0; i < otherPredicates; i++ {
+	for i := 0; i < otherTagCount; i++ {
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			entityID := fmt.Sprintf("c360.load.test.corpus.other.o%d", i)
-			predicate := fmt.Sprintf("code.artifact.tag%d", i)
-			require.NoError(t, graphIndex.UpdatePredicateIndex(ctx, entityID, predicate))
+			tag := validatedTags[i]
+			require.NoError(t, graphIndex.UpdatePredicateIndex(ctx, entityID, tag))
 		}(i)
 	}
 	wg.Wait()
-	t.Logf("seeded %d composite keys across %d predicates in %v", hotPredicateMembers+otherPredicates, otherPredicates+1, time.Since(seedStart))
+	t.Logf("seeded %d composite keys across %d predicates in %v", hotPredicateMembers+otherTagCount, otherTagCount+1, time.Since(seedStart))
 
 	// This is the call under test: the unfiltered predicateList path.
 	readStart := time.Now()
@@ -107,9 +113,9 @@ func TestPredicateIndex_LoadScale(t *testing.T) {
 	var resp graph.PredicateListQueryResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
 
-	t.Logf("handleQueryPredicateListNATS over %d composite keys took %v", hotPredicateMembers+otherPredicates, readElapsed)
+	t.Logf("handleQueryPredicateListNATS over %d composite keys took %v", hotPredicateMembers+otherTagCount, readElapsed)
 
-	require.Len(t, resp.Data.Predicates, otherPredicates+1, "must report every predicate, not silently truncate")
+	require.Len(t, resp.Data.Predicates, otherTagCount+1, "must report every predicate, not silently truncate")
 	for _, p := range resp.Data.Predicates {
 		if p.Predicate == "code.artifact.type" {
 			require.Equal(t, hotPredicateMembers, p.EntityCount, "hot predicate's count must reflect all its members, not just a sample")

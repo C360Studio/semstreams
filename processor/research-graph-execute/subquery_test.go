@@ -113,8 +113,8 @@ func TestMaterializeForDecompose_EntityTypeAxisAnchorsOnCandidates(t *testing.T)
 	intent := &research.Intent{Topic: "x"}
 	args := research.DecomposeArgs{Axes: []string{"entity_type"}, Focus: "drones", Scope: research.DecomposeScopeMedium}
 	candidates := []research.Candidate{
-		{EntityID: "id-1", Tier: "0", Source: "x"},
-		{EntityID: "id-2", Tier: "0", Source: "x"},
+		{EntityID: "test.research.graph.execute.entity.id-1", Tier: "0", Source: "x"},
+		{EntityID: "test.research.graph.execute.entity.id-2", Tier: "0", Source: "x"},
 	}
 	queries := materializeForDecompose(intent, args, candidates)
 	// Should produce: BM25 (always) + entity_state (entity_type axis with candidates).
@@ -245,8 +245,8 @@ func TestMaterializeForDecompose_ScopeCapsCandidateAnchoring(t *testing.T) {
 
 func TestResolveSeedRefByCandidateIndex(t *testing.T) {
 	candidates := []research.Candidate{
-		{EntityID: "id-0", Tier: "0", Source: "x"},
-		{EntityID: "id-1", Tier: "0", Source: "x"},
+		{EntityID: "test.research.graph.execute.entity.id-0", Tier: "0", Source: "x"},
+		{EntityID: "test.research.graph.execute.entity.id-1", Tier: "0", Source: "x"},
 	}
 	cases := []struct {
 		name    string
@@ -254,8 +254,8 @@ func TestResolveSeedRefByCandidateIndex(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"valid 0", "0", "id-0", false},
-		{"valid 1", "1", "id-1", false},
+		{"valid 0", "0", "test.research.graph.execute.entity.id-0", false},
+		{"valid 1", "1", "test.research.graph.execute.entity.id-1", false},
 		{"out of bounds", "5", "", true},
 		{"negative", "-1", "", true},
 		{"non-int", "abc", "", true},

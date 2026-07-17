@@ -342,14 +342,16 @@ lifecycle facts:
 - Transient or high-volume — represent how work happened, not what now
   exists or what phase a named entity is in
 
-Rules can watch multiple buckets via the `entity_watch_buckets`
-config:
+The rule processor's entity evaluator does not decode these buckets. Its
+`entity_watch_buckets` contract accepts only canonical six-position patterns
+for `ENTITY_STATES`. Reacting to an operational record requires a separately
+designed typed adapter owned by that record's component; it must define the
+decoder, evaluator, recovery behavior, and retention contract explicitly.
 
 ```json
 {
   "entity_watch_buckets": {
-    "ENTITY_STATES": ["telemetry.>"],
-    "AGENT_LOOPS": ["COMPLETE_*", "research.*"]
+    "ENTITY_STATES": ["acme.*.robotics.*.drone.*"]
   }
 }
 ```

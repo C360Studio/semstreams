@@ -46,9 +46,14 @@ relationship between two functions is a triple like any other fact:
 
 ```text
 Subject: acme.ops.semsource.ast.function.main
-Predicate: calls
+Predicate: source.code.calls
 Object: acme.ops.semsource.ast.function.helper
+Datatype: @id
 ```
+
+The `@id` datatype is what makes the object an entity reference. An untyped string is a scalar value even when it
+looks like an entity ID. Every federated root ID, triple subject, and `@id` object must satisfy the exact six-part,
+256-byte canonical entity contract before it can enter authoritative graph state.
 
 This means federated entities land in the graph and participate in queries, community detection,
 and inference exactly like locally-produced entities.
@@ -157,8 +162,8 @@ Both patterns require zero code changes — they are purely flow configuration d
 
 An external source sends `EventPayload` messages over WebSocket. Each payload must contain:
 
-1. **Entity ID** — valid 6-part identifier
-2. **Triples** — `[]message.Triple` with the entity's facts and relationships
+1. **Entity ID** — canonical six-part identifier, at most 256 bytes
+2. **Triples** — `[]message.Triple` with canonical subjects and explicit `@id` relationship objects
 3. **Valid schema** — the payload must be registered via `federation.RegisterPayload(domain)`
 
 The receiving SemStreams instance does not need to know the source's internal schema or data

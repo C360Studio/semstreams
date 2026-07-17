@@ -285,7 +285,7 @@ func TestDispatcher_EnforceModePartialPublishFailure(t *testing.T) {
 	t.Parallel()
 
 	// Custom publisher that fails on the second call only.
-	pub := &selectiveFailPublisher{failCallIDPredicate: func(callID string) bool {
+	pub := &selectiveFailPublisher{failCallIDMatch: func(callID string) bool {
 		return callID == "c2"
 	}}
 	d := NewGovernanceDispatcher(
@@ -621,9 +621,9 @@ func TestToolCallGovernanceConfigIsEnforcing(t *testing.T) {
 // "agent.toolcall.proposed.<loop>" — the publisher parses the payload
 // to extract call_id and decide whether to fail.
 type selectiveFailPublisher struct {
-	mu                  sync.Mutex
-	published           []publishedVerdict
-	failCallIDPredicate func(callID string) bool
+	mu              sync.Mutex
+	published       []publishedVerdict
+	failCallIDMatch func(callID string) bool
 }
 
 func (m *selectiveFailPublisher) PublishToStream(_ context.Context, subject string, data []byte) error {
@@ -638,7 +638,7 @@ func (m *selectiveFailPublisher) PublishToStream(_ context.Context, subject stri
 			Data ProposedToolCallPayload `json:"data"`
 		}
 		if err := json.Unmarshal(envelope.Payload, &generic); err == nil {
-			if m.failCallIDPredicate != nil && m.failCallIDPredicate(generic.Data.CallID) {
+			if m.failCallIDMatch != nil && m.failCallIDMatch(generic.Data.CallID) {
 				return errors.New("selective publish failure")
 			}
 		}

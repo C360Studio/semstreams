@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	agenticmemory "github.com/c360studio/semstreams/processor/agentic-memory"
 )
@@ -361,15 +362,14 @@ func TestHydrator_WithMockGraphClient(t *testing.T) {
 }
 
 func TestLLMExtractor_WithMockLLMClient(t *testing.T) {
+	fact := message.Triple{
+		Subject:   semantictest.EntityID(t, "test", "agentic-memory", "extractor", "mock", "entity", "001"),
+		Predicate: semantictest.Predicate(t, "test", "memory", "property"),
+		Object:    "value",
+	}
 	mockLLM := &MockLLMClient{
 		ExtractFactsFunc: func(ctx context.Context, model string, content string, maxTokens int) ([]message.Triple, error) {
-			return []message.Triple{
-				{
-					Subject:   "test.entity.1",
-					Predicate: "hasProperty",
-					Object:    "value",
-				},
-			}, nil
+			return []message.Triple{fact}, nil
 		},
 	}
 

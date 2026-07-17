@@ -68,14 +68,14 @@ func TestBuildSpawnIdentityTriples_RequiredFields(t *testing.T) {
 		}
 	}
 
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 	required := []string{
 		agvocab.LoopRole,
 		agvocab.LoopTask,
 		agvocab.LoopDescription,
 	}
 	for _, pred := range required {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("missing required predicate: %s", pred)
 		}
 	}
@@ -101,10 +101,10 @@ func TestBuildSpawnIdentityTriples_StampsParent(t *testing.T) {
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if !predicates[agvocab.LoopParent] {
-		t.Fatalf("expected agent.loop.parent triple; got predicates: %v", predicates)
+	if !facts[agvocab.LoopParent] {
+		t.Fatalf("expected agent.loop.parent triple; got predicates: %v", facts)
 	}
 
 	parent, ok := objectFor(triples, agvocab.LoopParent).(string)
@@ -133,7 +133,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	optional := []string{
 		agvocab.LoopParent,
@@ -142,7 +142,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsPresentWhenSet(t *testing.T) {
 		agvocab.LoopUser,
 	}
 	for _, pred := range optional {
-		if !predicates[pred] {
+		if !facts[pred] {
 			t.Errorf("expected predicate %s to be present, but it was omitted", pred)
 		}
 	}
@@ -167,7 +167,7 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) 
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
 	optional := []string{
 		agvocab.LoopParent,
@@ -177,16 +177,16 @@ func TestBuildSpawnIdentityTriples_OptionalFieldsOmittedWhenEmpty(t *testing.T) 
 		agvocab.LoopDescription,
 	}
 	for _, pred := range optional {
-		if predicates[pred] {
+		if facts[pred] {
 			t.Errorf("expected predicate %s to be omitted when empty, but it was present", pred)
 		}
 	}
 
 	// Role + task survive.
-	if !predicates[agvocab.LoopRole] {
+	if !facts[agvocab.LoopRole] {
 		t.Errorf("expected %s to be present", agvocab.LoopRole)
 	}
-	if !predicates[agvocab.LoopTask] {
+	if !facts[agvocab.LoopTask] {
 		t.Errorf("expected %s to be present", agvocab.LoopTask)
 	}
 }
@@ -304,10 +304,10 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if !predicates[agvocab.LoopRun] {
-		t.Fatalf("expected agent.run triple; got predicates: %v", predicates)
+	if !facts[agvocab.LoopRun] {
+		t.Fatalf("expected agent.run triple; got predicates: %v", facts)
 	}
 
 	runID, ok := objectFor(triples, agvocab.LoopRun).(string)
@@ -320,8 +320,8 @@ func TestBuildSpawnIdentityTriples_StampsRunID(t *testing.T) {
 
 	// ADR-053 follow-up: agent.run.entity_id is the FULL 6-part chain entity ID,
 	// the rule-addressable upsert subject.
-	if !predicates[agvocab.LoopRunEntityID] {
-		t.Fatalf("expected agent.run.entity_id triple; got predicates: %v", predicates)
+	if !facts[agvocab.LoopRunEntityID] {
+		t.Fatalf("expected agent.run.entity_id triple; got predicates: %v", facts)
 	}
 	runEntityID, ok := objectFor(triples, agvocab.LoopRunEntityID).(string)
 	if !ok {
@@ -344,12 +344,12 @@ func TestBuildSpawnIdentityTriples_OmitsRunIDWhenEmpty(t *testing.T) {
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if predicates[agvocab.LoopRun] {
+	if facts[agvocab.LoopRun] {
 		t.Errorf("expected agent.run triple to be omitted when RunID is empty")
 	}
-	if predicates[agvocab.LoopRunEntityID] {
+	if facts[agvocab.LoopRunEntityID] {
 		t.Errorf("expected agent.run.entity_id triple to be omitted when RunID is empty")
 	}
 }
@@ -401,10 +401,10 @@ func TestBuildSpawnIdentityTriples_StampsReplyTo(t *testing.T) {
 	}
 
 	triples := buildSpawnTriples(loopEntityID, task, "acme", "ops")
-	predicates := predicateSet(triples)
+	facts := predicateSet(triples)
 
-	if !predicates[agvocab.LoopReplyTo] {
-		t.Fatalf("expected agent.loop.reply_to triple; got predicates: %v", predicates)
+	if !facts[agvocab.LoopReplyTo] {
+		t.Fatalf("expected agent.loop.reply_to triple; got predicates: %v", facts)
 	}
 
 	replyTo, ok := objectFor(triples, agvocab.LoopReplyTo).(string)

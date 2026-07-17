@@ -23,7 +23,7 @@ func TestPredicatePoisonLatchesEmbeddingResetAndBlocksQueries(t *testing.T) {
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		lifecycleReporter: component.NewNoOpLifecycleReporter(),
 	}
-	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	c.queueEntityForEmbedding(context.Background(), "acme.ops.robotics.gcs.drone.001", 7, poisoned)
 
 	status := c.computeEmbeddingStatus(context.Background())
@@ -47,7 +47,7 @@ func TestWatchAllBootstrapPoisonIsNeverQueryVisibleInEitherOrder(t *testing.T) {
 	t.Parallel()
 
 	valid := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`)
-	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`)
+	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 
 	for _, tc := range []struct {
 		name          string

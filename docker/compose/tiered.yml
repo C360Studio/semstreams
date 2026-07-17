@@ -285,11 +285,15 @@ services:
   # PROFILE: semantic - Only started when --profile semantic is specified
   semstreams-ml:
     # Per-target image tag — see docker/compose/e2e.yml for rationale.
-    image: c360studio/semstreams:e2e-production
+    # semantic.json includes the bundled example/domain processors used by the
+    # tiered fixture corpus, so this profile must run the e2e binary just like
+    # the structural profile. The production binary intentionally does not
+    # register those example components.
+    image: c360studio/semstreams:e2e-test
     build:
       context: ../..
       dockerfile: docker/Dockerfile
-      target: production
+      target: e2e
     container_name: semstreams-tiered-app-ml
     profiles:
       - semantic

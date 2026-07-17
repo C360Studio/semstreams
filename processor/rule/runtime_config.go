@@ -12,35 +12,27 @@ import (
 
 // ApplyConfigUpdate applies validated configuration changes
 func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
+	var (
+		buckets    map[string][]string
+		hasBuckets bool
+	)
+	if bucketsVal, ok := changes["entity_watch_buckets"]; ok {
+		var err error
+		buckets, err = parseEntityWatchBuckets(bucketsVal)
+		if err != nil {
+			return errs.WrapInvalid(err, "RuleProcessor", "ApplyConfigUpdate", "parse entity watch buckets")
+		}
+		hasBuckets = true
+	}
+
 	rp.mu.Lock()
-	defer rp.mu.Unlock()
 
 	// Apply rule configuration changes
 	if rulesConfig, ok := changes["rules"]; ok {
 		rulesMap := rulesConfig.(map[string]any) // Validated in ValidateConfigUpdate
 		if err := rp.applyRuleChanges(rulesMap); err != nil {
+			rp.mu.Unlock()
 			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "apply rule changes")
-		}
-	}
-
-	// Apply entity_watch_patterns changes dynamically (backwards compatibility)
-	if patternsVal, ok := changes["entity_watch_patterns"]; ok {
-		patterns := rp.convertToStringSlice(patternsVal)
-
-		// Dynamically update watchers - no restart required
-		// Use the locked version since we already hold the lock
-		if err := rp.updateWatchPatternsLocked(patterns); err != nil {
-			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "update watch patterns")
-		}
-	}
-
-	// Apply entity_watch_buckets changes dynamically (multi-bucket support)
-	if bucketsVal, ok := changes["entity_watch_buckets"]; ok {
-		buckets := rp.convertToBucketPatterns(bucketsVal)
-
-		// Dynamically update bucket watchers - no restart required
-		if err := rp.updateWatchBucketsLocked(buckets); err != nil {
-			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "update watch buckets")
 		}
 	}
 
@@ -49,6 +41,14 @@ func (rp *Processor) ApplyConfigUpdate(changes map[string]any) error {
 		integration := integrationVal.(bool) // Validated in ValidateConfigUpdate
 		rp.config.EnableGraphIntegration = integration
 		rp.logger.Info("Updated graph integration setting", "enabled", integration)
+	}
+	rp.mu.Unlock()
+
+	// Watch preparation performs NATS I/O outside the processor config mutex.
+	if hasBuckets {
+		if err := rp.UpdateWatchBuckets(buckets); err != nil {
+			return errs.Wrap(err, "RuleProcessor", "ApplyConfigUpdate", "update watch buckets")
+		}
 	}
 
 	return nil
@@ -284,28 +284,11 @@ func (rp *Processor) GetRuntimeConfig() map[string]any {
 		"buffer_window_size":       rp.config.BufferWindowSize,
 		"alert_cooldown_period":    rp.config.AlertCooldownPeriod,
 		"enable_graph_integration": rp.config.EnableGraphIntegration,
-		"entity_watch_patterns":    rp.config.EntityWatchPatterns,
 		"entity_watch_buckets":     rp.config.EntityWatchBuckets,
 		"rules":                    rulesConfig,
 		"rule_count":               len(rp.rules),
 		"is_running":               rp.isSubscribed,
 	}
-}
-
-// convertToBucketPatterns converts a generic value to map[string][]string
-func (rp *Processor) convertToBucketPatterns(val any) map[string][]string {
-	result := make(map[string][]string)
-
-	switch v := val.(type) {
-	case map[string]any:
-		for bucket, patterns := range v {
-			result[bucket] = rp.convertToStringSlice(patterns)
-		}
-	case map[string][]string:
-		return v
-	}
-
-	return result
 }
 
 // extractConditions converts expression conditions to configuration format

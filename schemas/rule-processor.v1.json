@@ -31,16 +31,21 @@
     },
     "entity_watch_buckets": {
       "type": "object",
-      "description": "Map of bucket names to watch patterns for multi-bucket observability",
-      "category": "advanced"
-    },
-    "entity_watch_patterns": {
-      "type": "array",
-      "description": "NATS KV patterns to watch for entity changes (e.g. 'telemetry.robotics.\u003e')",
-      "items": {
-        "type": "string"
+      "description": "ENTITY_STATES watch patterns for the rule processor's typed EntityState evaluator.",
+      "category": "advanced",
+      "properties": {
+        "ENTITY_STATES": {
+          "type": "array",
+          "description": "Exact six-position entity ID patterns.",
+          "items": {
+            "type": "string",
+            "description": "Exact six-position entity ID pattern; each position is a canonical literal segment or *.",
+            "maxLength": 256,
+            "pattern": "^(?:\\*|[A-Za-z0-9][A-Za-z0-9_-]*)(?:\\.(?:\\*|[A-Za-z0-9][A-Za-z0-9_-]*)){5}$"
+          }
+        }
       },
-      "category": "advanced"
+      "additionalProperties": false
     },
     "inline_rules": {
       "type": "array",
@@ -294,16 +299,25 @@
             "properties": {
               "pattern": {
                 "type": "string",
-                "description": "pattern"
+                "description": "Exact six-position entity ID pattern; each position is a canonical literal segment or *.",
+                "maxLength": 256,
+                "pattern": "^(?:\\*|[A-Za-z0-9][A-Za-z0-9_-]*)(?:\\.(?:\\*|[A-Za-z0-9][A-Za-z0-9_-]*)){5}$"
               },
               "watch_buckets": {
                 "type": "array",
-                "description": "watch_buckets",
+                "description": "Typed state buckets consumed by this EntityState evaluator; only ENTITY_STATES is supported.",
                 "items": {
-                  "type": "string"
+                  "type": "string",
+                  "enum": [
+                    "ENTITY_STATES"
+                  ]
                 }
               }
-            }
+            },
+            "additionalProperties": false,
+            "required": [
+              "pattern"
+            ]
           },
           "fire_every_n_events": {
             "type": "integer",
@@ -1155,7 +1169,7 @@
     },
     "ports": {
       "type": "string",
-      "description": "Port configuration for inputs (KV watch: ENTITY_STATES PREDICATE_INDEX) and outputs (NATS: control commands)",
+      "description": "Port configuration for ENTITY_STATES and message inputs plus action outputs",
       "category": "basic"
     },
     "projection_contracts": {

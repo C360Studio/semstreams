@@ -4,10 +4,6 @@
   "name": "Extract Decision Patterns",
   "description": "Pattern-match common decision language in agent responses. Creates triples for decisions like 'decided to use', 'chose', 'will implement'. Supplements LLM-assisted extraction.",
   "enabled": true,
-  "entity": {
-    "pattern": "loop.agentic.task.*",
-    "watch_buckets": ["AGENT_LOOPS"]
-  },
   "conditions": [
     {
       "field": "$message.response.content",

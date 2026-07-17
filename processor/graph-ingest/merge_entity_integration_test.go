@@ -97,7 +97,7 @@ func TestIntegration_MergeEntity_SecondWriteMergesTriples(t *testing.T) {
 	// Both triples must be present — pre-fix this assertion failed
 	// because the second MergeEntity (then CreateEntity → Put) wiped
 	// mission.state.phase.
-	predicates := make(map[string]any, len(stored.Triples))
+	predicates := make(map[string]any, len(stored.Triples)) // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed output map populated from persisted triples"}
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = tr.Object
 	}
@@ -222,7 +222,7 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 	stored, _, err := c.fetchEntityState(ctx, entityID)
 	require.NoError(t, err)
 	require.NotNil(t, stored)
-	predicates := make(map[string]any, len(stored.Triples))
+	predicates := make(map[string]any, len(stored.Triples)) // predicate-audit:unrelated {"column":16,"surface":"go-assignment:predicates","value":"","basis":"reviewed output map populated from persisted triples"}
 	for _, tr := range stored.Triples {
 		predicates[tr.Predicate] = tr.Object
 	}

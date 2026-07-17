@@ -116,10 +116,10 @@ func TestTrajectoryStepEntity_ToolCall_Failed(t *testing.T) {
 		Timestamp:     time.Date(2026, 3, 17, 14, 0, 0, 0, time.UTC),
 		StepType:      "tool_call",
 		ToolName:      "graph_query",
-		ToolArguments: map[string]any{"entity_id": "missing"},
+		ToolArguments: map[string]any{"entity_id": "test.agentic.trajectory.tool.entity.missing"},
 		Duration:      42,
 		ToolStatus:    "failed",
-		ErrorMessage:  "entity not found: missing",
+		ErrorMessage:  "entity not found: test.agentic.trajectory.tool.entity.missing",
 		ErrorCategory: string(agentic.ToolErrorNotFound),
 	}
 
@@ -135,7 +135,7 @@ func TestTrajectoryStepEntity_ToolCall_Failed(t *testing.T) {
 		triples := entity.Triples()
 
 		assert.Equal(t, "failed", objectFor(triples, agvocab.StepToolStatus))
-		assert.Equal(t, "entity not found: missing", objectFor(triples, agvocab.StepErrorMessage))
+		assert.Equal(t, "entity not found: test.agentic.trajectory.tool.entity.missing", objectFor(triples, agvocab.StepErrorMessage))
 		assert.Equal(t, "not_found", objectFor(triples, agvocab.StepErrorCategory))
 	})
 
@@ -146,7 +146,7 @@ func TestTrajectoryStepEntity_ToolCall_Failed(t *testing.T) {
 
 	t.Run("RawContent_includes_error", func(t *testing.T) {
 		content := entity.RawContent()
-		assert.Equal(t, "entity not found: missing", content["error"])
+		assert.Equal(t, "entity not found: test.agentic.trajectory.tool.entity.missing", content["error"])
 	})
 }
 

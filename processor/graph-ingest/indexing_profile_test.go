@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -67,17 +68,13 @@ func profileValues(es *graph.EntityState) []string {
 	return out
 }
 
-func userTriple(predicate string, object any) message.Triple {
-	return message.Triple{Subject: testProfileEntityID, Predicate: predicate, Object: object, Timestamp: time.Now()}
-}
-
 // --- create_with_triples (production handler) ---
 
 func TestIndexingProfile_CreateWithTriples_DefaultsToControlFloor(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:  &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
-		Triples: []message.Triple{userTriple("robotics.status.armed", true)},
+		Triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "robotics", "status", "armed"), Object: true, Timestamp: time.Now()}},
 	}
 	data, _ := json.Marshal(req)
 
@@ -96,7 +93,7 @@ func TestIndexingProfile_CreateWithTriples_EnvelopeProfileWins(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:          &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
-		Triples:         []message.Triple{userTriple("doc.body.text", "hello")},
+		Triples:         []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "hello", Timestamp: time.Now()}},
 		IndexingProfile: vocabulary.IndexingProfileContent,
 	}
 	data, _ := json.Marshal(req)
@@ -207,7 +204,7 @@ func TestIndexingProfile_Graphable_IndexingProfilerWins(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	payload := &testGraphablePayload{
 		id:      testProfileEntityID,
-		triples: []message.Triple{userTriple("doc.body.text", "content here")},
+		triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "content here", Timestamp: time.Now()}},
 		profile: vocabulary.IndexingProfileContent,
 	}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
@@ -224,7 +221,7 @@ func TestIndexingProfile_Graphable_IndexingProfilerWins(t *testing.T) {
 func TestIndexingProfile_Graphable_NoProfilerFallsToFloor(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	// Payload returns "" from IndexingProfile() => treated as absent.
-	payload := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("test.fixture.value", "v")}}
+	payload := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"), Object: "v", Timestamp: time.Now()}}}
 	msg := message.NewBaseMessage(payload.Schema(), payload, "test")
 
 	entity, err := comp.extractEntityFromMessage(msg)
@@ -243,7 +240,7 @@ func TestIndexingProfile_ReArrival_DoesNotAccumulateOrReProfile(t *testing.T) {
 	ctx := context.Background()
 
 	// First arrival: declares content.
-	first := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("doc.body.text", "v1")}, profile: vocabulary.IndexingProfileContent}
+	first := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "v1", Timestamp: time.Now()}}, profile: vocabulary.IndexingProfileContent}
 	e1, err := comp.extractEntityFromMessage(message.NewBaseMessage(first.Schema(), first, "test"))
 	require.NoError(t, err)
 	require.NoError(t, comp.MergeEntity(ctx, e1))
@@ -251,7 +248,7 @@ func TestIndexingProfile_ReArrival_DoesNotAccumulateOrReProfile(t *testing.T) {
 	// Second arrival of the SAME entity declaring a DIFFERENT profile (trace):
 	// the profile is immutable after create, so this must NOT re-profile and
 	// must NOT add a second profile triple.
-	second := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("doc.body.text", "v2")}, profile: vocabulary.IndexingProfileTrace}
+	second := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "v2", Timestamp: time.Now()}}, profile: vocabulary.IndexingProfileTrace}
 	e2, err := comp.extractEntityFromMessage(message.NewBaseMessage(second.Schema(), second, "test"))
 	require.NoError(t, err)
 	require.NoError(t, comp.MergeEntity(ctx, e2))
@@ -280,7 +277,7 @@ func TestIndexingProfile_StubUpgrade_StampsOnRealArrival(t *testing.T) {
 
 	// Real producer arrives and merges into the stub: this is the entity's true
 	// birth, so the profile must be stamped now (floor, since none declared).
-	realArrival := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{userTriple("doc.body.text", "real")}}
+	realArrival := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "real", Timestamp: time.Now()}}}
 	entity, err := comp.extractEntityFromMessage(message.NewBaseMessage(realArrival.Schema(), realArrival, "test"))
 	require.NoError(t, err)
 	require.NoError(t, comp.MergeEntity(ctx, entity))
@@ -298,7 +295,7 @@ func TestIndexingProfile_StructuralGraphNeverGated_TraceEntityStaysQueryable(t *
 
 	req := graph.CreateEntityWithTriplesRequest{
 		Entity:          &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
-		Triples:         []message.Triple{userTriple("audit.event.kind", "trace-line")},
+		Triples:         []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "audit", "event", "kind"), Object: "trace-line", Timestamp: time.Now()}},
 		IndexingProfile: vocabulary.IndexingProfileTrace,
 	}
 	createData, _ := json.Marshal(req)
@@ -324,9 +321,9 @@ func TestReconcileIndexingProfile_DedupesToFirst(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	es := &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()}
 	es.Triples = []message.Triple{
-		{Subject: es.ID, Predicate: vocabulary.EntityIndexingProfile, Object: vocabulary.IndexingProfileContent},
-		userTriple("test.fixture.value", "v"),
-		{Subject: es.ID, Predicate: vocabulary.EntityIndexingProfile, Object: vocabulary.IndexingProfileTrace},
+		{Subject: es.ID, Predicate: semantictest.Predicate(t, "entity", "indexing", "profile"), Object: vocabulary.IndexingProfileContent},
+		{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"), Object: "v", Timestamp: time.Now()},
+		{Subject: es.ID, Predicate: semantictest.Predicate(t, "entity", "indexing", "profile"), Object: vocabulary.IndexingProfileTrace},
 	}
 	comp.reconcileIndexingProfile(es)
 	assert.Equal(t, []string{vocabulary.IndexingProfileContent}, profileValues(es),
@@ -373,7 +370,7 @@ func TestIndexingProfile_FloorMetric_FiresExactlyOnFloor(t *testing.T) {
 	// (c) Re-arrival of the floor-stamped entity (001) → profile already present
 	//     → keep-first, no floor → metric unchanged (immutability is not a default).
 	before = testutil.ToFloat64(counter)
-	payload := &testGraphablePayload{id: "c360.platform.metrictest.sys.widget.001", triples: []message.Triple{userTriple("test.fixture.value", "v2")}}
+	payload := &testGraphablePayload{id: "c360.platform.metrictest.sys.widget.001", triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "test", "fixture", "value"), Object: "v2", Timestamp: time.Now()}}}
 	entity, err := comp.extractEntityFromMessage(message.NewBaseMessage(mt, payload, "test"))
 	require.NoError(t, err)
 	require.NoError(t, comp.MergeEntity(ctx, entity))

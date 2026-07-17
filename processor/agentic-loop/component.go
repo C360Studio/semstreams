@@ -9,12 +9,14 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"os"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -57,7 +59,8 @@ type Component struct {
 	outputPorts []component.Port
 
 	// Track consumers for cleanup
-	consumerInfos []consumerInfo
+	consumerInfos  []consumerInfo
+	consumerCancel context.CancelFunc
 
 	// Query subscription for trajectory requests
 	trajectorySub *natsclient.Subscription
@@ -75,11 +78,35 @@ type Component struct {
 	// Graph writer for model endpoint and loop execution entities
 	graphWriter *graphWriter
 
+	// graphStateReset permanently blocks task intake after this process
+	// observes incompatible authoritative graph state. Start clears the latch;
+	// recovery requires graph reset/canonical reingest and component restart.
+	graphStateReset atomic.Pointer[graphStateResetLatch]
+
 	// testPublishHook, if non-nil, is called by publishApprovalResponseToWire
 	// in place of the real NATS publish. Used in unit tests to capture
 	// wire-level approval-response messages without a NATS connection.
 	// Always nil in production.
 	testPublishHook func(subject string, data []byte)
+}
+
+type graphStateResetLatch struct {
+	err error
+}
+
+type inputHandler func(context.Context, []byte) error
+
+func adaptVoidInputHandler(handler func(context.Context, []byte)) inputHandler {
+	return func(ctx context.Context, data []byte) error {
+		handler(ctx, data)
+		return nil
+	}
+}
+
+func newConsumerLifecycleContext(startCtx context.Context) (context.Context, context.CancelFunc) {
+	// Preserve trace/value propagation from Start while intentionally detaching
+	// startup cancellation/deadlines. Component.Stop owns this lifecycle.
+	return context.WithCancel(context.WithoutCancel(startCtx))
 }
 
 // consumerInfo tracks JetStream consumer details for cleanup
@@ -265,14 +292,17 @@ func (c *Component) Health() component.HealthStatus {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	healthy := c.started
+	resetRequired := c.graphStateReset.Load() != nil
+	healthy := c.started && !resetRequired
 	uptime := time.Duration(0)
 	if c.started {
 		uptime = time.Since(c.startTime)
 	}
 
 	status := "stopped"
-	if healthy {
+	if resetRequired {
+		status = graph.ErrorCodeGraphStateResetRequired
+	} else if healthy {
 		status = "running"
 	}
 
@@ -316,6 +346,7 @@ func (c *Component) Start(ctx context.Context) error {
 	if c.started {
 		return errs.ErrAlreadyStarted
 	}
+	c.graphStateReset.Store(nil)
 
 	// Initialize KV buckets if NATS client available
 	if c.natsClient != nil {
@@ -323,14 +354,22 @@ func (c *Component) Start(ctx context.Context) error {
 			return errs.Wrap(err, "agentic-loop", "Start", "initialize KV buckets")
 		}
 
-		// Set up NATS subscriptions for input ports
-		if err := c.setupSubscriptions(ctx); err != nil {
+		// Consumer callbacks use a component-owned lifecycle context rather than
+		// the caller's startup deadline. Stop cancels it after any reset-required
+		// task has been held in flight for operator repair.
+		consumerCtx, consumerCancel := newConsumerLifecycleContext(ctx)
+		c.consumerCancel = consumerCancel
+
+		// Set up NATS subscriptions for input ports.
+		if err := c.setupSubscriptions(ctx, consumerCtx); err != nil {
+			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "setup subscriptions")
 		}
 
 		// Set up trajectory query handler
 		sub, err := c.natsClient.SubscribeForRequests(ctx, "agentic.query.trajectory", c.handleTrajectoryQuery)
 		if err != nil {
+			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
 		}
 		c.trajectorySub = sub
@@ -371,6 +410,19 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (c *Component) cleanupConsumersAfterStartFailure() {
+	if c.consumerCancel != nil {
+		c.consumerCancel()
+		c.consumerCancel = nil
+	}
+	if c.natsClient != nil {
+		for _, info := range c.consumerInfos {
+			c.natsClient.StopConsumer(info.streamName, info.consumerName)
+		}
+	}
+	c.consumerInfos = nil
 }
 
 // initPromptRegistry seeds the handler's prompt.Registry with
@@ -453,6 +505,13 @@ func (c *Component) Stop(timeout time.Duration) error {
 	if c.trajectorySub != nil {
 		_ = c.trajectorySub.Unsubscribe()
 		c.trajectorySub = nil
+	}
+
+	// Cancel the component-owned consumer lifecycle before stopping consumers.
+	// A reset-held task observes this cancellation and is NAKed exactly once.
+	if c.consumerCancel != nil {
+		c.consumerCancel()
+		c.consumerCancel = nil
 	}
 
 	// Stop all JetStream consumers
@@ -574,7 +633,7 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 }
 
 // setupSubscriptions sets up JetStream consumers for input ports
-func (c *Component) setupSubscriptions(ctx context.Context) error {
+func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) error {
 	for _, port := range c.inputPorts {
 		var subject string
 
@@ -592,20 +651,20 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			continue
 		}
 
-		var handler func(context.Context, []byte)
+		var handler inputHandler
 
 		// Route to appropriate handler based on port name
 		switch port.Name {
 		case "agent.task":
-			handler = c.handleTaskMessage
+			handler = c.taskInputHandler(consumerCtx, 30*time.Minute)
 		case "agent.response":
-			handler = c.handleResponseMessage
+			handler = adaptVoidInputHandler(c.handleResponseMessage)
 		case "tool.result":
-			handler = c.handleToolResultMessage
+			handler = adaptVoidInputHandler(c.handleToolResultMessage)
 		case "agent.signal":
-			handler = c.handleSignalMessage
+			handler = adaptVoidInputHandler(c.handleSignalMessage)
 		case "agent.approval_response":
-			handler = c.handleApprovalResponseMessage
+			handler = adaptVoidInputHandler(c.handleApprovalResponseMessage)
 		case "agent.toolcall.approved", "agent.toolcall.rejected":
 			// Verdicts from rule-driven tool-call governance (ADR-039).
 			// Both subjects route into the same demux — the dispatcher
@@ -614,13 +673,13 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 			// no fallback construction); the wildcard subscription is
 			// still cheap to bind but never gets traffic in disabled
 			// mode because nothing publishes to proposed.
-			handler = c.handleToolCallVerdictMessage
+			handler = adaptVoidInputHandler(c.handleToolCallVerdictMessage)
 		default:
 			c.logger.Warn("Unknown input port", "port", port.Name)
 			continue
 		}
 
-		if err := c.setupConsumer(ctx, port, subject, handler); err != nil {
+		if err := c.setupConsumer(setupCtx, consumerCtx, port, subject, handler); err != nil {
 			return errs.Wrap(err, "agentic-loop", "setupSubscriptions", fmt.Sprintf("setup consumer for %s", subject))
 		}
 	}
@@ -653,11 +712,11 @@ func resolveStreamName(port component.Port, componentStreamName string) string {
 
 // setupConsumer sets up a JetStream consumer for an input port. The
 // stream to bind to is resolved by resolveStreamName above.
-func (c *Component) setupConsumer(ctx context.Context, port component.Port, subject string, handler func(context.Context, []byte)) error {
+func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port component.Port, subject string, handler inputHandler) error {
 	streamName := resolveStreamName(port, c.config.StreamName)
 
 	// Wait for stream to be available
-	if err := c.waitForStream(ctx, streamName); err != nil {
+	if err := c.waitForStream(setupCtx, streamName); err != nil {
 		return errs.WrapTransient(err, "agentic-loop", "setupConsumer", fmt.Sprintf("wait for stream %s", streamName))
 	}
 
@@ -692,7 +751,18 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, subj
 	)
 
 	switch port.Name {
-	case "agent.task", "agent.response", "tool.result":
+	case "agent.task":
+		ackWait = c.config.Consumer.ParsedAckWait()
+		maxAckPending = 1
+		maxDeliver = c.config.Consumer.MaxDeliver
+		// The task adapter owns the ordinary 30m work deadline. The outer
+		// callback stays lifecycle-bound so a reset-required task can retain one
+		// delivery without spending MaxDeliver.
+		msgTimeout = 30 * time.Minute
+		backOff = []time.Duration{30 * time.Second, 2 * time.Minute}
+		useHeartbeat = true
+		heartbeatInterval = c.config.Consumer.ParsedHeartbeatInterval()
+	case "agent.response", "tool.result":
 		ackWait = c.config.Consumer.ParsedAckWait()
 		maxAckPending = 1
 		maxDeliver = c.config.Consumer.MaxDeliver
@@ -720,31 +790,33 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, subj
 		BackOff:        backOff,
 		AutoCreate:     false,
 		MessageTimeout: msgTimeout,
+		// agent.task applies its 30m ordinary-work deadline in taskInputHandler;
+		// its outer context must remain lifecycle-bound for reset holds.
+		DisableMessageTimeout: port.Name == "agent.task",
 	}
 
 	var handlerFn func(context.Context, jetstream.Msg)
 	if useHeartbeat {
 		hi := heartbeatInterval
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			if err := natsclient.ConsumeWithHeartbeat(msgCtx, msg, hi,
-				func(workCtx context.Context) error {
-					handler(workCtx, msg.Data())
-					return nil
-				},
-			); err != nil {
+			if err := consumeLongRunningInput(msgCtx, msg, hi, handler); err != nil {
 				c.logger.Error("Message handler error", "port", port.Name, "error", err)
 			}
 		}
 	} else {
 		handlerFn = func(msgCtx context.Context, msg jetstream.Msg) {
-			handler(msgCtx, msg.Data())
+			if err := handler(msgCtx, msg.Data()); err != nil {
+				_ = msg.Nak()
+				c.logger.Error("Message handler error", "port", port.Name, "error", err)
+				return
+			}
 			if ackErr := msg.Ack(); ackErr != nil {
 				c.logger.Error("Failed to ack JetStream message", "error", ackErr)
 			}
 		}
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, handlerFn)
+	err := c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
 	if err != nil {
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
@@ -761,6 +833,17 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port, subj
 		"consumer", consumerName,
 		"port", port.Name)
 	return nil
+}
+
+func consumeLongRunningInput(
+	ctx context.Context,
+	msg jetstream.Msg,
+	heartbeatInterval time.Duration,
+	handler inputHandler,
+) error {
+	return natsclient.ConsumeWithHeartbeat(ctx, msg, heartbeatInterval, func(workCtx context.Context) error {
+		return handler(workCtx, msg.Data())
+	})
 }
 
 // waitForStream waits for a JetStream stream to be available
@@ -806,17 +889,38 @@ func sanitizeSubject(subject string) string {
 }
 
 // handleTaskMessage processes incoming task messages
-func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
+func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
+	return c.handleTaskMessageWithLifecycle(ctx, ctx, data)
+}
+
+func (c *Component) taskInputHandler(lifecycleCtx context.Context, workTimeout time.Duration) inputHandler {
+	return func(consumerCtx context.Context, data []byte) error {
+		workCtx, cancel := context.WithTimeout(consumerCtx, workTimeout)
+		defer cancel()
+		err := c.handleTaskMessageWithLifecycle(workCtx, lifecycleCtx, data)
+		if err == nil && workCtx.Err() != nil {
+			return workCtx.Err()
+		}
+		return err
+	}
+}
+
+func (c *Component) handleTaskMessageWithLifecycle(workCtx, lifecycleCtx context.Context, data []byte) error {
+	if reset := c.graphStateReset.Load(); reset != nil {
+		c.logger.Error("task intake blocked until authoritative graph reset and restart",
+			"code", graph.ErrorCodeGraphStateResetRequired)
+		return c.holdTaskUntilResetRestart(lifecycleCtx, reset)
+	}
 	baseMsg, err := c.decoder.Decode(data)
 	if err != nil {
 		c.logger.Error("Failed to unmarshal BaseMessage", "error", err)
-		return
+		return nil
 	}
 
 	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
 	if !ok {
 		c.logger.Error("Unexpected payload type", "type", fmt.Sprintf("%T", baseMsg.Payload()))
-		return
+		return nil
 	}
 
 	c.logger.Debug("Processing task message",
@@ -825,27 +929,17 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 		slog.String("model", task.Model))
 
 	// Handle the task using the message handler
-	result, err := c.handler.HandleTask(ctx, *task)
+	result, err := c.handler.HandleTask(workCtx, *task)
 	if err != nil {
 		c.logger.Error("Failed to handle task", "error", err, "task_id", task.TaskID)
-		return
-	}
-
-	// Record loop creation only when HandleTask actually created a new loop.
-	// The dedup short-circuit (handlers.go HandleTask) returns Created=false
-	// for redelivered TaskMessages whose task_id already has an active loop.
-	// Gating here prevents the active_loops gauge from drifting upward on
-	// every JetStream redelivery — the original loop's eventual completion
-	// only fires one Dec(), so each ungated redelivery would leak +1.
-	if c.metrics != nil && result.Created {
-		c.metrics.recordLoopCreated()
+		return nil
 	}
 
 	if !result.Created {
 		c.logger.Debug("Task deduplicated — loop already active",
 			slog.String("loop_id", result.LoopID),
 			slog.String("task_id", task.TaskID))
-		return
+		return nil
 	}
 
 	c.logger.Debug("Loop created",
@@ -870,23 +964,84 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) {
 	// read both families via the existing $entity.triple.<predicate>
 	// substitution. No-op when the producer didn't set RelatedLoops.
 	if c.graphWriter != nil {
-		if err := c.graphWriter.WriteSpawnIdentity(ctx, result.LoopID, task); err != nil {
+		if err := c.graphWriter.WriteSpawnIdentity(workCtx, result.LoopID, task); err != nil {
 			c.logger.Error("graph_writer: loop-execution entity birth failed — halting loop spawn",
 				"loop_id", result.LoopID, "task_id", task.TaskID, "error", err)
 			entity, _ := c.handler.GetLoop(result.LoopID)
-			c.handleLoopFailure(ctx, result.LoopID, entity, "spawn_identity_birth_failed", err)
-			return
+			return c.handleSpawnIdentityFailureWithLifecycle(workCtx, lifecycleCtx, result.LoopID, entity, err)
 		}
 		if rawLineage, ok := task.Metadata[agentic.MetadataKeyRelatedLoops].(map[string]any); ok {
-			c.graphWriter.WriteLineageTriples(ctx, result.LoopID, rawLineage)
+			c.graphWriter.WriteLineageTriples(workCtx, result.LoopID, rawLineage)
 		}
 	}
 
+	// Record creation only after graph birth succeeds. A poisoned authoritative
+	// read-back rolls creation back and must leave no business metric. Ordinary
+	// operational birth failures record creation immediately before the existing
+	// failure path so its active-loop decrement remains balanced.
+	if c.metrics != nil {
+		c.metrics.recordLoopCreated()
+	}
+
 	// Publish output messages
-	c.publishResults(ctx, result)
+	c.publishResults(workCtx, result)
 
 	// Persist loop state to KV
-	c.persistLoopState(ctx, result.LoopID)
+	c.persistLoopState(workCtx, result.LoopID)
+	return nil
+}
+
+// handleSpawnIdentityFailure keeps authoritative graph poison out of the loop
+// business-failure lane. A reset-required graph cannot safely accept failure
+// triples, and emitting AGENT_LOOPS terminal state, metrics, or failure events
+// would falsely describe a graph-contract outage as a failed user task.
+// Ordinary operational birth failures retain the established failure handling.
+func (c *Component) handleSpawnIdentityFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, err error) error {
+	return c.handleSpawnIdentityFailureWithLifecycle(ctx, ctx, loopID, entity, err)
+}
+
+func (c *Component) handleSpawnIdentityFailureWithLifecycle(
+	workCtx, lifecycleCtx context.Context,
+	loopID string,
+	entity agentic.LoopEntity,
+	err error,
+) error {
+	if graph.IsStateContractError(err) {
+		classified := graph.ClassifyStateContractError(err)
+		c.graphStateReset.CompareAndSwap(nil, &graphStateResetLatch{err: classified})
+		if c.handler != nil {
+			if c.handler.trajectoryManager != nil {
+				c.handler.trajectoryManager.DeleteTrajectory(loopID)
+			}
+			if c.handler.loopManager != nil {
+				_ = c.handler.loopManager.DeleteLoop(loopID)
+			}
+		}
+		c.logger.Error("authoritative graph state requires reset; loop business failure output blocked",
+			"loop_id", loopID,
+			"code", graph.ErrorCodeGraphStateResetRequired,
+			"class", errs.ErrorFatal.String(),
+			"error", classified)
+		return c.holdTaskUntilResetRestart(lifecycleCtx, c.graphStateReset.Load())
+	}
+	if c.metrics != nil && entity.ID != "" {
+		c.metrics.recordLoopCreated()
+	}
+	c.handleLoopFailure(workCtx, loopID, entity, "spawn_identity_birth_failed", err)
+	return nil
+}
+
+// holdTaskUntilResetRestart keeps the current JetStream delivery in flight
+// while operators repair authoritative graph state. ConsumeWithHeartbeat emits
+// InProgress during the wait, so finite MaxDeliver is not burned. Component
+// stop/restart cancels ctx, at which point the consumer performs one delayed
+// NAK and the task becomes available to the repaired process.
+func (c *Component) holdTaskUntilResetRestart(ctx context.Context, reset *graphStateResetLatch) error {
+	if reset == nil {
+		return nil
+	}
+	<-ctx.Done()
+	return reset.err
 }
 
 // handleResponseMessage processes incoming agent response messages

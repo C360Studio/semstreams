@@ -16,7 +16,7 @@ func TestPredicatePoisonProducesNoTemporalOutputAndBlocksQueries(t *testing.T) {
 	t.Parallel()
 
 	c, temporalBucket, reverseBucket := newEventTimeTestComponent()
-	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","updated_at":"2026-07-14T00:00:00Z","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","updated_at":"2026-07-14T00:00:00Z","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	c.processEntityUpdate(context.Background(), &mockKVEntry{data: poisoned})
 
 	if c.resetState.Load() == nil {
@@ -59,7 +59,7 @@ func TestWatchAllBootstrapRejectsPoisonAtomicallyInEitherOrder(t *testing.T) {
 	t.Parallel()
 
 	valid := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","updated_at":"2026-07-14T00:00:00Z","triples":[]}`)
-	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","updated_at":"2026-07-14T00:00:00Z","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`)
+	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","updated_at":"2026-07-14T00:00:00Z","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 
 	for _, tc := range []struct {
 		name     string

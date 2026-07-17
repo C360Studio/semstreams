@@ -36,7 +36,7 @@ func TestEntityWatcher_DeletedEntityCleansRuleState(t *testing.T) {
 	}
 
 	config := DefaultConfig()
-	config.EntityWatchPatterns = []string{"gh358.test.>"}
+	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"gh358.test.*.*.*.*"}}
 	proc, err := NewProcessor(nc, &config)
 	require.NoError(t, err)
 	require.NoError(t, proc.Initialize())

@@ -369,3 +369,13 @@ func TestHierarchyInference_ContainerEntityWithNonStandardSuffix(t *testing.T) {
 	triples := tripleAdder.getTriples()
 	assert.Len(t, triples, 2, "Should create edges for non-container entity")
 }
+
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature" line=79 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies five-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor" line=84 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies four-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental" line=89 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies three-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360.logistics" line=94 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies two-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "c360" line=99 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies one-position IDs are not containers
+// entity-id-audit:classify intentional-malformed "" line=118 column=21 surface=go-field:.entityID entity_id_invalid:empty verifies empty input is not a container
+// entity-id-audit:classify intentional-malformed "." line=123 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a dot-only value is not a container
+// entity-id-audit:classify intentional-malformed "a.b.c.d.group" line=128 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a five-position group suffix is not a container
+// entity-id-audit:classify intentional-malformed "c360.logistics.environmental.sensor.temperature.instance.group" line=138 column=21 surface=go-field:.entityID entity_id_invalid:arity verifies a seven-position group suffix is not a container

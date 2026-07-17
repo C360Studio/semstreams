@@ -290,6 +290,20 @@ func newClassified(class ErrorClass, err error, component, operation, message st
 		Component: component,
 		Operation: operation,
 	}
+
+}
+
+func inheritMachineContract(classified *ClassifiedError, err error) *ClassifiedError {
+	// Wrapping adds handling class and operator context; it must not erase an
+	// existing machine-readable contract. Explicit ClassifiedCode constructors
+	// do not call this helper because their new code/detail intentionally replace
+	// any inner contract.
+	var inner *ClassifiedError
+	if errors.As(err, &inner) && inner.Code != "" {
+		classified.Code = inner.Code
+		classified.Detail = inner.Detail
+	}
+	return classified
 }
 
 // Classified wraps err with the given class WITHOUT adding the
@@ -314,7 +328,7 @@ func Classified(class ErrorClass, err error) *ClassifiedError {
 	if err == nil {
 		return nil
 	}
-	return newClassified(class, err, "", "", err.Error())
+	return inheritMachineContract(newClassified(class, err, "", "", err.Error()), err)
 }
 
 // ClassifiedCode is Classified plus a stable machine Code (ADR-060 — the
@@ -396,7 +410,7 @@ func WrapTransient(err error, component, method, action string) error {
 		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
-	return newClassified(ErrorTransient, wrappedErr, component, method, wrappedErr.Error())
+	return inheritMachineContract(newClassified(ErrorTransient, wrappedErr, component, method, wrappedErr.Error()), err)
 }
 
 // WrapFatal wraps an error as fatal with context.
@@ -411,7 +425,7 @@ func WrapFatal(err error, component, method, action string) error {
 		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
-	return newClassified(ErrorFatal, wrappedErr, component, method, wrappedErr.Error())
+	return inheritMachineContract(newClassified(ErrorFatal, wrappedErr, component, method, wrappedErr.Error()), err)
 }
 
 // WrapInvalid wraps an error as invalid with context.
@@ -426,7 +440,7 @@ func WrapInvalid(err error, component, method, action string) error {
 		err = errors.New(action)
 	}
 	wrappedErr := Wrap(err, component, method, action)
-	return newClassified(ErrorInvalid, wrappedErr, component, method, wrappedErr.Error())
+	return inheritMachineContract(newClassified(ErrorInvalid, wrappedErr, component, method, wrappedErr.Error()), err)
 }
 
 // RetryConfig defines configuration for retry operations

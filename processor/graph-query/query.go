@@ -97,6 +97,10 @@ func (c *Component) handleQueryEntity(ctx context.Context, data []byte) ([]byte,
 		c.recordError(err)
 		return nil, err
 	}
+	if err := validateEntityQueryResponse(response); err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 
 	c.recordSuccess(len(data), len(response))
 	return response, nil
@@ -158,6 +162,10 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 		c.recordError(err)
 		return nil, err
 	}
+	if err := validateEntityQueryResponse(response); err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 
 	c.recordSuccess(len(data), len(response))
 	return response, nil
@@ -205,6 +213,10 @@ func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, 
 		c.recordError(err)
 		return nil, err
 	}
+	if err := validateEntityBatchQueryResponse(response); err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 
 	c.recordSuccess(len(data), len(response))
 	return response, nil
@@ -243,9 +255,45 @@ func (c *Component) handleQueryPrefix(ctx context.Context, data []byte) ([]byte,
 		}
 		return nil, err
 	}
+	if err := validateEntityPrefixQueryResponse(response); err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 
 	c.recordSuccess(len(data), len(response))
 	return response, nil
+}
+
+func validateEntityQueryResponse(data []byte) error {
+	var entity graph.EntityState
+	if err := graph.UnmarshalEntityState(data, &entity); err != nil {
+		return fmt.Errorf("validate entity query response: %w", err)
+	}
+	return nil
+}
+
+func validateEntityBatchQueryResponse(data []byte) error {
+	var response struct {
+		Entities []*graph.EntityState `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return fmt.Errorf("decode entity batch query response: %w", err)
+	}
+	if err := graph.ValidateDecodedEntityStatePointers(response.Entities); err != nil {
+		return fmt.Errorf("validate entity batch query response: %w", err)
+	}
+	return nil
+}
+
+func validateEntityPrefixQueryResponse(data []byte) error {
+	var response graph.PrefixQueryResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return fmt.Errorf("decode entity prefix query response: %w", err)
+	}
+	if err := graph.ValidateDecodedEntityStates(response.Entities); err != nil {
+		return fmt.Errorf("validate entity prefix query response: %w", err)
+	}
+	return nil
 }
 
 // handleQueryRelationships handles relationship query requests (passthrough to graph-index)
@@ -412,13 +460,12 @@ func (c *Component) handleQueryHierarchyStats(ctx context.Context, data []byte) 
 	}
 
 	// Parse prefix response (entities envelope from graph-ingest)
-	var envelope struct {
-		Entities []struct {
-			ID string `json:"id"`
-		} `json:"entities"`
-	}
+	var envelope graph.PrefixQueryResponse
 	if err := json.Unmarshal(response, &envelope); err != nil {
 		return nil, errs.WrapInvalid(err, "GraphQuery", "handleQueryHierarchyStats", "parse prefix response")
+	}
+	if err := graph.ValidateDecodedEntityStates(envelope.Entities); err != nil {
+		return nil, err
 	}
 
 	// Extract entity IDs and group by next hierarchy level

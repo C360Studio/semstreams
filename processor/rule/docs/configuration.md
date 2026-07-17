@@ -13,7 +13,7 @@ type Config struct {
     BufferWindowSize       string
     AlertCooldownPeriod    string
     EnableGraphIntegration bool
-    EntityWatchPatterns    []string
+    EntityWatchBuckets     map[string][]string
     Consumer               ConsumerConfig
 }
 ```
@@ -76,23 +76,31 @@ When disabled, triple actions are logged but not executed. Useful for testing.
 
 ## Advanced Configuration
 
-### entity_watch_patterns
+### entity_watch_buckets
 
-NATS wildcard patterns for entity IDs to watch in `ENTITY_STATES` bucket.
+Patterns for the rule processor's typed `EntityState` watcher. `ENTITY_STATES`
+is the only supported bucket and every value must be an exact six-position
+entity ID pattern.
 
 ```json
 {
-  "entity_watch_patterns": [
-    "acme.*.robotics.*.drone.*",
-    "acme.*.environmental.*.sensor.*"
-  ]
+  "entity_watch_buckets": {
+    "ENTITY_STATES": [
+      "acme.*.robotics.*.drone.*",
+      "acme.*.environmental.*.sensor.*"
+    ]
+  }
 }
 ```
 
-**Type:** `[]string`
-**Default:** `[]`
+**Type:** `map[string][]string`
+**Default:** `{}`
 
 See [Entity Watching](06-entity-watching.md) for pattern syntax.
+
+Operational KV records need a separately designed typed rule adapter with their
+own decoder and evaluator. They are intentionally rejected here rather than
+being decoded as graph entities.
 
 ### buffer_window_size
 
@@ -139,12 +147,6 @@ Define input sources for rule evaluation.
         "type": "kv-watch",
         "required": true,
         "description": "Watch entity state changes"
-      },
-      {
-        "name": "predicate_index",
-        "type": "kv-watch",
-        "required": false,
-        "description": "Watch predicate index changes"
       }
     ]
   }
@@ -227,7 +229,6 @@ func DefaultConfig() Config {
         Ports: &component.PortConfig{
             Inputs: []component.PortDefinition{
                 {Name: "entity_states", Type: "kv-watch", Required: true},
-                {Name: "predicate_index", Type: "kv-watch", Required: false},
             },
             Outputs: []component.PortDefinition{
                 {Name: "control_commands", Type: "nats", Subject: "control.*.commands"},
@@ -264,7 +265,7 @@ Some settings can be updated at runtime without restart.
 |---------|------------|-------|
 | `enable_graph_integration` | Yes | Takes effect on next action |
 | `rules` (individual) | Yes | Add/update/remove rules |
-| `entity_watch_patterns` | Yes | Watchers added/removed dynamically |
+| `entity_watch_buckets` | Yes | Watchers added/removed dynamically |
 
 ### ApplyConfigUpdate
 
@@ -291,7 +292,7 @@ config := processor.GetRuntimeConfig()
 //   "buffer_window_size": "10m",
 //   "alert_cooldown_period": "2m",
 //   "enable_graph_integration": true,
-//   "entity_watch_patterns": [...],
+//   "entity_watch_buckets": {...},
 //   "rules": {...},
 //   "rule_count": 5,
 //   "is_running": true
@@ -316,10 +317,12 @@ config := processor.GetRuntimeConfig()
     "/etc/semstreams/rules/fleet.json"
   ],
 
-  "entity_watch_patterns": [
-    "acme.*.robotics.*.drone.*",
-    "acme.*.environmental.*.sensor.*"
-  ],
+  "entity_watch_buckets": {
+    "ENTITY_STATES": [
+      "acme.*.robotics.*.drone.*",
+      "acme.*.environmental.*.sensor.*"
+    ]
+  },
 
   "buffer_window_size": "10m",
   "alert_cooldown_period": "5m",
@@ -341,7 +344,6 @@ Configuration can be overridden via environment variables:
 | Variable | Config Field |
 |----------|--------------|
 | `SEMSTREAMS_RULES_FILES` | `rules_files` (comma-separated) |
-| `SEMSTREAMS_ENTITY_WATCH_PATTERNS` | `entity_watch_patterns` (comma-separated) |
 | `SEMSTREAMS_ENABLE_GRAPH_INTEGRATION` | `enable_graph_integration` |
 | `SEMSTREAMS_ALERT_COOLDOWN` | `alert_cooldown_period` |
 
@@ -353,9 +355,9 @@ Configuration is validated on load:
 - `inline_rules` must have valid structure
 - `buffer_window_size` must be valid Go duration
 - `alert_cooldown_period` must be valid Go duration
-- `entity_watch_patterns` must be valid NATS wildcards
+- `entity_watch_buckets["ENTITY_STATES"]` values must be canonical six-position entity ID patterns
 
-Invalid configuration logs warnings but doesn't prevent startup (graceful degradation).
+Invalid entity watch declarations fail before any watcher is created.
 
 ## Next Steps
 

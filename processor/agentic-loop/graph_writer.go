@@ -263,7 +263,7 @@ func (w *graphWriter) verifyExistingEntityOrigin(ctx context.Context, entityID s
 		return fmt.Errorf("create_with_triples returned entity_exists for %s but the read-back to verify the typed origin failed: %w", entityID, err)
 	}
 	var existing gtypes.EntityState
-	if err := json.Unmarshal(respData, &existing); err != nil {
+	if err := gtypes.UnmarshalEntityState(respData, &existing); err != nil {
 		return fmt.Errorf("create_with_triples entity_exists: unmarshal existing entity %s: %w", entityID, err)
 	}
 	if existing.MessageType != want {

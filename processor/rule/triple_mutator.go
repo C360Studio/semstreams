@@ -196,6 +196,11 @@ func (m *tripleMutator) ReplaceOwned(ctx context.Context, ruleID, ownerToken, en
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return 0, fmt.Errorf("unmarshal response: %w", err)
 	}
+	if resp.Entity != nil {
+		if err := gtypes.ValidateDecodedEntityState(resp.Entity); err != nil {
+			return 0, fmt.Errorf("validate update response: %w", err)
+		}
+	}
 
 	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
 		m.revisionTracker.trackRuleRevision(ruleID, entityID, resp.KVRevision)

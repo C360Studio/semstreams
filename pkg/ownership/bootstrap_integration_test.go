@@ -52,7 +52,14 @@ func TestIntegration_EnsureBuckets_ConfigAndUsable(t *testing.T) {
 	}
 
 	// The returned Registry is usable.
-	if err := r.RegisterOwner(ctx, reg("cs-api", sysPat, "sensorml.process.label")); err != nil {
+	registration := Registration{
+		Owner: "cs-api",
+		Claims: []OwnerClaim{{
+			Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned,
+			Predicates: []string{"sensorml.process.label"},
+		}},
+	}
+	if err := r.RegisterOwner(ctx, registration); err != nil {
 		t.Fatalf("RegisterOwner through EnsureBuckets registry: %v", err)
 	}
 	// EnsureBuckets is idempotent — a second call (a second process) returns a

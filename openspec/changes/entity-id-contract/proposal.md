@@ -14,6 +14,14 @@ entity axis has a governed maximum. At a 256-byte entity-ID maximum, the reviewe
 Beta is the clean-break window. gh#531 should establish one framework-wide identity language before graph-index
 activation or v1, without carrying a permissive mode or malformed persisted identities forward.
 
+## Implementation Status
+
+PR #534, merged at `c8f0b92e` with final branch head `6ef169dd`, completes the authoritative final-candidate write seam:
+entity IDs, explicit subjects, and classified entity references are rejected before ENTITY_STATES or derived-index
+I/O. Independent replay/direct-NATS proof, the complete local source/corpus and cutover work, and final local quality
+gates remain open. Graph-index production-path controls, maximum real-NATS conformance, and activation remain owned by
+`graph-index-fixed-arity-reconciliation`; they are dependencies, not waived entity-contract work.
+
 ## What Changes
 
 - Define a canonical entity ID as exactly six non-empty dot-separated ASCII segments in
@@ -84,18 +92,19 @@ reader/writer, or online/in-place migration.
   pre-I/O validation. This change selects the narrower semantic limit `E <= 256`; it does not change the NATS
   contract or claim that 256 is a server maximum.
 - `graph-index-fixed-arity-reconciliation` depends before framework activation on this change's completed local
-  contract/API, local zero-violation corpus, ObjectStore zero-I/O, clean pre-v1 wipe/reseed, key-budget, and breaking
-  e2e tasks. It does not wait for this change to archive. With `E = 256`, its maximum current
-  INCOMING key is `2E + 390 = 902` bytes, below 1,024. The graph-index change still owns real-NATS filter performance,
-  reconciliation correctness, and its activation ADR.
+  contract/API, local zero-violation corpus, ObjectStore zero-I/O, clean pre-v1 wipe/reseed, unit key-budget, and
+  breaking e2e tasks. It does not wait for this change to archive or its owned-product pre-v1/archive-only rollout
+  tasks. With `E = 256`, its maximum current INCOMING key is `2E + 390 = 902` bytes, below 1,024. The graph-index
+  change owns the complete production-path controls, pinned real-NATS maximum/exact-match conformance, reconciliation
+  correctness and performance, and its activation ADR.
 - Predicate-contract enforcement remains independent: predicates and entity IDs have different grammars, semantic
   positions, and source/configuration inventories even though both participate in complete graph-index keys.
 
 ## Impact
 
-- **Framework code:** `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rules,
-  ObjectStore, agentic ID constructors, query/export helpers, schemas, fixtures, and every other literal, pattern,
-  or prefix consumer.
+- **Framework code:** `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, ObjectStore,
+  agentic ID constructors, query/export helpers, schemas, fixtures, and every other literal, pattern, or prefix
+  consumer.
 - **Stored data:** the pre-v1 cutover wipes all incompatible NATS state and reseeds it from canonical owned sources;
   this change provides no old-state preservation contract.
 - **Consumers:** SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, reference deployments, and any

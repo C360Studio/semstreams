@@ -29,32 +29,34 @@ Enable entity watching by specifying patterns:
 
 ```json
 {
-  "entity_watch_patterns": [
-    "acme.*.robotics.*.drone.*",
-    "acme.*.environmental.*.sensor.*"
-  ]
+  "entity_watch_buckets": {
+    "ENTITY_STATES": [
+      "acme.*.robotics.*.drone.*",
+      "acme.*.environmental.*.sensor.*"
+    ]
+  }
 }
 ```
 
-If no patterns are configured, entity watching is disabled:
+If no patterns are configured, pattern-specific evaluation is disabled; the authoritative graph-state guard remains
+active:
 
 ```go
-if len(rp.config.EntityWatchPatterns) == 0 {
-    rp.logger.Info("No entity watch patterns configured, skipping KV watch setup")
-    return nil
+if len(rp.config.EntityWatchBuckets) == 0 {
+    rp.logger.Info("No rule entity patterns configured; authoritative graph guard remains active")
 }
 ```
 
 ## Pattern Syntax
 
-Patterns use NATS wildcard syntax for matching entity IDs in the `ENTITY_STATES` bucket.
+Patterns have exactly six entity-ID positions. Each position is a canonical literal segment or the complete wildcard
+token `*`. `ENTITY_STATES` is the only supported bucket.
 
 ### Wildcards
 
 | Wildcard | Meaning | Position |
 |----------|---------|----------|
 | `*` | Match single segment | Any |
-| `>` | Match one or more segments | End only |
 
 ### Examples
 
@@ -65,14 +67,14 @@ Patterns use NATS wildcard syntax for matching entity IDs in the `ENTITY_STATES`
 # All sensors under logistics
 acme.logistics.environmental.*.sensor.*
 
-# Everything under robotics (any depth)
-acme.*.robotics.>
+# Everything under robotics
+acme.*.robotics.*.*.*
 
 # Specific platform, any entity type
 acme.logistics.*.fleet.*.*
 
-# All entities (use sparingly)
->
+# All canonical entities (use sparingly)
+*.*.*.*.*.*
 ```
 
 ### Pattern to Entity Matching
@@ -81,14 +83,14 @@ acme.logistics.*.fleet.*.*
 |---------|---------|---------------|
 | `*.*.robotics.*.*.*` | `acme.platform1.robotics.fleet.drone.d007` | `acme.platform1.logistics.fleet.drone.d007` |
 | `acme.*.*.*.drone.*` | `acme.prod.robotics.fleet.drone.d007` | `acme.prod.robotics.fleet.sensor.s001` |
-| `acme.logistics.>` | `acme.logistics.environmental.sensor.temperature.s042` | `acme.production.environmental.sensor.temperature.s042` |
+| `acme.logistics.*.*.*.*` | `acme.logistics.environmental.sensor.temperature.s042` | `acme.production.environmental.sensor.temperature.s042` |
 
 ## KV Watcher Setup
 
 For each configured pattern, a NATS KV watcher is created:
 
 ```go
-for _, pattern := range rp.config.EntityWatchPatterns {
+for _, pattern := range rp.config.EntityWatchBuckets["ENTITY_STATES"] {
     watcher, err := entityBucket.Watch(ctx, pattern)
     if err != nil {
         return err
@@ -188,13 +190,13 @@ type EntityStateEvaluator interface {
 
 Two levels of filtering exist:
 
-### 1. Entity Watch Patterns (Config Level)
+### 1. Entity Watch Buckets (Config Level)
 
 Which entities trigger rule evaluation:
 
 ```json
 {
-  "entity_watch_patterns": ["acme.*.robotics.>"]
+  "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.robotics.*.*.*"]}
 }
 ```
 
@@ -221,7 +223,7 @@ An entity must match both:
 ```json
 // Config
 {
-  "entity_watch_patterns": ["acme.*.>"]  // Watch all acme entities
+  "entity_watch_buckets": {"ENTITY_STATES": ["acme.*.*.*.*.*"]}
 }
 
 // Rule 1: Drone battery
@@ -250,13 +252,13 @@ More specific patterns = fewer entities to evaluate:
 
 ```json
 // Bad: Evaluates ALL entities
-{"entity_watch_patterns": [">"]}
+{"entity_watch_buckets": {"ENTITY_STATES": ["*.*.*.*.*.*"]}}
 
 // Good: Only robotics entities
-{"entity_watch_patterns": ["*.*.robotics.>"]}
+{"entity_watch_buckets": {"ENTITY_STATES": ["*.*.robotics.*.*.*"]}}
 
 // Better: Only drones
-{"entity_watch_patterns": ["*.*.robotics.*.drone.*"]}
+{"entity_watch_buckets": {"ENTITY_STATES": ["*.*.robotics.*.drone.*"]}}
 ```
 
 ### Multiple Patterns
@@ -265,10 +267,12 @@ Each pattern creates a separate watcher and goroutine:
 
 ```json
 {
-  "entity_watch_patterns": [
-    "acme.prod.robotics.*.drone.*",
-    "acme.prod.environmental.*.sensor.*"
-  ]
+  "entity_watch_buckets": {
+    "ENTITY_STATES": [
+      "acme.prod.robotics.*.drone.*",
+      "acme.prod.environmental.*.sensor.*"
+    ]
+  }
 }
 ```
 
@@ -341,7 +345,7 @@ INFO Started KV watcher pattern="acme.*.robotics.>"
 
 ```bash
 # Watch for entity changes
-nats kv watch ENTITY_STATES "acme.*.robotics.>"
+nats kv watch ENTITY_STATES "acme.*.robotics.*.*.*"
 ```
 
 ## Dynamic Pattern Updates
@@ -355,9 +359,11 @@ Entity watch patterns can be updated at runtime without restarting the processor
 ```go
 // Example: Update patterns dynamically
 changes := map[string]any{
-    "entity_watch_patterns": []string{
-        "acme.*.robotics.*.drone.*",
-        "acme.*.logistics.>",  // New pattern
+    "entity_watch_buckets": map[string][]string{
+        "ENTITY_STATES": {
+            "acme.*.robotics.*.drone.*",
+            "acme.*.logistics.*.*.*",
+        },
     },
 }
 processor.ApplyConfigUpdate(changes)
@@ -371,7 +377,7 @@ This enables:
 ## Limitations
 
 - Patterns only match entity IDs, not triple contents
-- `>` wildcard must be at end of pattern
+- `>` and embedded wildcards are rejected
 - High cardinality patterns can cause CPU pressure
 - Deleted entities don't trigger exit actions (state cleaned up separately)
 

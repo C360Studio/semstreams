@@ -18,7 +18,7 @@ func TestEntityStateGuardRejectsUnrelatedPoisonAndAllQueries(t *testing.T) {
 	t.Parallel()
 
 	watcher := newIngestGuardWatcher(4)
-	watcher.updates <- &mockKVEntry{key: "unrelated", data: []byte(`{"id":"acme.ops.robotics.gcs.sensor.001","triples":[{"subject":"acme.ops.robotics.gcs.sensor.001","predicate":"legacy.predicate","object":1}]}`)}
+	watcher.updates <- &mockKVEntry{key: "unrelated", data: []byte(`{"id":"acme.ops.robotics.gcs.sensor.001","triples":[{"subject":"acme.ops.robotics.gcs.sensor.001","predicate":"legacy.predicate","object":1}]}`)} // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	watcher.updates <- nil
 	bucket := newMockKVBucket()
 	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return watcher, nil }
@@ -157,7 +157,7 @@ func TestQueryDiscoveredPoisonBlocksConcurrentReadyResponse(t *testing.T) {
 	validID := "acme.ops.robotics.gcs.sensor.valid"
 	poisonID := "acme.ops.robotics.gcs.sensor.poison"
 	valid := []byte(`{"id":"acme.ops.robotics.gcs.sensor.valid","triples":[]}`)
-	poison := []byte(`{"id":"acme.ops.robotics.gcs.sensor.poison","triples":[{"subject":"acme.ops.robotics.gcs.sensor.poison","predicate":"legacy.predicate","object":1}]}`)
+	poison := []byte(`{"id":"acme.ops.robotics.gcs.sensor.poison","triples":[{"subject":"acme.ops.robotics.gcs.sensor.poison","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	bucket := newMockKVBucket()
 	bucket.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 		switch key {

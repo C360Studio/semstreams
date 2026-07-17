@@ -122,6 +122,9 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode prefix: %w", err)
 	}
+	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate prefix: %w", err)
+	}
 	ids := make([]string, 0, len(resp.Entities))
 	for i := range resp.Entities {
 		ids = append(ids, resp.Entities[i].ID)
@@ -157,9 +160,10 @@ func (c *Client) resolveSemantic(ctx context.Context, query string, scope []stri
 	}
 	ids := make([]string, 0, len(resp.Results))
 	for _, r := range resp.Results {
-		if r.EntityID != "" {
-			ids = append(ids, r.EntityID)
-		}
+		ids = append(ids, r.EntityID)
+	}
+	if err := graph.ValidateDecodedEntityIDs(ids); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate semantic: %w", err)
 	}
 	return ids, nil
 }
@@ -200,6 +204,9 @@ func (c *Client) Entity(ctx context.Context, id string) (*fusion.Entity, error) 
 	if err := json.Unmarshal(raw, &es); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode entity %q: %w", id, err)
 	}
+	if err := graph.ValidateDecodedEntityState(&es); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate entity %q: %w", id, err)
+	}
 	return &fusion.Entity{ID: es.ID, Triples: es.Triples}, nil
 }
 
@@ -219,6 +226,9 @@ func (c *Client) Entities(ctx context.Context, ids []string) ([]*fusion.Entity, 
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode batch: %w", err)
+	}
+	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate batch: %w", err)
 	}
 	out := make([]*fusion.Entity, 0, len(resp.Entities))
 	for i := range resp.Entities {
@@ -245,6 +255,13 @@ func (c *Client) Neighbors(ctx context.Context, id string, predicates []string, 
 	}
 	if err := json.Unmarshal(raw, &rels); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode relationships: %w", err)
+	}
+	endpointIDs := make([]string, 0, len(rels)*2)
+	for _, relationship := range rels {
+		endpointIDs = append(endpointIDs, relationship.FromEntityID, relationship.ToEntityID)
+	}
+	if err := graph.ValidateDecodedEntityIDs(endpointIDs); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate relationships: %w", err)
 	}
 	want := predicateSet(predicates)
 	edges := make([]fusion.Edge, 0, len(rels))
@@ -296,6 +313,13 @@ func (c *Client) byNameMatches(ctx context.Context, query string, limit int) ([]
 	var resp graph.QueryResponse[graph.NameData]
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode byName: %w", err)
+	}
+	entityIDs := make([]string, 0, len(resp.Data.Matches))
+	for _, match := range resp.Data.Matches {
+		entityIDs = append(entityIDs, match.EntityID)
+	}
+	if err := graph.ValidateDecodedEntityIDs(entityIDs); err != nil {
+		return nil, fmt.Errorf("fusionnats: validate byName: %w", err)
 	}
 	return resp.Data.Matches, nil
 }

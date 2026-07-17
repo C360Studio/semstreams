@@ -125,12 +125,12 @@ func TestRelationshipPredicates(t *testing.T) {
 
 func TestGetRelationshipPredicates(t *testing.T) {
 	// Get all registered predicates and filter for graph.rel.*
-	allPredicates := ListRegisteredPredicates()
-	relPredicates := make([]string, 0)
+	allPredicates := ListRegisteredPredicates() // predicate-audit:unrelated {"column":19,"surface":"go-assignment:allPredicates","value":"","basis":"reviewed:runtime-registry-output"}
+	relPredicates := make([]string, 0)          // predicate-audit:unrelated {"column":19,"surface":"go-assignment:relPredicates","value":"","basis":"reviewed:runtime-filtered-predicate-collection"}
 	for _, pred := range allPredicates {
 		meta := GetPredicateMetadata(pred)
 		if meta != nil && meta.Domain == "graph" && meta.Category == "rel" {
-			relPredicates = append(relPredicates, pred)
+			relPredicates = append(relPredicates, pred) // predicate-audit:unrelated {"column":20,"surface":"go-assignment:relPredicates","value":"","basis":"reviewed:runtime-filtered-predicate-collection"}
 		}
 	}
 

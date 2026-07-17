@@ -68,11 +68,11 @@ func TestRouteDecision_SynthesizeDirectly(t *testing.T) {
 	router := &fakeRouter{
 		content: `{"action":"synthesize_directly","args":{},"rationale":"candidate set is already sufficient"}`,
 	}
-	intent := &research.Intent{Topic: "drone-001 status"}
+	intent := &research.Intent{Topic: "test.research.graph.route.entity.drone-001 status"}
 	out := &research.ClassifierOutput{
-		Topic:      "drone-001 status",
+		Topic:      "test.research.graph.route.entity.drone-001 status",
 		Tier:       "0",
-		Candidates: []research.Candidate{{EntityID: "drone-001", Label: "Drone 001", Tier: "0", Source: "x"}},
+		Candidates: []research.Candidate{{EntityID: "test.research.graph.route.entity.drone-001", Label: "Drone 001", Tier: "0", Source: "x"}},
 	}
 
 	got, err := routeDecision(context.Background(), router, intent, out, 512, 10, nil)
@@ -88,7 +88,7 @@ func TestRouteDecision_SynthesizeDirectly(t *testing.T) {
 	if router.gotMaxToks != 512 {
 		t.Errorf("max_tokens = %d, want 512", router.gotMaxToks)
 	}
-	if !strings.Contains(router.gotUser, "drone-001 status") {
+	if !strings.Contains(router.gotUser, "test.research.graph.route.entity.drone-001 status") {
 		t.Errorf("user prompt missing topic: %q", router.gotUser)
 	}
 }
@@ -118,11 +118,11 @@ func TestRouteDecision_DecomposeHappyPath(t *testing.T) {
 
 func TestRouteDecision_WalkSeedsHappyPath(t *testing.T) {
 	router := &fakeRouter{
-		content: `{"action":"walk_seeds","args":{"seeds":[{"ref":"drone-001","ref_type":"name"},{"ref":"0","ref_type":"candidate_index"}]},"rationale":"have starts"}`,
+		content: `{"action":"walk_seeds","args":{"seeds":[{"ref":"test.research.graph.route.entity.drone-001","ref_type":"name"},{"ref":"0","ref_type":"candidate_index"}]},"rationale":"have starts"}`,
 	}
 	got, err := routeDecision(context.Background(), router,
 		&research.Intent{Topic: "x"},
-		&research.ClassifierOutput{Topic: "x", Tier: "0", Candidates: []research.Candidate{{EntityID: "drone-001", Tier: "0", Source: "x"}}},
+		&research.ClassifierOutput{Topic: "x", Tier: "0", Candidates: []research.Candidate{{EntityID: "test.research.graph.route.entity.drone-001", Tier: "0", Source: "x"}}},
 		512, 10, nil)
 	if err != nil {
 		t.Fatalf("routeDecision: %v", err)
@@ -131,7 +131,7 @@ func TestRouteDecision_WalkSeedsHappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseWalkSeedsArgs: %v", err)
 	}
-	if len(args.Seeds) != 2 || args.Seeds[0].Ref != "drone-001" {
+	if len(args.Seeds) != 2 || args.Seeds[0].Ref != "test.research.graph.route.entity.drone-001" {
 		t.Errorf("walk_seeds args drift: %+v", args)
 	}
 }
@@ -322,8 +322,8 @@ func TestBuildUserPrompt_IncludesTopicAndCandidates(t *testing.T) {
 		Confidence: 0.72,
 		Hints:      map[string]any{"k": "v"},
 		Candidates: []research.Candidate{
-			{EntityID: "sensor-001", Label: "Sensor 001", Type: "sensor", Relevance: 0.9, Tier: "0", Source: "x"},
-			{EntityID: "sensor-002", Label: "Sensor 002", Type: "sensor", Relevance: 0.5, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.sensor-001", Label: "Sensor 001", Type: "sensor", Relevance: 0.9, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.sensor-002", Label: "Sensor 002", Type: "sensor", Relevance: 0.5, Tier: "0", Source: "x"},
 		},
 	}
 	got := buildUserPrompt(intent, out, 10)
@@ -334,8 +334,8 @@ func TestBuildUserPrompt_IncludesTopicAndCandidates(t *testing.T) {
 		"entity_type: sensor",
 		"Classifier tier: 1",
 		"Classifier confidence: 0.72",
-		"sensor-001",
-		"sensor-002",
+		"test.research.graph.route.entity.sensor-001",
+		"test.research.graph.route.entity.sensor-002",
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("prompt missing %q\nfull:\n%s", want, got)
@@ -350,21 +350,21 @@ func TestBuildUserPrompt_CapsCandidateCount(t *testing.T) {
 		Topic: "x",
 		Tier:  "0",
 		Candidates: []research.Candidate{
-			{EntityID: "low", Relevance: 0.1, Tier: "0", Source: "x"},
-			{EntityID: "high", Relevance: 0.9, Tier: "0", Source: "x"},
-			{EntityID: "mid", Relevance: 0.5, Tier: "0", Source: "x"},
-			{EntityID: "low2", Relevance: 0.2, Tier: "0", Source: "x"},
-			{EntityID: "mid2", Relevance: 0.4, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.low", Relevance: 0.1, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.high", Relevance: 0.9, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.mid", Relevance: 0.5, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.low2", Relevance: 0.2, Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.route.entity.mid2", Relevance: 0.4, Tier: "0", Source: "x"},
 		},
 	}
 	got := buildUserPrompt(&research.Intent{Topic: "x"}, out, 2)
-	if !strings.Contains(got, "high") {
+	if !strings.Contains(got, "test.research.graph.route.entity.high") {
 		t.Errorf("top-relevance 'high' missing from capped prompt:\n%s", got)
 	}
-	if !strings.Contains(got, "mid") {
+	if !strings.Contains(got, "test.research.graph.route.entity.mid") {
 		t.Errorf("second-relevance 'mid' missing from capped prompt:\n%s", got)
 	}
-	if strings.Contains(got, "low2") || strings.Contains(got, "mid2") {
+	if strings.Contains(got, "test.research.graph.route.entity.low2") || strings.Contains(got, "test.research.graph.route.entity.mid2") {
 		t.Errorf("low-relevance candidates leaked past cap:\n%s", got)
 	}
 }
@@ -424,7 +424,7 @@ func TestRouteDecision_PassesSystemAndUserPrompts(t *testing.T) {
 	intent := &research.Intent{Topic: "my topic", Hints: map[string]string{"a": "b"}}
 	out := &research.ClassifierOutput{
 		Topic: "my topic", Tier: "0",
-		Candidates: []research.Candidate{{EntityID: "ent-1", Tier: "0", Source: "x"}},
+		Candidates: []research.Candidate{{EntityID: "test.research.graph.route.entity.ent-1", Tier: "0", Source: "x"}},
 	}
 	_, err := routeDecision(context.Background(), router, intent, out, 512, 10, nil)
 	if err != nil {
@@ -436,7 +436,7 @@ func TestRouteDecision_PassesSystemAndUserPrompts(t *testing.T) {
 	if !strings.Contains(router.gotUser, "my topic") {
 		t.Errorf("user prompt missing topic: %s", router.gotUser)
 	}
-	if !strings.Contains(router.gotUser, "ent-1") {
+	if !strings.Contains(router.gotUser, "test.research.graph.route.entity.ent-1") {
 		t.Errorf("user prompt missing candidate: %s", router.gotUser)
 	}
 }

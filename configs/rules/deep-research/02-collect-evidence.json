@@ -4,6 +4,7 @@
   "name": "Collect Research Evidence",
   "description": "When a researcher completes successfully, record a reference entry in RESEARCH_EVIDENCE and add a research.has_evidence triple. The entry carries only identifiers (loop_id, task_id, role). Downstream consumers fetch findings via read_loop_result on the loop id. Rules carry references, not payloads — see ADR-028.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

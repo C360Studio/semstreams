@@ -4,6 +4,7 @@ package natsclient
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,6 +14,51 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIntegration_ConsumeStreamWithConfigContexts_CancelledSetupDoesNotStartConsumer(t *testing.T) {
+	ctx := context.Background()
+	natsContainer, natsURL := startNATSContainerWithJS(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	client, err := NewClient(natsURL)
+	require.NoError(t, err)
+	require.NoError(t, client.Connect(ctx))
+	defer client.Close(ctx)
+
+	_, err = client.EnsureStream(ctx, jetstream.StreamConfig{
+		Name:     "CONTEXT_SPLIT_STREAM",
+		Subjects: []string{"context.split.>"},
+		Storage:  jetstream.MemoryStorage,
+	})
+	require.NoError(t, err)
+
+	setupCtx, cancelSetup := context.WithCancel(ctx)
+	cancelSetup()
+	handlerCtx, cancelHandler := context.WithCancel(ctx)
+	defer cancelHandler()
+
+	err = client.ConsumeStreamWithConfigContexts(setupCtx, handlerCtx, StreamConsumerConfig{
+		StreamName:    "CONTEXT_SPLIT_STREAM",
+		ConsumerName:  "cancelled-setup",
+		FilterSubject: "context.split.>",
+		DeliverPolicy: "all",
+		AckPolicy:     "explicit",
+	}, func(context.Context, jetstream.Msg) {
+		t.Error("handler ran despite cancelled consumer setup")
+	})
+	require.Error(t, err)
+	assert.True(t, errors.Is(err, context.Canceled), "setup error = %v, want context cancellation", err)
+	select {
+	case <-handlerCtx.Done():
+		t.Fatal("setup cancellation leaked into independent handler lifecycle")
+	default:
+	}
+
+	client.consumersMu.Lock()
+	_, started := client.consumers["CONTEXT_SPLIT_STREAM:cancelled-setup"]
+	client.consumersMu.Unlock()
+	assert.False(t, started, "cancelled setup registered a live consumer")
+}
 
 // TestIntegration_EnsureStream tests stream creation
 func TestIntegration_EnsureStream(t *testing.T) {

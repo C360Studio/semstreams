@@ -394,16 +394,12 @@ func (s *TieredScenario) printMetricsIfApplicable(ctx context.Context, stageName
 	if !strings.Contains(stageName, "send") && !strings.Contains(stageName, "validate") && !strings.Contains(stageName, "verify") {
 		return
 	}
-	snapshot, err := s.metrics.FetchSnapshot(ctx)
-	if err != nil {
+	// Both counters carry labels, so an exact map lookup against a parsed
+	// snapshot silently reports zero. Sum every series by metric name instead.
+	entities, entityErr := s.metrics.SumMetricsByName(ctx, "semstreams_datamanager_entities_updated_total")
+	rules, ruleErr := s.metrics.SumMetricsByName(ctx, "semstreams_rule_evaluations_total")
+	if entityErr != nil && ruleErr != nil {
 		return
-	}
-	var entities, rules float64
-	if m, ok := snapshot.Metrics["semstreams_datamanager_entities_updated_total"]; ok {
-		entities = m.Value
-	}
-	if m, ok := snapshot.Metrics["semstreams_rule_evaluations_total"]; ok {
-		rules = m.Value
 	}
 	fmt.Printf("  Metrics: entities=%.0f, rules=%.0f\n", entities, rules)
 }

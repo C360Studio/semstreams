@@ -4,6 +4,7 @@
   "name": "R3 — Execute complete → Assess",
   "description": "ADR-045 R3. Fires when execute_subqueries stamps research.execute.complete. Dispatches assess_sufficiency to judge whether the evidence is enough or refine is needed. In the refine loop, R4's refine branch clears research.execute.complete + research.assess.complete before re-dispatching execute, so R3 fires again on the next stamp. Per-rule MaxIterations not set — R4's refine branch has the iteration cap.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

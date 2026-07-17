@@ -6,6 +6,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -32,29 +33,29 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 			template: "$entity.triple.gather.child.completed.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "gather.child.completed", Object: "loop_a"},
-					{Predicate: "gather.child.completed", Object: "loop_b"},
-					{Predicate: "gather.child.completed", Object: "loop_c"},
+					{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "loop_a"},
+					{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "loop_b"},
+					{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "loop_c"},
 				},
 			},
 			want: `["loop_a","loop_b","loop_c"]`,
 		},
 		{
 			name:     "Pattern B — single triple with []string Object → JSON array of elements",
-			template: "$entity.triple.subtopics.triples",
+			template: "$entity.triple.test.fixture.subtopics.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []string{"hydraulics", "pneumatics", "electrics"}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{"hydraulics", "pneumatics", "electrics"}},
 				},
 			},
 			want: `["hydraulics","pneumatics","electrics"]`,
 		},
 		{
 			name:     "Pattern B — single triple with []any Object (JSON-unmarshal shape)",
-			template: "$entity.triple.subtopics.triples",
+			template: "$entity.triple.test.fixture.subtopics.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []any{"a", "b"}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []any{"a", "b"}},
 				},
 			},
 			want: `["a","b"]`,
@@ -64,17 +65,17 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 			template: "$entity.triple.coordinator.decision.subtopics.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "coordinator.decision.subtopics", Object: `["alpha","beta","gamma"]`},
+					{Predicate: semantictest.Predicate(t, "coordinator", "decision", "subtopics"), Object: `["alpha","beta","gamma"]`},
 				},
 			},
 			want: `["alpha","beta","gamma"]`,
 		},
 		{
 			name:     "Predicate not present → empty JSON array",
-			template: "$entity.triple.never.set.triples",
+			template: "$entity.triple.test.never.set.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "other.predicate", Object: "value"},
+					{Predicate: semantictest.Predicate(t, "test", "other", "predicate"), Object: "value"},
 				},
 			},
 			want: "[]",
@@ -84,31 +85,31 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 			template: "$entity.triple.gather.child.completed.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "gather.child.completed", Object: "only_child"},
+					{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "only_child"},
 				},
 			},
 			want: `["only_child"]`,
 		},
 		{
 			name:     "Empty Pattern B list → empty JSON array",
-			template: "$entity.triple.subtopics.triples",
+			template: "$entity.triple.test.fixture.subtopics.triples",
 			entity: &gtypes.EntityState{
 				Triples: []message.Triple{
-					{Predicate: "subtopics", Object: []string{}},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{}},
 				},
 			},
 			want: "[]",
 		},
 		{
 			name:     "Mixed Pattern A + non-string scalar → stringified into array",
-			template: "$entity.triple.counts.triples",
+			template: "$entity.triple.test.fixture.counts.triples",
 			entity: &gtypes.EntityState{
 				// Numeric scalar Objects get stringified via %v —
 				// same path that []any non-string elements take in
 				// coerceTripleObjectToStrings.
 				Triples: []message.Triple{
-					{Predicate: "counts", Object: 42},
-					{Predicate: "counts", Object: 17},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "counts"), Object: 42},
+					{Predicate: semantictest.Predicate(t, "test", "fixture", "counts"), Object: 17},
 				},
 			},
 			want: `["42","17"]`,
@@ -129,7 +130,7 @@ func TestTripleTriplesSubstitution_TruthTable(t *testing.T) {
 // rather than tripping the unresolved-template warning.
 func TestTripleTriplesSubstitution_NilEntityResolvesToEmpty(t *testing.T) {
 	ec := &ExecutionContext{} // Entity nil
-	got := ec.SubstituteVariables("$entity.triple.anything.triples")
+	got := ec.SubstituteVariables("$entity.triple.test.fixture.anything.triples")
 	assert.Equal(t, "[]", got)
 }
 
@@ -139,12 +140,12 @@ func TestTripleTriplesSubstitution_RelatedNamespace(t *testing.T) {
 	ec := &ExecutionContext{
 		Related: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "tags", Object: "x"},
-				{Predicate: "tags", Object: "y"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "tags"), Object: "x"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "tags"), Object: "y"},
 			},
 		},
 	}
-	got := ec.SubstituteVariables("$related.triple.tags.triples")
+	got := ec.SubstituteVariables("$related.triple.test.fixture.tags.triples")
 	assert.Equal(t, `["x","y"]`, got)
 }
 
@@ -157,14 +158,14 @@ func TestTripleTriplesSubstitution_RunsBeforeGenericSubstitution(t *testing.T) {
 	ec := &ExecutionContext{
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "subtopics", Object: []string{"a", "b", "c"}},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "subtopics"), Object: []string{"a", "b", "c"}},
 			},
 		},
 	}
 	// Template uses both the plain triple reference AND the .triples
 	// suffix. If the generic substitution ran first, the .triples
 	// suffix would be orphaned on the stringified `[a b c]` value.
-	got := ec.SubstituteVariables("plain=$entity.triple.subtopics triples=$entity.triple.subtopics.triples")
+	got := ec.SubstituteVariables("plain=$entity.triple.test.fixture.subtopics triples=$entity.triple.test.fixture.subtopics.triples")
 	// Plain reference stringifies the list (existing behavior);
 	// .triples renders as JSON array.
 	assert.Contains(t, got, `triples=["a","b","c"]`)
@@ -185,23 +186,23 @@ func TestTripleTriplesSubstitution_MultipleTokensInOneTemplate(t *testing.T) {
 	ec := &ExecutionContext{
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "first", Object: "a"},
-				{Predicate: "first", Object: "b"},
-				{Predicate: "second", Object: "x"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "first"), Object: "a"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "first"), Object: "b"},
+				{Predicate: semantictest.Predicate(t, "test", "fixture", "second"), Object: "x"},
 			},
 		},
 	}
-	prompt := "Sibling IDs: $entity.triple.first.triples. Subtopics: $entity.triple.second.triples."
+	prompt := "Sibling IDs: $entity.triple.test.fixture.first.triples; Subtopics: $entity.triple.test.fixture.second.triples"
 	got := ec.SubstituteVariables(prompt)
-	assert.Equal(t, `Sibling IDs: ["a","b"]. Subtopics: ["x"].`, got)
+	assert.Equal(t, `Sibling IDs: ["a","b"]; Subtopics: ["x"]`, got)
 }
 
 func TestTripleTriplesSubstitution_CanonicalHyphenatedPredicate(t *testing.T) {
 	t.Parallel()
 
 	ec := &ExecutionContext{Entity: &gtypes.EntityState{Triples: []message.Triple{
-		{Predicate: "gather.child.completed", Object: "child-a"},
-		{Predicate: "gather.child.completed", Object: "child-b"},
+		{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "child-a"},
+		{Predicate: semantictest.Predicate(t, "gather", "child", "completed"), Object: "child-b"},
 	}}}
 
 	got := ec.SubstituteVariables("$entity.triple.gather.child.completed.triples")

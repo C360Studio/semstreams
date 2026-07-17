@@ -4,6 +4,7 @@
   "name": "Spawn Researcher on New Task",
   "description": "When the initial general agent completes successfully, spawn a researcher. The researcher receives the parent loop id as a reference and uses read_loop_result to fetch the original question body on demand. Rules carry references, not payloads — see ADR-028.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

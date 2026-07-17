@@ -4,6 +4,7 @@
   "name": "Timeout - Synthesize Partial Results",
   "description": "When a researcher loop approaches its iteration limit without completing, trigger synthesis with whatever evidence has been collected so far. Better to return partial findings than nothing.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

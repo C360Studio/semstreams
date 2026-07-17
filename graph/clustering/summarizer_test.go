@@ -253,8 +253,8 @@ func TestExtractTerms(t *testing.T) {
 // TestStatisticalSummarizer_IDFLiftsRareTerms is the regression guard for
 // the 2026-05-07 globalSearch known-answer bug: niche query-relevant nouns
 // (e.g. "hydraulic" sourced from a sensor's location property) were being
-// crowded out of community.Keywords by universal predicates ("location",
-// "unit") because keyword scoring was TF-only with no IDF. After the fix,
+// crowded out of community.Keywords by universal predicates ("entity.location.value",
+// "entity.measurement.unit") because keyword scoring was TF-only with no IDF. After the fix,
 // BuildCorpusDF computes corpus-wide document frequency once per pass and
 // extractKeywords scores by TF*IDF when DF is set, de-weighting universal
 // terms and surfacing distinctive ones.
@@ -263,14 +263,14 @@ func TestStatisticalSummarizer_IDFLiftsRareTerms(t *testing.T) {
 		return &gtypes.EntityState{
 			ID: id,
 			Triples: []message.Triple{
-				{Subject: id, Predicate: "location", Object: locationValue},
-				{Subject: id, Predicate: "unit", Object: "percent"},
+				{Subject: id, Predicate: "entity.location.value", Object: locationValue},
+				{Subject: id, Predicate: "entity.measurement.unit", Object: "percent"},
 			},
 		}
 	}
 
 	// Three communities of 5 sensors each. Each community has a distinctive
-	// location term; the predicates "location" and "unit" + the value
+	// location term; the predicates "entity.location.value" and "entity.measurement.unit" + the value
 	// "percent" are universal across all 15 entities.
 	mkCommunity := func(typePart, locationValue string) []*gtypes.EntityState {
 		out := make([]*gtypes.EntityState, 5)
@@ -307,15 +307,15 @@ func TestStatisticalSummarizer_IDFLiftsRareTerms(t *testing.T) {
 	// "hydraulic" appears in 5 of 15 entities (rare). With IDF=log(15/5)≈1.10
 	// it should clear the top-5 cap. Without IDF it competes against
 	// universal predicates each at TF=5/5=1.0 and tends to lose to
-	// log(1+freq)-weighted "location"/"unit" with their high raw counts.
+	// log(1+freq)-weighted "entity.location.value"/"entity.measurement.unit" with their high raw counts.
 	assert.True(t, idfSet["hydraulic"],
 		"corpus-wide DF should lift 'hydraulic' (rare) into top-5; got %v", withIDF)
 
-	// Universal predicates ("location", "unit") have DF=15, IDF=log(1)=0
+	// Universal predicates ("entity.location.value", "entity.measurement.unit") have DF=15, IDF=log(1)=0
 	// (smoothed to 0.01 in the impl). They must NOT win the top slot.
-	assert.NotEqual(t, "location", withIDF[0],
+	assert.NotEqual(t, "entity.location.value", withIDF[0],
 		"universal predicate 'location' should not be top keyword under IDF")
-	assert.NotEqual(t, "unit", withIDF[0],
+	assert.NotEqual(t, "entity.measurement.unit", withIDF[0],
 		"universal predicate 'unit' should not be top keyword under IDF")
 }
 

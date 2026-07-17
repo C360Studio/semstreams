@@ -15,6 +15,7 @@ const (
 	PredicateMeasurementFahrenheit = "sensor.measurement.fahrenheit"
 	PredicateMeasurementPercent    = "sensor.measurement.percent"
 	PredicateMeasurementHPA        = "sensor.measurement.hpa"
+	PredicateMeasurementPSI        = "sensor.measurement.psi"
 
 	// Sensor classification predicates
 	PredicateClassificationType    = "sensor.classification.type"
@@ -35,6 +36,9 @@ const (
 
 	// Sensor identity predicates (for ALIAS_INDEX)
 	PredicateSensorSerial = "iot.sensor.serial"
+
+	// Alert predicates emitted by the bundled reference rules.
+	PredicateAlertStateActive = "alert.state.active"
 )
 
 // RegisterVocabulary registers all IoT sensor domain predicates with the vocabulary
@@ -70,6 +74,12 @@ func RegisterVocabulary() {
 		vocabulary.WithDescription("Pressure reading in hectopascals"),
 		vocabulary.WithDataType("float64"),
 		vocabulary.WithUnits("hPa"),
+	)
+
+	vocabulary.Register(PredicateMeasurementPSI,
+		vocabulary.WithDescription("Pressure reading in pounds per square inch"),
+		vocabulary.WithDataType("float64"),
+		vocabulary.WithUnits("psi"),
 	)
 
 	// Sensor classification predicates
@@ -129,4 +139,12 @@ func RegisterVocabulary() {
 		vocabulary.WithDataType("string"),
 		vocabulary.WithAlias(vocabulary.AliasTypeExternal, 0), // Resolvable external ID
 		vocabulary.WithIRI(vocabulary.DcIdentifier))
+
+	// Reference rule outputs. This belongs to the example vocabulary rather
+	// than framework core: applications define and register their own alert
+	// semantics alongside the rules that emit them.
+	vocabulary.Register(PredicateAlertStateActive,
+		vocabulary.WithDescription("Active alert code emitted by the bundled IoT reference rules"),
+		vocabulary.WithDataType("string"),
+	)
 }

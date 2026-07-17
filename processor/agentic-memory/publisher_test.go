@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -159,8 +160,8 @@ func TestPublishGraphMutations_AddTriples(t *testing.T) {
 				LoopID:    "loop-001",
 				Triples: []message.Triple{
 					{
-						Subject:   "loop.001",
-						Predicate: "hasDecision",
+						Subject:   semantictest.EntityID(t, "test", "agentic-memory", "publisher", "loop", "execution", "001"),
+						Predicate: semantictest.Predicate(t, "agent", "memory", "decision"),
 						Object:    "Use pattern A",
 					},
 				},
@@ -175,13 +176,13 @@ func TestPublishGraphMutations_AddTriples(t *testing.T) {
 				LoopID:    "loop-002",
 				Triples: []message.Triple{
 					{
-						Subject:   "loop.002",
-						Predicate: "hasFile",
+						Subject:   semantictest.EntityID(t, "test", "agentic-memory", "publisher", "loop", "execution", "002"),
+						Predicate: semantictest.Predicate(t, "agent", "memory", "file"),
 						Object:    "main.go",
 					},
 					{
-						Subject:   "loop.002",
-						Predicate: "usedTool",
+						Subject:   semantictest.EntityID(t, "test", "agentic-memory", "publisher", "loop", "execution", "002"),
+						Predicate: semantictest.Predicate(t, "agent", "memory", "used-tool"),
 						Object:    "grep",
 					},
 				},
@@ -240,8 +241,8 @@ func TestPublishGraphMutations_DeleteTriples(t *testing.T) {
 		LoopID:    "loop-001",
 		Triples: []message.Triple{
 			{
-				Subject:   "loop.001",
-				Predicate: "hasObsoleteData",
+				Subject:   semantictest.EntityID(t, "test", "agentic-memory", "publisher", "loop", "execution", "001"),
+				Predicate: semantictest.Predicate(t, "agent", "memory", "obsolete-data"),
 				Object:    "old-value",
 			},
 		},
@@ -397,8 +398,8 @@ func TestMessageSerialization_GraphMutation(t *testing.T) {
 		LoopID:    "loop-001",
 		Triples: []message.Triple{
 			{
-				Subject:   "entity.001",
-				Predicate: "hasName",
+				Subject:   semantictest.EntityID(t, "test", "agentic-memory", "serialization", "graph", "entity", "001"),
+				Predicate: semantictest.Predicate(t, "core", "identity", "name"),
 				Object:    "Test Entity with 特殊字符",
 			},
 		},

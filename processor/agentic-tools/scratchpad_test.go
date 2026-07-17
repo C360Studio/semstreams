@@ -77,7 +77,7 @@ func TestScratchpadExecutor_HappyPath_EmitsFourTriples(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loop entity id: %v", err)
 	}
-	byPredicate := map[string]any{}
+	facts := map[string]any{}
 	for _, tr := range pub.triples {
 		if tr.Subject != loopEntityID {
 			t.Errorf("triple subject = %q, want loop entity %q", tr.Subject, loopEntityID)
@@ -85,16 +85,16 @@ func TestScratchpadExecutor_HappyPath_EmitsFourTriples(t *testing.T) {
 		if tr.Source != scratchpadToolSource {
 			t.Errorf("triple source = %q, want %q", tr.Source, scratchpadToolSource)
 		}
-		byPredicate[tr.Predicate] = tr.Object
+		facts[tr.Predicate] = tr.Object
 	}
-	if byPredicate[agvocab.ScratchID] != "scratch-uuid-fixed" {
-		t.Errorf("ScratchID = %v, want fixed uuid", byPredicate[agvocab.ScratchID])
+	if facts[agvocab.ScratchID] != "scratch-uuid-fixed" {
+		t.Errorf("ScratchID = %v, want fixed uuid", facts[agvocab.ScratchID])
 	}
-	if byPredicate[agvocab.ScratchText] != "Let me think: handle empty retry_hint." {
-		t.Errorf("ScratchText = %v, want literal", byPredicate[agvocab.ScratchText])
+	if facts[agvocab.ScratchText] != "Let me think: handle empty retry_hint." {
+		t.Errorf("ScratchText = %v, want literal", facts[agvocab.ScratchText])
 	}
-	if byPredicate[agvocab.ScratchChars] != 38 {
-		t.Errorf("ScratchChars = %v, want 38", byPredicate[agvocab.ScratchChars])
+	if facts[agvocab.ScratchChars] != 38 {
+		t.Errorf("ScratchChars = %v, want 38", facts[agvocab.ScratchChars])
 	}
 
 	// Co-emission invariant: all four triples for one call share the

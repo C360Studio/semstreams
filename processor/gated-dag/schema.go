@@ -1,10 +1,17 @@
 package gateddagexec
 
-import "github.com/c360studio/semstreams/component"
+import (
+	"fmt"
+
+	"github.com/c360studio/semstreams/component"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+)
 
 // Schema returns the component configuration schema (static metadata used by
 // the registry + operator UI). Mirrors the field set in Config.
 func (c Config) Schema() component.ConfigSchema {
+	minimumLength := 1
+	maximumLength := semtypes.MaxEntityIDBytes
 	return component.ConfigSchema{
 		Properties: map[string]component.PropertySchema{
 			"fan_out_workflow": {
@@ -15,7 +22,10 @@ func (c Config) Schema() component.ConfigSchema {
 			},
 			"unit_entity_prefix": {
 				Type:        "string",
-				Description: "graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out. Required.",
+				Description: fmt.Sprintf("Required canonical literal entity-ID query prefix with one to six dot-separated tokens and at most %d bytes; wildcards are not accepted. This is the graph.query.prefix scope read authoritatively each evaluation — the blast radius of one fan-out.", semtypes.MaxEntityIDBytes),
+				MinLength:   &minimumLength,
+				MaxLength:   &maximumLength,
+				Pattern:     semtypes.EntityIDLiteralPrefixPattern,
 				Category:    "basic",
 			},
 			"dispatch_subject": {
@@ -92,7 +102,9 @@ func (c Config) Schema() component.ConfigSchema {
 			},
 			"fan_out_instance_id": {
 				Type:        "string",
-				Description: "Optional 6-part entity ID of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty = no instance lifecycle owned.",
+				Description: fmt.Sprintf("Optional canonical six-part literal entity ID, at most %d bytes, of the FanOut lifecycle instance to own: created in 'dispatching' on Start, auto-transitioned to 'completed' when every unit is Done. Empty or omitted means no instance lifecycle is owned.", semtypes.MaxEntityIDBytes),
+				MaxLength:   &maximumLength,
+				Pattern:     semtypes.OptionalEntityIDLiteralPattern,
 				Category:    "advanced",
 			},
 			"stall_subject": {

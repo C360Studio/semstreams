@@ -277,7 +277,7 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 	assert.Len(t, triples, 6)
 
 	// Extract forward edges (entity → member → container)
-	forwardPredicates := make(map[string]string) // predicate -> object
+	forwardPredicates := make(map[string]string) // predicate-audit:unrelated {"column":23,"surface":"go-assignment:forwardPredicates","value":"","basis":"reviewed output map populated from inferred triples"}
 	for _, tr := range triples {
 		if tr.Subject == entityID {
 			forwardPredicates[tr.Predicate] = tr.Object.(string)
@@ -289,7 +289,7 @@ func TestHierarchyInference_OnEntityCreated_AllLevels(t *testing.T) {
 	assert.Equal(t, "c360.logistics.sensor.group.container.level", forwardPredicates[vocabulary.HierarchyDomainMember])
 
 	// Extract inverse edges (container → contains → entity)
-	inversePredicates := make(map[string]string) // predicate -> subject (container)
+	inversePredicates := make(map[string]string) // predicate-audit:unrelated {"column":23,"surface":"go-assignment:inversePredicates","value":"","basis":"reviewed output map populated from inferred triples"}
 	for _, tr := range triples {
 		if tr.Object == entityID {
 			inversePredicates[tr.Predicate] = tr.Subject

@@ -4,6 +4,7 @@
   "name": "Fan Out Research Subtopics",
   "description": "Fires when the research-coordinator decides fan_out. Spawns a sub-researcher that fetches the coordinator's subtopic list via read_loop_result and investigates one. True parallel fan-out (N agents at once) is out of scope for this milestone — that needs the coordinator's flow-composition tools (ADR-026 milestone 2). See ADR-026 + ADR-028.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -70,11 +71,39 @@ func prefixEnvelope(ids ...string) []byte {
 	return out
 }
 
+func TestHandleQueryGraphSummary_PoisonedPrefixReplyPropagates(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	poisoned, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{
+		{ID: validID},
+		{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+	}})
+	if err != nil {
+		t.Fatalf("marshal poison response: %v", err)
+	}
+	c := newSummaryTestComponent(func(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
+		if subject == "graph.ingest.query.prefix" {
+			return poisoned, nil
+		}
+		return predicateListResponse(), nil
+	})
+
+	response, err := c.handleQueryGraphSummary(context.Background(), []byte(`{"include_predicates":false}`))
+	if err == nil || !graph.IsStateContractError(err) {
+		t.Fatalf("error = %T %v, want graph state reset contract", err, err)
+	}
+	if response != nil {
+		t.Fatalf("response = %s, want nil before summary projection", response)
+	}
+}
+
 // predicateListResponse marshals a successful predicate-list response
 // from graph.index.query.predicateList.
 func predicateListResponse(preds ...graph.PredicateSummary) []byte {
 	resp := graph.NewQueryResponse(graph.PredicateListData{
-		Predicates: preds,
+		Predicates: preds, // predicate-audit:unrelated {"column":15,"surface":"go-field:Predicates","value":"","basis":"reviewed query-response output supplied by caller"}
 		Total:      len(preds),
 	})
 	out, _ := json.Marshal(resp)
@@ -100,7 +129,7 @@ func TestHandleQueryGraphSummary_HappyPath(t *testing.T) {
 			return predicateListResponse(
 				graph.PredicateSummary{Predicate: "agent.web.url", EntityCount: 3},
 				graph.PredicateSummary{Predicate: "agent.loop.outcome", EntityCount: 2},
-				graph.PredicateSummary{Predicate: "source.code.symbol_name", EntityCount: 1},
+				graph.PredicateSummary{Predicate: "source.code.symbol-name", EntityCount: 1},
 			), nil
 		}
 		return nil, errors.New("unexpected subject: " + subject)
@@ -159,7 +188,7 @@ func TestHandleQueryGraphSummary_IncludePredicatesFalse(t *testing.T) {
 			return prefixEnvelope("acme.platform.agent.web.observation.h1"), nil
 		case "graph.index.query.predicateList":
 			predicateCalled = true
-			return predicateListResponse(graph.PredicateSummary{Predicate: "x", EntityCount: 1}), nil
+			return predicateListResponse(graph.PredicateSummary{Predicate: "test.fixture.x", EntityCount: 1}), nil
 		}
 		return nil, errors.New("unexpected subject: " + subject)
 	})
@@ -316,6 +345,8 @@ func TestParseGraphSummaryRequest_ExplicitFalseOverrides(t *testing.T) {
 		t.Errorf("explicit include_predicates=false ignored")
 	}
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=78 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity graph summary prefix aggregate subject poison fixture
 
 // TestParseSummaryRequest_RoundTrip locks in the JSON tag contract
 // per the project's polymorphic-config rule (memory:

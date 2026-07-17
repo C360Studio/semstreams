@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/examples/processors/document"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -400,7 +401,7 @@ func TestIntegration_StructStillMarshaledCorrectly(t *testing.T) {
 		Value    int    `json:"value"`
 	}{
 		Type:     "sensor",
-		EntityID: "sensor-789",
+		EntityID: semantictest.EntityID(t, "test", "objectstore", "opaque", "json", "sensor", "789"),
 		Value:    42,
 	}
 
@@ -416,7 +417,7 @@ func TestIntegration_StructStillMarshaledCorrectly(t *testing.T) {
 	err = json.Unmarshal(retrieved, &parsed)
 	require.NoError(t, err)
 	assert.Equal(t, "sensor", parsed["type"])
-	assert.Equal(t, "sensor-789", parsed["entity_id"])
+	assert.Equal(t, input.EntityID, parsed["entity_id"])
 	assert.Equal(t, float64(42), parsed["value"]) // JSON numbers are float64
 }
 
@@ -569,12 +570,16 @@ func TestIntegration_BinaryStorable(t *testing.T) {
 	defer store.Close()
 
 	// Create a BinaryStorable implementation
+	entityID := semantictest.EntityID(t, "acme", "ops", "docs", "objectstore", "binary", "001")
 	binaryDoc := &testBinaryDocument{
-		id:          "acme.ops.docs.objectstore.binary.001",
+		id:          entityID,
 		title:       "Video Tutorial",
 		description: "How to use the system",
 		videoData:   []byte("fake video data - would be MP4 bytes"),
 		imageData:   []byte{0x89, 0x50, 0x4E, 0x47}, // PNG magic bytes
+		triples: []message.Triple{{
+			Subject: entityID, Predicate: semantictest.Predicate(t, "document", "metadata", "title"), Object: "Video Tutorial",
+		}},
 	}
 
 	// Store content with binary
@@ -587,7 +592,7 @@ func TestIntegration_BinaryStorable(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify text fields
-	assert.Equal(t, "acme.ops.docs.objectstore.binary.001", storedContent.EntityID)
+	assert.Equal(t, entityID, storedContent.EntityID)
 	assert.Equal(t, "Video Tutorial", storedContent.Fields["title"])
 	assert.Equal(t, "How to use the system", storedContent.Fields["description"])
 
@@ -637,12 +642,16 @@ func TestIntegration_BinaryStorable_LargeContent(t *testing.T) {
 		largeData[i] = byte(i % 256)
 	}
 
+	entityID := semantictest.EntityID(t, "acme", "ops", "docs", "objectstore", "binary", "large-001")
 	binaryDoc := &testBinaryDocument{
-		id:          "acme.ops.docs.objectstore.binary.large-001",
+		id:          entityID,
 		title:       "Large File",
 		description: "Testing large binary storage",
 		videoData:   largeData,
 		imageData:   nil, // No thumbnail
+		triples: []message.Triple{{
+			Subject: entityID, Predicate: semantictest.Predicate(t, "document", "metadata", "title"), Object: "Large File",
+		}},
 	}
 
 	// Store content with large binary
@@ -738,6 +747,7 @@ type testBinaryDocument struct {
 	videoData   []byte
 	imageData   []byte
 	storageRef  *message.StorageReference
+	triples     []message.Triple
 }
 
 func (d *testBinaryDocument) EntityID() string {
@@ -745,9 +755,7 @@ func (d *testBinaryDocument) EntityID() string {
 }
 
 func (d *testBinaryDocument) Triples() []message.Triple {
-	return []message.Triple{
-		{Subject: d.id, Predicate: "hasTitle", Object: d.title},
-	}
+	return d.triples
 }
 
 func (d *testBinaryDocument) StorageRef() *message.StorageReference {

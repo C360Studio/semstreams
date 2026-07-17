@@ -3,10 +3,14 @@ package graph
 import (
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestEvent_Validate_Valid(t *testing.T) {
 	now := time.Now()
+	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
+	batteryID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "001")
 	validMetadata := EventMetadata{
 		RuleName:  "test_rule",
 		Timestamp: now,
@@ -23,7 +27,7 @@ func TestEvent_Validate_Valid(t *testing.T) {
 			name: "valid entity update event",
 			event: Event{
 				Type:       EventEntityUpdate,
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{"status": "active"},
 				Metadata:   validMetadata,
 				Confidence: 0.8,
@@ -33,8 +37,8 @@ func TestEvent_Validate_Valid(t *testing.T) {
 			name: "valid relationship create event",
 			event: Event{
 				Type:       EventRelationshipCreate,
-				EntityID:   "drone_001",
-				TargetID:   "battery_001",
+				EntityID:   droneID,
+				TargetID:   batteryID,
 				Properties: map[string]any{"edge_type": "POWERED_BY"},
 				Metadata:   validMetadata,
 				Confidence: 1.0,
@@ -54,6 +58,7 @@ func TestEvent_Validate_Valid(t *testing.T) {
 
 func TestEvent_Validate_Invalid(t *testing.T) {
 	now := time.Now()
+	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
 	validMetadata := EventMetadata{
 		RuleName:  "test_rule",
 		Timestamp: now,
@@ -70,7 +75,7 @@ func TestEvent_Validate_Invalid(t *testing.T) {
 		{
 			name: "missing event type",
 			event: Event{
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{},
 				Metadata:   validMetadata,
 				Confidence: 1.0,
@@ -91,7 +96,7 @@ func TestEvent_Validate_Invalid(t *testing.T) {
 			name: "confidence too low",
 			event: Event{
 				Type:       EventEntityUpdate,
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{},
 				Metadata:   validMetadata,
 				Confidence: -0.1,
@@ -102,7 +107,7 @@ func TestEvent_Validate_Invalid(t *testing.T) {
 			name: "confidence too high",
 			event: Event{
 				Type:       EventEntityUpdate,
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{},
 				Metadata:   validMetadata,
 				Confidence: 1.1,
@@ -113,7 +118,7 @@ func TestEvent_Validate_Invalid(t *testing.T) {
 			name: "relationship event missing target ID",
 			event: Event{
 				Type:       EventRelationshipCreate,
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{},
 				Metadata:   validMetadata,
 				Confidence: 1.0,
@@ -138,6 +143,7 @@ func TestEvent_Validate_Invalid(t *testing.T) {
 
 func TestEvent_Validate_Metadata(t *testing.T) {
 	now := time.Now()
+	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
 
 	tests := []struct {
 		name     string
@@ -177,7 +183,7 @@ func TestEvent_Validate_Metadata(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			event := Event{
 				Type:       EventEntityUpdate,
-				EntityID:   "drone_001",
+				EntityID:   droneID,
 				Properties: map[string]any{},
 				Metadata:   tt.metadata,
 				Confidence: 1.0,
@@ -197,9 +203,10 @@ func TestEvent_Validate_Metadata(t *testing.T) {
 
 func TestEvent_Validate_AutoVersion(t *testing.T) {
 	now := time.Now()
+	droneID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
 	event := Event{
 		Type:       EventEntityUpdate,
-		EntityID:   "drone_001",
+		EntityID:   droneID,
 		Properties: map[string]any{},
 		Metadata: EventMetadata{
 			RuleName:  "test_rule",
@@ -274,7 +281,7 @@ func TestEvent_Subject(t *testing.T) {
 }
 
 func TestNewEntityUpdateEvent(t *testing.T) {
-	entityID := "drone_001"
+	entityID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
 	properties := map[string]any{
 		"status":  "active",
 		"battery": 85.5,
@@ -304,8 +311,8 @@ func TestNewEntityUpdateEvent(t *testing.T) {
 }
 
 func TestNewRelationshipCreateEvent(t *testing.T) {
-	fromID := "drone_001"
-	toID := "battery_001"
+	fromID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
+	toID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "001")
 	relationshipType := "POWERED_BY"
 	metadata := EventMetadata{
 		RuleName:  "power_relationship_detector",
@@ -333,7 +340,7 @@ func TestNewRelationshipCreateEvent(t *testing.T) {
 
 func TestNewAlertEvent(t *testing.T) {
 	alertType := "battery_low"
-	entityID := "drone_001"
+	entityID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
 	properties := map[string]any{
 		"battery_level": 15.0,
 		"threshold":     20.0,
@@ -374,7 +381,7 @@ func TestNewAlertEvent(t *testing.T) {
 }
 
 func TestNewEntityCreateEvent(t *testing.T) {
-	entityID := "sensor_001"
+	entityID := semantictest.EntityID(t, "test", "graph", "events", "telemetry", "sensor", "001")
 	entityType := "sensor:Temperature"
 	properties := map[string]any{
 		"location": "engine_room",
@@ -405,7 +412,7 @@ func TestNewEntityCreateEvent(t *testing.T) {
 }
 
 func TestNewEntityDeleteEvent(t *testing.T) {
-	entityID := "old_sensor_001"
+	entityID := semantictest.EntityID(t, "test", "graph", "events", "telemetry", "sensor", "retired-001")
 	reason := "sensor offline for 24 hours"
 	metadata := EventMetadata{
 		RuleName:  "cleanup_rule",
@@ -431,8 +438,8 @@ func TestNewEntityDeleteEvent(t *testing.T) {
 }
 
 func TestNewRelationshipDeleteEvent(t *testing.T) {
-	fromID := "drone_001"
-	toID := "old_battery_001"
+	fromID := semantictest.EntityID(t, "test", "graph", "events", "flight", "drone", "001")
+	toID := semantictest.EntityID(t, "test", "graph", "events", "power", "battery", "retired-001")
 	relationshipType := "POWERED_BY"
 	metadata := EventMetadata{
 		RuleName:  "battery_replacement_rule",

@@ -138,7 +138,7 @@ func TestComponent_HandleMessage_DecomposeHappyPath(t *testing.T) {
 		classifierOut: &research.ClassifierOutput{
 			Topic: "sensor anomalies", Tier: "1",
 			Candidates: []research.Candidate{
-				{EntityID: "sensor-001", Tier: "0", Source: "x"},
+				{EntityID: "test.research.graph.execute.entity.sensor-001", Tier: "0", Source: "x"},
 			},
 		},
 		decision: &research.RouteDecision{
@@ -151,9 +151,9 @@ func TestComponent_HandleMessage_DecomposeHappyPath(t *testing.T) {
 		},
 	}
 	gq := &fakeGraphQuery{
-		entityStateOut:   []fusion.Evidence{{EntityID: "sensor-001"}},
-		temporalRangeOut: []fusion.Evidence{{EntityID: "event-T1"}},
-		bm25Out:          []fusion.Evidence{{EntityID: "doc-abc", Score: 0.3}},
+		entityStateOut:   []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.sensor-001"}},
+		temporalRangeOut: []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.event-t1"}},
+		bm25Out:          []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.doc-abc", Score: 0.3}},
 	}
 	c := newTestComponent(loops, gq)
 	c.handleMessage(context.Background(), "component.execute_subqueries.loop-2", nil)

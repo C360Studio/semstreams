@@ -17,6 +17,8 @@ type fakeClassifier struct {
 	result *query.ClassificationResult
 }
 
+// entity-id-audit:classify intentional-malformed "" line=287 column=15 surface=go-field:.EntityID entity_id_invalid:empty empty research candidate ID rejection fixture
+
 func (f *fakeClassifier) ClassifyQuery(_ context.Context, _ string) *query.ClassificationResult {
 	return f.result
 }
@@ -145,7 +147,7 @@ func TestClassifyAndRetrieve_EmbeddingTier(t *testing.T) {
 	}}
 	retriever := &fakeRetriever{
 		candidates: []research.Candidate{
-			{EntityID: "doc.001", Tier: "1", Source: "search_graph", Relevance: 0.78},
+			{EntityID: "test.research.graph.classify.entity.doc-001", Tier: "1", Source: "search_graph", Relevance: 0.78},
 		},
 	}
 	intent := &research.Intent{Topic: "documents similar to onboarding guide"}
@@ -177,7 +179,7 @@ func TestClassifyAndRetrieve_LLMTier(t *testing.T) {
 	}}
 	retriever := &fakeRetriever{
 		candidates: []research.Candidate{
-			{EntityID: "sensor.42", Tier: "0", Source: "search_graph"},
+			{EntityID: "test.research.graph.classify.entity.sensor-42", Tier: "0", Source: "search_graph"},
 		},
 	}
 	intent := &research.Intent{Topic: "average voltage across batteries last 24 hours"}
@@ -203,7 +205,7 @@ func TestClassifyAndRetrieve_NilClassifierResultFallsThrough(t *testing.T) {
 	classifier := &fakeClassifier{result: nil}
 	retriever := &fakeRetriever{
 		candidates: []research.Candidate{
-			{EntityID: "fallback.001", Tier: "0", Source: "search_graph"},
+			{EntityID: "test.research.graph.classify.entity.fallback-001", Tier: "0", Source: "search_graph"},
 		},
 	}
 	intent := &research.Intent{Topic: "x"}
@@ -226,7 +228,7 @@ func TestClassifyAndRetrieve_NilClassifierResultFallsThrough(t *testing.T) {
 func TestClassifyAndRetrieve_DegradedPassthrough(t *testing.T) {
 	classifier := &fakeClassifier{result: &query.ClassificationResult{Tier: 0}}
 	retriever := &fakeRetriever{
-		candidates:     []research.Candidate{{EntityID: "x", Tier: "0", Source: "search_graph"}},
+		candidates:     []research.Candidate{{EntityID: "test.research.graph.classify.entity.x", Tier: "0", Source: "search_graph"}},
 		degraded:       true,
 		degradedReason: "server-side semantic fallback fired",
 	}
@@ -307,7 +309,7 @@ func TestClassifyAndRetrieve_HintsAreDefensiveCopy(t *testing.T) {
 		Options: sourceOptions,
 	}}
 	retriever := &fakeRetriever{
-		candidates: []research.Candidate{{EntityID: "x", Tier: "0", Source: "search_graph"}},
+		candidates: []research.Candidate{{EntityID: "test.research.graph.classify.entity.x", Tier: "0", Source: "search_graph"}},
 	}
 	intent := &research.Intent{Topic: "x"}
 

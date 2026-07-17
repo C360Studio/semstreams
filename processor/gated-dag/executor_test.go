@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/gateddag"
 	"github.com/stretchr/testify/require"
@@ -201,31 +202,37 @@ func TestClaimThenDispatch_ClaimErrorClearsInflight(t *testing.T) {
 
 // --- reEvaluate selection ---
 
-// presence builds a presence-marker triple (object value is irrelevant for
-// completed/failed/dirtied/claim — extractGraph keys on the predicate).
-func presence(pred string) message.Triple { return tri(pred, "x") }
-
 func TestReEvaluate_DiamondSelection(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "diamond", "unit", "a")
+	b := semantictest.EntityID(t, "test", "gateddag", "executor", "diamond", "unit", "b")
+	c := semantictest.EntityID(t, "test", "gateddag", "executor", "diamond", "unit", "c")
+	d := semantictest.EntityID(t, "test", "gateddag", "executor", "diamond", "unit", "d")
 	// a -> {b,c} -> d. Only a complete: b,c dispatch; d held.
 	states := []graph.EntityState{
-		unit("a", presence(cfg.CompletedPredicate)),
-		unit("b", tri(cfg.DependsOnPredicate, "a")),
-		unit("c", tri(cfg.DependsOnPredicate, "a")),
-		unit("d", tri(cfg.DependsOnPredicate, "b"), tri(cfg.DependsOnPredicate, "c")),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: "x"}),
+		unit(b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a}),
+		unit(c, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a}),
+		unit(d,
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: b},
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: c}),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
 	e.reEvaluate(context.Background(), true)
-	require.ElementsMatch(t, []string{"b", "c"}, sub.ids())
+	require.ElementsMatch(t, []string{b, c}, sub.ids())
 }
 
 func TestReEvaluate_InFlightDedup(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "dedup", "unit", "a")
+	b := semantictest.EntityID(t, "test", "gateddag", "executor", "dedup", "unit", "b")
 	// b is Ready (a complete) but already claimed → must NOT re-dispatch.
 	states := []graph.EntityState{
-		unit("a", presence(cfg.CompletedPredicate)),
-		unit("b", tri(cfg.DependsOnPredicate, "a"), presence(cfg.ClaimPredicate)),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: "x"}),
+		unit(b,
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a},
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "claim"), Object: "x"}),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
@@ -235,40 +242,44 @@ func TestReEvaluate_InFlightDedup(t *testing.T) {
 
 func TestReEvaluate_DirtiedOverridesStaleClaim(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "reset", "unit", "a")
+	b := semantictest.EntityID(t, "test", "gateddag", "executor", "reset", "unit", "b")
 	// b carries a stale claim AND a dirtied marker (reset that forgot to clear
 	// the claim) → V4: dirtied overrides claim, so b re-dispatches.
 	states := []graph.EntityState{
-		unit("a", presence(cfg.CompletedPredicate)),
-		unit("b",
-			tri(cfg.DependsOnPredicate, "a"),
-			presence(cfg.ClaimPredicate),
-			presence(cfg.DirtiedPredicate)),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: "x"}),
+		unit(b,
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a},
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "claim"), Object: "x"},
+			message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "dirtied"), Object: "x"}),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
 	e.reEvaluate(context.Background(), true)
-	require.Equal(t, []string{"b"}, sub.ids())
+	require.Equal(t, []string{b}, sub.ids())
 }
 
 func TestReEvaluate_BackstopPicksUpLateDependent(t *testing.T) {
 	cfg := validCfg()
+	c := semantictest.EntityID(t, "test", "gateddag", "executor", "backstop", "unit", "c")
+	d := semantictest.EntityID(t, "test", "gateddag", "executor", "backstop", "unit", "d")
 	// Pass 1: c is in-flight (claimed, not complete) → deduped; d held (c not
 	// done). Pass 2: c completes → d becomes dispatchable. A later pass (the
 	// backstop) re-reads authoritative state and releases the dependent.
 	pass1 := []graph.EntityState{
-		unit("c", presence(cfg.ClaimPredicate)),
-		unit("d", tri(cfg.DependsOnPredicate, "c")),
+		unit(c, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "claim"), Object: "x"}),
+		unit(d, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: c}),
 	}
 	pass2 := []graph.EntityState{
-		unit("c", presence(cfg.CompletedPredicate)),
-		unit("d", tri(cfg.DependsOnPredicate, "c")),
+		unit(c, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: "x"}),
+		unit(d, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: c}),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{pass1, pass2}}, sub.fn)
 	e.reEvaluate(context.Background(), true) // pass 1: c claimed (deduped), d held
 	require.Empty(t, sub.ids())
 	e.reEvaluate(context.Background(), true) // pass 2 (backstop): d now ready
-	require.Equal(t, []string{"d"}, sub.ids())
+	require.Equal(t, []string{d}, sub.ids())
 }
 
 func TestReEvaluate_ReadErrorIsResilient(t *testing.T) {
@@ -283,11 +294,13 @@ func TestReEvaluate_ReadErrorIsResilient(t *testing.T) {
 func TestReEvaluate_StopOnFirstFailureHoldsIndependentBranch(t *testing.T) {
 	cfg := validCfg()
 	cfg.FailurePolicy = FailurePolicyStopOnFirstFailure
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "failure", "unit", "a")
+	z := semantictest.EntityID(t, "test", "gateddag", "executor", "failure", "unit", "z")
 	// a failed; independent ready unit z. continue_others would dispatch z;
 	// stop_on_first_failure holds it.
 	states := []graph.EntityState{
-		unit("a", presence(cfg.FailedPredicate)),
-		unit("z"),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "failed"), Object: "x"}),
+		unit(z),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
@@ -299,13 +312,14 @@ func TestReEvaluate_StopOnFirstFailureHoldsIndependentBranch(t *testing.T) {
 	sub2 := &recordingSubmit{}
 	e2 := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub2.fn)
 	e2.reEvaluate(context.Background(), true)
-	require.Equal(t, []string{"z"}, sub2.ids())
+	require.Equal(t, []string{z}, sub2.ids())
 }
 
 func TestReEvaluate_SingleFlightSerializes(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "single-flight", "unit", "a")
 	r := &fakeReader{
-		scripts:    [][]graph.EntityState{{unit("a")}},
+		scripts:    [][]graph.EntityState{{unit(a)}},
 		blockEnter: make(chan struct{}),
 	}
 	sub := &recordingSubmit{}
@@ -327,10 +341,12 @@ func TestReEvaluate_SingleFlightSerializes(t *testing.T) {
 
 func TestReEvaluate_StallSurfacedNothingDispatched(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "stall", "unit", "a")
+	b := semantictest.EntityID(t, "test", "gateddag", "executor", "stall", "unit", "b")
 	// Cycle a<->b: nothing dispatchable, both held-ready ⇒ stall.
 	states := []graph.EntityState{
-		unit("a", tri(cfg.DependsOnPredicate, "b")),
-		unit("b", tri(cfg.DependsOnPredicate, "a")),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: b}),
+		unit(b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a}),
 	}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
@@ -410,10 +426,12 @@ func TestAllUnitsDone(t *testing.T) {
 
 func TestReEvaluate_StallEventEdgeTriggered(t *testing.T) {
 	cfg := validCfg()
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "stall-event", "unit", "a")
+	b := semantictest.EntityID(t, "test", "gateddag", "executor", "stall-event", "unit", "b")
 	// Cycle a<->b → persistent stall on every pass.
 	states := []graph.EntityState{
-		unit("a", tri(cfg.DependsOnPredicate, "b")),
-		unit("b", tri(cfg.DependsOnPredicate, "a")),
+		unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: b}),
+		unit(b, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: a}),
 	}
 	sub := &recordingSubmit{}
 	fs := &fakeStall{}
@@ -434,24 +452,26 @@ func TestReEvaluate_StallEventEdgeTriggered(t *testing.T) {
 // dispatch the #363 unit watch exposed).
 func TestReEvaluate_InMemoryInflightDedup(t *testing.T) {
 	cfg := validCfg()
-	states := []graph.EntityState{unit("a")} // a: no deps, Ready, never shows a claim
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "inflight", "unit", "a")
+	states := []graph.EntityState{unit(a)} // a: no deps, Ready, never shows a claim
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{states}}, sub.fn)
 	e.reEvaluate(context.Background(), true) // submits a, marks it in-flight
 	e.reEvaluate(context.Background(), true) // claim still not visible, but in-flight → NOT re-submitted
 	e.reEvaluate(context.Background(), true)
-	require.Equal(t, []string{"a"}, sub.ids(), "in-memory in-flight prevents double-dispatch before the claim is visible")
+	require.Equal(t, []string{a}, sub.ids(), "in-memory in-flight prevents double-dispatch before the claim is visible")
 }
 
 // TestReEvaluate_DirtiedClearsInflight proves a reset re-dispatches even if the
 // in-memory in-flight hint is stale (dirtied overrides it, same as the claim).
 func TestReEvaluate_DirtiedClearsInflight(t *testing.T) {
 	cfg := validCfg()
-	clean := []graph.EntityState{unit("a")}
-	reset := []graph.EntityState{unit("a", presence(cfg.DirtiedPredicate))}
+	a := semantictest.EntityID(t, "test", "gateddag", "executor", "inflight-reset", "unit", "a")
+	clean := []graph.EntityState{unit(a)}
+	reset := []graph.EntityState{unit(a, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "dirtied"), Object: "x"})}
 	sub := &recordingSubmit{}
 	e := newEvalExecutor(cfg, &fakeReader{scripts: [][]graph.EntityState{clean, reset}}, sub.fn)
 	e.reEvaluate(context.Background(), true) // submits a (in-flight)
 	e.reEvaluate(context.Background(), true) // a now dirtied → in-flight cleared, re-dispatched
-	require.Equal(t, []string{"a", "a"}, sub.ids(), "a dirtied unit re-dispatches despite a stale in-flight hint")
+	require.Equal(t, []string{a, a}, sub.ids(), "a dirtied unit re-dispatches despite a stale in-flight hint")
 }

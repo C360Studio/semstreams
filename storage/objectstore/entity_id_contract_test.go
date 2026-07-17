@@ -22,6 +22,8 @@ type invalidContentStorable struct {
 	contentCalls atomic.Int64
 }
 
+// entity-id-audit:classify intentional-malformed "a.b.c.d.e.-bad" line=89 column=51 surface=go-field:invalidTextContentStorable.entityID entity_id_invalid:first_byte invalid ObjectStore entity ID rejection fixture
+
 type invalidTextContentStorable struct {
 	entityID     string
 	rawCalls     atomic.Int64

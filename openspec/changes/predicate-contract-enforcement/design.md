@@ -65,6 +65,10 @@ reference deployments. The scanner parses these surfaces structurally rather tha
 
 This gives producers precise startup failures while the persistence gate remains the final defense.
 
+The completed initial corpus is bounded production evidence: it covers non-test Go producers and the declared
+configuration, schema, tool, and reference surfaces, but deliberately excludes `*_test.go` and `testdata`. A separate
+tracked test-fixture corpus is therefore required before the clean beta cutover can claim local zero violations.
+
 ### 4. Validate the complete candidate at the single persistence seam
 
 Every lane that can create or mutate ENTITY_STATES constructs its final candidate first. Validation runs
@@ -126,6 +130,19 @@ Enforcement requires:
 - structural e2e plus affected product contract/e2e suites;
 - operator diagnostics and reset/reingest rehearsal.
 
+Positive test fixtures use a grammar-only `internal/semantictest` predicate builder where runtime construction is
+appropriate. It accepts the three explicit semantic positions, joins them without normalization, delegates to
+`vocabulary.ParsePredicate`, and returns the validated string. It provides no default namespace, alias, graph entity,
+triple, or Graphable factory. Production Go files may not import the helper, and vocabulary grammar-authority tests
+retain raw fixtures to avoid a delegation cycle. Literal constants and commentless fixture data remain checked by the
+source auditors.
+
+Intentional invalid predicates are classified per exact occurrence, value, contract kind, and authoritative reason.
+Source comments bind only to the candidate on that source occurrence; strict JSON, JSONL, and other commentless
+structured fixtures use a checked file-plus-structural-location manifest. Missing, stale, duplicate, broad, unmatched,
+or reason-mismatched classifications fail. The existing production scan and the complementary `*_test.go`/`testdata`
+scan must both be clean before local zero-violation evidence is complete.
+
 ## Risks / Trade-offs
 
 - **Predicate renames can break rules and queries:** require one mapping shared across producers, configs,
@@ -134,10 +151,15 @@ Enforcement requires:
   universal structural grammar.
 - **Reset/reingest discards unexported beta state:** make the break explicit and provide preflight/export
   guidance; do not hide it behind permanent compatibility code.
+- **Shared fixtures can erase semantic test intent:** keep the helper at the grammar-string layer and require tests to
+  construct their own graph state, subjects, and references.
+- **File-wide invalid allowances can hide stale predicates:** bind every negative classification to one occurrence and
+  its authoritative reason, and fail on stale or ambiguous entries.
 
 ## Cutover Plan
 
-1. Land the grammar decision, parser, typed reasons, and complete source/config audit in the breaking branch.
+1. Land the grammar decision, parser, typed reasons, bounded production audit, and complementary test-fixture audit
+   in the breaking branch.
 2. Rename all owned framework/product/reference-design predicates and exact-query consumers in lockstep.
 3. Validate every declarative surface and constrain agent/tool authoring.
 4. Put unconditional validation at the final persistence seam and make replacement validate-before-remove.

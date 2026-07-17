@@ -183,7 +183,7 @@
       "config": {
         "enable_graph_integration": false,
         "entity_watch_buckets": {
-          "ENTITY_STATES": [">"]
+          "ENTITY_STATES": ["*.*.*.*.*.*"]
         },
         "ports": {
           "inputs": [

@@ -248,7 +248,7 @@ func TestClassifierOutput_ValidateRejectsInvalid(t *testing.T) {
 			name: "candidate bad tier",
 			output: research.ClassifierOutput{
 				Topic:      "x",
-				Candidates: []research.Candidate{{EntityID: "e", Tier: "bogus", Source: "x"}},
+				Candidates: []research.Candidate{{EntityID: "test.research.roundtrip.validation.entity.e", Tier: "bogus", Source: "x"}},
 			},
 			wantSub: "tier",
 		},
@@ -424,7 +424,7 @@ func TestEvidence_ValidateAcceptsPhase2Tier(t *testing.T) {
 	// tighten the enum without realising Phase 2 fixtures depend on it.
 	for _, tier := range []string{"0", "1", "2"} {
 		t.Run("tier_"+tier, func(t *testing.T) {
-			e := &fusion.Evidence{EntityID: "x", Tier: tier, Source: "s"}
+			e := &fusion.Evidence{EntityID: "test.research.roundtrip.validation.entity.x", Tier: tier, Source: "s"}
 			if err := e.Validate(); err != nil {
 				t.Errorf("Validate(tier=%q) = %v, want nil", tier, err)
 			}
@@ -455,7 +455,7 @@ func TestSearchResult_ValidateRejectsInvalidEvidence(t *testing.T) {
 			name: "evidence bad tier",
 			result: research.SearchResult{
 				Synthesis: "x",
-				Evidence:  []fusion.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
+				Evidence:  []fusion.Evidence{{EntityID: "test.research.roundtrip.validation.entity.e", Tier: "bogus", Source: "x"}},
 			},
 			wantSub: "tier",
 		},
@@ -833,7 +833,7 @@ func TestExecutionOutput_ValidateRejectsInvalid(t *testing.T) {
 			output: research.ExecutionOutput{
 				Topic:    "x",
 				Action:   research.ActionWalkSeeds,
-				Evidence: []fusion.Evidence{{EntityID: "e", Tier: "bogus", Source: "x"}},
+				Evidence: []fusion.Evidence{{EntityID: "test.research.roundtrip.validation.entity.e", Tier: "bogus", Source: "x"}},
 			},
 			wantSub: "tier",
 		},

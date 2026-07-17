@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/governance"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -34,6 +35,7 @@ func TestAction_AddTriple(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	fleetID := semantictest.EntityID(t, "c360", "platform1", "robotics", "mav1", "fleet", "alpha")
 
 	tests := []struct {
 		name       string
@@ -47,7 +49,7 @@ func TestAction_AddTriple(t *testing.T) {
 			name: "create proximity relationship",
 			action: Action{
 				Type:      ActionTypeAddTriple,
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "$related.id",
 				TTL:       "5m",
 			},
@@ -55,7 +57,7 @@ func TestAction_AddTriple(t *testing.T) {
 			relatedID: "c360.platform1.robotics.mav1.drone.002",
 			wantTriple: message.Triple{
 				Subject:   "c360.platform1.robotics.mav1.drone.001",
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "c360.platform1.robotics.mav1.drone.002",
 			},
 			wantErr: false,
@@ -64,15 +66,15 @@ func TestAction_AddTriple(t *testing.T) {
 			name: "create fleet membership",
 			action: Action{
 				Type:      ActionTypeAddTriple,
-				Predicate: "fleet.member_of",
-				Object:    "fleet.alpha",
+				Predicate: "test.fleet.member-of",
+				Object:    fleetID,
 			},
 			entityID:  "c360.platform1.robotics.mav1.drone.003",
 			relatedID: "",
 			wantTriple: message.Triple{
 				Subject:   "c360.platform1.robotics.mav1.drone.003",
-				Predicate: "fleet.member_of",
-				Object:    "fleet.alpha",
+				Predicate: "test.fleet.member-of",
+				Object:    fleetID,
 			},
 			wantErr: false,
 		},
@@ -118,6 +120,7 @@ func TestAction_RemoveTriple(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	fleetID := semantictest.EntityID(t, "c360", "platform1", "robotics", "mav1", "fleet", "alpha")
 
 	tests := []struct {
 		name      string
@@ -130,7 +133,7 @@ func TestAction_RemoveTriple(t *testing.T) {
 			name: "remove proximity relationship",
 			action: Action{
 				Type:      ActionTypeRemoveTriple,
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "$related.id",
 			},
 			entityID:  "c360.platform1.robotics.mav1.drone.001",
@@ -141,8 +144,8 @@ func TestAction_RemoveTriple(t *testing.T) {
 			name: "remove static relationship",
 			action: Action{
 				Type:      ActionTypeRemoveTriple,
-				Predicate: "fleet.member_of",
-				Object:    "fleet.alpha",
+				Predicate: "test.fleet.member-of",
+				Object:    fleetID,
 			},
 			entityID: "c360.platform1.robotics.mav1.drone.003",
 			wantErr:  false,
@@ -186,7 +189,7 @@ func TestAction(t *testing.T) {
 			name: "valid add_triple action",
 			action: Action{
 				Type:      ActionTypeAddTriple,
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "$related.id",
 				TTL:       "5m",
 			},
@@ -196,7 +199,7 @@ func TestAction(t *testing.T) {
 			name: "valid remove_triple action",
 			action: Action{
 				Type:      ActionTypeRemoveTriple,
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "$related.id",
 			},
 			valid: true,
@@ -217,7 +220,7 @@ func TestAction(t *testing.T) {
 			name: "valid update_triple action",
 			action: Action{
 				Type:      ActionTypeUpdateTriple,
-				Predicate: "proximity.near",
+				Predicate: "test.proximity.near",
 				Object:    "$related.id",
 				Properties: map[string]any{
 					"distance": 50.0,
@@ -303,7 +306,7 @@ func TestAction_TTLParsing(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			action := Action{
 				Type:      ActionTypeAddTriple,
-				Predicate: "test.predicate",
+				Predicate: "test.test.predicate",
 				Object:    "test.value",
 				TTL:       tt.ttl,
 			}
@@ -512,6 +515,8 @@ func TestAction_Publish(t *testing.T) {
 // T042: Test Publish action payload format
 func TestAction_Publish_PayloadFormat(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "publish", "entity", "001")
+	relatedID := semantictest.EntityID(t, "test", "rule", "actions", "publish", "related", "002")
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
@@ -526,7 +531,7 @@ func TestAction_Publish_PayloadFormat(t *testing.T) {
 		},
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001", RelatedID: "related.002"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: entityID, RelatedID: relatedID})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -536,8 +541,8 @@ func TestAction_Publish_PayloadFormat(t *testing.T) {
 	require.NoError(t, err)
 
 	// Verify required fields
-	assert.Equal(t, "entity.001", payload["entity_id"])
-	assert.Equal(t, "related.002", payload["related_id"])
+	assert.Equal(t, entityID, payload["entity_id"])
+	assert.Equal(t, relatedID, payload["related_id"])
 	assert.Equal(t, "test.subject", payload["subject"])
 	assert.Equal(t, "rule_engine", payload["source"])
 	assert.NotEmpty(t, payload["timestamp"])
@@ -619,7 +624,7 @@ func TestExecutePublish_NilPropertiesNoOp(t *testing.T) {
 	ctx := context.Background()
 	mock := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, mock)
-	ec := &ExecutionContext{EntityID: "entity.001"}
+	ec := &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publish", "entity", "002")}
 	action := Action{
 		Type:    ActionTypePublish,
 		Subject: "test.subject",
@@ -650,7 +655,7 @@ func TestAction_Publish_NoPublisher(t *testing.T) {
 	}
 
 	// Should not error, just log and return
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publish", "entity", "003")})
 	require.NoError(t, err)
 }
 
@@ -668,7 +673,7 @@ func TestAction_Publish_ErrorHandling(t *testing.T) {
 		Subject: "test.subject",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publish", "entity", "004")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish to test.subject")
 }
@@ -732,7 +737,7 @@ func (m *mockTripleMutator) ReplaceOwned(_ context.Context, ruleID, owner, entit
 		ruleID:    ruleID,
 		owner:     owner,
 		entityID:  entityID,
-		predicate: predicate,
+		predicate: predicate, // predicate-audit:unrelated {"column":14,"surface":"go-field:predicate","value":"","basis":"reviewed mock call capture copied from production invocation"}
 		objects:   objects,
 	})
 	return uint64(len(m.replaceOwnedCalls)), nil
@@ -743,6 +748,7 @@ func TestAction_UpdateTriple(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	fleetID := semantictest.EntityID(t, "c360", "platform", "fleet", "operations", "fleet", "alpha")
 
 	tests := []struct {
 		name          string
@@ -758,11 +764,11 @@ func TestAction_UpdateTriple(t *testing.T) {
 			name: "update status triple",
 			action: Action{
 				Type:      ActionTypeUpdateTriple,
-				Predicate: "status.battery",
+				Predicate: "test.status.battery",
 				Object:    "low",
 			},
 			entityID:      "c360.platform.robotics.mav1.drone.001",
-			wantPredicate: "status.battery",
+			wantPredicate: "test.status.battery",
 			wantObject:    "low",
 			wantErr:       false,
 		},
@@ -770,25 +776,25 @@ func TestAction_UpdateTriple(t *testing.T) {
 			name: "update with variable substitution",
 			action: Action{
 				Type:      ActionTypeUpdateTriple,
-				Predicate: "fleet.membership",
+				Predicate: "test.fleet.membership",
 				Object:    "$related.id",
 			},
 			entityID:      "c360.platform.robotics.mav1.drone.001",
-			relatedID:     "c360.platform.fleet.alpha",
-			wantPredicate: "fleet.membership",
-			wantObject:    "c360.platform.fleet.alpha",
+			relatedID:     fleetID,
+			wantPredicate: "test.fleet.membership",
+			wantObject:    fleetID,
 			wantErr:       false,
 		},
 		{
 			name: "update with TTL",
 			action: Action{
 				Type:      ActionTypeUpdateTriple,
-				Predicate: "alert.status",
+				Predicate: "test.alert.status",
 				Object:    "active",
 				TTL:       "5m",
 			},
 			entityID:      "c360.platform.robotics.mav1.drone.001",
-			wantPredicate: "alert.status",
+			wantPredicate: "test.alert.status",
 			wantObject:    "active",
 			wantErr:       false,
 		},
@@ -848,12 +854,12 @@ func TestAction_UpdateTriple_NoMutator(t *testing.T) {
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
-		Predicate: "test.predicate",
+		Predicate: "test.test.predicate",
 		Object:    "test.value",
 	}
 
 	// Should not error, just log and return
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "update", "entity", "001")})
 	require.NoError(t, err)
 }
 
@@ -869,12 +875,12 @@ func TestAction_UpdateTriple_RemoveFailsContinues(t *testing.T) {
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
-		Predicate: "test.predicate",
+		Predicate: "test.test.predicate",
 		Object:    "test.value",
 	}
 
 	// Should still succeed - add should still be called
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "update", "entity", "002")})
 	require.NoError(t, err)
 
 	// Add should still have been called
@@ -893,11 +899,11 @@ func TestAction_UpdateTriple_AddFails(t *testing.T) {
 
 	action := Action{
 		Type:      ActionTypeUpdateTriple,
-		Predicate: "test.predicate",
+		Predicate: "test.test.predicate",
 		Object:    "test.value",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "update", "entity", "003")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "add updated triple")
 }
@@ -907,6 +913,9 @@ func TestAction_PublishAgent(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
+	sensorID := semantictest.EntityID(t, "test", "rule", "actions", "agent", "sensor", "001")
+	systemID := semantictest.EntityID(t, "test", "rule", "actions", "agent", "system", "001")
+	fixtureID := semantictest.EntityID(t, "test", "rule", "actions", "agent", "entity", "001")
 
 	tests := []struct {
 		name        string
@@ -926,7 +935,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:   "mock-model",
 				Prompt:  "Analyze anomaly for entity $entity.id",
 			},
-			entityID:    "c360.platform.sensor.temp.001",
+			entityID:    sensorID,
 			wantSubject: "agent.task.anomaly",
 			wantErr:     false,
 		},
@@ -939,7 +948,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:   "gpt-4",
 				Prompt:  "Design solution for $entity.id",
 			},
-			entityID:    "c360.platform.system.001",
+			entityID:    systemID,
 			wantSubject: "agent.task.design",
 			wantErr:     false,
 		},
@@ -952,8 +961,8 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:   "mock-model",
 				Prompt:  "Analyze $entity.id",
 			},
-			entityID:    "sensor-001",
-			wantSubject: "agent.task.sensor-001",
+			entityID:    sensorID,
+			wantSubject: "agent.task." + sensorID,
 			wantErr:     false,
 		},
 		{
@@ -964,7 +973,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:  "mock-model",
 				Prompt: "Test prompt",
 			},
-			entityID: "entity.001",
+			entityID: fixtureID,
 			wantErr:  true,
 			errMsg:   "subject is required",
 		},
@@ -976,7 +985,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:   "mock-model",
 				Prompt:  "Test prompt",
 			},
-			entityID: "entity.001",
+			entityID: fixtureID,
 			wantErr:  true,
 			errMsg:   "role is required",
 		},
@@ -988,7 +997,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Role:    "general",
 				Prompt:  "Test prompt",
 			},
-			entityID: "entity.001",
+			entityID: fixtureID,
 			wantErr:  true,
 			errMsg:   "model is required",
 		},
@@ -1000,7 +1009,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Role:    "general",
 				Model:   "mock-model",
 			},
-			entityID: "entity.001",
+			entityID: fixtureID,
 			wantErr:  true,
 			errMsg:   "prompt is required",
 		},
@@ -1013,7 +1022,7 @@ func TestAction_PublishAgent(t *testing.T) {
 				Model:   "mock-model",
 				Prompt:  "Test prompt",
 			},
-			entityID:    "entity.001",
+			entityID:    fixtureID,
 			wantErr:     false,
 			wantSubject: "agent.task.test",
 		},
@@ -1043,6 +1052,8 @@ func TestAction_PublishAgent(t *testing.T) {
 // T050: Test PublishAgent payload format (TaskMessage)
 func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "sensor", "001")
+	relatedID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "warehouse", "a")
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
@@ -1056,7 +1067,7 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 		Prompt:  "Analyze entity $entity.id in location $related.id",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "sensor.temp.001", RelatedID: "warehouse.zone.A"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: entityID, RelatedID: relatedID})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -1072,7 +1083,7 @@ func TestAction_PublishAgent_PayloadFormat(t *testing.T) {
 	assert.Contains(t, task.TaskID, "rule-", "task_id should start with 'rule-'")
 	assert.Equal(t, "general", task.Role)
 	assert.Equal(t, "mock-model", task.Model)
-	assert.Equal(t, "Analyze entity sensor.temp.001 in location warehouse.zone.A", task.Prompt)
+	assert.Equal(t, "Analyze entity "+entityID+" in location "+relatedID, task.Prompt)
 }
 
 // T050b: Test PublishAgent resolves action.Tools → TaskMessage.Tools via the
@@ -1100,7 +1111,7 @@ func TestAction_PublishAgent_ToolsResolved(t *testing.T) {
 		Tools:   []string{toolName, "tool_that_does_not_exist"},
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "001")})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -1132,7 +1143,7 @@ func TestAction_PublishAgent_EmptyToolsLeavesUnset(t *testing.T) {
 		// Tools omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "tools", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1166,7 +1177,7 @@ func TestAction_PublishAgent_ActionAllowlist(t *testing.T) {
 		ActionAllowlist: []string{"planned", "needs_clarification"},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "allowlist", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1218,7 +1229,7 @@ func TestAction_PublishAgent_ResponseFormat(t *testing.T) {
 		ResponseFormat: rf,
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "response-format", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1253,7 +1264,7 @@ func TestAction_PublishAgent_EmptyResponseFormat(t *testing.T) {
 		// ResponseFormat omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "response-format", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1300,7 +1311,7 @@ func TestAction_PublishAgent_ToolChoice(t *testing.T) {
 				ToolChoice: tt.tc,
 			}
 
-			require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+			require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "tool-choice", "entity", "001")}))
 			require.Len(t, mock.published, 1)
 
 			baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1333,7 +1344,7 @@ func TestAction_PublishAgent_EmptyToolChoice(t *testing.T) {
 		// ToolChoice omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "tool-choice", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1411,7 +1422,7 @@ func TestAction_PublishAgent_ForEach_EmptyListNoDispatch(t *testing.T) {
 	executor := NewActionExecutorFull(nil, nil, mock)
 
 	ec := &ExecutionContext{
-		EntityID: "e.1",
+		EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "002"),
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
 				{Predicate: "coordinator.decision.subtopics", Object: `[]`},
@@ -1448,11 +1459,11 @@ func TestAction_PublishAgent_ForEach_MissingVarErrors(t *testing.T) {
 		Role:    "researcher",
 		Model:   "mock-model",
 		Prompt:  "p",
-		ForEach: "$entity.triple.subtopics",
+		ForEach: "$entity.triple.test.fixture.subtopics",
 		// ForEachVar deliberately omitted
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "003")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "for_each_var is required")
 }
@@ -1470,10 +1481,10 @@ func TestAction_PublishAgent_ForEach_NonListDegeneratesToSingle(t *testing.T) {
 	executor := NewActionExecutorFull(nil, nil, mock)
 
 	ec := &ExecutionContext{
-		EntityID: "e.1",
+		EntityID: semantictest.EntityID(t, "test", "rule", "actions", "foreach", "entity", "004"),
 		Entity: &gtypes.EntityState{
 			Triples: []message.Triple{
-				{Predicate: "agent.role", Object: "researcher"},
+				{Predicate: "test.agent.role", Object: "researcher"},
 			},
 		},
 	}
@@ -1483,8 +1494,8 @@ func TestAction_PublishAgent_ForEach_NonListDegeneratesToSingle(t *testing.T) {
 		Subject:    "agent.task.x",
 		Role:       "researcher",
 		Model:      "mock-model",
-		Prompt:     "investigate $x",            // intentionally references unbound iter-var
-		ForEach:    "$entity.triple.agent.role", // scalar, not list
+		Prompt:     "investigate $x",                 // intentionally references unbound iter-var
+		ForEach:    "$entity.triple.test.agent.role", // scalar, not list
 		ForEachVar: "x",
 	}
 
@@ -1532,7 +1543,7 @@ func TestAction_PublishAgent_RelatedLoops(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "related-loops", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1560,6 +1571,7 @@ func TestAction_PublishAgent_RelatedLoops(t *testing.T) {
 // Metadata.
 func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "related-loops", "entity", "003")
 	ctx := context.Background()
 	mock := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, mock)
@@ -1575,7 +1587,7 @@ func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "loop-research-from-entity"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: entityID}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1586,7 +1598,7 @@ func TestAction_PublishAgent_RelatedLoops_VariableSubstitution(t *testing.T) {
 	rawLineage := task.Metadata[agentic.MetadataKeyRelatedLoops]
 	lineage, ok := rawLineage.(map[string]any)
 	require.True(t, ok)
-	assert.Equal(t, "loop-research-from-entity", lineage["researcher"],
+	assert.Equal(t, entityID, lineage["researcher"],
 		"$entity.id should substitute to ExecutionContext.EntityID")
 }
 
@@ -1608,7 +1620,7 @@ func TestAction_PublishAgent_EmptyRelatedLoops(t *testing.T) {
 		// RelatedLoops omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "related-loops", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1656,7 +1668,7 @@ func TestAction_PublishAgent_Properties_StampedToMetadata(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "properties", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1778,7 +1790,7 @@ func TestAction_PublishAgent_Properties_NonStringPassThrough(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "properties", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1824,7 +1836,7 @@ func TestAction_PublishAgent_Properties_ReservedKeysSkipped(t *testing.T) {
 		},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "properties", "entity", "003")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1867,7 +1879,7 @@ func TestAction_PublishAgent_EmptyProperties_NoMetadataChange(t *testing.T) {
 		// Properties omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "properties", "entity", "004")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -1901,7 +1913,7 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 	}
 
 	// Trigger entity is a loop execution — parent linkage should appear.
-	loopEntityID := "c360.ops.agent.agentic-loop.execution.loop-research-abc"
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-research-abc")
 	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: loopEntityID}))
 	require.Len(t, mock.published, 1)
 
@@ -1921,17 +1933,22 @@ func TestAction_PublishAgent_ParentLoopIDFromLoopEntity(t *testing.T) {
 func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	telemetryID := semantictest.EntityID(t, "c360", "ops", "robotics", "gcs", "drone", "001")
+	modelID := semantictest.EntityID(t, "c360", "ops", "agent", "model-registry", "endpoint", "claude-sonnet")
+	stepID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "step", "loop-1-0")
+	chainID := semantictest.EntityID(t, "c360", "ops", "agent", "chain", "execution", "chain-abc")
 
 	tests := []struct {
 		name     string
 		entityID string
 	}{
-		{"telemetry entity", "c360.ops.robotics.gcs.drone.001"},
-		{"model endpoint", "c360.ops.agent.model-registry.endpoint.claude-sonnet"},
-		{"trajectory step", "c360.ops.agent.agentic-loop.step.loop-1-0"},
-		{"chain execution", "c360.ops.agent.chain.execution.chain-abc"},
-		{"non-canonical entity ID", "e.1"},
+		{"telemetry entity", telemetryID},
+		{"model endpoint", modelID},
+		{"trajectory step", stepID},
+		{"chain execution", chainID},
+		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
+	// entity-id-audit:classify intentional-malformed "e.1" line=1949 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1976,7 +1993,7 @@ func TestAction_PublishAgent_EmptyActionAllowlist(t *testing.T) {
 		// ActionAllowlist omitted
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "allowlist", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -2022,7 +2039,7 @@ func TestAction_PublishAgent_NoPublisher(t *testing.T) {
 	}
 
 	// Should not error, just log and return
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publisher", "entity", "none")})
 	require.NoError(t, err)
 }
 
@@ -2043,7 +2060,7 @@ func TestAction_PublishAgent_ErrorHandling(t *testing.T) {
 		Prompt:  "Test prompt",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publisher", "entity", "error")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "publish agent task to agent.task.test")
 }
@@ -2057,6 +2074,7 @@ func TestActionConstant_PublishAgent(t *testing.T) {
 // Test PublishAgent with WorkflowSlug and WorkflowStep fields
 func TestAction_PublishAgent_WorkflowFields(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "c360", "github", "repo", "myrepo", "workflow", "42")
 
 	ctx := context.Background()
 	mock := &mockPublisher{}
@@ -2072,7 +2090,7 @@ func TestAction_PublishAgent_WorkflowFields(t *testing.T) {
 		WorkflowStep: "qualify",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "c360.github.repo.myrepo.workflow.42"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: entityID})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -2087,7 +2105,7 @@ func TestAction_PublishAgent_WorkflowFields(t *testing.T) {
 	assert.Equal(t, "github-issue-to-pr", task.WorkflowSlug)
 	assert.Equal(t, "qualify", task.WorkflowStep)
 	assert.Equal(t, "qualifier", task.Role)
-	assert.Equal(t, "Qualify issue for c360.github.repo.myrepo.workflow.42", task.Prompt)
+	assert.Equal(t, "Qualify issue for "+entityID, task.Prompt)
 }
 
 // Test PublishAgent WorkflowSlug/WorkflowStep with variable substitution
@@ -2108,7 +2126,7 @@ func TestAction_PublishAgent_WorkflowFieldsVariableSubstitution(t *testing.T) {
 		WorkflowStep: "develop",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "workflow", "entity", "001")})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -2138,7 +2156,7 @@ func TestAction_PublishAgent_NoWorkflowFields(t *testing.T) {
 		Prompt:  "General task",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "workflow", "entity", "002")})
 	require.NoError(t, err)
 	require.Len(t, mock.published, 1)
 
@@ -2171,7 +2189,7 @@ func TestAction_PublishAgent_QualifierDeveloperRoles(t *testing.T) {
 				Prompt:  "Test prompt",
 			}
 
-			err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+			err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "roles", "entity", "001")})
 			require.NoError(t, err, "role %q should be valid", role)
 			require.Len(t, mock.published, 1)
 		})
@@ -2210,7 +2228,7 @@ func TestAction_PublishAgent_ExtendedRoles(t *testing.T) {
 				Prompt:  "Test prompt",
 			}
 
-			err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+			err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "roles", "entity", "002")})
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -2242,7 +2260,7 @@ func TestAction_PublishAgent_WritesSpawnedTaskTriple(t *testing.T) {
 		Prompt:  "investigate",
 	}
 
-	entityID := "org.platform.domain.system.type.001"
+	entityID := semantictest.EntityID(t, "org", "platform", "domain", "system", "type", "001")
 	ec := &ExecutionContext{
 		EntityID: entityID,
 		State:    &MatchState{RuleID: "research-rule"},
@@ -2290,7 +2308,7 @@ func TestAction_PublishAgent_NoMutatorSkipsTriple(t *testing.T) {
 		Prompt:  "go",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "mutator", "entity", "none")})
 	require.NoError(t, err)
 	require.Len(t, mockPub.published, 1)
 }
@@ -2313,7 +2331,7 @@ func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
 		Prompt:  "go",
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "entity.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "publisher", "entity", "skipped")})
 	require.NoError(t, err)
 	assert.Empty(t, mockMut.addedTriples,
 		"no triple should be written when publish was skipped")
@@ -2322,6 +2340,10 @@ func TestAction_PublishAgent_NoPublisherSkipsTriple(t *testing.T) {
 // T055: Test ExecutionContext.SubstituteVariables covers entity IDs, state fields, and entity triples
 func TestExecutionContext_SubstituteVariables(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "substitution", "entity", "001")
+	sensorID := semantictest.EntityID(t, "c360", "platform", "sensor", "temperature", "device", "001")
+	droneID := semantictest.EntityID(t, "test", "rule", "actions", "substitution", "drone", "001")
+	zoneID := semantictest.EntityID(t, "test", "rule", "actions", "substitution", "zone", "a")
 
 	tests := []struct {
 		name     string
@@ -2331,20 +2353,20 @@ func TestExecutionContext_SubstituteVariables(t *testing.T) {
 	}{
 		{
 			name:     "substitute entity.id",
-			ec:       &ExecutionContext{EntityID: "c360.platform.sensor.temp.001"},
+			ec:       &ExecutionContext{EntityID: sensorID},
 			template: "Entity: $entity.id",
-			want:     "Entity: c360.platform.sensor.temp.001",
+			want:     "Entity: " + sensorID,
 		},
 		{
 			name:     "substitute related.id",
-			ec:       &ExecutionContext{EntityID: "drone.001", RelatedID: "zone.A"},
+			ec:       &ExecutionContext{EntityID: droneID, RelatedID: zoneID},
 			template: "Related: $related.id",
-			want:     "Related: zone.A",
+			want:     "Related: " + zoneID,
 		},
 		{
 			name: "substitute state.iteration",
 			ec: &ExecutionContext{
-				EntityID: "entity.001",
+				EntityID: entityID,
 				State:    &MatchState{Iteration: 3, MaxIterations: 10},
 			},
 			template: "Iter: $state.iteration of $state.max_iterations",
@@ -2353,33 +2375,33 @@ func TestExecutionContext_SubstituteVariables(t *testing.T) {
 		{
 			name: "substitute entity triple predicate",
 			ec: &ExecutionContext{
-				EntityID: "entity.001",
+				EntityID: entityID,
 				Entity: &gtypes.EntityState{
-					ID: "entity.001",
+					ID: entityID,
 					Triples: []message.Triple{
-						{Subject: "entity.001", Predicate: "agent.role", Object: "architect"},
-						{Subject: "entity.001", Predicate: "status.battery", Object: "low"},
+						{Subject: entityID, Predicate: "test.agent.role", Object: "architect"},
+						{Subject: entityID, Predicate: "test.status.battery", Object: "low"},
 					},
 				},
 			},
-			template: "Role: $entity.triple.agent.role, Battery: $entity.triple.status.battery",
+			template: "Role: $entity.triple.test.agent.role, Battery: $entity.triple.test.status.battery",
 			want:     "Role: architect, Battery: low",
 		},
 		{
 			name:     "no substitution needed",
-			ec:       &ExecutionContext{EntityID: "entity.001"},
+			ec:       &ExecutionContext{EntityID: entityID},
 			template: "static.content",
 			want:     "static.content",
 		},
 		{
 			name:     "empty related.id substitutes empty string",
-			ec:       &ExecutionContext{EntityID: "entity.001", RelatedID: ""},
+			ec:       &ExecutionContext{EntityID: entityID, RelatedID: ""},
 			template: "Related: $related.id",
 			want:     "Related: ",
 		},
 		{
 			name:     "nil state skips state substitutions",
-			ec:       &ExecutionContext{EntityID: "entity.001"},
+			ec:       &ExecutionContext{EntityID: entityID},
 			template: "Iter: $state.iteration",
 			want:     "Iter: $state.iteration",
 		},
@@ -2405,6 +2427,7 @@ func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
 	var buf strings.Builder
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "unresolved", "entity", "001")
 
 	tests := []struct {
 		name          string
@@ -2414,21 +2437,21 @@ func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
 	}{
 		{
 			name:          "triple predicate missing from entity",
-			ec:            &ExecutionContext{EntityID: "entity.001", Entity: &gtypes.EntityState{ID: "entity.001"}},
+			ec:            &ExecutionContext{EntityID: entityID, Entity: &gtypes.EntityState{ID: entityID}},
 			template:      "key.$entity.triple.agent.loop.task",
 			wantLeftovers: []string{"$entity.triple.agent.loop.task"},
 		},
 		{
 			name:          "state substitution without state struct",
-			ec:            &ExecutionContext{EntityID: "entity.001"},
+			ec:            &ExecutionContext{EntityID: entityID},
 			template:      "iter=$state.iteration",
 			wantLeftovers: []string{"$state.iteration"},
 		},
 		{
 			name:          "multiple unresolved tokens collected",
-			ec:            &ExecutionContext{EntityID: "entity.001"},
-			template:      "a=$entity.triple.missing.one b=$related.id c=$state.iteration",
-			wantLeftovers: []string{"$entity.triple.missing.one", "$state.iteration"},
+			ec:            &ExecutionContext{EntityID: entityID},
+			template:      "a=$entity.triple.test.missing.one b=$related.id c=$state.iteration",
+			wantLeftovers: []string{"$entity.triple.test.missing.one", "$state.iteration"},
 		},
 		{
 			// Cron-only $schedule.* token in an expression-rule path
@@ -2436,7 +2459,7 @@ func TestExecutionContext_SubstituteVariables_WarnsOnUnresolved(t *testing.T) {
 			// "schedule" to the alternation so a future refactor can't
 			// silently drop the namespace.
 			name:          "schedule token without schedule context",
-			ec:            &ExecutionContext{EntityID: "entity.001"},
+			ec:            &ExecutionContext{EntityID: entityID},
 			template:      "key=$schedule.unknown_field",
 			wantLeftovers: []string{"$schedule.unknown_field"},
 		},
@@ -2474,21 +2497,23 @@ func TestExecutionContext_SubstituteVariables_NoWarnOnClean(t *testing.T) {
 	var buf strings.Builder
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	defer slog.SetDefault(prev)
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "clean", "entity", "001")
+	relatedID := semantictest.EntityID(t, "test", "rule", "actions", "clean", "zone", "a")
 
 	ec := &ExecutionContext{
-		EntityID:  "entity.001",
-		RelatedID: "zone.A",
+		EntityID:  entityID,
+		RelatedID: relatedID,
 		State:     &MatchState{Iteration: 2, MaxIterations: 5},
 		Entity: &gtypes.EntityState{
-			ID: "entity.001",
+			ID: entityID,
 			Triples: []message.Triple{
-				{Subject: "entity.001", Predicate: "agent.role", Object: "architect"},
+				{Subject: entityID, Predicate: "test.agent.role", Object: "architect"},
 			},
 		},
 	}
 
-	got := ec.SubstituteVariables("$entity.id|$related.id|$state.iteration|$entity.triple.agent.role")
-	assert.Equal(t, "entity.001|zone.A|2|architect", got)
+	got := ec.SubstituteVariables("$entity.id|$related.id|$state.iteration|$entity.triple.test.agent.role")
+	assert.Equal(t, entityID+"|"+relatedID+"|2|architect", got)
 	assert.Empty(t, buf.String(), "clean substitution should not log")
 }
 
@@ -2560,7 +2585,7 @@ func TestAction_UpdateKV_Merge(t *testing.T) {
 		Merge: true,
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "plan.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "kv-merge", "plan", "001")})
 	require.NoError(t, err)
 
 	// Verify merge: existing "owner" preserved, "status" updated, "updated_by" added
@@ -2589,7 +2614,7 @@ func TestAction_UpdateKV_Overwrite(t *testing.T) {
 		Merge: false,
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "exec.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "kv-overwrite", "execution", "001")})
 	require.NoError(t, err)
 
 	result := kv.data["EXECUTION_STATES"]["exec-001"]
@@ -2600,14 +2625,15 @@ func TestAction_UpdateKV_Overwrite(t *testing.T) {
 func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "kv-substitution", "plan", "001")
 
 	kv := newMockKVWriter()
 	executor := NewActionExecutorComplete(nil, nil, nil, kv)
 
 	entity := &gtypes.EntityState{
-		ID: "plan.001",
+		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: "plan.001", Predicate: "workflow.plan.slug", Object: "my-plan"},
+			{Subject: entityID, Predicate: "workflow.plan.slug", Object: "my-plan"},
 		},
 	}
 
@@ -2618,13 +2644,13 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id",
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2647 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}
 
 	ec := &ExecutionContext{
-		EntityID: "plan.001",
+		EntityID: entityID,
 		Entity:   entity,
 	}
 
@@ -2636,7 +2662,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 
 	result := kv.data["PLAN_STATES"]["my-plan"]
 	assert.Equal(t, "drafting", result["status"])
-	assert.Equal(t, "plan.001", result["entity_id"])
+	assert.Equal(t, entityID, result["entity_id"])
 	// $now should be substituted to an RFC3339 timestamp
 	nowStr, ok := result["updated_at"].(string)
 	require.True(t, ok, "updated_at should be a string")
@@ -2658,7 +2684,7 @@ func TestAction_UpdateKV_MissingBucket(t *testing.T) {
 		},
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "plan.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "kv-missing", "plan", "001")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "bucket is required")
 }
@@ -2694,7 +2720,7 @@ func TestAction_UpdateKV_MissingKey(t *testing.T) {
 		},
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "plan.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "kv-missing", "plan", "002")})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "key is required")
 }
@@ -2715,16 +2741,18 @@ func TestAction_UpdateKV_NoWriter(t *testing.T) {
 		},
 	}
 
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "plan.001"})
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "kv-writer", "plan", "none")})
 	require.NoError(t, err)
 }
 
 func TestSubstitutePayloadVariables_Nested(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "plan", "001")
+	relatedID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "request", "001")
 
 	ec := &ExecutionContext{
-		EntityID:  "plan.001",
-		RelatedID: "req.001",
+		EntityID:  entityID,
+		RelatedID: relatedID,
 	}
 
 	payload := map[string]any{
@@ -2739,20 +2767,22 @@ func TestSubstitutePayloadVariables_Nested(t *testing.T) {
 
 	result := substitutePayloadVariables(payload, ec)
 
-	assert.Equal(t, "plan.001", result["entity"])
-	assert.Equal(t, "req.001", result["related"])
+	assert.Equal(t, entityID, result["entity"])
+	assert.Equal(t, relatedID, result["related"])
 	assert.Equal(t, 42, result["count"]) // non-string preserved
 	nested := result["nested"].(map[string]any)
-	assert.Equal(t, "plan.001", nested["inner_entity"])
+	assert.Equal(t, entityID, nested["inner_entity"])
 	assert.Equal(t, true, nested["flag"]) // non-string preserved
 }
 
 func TestSubstitutePayloadVariables_ArrayValues(t *testing.T) {
 	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "plan", "002")
+	relatedID := semantictest.EntityID(t, "test", "rule", "actions", "payload", "request", "002")
 
 	ec := &ExecutionContext{
-		EntityID:  "plan.001",
-		RelatedID: "req.001",
+		EntityID:  entityID,
+		RelatedID: relatedID,
 	}
 
 	payload := map[string]any{
@@ -2764,15 +2794,15 @@ func TestSubstitutePayloadVariables_ArrayValues(t *testing.T) {
 	result := substitutePayloadVariables(payload, ec)
 
 	tags := result["tags"].([]any)
-	assert.Equal(t, "plan.001", tags[0])
+	assert.Equal(t, entityID, tags[0])
 	assert.Equal(t, "static", tags[1])
-	assert.Equal(t, "req.001", tags[2])
+	assert.Equal(t, relatedID, tags[2])
 
 	numbers := result["numbers"].([]any)
 	assert.Equal(t, 1, numbers[0]) // non-string preserved
 
 	mixed := result["mixed"].([]any)
-	assert.Equal(t, "plan.001", mixed[0])
+	assert.Equal(t, entityID, mixed[0])
 	assert.Equal(t, 42, mixed[1])
 	assert.Equal(t, true, mixed[2])
 }
@@ -3180,7 +3210,7 @@ func TestAction_PublishAgent_RunIDInheritedFromLoopEntity(t *testing.T) {
 	}
 
 	// Build an entity state that carries agent.run = "root-loop-uuid".
-	loopEntityID := "c360.ops.agent.agentic-loop.execution.loop-abc"
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-abc")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3227,7 +3257,7 @@ func TestAction_PublishAgent_RunIDNotInheritedWhenMissing(t *testing.T) {
 	}
 
 	// Loop entity without agent.run triple.
-	loopEntityID := "c360.ops.agent.agentic-loop.execution.loop-xyz"
+	loopEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "loop-xyz")
 	entity := &gtypes.EntityState{
 		ID: loopEntityID,
 		Triples: []message.Triple{
@@ -3269,7 +3299,7 @@ func TestAction_PublishAgent_RunIDInheritedFromNonLoopEntityTriple(t *testing.T)
 	}
 
 	// Chain entity (not a loop execution) carrying an agent.run triple.
-	chainEntityID := "c360.ops.agent.chain.execution.chain-abc"
+	chainEntityID := semantictest.EntityID(t, "c360", "ops", "agent", "chain", "execution", "chain-abc")
 	entity := &gtypes.EntityState{
 		ID: chainEntityID,
 		Triples: []message.Triple{
@@ -3318,7 +3348,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 
 	// Trigger entity is a loop-execution entity — the firing coordinator loop.
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := "acme.ops.agent.agentic-loop.execution." + firingLoopID
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3344,7 +3374,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunAndStampsAgentRun(t *testing.T)
 		"spawned child's RunID must equal the firing loop's bare loop-id")
 
 	// Manager.Create must have been called (run minted in "dispatched").
-	runEntityID := "acme.ops.agent.chain.execution." + firingLoopID
+	runEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "chain", "execution", firingLoopID)
 	_, created := mgr.entities["agent-run"][runEntityID]
 	assert.True(t, created, "Manager.Create must mint the AgentRun entity")
 
@@ -3387,7 +3417,7 @@ func TestAction_PublishAgent_RunScopeNew_NonLoopEntityFallsBackToInherit(t *test
 	}
 
 	// Non-loop trigger: no LoopIDFromExecutionEntityID match.
-	nonLoopEntity := "acme.ops.iot.sensor.temperature.001"
+	nonLoopEntity := semantictest.EntityID(t, "acme", "ops", "iot", "sensor", "temperature", "001")
 	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: nonLoopEntity})
 	require.NoError(t, err)
 	require.Len(t, pub.published, 1, "task must still be published despite non-loop trigger")
@@ -3413,7 +3443,7 @@ func TestAction_PublishAgent_RunScopeNew_NoLifecycleManagerFallsBackToInherit(t 
 	executor := NewActionExecutorComplete(nil, nil, pub, nil)
 
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := "acme.ops.agent.agentic-loop.execution." + firingLoopID
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3448,7 +3478,7 @@ func TestAction_PublishAgent_RunScopeNone_SuppressesRunID(t *testing.T) {
 	executor := NewActionExecutorFull(nil, nil, pub)
 
 	firingLoopID := "coordinator-loop-uuid"
-	loopEntityID := "acme.ops.agent.agentic-loop.execution." + firingLoopID
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
 
 	// Entity has an agent.run triple — but run_scope:none suppresses it.
 	entity := &gtypes.EntityState{
@@ -3494,7 +3524,7 @@ func TestAction_PublishAgent_RunScopeNew_MintsRunSuccessfully(t *testing.T) {
 	executor.SetLifecycleManager(mgr)
 
 	firingLoopID := "coord-fresh-mint"
-	loopEntityID := "acme.ops.agent.agentic-loop.execution." + firingLoopID
+	loopEntityID := semantictest.EntityID(t, "acme", "ops", "agent", "agentic-loop", "execution", firingLoopID)
 
 	action := Action{
 		Type:     ActionTypePublishAgent,
@@ -3544,7 +3574,7 @@ func TestAction_PublishAgent_FilesystemPolicy(t *testing.T) {
 		ScratchPaths:     []string{".probe/", "build"},
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "filesystem", "entity", "001")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
@@ -3581,7 +3611,7 @@ func TestAction_PublishAgent_NoFilesystemPolicy(t *testing.T) {
 		Prompt:  "do work",
 	}
 
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "e.1"}))
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "filesystem", "entity", "002")}))
 	require.Len(t, mock.published, 1)
 
 	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)

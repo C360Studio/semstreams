@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestEstimateTokens(t *testing.T) {
@@ -159,10 +161,13 @@ func TestBudgetAllocation(t *testing.T) {
 
 func TestNewConstructedContext(t *testing.T) {
 	content := "Test content for context"
-	entities := []string{"entity1", "entity2"}
+	entities := []string{
+		semantictest.EntityID(t, "test", "semstreams", "context", "constructed", "entity", "one"),
+		semantictest.EntityID(t, "test", "semstreams", "context", "constructed", "entity", "two"),
+	}
 	sources := []Source{
-		EntitySource("entity1"),
-		EntitySource("entity2"),
+		EntitySource(semantictest.EntityID(t, "test", "semstreams", "context", "constructed", "entity", "one")),
+		EntitySource(semantictest.EntityID(t, "test", "semstreams", "context", "constructed", "entity", "two")),
 	}
 
 	ctx := NewConstructedContext(content, entities, sources)
@@ -186,8 +191,8 @@ func TestNewConstructedContext(t *testing.T) {
 
 func TestFormatEntitiesForContext(t *testing.T) {
 	entities := map[string]json.RawMessage{
-		"entity.one": json.RawMessage(`{"name": "Entity One", "value": 42}`),
-		"entity.two": json.RawMessage(`{"name": "Entity Two", "value": 100}`),
+		semantictest.EntityID(t, "test", "semstreams", "context", "formatted", "entity", "one"): json.RawMessage(`{"name": "Entity One", "value": 42}`),
+		semantictest.EntityID(t, "test", "semstreams", "context", "formatted", "entity", "two"): json.RawMessage(`{"name": "Entity Two", "value": 100}`),
 	}
 
 	content, tokenCount, err := FormatEntitiesForContext(entities, DefaultFormatOptions())
@@ -203,15 +208,15 @@ func TestFormatEntitiesForContext(t *testing.T) {
 	}
 
 	// Check structure
-	if !contains(content, "entity.one") || !contains(content, "entity.two") {
+	if !contains(content, "test.semstreams.context.formatted.entity.one") || !contains(content, "test.semstreams.context.formatted.entity.two") {
 		t.Error("content should contain entity IDs")
 	}
 }
 
 func TestFormatRelationshipsForContext(t *testing.T) {
 	relationships := []Relationship{
-		{Subject: "a", Predicate: "relates_to", Object: "b"},
-		{Subject: "b", Predicate: "connects", Object: "c"},
+		{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "relationship", "entity", "a"), Predicate: semantictest.Predicate(t, "context", "relationship", "relates-to"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "relationship", "entity", "b")},
+		{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "relationship", "entity", "b"), Predicate: semantictest.Predicate(t, "context", "relationship", "connects"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "relationship", "entity", "c")},
 	}
 
 	content, tokenCount, err := FormatRelationshipsForContext(relationships, DefaultFormatOptions())
@@ -225,16 +230,16 @@ func TestFormatRelationshipsForContext(t *testing.T) {
 	if tokenCount == 0 {
 		t.Error("expected non-zero token count")
 	}
-	if !contains(content, "relates_to") {
+	if !contains(content, "context.relationship.relates-to") {
 		t.Error("content should contain relationship predicates")
 	}
 }
 
 func TestCollectEntityIDs(t *testing.T) {
 	relationships := []Relationship{
-		{Subject: "a", Predicate: "rel", Object: "b"},
-		{Subject: "b", Predicate: "rel", Object: "c"},
-		{Subject: "a", Predicate: "rel", Object: "c"}, // Duplicate a and c
+		{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "a"), Predicate: semantictest.Predicate(t, "context", "relationship", "related"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "b")},
+		{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "b"), Predicate: semantictest.Predicate(t, "context", "relationship", "related"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "c")},
+		{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "a"), Predicate: semantictest.Predicate(t, "context", "relationship", "related"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "collect", "entity", "c")}, // Duplicate a and c
 	}
 
 	ids := CollectEntityIDs(relationships)
@@ -249,7 +254,7 @@ func TestCollectEntityIDs(t *testing.T) {
 	for _, id := range ids {
 		idMap[id] = true
 	}
-	for _, expected := range []string{"a", "b", "c"} {
+	for _, expected := range []string{"test.semstreams.context.collect.entity.a", "test.semstreams.context.collect.entity.b", "test.semstreams.context.collect.entity.c"} {
 		if !idMap[expected] {
 			t.Errorf("missing expected ID: %s", expected)
 		}
@@ -282,12 +287,16 @@ func (m *mockGraphClient) QueryRelationships(_ context.Context, entityID string,
 func TestBatchQueryEntities(t *testing.T) {
 	client := &mockGraphClient{
 		entities: map[string]json.RawMessage{
-			"e1": json.RawMessage(`{"id": "e1"}`),
-			"e2": json.RawMessage(`{"id": "e2"}`),
+			semantictest.EntityID(t, "test", "semstreams", "context", "batch", "entity", "one"): json.RawMessage(`{"id": "test.semstreams.context.batch.entity.one"}`),
+			semantictest.EntityID(t, "test", "semstreams", "context", "batch", "entity", "two"): json.RawMessage(`{"id": "test.semstreams.context.batch.entity.two"}`),
 		},
 	}
 
-	result, err := BatchQueryEntities(context.Background(), client, []string{"e1", "e2", "e3"})
+	result, err := BatchQueryEntities(context.Background(), client, []string{
+		semantictest.EntityID(t, "test", "semstreams", "context", "batch", "entity", "one"),
+		semantictest.EntityID(t, "test", "semstreams", "context", "batch", "entity", "two"),
+		semantictest.EntityID(t, "test", "semstreams", "context", "batch", "entity", "three"),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -298,18 +307,18 @@ func TestBatchQueryEntities(t *testing.T) {
 	if len(result.NotFound) != 1 {
 		t.Errorf("expected 1 not found, got %d", len(result.NotFound))
 	}
-	if result.NotFound[0] != "e3" {
-		t.Errorf("expected e3 not found")
+	if result.NotFound[0] != "test.semstreams.context.batch.entity.three" {
+		t.Errorf("expected canonical third entity not found")
 	}
 }
 
 func TestBuildContextFromBatch(t *testing.T) {
 	batchResult := &BatchQueryResult{
 		Entities: map[string]json.RawMessage{
-			"entity.test": json.RawMessage(`{"name": "Test", "value": 123}`),
+			semantictest.EntityID(t, "test", "semstreams", "context", "built", "entity", "subject"): json.RawMessage(`{"name": "Test", "value": 123}`),
 		},
 		Relationships: []Relationship{
-			{Subject: "entity.test", Predicate: "links_to", Object: "other"},
+			{Subject: semantictest.EntityID(t, "test", "semstreams", "context", "built", "entity", "subject"), Predicate: semantictest.Predicate(t, "context", "relationship", "links-to"), Object: semantictest.EntityID(t, "test", "semstreams", "context", "built", "entity", "object")},
 		},
 	}
 

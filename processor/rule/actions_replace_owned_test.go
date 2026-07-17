@@ -25,11 +25,11 @@ import (
 // ownedPredicate is the predicate the test rule pack declares in a
 // replace-owned projection group; replace_owned actions naming it are inside
 // the envelope.
-const ownedPredicate = "status.phase"
+const ownedPredicate = "test.status.phase"
 
 // outOfEnvelopePredicate is a predicate NOT in any replace-owned group — a
 // replace_owned action naming it must be rejected at both load paths.
-const outOfEnvelopePredicate = "status.unowned"
+const outOfEnvelopePredicate = "test.status.unowned"
 
 const testReplaceOwnedPackID = "replace-owned-test"
 const testReplaceOwnedOwner = "rule-pack." + testReplaceOwnedPackID
@@ -183,7 +183,7 @@ func TestReplaceOwned_HotReload_ParseErrorDoesNotBypassEnvelope(t *testing.T) {
 			"hot-bypass": map[string]any{
 				"type": "test_rule",
 				"conditions": []any{
-					map[string]any{"field": "x", "operator": "eq", "value": "y"},
+					map[string]any{"field": "test.fixture.x", "operator": "eq", "value": "y"},
 				},
 				"entity": map[string]any{
 					"watch_buckets": []any{123}, // non-string → definitionFromMap errors
@@ -280,7 +280,7 @@ func TestReplaceOwned_DollarPredicate_RejectedAtValidation(t *testing.T) {
 			Name:    "dollar-pred",
 			Enabled: true,
 			OnEnter: []Action{
-				{Type: ActionTypeReplaceOwned, Predicate: "$message.predicate_name", Object: "running"},
+				{Type: ActionTypeReplaceOwned, Predicate: "$message.predicate_name", Object: "running"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.predicate_name","reason":"arity"}
 			},
 		},
 	}
@@ -297,7 +297,7 @@ func TestReplaceOwned_DollarPredicate_RejectedAtValidation(t *testing.T) {
 				"on_enter": []any{
 					map[string]any{
 						"type":      ActionTypeReplaceOwned,
-						"predicate": "$message.predicate_name",
+						"predicate": "$message.predicate_name", // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.predicate_name","reason":"arity"}
 						"object":    "running",
 					},
 				},

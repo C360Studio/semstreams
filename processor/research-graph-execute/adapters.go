@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -67,33 +68,38 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	if err != nil {
 		return nil, fmt.Errorf("entity_state via %s: %w", subjectGraphQueryBatch, err)
 	}
-	// graph.query.batch returns {entities: [<EntityState>]} where
-	// EntityState uses `id` (not `entity_id`). EntityState carries
-	// Triples but PR 4 only needs the ID for downstream dedup +
-	// budget; snippet extraction from triples is Phase 2 work.
-	var resp struct {
-		Entities []struct {
-			ID string `json:"id"`
-		} `json:"entities"`
+	entities, err := decodeEntityStateResponse(respData)
+	if err != nil {
+		return nil, err
 	}
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return nil, fmt.Errorf("decode entity_state response: %w", err)
-	}
-	out := make([]fusion.Evidence, 0, len(resp.Entities))
-	for i, e := range resp.Entities {
+	out := make([]fusion.Evidence, 0, len(entities))
+	for i, entity := range entities {
 		if limit > 0 && i >= limit {
 			break
 		}
-		if strings.TrimSpace(e.ID) == "" {
-			continue
-		}
 		out = append(out, fusion.Evidence{
-			EntityID: e.ID,
+			EntityID: entity.ID,
 			Tier:     tier,
 			Source:   source,
 		})
 	}
 	return out, nil
+}
+
+func decodeEntityStateResponse(data []byte) ([]graph.EntityState, error) {
+	// Decode the complete EntityState candidates even though this adapter only
+	// projects IDs. A partial {id} shape would let poisoned subjects/references
+	// cross an authoritative batch boundary unseen.
+	var resp struct {
+		Entities []graph.EntityState `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, fmt.Errorf("decode entity_state response: %w", err)
+	}
+	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
+		return nil, fmt.Errorf("validate entity_state response: %w", err)
+	}
+	return resp.Entities, nil
 }
 
 // PredicateWalk implements fusion.GraphQueryClient via

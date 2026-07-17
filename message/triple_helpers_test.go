@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestTriple_IsRelationship(t *testing.T) {
@@ -55,7 +57,7 @@ func TestTriple_IsRelationship(t *testing.T) {
 			name: "relationship triple with valid entity ID",
 			triple: Triple{
 				Subject:    "c360.platform1.robotics.mav1.drone.0",
-				Predicate:  "robotics.component.powered_by",
+				Predicate:  semantictest.Predicate(t, "robotics", "component", "powered-by"),
 				Object:     "c360.platform1.robotics.mav1.battery.0",
 				Source:     "system",
 				Timestamp:  now,
@@ -66,7 +68,7 @@ func TestTriple_IsRelationship(t *testing.T) {
 		{
 			name: "relationship triple with different valid entity ID",
 			triple: Triple{
-				Subject:    "ops.missions.patrol.alpha",
+				Subject:    semantictest.EntityID(t, "ops", "missions", "patrol", "alpha", "mission", "001"),
 				Predicate:  "mission.includes.asset",
 				Object:     "c360.platform1.robotics.mav1.drone.0",
 				Source:     "rule-processor",
@@ -358,3 +360,21 @@ func TestTriple_ExpiresAt_JSON_OmitEmpty(t *testing.T) {
 		t.Error("expires_at should be omitted when nil")
 	}
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=144 column=65 surface=go-triple-reference entity_id_invalid:arity verifies explicit malformed reference rejection
+// entity-id-audit:classify intentional-malformed "gcs.operators.station.1" line=169 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies old four-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "ops.missions.patrol.alpha" line=174 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies old four-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "telemetry.robotics.drone" line=184 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies three-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "robotics.drone" line=189 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies two-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "drone" line=194 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies one-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "c360.platform1.robotics.mav1.drone" line=199 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies five-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "c360.platform1.robotics.mav1.drone.0.extra" line=204 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies seven-position IDs are rejected
+// entity-id-audit:classify intentional-malformed "" line=209 column=14 surface=go-field:.entityID entity_id_invalid:empty verifies empty IDs are rejected
+// entity-id-audit:classify intentional-malformed "..." line=214 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies dot-only IDs are rejected
+// entity-id-audit:classify intentional-malformed "c360.platform1..mav1.drone.0" line=219 column=14 surface=go-field:.entityID entity_id_invalid:empty_segment verifies an empty position is rejected
+// entity-id-audit:classify intentional-malformed "c360.platform1.robotics.mav1.drone.0." line=224 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a trailing position is rejected
+// entity-id-audit:classify intentional-malformed ".c360.platform1.robotics.mav1.drone.0" line=229 column=14 surface=go-field:.entityID entity_id_invalid:arity verifies a leading position is rejected
+// entity-id-audit:classify intentional-malformed "{\"include\":[\"main.go\",\"auth/middleware.go\",\"handlers/user Handlers.go\",\"test/auth_test.go\"],\"exclude\":[\"third-party libraries\"],\"do_not_touch\":[\"README.md\",\"LICENSE\"]}" line=234 column=14 surface=go-field:.entityID entity_id_invalid:first_byte verifies JSON text cannot spoof entity structure
+// entity-id-audit:classify intentional-malformed "c360.platform 1.robotics.mav1.drone.0" line=239 column=14 surface=go-field:.entityID entity_id_invalid:alphabet verifies whitespace is rejected
+// entity-id-audit:classify intentional-malformed "c360.{platform}.robotics.mav1.drone.0" line=244 column=14 surface=go-field:.entityID entity_id_invalid:first_byte verifies brace-prefixed positions are rejected
+// entity-id-audit:classify intentional-malformed "c360.platform/1.robotics.mav1.drone.0" line=249 column=14 surface=go-field:.entityID entity_id_invalid:alphabet verifies slash bytes are rejected

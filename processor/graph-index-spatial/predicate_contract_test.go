@@ -23,9 +23,9 @@ func TestExtractGeoCoordinatesIgnoresBarePredicateAliases(t *testing.T) {
 		{Predicate: "geo.location.latitude", Object: 40.0},
 		{Predicate: "geo.location.longitude", Object: -100.0},
 		{Predicate: "geo.location.altitude", Object: 1200.0},
-		{Predicate: "latitude", Object: 1.0},
-		{Predicate: "longitude", Object: 2.0},
-		{Predicate: "altitude", Object: 3.0},
+		{Predicate: "latitude", Object: 1.0},  // predicate-audit:invalid {"kind":"stored-predicate","value":"latitude","reason":"arity"}
+		{Predicate: "longitude", Object: 2.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"longitude","reason":"arity"}
+		{Predicate: "altitude", Object: 3.0},  // predicate-audit:invalid {"kind":"stored-predicate","value":"altitude","reason":"arity"}
 	})
 	if lat == nil || *lat != 40 || lon == nil || *lon != -100 || alt == nil || *alt != 1200 {
 		t.Fatalf("coordinates = (%v, %v, %v), want canonical (40, -100, 1200)", lat, lon, alt)
@@ -41,7 +41,7 @@ func TestPredicatePoisonProducesNoSpatialOutputAndBlocksQueries(t *testing.T) {
 		spatialBucket:     bucket,
 		lifecycleReporter: component.NewNoOpLifecycleReporter(),
 	}
-	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":1}]}`)
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	c.processEntityUpdate(context.Background(), &mockKVEntry{data: poisoned})
 
 	if c.resetState.Load() == nil {
@@ -83,7 +83,7 @@ func TestWatchAllBootstrapRejectsPoisonAtomicallyInEitherOrder(t *testing.T) {
 	t.Parallel()
 
 	valid := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"geo.location.latitude","object":40},{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"geo.location.longitude","object":-100}]}`)
-	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`)
+	poison := []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 
 	for _, tc := range []struct {
 		name     string

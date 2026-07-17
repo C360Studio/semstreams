@@ -7,14 +7,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
-func tr(predicate string) message.Triple {
-	return message.Triple{Subject: "run.entity", Predicate: predicate, Object: "v"}
-}
-
 func TestOwnedPredicates(t *testing.T) {
+	entityID := semantictest.EntityID(t, "test", "agentic-tools", "owned-facts", "reader", "run", "001")
 	tests := []struct {
 		name    string
 		triples []message.Triple
@@ -24,19 +22,19 @@ func TestOwnedPredicates(t *testing.T) {
 		{
 			name: "prefix scopes to owned package, sibling predicates excluded",
 			triples: []message.Triple{
-				tr("change.abc.task.1"),
-				tr("change.abc.task.2"),
-				tr("core.identity.type"), // other owner — must NOT be returned
-				tr("status.phase"),       // lifecycle — must NOT be returned
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-1"), Object: "v"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-2"), Object: "v"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "core", "identity", "type"), Object: "v"},     // other owner — must NOT be returned
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "lifecycle", "status", "phase"), Object: "v"}, // lifecycle — must NOT be returned
 			},
 			prefix: "change.abc.",
-			want:   []string{"change.abc.task.1", "change.abc.task.2"},
+			want:   []string{"change.abc.task-1", "change.abc.task-2"},
 		},
 		{
 			name: "distinct: multi-valued predicate collapses to one entry",
 			triples: []message.Triple{
-				{Subject: "run.entity", Predicate: "change.abc.tag", Object: "a"},
-				{Subject: "run.entity", Predicate: "change.abc.tag", Object: "b"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "tag"), Object: "a"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "tag"), Object: "b"},
 			},
 			prefix: "change.abc.",
 			want:   []string{"change.abc.tag"},
@@ -44,34 +42,34 @@ func TestOwnedPredicates(t *testing.T) {
 		{
 			name: "sorted output regardless of triple order",
 			triples: []message.Triple{
-				tr("change.abc.task.3"),
-				tr("change.abc.task.1"),
-				tr("change.abc.task.2"),
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-3"), Object: "v"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-1"), Object: "v"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-2"), Object: "v"},
 			},
 			prefix: "change.abc.",
-			want:   []string{"change.abc.task.1", "change.abc.task.2", "change.abc.task.3"},
+			want:   []string{"change.abc.task-1", "change.abc.task-2", "change.abc.task-3"},
 		},
 		{
 			name: "empty prefix returns every predicate (single-owner escape hatch)",
 			triples: []message.Triple{
-				tr("change.abc.task.1"),
-				tr("core.identity.type"),
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-1"), Object: "v"},
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "core", "identity", "type"), Object: "v"},
 			},
 			prefix: "",
-			want:   []string{"change.abc.task.1", "core.identity.type"},
+			want:   []string{"change.abc.task-1", "core.identity.type"},
 		},
 		{
 			name: "empty predicate skipped",
 			triples: []message.Triple{
-				tr(""),
-				tr("change.abc.task.1"),
+				{Subject: entityID, Predicate: "", Object: "v"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "abc", "task-1"), Object: "v"},
 			},
 			prefix: "change.abc.",
-			want:   []string{"change.abc.task.1"},
+			want:   []string{"change.abc.task-1"},
 		},
 		{
 			name:    "no match returns empty, not nil-panic",
-			triples: []message.Triple{tr("other.pred")},
+			triples: []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "other", "fact", "predicate"), Object: "v"}},
 			prefix:  "change.abc.",
 			want:    []string{},
 		},

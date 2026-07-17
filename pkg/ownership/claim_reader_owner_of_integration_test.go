@@ -93,7 +93,7 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	if err := reg.RegisterOwner(ctx, Registration{
 		Owner: "evidence-writer",
 		Claims: []OwnerClaim{
-			oc("evidence-writer", sysPat, ModeAppendEvidence, "web.relation.backlink"),
+			OwnerClaim{Owner: "evidence-writer", Pattern: sysPat, Mode: ModeAppendEvidence, Predicates: []string{"web.relation.backlink"}},
 		},
 	}); err != nil {
 		t.Fatalf("RegisterOwner(append-evidence): %v", err)
@@ -107,10 +107,13 @@ func TestIntegration_ClaimReader_OwnerOf(t *testing.T) {
 	}
 }
 
-// reg_ is a local alias for the reg() helper (defined in
-// registry_integration_test.go) to avoid the name collision with the *Registry
-// variable named reg in the same test function. Both compile in the same
-// package under the integration build tag.
+// reg_ keeps the registration fixture concise without hiding entity patterns
+// from the source audit behind a production helper.
 func reg_(owner, pattern string, preds ...string) Registration {
-	return reg(owner, pattern, preds...)
+	return Registration{
+		Owner: owner,
+		Claims: []OwnerClaim{{
+			Owner: owner, Pattern: pattern, Mode: ModeReplaceOwned, Predicates: preds,
+		}},
+	}
 }

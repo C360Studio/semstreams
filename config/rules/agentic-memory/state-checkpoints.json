@@ -4,10 +4,6 @@
   "name": "Extract Iteration State",
   "description": "Extract iteration state checkpoints during agentic execution. Creates triples tracking iteration count, state transitions, and timestamps for recovery.",
   "enabled": true,
-  "entity": {
-    "pattern": "loop.agentic.task.*",
-    "watch_buckets": ["AGENT_LOOPS"]
-  },
   "conditions": [
     {
       "field": "$message.iteration",

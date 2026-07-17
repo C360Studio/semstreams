@@ -4,6 +4,7 @@
   "name": "R4 — Assess decision dispatch",
   "description": "ADR-045 R4. Fires on research.assess.complete (assess_sufficiency's terminal stamp). Three action-level branches keyed on research.assess.sufficient and $state.iteration: (1) sufficient=true → synthesize_answer (terminal happy path); (2) sufficient=false AND $state.iteration <= 5 → refine via execute_subqueries after clearing the execute+assess markers (so R3 re-fires); (3) sufficient=false AND $state.iteration >= 6 → synthesize_answer (cap-exhaust fallback — the refine actions hit MaxIterations=5 on the 6th R4 fire and skip, so the fallback action must take over or the chain stalls forever). $state.iteration is the per-rule firing counter (see processor/rule/rule_factory.go Definition.MaxIterations doc) — increments on each TransitionEntered. The 1st R4 fire (initial assess) is iteration=1; refines fire R4 again at iterations 2..6 (each refine creates a new assess.complete after the remove_triple clear), so the 6th fire is the cap-exhaust boundary.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

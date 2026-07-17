@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,6 +75,16 @@ func TestCreateEntity_UnicodeID(t *testing.T) {
 	}
 }
 
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.🚁001" line=46 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode instance rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.робот.mav1.drone.001" line=52 column=15 surface=go-field:.entityID entity_id_invalid:first_byte Unicode domain rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=136 column=14 surface=go-field:.entityID entity_id_invalid:empty empty ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=141 column=14 surface=go-field:.entityID entity_id_invalid:arity five-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001.extra" line=146 column=14 surface=go-field:.entityID entity_id_invalid:arity seven-part ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav 1.drone.001" line=151 column=14 surface=go-field:.entityID entity_id_invalid:alphabet whitespace rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.001!" line=156 column=14 surface=go-field:.entityID entity_id_invalid:alphabet punctuation rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=253 column=15 surface=go-field:.entityID entity_id_invalid:empty empty validation fixture
+// entity-id-audit:classify intentional-malformed "" line=450 column=9 surface=go-return:EntityID entity_id_invalid:empty empty Graphable ID rejection fixture
+
 func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	// Test entity creation with large number of triples (performance test)
 
@@ -85,7 +96,7 @@ func TestCreateEntity_LargeTripleSet(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		triples[i] = message.Triple{
 			Subject:    "c360.platform.test.sys.type.001",
-			Predicate:  "test.property." + string(rune('a'+i%26)),
+			Predicate:  semantictest.Predicate(t, "test", "property", string(rune('a'+i%26))),
 			Object:     float64(i),
 			Confidence: 1.0,
 			Timestamp:  time.Now(),

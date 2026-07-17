@@ -38,7 +38,7 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 				},
 				ForeignEdges: []projection.ForeignEdge{
 					{
-						Predicate:     "drone.assigned_to",
+						Predicate:     "test.drone.assigned-to",
 						Mode:          ownership.EdgeConditional,
 						TargetPattern: "acme.ops.robotics.gcs.mission.*",
 					},

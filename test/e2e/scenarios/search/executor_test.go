@@ -18,8 +18,8 @@ func TestExecutor_ExecuteOne_Success(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "temperature sensors",
 					"results": []map[string]any{
-						{"entity_id": "sensor-temp-001", "similarity": 0.85},
-						{"entity_id": "sensor-temp-002", "similarity": 0.72},
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.85},
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-002", "similarity": 0.72},
 					},
 					"duration": "15ms",
 				},
@@ -127,7 +127,7 @@ func TestExecutor_ExecuteOne_MustIncludeFails(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "temperature",
 					"results": []map[string]any{
-						{"entity_id": "sensor-humid-001", "similarity": 0.9},
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-humid-001", "similarity": 0.9},
 					},
 					"duration": "12ms",
 				},
@@ -161,8 +161,8 @@ func TestExecutor_ExecuteOne_MustExcludeWarning(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "temperature",
 					"results": []map[string]any{
-						{"entity_id": "sensor-temp-001", "similarity": 0.9},
-						{"entity_id": "doc-hr-001", "similarity": 0.5}, // Should be excluded
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.9},
+						{"entity_id": "test.e2e.search.scenario.entity.doc-hr-001", "similarity": 0.5}, // Should be excluded
 					},
 					"duration": "14ms",
 				},
@@ -202,8 +202,8 @@ func TestExecutor_ExecuteAll_Stats(t *testing.T) {
 					"similaritySearch": map[string]any{
 						"query": "query1",
 						"results": []map[string]any{
-							{"entity_id": "hit-1", "similarity": 0.8},
-							{"entity_id": "hit-2", "similarity": 0.6},
+							{"entity_id": "test.e2e.search.scenario.entity.hit-1", "similarity": 0.8},
+							{"entity_id": "test.e2e.search.scenario.entity.hit-2", "similarity": 0.6},
 						},
 						"duration": "20ms",
 					},
@@ -258,7 +258,7 @@ func TestExecutor_ExecuteAll_KnownAnswerTracking(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
-						{"entity_id": "sensor-temp-001", "similarity": 0.8},
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.8},
 					},
 					"duration": "15ms",
 				},
@@ -296,9 +296,9 @@ func TestValidation_AvgScore(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
-						{"entity_id": "a", "similarity": 0.9},
-						{"entity_id": "b", "similarity": 0.7},
-						{"entity_id": "c", "similarity": 0.5},
+						{"entity_id": "test.e2e.search.scenario.entity.a", "similarity": 0.9},
+						{"entity_id": "test.e2e.search.scenario.entity.b", "similarity": 0.7},
+						{"entity_id": "test.e2e.search.scenario.entity.c", "similarity": 0.5},
 					},
 					"duration": "18ms",
 				},
@@ -325,9 +325,9 @@ func TestValidation_HitsAboveMinScore(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
-						{"entity_id": "a", "similarity": 0.9},
-						{"entity_id": "b", "similarity": 0.4}, // Below 0.5
-						{"entity_id": "c", "similarity": 0.6},
+						{"entity_id": "test.e2e.search.scenario.entity.a", "similarity": 0.9},
+						{"entity_id": "test.e2e.search.scenario.entity.b", "similarity": 0.4}, // Below 0.5
+						{"entity_id": "test.e2e.search.scenario.entity.c", "similarity": 0.6},
 					},
 					"duration": "22ms",
 				},
@@ -358,13 +358,13 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name: "entity_found_in_top_3",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.9},
-				{EntityID: "doc-ops-002", Score: 0.8},
-				{EntityID: "doc-ops-003", Score: 0.7},
-				{EntityID: "doc-hr-001", Score: 0.6},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-003", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.6},
 			},
 			mustIncludeInTopN: map[int][]string{
-				3: {"doc-ops-001"},
+				3: {"test.e2e.search.scenario.entity.doc-ops-001"},
 			},
 			wantViolations: nil,
 			wantPass:       true,
@@ -372,17 +372,17 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name: "entity_found_but_not_in_top_3",
 			hits: []Hit{
-				{EntityID: "doc-hr-001", Score: 0.9},
-				{EntityID: "doc-hr-002", Score: 0.8},
-				{EntityID: "doc-hr-003", Score: 0.7},
-				{EntityID: "doc-ops-001", Score: 0.6}, // Rank 4, not in top 3
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-003", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.6}, // Rank 4, not in top 3
 			},
 			mustIncludeInTopN: map[int][]string{
-				3: {"doc-ops-001"},
+				3: {"test.e2e.search.scenario.entity.doc-ops-001"},
 			},
 			wantViolations: []PositionViolation{
 				{
-					Pattern:      "doc-ops-001",
+					Pattern:      "test.e2e.search.scenario.entity.doc-ops-001",
 					RequiredTopN: 3,
 					ActualRank:   4,
 				},
@@ -392,16 +392,16 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name: "entity_not_found_at_all",
 			hits: []Hit{
-				{EntityID: "doc-hr-001", Score: 0.9},
-				{EntityID: "doc-hr-002", Score: 0.8},
-				{EntityID: "doc-hr-003", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-003", Score: 0.7},
 			},
 			mustIncludeInTopN: map[int][]string{
-				3: {"doc-ops-001"},
+				3: {"test.e2e.search.scenario.entity.doc-ops-001"},
 			},
 			wantViolations: []PositionViolation{
 				{
-					Pattern:      "doc-ops-001",
+					Pattern:      "test.e2e.search.scenario.entity.doc-ops-001",
 					RequiredTopN: 3,
 					ActualRank:   -1,
 				},
@@ -411,15 +411,15 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name: "multiple_positions_top_3_and_top_5",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.95},
-				{EntityID: "doc-ops-002", Score: 0.90},
-				{EntityID: "doc-ops-003", Score: 0.85},
-				{EntityID: "doc-ops-004", Score: 0.80},
-				{EntityID: "sensor-temp-001", Score: 0.75},
-				{EntityID: "doc-ops-005", Score: 0.70},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.95},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.90},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-003", Score: 0.85},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-004", Score: 0.80},
+				{EntityID: "test.e2e.search.scenario.entity.sensor-temp-001", Score: 0.75},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-005", Score: 0.70},
 			},
 			mustIncludeInTopN: map[int][]string{
-				3: {"doc-ops-001"},
+				3: {"test.e2e.search.scenario.entity.doc-ops-001"},
 				5: {"sensor-temp"},
 			},
 			wantViolations: nil,
@@ -428,10 +428,10 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name:              "empty_hits_with_position_constraint",
 			hits:              []Hit{},
-			mustIncludeInTopN: map[int][]string{3: {"doc-ops-001"}},
+			mustIncludeInTopN: map[int][]string{3: {"test.e2e.search.scenario.entity.doc-ops-001"}},
 			wantViolations: []PositionViolation{
 				{
-					Pattern:      "doc-ops-001",
+					Pattern:      "test.e2e.search.scenario.entity.doc-ops-001",
 					RequiredTopN: 3,
 					ActualRank:   -1,
 				},
@@ -441,13 +441,13 @@ func TestValidate_MustIncludeInTopN(t *testing.T) {
 		{
 			name: "pattern_matches_multiple_but_first_in_top_n",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.9},
-				{EntityID: "doc-ops-002", Score: 0.8},
-				{EntityID: "doc-hr-001", Score: 0.7},
-				{EntityID: "doc-ops-003", Score: 0.6},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-003", Score: 0.6},
 			},
 			mustIncludeInTopN: map[int][]string{
-				2: {"doc-ops"}, // Matches doc-ops-001 at rank 1
+				2: {"doc-ops"}, // Matches test.e2e.search.scenario.entity.doc-ops-001 at rank 1
 			},
 			wantViolations: nil,
 			wantPass:       true,
@@ -527,12 +527,12 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "entity_a_ranks_higher_than_b",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.9},
-				{EntityID: "doc-ops-002", Score: 0.8},
-				{EntityID: "doc-hr-001", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.7},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: nil,
 			wantPass:       true,
@@ -540,16 +540,16 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "entity_a_ranks_lower_than_b",
 			hits: []Hit{
-				{EntityID: "doc-hr-001", Score: 0.9},
-				{EntityID: "doc-ops-001", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.8},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: []RankingViolation{
 				{
-					Higher:     "doc-ops-001",
-					Lower:      "doc-hr-001",
+					Higher:     "test.e2e.search.scenario.entity.doc-ops-001",
+					Lower:      "test.e2e.search.scenario.entity.doc-hr-001",
 					HigherRank: 2,
 					LowerRank:  1,
 				},
@@ -559,11 +559,11 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "entity_a_present_b_not_present",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.9},
-				{EntityID: "doc-ops-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.8},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: nil, // A present beats absent B
 			wantPass:       true,
@@ -571,16 +571,16 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "entity_a_not_present_b_present",
 			hits: []Hit{
-				{EntityID: "doc-hr-001", Score: 0.9},
-				{EntityID: "doc-hr-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-002", Score: 0.8},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: []RankingViolation{
 				{
-					Higher:     "doc-ops-001",
-					Lower:      "doc-hr-001",
+					Higher:     "test.e2e.search.scenario.entity.doc-ops-001",
+					Lower:      "test.e2e.search.scenario.entity.doc-hr-001",
 					HigherRank: -1,
 					LowerRank:  1,
 				},
@@ -590,10 +590,10 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "neither_present",
 			hits: []Hit{
-				{EntityID: "doc-finance-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-finance-001", Score: 0.9},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: nil, // No ranking constraint violated
 			wantPass:       true,
@@ -601,14 +601,14 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "multiple_ranking_constraints",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.95},
-				{EntityID: "doc-ops-002", Score: 0.90},
-				{EntityID: "doc-hr-001", Score: 0.85},
-				{EntityID: "doc-finance-001", Score: 0.80},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.95},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.90},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.85},
+				{EntityID: "test.e2e.search.scenario.entity.doc-finance-001", Score: 0.80},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001", "doc-finance-001"},
-				"doc-ops-002": {"doc-hr-001"},
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001", "test.e2e.search.scenario.entity.doc-finance-001"},
+				"test.e2e.search.scenario.entity.doc-ops-002": {"test.e2e.search.scenario.entity.doc-hr-001"},
 			},
 			wantViolations: nil,
 			wantPass:       true,
@@ -616,18 +616,18 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "one_constraint_passes_one_fails",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.95},
-				{EntityID: "doc-hr-001", Score: 0.90},
-				{EntityID: "doc-ops-002", Score: 0.85},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.95},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.90},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.85},
 			},
 			mustRankHigherThan: map[string][]string{
-				"doc-ops-001": {"doc-hr-001"}, // Pass: rank 1 > rank 2
-				"doc-ops-002": {"doc-hr-001"}, // Fail: rank 3 < rank 2
+				"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"}, // Pass: rank 1 > rank 2
+				"test.e2e.search.scenario.entity.doc-ops-002": {"test.e2e.search.scenario.entity.doc-hr-001"}, // Fail: rank 3 < rank 2
 			},
 			wantViolations: []RankingViolation{
 				{
-					Higher:     "doc-ops-002",
-					Lower:      "doc-hr-001",
+					Higher:     "test.e2e.search.scenario.entity.doc-ops-002",
+					Lower:      "test.e2e.search.scenario.entity.doc-hr-001",
 					HigherRank: 3,
 					LowerRank:  2,
 				},
@@ -637,10 +637,10 @@ func TestValidate_MustRankHigherThan(t *testing.T) {
 		{
 			name: "pattern_matching_first_occurrence",
 			hits: []Hit{
-				{EntityID: "doc-ops-001", Score: 0.9},
-				{EntityID: "doc-ops-002", Score: 0.8},
-				{EntityID: "doc-hr-001", Score: 0.7},
-				{EntityID: "doc-hr-002", Score: 0.6},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-001", Score: 0.9},
+				{EntityID: "test.e2e.search.scenario.entity.doc-ops-002", Score: 0.8},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-001", Score: 0.7},
+				{EntityID: "test.e2e.search.scenario.entity.doc-hr-002", Score: 0.6},
 			},
 			mustRankHigherThan: map[string][]string{
 				"doc-ops": {"doc-hr"}, // First doc-ops (rank 1) vs first doc-hr (rank 3)
@@ -720,11 +720,11 @@ func TestValidate_CombinedPositionAndRanking(t *testing.T) {
 				"similaritySearch": map[string]any{
 					"query": "test",
 					"results": []map[string]any{
-						{"entity_id": "doc-ops-001", "similarity": 0.9},
-						{"entity_id": "doc-ops-002", "similarity": 0.8},
-						{"entity_id": "doc-hr-001", "similarity": 0.7},
-						{"entity_id": "sensor-temp-001", "similarity": 0.6},
-						{"entity_id": "doc-finance-001", "similarity": 0.5},
+						{"entity_id": "test.e2e.search.scenario.entity.doc-ops-001", "similarity": 0.9},
+						{"entity_id": "test.e2e.search.scenario.entity.doc-ops-002", "similarity": 0.8},
+						{"entity_id": "test.e2e.search.scenario.entity.doc-hr-001", "similarity": 0.7},
+						{"entity_id": "test.e2e.search.scenario.entity.sensor-temp-001", "similarity": 0.6},
+						{"entity_id": "test.e2e.search.scenario.entity.doc-finance-001", "similarity": 0.5},
 					},
 					"duration": "15ms",
 				},
@@ -739,12 +739,12 @@ func TestValidate_CombinedPositionAndRanking(t *testing.T) {
 	query := Query{
 		Text: "test",
 		MustIncludeInTopN: map[int][]string{
-			3: {"doc-ops-001"},
+			3: {"test.e2e.search.scenario.entity.doc-ops-001"},
 			5: {"sensor-temp"},
 		},
 		MustRankHigherThan: map[string][]string{
-			"doc-ops-001": {"doc-hr-001"},
-			"doc-ops-002": {"sensor-temp"},
+			"test.e2e.search.scenario.entity.doc-ops-001": {"test.e2e.search.scenario.entity.doc-hr-001"},
+			"test.e2e.search.scenario.entity.doc-ops-002": {"sensor-temp"},
 		},
 	}
 

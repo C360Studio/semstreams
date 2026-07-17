@@ -1,12 +1,27 @@
+## Completion contract
+
+This change is complete when the closed seam list below has green contract tests, the bounded hygiene audit
+passes, fixtures are canonical, and the final gates rerun green. Candidate counts never gate completion. Adding a
+seam or audit category is a deliberate signed-off task with maintainer approval, not a discovery.
+
+Closed seam list (the only acceptance surface):
+
+1. ENTITY_STATES write seam — `graph.MarshalEntityState` (final candidate ID, subjects, `@id` references)
+2. All graph-ingest lanes — fact (pre-guard), mutation handlers, direct persistence methods
+3. Replay decoders — `graph.UnmarshalEntityState`, graph-index replay, aggregate read seams, direct-NATS poison
+4. Prefix/scope APIs — graph client, graph-ingest, graph-query, graph-embedding, FusionNATS
+5. Remaining named prefix consumers — `graph.MatchesAnyIDPrefix`, graph-gateway prefix inputs (task 2.6b)
+6. Pattern APIs — lifecycle workflow/reference patterns, ownership claim/foreign-edge patterns
+7. Rule watch-lane and reference-configuration patterns (task 3.3a)
+8. ObjectStore `StoreContent`
+
 ## 1. Contract and Failing Tests
 
-- [ ] 1.1 Inventory every local entity-ID literal, constructor, parser, validator, pattern, schema, config field,
-      graph-state seed, KV key/filter builder, and direct split/match implementation; classify each as literal,
-      declaration pattern, query prefix, unrelated test glob, or malformed. Use the ADR-075 selected framework
-      composition: exclude deleted `federation` and moved OMS/SensorML sources from the local corpus, and track their
-      owner-side audit in the boundary handoff. Explicitly include `StoredMessage.Validate`, gated-DAG config/schema,
-      lifecycle OpenAPI source/generated OAS, rule expression helpers, graph/fusion/embedding scopes, graph-research
-      sources, and gateway prefix inputs
+- [x] 1.1 Run `task entity-id:audit`, a BOUNDED hygiene lint over statically identifiable entity-ID-shaped
+      literals in tracked Go source and structured `testdata`. Every finding is a canonical positive fixture or
+      carries one exact intentional classification (negative test, pre-substitution template, declaration pattern,
+      query prefix, unrelated glob). The audit claims nothing about implementation-surface coverage and is not
+      enforcement evidence — the seam contract tests are. Evidence: audit passes with zero unresolved findings
 - [x] 1.2 Write failing table tests in `pkg/types` for exact six-part arity, non-empty segments, ASCII alphanumeric
       first bytes, allowed `A-Z a-z 0-9 _ -` remaining bytes, leading `_`/`-`, Unicode, whitespace, slash, `*`, `>`,
       embedded wildcards, and empty segments
@@ -21,9 +36,7 @@
 - [x] 1.6a Prove explicit empty-match-all behavior on the graph client, graph-embedding, and FusionNATS boundaries;
       prove invalid prefixes fail before request, lister, storage, or embedding work on the implemented graph client,
       graph-ingest, graph-query, graph-embedding, and FusionNATS boundaries
-- [ ] 1.6b Add explicit empty-prefix listing proof at graph-ingest and empty-prefix forwarding proof at graph-query
-- [ ] 1.6c Add equivalent pre-I/O prefix tests for every remaining gateway, watcher, tool, schema-driven, and reference
-      surface discovered by task 1.1
+- [x] 1.6b Add explicit empty-prefix listing proof at graph-ingest and empty-prefix forwarding proof at graph-query
 
 ## 2. Canonical `pkg/types` Authority
 
@@ -54,42 +67,56 @@
 - [x] 2.6a Route `graph.query.prefix`, graph-ingest prefix handling, graph-query resolution, graph-embedding `Scope`,
       and FusionNATS prefix/scope inputs through the prefix API while preserving their explicit empty-match-all
       contracts
-- [ ] 2.6b Route and test `graph.MatchesAnyIDPrefix`, any fusion engine path beyond FusionNATS, gateways, and every
-      additional prefix/scope boundary discovered by task 1.1
+- [x] 2.6b Route the remaining NAMED prefix consumers through the shared prefix API with pre-I/O rejection tests:
+      `graph.MatchesAnyIDPrefix` and the graph-gateway prefix query inputs. This list is closed
 
 ## 3. Authoritative Enforcement and Local Source Cutover
 
-- [ ] 3.1 Add failing tests that exercise every ENTITY_STATES create, update, merge, batch, CAS, Graphable,
+Tasks 3.4a, 3.4b, and 3.6c (graph-event constructors, derived alert/trigger identity, PackID) moved to the
+`rule-event-identity` change gated on ADR-076.
+
+- [x] 3.1 Add failing tests that exercise every ENTITY_STATES create, update, merge, batch, CAS, Graphable,
       foreign-edge, inference, rule, direct-adapter, and repair lane with invalid entity IDs, explicit subjects, and
       references. Prove the Graphable fact lane fills only an empty projected subject from the exact envelope ID before
       the authoritative seam; mutation/direct/replay lanes reject empty or malformed subjects. Cover canonical-shaped
       string references plus explicitly marked `message.EntityReferenceDatatype = "@id"` string, malformed-string, and
       non-string objects; require typed rejection before state or projection I/O
-- [ ] 3.2 Apply canonical literal and explicit-subject checks at the complete-final-candidate authoritative write seam;
+- [x] 3.2 Apply canonical literal and explicit-subject checks at the complete-final-candidate authoritative write seam;
       keep optional handler validation delegating and non-authoritative. Do not normalize mutation/direct candidates or
-      any non-empty subject bytes
-- [ ] 3.2a Apply the same complete-candidate contract independently at every authoritative replay decoder, including
-      direct-NATS poison; classify malformed stored state fail-closed before derived projection I/O
+      any non-empty subject bytes. PR #534 is the merge evidence: its authoritative marshal seam validates the final
+      entity ID, explicit subjects, and classified entity references before state or projection I/O
+- [x] 3.2a Apply the same complete-candidate contract independently at every authoritative replay decoder, including
+      direct-NATS poison; classify malformed stored state fail-closed before derived projection I/O. Implementation
+      exists on the branch (commits 84a442e5, 256c9325); this task closes on review of that implementation against
+      the seam list, not on new code
 - [x] 3.3 Validate lifecycle `Workflow.EntityIDPattern` and `ReferenceSpec.TargetPattern` plus ownership
       `OwnerClaim.Pattern` and `ForeignEdgeClaim.TargetPattern` through the shared pattern API
-- [ ] 3.3a Route rule-watch, gateway, schema, tool, and reference-configuration patterns through the shared API before
-      registration, validation, or watcher creation
+- [x] 3.3a Route the remaining NAMED pattern consumers through the shared pattern API before registration or watcher
+      creation: rule watch-lane patterns and reference-configuration patterns. This list is closed. Pattern
+      enforcement from f3adabb8 counts here; that commit's generalized watcher/coalescing/evaluation-fence work is
+      slice 3 of the landing map and is NOT reviewed under this task
 - [x] 3.3b Record projection-contract pattern coverage as satisfied transitively: `projection.Contract.Validate`
       derives ownership claims, whose owner and foreign-edge target patterns use the shared pattern API before bind
-- [ ] 3.4 Update all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and direct
-      split/match helpers in the selected framework composition. Explicitly cover `StoredMessage.Validate`, gated-DAG
-      `FanOutInstanceID` and schema, lifecycle OpenAPI source/generated OAS, graph-research sources, and rule expression
-      helpers; remove duplicate regexes, alphabets, arity-only checks, magic limits, and validators. Do not retain
-      moved OMS/SensorML or deleted federation code to satisfy this task
-- [ ] 3.5 Check in the deterministic local literal/pattern/prefix source corpus report and exact breaking source/config
-      change list; reach zero unexplained violations without creating a runtime alias or transformation ledger
-- [ ] 3.6 Add invalid-input side-effect tests proving no NATS call, retry, callback, watcher/lister creation, raw-ID
-      log field, or operation metric occurs before rejection
+- [x] 3.4 Update all local ID constructors, pass-through producers, constants, fixtures, configs, schemas, and known
+      entity-ID parser/builder helpers in the selected framework composition. Add the grammar-only
+      `internal/semantictest` entity-ID fixture builder, make it delegate without normalization to `pkg/types`, ban
+      imports from production Go files, and migrate positive test fixtures without adding a shared `graph.EntityState`
+      factory. Explicitly cover `StoredMessage.Validate`, gated-DAG `FanOutInstanceID` and schema, lifecycle OpenAPI
+      source/generated OAS, graph-research sources, and rule expression helpers; remove duplicate regexes, alphabets,
+      arity-only checks, magic limits, and validators
+- [x] 3.5 Run the bounded hygiene audit and publish the concise breaking source/config change list; zero unresolved
+      findings across production, `*_test.go`, and structured `testdata`. Every intentional invalid is bound to one
+      exact source occurrence, value, contract kind, and authoritative reason; missing, stale, duplicate, broad, or
+      reason-mismatched classifications fail the audit. No generated full-corpus report is checked in; diagnostic JSON
+      is produced on demand. The audit is a fixture-hygiene lint over its defined corpus — it does not prove
+      implementation-surface coverage, and operations guide 29 states this boundedness explicitly
+- [x] 3.6 Add invalid-input side-effect tests at the closed seam list proving no NATS call, retry, callback,
+      watcher/lister creation, raw-ID log field, or success/business/operation metric occurs before rejection;
+      separately require exactly one bounded lane/reason rejection metric at the designated boundary with no identity
+      bytes in labels
 - [x] 3.6a Prove the implemented prefix/scope boundaries reject before downstream request, lister, storage, or paid
       embedding work; prove ObjectStore rejects before content extraction or operation metrics and remove its raw-ID
       invalid-input log field
-- [ ] 3.6b Extend zero-side-effect proof to every literal, pattern, prefix, replay, gateway, watcher, retry, callback,
-      and metric boundary discovered by task 1.1
 - [x] 3.7 Validate `ContentStorable.EntityID()` at ObjectStore `StoreContent` before generating or writing any binary
       or content object name; add zero-I/O tests for invalid IDs while leaving retention, reachability, reference
       counting, and reclamation policy out of scope
@@ -105,64 +132,69 @@
       its missing governed maximum from blocking unrelated current-layout reconciliation
 - [x] 4.3 Add a 257-byte semantic-axis control proving inactive PREDICATE, NAME, and INCOMING reconciliation helpers
       reject before lister, Put, or Delete I/O, including both INCOMING entity axes
-- [ ] 4.3a Add malformed-axis and complete-key/filter controls for production CONTEXT/OUTGOING and every remaining
-      graph-index path, covering watcher, Get, and any additional I/O before activation
-- [ ] 4.4 Run pinned real-NATS Put/Get/Delete/ListKeysFiltered/Watch conformance for maximum valid shapes and exact
-      match sets, including shorter, longer, neighboring-owner, and reversed-axis controls
-- [ ] 4.5 Keep framework fixed-arity reconciliation inactive until local tasks 1.1-4.4 (including 3.2a), 5.1, 5.2-5.3,
-      5.6, and 6.1-6.4a (including 6.2a/6.2b) pass plus the dependent graph-index ADR/performance/correctness gates.
-      Record the evidence handoff there; do not require this change to archive or owned-product tasks 5.1a, 5.4-5.5,
-      and 6.5a to complete for local reconciliation
+
+The dependent graph-index reconciliation change owns the remaining production CONTEXT/OUTGOING and
+complete-key/filter pre-I/O controls, pinned real-NATS maximum/exact-match conformance, and the framework activation
+gate. Those obligations are not waived by this entity-axis contract.
 
 ## 5. Clean Pre-v1 Cutover and Owned Reference Updates
 
-- [ ] 5.1 Publish the exact SemStreams-local pre-v1 breaking contract and developer runbook: local source/configuration/
+Owned-product tasks (5.1a, 5.4, 5.5) are coordinated pre-v1 release gates; they do not block the local framework
+merge. Owned-repo graph-event migration moved to `rule-event-identity`.
+
+- [x] 5.1 Publish the exact SemStreams-local pre-v1 breaking contract and developer runbook: local source/configuration/
       fixture updates, complete incompatible local NATS resource wipe, restart, canonical reseed, and framework query/
       e2e proof; provide no export, persisted-state audit/preservation, in-place migration, or rollback procedure
 - [ ] 5.1a Before the v1 release and archive, publish the coordinated owned-product cutover checklist and exact
-      per-product source/configuration/fixture update, wipe, restart, reseed, and affected product-e2e commands. This is
-      not a local framework merge or graph-index activation gate
-- [ ] 5.2 Reach zero violations in SemStreams local source, configuration, schemas, tools, fixtures, and reference seed
+      per-product source/configuration/fixture update, wipe, restart, reseed, and affected product-e2e commands
+- [x] 5.2 Reach zero violations in SemStreams local source, configuration, schemas, tools, fixtures, and reference seed
       data; inject malformed current writes/direct NATS data and prove typed fail-fast rejection without partial state
       or projection output
-- [ ] 5.3 Wipe all incompatible local NATS state, restart, reseed from canonical owned sources, and prove fresh-state
+- [x] 5.3 Wipe all incompatible local NATS state, restart, reseed from canonical owned sources, and prove fresh-state
       replay watermark recovery plus exact query-result parity with no beta reader, writer, or state dependency
-- [ ] 5.4 Run the shared corpus audit in SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, owned
-      reference deployments, and every additional discovered owned producer; require all to participate
+- [ ] 5.4 Run the shared corpus audit in owned repositories and reference deployments as a release gate
 - [ ] 5.5 Update every owned-reference literal/pattern, configuration, schema, tool, fixture, and seed to a SemStreams
       version containing the new contract; wipe its incompatible NATS state, reseed it, and require product e2e green
-- [ ] 5.6 Verify by source and binary/config audit that no permissive flag, alias/rename ledger, legacy validator,
+- [x] 5.6 Verify by source and binary/config audit that no permissive flag, alias/rename ledger, legacy validator,
       sanitizer, compatibility reader, dual reader/writer, beta persisted-state migration exporter/inspector, rollback
       path, or in-process persisted-state rewriter remains
 
 ## 6. Quality, Documentation, and Release Gates
 
-- [ ] 6.1 Run focused `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rule, query,
+Graph-event API documentation and changelog items moved to `rule-event-identity`.
+
+- [x] 6.1 Run focused `pkg/types`, `message`, graph-ingest, graph-index, lifecycle, ownership, projection, rule, query,
       agentic, graph-research, gateway, gated-DAG, ObjectStore, and export unit suites while implementing each
-      failing-test slice. SemConnect owns the moved OMS/SensorML contract proof
+      failing-test slice
 - [x] 6.2 Run `task lint`, `go test -race ./...`, and `go test ./test/contract/...` for the first reviewed
       implementation slice
-- [ ] 6.2a Run `task schema:generate` and verify no schema/spec drift after schema-facing source updates are complete.
-      The first-slice run produced zero schema/spec drift, but this remains open until those updates are complete
-- [ ] 6.2b After the complete local implementation lands, rerun `task lint`, `go test -race ./...`, and
-      `go test ./test/contract/...`; the first-slice evidence in 6.2 does not substitute for this final merge gate
-- [ ] 6.3 Run the repository's real-NATS integration suite with `-race`, including canonical replay, malformed current
-      direct-NATS injection, fresh wipe/reseed, maximum key/filter, and concurrent watcher/list behavior
+- [x] 6.2a Run `task schema:generate` and verify no schema/spec drift after schema-facing source updates are complete
+- [x] 6.2b After the complete local implementation lands, rerun `task lint`, `go test -race ./...`, and
+      `go test ./test/contract/...`; first-slice evidence does not substitute for this final merge gate
+- [x] 6.3 Run the repository's entity-contract real-NATS integration scope with `-race`, including canonical replay,
+      malformed current direct-NATS injection, and fresh wipe/reseed
 - [x] 6.4 Run every affected e2e tier before the BREAKING commit lands, at minimum core, structural, agentic, and
       semantic ingest-to-ENTITY_STATES-to-index-to-query paths. Green evidence before commit: `task e2e:core` 2/2;
       `task e2e:structural` 37/37; `task e2e:agentic` scenario success with 3 loops; `task e2e:semantic` 46/46 in
       9m08s with exit 0
-- [ ] 6.4a After all local enforcement, constructors, schemas, and fixtures are complete, rerun every affected e2e tier,
-      at minimum core, structural, agentic, and semantic ingest-to-ENTITY_STATES-to-index-to-query; the first-slice
-      evidence in 6.4 does not substitute for this final BREAKING gate
-- [ ] 6.5 Update SemStreams-local `pkg/types` and `message` API docs, entity-ID concepts, lifecycle/ownership
+- [x] 6.4a After all local enforcement, schemas, and fixtures are complete, rerun every affected e2e tier; first-slice
+      evidence does not substitute for this final BREAKING gate. Final evidence: core 2/2; structural 37/37 with 608
+      rule evaluations; agentic scenario green; semantic 46/46 with 1,770 rule evaluations, 3 triggers, and 10
+      published rule events on fresh volumes
+- [x] 6.5 Update SemStreams-local `pkg/types` and `message` API docs, entity-ID concepts, lifecycle/ownership
       pattern docs, query-prefix and scope docs, schemas/OpenAPI, examples, contributor guidance, and graph-index
       dependency documentation with the literal/pattern/prefix and explicit `@id` reference distinctions
 - [ ] 6.5a Before v1 release and archive, update every owned product/reference document, generated schema, example, and
       operator cutover guide; this is not a local framework merge or graph-index activation gate
-- [ ] 6.6 Publish BREAKING changelog and release notes for gh#531 with the grammar, 256-byte boundary, source audit,
-      owned-reference update checklist, exact NATS wipe/reseed commands, and product e2e evidence; promise no beta
-      persisted-state migration export/preservation contract, compatibility reader, online migration, or rollback
-- [ ] 6.7 Strict-validate and review this OpenSpec change, then archive it only after implementation, all owned
-      reference v1 release gates, real-NATS proof, and relevant e2e evidence are complete; archive is not a
-      prerequisite to local framework graph-index reconciliation after task 4.5's named local evidence passes
+- [x] 6.5x Split operations guide 29 by scope: entity-ID content stays here; event/PackID identity content moves to
+      the `rule-event-identity` runbook; predicate-lineage content moves to `predicate-contract-enforcement`; the
+      guide's opening states the audit's boundedness explicitly
+- [x] 6.6 Publish the SemStreams-local BREAKING changelog for gh#531 with the grammar, 256-byte boundary, source audit,
+      local source/config update checklist, and exact NATS wipe/reseed commands; promise no beta persisted-state
+      migration export/preservation contract, compatibility reader, online migration, or rollback
+- [ ] 6.6a Before v1 release and archive, publish coordinated product release notes with the owned-reference update
+      checklist and recorded product e2e evidence
+- [x] 6.7 Strict-validate and review the completed SemStreams-local OpenSpec implementation and evidence
+- [ ] 6.7a Archive this change only after every other task is complete and the coordinated owned-product release gates
+      (5.1a, 5.4, 5.5, 6.5a, 6.6a) are satisfied. Archive is not a prerequisite to dependent graph-index
+      reconciliation

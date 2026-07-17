@@ -23,28 +23,28 @@ func TestNormalizeName_FoldsAndTrims(t *testing.T) {
 
 func TestRankNameMatches(t *testing.T) {
 	items := []graph.NameIndexItem{
-		{EntityID: "e.pref", Name: "foo", Predicate: "skos.core.pref-label", Priority: 0}, // high salience, not exact-case
-		{EntityID: "e.exact", Name: "Foo", Predicate: "dc.terms.title", Priority: 1},      // exact-case
-		{EntityID: "e.upper", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},      // fold-only
+		{EntityID: "test.graph.index.name.entity.pref", Name: "foo", Predicate: "skos.core.pref-label", Priority: 0}, // high salience, not exact-case
+		{EntityID: "test.graph.index.name.entity.exact", Name: "Foo", Predicate: "dc.terms.title", Priority: 1},      // exact-case
+		{EntityID: "test.graph.index.name.entity.upper", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},      // fold-only
 	}
 
 	got := rankNameMatches(items, "Foo", 0)
 	require.Len(t, got, 3)
 	// 1) exact-case wins over higher salience.
-	assert.Equal(t, "e.exact", got[0].EntityID)
+	assert.Equal(t, "test.graph.index.name.entity.exact", got[0].EntityID)
 	assert.True(t, got[0].ExactCase)
 	// 2) among fold-only, lower priority (higher salience) wins.
-	assert.Equal(t, "e.pref", got[1].EntityID)
+	assert.Equal(t, "test.graph.index.name.entity.pref", got[1].EntityID)
 	assert.False(t, got[1].ExactCase)
 	// 3) remaining fold-only by entity ID.
-	assert.Equal(t, "e.upper", got[2].EntityID)
+	assert.Equal(t, "test.graph.index.name.entity.upper", got[2].EntityID)
 }
 
 func TestRankNameMatches_DedupsByEntityKeepingBest(t *testing.T) {
 	// Same entity carries the name under two predicates; keep its best (exact + salient).
 	items := []graph.NameIndexItem{
-		{EntityID: "e1", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},
-		{EntityID: "e1", Name: "Foo", Predicate: "skos.core.pref-label", Priority: 0},
+		{EntityID: "test.graph.index.name.entity.e1", Name: "FOO", Predicate: "dc.terms.title", Priority: 1},
+		{EntityID: "test.graph.index.name.entity.e1", Name: "Foo", Predicate: "skos.core.pref-label", Priority: 0},
 	}
 	got := rankNameMatches(items, "Foo", 0)
 	require.Len(t, got, 1)
@@ -54,14 +54,14 @@ func TestRankNameMatches_DedupsByEntityKeepingBest(t *testing.T) {
 
 func TestRankNameMatches_Limit(t *testing.T) {
 	items := []graph.NameIndexItem{
-		{EntityID: "e3", Name: "x", Priority: 1},
-		{EntityID: "e1", Name: "x", Priority: 1},
-		{EntityID: "e2", Name: "x", Priority: 1},
+		{EntityID: "test.graph.index.name.entity.e3", Name: "x", Priority: 1},
+		{EntityID: "test.graph.index.name.entity.e1", Name: "x", Priority: 1},
+		{EntityID: "test.graph.index.name.entity.e2", Name: "x", Priority: 1},
 	}
 	got := rankNameMatches(items, "x", 2)
 	require.Len(t, got, 2)
-	assert.Equal(t, "e1", got[0].EntityID) // tiebreak by entity ID asc
-	assert.Equal(t, "e2", got[1].EntityID)
+	assert.Equal(t, "test.graph.index.name.entity.e1", got[0].EntityID) // tiebreak by entity ID asc
+	assert.Equal(t, "test.graph.index.name.entity.e2", got[1].EntityID)
 }
 
 // --- KV round-trip through the real Update + query handler ---

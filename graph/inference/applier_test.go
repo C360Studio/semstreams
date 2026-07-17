@@ -33,7 +33,7 @@ func TestDirectRelationshipApplier_ApplyRelationship_Success(t *testing.T) {
 	suggestion := &RelationshipSuggestion{
 		FromEntity: "c360.p1.robotics.sys1.drone.001",
 		ToEntity:   "c360.p1.robotics.sys1.drone.002",
-		Predicate:  "inference.related_to.high",
+		Predicate:  "inference.related-to.high",
 		Confidence: 0.85,
 		Reasoning:  "high semantic similarity",
 	}
@@ -71,7 +71,7 @@ func TestDirectRelationshipApplier_ApplyRelationship_EmptyFromEntity(t *testing.
 	suggestion := &RelationshipSuggestion{
 		FromEntity: "",
 		ToEntity:   "c360.p1.robotics.sys1.drone.002",
-		Predicate:  "inference.related_to.high",
+		Predicate:  "inference.related-to.high",
 		Confidence: 0.85,
 	}
 
@@ -89,7 +89,7 @@ func TestDirectRelationshipApplier_ApplyRelationship_EmptyToEntity(t *testing.T)
 	suggestion := &RelationshipSuggestion{
 		FromEntity: "c360.p1.robotics.sys1.drone.001",
 		ToEntity:   "",
-		Predicate:  "inference.related_to.high",
+		Predicate:  "inference.related-to.high",
 		Confidence: 0.85,
 	}
 
@@ -107,7 +107,7 @@ func TestDirectRelationshipApplier_ApplyRelationship_EmptyPredicate(t *testing.T
 	suggestion := &RelationshipSuggestion{
 		FromEntity: "c360.p1.robotics.sys1.drone.001",
 		ToEntity:   "c360.p1.robotics.sys1.drone.002",
-		Predicate:  "",
+		Predicate:  "", // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 		Confidence: 0.85,
 	}
 
@@ -126,7 +126,7 @@ func TestDirectRelationshipApplier_ApplyRelationship_AdderError(t *testing.T) {
 	suggestion := &RelationshipSuggestion{
 		FromEntity: "c360.p1.robotics.sys1.drone.001",
 		ToEntity:   "c360.p1.robotics.sys1.drone.002",
-		Predicate:  "inference.related_to.high",
+		Predicate:  "inference.related-to.high",
 		Confidence: 0.85,
 	}
 

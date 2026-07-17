@@ -45,7 +45,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 		{
 			name: "empty Predicate on first triple",
 			triples: []message.Triple{
-				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "x", Timestamp: now, Confidence: 1.0},
+				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "x", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 			},
 			wantInvalid:   true,
 			wantSubstring: `"" (empty)`,
@@ -63,7 +63,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 			name: "valid first, empty-predicate second — whole batch rejected",
 			triples: []message.Triple{
 				{Subject: "a.b.c.d.e.001", Predicate: "p.q.r", Object: "x", Timestamp: now, Confidence: 1.0},
-				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "y", Timestamp: now, Confidence: 1.0},
+				{Subject: "a.b.c.d.e.001", Predicate: "", Object: "y", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
 			},
 			wantInvalid:   true,
 			wantSubstring: `"" (empty)`,

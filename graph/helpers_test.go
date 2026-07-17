@@ -14,18 +14,18 @@ func TestGetPropertyValue(t *testing.T) {
 		ID: "c360.platform.domain.system.test.entity",
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    75.5,
 			},
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.voltage",
 				Object:    12.6,
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO",                         // Relationship predicate
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "graph.relation.connected-to",          // Relationship predicate
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},
@@ -55,7 +55,7 @@ func TestGetPropertyValue(t *testing.T) {
 		{
 			name:      "relationship should not be found",
 			entity:    entity,
-			predicate: "CONNECTED_TO",
+			predicate: "graph.relation.connected-to",
 			wantValue: nil,
 			wantFound: false,
 		},
@@ -69,7 +69,7 @@ func TestGetPropertyValue(t *testing.T) {
 		{
 			name:      "nil entity",
 			entity:    nil,
-			predicate: "any.property",
+			predicate: "test.fixture.property",
 			wantValue: nil,
 			wantFound: false,
 		},
@@ -88,18 +88,18 @@ func TestGetPropertyValueTyped(t *testing.T) {
 	entity := &EntityState{
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    75.5, // float64
 			},
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.flight.armed",
 				Object:    true, // bool
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "entity.name",
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "entity.identity.name",
 				Object:    "Test Drone", // string
 			},
 		},
@@ -118,7 +118,7 @@ func TestGetPropertyValueTyped(t *testing.T) {
 	})
 
 	t.Run("correct type string", func(t *testing.T) {
-		value, found := GetPropertyValueTyped[string](entity, "entity.name")
+		value, found := GetPropertyValueTyped[string](entity, "entity.identity.name")
 		assert.True(t, found)
 		assert.Equal(t, "Test Drone", value)
 	})
@@ -140,18 +140,18 @@ func TestGetProperties(t *testing.T) {
 	entity := &EntityState{
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    75.5,
 			},
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.flight.armed",
 				Object:    true,
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO",                         // Relationship - should be excluded
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "graph.relation.connected-to",          // Relationship - should be excluded
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},
@@ -184,18 +184,18 @@ func TestGetRelationshipTriples(t *testing.T) {
 	entity := &EntityState{
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level", // Property
 				Object:    75.5,
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO",                         // Relationship
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "graph.relation.connected-to",          // Relationship
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "POWERED_BY",                          // Relationship
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "graph.relation.powered-by",           // Relationship
 				Object:    "c360.platform1.power.battery.main.0", // Valid 6-part EntityID
 			},
 		},
@@ -205,12 +205,12 @@ func TestGetRelationshipTriples(t *testing.T) {
 		relationships := GetRelationshipTriples(entity)
 		require.Len(t, relationships, 2)
 
-		predicates := make([]string, len(relationships))
+		predicates := make([]string, len(relationships)) // predicate-audit:unrelated {"column":17,"surface":"go-assignment:predicates","value":"","basis":"reviewed output accumulator populated from returned relationship triples"}
 		for i, rel := range relationships {
 			predicates[i] = rel.Predicate
 		}
-		assert.Contains(t, predicates, "CONNECTED_TO")
-		assert.Contains(t, predicates, "POWERED_BY")
+		assert.Contains(t, predicates, "graph.relation.connected-to")
+		assert.Contains(t, predicates, "graph.relation.powered-by")
 	})
 
 	t.Run("nil entity", func(t *testing.T) {
@@ -223,18 +223,18 @@ func TestGetPropertyTriples(t *testing.T) {
 	entity := &EntityState{
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level", // Property
 				Object:    75.5,
 			},
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.flight.armed", // Property
 				Object:    true,
 			},
 			{
-				Subject:   "test.entity",
-				Predicate: "CONNECTED_TO",                         // Relationship - should be excluded
+				Subject:   "test.fixture.graph.helpers.entity.001",
+				Predicate: "graph.relation.connected-to",          // Relationship - should be excluded
 				Object:    "c360.platform1.robotics.mav1.drone.0", // Valid 6-part EntityID
 			},
 		},
@@ -244,7 +244,7 @@ func TestGetPropertyTriples(t *testing.T) {
 		properties := GetPropertyTriples(entity)
 		require.Len(t, properties, 2)
 
-		predicates := make([]string, len(properties))
+		predicates := make([]string, len(properties)) // predicate-audit:unrelated {"column":17,"surface":"go-assignment:predicates","value":"","basis":"reviewed output accumulator populated from returned property triples"}
 		for i, prop := range properties {
 			predicates[i] = prop.Predicate
 		}
@@ -262,7 +262,7 @@ func TestHasProperty(t *testing.T) {
 	entity := &EntityState{
 		Triples: []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    75.5,
 			},
@@ -271,19 +271,19 @@ func TestHasProperty(t *testing.T) {
 
 	assert.True(t, HasProperty(entity, "robotics.battery.level"))
 	assert.False(t, HasProperty(entity, "non.existing.property"))
-	assert.False(t, HasProperty(nil, "any.property"))
+	assert.False(t, HasProperty(nil, "test.fixture.property"))
 }
 
 func TestMergeTriples(t *testing.T) {
 	t.Run("newer overrides existing property", func(t *testing.T) {
 		existing := []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    70.0, // Old value
 			},
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.flight.armed",
 				Object:    false, // Old value
 			},
@@ -291,7 +291,7 @@ func TestMergeTriples(t *testing.T) {
 
 		newer := []message.Triple{
 			{
-				Subject:   "test.entity",
+				Subject:   "test.fixture.graph.helpers.entity.001",
 				Predicate: "robotics.battery.level",
 				Object:    85.0, // New value should win
 			},
@@ -317,29 +317,29 @@ func TestMergeTriples(t *testing.T) {
 		result := MergeTriples(nil, nil)
 		assert.Nil(t, result)
 
-		existing := []message.Triple{{Subject: "test", Predicate: "prop", Object: "value"}}
+		existing := []message.Triple{{Subject: "test.fixture.graph.helpers.entity.001", Predicate: "test.fixture.property", Object: "value"}}
 		result = MergeTriples(existing, nil)
 		assert.Equal(t, existing, result)
 
-		newer := []message.Triple{{Subject: "test", Predicate: "prop", Object: "new"}}
+		newer := []message.Triple{{Subject: "test.fixture.graph.helpers.entity.001", Predicate: "test.fixture.property", Object: "new"}}
 		result = MergeTriples(nil, newer)
 		assert.Equal(t, newer, result)
 	})
 
 	t.Run("no conflicts", func(t *testing.T) {
 		existing := []message.Triple{
-			{Subject: "test", Predicate: "prop1", Object: "value1"},
+			{Subject: "test.fixture.graph.helpers.entity.001", Predicate: "test.fixture.property1", Object: "value1"},
 		}
 		newer := []message.Triple{
-			{Subject: "test", Predicate: "prop2", Object: "value2"},
+			{Subject: "test.fixture.graph.helpers.entity.001", Predicate: "test.fixture.property2", Object: "value2"},
 		}
 
 		merged := MergeTriples(existing, newer)
 		assert.Len(t, merged, 2)
 
 		// Should contain both
-		_, found1 := findTripleByPredicate(merged, "prop1")
-		_, found2 := findTripleByPredicate(merged, "prop2")
+		_, found1 := findTripleByPredicate(merged, "test.fixture.property1")
+		_, found2 := findTripleByPredicate(merged, "test.fixture.property2")
 		assert.True(t, found1)
 		assert.True(t, found2)
 	})

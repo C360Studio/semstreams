@@ -160,6 +160,11 @@ func (w *natsOwnedFactWriter) ReplaceTriples(ctx context.Context, entityID strin
 	if err := json.Unmarshal(respData, &resp); err != nil {
 		return fmt.Errorf("unmarshal update_with_triples response: %w", err)
 	}
+	if resp.Entity != nil {
+		if err := graph.ValidateDecodedEntityState(resp.Entity); err != nil {
+			return fmt.Errorf("validate update_with_triples response: %w", err)
+		}
+	}
 	return nil
 }
 

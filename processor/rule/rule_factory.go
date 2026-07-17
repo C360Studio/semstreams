@@ -70,8 +70,8 @@ type Definition struct {
 
 // EntityConfig defines entity-specific configuration
 type EntityConfig struct {
-	Pattern      string   `json:"pattern"`       // Entity ID pattern to match
-	WatchBuckets []string `json:"watch_buckets"` // KV buckets to watch
+	Pattern      string   `json:"pattern"`       // Exact six-position EntityState ID pattern
+	WatchBuckets []string `json:"watch_buckets"` // Optional declaration; ENTITY_STATES only
 }
 
 // Factory creates rules from configuration

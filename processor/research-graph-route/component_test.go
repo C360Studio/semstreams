@@ -94,17 +94,17 @@ func newTestComponent(loops LoopStore, router Router) *Component {
 
 func TestComponent_HandleMessage_HappyPath(t *testing.T) {
 	loops := &fakeLoopStore{
-		intent: &research.Intent{Topic: "drone-001 maintenance events"},
+		intent: &research.Intent{Topic: "test.research.graph.route.entity.drone-001 maintenance events"},
 		classifierOut: &research.ClassifierOutput{
-			Topic: "drone-001 maintenance events",
+			Topic: "test.research.graph.route.entity.drone-001 maintenance events",
 			Tier:  "0",
 			Candidates: []research.Candidate{
-				{EntityID: "drone-001", Label: "Drone 001", Relevance: 0.9, Tier: "0", Source: "x"},
+				{EntityID: "test.research.graph.route.entity.drone-001", Label: "Drone 001", Relevance: 0.9, Tier: "0", Source: "x"},
 			},
 		},
 	}
 	router := &fakeRouter{
-		content: `{"action":"walk_seeds","args":{"seeds":[{"ref":"drone-001","ref_type":"name"}]},"rationale":"seed found"}`,
+		content: `{"action":"walk_seeds","args":{"seeds":[{"ref":"test.research.graph.route.entity.drone-001","ref_type":"name"}]},"rationale":"seed found"}`,
 	}
 	c := newTestComponent(loops, router)
 	c.handleMessage(context.Background(), "component.route_search.loop-123", nil)

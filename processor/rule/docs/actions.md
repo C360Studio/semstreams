@@ -281,8 +281,10 @@ Rule fires update_kv → PLAN_STATES["plan-001"] written
                      └─ Revision history    → full audit trail
 ```
 
-Other processors, rules (via `entity_watch_buckets`), or external services watching the bucket
-all receive the update automatically.
+Typed component adapters or external services watching the bucket receive the
+update automatically. The rule processor's entity watcher accepts only
+`ENTITY_STATES`; operational KV rule adapters need their own typed decoder and
+evaluator surface.
 
 ## How Actions Shape Communities
 

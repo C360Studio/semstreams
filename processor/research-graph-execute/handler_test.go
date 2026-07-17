@@ -167,13 +167,13 @@ func TestResolveSeedRefs_AllDropped(t *testing.T) {
 
 func TestExecuteAll_HappyPath(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut:   []fusion.Evidence{{EntityID: "e1", Score: 0.9}},
-		predicateWalkOut: []fusion.Evidence{{EntityID: "e2", Score: 0.7}},
-		bm25Out:          []fusion.Evidence{{EntityID: "e3", Score: 0.5}},
+		entityStateOut:   []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.e1", Score: 0.9}},
+		predicateWalkOut: []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.e2", Score: 0.7}},
+		bm25Out:          []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.e3", Score: 0.5}},
 	}
 	queries := []SubQuery{
-		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
-		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "pw", PredicateWalk: &PredicateWalkArgs{Seeds: []string{"e1"}}},
+		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"test.research.graph.execute.entity.e1"}}},
+		{Type: SubQueryTypePredicateWalk, Tier: "0", Source: "pw", PredicateWalk: &PredicateWalkArgs{Seeds: []string{"test.research.graph.execute.entity.e1"}}},
 		{Type: SubQueryTypeBM25, Tier: "1", Source: "bm", BM25: &BM25Args{Query: "q"}},
 	}
 	out, err := executeAll(context.Background(), gq, queries,
@@ -201,11 +201,11 @@ func TestExecuteAll_HappyPath(t *testing.T) {
 
 func TestExecuteAll_PerSubqueryErrorIsDegrading(t *testing.T) {
 	gq := &fakeGraphQuery{
-		entityStateOut: []fusion.Evidence{{EntityID: "e1", Score: 0.9}},
+		entityStateOut: []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.e1", Score: 0.9}},
 		bm25Err:        errBM25Down,
 	}
 	queries := []SubQuery{
-		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"e1"}}},
+		{Type: SubQueryTypeEntityState, Tier: "0", Source: "es", EntityState: &EntityStateArgs{EntityIDs: []string{"test.research.graph.execute.entity.e1"}}},
 		{Type: SubQueryTypeBM25, Tier: "1", Source: "bm", BM25: &BM25Args{Query: "q"}},
 	}
 	out, err := executeAll(context.Background(), gq, queries,
@@ -299,5 +299,5 @@ func (g *countingDelayedGQ) TemporalRange(_ context.Context, _ TemporalRangeArgs
 func (g *countingDelayedGQ) BM25(_ context.Context, _ BM25Args, tier, source string, _ int) ([]fusion.Evidence, error) {
 	atomic.AddInt64(&g.calls, 1)
 	time.Sleep(g.delay)
-	return []fusion.Evidence{{EntityID: "e", Tier: tier, Source: source, Score: 0.5}}, nil
+	return []fusion.Evidence{{EntityID: "test.research.graph.execute.entity.e", Tier: tier, Source: source, Score: 0.5}}, nil
 }

@@ -4,6 +4,7 @@
   "name": "Synthesize When Coordinator Decides",
   "description": "Fires when the research-coordinator decides synthesize. The synthesizer queries the graph for all research.has_evidence entries (written by rule 02 on researcher completions) and produces the final structured answer. Synthesis is no longer reflexive on every researcher completion — it's gated on the coordinator's judgment. See ADR-026 + ADR-028.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

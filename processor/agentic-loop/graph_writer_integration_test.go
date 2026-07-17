@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -35,6 +36,8 @@ type tripleCollector struct {
 	batchRequests  int
 	batchSizes     []int
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=635 column=18 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed replay root rejection
 
 func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, error) {
 	var req gtypes.AddTripleRequest
@@ -616,6 +619,95 @@ func TestWriteSpawnIdentity_EntityExistsNotOurTypedOrigin_Integration(t *testing
 	}
 }
 
+// The EntityExists origin read-back is an authoritative graph-state boundary.
+// A matching MessageType cannot bless poisoned ENTITY_STATES data as an
+// idempotent re-birth: malformed identity-bearing fields must fail before the
+// divergent-task warning (or any later success behavior) runs.
+func TestWriteSpawnIdentity_EntityExistsPoisonedReadbackFailsClosed_Integration(t *testing.T) {
+	validID := "acme.ops.agent.agentic-loop.execution.loop-poison"
+	tests := []struct {
+		name     string
+		existing gtypes.EntityState
+	}{
+		{
+			name: "malformed root id",
+			existing: gtypes.EntityState{
+				ID:          "bad",
+				MessageType: agentic.LoopExecutionMessageType(),
+			},
+		},
+		{
+			name: "malformed triple subject",
+			existing: gtypes.EntityState{
+				ID:          validID,
+				MessageType: agentic.LoopExecutionMessageType(),
+				Triples: []message.Triple{{
+					Subject:   "bad",
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+					Object:    "task-first",
+				}},
+			},
+		},
+		{
+			name: "malformed explicit entity reference",
+			existing: gtypes.EntityState{
+				ID:          validID,
+				MessageType: agentic.LoopExecutionMessageType(),
+				Triples: []message.Triple{
+					{
+						Subject:   validID,
+						Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+						Object:    "task-first",
+					},
+					{
+						Subject:   validID,
+						Predicate: semantictest.Predicate(t, "agent", "loop", "parent"),
+						Object:    "bad",
+						Datatype:  message.EntityReferenceDatatype,
+					},
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+			ctx := context.Background()
+
+			responder := &createWithTriplesResponder{alreadyExists: true}
+			responder.subscribe(t, ctx, tc.Client)
+			q := &queryEntityResponder{entity: tt.existing}
+			q.subscribe(t, ctx, tc.Client)
+
+			h := &integrationCaptureHandler{}
+			w := agenticloop.NewGraphWriterForTest(tc.Client, nil, types.PlatformMeta{Org: "acme", Platform: "ops"})
+			w.SetLogger(slog.New(h))
+
+			err := w.WriteSpawnIdentity(ctx, "loop-poison", &agentic.TaskMessage{
+				TaskID: "task-second",
+				Role:   "researcher",
+			})
+			if err == nil {
+				t.Fatal("WriteSpawnIdentity must reject a poisoned authoritative read-back")
+			}
+			var classified *errs.ClassifiedError
+			if !errors.As(err, &classified) ||
+				classified.Class != errs.ErrorFatal ||
+				classified.Code != gtypes.ErrorCodeGraphStateResetRequired {
+				t.Fatalf("error classification = %#v, want fatal/%q", classified, gtypes.ErrorCodeGraphStateResetRequired)
+			}
+			var stateErr *gtypes.StateContractError
+			if !errors.As(err, &stateErr) {
+				t.Fatalf("error = %T %v, want wrapped *graph.StateContractError", err, err)
+			}
+			if warns := h.warnMessages(); len(warns) != 0 {
+				t.Fatalf("poisoned read-back reached divergent-task warning: %v", warns)
+			}
+		})
+	}
+}
+
 // ADR-056 4c-pre-1: WriteSpawnIdentity returns an error on genuine birth failure
 // (non-already-exists). The caller must be able to detect and halt.
 func TestWriteSpawnIdentity_ReturnsErrorOnGenuineFailure_Integration(t *testing.T) {
@@ -1107,7 +1199,7 @@ func TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   "acme.ops.agent.agentic-loop.execution.loop-reuse",
-					Predicate: agvocab.LoopTask,
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 					Object:    "task-first",
 				},
 			},
@@ -1148,7 +1240,7 @@ func TestWriteSpawnIdentity_DivergentTaskID_Warns_Integration(t *testing.T) {
 			Triples: []message.Triple{
 				{
 					Subject:   "acme.ops.agent.agentic-loop.execution.loop-retry",
-					Predicate: agvocab.LoopTask,
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
 					Object:    "task-same",
 				},
 			},

@@ -85,7 +85,7 @@ func TestIntegration_PreexistingPredicatePoisonIsSticky(t *testing.T) {
 
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	targetID := "acme.ops.robotics.gcs.mission.001"
-	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`)
+	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	_, err = entityBucket.Put(ctx, entityID, poisoned)
 	require.NoError(t, err)
 

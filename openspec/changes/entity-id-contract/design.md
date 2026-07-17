@@ -162,14 +162,17 @@ remain:
 
 INCOMING is the maximum at 902 bytes, leaving 122 bytes beneath the project 1,024-byte key/filter contract. Its
 layout has 13 tokens, also beneath the 64-token contract. Owner and forward filters replace one or more literal
-positions with one-byte complete-token `*`, so none exceeds the corresponding maximum literal layout. Tests still
-construct every maximum key and filter and pass it through the shared NATS validators; arithmetic does not replace
-real-NATS conformance.
+positions with one-byte complete-token `*`, so none exceeds the corresponding maximum literal layout. This change's
+tests construct every maximum key and filter and pass it through the shared NATS validators, establishing the
+governed entity-axis bound and unit budget proof. The dependent `graph-index-fixed-arity-reconciliation` change owns
+complete production CONTEXT/OUTGOING and remaining-path pre-I/O controls plus pinned real-NATS maximum-key,
+maximum-filter, and exact-match conformance. Moving those graph-index proofs does not waive them.
 
 Graph-index benchmark scaffolding may consume the contract for proof, but framework fixed-arity reconciliation MUST
 remain inactive until the named local contract/API, corpus, ObjectStore zero-I/O, clean wipe/reseed, key-budget, and
-breaking e2e tasks in this change pass, and the dependent graph-index activation gates pass. It does not wait for
-this change to archive. This change does not select raw versus hashed PREDICATE representation.
+breaking e2e tasks in this change pass, and the dependent graph-index production-path, real-NATS, ADR, performance,
+correctness, and activation gates pass. It does not wait for this change to archive or for owned-product rollout tasks
+that are explicitly pre-v1/archive-only. This change does not select raw versus hashed PREDICATE representation.
 
 ### 6. Enforcement is unconditional and the beta cutover is clean
 
@@ -201,6 +204,10 @@ persisted-state preservation or rollback obligation.
 The implementation begins with a deterministic source corpus over Go constructors/constants, configs, schemas,
 fixtures, generated tools, and owned reference deployments. It reports literal IDs, declaration patterns, and query
 prefixes separately and identifies source location plus failure reason. It does not inspect persisted beta state.
+The blocking gate is the concrete typed/static value corpus. Repository-wide name heuristics over generic KV calls,
+match-named functions, string builders, or `strings.Split` are not accepted as contract evidence because they are not
+type-aware and do not prove delegation to the canonical APIs. The audit emits diagnostic JSON on demand; a generated
+full-corpus snapshot is not checked into documentation.
 
 SemStreams, SemSource, SemOps, SemConnect, SemTeams, SemSpec, SemDragon, SemLink, and every additional owned producer
 update source/configuration/fixtures against the same SemStreams version. The exact breaking release procedure wipes
@@ -210,7 +217,47 @@ ledger because every reference design is owned and required before v1.
 Those coordinated owned-reference gates block the v1 release and archive of this change, not local framework
 graph-index activation after its named clean pre-v1 prerequisites have passed.
 
-## Implementation checkpoint: first reviewed slice
+### 8. Shared test fixtures construct grammar values, not graph entities
+
+The local source corpus includes every tracked `*_test.go` file and structured artifact beneath `testdata`. A green
+production-only scan is not evidence that positive fixtures satisfy the entity-ID contract. Positive fixtures use a
+small `internal/semantictest` builder where runtime construction is appropriate. The builder accepts the six explicit
+entity-ID positions, joins them without rewriting any byte, delegates to `pkg/types.ValidateEntityID`, and returns the
+validated string. It supplies no default namespace, normalization, randomness, options, `graph.EntityState`, triples,
+or Graphable factory. Tests that need an entity remain responsible for constructing the exact state their behavior
+requires.
+
+Only test files may import `internal/semantictest`; a repository contract test rejects imports from production Go
+files. `pkg/types` grammar-authority tests remain raw fixtures because importing a helper that delegates back to
+`pkg/types` would create a cycle. Literal constants and formats that cannot call the runtime helper remain subject to
+the same checked source audit.
+
+Intentional invalid fixtures are exceptions to the positive-fixture rule, not file-wide allowances. In source formats
+with comments, an invalid classification binds to the exact candidate occurrence and records its contract kind, exact
+value, and authoritative stable reason. Strict JSON, JSONL, and other commentless structured fixtures remain canonical
+positive data; an intentional negative moves into a comment-capable native rejection test instead of creating a second
+checked classification manifest that can drift. The auditor rejects missing, stale, duplicate, broad, unmatched, or
+reason-mismatched classifications and requires every classification to resolve to exactly one candidate. This
+preserves negative grammar tests without allowing an old positive fixture to hide behind another occurrence of the
+same malformed value.
+
+A pre-substitution entity expression is neither a positive literal nor an intentional malformed value. It uses an
+exact intentional-template classification at its source occurrence and still must pass the canonical contract after
+substitution. The annotation documents the authoring language; it is not a runtime validation exemption.
+
+## Implementation checkpoint: PR #534 authoritative write seam
+
+PR #534, merged at `c8f0b92e` with final branch head `6ef169dd`, completes task 3.2. The final authoritative marshal
+candidate validates its entity ID, every explicit triple subject, and classified entity references before
+ENTITY_STATES or derived-projection I/O. The Graphable lane may fill only an omitted subject from the envelope ID;
+mutation and direct candidates receive no normalization. Terminal structural rejections are bounded and observable,
+and incompatible stored state latches reset-required readiness instead of entering an unlimited redelivery loop.
+
+That merge evidence does not complete the independent replay/direct-NATS coverage in task 3.2a, the full lane matrix
+in task 3.1, the local source corpus and cutover gates, or any graph-index production-path or real-NATS activation
+proof transferred to `graph-index-fixed-arity-reconciliation`.
+
+## Implementation checkpoint: first reviewed API slice
 
 The first reviewer-approved implementation slice establishes the canonical `pkg/types` literal, pattern, and prefix
 APIs, stable error constants, byte-exact grammar, and boolean/parser delegation. Graph-ingest's existing private
@@ -225,14 +272,16 @@ rule-watch, gateway, schema, tool, other fusion-engine, and reference-design sur
 inventory and source-update tasks.
 
 ObjectStore now validates `ContentStorable.EntityID()` before binary/content extraction, object-name generation,
-operation metrics, or NATS I/O for both binary and non-binary content. The previous invalid-input log that exposed
-the raw ID was removed. This closes only the `StoreContent` preflight requirement; it does not close retention or
-reclamation policy.
+success/business/storage metrics, or NATS I/O for both binary and non-binary content. Its designated boundary records
+exactly one bounded lane/reason rejection metric without identity bytes in labels. The previous invalid-input log that
+exposed the raw ID was removed. This closes only the `StoreContent` preflight requirement; it does not close retention
+or reclamation policy.
 
 The graph-index unit matrix now uses `E = 256` to prove the current maximum formulas and shared-validator acceptance.
 Inactive PREDICATE, NAME, and both INCOMING entity axes also reject a 257-byte ID before lister, Put, or Delete I/O.
 Production CONTEXT/OUTGOING semantic preflight, malformed complete-axis controls, and real-NATS maximum key/filter
-operations and match sets remain open, so production fixed-arity reconciliation remains blocked.
+operations and match sets remain open under `graph-index-fixed-arity-reconciliation`, so production fixed-arity
+reconciliation remains blocked.
 
 The reviewed slice passed `task lint`, `go test -race ./...`, and `go test ./test/contract/...`; task 6.4 records the
 green breaking e2e evidence. This checkpoint does not claim completion of the full local inventory/corpus, schema
@@ -251,6 +300,10 @@ real-NATS integration.
   content-object I/O; broader ObjectStore lifecycle policy remains separately governed.
 - **Delegating APIs can look like duplicate authority.** Tests pin identical results across `pkg/types`, `message`,
   graph-ingest, and pattern registration; only `pkg/types` owns grammar code.
+- **A broad test helper can hide semantics.** The shared helper constructs and validates only grammar strings. Tests
+  continue to express subjects, references, hierarchy, versions, and projection state directly.
+- **Negative-fixture allowances can mask stale positives.** Exact occurrence and authoritative-reason matching makes
+  every exception fail closed when its source moves, disappears, duplicates, or changes meaning.
 - **Wipe/reseed is operationally disruptive.** It is acceptable because no product is in production and every
   reference design is owned. Release docs name the exact NATS resources, reseed commands, and e2e gates; they do not
   promise export, old-state inspection, or rollback.
@@ -270,6 +323,12 @@ NATS data is separately rejected without partial output. ObjectStore proof recor
 writes for invalid IDs. Prefix proof covers graph query, semantic-search/fusion scopes, and gateway inputs before any
 NATS filter or query I/O. Final gates include lint, full `-race`, schema no-drift, contract suites, real-NATS
 integration, and every affected product e2e tier before the BREAKING release lands.
+
+Fixture-contract tests prove that the shared builder returns the exact unmodified joined bytes accepted by
+`pkg/types`, rejects malformed components rather than repairing them, and cannot be imported by production Go files.
+Audit fixtures prove that `*_test.go` and structured `testdata` are scanned; an exact intentional-negative
+classification passes only for the matching stable reason; and missing, stale, duplicate, broad, or wrong-reason
+classifications fail. The local corpus reaches zero unexplained violations before the clean cutover is complete.
 
 Authoritative-state tests separately prove Graphable empty-subject fill before marshal, rejection of the same empty
 subject on mutation/direct/replay candidates, canonical validation of every explicit subject, current structural

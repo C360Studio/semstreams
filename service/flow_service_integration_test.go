@@ -420,7 +420,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_ValidateFlowInvalid() {
 						},
 					},
 					"rules": []map[string]any{
-						{"field": "value", "operator": "gt", "value": 100},
+						{"field": "test.state.value", "operator": "gt", "value": 100},
 					},
 				},
 			},
@@ -598,7 +598,7 @@ func (s *FlowServiceHTTPSuite) TestHTTP_DeployInvalidFlow() {
 						},
 					},
 					"rules": []map[string]any{
-						{"field": "value", "operator": "gt", "value": 100},
+						{"field": "test.state.value", "operator": "gt", "value": 100},
 					},
 				},
 			},

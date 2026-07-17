@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -59,7 +60,7 @@ func TestAttack_ZeroMaxDepth(t *testing.T) {
 	mockClient.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 		case "graph.index.query.outgoing":
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 		default:
@@ -75,7 +76,7 @@ func TestAttack_ZeroMaxDepth(t *testing.T) {
 
 	ctx := context.Background()
 	// Request with max_depth: 0 should apply component default
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":0}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":0}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 
@@ -348,16 +349,17 @@ func TestAttack_DeeplyNestedJSON(t *testing.T) {
 
 func TestAttack_PathSearchExcessiveMaxDepth(t *testing.T) {
 	mockClient := newMockNATSClient()
+	nextID := semantictest.EntityID(t, "test", "fixture", "graph", "query", "entity", "next")
 
 	callCount := 0
 	mockClient.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		callCount++
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.entity.001","triples":[]}`), nil
+			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
 		case "graph.index.query.outgoing":
 			// Always return next node (infinite graph) in QueryResponse envelope format
-			return []byte(`{"data":{"relationships":[{"to_entity_id":"next","predicate":"p"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
+			return []byte(`{"data":{"relationships":[{"to_entity_id":"` + nextID + `","predicate":"test.fixture.p"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 		default:
 			return nil, errors.New("unexpected subject")
 		}
@@ -372,7 +374,7 @@ func TestAttack_PathSearchExcessiveMaxDepth(t *testing.T) {
 	ctx := context.Background()
 
 	// Request with excessive max_depth (should be clamped to config.MaxDepth)
-	queryData := []byte(`{"start_entity":"test.entity.001","max_depth":999999}`)
+	queryData := []byte(`{"start_entity":"test.fixture.graph.query.entity.001","max_depth":999999}`)
 
 	response, err := comp.handlePathSearch(ctx, queryData)
 

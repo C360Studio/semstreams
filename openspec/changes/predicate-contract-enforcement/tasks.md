@@ -1,7 +1,11 @@
 ## 1. Contract and Inventory
 
-- [x] 1.1 Generate the complete local predicate corpus from Go producers/constants, configuration ASTs,
-      lifecycle/ownership/projection declarations, schemas, tools, and reference deployments
+- [x] 1.1 Generate the bounded local production predicate corpus from non-test Go producers/constants, configuration
+      ASTs, lifecycle/ownership/projection declarations, schemas, tools, and reference deployments. This completed
+      evidence deliberately excludes `*_test.go` and `testdata`; task 1.1a owns that complementary corpus
+- [ ] 1.1a Generate and classify the complete local predicate corpus from tracked `*_test.go` files and structured
+      artifacts beneath every `testdata` directory. Distinguish canonical positive fixtures, exact intentional
+      negatives, and unrelated strings; do not treat an entire file or directory as an invalid-fixture allowance
 - [x] 1.2 Validate the strict lower-kebab grammar against the corpus and produce the exact breaking rename ledger
 - [x] 1.3 Record the grammar, domain/domain-category delegation, and registration relationship in a new ADR
 - [x] 1.4 Implement one typed parser and table/fuzz tests for valid, malformed, wildcard, Unicode, and length cases
@@ -28,7 +32,10 @@
 
 ## 4. Clean Beta Cutover
 
-- [ ] 4.1 Rename all first-party and owned sister-repository producers, rules, schemas, tools, and exact queries
+- [ ] 4.1 Rename all first-party and owned sister-repository producers, rules, schemas, tools, exact queries, positive
+      `*_test.go` fixtures, and structured `testdata`. Add the grammar-only `internal/semantictest` predicate fixture
+      builder, delegate it without normalization to `vocabulary.ParsePredicate`, ban imports from production Go
+      files, and do not add a graph-entity or triple factory
 - [x] 4.2 Publish the reviewed rename ledger as breaking release documentation, not a runtime alias table
 - [x] 4.3 Make update/replace validate the complete candidate before any destructive removal
 - [x] 4.4 Add graph-ingest and graph-index replay validation that independently blocks readiness on invalid state
@@ -39,7 +46,10 @@
 
 ## 5. Enforcement and Release Gates
 
-- [ ] 5.1 Run local, owned sister-repository, and reference-design audits to zero violations
+- [ ] 5.1 Run local, owned sister-repository, and reference-design audits to zero unexplained production, `*_test.go`,
+      and structured-`testdata` violations. Every intentional invalid MUST identify one exact occurrence, value,
+      contract kind, and authoritative reason; missing, stale, duplicate, broad, or reason-mismatched classifications
+      fail the gate
 - [ ] 5.2 Run reset/reingest with expected query-result fixtures against representative beta state
 - [ ] 5.3 Seed invalid preexisting state in real NATS and prove every graph-index/query consumer stays not-ready
 - [x] 5.4 Run lint, race, schema no-drift, contract, real-NATS integration, and affected e2e suites

@@ -503,12 +503,12 @@ func (e *StatefulEvaluator) evaluateWhen(
 	// evaluation. evaluateWhen runs per-action when-clauses; the same
 	// substitution semantics that apply to top-level conditions apply
 	// here.
-	entityID := ""
+	resolvedID := ""
 	if entity != nil {
-		entityID = entity.ID
+		resolvedID = entity.ID
 	}
 	ec := &ExecutionContext{
-		EntityID:    entityID,
+		EntityID:    resolvedID,
 		Entity:      entity,
 		MessageData: map[string]any(messageFields),
 		Lifecycle:   e.lifecycleManager,

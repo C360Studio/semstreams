@@ -125,9 +125,9 @@ func TestReviewWorker_MakeDecision_AutoApprove(t *testing.T) {
 		ID:         "high-confidence",
 		Confidence: 0.95, // Above 0.9 threshold
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "a",
-			ToEntity:   "b",
-			Predicate:  "related_to",
+			FromEntity: "test.inference.graph.review.entity.a",
+			ToEntity:   "test.inference.graph.review.entity.b",
+			Predicate:  "inference.relation.related-to",
 		},
 	}
 
@@ -212,13 +212,13 @@ func TestReviewWorker_MakeDecision_LLMApprove(t *testing.T) {
 	anomaly := &StructuralAnomaly{
 		ID:         "llm-review",
 		Confidence: 0.6, // Between thresholds, will use LLM
-		EntityA:    "entity-a",
-		EntityB:    "entity-b",
+		EntityA:    "test.inference.graph.review.entity.a",
+		EntityB:    "test.inference.graph.review.entity.b",
 		Type:       AnomalySemanticStructuralGap,
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "entity-a",
-			ToEntity:   "entity-b",
-			Predicate:  "related_to",
+			FromEntity: "test.inference.graph.review.entity.a",
+			ToEntity:   "test.inference.graph.review.entity.b",
+			Predicate:  "inference.relation.related-to",
 		},
 	}
 
@@ -252,8 +252,8 @@ func TestReviewWorker_MakeDecision_LLMReject(t *testing.T) {
 	anomaly := &StructuralAnomaly{
 		ID:         "llm-reject",
 		Confidence: 0.6,
-		EntityA:    "entity-a",
-		EntityB:    "entity-b",
+		EntityA:    "test.inference.graph.review.entity.a",
+		EntityB:    "test.inference.graph.review.entity.b",
 		Type:       AnomalySemanticStructuralGap,
 	}
 
@@ -351,16 +351,16 @@ func TestReviewWorker_BuildReviewPrompt(t *testing.T) {
 	anomaly := &StructuralAnomaly{
 		Type:       AnomalySemanticStructuralGap,
 		Confidence: 0.75,
-		EntityA:    "company:acme-corp",
-		EntityB:    "person:john-doe",
+		EntityA:    "test.inference.graph.review.company.acme-corp",
+		EntityB:    "test.inference.graph.review.person.john-doe",
 		Evidence: Evidence{
 			Similarity:         0.85,
 			StructuralDistance: 4,
 		},
 		Suggestion: &RelationshipSuggestion{
-			FromEntity: "company:acme-corp",
-			ToEntity:   "person:john-doe",
-			Predicate:  "employs",
+			FromEntity: "test.inference.graph.review.company.acme-corp",
+			ToEntity:   "test.inference.graph.review.person.john-doe",
+			Predicate:  "social.relation.employs",
 			Reasoning:  "High semantic similarity suggests employment relationship",
 		},
 	}
@@ -370,11 +370,11 @@ func TestReviewWorker_BuildReviewPrompt(t *testing.T) {
 	// Verify prompt contains key information
 	assert.Contains(t, prompt, "semantic_structural_gap")
 	assert.Contains(t, prompt, "0.75")
-	assert.Contains(t, prompt, "company:acme-corp")
-	assert.Contains(t, prompt, "person:john-doe")
+	assert.Contains(t, prompt, "test.inference.graph.review.company.acme-corp")
+	assert.Contains(t, prompt, "test.inference.graph.review.person.john-doe")
 	assert.Contains(t, prompt, "0.85") // similarity
 	assert.Contains(t, prompt, "4")    // structural distance
-	assert.Contains(t, prompt, "employs")
+	assert.Contains(t, prompt, "social.relation.employs")
 	assert.Contains(t, prompt, "APPROVE or REJECT")
 }
 

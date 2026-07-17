@@ -94,3 +94,9 @@ func writeAuditFixture(t *testing.T, root, name, content string) {
 		t.Fatal(err)
 	}
 }
+
+// Exact classifications for malformed predicates embedded in the temporary
+// production/test source strings above. Locations bind physical occurrences.
+// predicate-audit:invalid {"location":"line:14:column:28:embedded-structured:inner-offset:88","kind":"stored-predicate","value":"legacy.bad_name","reason":"arity"}
+// predicate-audit:invalid {"location":"line:35:column:28:embedded-structured:inner-offset:117","kind":"stored-predicate","value":"legacy.bad_name","reason":"arity"}
+// predicate-audit:invalid {"location":"line:38:column:28:embedded-structured:inner-offset:43","kind":"stored-predicate","value":"also.bad_name","reason":"arity"}

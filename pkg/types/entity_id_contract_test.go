@@ -2,6 +2,7 @@ package types
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -108,9 +109,9 @@ func TestParseEntityIDAndStructValidationShareAuthority(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, original, parsed.String())
 	assert.True(t, parsed.IsValid())
-	assert.False(t, (EntityID{Org: "-bad", Platform: "p", Domain: "d", System: "s", Type: "t", Instance: "i"}).IsValid())
+	assert.False(t, (EntityID{Org: "-bad", Platform: "p", Domain: "d", System: "s", Type: "t", Instance: "i"}).IsValid()) // entity-id-audit:classify intentional-malformed "-bad.p.d.s.t.i" line=112 column=19 surface=go-constructor:EntityID entity_id_invalid:first_byte constructor rejection fixture
 
-	_, err = ParseEntityID("a.b.c.d.e")
+	_, err = ParseEntityID("a.b.c.d.e") // entity-id-audit:classify intentional-malformed "a.b.c.d.e" line=114 column=25 surface=go-call:ParseEntityID entity_id_invalid:arity parser rejection fixture
 	assertEntityIDContractError(t, err, ErrorCodeEntityIDInvalid, EntityIDReasonArity, nil)
 }
 
@@ -146,7 +147,25 @@ func TestValidateEntityIDPattern(t *testing.T) {
 			assertEntityIDContractError(t, err, ErrorCodeEntityIDPatternInvalid, tt.wantReason, nil)
 		})
 	}
-	assert.Error(t, ValidateEntityID("acme.*.robotics.gcs.drone.*"))
+	assert.Error(t, ValidateEntityID("acme.*.robotics.gcs.drone.*")) // entity-id-audit:classify intentional-malformed "acme.*.robotics.gcs.drone.*" line=150 column=35 surface=go-call:ValidateEntityID entity_id_invalid:first_byte concrete ID rejects pattern fixture
+}
+
+func TestMatchEntityIDPattern(t *testing.T) {
+	t.Parallel()
+
+	matched, err := MatchEntityIDPattern(
+		"acme.*.robotics.*.drone.*",
+		"acme.prod.robotics.gcs.drone.d007",
+	)
+	require.NoError(t, err)
+	require.True(t, matched)
+
+	matched, err = MatchEntityIDPattern(
+		"acme.*.environmental.*.sensor.*",
+		"acme.prod.robotics.gcs.drone.d007",
+	)
+	require.NoError(t, err)
+	require.False(t, matched)
 }
 
 func TestValidateEntityIDPrefix(t *testing.T) {
@@ -172,6 +191,36 @@ func TestValidateEntityIDPrefix(t *testing.T) {
 			err := ValidateEntityIDPrefix(tt.value)
 			assertEntityIDContractError(t, err, ErrorCodeEntityIDPrefixInvalid, tt.wantReason, nil)
 		})
+	}
+}
+
+func TestEntityIDSchemaPatterns(t *testing.T) {
+	t.Parallel()
+
+	full := regexp.MustCompile(EntityIDLiteralPattern)
+	declaration := regexp.MustCompile(EntityIDDeclarationPattern)
+	prefix := regexp.MustCompile(EntityIDLiteralPrefixPattern)
+	optional := regexp.MustCompile(OptionalEntityIDLiteralPattern)
+	require.True(t, declaration.MatchString("acme.*.robotics.gcs.drone.*"))
+	require.False(t, declaration.MatchString("acme.ops.robotics.>"))
+	require.False(t, declaration.MatchString("acme.ops.robotics.gcs.drøne.1"))
+
+	for _, value := range []string{"a.b.c.d.e.f", "Acme.ops2.robotics.gcs_1.drone-type.001", entityIDWithBytes(256)} {
+		assert.True(t, full.MatchString(value), value)
+		assert.True(t, optional.MatchString(value), value)
+		require.NoError(t, ValidateEntityID(value))
+	}
+	for _, value := range []string{"", "a.b.c", "a.b.c.d.e.*", `a\.b.c.d.e.f`} {
+		assert.False(t, full.MatchString(value), value)
+	}
+	assert.True(t, optional.MatchString(""), "optional schema sentinel")
+
+	for _, value := range []string{"a", "a.b.c", "a.b.c.d.e.f", entityIDWithBytes(256)} {
+		assert.True(t, prefix.MatchString(value), value)
+		require.NoError(t, ValidateEntityIDPrefix(value))
+	}
+	for _, value := range []string{"", "a.*", "a.b.c.d.e.f.g", `a\.b`} {
+		assert.False(t, prefix.MatchString(value), value)
 	}
 }
 

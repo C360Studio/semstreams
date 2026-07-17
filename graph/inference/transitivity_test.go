@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph/structural"
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 // mockRelationshipQuerier implements RelationshipQuerier for testing.
@@ -36,7 +37,7 @@ func TestTransitivityDetector_Configure(t *testing.T) {
 		Enabled:                 true,
 		MaxIntermediateHops:     3,
 		MinExpectedTransitivity: 2,
-		TransitivePredicates:    []string{"worksFor", "memberOf"},
+		TransitivePredicates:    []string{"social.relation.works-for", "graph.community.member-of"},
 	}
 
 	err := detector.Configure(cfg)
@@ -111,31 +112,35 @@ func TestTransitivityDetector_Detect_NoPredicates(t *testing.T) {
 }
 
 func TestTransitivityDetector_Detect_FindsGaps(t *testing.T) {
-	// Graph: A --worksFor--> B --worksFor--> C
+	// Graph: A --social.relation.works-for--> B --social.relation.works-for--> C
 	// No direct A --> C relationship
 	// This should be detected as a transitivity gap
 
+	entityA := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "a")
+	entityB := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "b")
+	entityC := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "c")
+	pivotID := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "pivot", "001")
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
-			"A": {{FromEntityID: "A", ToEntityID: "B", Predicate: "worksFor"}},
-			"B": {{FromEntityID: "B", ToEntityID: "C", Predicate: "worksFor"}},
-			"C": {},
+			entityA: {{FromEntityID: entityA, ToEntityID: entityB, Predicate: "social.relation.works-for"}},
+			entityB: {{FromEntityID: entityB, ToEntityID: entityC, Predicate: "social.relation.works-for"}},
+			entityC: {},
 		},
 		incoming: map[string][]RelationshipInfo{
-			"A": {},
-			"B": {{FromEntityID: "A", ToEntityID: "B", Predicate: "worksFor"}},
-			"C": {{FromEntityID: "B", ToEntityID: "C", Predicate: "worksFor"}},
+			entityA: {},
+			entityB: {{FromEntityID: entityA, ToEntityID: entityB, Predicate: "social.relation.works-for"}},
+			entityC: {{FromEntityID: entityB, ToEntityID: entityC, Predicate: "social.relation.works-for"}},
 		},
 	}
 
 	// Set up pivot index where A-C distance is 3 (greater than expected)
 	pivotIndex := &structural.PivotIndex{
-		Pivots: []string{"pivot1"},
+		Pivots: []string{pivotID},
 		DistanceVectors: map[string][]int{
-			"A":      {0},
-			"B":      {1},
-			"C":      {3}, // Distance suggests gap
-			"pivot1": {0},
+			entityA: {0},
+			entityB: {1},
+			entityC: {3}, // Distance suggests gap
+			pivotID: {0},
 		},
 		ComputedAt:  time.Now(),
 		EntityCount: 4,
@@ -150,7 +155,7 @@ func TestTransitivityDetector_Detect_FindsGaps(t *testing.T) {
 		Enabled:                 true,
 		MaxIntermediateHops:     3,
 		MinExpectedTransitivity: 1, // Expect transitivity within 1 hop
-		TransitivePredicates:    []string{"worksFor"},
+		TransitivePredicates:    []string{"social.relation.works-for"},
 	})
 	if err != nil {
 		t.Fatalf("Configure failed: %v", err)
@@ -168,21 +173,21 @@ func TestTransitivityDetector_Detect_FindsGaps(t *testing.T) {
 
 	found := false
 	for _, a := range anomalies {
-		if a.Type == AnomalyTransitivityGap && a.EntityA == "A" && a.EntityB == "C" {
+		if a.Type == AnomalyTransitivityGap && a.EntityA == entityA && a.EntityB == entityC {
 			found = true
 
 			// Verify suggestion is populated
 			if a.Suggestion == nil {
 				t.Error("expected Suggestion to be populated")
 			} else {
-				if a.Suggestion.FromEntity != "A" {
+				if a.Suggestion.FromEntity != entityA {
 					t.Errorf("expected Suggestion.FromEntity='A', got %s", a.Suggestion.FromEntity)
 				}
-				if a.Suggestion.ToEntity != "C" {
+				if a.Suggestion.ToEntity != entityC {
 					t.Errorf("expected Suggestion.ToEntity='C', got %s", a.Suggestion.ToEntity)
 				}
-				if a.Suggestion.Predicate != "worksFor" {
-					t.Errorf("expected Suggestion.Predicate='worksFor', got %s", a.Suggestion.Predicate)
+				if a.Suggestion.Predicate != "social.relation.works-for" {
+					t.Errorf("expected Suggestion.Predicate='social.relation.works-for', got %s", a.Suggestion.Predicate)
 				}
 				if a.Suggestion.Reasoning == "" {
 					t.Error("expected Suggestion.Reasoning to be non-empty")
@@ -190,8 +195,8 @@ func TestTransitivityDetector_Detect_FindsGaps(t *testing.T) {
 			}
 
 			// Verify evidence
-			if a.Evidence.Predicate != "worksFor" {
-				t.Errorf("expected Evidence.Predicate='worksFor', got %s", a.Evidence.Predicate)
+			if a.Evidence.Predicate != "social.relation.works-for" {
+				t.Errorf("expected Evidence.Predicate='social.relation.works-for', got %s", a.Evidence.Predicate)
 			}
 			if len(a.Evidence.ChainPath) < 3 {
 				t.Errorf("expected ChainPath with at least 3 nodes, got %v", a.Evidence.ChainPath)
@@ -206,31 +211,37 @@ func TestTransitivityDetector_Detect_FindsGaps(t *testing.T) {
 
 func TestTransitivityDetector_Detect_FiltersPredicates(t *testing.T) {
 	// Graph has relationships with different predicates
-	// Only "worksFor" is configured as transitive
-	// "friendOf" should be ignored
+	// Only "social.relation.works-for" is configured as transitive
+	// "social.relation.friend-of" should be ignored
 
+	entityA := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "a")
+	entityB := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "b")
+	entityC := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "c")
+	entityD := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "d")
+	entityE := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "e")
+	pivotID := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "pivot", "001")
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
-			"A": {
-				{FromEntityID: "A", ToEntityID: "B", Predicate: "friendOf"},
-				{FromEntityID: "A", ToEntityID: "D", Predicate: "worksFor"},
+			entityA: {
+				{FromEntityID: entityA, ToEntityID: entityB, Predicate: "social.relation.friend-of"},
+				{FromEntityID: entityA, ToEntityID: entityD, Predicate: "social.relation.works-for"},
 			},
-			"B": {{FromEntityID: "B", ToEntityID: "C", Predicate: "friendOf"}},
-			"D": {{FromEntityID: "D", ToEntityID: "E", Predicate: "worksFor"}},
-			"C": {},
-			"E": {},
+			entityB: {{FromEntityID: entityB, ToEntityID: entityC, Predicate: "social.relation.friend-of"}},
+			entityD: {{FromEntityID: entityD, ToEntityID: entityE, Predicate: "social.relation.works-for"}},
+			entityC: {},
+			entityE: {},
 		},
 	}
 
 	pivotIndex := &structural.PivotIndex{
-		Pivots: []string{"pivot1"},
+		Pivots: []string{pivotID},
 		DistanceVectors: map[string][]int{
-			"A":      {0},
-			"B":      {1},
-			"C":      {5}, // High distance, but friendOf is not transitive
-			"D":      {1},
-			"E":      {5}, // High distance, worksFor IS transitive
-			"pivot1": {0},
+			entityA: {0},
+			entityB: {1},
+			entityC: {5}, // High distance, but social.relation.friend-of is not transitive
+			entityD: {1},
+			entityE: {5}, // High distance, social.relation.works-for IS transitive
+			pivotID: {0},
 		},
 		ComputedAt:  time.Now(),
 		EntityCount: 6,
@@ -245,7 +256,7 @@ func TestTransitivityDetector_Detect_FiltersPredicates(t *testing.T) {
 		Enabled:                 true,
 		MaxIntermediateHops:     3,
 		MinExpectedTransitivity: 1,
-		TransitivePredicates:    []string{"worksFor"}, // Only worksFor
+		TransitivePredicates:    []string{"social.relation.works-for"}, // Only social.relation.works-for
 	})
 	if err != nil {
 		t.Fatalf("Configure failed: %v", err)
@@ -256,34 +267,38 @@ func TestTransitivityDetector_Detect_FiltersPredicates(t *testing.T) {
 		t.Fatalf("Detect failed: %v", err)
 	}
 
-	// Should only find worksFor gaps, not friendOf gaps
+	// Should only find social.relation.works-for gaps, not social.relation.friend-of gaps
 	for _, a := range anomalies {
-		if a.Evidence.Predicate == "friendOf" {
-			t.Error("should not detect gaps for non-transitive predicate 'friendOf'")
+		if a.Evidence.Predicate == "social.relation.friend-of" {
+			t.Error("should not detect gaps for non-transitive predicate 'social.relation.friend-of'")
 		}
 	}
 }
 
 func TestTransitivityDetector_Detect_RespectsMinExpectedTransitivity(t *testing.T) {
-	// Graph: A --worksFor--> B --worksFor--> C
+	// Graph: A --social.relation.works-for--> B --social.relation.works-for--> C
 	// If A-C distance is <= MinExpectedTransitivity, no gap should be flagged
 
+	entityA := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "a")
+	entityB := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "b")
+	entityC := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "c")
+	pivotID := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "pivot", "001")
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
-			"A": {{FromEntityID: "A", ToEntityID: "B", Predicate: "worksFor"}},
-			"B": {{FromEntityID: "B", ToEntityID: "C", Predicate: "worksFor"}},
-			"C": {},
+			entityA: {{FromEntityID: entityA, ToEntityID: entityB, Predicate: "social.relation.works-for"}},
+			entityB: {{FromEntityID: entityB, ToEntityID: entityC, Predicate: "social.relation.works-for"}},
+			entityC: {},
 		},
 	}
 
 	// A-C distance is 1, which is <= MinExpectedTransitivity of 2
 	pivotIndex := &structural.PivotIndex{
-		Pivots: []string{"pivot1"},
+		Pivots: []string{pivotID},
 		DistanceVectors: map[string][]int{
-			"A":      {0},
-			"B":      {1},
-			"C":      {1}, // Close distance - no gap
-			"pivot1": {0},
+			entityA: {0},
+			entityB: {1},
+			entityC: {1}, // Close distance - no gap
+			pivotID: {0},
 		},
 		ComputedAt:  time.Now(),
 		EntityCount: 4,
@@ -298,7 +313,7 @@ func TestTransitivityDetector_Detect_RespectsMinExpectedTransitivity(t *testing.
 		Enabled:                 true,
 		MaxIntermediateHops:     3,
 		MinExpectedTransitivity: 2, // Distance 1 is within expected
-		TransitivePredicates:    []string{"worksFor"},
+		TransitivePredicates:    []string{"social.relation.works-for"},
 	})
 	if err != nil {
 		t.Fatalf("Configure failed: %v", err)
@@ -316,17 +331,21 @@ func TestTransitivityDetector_Detect_RespectsMinExpectedTransitivity(t *testing.
 }
 
 func TestTransitivityDetector_Detect_ContextCancellation(t *testing.T) {
+	entityA := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "a")
+	entityB := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "b")
+	entityC := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "node", "c")
+	pivotID := semantictest.EntityID(t, "test", "inference", "graph", "transitivity", "pivot", "001")
 	querier := &mockRelationshipQuerier{
 		outgoing: map[string][]RelationshipInfo{
-			"A": {{FromEntityID: "A", ToEntityID: "B", Predicate: "worksFor"}},
-			"B": {{FromEntityID: "B", ToEntityID: "C", Predicate: "worksFor"}},
-			"C": {},
+			entityA: {{FromEntityID: entityA, ToEntityID: entityB, Predicate: "social.relation.works-for"}},
+			entityB: {{FromEntityID: entityB, ToEntityID: entityC, Predicate: "social.relation.works-for"}},
+			entityC: {},
 		},
 	}
 
 	pivotIndex := &structural.PivotIndex{
-		Pivots:          []string{"pivot1"},
-		DistanceVectors: map[string][]int{"A": {0}, "B": {1}, "C": {5}, "pivot1": {0}},
+		Pivots:          []string{pivotID},
+		DistanceVectors: map[string][]int{entityA: {0}, entityB: {1}, entityC: {5}, pivotID: {0}},
 	}
 
 	detector := NewTransitivityDetector(&DetectorDependencies{
@@ -338,7 +357,7 @@ func TestTransitivityDetector_Detect_ContextCancellation(t *testing.T) {
 		Enabled:                 true,
 		MaxIntermediateHops:     3,
 		MinExpectedTransitivity: 1,
-		TransitivePredicates:    []string{"worksFor"},
+		TransitivePredicates:    []string{"social.relation.works-for"},
 	})
 	if err != nil {
 		t.Fatalf("Configure failed: %v", err)

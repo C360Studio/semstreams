@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -87,7 +88,7 @@ func TestOwnerReconcile_DeduplicatesFilteredResults(t *testing.T) {
 
 func TestOwnerReconcileSpike_RetractsReplacedAndEmptyMemberships(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	comp.namePredicates = map[string]int{"core.identity.name": 0}
+	comp.namePredicates = map[string]int{semantictest.Predicate(t, "core", "identity", "name"): 0} // predicate-audit:unrelated {"column":24,"surface":"go-assignment:namePredicates","value":"","basis":"reviewed component test configuration map; contained predicate is runtime-authoritative"}
 	ctx := context.Background()
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	targetA := "acme.ops.robotics.gcs.mission.001"
@@ -157,10 +158,10 @@ func TestNameOwnerReconcile_UpdatesValueForStableKey(t *testing.T) {
 	key := nameCompositeKey(nameIndexKey("Alpha"), entityID, predicate)
 
 	require.NoError(t, comp.reconcileNameIndex(ctx, entityID, []nameIndexWrite{
-		{name: "Alpha", predicate: predicate, priority: 2},
+		{name: "Alpha", predicate: semantictest.Predicate(t, "core", "identity", "name"), priority: 2},
 	}))
 	require.NoError(t, comp.reconcileNameIndex(ctx, entityID, []nameIndexWrite{
-		{name: "ALPHA", predicate: predicate, priority: 0},
+		{name: "ALPHA", predicate: semantictest.Predicate(t, "core", "identity", "name"), priority: 0},
 	}))
 
 	nameMock(comp).mu.Lock()

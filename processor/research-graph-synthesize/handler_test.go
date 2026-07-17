@@ -96,12 +96,12 @@ func TestSynthesizeAnswer_QuoteBack_StripsFabricatedRefs(t *testing.T) {
 		Topic:  "x",
 		Action: research.ActionWalkSeeds,
 		Evidence: []fusion.Evidence{
-			{EntityID: "real-1", Tier: "0", Source: "x"},
-			{EntityID: "real-2", Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.synthesize.entity.real-1", Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.synthesize.entity.real-2", Tier: "0", Source: "x"},
 		},
 	}
 	s := &fakeSynthesizer{
-		content: `{"synthesis":"answer mentions real-1 and fake-99","evidence_refs":["real-1","fake-99","also-fake","real-2"]}`,
+		content: `{"synthesis":"answer mentions test.research.graph.synthesize.entity.real-1 and fake-99","evidence_refs":["test.research.graph.synthesize.entity.real-1","fake-99","also-fake","test.research.graph.synthesize.entity.real-2"]}`,
 	}
 	got, err := synthesizeAnswer(context.Background(), s,
 		&research.Intent{Topic: "x"}, exec, nil,
@@ -110,10 +110,10 @@ func TestSynthesizeAnswer_QuoteBack_StripsFabricatedRefs(t *testing.T) {
 		t.Fatalf("synthesizeAnswer: %v", err)
 	}
 	if len(got.Evidence) != 2 {
-		t.Fatalf("Evidence len = %d, want 2 (real-1 + real-2 kept; fakes stripped)", len(got.Evidence))
+		t.Fatalf("Evidence len = %d, want 2 (test.research.graph.synthesize.entity.real-1 + test.research.graph.synthesize.entity.real-2 kept; fakes stripped)", len(got.Evidence))
 	}
 	ids := []string{got.Evidence[0].EntityID, got.Evidence[1].EntityID}
-	if ids[0] != "real-1" || ids[1] != "real-2" {
+	if ids[0] != "test.research.graph.synthesize.entity.real-1" || ids[1] != "test.research.graph.synthesize.entity.real-2" {
 		t.Errorf("kept refs drift: %v", ids)
 	}
 }
@@ -122,7 +122,7 @@ func TestSynthesizeAnswer_QuoteBack_NoValidRefsDegrades(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []fusion.Evidence{{EntityID: "real-1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.real-1", Tier: "0", Source: "x"}},
 	}
 	s := &fakeSynthesizer{
 		content: `{"synthesis":"answer makes things up","evidence_refs":["fake-only","another-fake"]}`,
@@ -165,7 +165,7 @@ func TestSynthesizeAnswer_DecompTrace_FromRouteWalkSeeds(t *testing.T) {
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionWalkSeeds,
-		Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.e1", Tier: "0", Source: "x"}},
 	}
 	route := &research.RouteDecision{
 		Action: research.ActionWalkSeeds,
@@ -176,7 +176,7 @@ func TestSynthesizeAnswer_DecompTrace_FromRouteWalkSeeds(t *testing.T) {
 			},
 		},
 	}
-	s := &fakeSynthesizer{content: `{"synthesis":"x","evidence_refs":["e1"]}`}
+	s := &fakeSynthesizer{content: `{"synthesis":"x","evidence_refs":["test.research.graph.synthesize.entity.e1"]}`}
 	got, err := synthesizeAnswer(context.Background(), s,
 		&research.Intent{Topic: "x"}, exec, route,
 		2048, 30, 480, quietLogger())
@@ -198,9 +198,9 @@ func TestSynthesizeAnswer_DecompTrace_NilRouteFallsBackToExecAction(t *testing.T
 	exec := &research.ExecutionOutput{
 		Topic:    "x",
 		Action:   research.ActionSynthesizeDirectly,
-		Evidence: []fusion.Evidence{{EntityID: "e1", Tier: "0", Source: "x"}},
+		Evidence: []fusion.Evidence{{EntityID: "test.research.graph.synthesize.entity.e1", Tier: "0", Source: "x"}},
 	}
-	s := &fakeSynthesizer{content: `{"synthesis":"x","evidence_refs":["e1"]}`}
+	s := &fakeSynthesizer{content: `{"synthesis":"x","evidence_refs":["test.research.graph.synthesize.entity.e1"]}`}
 	got, err := synthesizeAnswer(context.Background(), s,
 		&research.Intent{Topic: "x"}, exec, nil,
 		2048, 30, 480, quietLogger())
@@ -252,11 +252,11 @@ func TestSynthesizeAnswer_DedupRefs(t *testing.T) {
 		Topic:  "x",
 		Action: research.ActionWalkSeeds,
 		Evidence: []fusion.Evidence{
-			{EntityID: "e1", Tier: "0", Source: "x"},
+			{EntityID: "test.research.graph.synthesize.entity.e1", Tier: "0", Source: "x"},
 		},
 	}
 	s := &fakeSynthesizer{
-		content: `{"synthesis":"x","evidence_refs":["e1","e1","e1"]}`,
+		content: `{"synthesis":"x","evidence_refs":["test.research.graph.synthesize.entity.e1","test.research.graph.synthesize.entity.e1","test.research.graph.synthesize.entity.e1"]}`,
 	}
 	got, err := synthesizeAnswer(context.Background(), s,
 		&research.Intent{Topic: "x"}, exec, nil,

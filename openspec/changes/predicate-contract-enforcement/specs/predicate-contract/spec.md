@@ -77,6 +77,44 @@ without entity or predicate labels.
 - **WHEN** a deployment loads graph-ingest configuration
 - **THEN** no option exists to accept noncanonical predicates
 
+### Requirement: Predicate test fixtures are canonical or exactly classified negatives
+
+The completed bounded production predicate corpus MUST remain distinct from the complementary tracked corpus over
+every `*_test.go` file and every structured artifact beneath `testdata`. Both corpora MUST be clean before local
+zero-violation evidence is complete. Positive runtime fixtures SHOULD use the grammar-only
+`internal/semantictest` predicate builder. The builder MUST accept all three semantic positions explicitly, MUST join
+and validate them through `vocabulary.ParsePredicate` without normalization, aliases, or defaults, and MUST return only
+the validated string. It MUST NOT construct graph entities, triples, Graphable values, or other behavior-bearing
+fixtures. Production Go files MUST NOT import this test helper. Vocabulary grammar-authority tests and literal
+constants MAY remain raw source values, but MUST remain in the checked corpus.
+
+Every intentional invalid predicate fixture MUST be classified at one exact occurrence with its contract kind, exact
+value, and authoritative stable reason. A commentless structured fixture MUST use a checked manifest entry naming its
+file and structural location or record. File-wide or directory-wide invalid allowances MUST NOT satisfy the corpus.
+Missing, stale, duplicate, unmatched, broad, or reason-mismatched classifications MUST fail, and every classification
+MUST resolve to exactly one candidate.
+
+#### Scenario: the predicate helper does not normalize malformed positions
+
+- **GIVEN** explicit predicate positions containing uppercase, underscore, or invalid hyphen placement
+- **WHEN** the test fixture builder joins and validates them
+- **THEN** it fails through `vocabulary.ParsePredicate`
+- **AND** it does not lowercase, replace, alias, default, or return a repaired predicate
+
+#### Scenario: production code cannot import the predicate fixture helper
+
+- **GIVEN** a non-test Go file imports `internal/semantictest`
+- **WHEN** repository contract checks run
+- **THEN** the check fails and identifies the production import
+- **AND** a graph-entity or triple factory is not introduced to hide the dependency
+
+#### Scenario: predicate negative classifications match one authoritative reason
+
+- **GIVEN** one malformed predicate occurrence classified with its exact value and authoritative reason
+- **WHEN** the test-fixture corpus audit resolves the classification
+- **THEN** it accepts the exception only when exactly one candidate matches and parsing returns that reason
+- **AND** a missing, stale, duplicate, broad, unmatched, or wrong-reason classification fails the audit
+
 ### Requirement: The beta cutover updates owned producers and resets incompatible state
 
 The breaking release MUST update every SemStreams producer, owned reference design, generated schema/tool

@@ -35,7 +35,7 @@ func TestNewStaticRouter(t *testing.T) {
 			"outgoing":          "graph.index.query.outgoing",
 			"incoming":          "graph.index.query.incoming",
 			"alias":             "graph.index.query.alias",
-			"predicate":         "graph.index.query.predicate",
+			"predicate":         "graph.index.query.predicate", // predicate-audit:unrelated {"column":25,"surface":"go-field:predicate","value":"graph.index.query.predicate","basis":"reviewed NATS request subject, not stored semantic predicate"}
 			"predicateList":     "graph.index.query.predicateList",
 			"predicateStats":    "graph.index.query.predicateStats",
 			"predicateCompound": "graph.index.query.predicateCompound",

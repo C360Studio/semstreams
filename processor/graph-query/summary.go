@@ -67,7 +67,8 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 	// the pagination contract.
 	prefixPayload, err := json.Marshal(graph.PrefixQueryRequest{
 		Prefix: "",
-		Limit:  req.EntitySampleLimit,
+		// entity-id-audit:classify intentional-sentinel "" line=69 column=11 surface=go-field:PrefixQueryRequest.Prefix entity_id_prefix_invalid:empty documented match-all query
+		Limit: req.EntitySampleLimit,
 	})
 	if err != nil {
 		return nil, errs.Wrap(err, "GraphQuery", "handleQueryGraphSummary", "marshal prefix request")
@@ -88,7 +89,11 @@ func (c *Component) handleQueryGraphSummary(ctx context.Context, data []byte) ([
 		return nil, prefixErr
 	}
 
-	entityIDs := extractEntityIDsFromPrefixResponse(prefixResp)
+	entityIDs, err := extractEntityIDsFromPrefixResponse(prefixResp)
+	if err != nil {
+		c.recordError(err)
+		return nil, err
+	}
 	summary.TotalEntities = len(entityIDs)
 	summary.EntitySampleTruncated = len(entityIDs) >= req.EntitySampleLimit
 	summary.EntityTypes = aggregateEntityTypes(entityIDs, req.ExamplesPerType)
@@ -156,25 +161,22 @@ func parseSummaryRequest(data []byte) graph.SummaryRequest {
 // extractEntityIDsFromPrefixResponse pulls the IDs out of the
 // graph-ingest prefix response envelope. graph-ingest returns
 // {"entities": [{"id": "..."}, ...]} per the existing
-// handleQueryPrefixNATS shape. Returns an empty slice on any parse
-// failure; callers treat that as "no entities discoverable" rather
-// than a hard error so a partial summary still ships.
-func extractEntityIDsFromPrefixResponse(data []byte) []string {
-	var envelope struct {
-		Entities []struct {
-			ID string `json:"id"`
-		} `json:"entities"`
-	}
+// handleQueryPrefixNATS shape. It validates the complete EntityState page
+// before projecting IDs; a poisoned authoritative page is a hard graph-state
+// failure, not an empty partial-summary facet.
+func extractEntityIDsFromPrefixResponse(data []byte) ([]string, error) {
+	var envelope graph.PrefixQueryResponse
 	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil
+		return nil, errs.WrapInvalid(err, "GraphQuery", "extractEntityIDsFromPrefixResponse", "unmarshal prefix response")
+	}
+	if err := graph.ValidateDecodedEntityStates(envelope.Entities); err != nil {
+		return nil, err
 	}
 	out := make([]string, 0, len(envelope.Entities))
 	for _, e := range envelope.Entities {
-		if e.ID != "" {
-			out = append(out, e.ID)
-		}
+		out = append(out, e.ID)
 	}
-	return out
+	return out, nil
 }
 
 // aggregateEntityTypes groups entity IDs into domain.system.type

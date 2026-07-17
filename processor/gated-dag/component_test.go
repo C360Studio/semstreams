@@ -2,10 +2,12 @@ package gateddagexec
 
 import (
 	"encoding/json"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -45,6 +47,23 @@ func TestComponent_Discoverable(t *testing.T) {
 
 	require.Contains(t, c.ConfigSchema().Required, "unit_entity_prefix")
 	require.Contains(t, c.ConfigSchema().Required, "dispatch_subject")
+	prefixSchema := c.ConfigSchema().Properties["unit_entity_prefix"]
+	require.NotNil(t, prefixSchema.MinLength)
+	require.Equal(t, 1, *prefixSchema.MinLength)
+	require.NotNil(t, prefixSchema.MaxLength)
+	require.Equal(t, 256, *prefixSchema.MaxLength)
+	require.Equal(t, semtypes.EntityIDLiteralPrefixPattern, prefixSchema.Pattern)
+	prefixPattern := regexp.MustCompile(prefixSchema.Pattern)
+	require.True(t, prefixPattern.MatchString("acme.ops.plan.fanout.unit"))
+	require.False(t, prefixPattern.MatchString(`acme\.ops`))
+	require.False(t, prefixPattern.MatchString("acme.*"))
+	instanceSchema := c.ConfigSchema().Properties["fan_out_instance_id"]
+	require.Nil(t, instanceSchema.MinLength, "empty is the explicit no-lifecycle sentinel")
+	require.Equal(t, semtypes.OptionalEntityIDLiteralPattern, instanceSchema.Pattern)
+	instancePattern := regexp.MustCompile(instanceSchema.Pattern)
+	require.True(t, instancePattern.MatchString(""))
+	require.True(t, instancePattern.MatchString("acme.ops.plan.fanout.instance.1"))
+	require.False(t, instancePattern.MatchString(`acme\.ops.plan.fanout.instance.1`))
 
 	// Health before start.
 	h := c.Health()

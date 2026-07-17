@@ -120,27 +120,27 @@ type Definition struct {
 {
   "entity": {
     "pattern": "acme.*.robotics.*.drone.*",
-    "watch_buckets": ["ENTITY_STATES", "PREDICATE_INDEX"]
+    "watch_buckets": ["ENTITY_STATES"]
   }
 }
 ```
 
 | Field | Description |
 |-------|-------------|
-| `pattern` | NATS wildcard pattern for entity IDs |
-| `watch_buckets` | KV buckets to watch for changes |
+| `pattern` | Exact six-position entity ID pattern |
+| `watch_buckets` | Optional typed bucket declaration; only `ENTITY_STATES` is accepted |
 
 **Pattern Syntax:**
 
 - `*` - matches single segment
-- `>` - matches one or more segments (at end only)
+- `>` - rejected; it hides entity-ID arity mistakes
 
 **Examples:**
 
 ```text
 acme.*.robotics.*.drone.*     # Drones from any platform/system
 *.*.*.*.sensor.*              # All sensors
-acme.logistics.>              # Everything in logistics
+acme.logistics.*.*.*.*        # Everything in logistics
 ```
 
 ## Condition Syntax

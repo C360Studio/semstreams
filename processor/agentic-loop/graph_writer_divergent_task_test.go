@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -22,7 +23,14 @@ import (
 
 func TestDivergentTaskID_DifferentTaskIDs_ReturnsDivergent(t *testing.T) {
 	t.Parallel()
-	existing := entityStateWithTask("task-original")
+	existing := &gtypes.EntityState{
+		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+		Triples: []message.Triple{{
+			Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+			Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+			Object:    "task-original",
+		}},
+	}
 	existingID, divergent := divergentTaskID(existing, "task-new")
 	if !divergent {
 		t.Error("expected divergent=true for different task IDs, got false")
@@ -34,7 +42,14 @@ func TestDivergentTaskID_DifferentTaskIDs_ReturnsDivergent(t *testing.T) {
 
 func TestDivergentTaskID_SameTaskID_NotDivergent(t *testing.T) {
 	t.Parallel()
-	existing := entityStateWithTask("task-same")
+	existing := &gtypes.EntityState{
+		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+		Triples: []message.Triple{{
+			Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+			Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+			Object:    "task-same",
+		}},
+	}
 	existingID, divergent := divergentTaskID(existing, "task-same")
 	if divergent {
 		t.Errorf("expected divergent=false for same task ID, got true (existingID=%q)", existingID)
@@ -44,7 +59,14 @@ func TestDivergentTaskID_SameTaskID_NotDivergent(t *testing.T) {
 func TestDivergentTaskID_EmptyIncomingTaskID_NotDivergent(t *testing.T) {
 	t.Parallel()
 	// When the incoming task_id is empty (caller didn't supply one), never flag.
-	existing := entityStateWithTask("task-original")
+	existing := &gtypes.EntityState{
+		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+		Triples: []message.Triple{{
+			Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+			Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+			Object:    "task-original",
+		}},
+	}
 	_, divergent := divergentTaskID(existing, "")
 	if divergent {
 		t.Error("expected divergent=false when incomingTaskID is empty")
@@ -69,7 +91,7 @@ func TestDivergentTaskID_NonStringTaskIDObject_NotDivergent(t *testing.T) {
 	existing := &gtypes.EntityState{
 		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
 		Triples: []message.Triple{
-			{Predicate: agvocab.LoopTask, Object: 42},
+			{Predicate: semantictest.Predicate(t, "agent", "loop", "task"), Object: 42},
 		},
 	}
 	_, divergent := divergentTaskID(existing, "task-new")
@@ -84,7 +106,7 @@ func TestDivergentTaskID_EmptyExistingTaskID_NotDivergent(t *testing.T) {
 	existing := &gtypes.EntityState{
 		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
 		Triples: []message.Triple{
-			{Predicate: agvocab.LoopTask, Object: ""},
+			{Predicate: semantictest.Predicate(t, "agent", "loop", "task"), Object: ""},
 		},
 	}
 	_, divergent := divergentTaskID(existing, "task-new")
@@ -150,20 +172,41 @@ func TestVerifyExistingLoopOrigin_DivergentTaskID_WarnShape(t *testing.T) {
 
 	cases := []divergentTaskWarnCase{
 		{
-			name:           "divergent task_id emits warning",
-			existing:       entityStateWithTask("task-original"),
+			name: "divergent task_id emits warning",
+			existing: &gtypes.EntityState{
+				ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+				Triples: []message.Triple{{
+					Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+					Object:    "task-original",
+				}},
+			},
 			incomingTaskID: "task-new",
 			wantWarn:       true,
 		},
 		{
-			name:           "same task_id suppresses warning",
-			existing:       entityStateWithTask("task-same"),
+			name: "same task_id suppresses warning",
+			existing: &gtypes.EntityState{
+				ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+				Triples: []message.Triple{{
+					Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+					Object:    "task-same",
+				}},
+			},
 			incomingTaskID: "task-same",
 			wantWarn:       false,
 		},
 		{
-			name:           "empty incoming task_id suppresses warning",
-			existing:       entityStateWithTask("task-original"),
+			name: "empty incoming task_id suppresses warning",
+			existing: &gtypes.EntityState{
+				ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+				Triples: []message.Triple{{
+					Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+					Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+					Object:    "task-original",
+				}},
+			},
 			incomingTaskID: "",
 			wantWarn:       false,
 		},
@@ -222,7 +265,14 @@ func TestDivergentTaskID_IdentityTriples_FirstSpawnWins(t *testing.T) {
 
 	// Simulate first spawn's entity as canonically stored.
 	firstTaskID := "task-first"
-	existing := entityStateWithTask(firstTaskID)
+	existing := &gtypes.EntityState{
+		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
+		Triples: []message.Triple{{
+			Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
+			Predicate: semantictest.Predicate(t, "agent", "loop", "task"),
+			Object:    firstTaskID,
+		}},
+	}
 
 	// Second spawn reuses the same loop_id with a new task.
 	secondTaskID := "task-second"
@@ -245,20 +295,5 @@ func TestDivergentTaskID_IdentityTriples_FirstSpawnWins(t *testing.T) {
 	}
 	if got, _ := triple.Object.(string); got != firstTaskID {
 		t.Errorf("existing entity's task_id was mutated: got %q, want %q", got, firstTaskID)
-	}
-}
-
-// entityStateWithTask is a test helper that builds a minimal gtypes.EntityState
-// with a single agent.loop.task triple carrying the given taskID.
-func entityStateWithTask(taskID string) *gtypes.EntityState {
-	return &gtypes.EntityState{
-		ID: "acme.ops.agent.agentic-loop.execution.loop-001",
-		Triples: []message.Triple{
-			{
-				Subject:   "acme.ops.agent.agentic-loop.execution.loop-001",
-				Predicate: agvocab.LoopTask,
-				Object:    taskID,
-			},
-		},
 	}
 }

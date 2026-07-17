@@ -395,6 +395,15 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 			// Convert int to float64 for JSON comparison compatibility
 			prop["maximum"] = float64(*propSchema.Maximum)
 		}
+		if propSchema.MinLength != nil {
+			prop["minLength"] = float64(*propSchema.MinLength)
+		}
+		if propSchema.MaxLength != nil {
+			prop["maxLength"] = float64(*propSchema.MaxLength)
+		}
+		if propSchema.Pattern != "" {
+			prop["pattern"] = propSchema.Pattern
+		}
 		if len(propSchema.Enum) > 0 {
 			// Convert []string to []any for JSON comparison compatibility
 			enumAny := make([]any, len(propSchema.Enum))
@@ -405,6 +414,9 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 		}
 		if propSchema.Category != "" {
 			prop["category"] = propSchema.Category
+		}
+		if propSchema.AdditionalProperties != nil {
+			prop["additionalProperties"] = *propSchema.AdditionalProperties
 		}
 		// Handle array types - add items schema
 		if propSchema.Type == "array" {
@@ -502,6 +514,15 @@ func convertPropertySchemaToMap(src *component.PropertySchema) map[string]interf
 	if src.Maximum != nil {
 		result["maximum"] = float64(*src.Maximum)
 	}
+	if src.MinLength != nil {
+		result["minLength"] = float64(*src.MinLength)
+	}
+	if src.MaxLength != nil {
+		result["maxLength"] = float64(*src.MaxLength)
+	}
+	if src.Pattern != "" {
+		result["pattern"] = src.Pattern
+	}
 	if len(src.Enum) > 0 {
 		enumAny := make([]any, len(src.Enum))
 		for i, e := range src.Enum {
@@ -511,6 +532,9 @@ func convertPropertySchemaToMap(src *component.PropertySchema) map[string]interf
 	}
 	if src.Category != "" {
 		result["category"] = src.Category
+	}
+	if src.AdditionalProperties != nil {
+		result["additionalProperties"] = *src.AdditionalProperties
 	}
 	if len(src.Properties) > 0 {
 		result["properties"] = convertPropertiesToMap(src.Properties)
@@ -552,6 +576,15 @@ func convertPropertiesToMap(props map[string]component.PropertySchema) map[strin
 		if prop.Maximum != nil {
 			propMap["maximum"] = float64(*prop.Maximum)
 		}
+		if prop.MinLength != nil {
+			propMap["minLength"] = float64(*prop.MinLength)
+		}
+		if prop.MaxLength != nil {
+			propMap["maxLength"] = float64(*prop.MaxLength)
+		}
+		if prop.Pattern != "" {
+			propMap["pattern"] = prop.Pattern
+		}
 		if len(prop.Enum) > 0 {
 			enumAny := make([]any, len(prop.Enum))
 			for i, e := range prop.Enum {
@@ -561,6 +594,9 @@ func convertPropertiesToMap(props map[string]component.PropertySchema) map[strin
 		}
 		if prop.Category != "" {
 			propMap["category"] = prop.Category
+		}
+		if prop.AdditionalProperties != nil {
+			propMap["additionalProperties"] = *prop.AdditionalProperties
 		}
 		if len(prop.Properties) > 0 {
 			propMap["properties"] = convertPropertiesToMap(prop.Properties)

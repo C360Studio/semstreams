@@ -4,9 +4,6 @@
   "name": "Architect Completion - Spawn Editor",
   "description": "When architect completes successfully, spawn editor to implement the architecture specification",
   "enabled": true,
-  "entity": {
-    "pattern": "agent.complete.>"
-  },
   "conditions": [
     {
       "field": "$message.role",

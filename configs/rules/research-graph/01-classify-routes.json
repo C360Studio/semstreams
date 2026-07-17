@@ -4,6 +4,7 @@
   "name": "R1 — Classify complete → Route",
   "description": "ADR-045 R1. Fires after nl_classify stamps research.classify.complete on the loop entity. Dispatches route_search to make the routing decision. ne \"\" matches the stamped RFC3339Nano timestamp; in the retighten loop, R2's retighten branch clears this triple before re-dispatching nl_classify, so a new stamp on the re-run causes another false→true transition and R1 fires again. Per-rule MaxIterations not set — R2's retighten branch has the iteration cap, and removing the trigger triple is what resets the on_enter state for the next round.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

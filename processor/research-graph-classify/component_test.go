@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/types"
@@ -251,7 +252,7 @@ func TestComponent_HandleMessage_SnapshotFailureDoesNotBlockTrigger(t *testing.T
 	}
 	classifier := &fakeClassifier{result: &query.ClassificationResult{Tier: 0}}
 	retriever := &fakeRetriever{
-		candidates: []research.Candidate{{EntityID: "x", Tier: "0", Source: "search_graph"}},
+		candidates: []research.Candidate{{EntityID: semantictest.EntityID(t, "test", "research", "classify", "candidate", "entity", "001"), Tier: "0", Source: "search_graph"}},
 	}
 	c := newTestComponent(loops, classifier, retriever)
 	c.logger = quietLogger()
@@ -270,7 +271,7 @@ func TestComponent_HandleMessage_ClassifyTriggerFailureCounts(t *testing.T) {
 	}
 	classifier := &fakeClassifier{result: &query.ClassificationResult{Tier: 0}}
 	retriever := &fakeRetriever{
-		candidates: []research.Candidate{{EntityID: "x", Tier: "0", Source: "search_graph"}},
+		candidates: []research.Candidate{{EntityID: semantictest.EntityID(t, "test", "research", "classify", "candidate", "entity", "002"), Tier: "0", Source: "search_graph"}},
 	}
 	c := newTestComponent(loops, classifier, retriever)
 	c.logger = quietLogger()
@@ -292,7 +293,7 @@ func TestComponent_EnvelopeShape_DecodesViaProductionRegistry(t *testing.T) {
 	loops := &fakeLoopStore{intent: &research.Intent{Topic: "voltage"}}
 	classifier := &fakeClassifier{result: &query.ClassificationResult{Tier: 1, Confidence: 0.8}}
 	retriever := &fakeRetriever{
-		candidates: []research.Candidate{{EntityID: "battery.01", Tier: "1", Source: "search_graph"}},
+		candidates: []research.Candidate{{EntityID: semantictest.EntityID(t, "test", "research", "classify", "candidate", "battery", "01"), Tier: "1", Source: "search_graph"}},
 	}
 	c := newTestComponent(loops, classifier, retriever)
 	c.logger = quietLogger()
@@ -358,7 +359,7 @@ func TestComponent_HandleMessage_StampsOrchestrationTriples(t *testing.T) {
 	// form derived from deps.Platform.Org/Platform and loop_id) so
 	// graph-ingest's per-Subject CAS path lands them atomically.
 	const wantSubject = "acme.ops.agent.agentic-loop.execution.rg_test001"
-	byPredicate := map[string]any{}
+	facts := map[string]any{}
 	for _, tr := range batch {
 		if tr.Subject != wantSubject {
 			t.Errorf("triple Subject = %q, want %q (loop-execution entity ID for atomic batch)", tr.Subject, wantSubject)
@@ -366,16 +367,16 @@ func TestComponent_HandleMessage_StampsOrchestrationTriples(t *testing.T) {
 		if tr.Source != research.SourceClassify {
 			t.Errorf("triple Source = %q, want %q", tr.Source, research.SourceClassify)
 		}
-		byPredicate[tr.Predicate] = tr.Object
+		facts[tr.Predicate] = tr.Object
 	}
 
-	if byPredicate[research.PredicateResearchClassifyCandidateCount] != "2" {
-		t.Errorf("candidate_count = %v, want \"2\"", byPredicate[research.PredicateResearchClassifyCandidateCount])
+	if facts[research.PredicateResearchClassifyCandidateCount] != "2" {
+		t.Errorf("candidate_count = %v, want \"2\"", facts[research.PredicateResearchClassifyCandidateCount])
 	}
-	if byPredicate[research.PredicateResearchClassifyDegraded] != "true" {
-		t.Errorf("degraded = %v, want \"true\" (retriever flagged degraded)", byPredicate[research.PredicateResearchClassifyDegraded])
+	if facts[research.PredicateResearchClassifyDegraded] != "true" {
+		t.Errorf("degraded = %v, want \"true\" (retriever flagged degraded)", facts[research.PredicateResearchClassifyDegraded])
 	}
-	if byPredicate[research.PredicateResearchClassifyComplete] == nil {
+	if facts[research.PredicateResearchClassifyComplete] == nil {
 		t.Errorf("classify.complete triple missing")
 	}
 }

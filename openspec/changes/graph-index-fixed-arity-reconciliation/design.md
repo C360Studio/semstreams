@@ -9,6 +9,12 @@ uses its validators, stable errors, and budgets before I/O rather than copying p
 `x1_` opaque codec is available only for a separately authorized new or changed axis; current untagged predicate hex
 remains unchanged.
 
+The shared `entity-id-contract` owns the canonical `E <= 256` semantic bound, authoritative final-candidate seam,
+independent replay/direct-poison contract, local source cutover, and its local quality gates. This change owns all
+complete production graph-index key/filter controls, pinned real-NATS maximum and exact-match conformance, and the
+activation decision. Those graph-index obligations were moved here rather than waived. Owned-product rollout tasks
+remain pre-v1/archive gates and do not substitute for either change's local proof.
+
 PR #524's physical hardening is valuable: one membership per key, O(E) write volume, no shared-list CAS,
 per-entity ordered reconciliation, exact watermarks, explicit empty OUTGOING projections, typed readiness,
 and bounded repair. Its predicate encoding rationale assumed graph-ingest accepted any non-empty predicate and that
@@ -287,14 +293,16 @@ cycle. Any required initial replay failure keeps reads not-ready.
 
 1. Consume the archived `nats-kv-keys` baseline, then correct/complete/archive `graph-index-hardening` and seed the
    baseline graph-index spec.
-2. Use canonical `E = 256` to prove every bounded in-scope current layout/filter fits the shared budgets, then complete
-   pinned real-NATS maximum key/filter exact-match conformance. Audit ALIAS independently and hand its unbounded result
-   to the separate owner without blocking other stores.
+2. Use canonical `E = 256` to prove every bounded in-scope current layout/filter fits the shared budgets, complete
+   malformed-axis and complete production-path pre-I/O controls, then complete pinned real-NATS maximum key/filter
+   exact-match conformance. Audit ALIAS independently and hand its unbounded result to the separate owner without
+   blocking other stores.
 3. Prove current-layout exact owner filters through the shared validators without changing production behavior.
-4. Complete the predicate and entity-ID clean-source/configuration/fixture gates; approve the owner-discovery and
-   INCOMING-ownership ADR; update every owned reference, wipe incompatible NATS state, restart, and reseed canonical
-   sources. Activate filtered reconciliation only for passing stores, first completing an approved dependent bounded
-   mechanism for each failed query-visible store.
+4. Complete the SemStreams-local predicate and entity-ID source/configuration/fixture gates, wipe incompatible local
+   NATS state, restart, and reseed canonical framework sources; approve the owner-discovery and INCOMING-ownership
+   ADR. Activate filtered reconciliation only for passing stores, first completing an approved dependent bounded
+   mechanism for each failed query-visible store. Coordinated owned-product source updates, product NATS wipe/reseed,
+   and product e2e remain pre-v1/archive gates and do not block this local framework activation.
 5. Prove public query, readiness, restart, repair, and lifecycle semantics on the rebuilt shipped representation.
 6. Independently benchmark hash+catalog against raw PREDICATE keys after the predicate corpus is clean.
 7. Retain hash+catalog unless raw has a bounded key and materially improves a required surface; record the ADR-065

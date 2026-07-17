@@ -3,18 +3,22 @@ package graph
 import (
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/internal/semantictest"
 )
 
 func TestIncomingEdgesAddEdge(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{},
 	}
 
 	// Add first edge
 	edge1 := IncomingEdge{
-		FromEntityID: "source-entity-1",
-		EdgeType:     "POWERED_BY",
+		FromEntityID: sourceID,
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -25,21 +29,23 @@ func TestIncomingEdgesAddEdge(t *testing.T) {
 		t.Errorf("expected 1 incoming edge, got %d", len(ie.Incoming))
 	}
 
-	if ie.Incoming[0].FromEntityID != "source-entity-1" {
-		t.Errorf("expected source-entity-1, got %s", ie.Incoming[0].FromEntityID)
+	if ie.Incoming[0].FromEntityID != sourceID {
+		t.Errorf("expected %s, got %s", sourceID, ie.Incoming[0].FromEntityID)
 	}
 }
 
 func TestIncomingEdgesAddDuplicateEdge(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{},
 	}
 
 	// Add first edge
 	edge1 := IncomingEdge{
-		FromEntityID: "source-entity-1",
-		EdgeType:     "POWERED_BY",
+		FromEntityID: sourceID,
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -48,8 +54,8 @@ func TestIncomingEdgesAddDuplicateEdge(t *testing.T) {
 
 	// Add same edge with different weight (should replace)
 	edge2 := IncomingEdge{
-		FromEntityID: "source-entity-1",
-		EdgeType:     "POWERED_BY",
+		FromEntityID: sourceID,
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       2.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -66,17 +72,20 @@ func TestIncomingEdgesAddDuplicateEdge(t *testing.T) {
 }
 
 func TestIncomingEdgesRemoveEdge(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	source1 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
+	source2 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "002")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{
 			{
-				FromEntityID: "source-entity-1",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: source1,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 			{
-				FromEntityID: "source-entity-2",
+				FromEntityID: source2,
 				EdgeType:     "NEAR",
 				Weight:       0.5,
 				UpdatedAt:    time.Now(),
@@ -85,46 +94,50 @@ func TestIncomingEdgesRemoveEdge(t *testing.T) {
 	}
 
 	// Remove first edge
-	ie.RemoveIncomingEdge("source-entity-1", "POWERED_BY")
+	ie.RemoveIncomingEdge(source1, "graph.relation.powered-by")
 
 	if len(ie.Incoming) != 1 {
 		t.Errorf("expected 1 incoming edge after removal, got %d", len(ie.Incoming))
 	}
 
-	if ie.Incoming[0].FromEntityID != "source-entity-2" {
-		t.Errorf("expected source-entity-2 to remain, got %s", ie.Incoming[0].FromEntityID)
+	if ie.Incoming[0].FromEntityID != source2 {
+		t.Errorf("expected %s to remain, got %s", source2, ie.Incoming[0].FromEntityID)
 	}
 }
 
 func TestIncomingEdgesGetByType(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	source1 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
+	source2 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "002")
+	source3 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "003")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{
 			{
-				FromEntityID: "source-entity-1",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: source1,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 			{
-				FromEntityID: "source-entity-2",
+				FromEntityID: source2,
 				EdgeType:     "NEAR",
 				Weight:       0.5,
 				UpdatedAt:    time.Now(),
 			},
 			{
-				FromEntityID: "source-entity-3",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: source3,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.5,
 				UpdatedAt:    time.Now(),
 			},
 		},
 	}
 
-	poweredByEdges := ie.GetIncomingEdgesByType("POWERED_BY")
+	poweredByEdges := ie.GetIncomingEdgesByType("graph.relation.powered-by")
 
 	if len(poweredByEdges) != 2 {
-		t.Errorf("expected 2 POWERED_BY edges, got %d", len(poweredByEdges))
+		t.Errorf("expected 2 graph.relation.powered-by edges, got %d", len(poweredByEdges))
 	}
 
 	nearEdges := ie.GetIncomingEdgesByType("NEAR")
@@ -141,23 +154,26 @@ func TestIncomingEdgesGetByType(t *testing.T) {
 }
 
 func TestIncomingEdgesGetEntityIDs(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	source1 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
+	source2 := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "002")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{
 			{
-				FromEntityID: "source-entity-1",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: source1,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 			{
-				FromEntityID: "source-entity-2",
+				FromEntityID: source2,
 				EdgeType:     "NEAR",
 				Weight:       0.5,
 				UpdatedAt:    time.Now(),
 			},
 			{
-				FromEntityID: "source-entity-1", // Duplicate entity with different edge type
+				FromEntityID: source1, // Duplicate entity with different edge type
 				EdgeType:     "NEAR",
 				Weight:       0.8,
 				UpdatedAt:    time.Now(),
@@ -174,10 +190,10 @@ func TestIncomingEdgesGetEntityIDs(t *testing.T) {
 	// Check that both entities are present (order doesn't matter)
 	found1, found2 := false, false
 	for _, id := range entityIDs {
-		if id == "source-entity-1" {
+		if id == source1 {
 			found1 = true
 		}
-		if id == "source-entity-2" {
+		if id == source2 {
 			found2 = true
 		}
 	}
@@ -191,8 +207,10 @@ func TestIncomingEdgesGetEntityIDs(t *testing.T) {
 }
 
 func TestIncomingEdgesCount(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{},
 	}
 
@@ -201,8 +219,8 @@ func TestIncomingEdgesCount(t *testing.T) {
 	}
 
 	ie.Incoming = append(ie.Incoming, IncomingEdge{
-		FromEntityID: "source-entity-1",
-		EdgeType:     "POWERED_BY",
+		FromEntityID: sourceID,
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	})
@@ -213,42 +231,47 @@ func TestIncomingEdgesCount(t *testing.T) {
 }
 
 func TestIncomingEdgesHasIncomingFrom(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
+	missingID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "missing")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{
 			{
-				FromEntityID: "source-entity-1",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: sourceID,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 		},
 	}
 
-	if !ie.HasIncomingFrom("source-entity-1") {
+	if !ie.HasIncomingFrom(sourceID) {
 		t.Error("expected to find incoming edge from source-entity-1")
 	}
 
-	if ie.HasIncomingFrom("non-existent-entity") {
+	if ie.HasIncomingFrom(missingID) {
 		t.Error("expected not to find incoming edge from non-existent-entity")
 	}
 }
 
 func TestIncomingEdgesHasIncomingOfType(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
 	ie := &IncomingEdges{
-		EntityID: "target-entity",
+		EntityID: targetID,
 		Incoming: []IncomingEdge{
 			{
-				FromEntityID: "source-entity-1",
-				EdgeType:     "POWERED_BY",
+				FromEntityID: sourceID,
+				EdgeType:     "graph.relation.powered-by",
 				Weight:       1.0,
 				UpdatedAt:    time.Now(),
 			},
 		},
 	}
 
-	if !ie.HasIncomingOfType("POWERED_BY") {
-		t.Error("expected to find incoming edge of type POWERED_BY")
+	if !ie.HasIncomingOfType("graph.relation.powered-by") {
+		t.Error("expected to find incoming edge of type graph.relation.powered-by")
 	}
 
 	if ie.HasIncomingOfType("NON_EXISTENT") {
@@ -257,8 +280,10 @@ func TestIncomingEdgesHasIncomingOfType(t *testing.T) {
 }
 
 func TestIncomingEdgesUpdatedAtModification(t *testing.T) {
+	targetID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "target", "001")
+	sourceID := semantictest.EntityID(t, "test", "graph", "index", "incoming", "source", "001")
 	ie := &IncomingEdges{
-		EntityID:  "target-entity",
+		EntityID:  targetID,
 		Incoming:  []IncomingEdge{},
 		UpdatedAt: time.Now().Add(-1 * time.Hour), // Set to past time
 	}
@@ -267,8 +292,8 @@ func TestIncomingEdgesUpdatedAtModification(t *testing.T) {
 
 	// Adding an edge should update the timestamp
 	edge := IncomingEdge{
-		FromEntityID: "source-entity-1",
-		EdgeType:     "POWERED_BY",
+		FromEntityID: sourceID,
+		EdgeType:     "graph.relation.powered-by",
 		Weight:       1.0,
 		UpdatedAt:    time.Now(),
 	}
@@ -282,7 +307,7 @@ func TestIncomingEdgesUpdatedAtModification(t *testing.T) {
 	newTime := ie.UpdatedAt
 
 	// Removing an edge should also update the timestamp
-	ie.RemoveIncomingEdge("source-entity-1", "POWERED_BY")
+	ie.RemoveIncomingEdge(sourceID, "graph.relation.powered-by")
 
 	if !ie.UpdatedAt.After(newTime) {
 		t.Error("expected UpdatedAt to be updated after removing edge")

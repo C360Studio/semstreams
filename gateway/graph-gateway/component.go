@@ -41,6 +41,7 @@ import (
 	"github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -1719,15 +1720,37 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 	// Unwrap entities envelope for collection responses (e.g. graph.query.prefix)
 	// Internal NATS APIs return {"entities": [...]} for consistency; GraphQL expects raw arrays
 	if subject == "graph.query.prefix" {
-		var envelope struct {
-			Entities json.RawMessage `json:"entities"`
+		unwrapped, err := validateAndUnwrapPrefixResponse(resp)
+		if err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			c.writeGraphQLError(w, http.StatusInternalServerError, err.Error())
+			return
 		}
-		if err := json.Unmarshal(resp, &envelope); err == nil && len(envelope.Entities) > 0 {
-			resp = envelope.Entities
-		}
+		resp = unwrapped
 	}
 
 	c.writeGraphQLSuccessWithExtensions(w, subject, resp, extensions)
+}
+
+func validateAndUnwrapPrefixResponse(data []byte) ([]byte, error) {
+	var response graph.PrefixQueryResponse
+	if err := json.Unmarshal(data, &response); err != nil {
+		return nil, fmt.Errorf("decode graph.query.prefix response: %w", err)
+	}
+	if err := graph.ValidateDecodedEntityStates(response.Entities); err != nil {
+		return nil, fmt.Errorf("validate graph.query.prefix response: %w", err)
+	}
+
+	var envelope struct {
+		Entities json.RawMessage `json:"entities"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		return nil, fmt.Errorf("unwrap graph.query.prefix response: %w", err)
+	}
+	if len(envelope.Entities) == 0 {
+		return data, nil
+	}
+	return envelope.Entities, nil
 }
 
 // handleGraphQL handles GraphQL requests
@@ -1780,6 +1803,11 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	mergedVars := mergeVariables(inlineArgs, gqlReq.Variables)
 
 	payload := c.transformVariablesToNATSPayload(mergedVars, subject)
+	if err := validateGatewayPrefixPayload(subject, payload); err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		c.writeGraphQLError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	// For search queries, classify the query text and merge extracted options.
 	// When classification succeeds, capture the result for inclusion in the GraphQL
@@ -1833,6 +1861,22 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	}
 
 	c.handleNATSResponseWithExtensions(w, subject, resp, extensions)
+}
+
+func validateGatewayPrefixPayload(subject string, payload map[string]interface{}) error {
+	if subject != "graph.query.prefix" && subject != "graph.query.hierarchyStats" {
+		return nil
+	}
+	prefix, ok := payload["prefix"].(string)
+	if !ok {
+		return errs.WrapInvalid(errs.ErrInvalidData, "GraphGateway", "validateGatewayPrefixPayload", "prefix must be a string")
+	}
+	// Both gateway prefix resolvers preserve their established explicit empty
+	// match-all sentinel. Every non-empty value uses the shared prefix grammar.
+	if prefix == "" {
+		return nil
+	}
+	return semtypes.ValidateEntityIDPrefix(prefix)
 }
 
 // handleMCP handles MCP requests

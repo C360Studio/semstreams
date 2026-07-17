@@ -524,8 +524,8 @@ compatibility shim. This is that guidance for this specific change:
   that makes CAS unnecessary here specifically.
 - The "fixed 7-token key" framing (and the GH #433 `*.<entityID>` bonus
   filter it enables) assumes entity IDs are always exactly 6 dot-tokens
-  with no embedded dots per token — true today (`entityIDRegex`,
-  `processor/graph-ingest/component.go`) and this design's read/write paths
+  with no embedded dots per token — enforced by the canonical six-position
+  `pkg/types` entity-ID contract — and this design's read/write paths
   don't actually depend on that arity (they strip the fixed hash prefix
   and take everything after as the entity ID, whatever its length), so
   this assumption affects only the advertised GH #433 bonus, not this

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -35,9 +36,9 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 
 	entity := &EntityState{Triples: []message.Triple{
 		{Predicate: "valid.fact.name"},
-		{Predicate: "bad.two"},
-		{Predicate: "bad.two"},
-		{Predicate: "bad.fact.has_underscore"},
+		{Predicate: "bad.two"},                 // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+		{Predicate: "bad.two"},                 // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
+		{Predicate: "bad.fact.has_underscore"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.fact.has_underscore","reason":"segment_character"}
 	}}
 
 	err := ValidateEntityPredicates(entity)
@@ -46,8 +47,8 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 		t.Fatalf("ValidateEntityPredicates() error = %T %v, want *EntityPredicateContractError", err, err)
 	}
 	want := []InvalidEntityPredicate{
-		{Predicate: "bad.fact.has_underscore", Reason: vocabulary.PredicateReasonSegmentCharacter},
-		{Predicate: "bad.two", Reason: vocabulary.PredicateReasonArity},
+		{Predicate: "bad.fact.has_underscore", Reason: vocabulary.PredicateReasonSegmentCharacter}, // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.fact.has_underscore","reason":"segment_character"}
+		{Predicate: "bad.two", Reason: vocabulary.PredicateReasonArity},                            // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 	}
 	if len(contractErr.Violations) != len(want) {
 		t.Fatalf("violations = %#v, want %#v", contractErr.Violations, want)
@@ -62,7 +63,7 @@ func TestValidateEntityPredicatesReportsAllUniqueViolations(t *testing.T) {
 func TestMarshalEntityStateRejectsInvalidFinalCandidate(t *testing.T) {
 	t.Parallel()
 
-	entity := &EntityState{Triples: []message.Triple{{Predicate: "legacy.invalid_name"}}}
+	entity := &EntityState{Triples: []message.Triple{{Predicate: "legacy.invalid_name"}}} // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.invalid_name","reason":"arity"}
 	data, err := MarshalEntityState(entity)
 	if err == nil {
 		t.Fatal("MarshalEntityState() error = nil, want predicate contract error")
@@ -88,7 +89,7 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 		},
 		{
 			name:   "noncanonical predicate",
-			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"acme.ops.test.system.widget.001","predicate":"bad.two"}]}`),
+			data:   []byte(`{"id":"acme.ops.test.system.widget.001","triples":[{"subject":"acme.ops.test.system.widget.001","predicate":"bad.two"}]}`), // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 			reason: GraphStateReasonNoncanonicalPredicate,
 		},
 	}
@@ -96,6 +97,13 @@ func TestUnmarshalEntityStateReturnsTypedResetReason(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var entity EntityState
 			err := UnmarshalEntityState(tt.data, &entity)
+			var classified *errs.ClassifiedError
+			if !errors.As(err, &classified) {
+				t.Fatalf("UnmarshalEntityState() error = %T %v, want *errs.ClassifiedError", err, err)
+			}
+			if classified.Class != errs.ErrorFatal || classified.Code != ErrorCodeGraphStateResetRequired {
+				t.Fatalf("classification = %s/%q, want fatal/%q", classified.Class, classified.Code, ErrorCodeGraphStateResetRequired)
+			}
 			var stateErr *StateContractError
 			if !errors.As(err, &stateErr) {
 				t.Fatalf("UnmarshalEntityState() error = %T %v, want *StateContractError", err, err)
@@ -198,7 +206,7 @@ func TestValidateEntityStateContractDeterministicPrecedence(t *testing.T) {
 		ID: "bad",
 		Triples: []message.Triple{{
 			Subject:   "also-bad",
-			Predicate: "bad.two",
+			Predicate: "bad.two", // predicate-audit:invalid {"kind":"stored-predicate","value":"bad.two","reason":"arity"}
 			Object:    42,
 			Datatype:  message.EntityReferenceDatatype,
 		}},
@@ -267,3 +275,95 @@ func TestAuthoritativeEntityStateContractRejectsNilCandidate(t *testing.T) {
 		t.Fatalf("MarshalEntityState(nil) = %q, %v; want nil bytes and error", data, err)
 	}
 }
+
+func TestValidateDecodedEntityStateCollectionsRejectWholeReply(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	tests := []struct {
+		name     string
+		entities []EntityState
+		field    EntityStateContractField
+	}{
+		{
+			name: "root",
+			entities: []EntityState{
+				{ID: validID},
+				{ID: invalidEntityID},
+			},
+			field: EntityStateContractFieldID,
+		},
+		{
+			name: "subject",
+			entities: []EntityState{{
+				ID:      validID,
+				Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}},
+			}},
+			field: EntityStateContractFieldSubject,
+		},
+		{
+			name: "reference",
+			entities: []EntityState{{
+				ID: validID,
+				Triples: []message.Triple{{
+					Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
+				}},
+			}},
+			field: EntityStateContractFieldReference,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := ValidateDecodedEntityStates(tt.entities)
+			assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+			var contractErr *EntityStateContractError
+			if !errors.As(err, &contractErr) || contractErr.Field != tt.field {
+				t.Fatalf("error = %T %v, want field %q", err, err, tt.field)
+			}
+		})
+	}
+
+	valid := []EntityState{{ID: validID}}
+	if err := ValidateDecodedEntityStates(valid); err != nil {
+		t.Fatalf("ValidateDecodedEntityStates(valid) error = %v", err)
+	}
+	pointers := []*EntityState{&valid[0], nil}
+	err := ValidateDecodedEntityStatePointers(pointers)
+	assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+}
+
+func TestValidateDecodedEntityIDsRejectsWholeReply(t *testing.T) {
+	t.Parallel()
+
+	invalidEntityID := "bad"
+	err := ValidateDecodedEntityIDs([]string{
+		"acme.ops.test.system.widget.001",
+		invalidEntityID,
+	})
+	assertGraphResetContract(t, err, GraphStateReasonNoncanonicalEntityID)
+}
+
+func assertGraphResetContract(t *testing.T, err error, reason StateResetReason) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("error = nil, want graph reset contract")
+	}
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) {
+		t.Fatalf("error = %T %v, want *errs.ClassifiedError", err, err)
+	}
+	if classified.Class != errs.ErrorFatal || classified.Code != ErrorCodeGraphStateResetRequired {
+		t.Fatalf("classification = %s/%q, want fatal/%q", classified.Class, classified.Code, ErrorCodeGraphStateResetRequired)
+	}
+	var stateErr *StateContractError
+	if !errors.As(err, &stateErr) || stateErr.Reason != reason {
+		t.Fatalf("error = %T %v, want reason %q", err, err, reason)
+	}
+}
+
+// entity-id-audit:classify intentional-malformed "bad" line=283 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity aggregate root subject and reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=340 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity identity-only aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=140 column=32 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed root contract rejection
+// entity-id-audit:classify intentional-malformed "bad" line=206 column=7 surface=go-field:EntityState.ID entity_id_invalid:arity verifies deterministic root-before-subject rejection

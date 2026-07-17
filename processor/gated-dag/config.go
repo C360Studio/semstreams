@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -56,9 +57,10 @@ type Config struct {
 	// the framework default when this is left at the default (see component.go).
 	FanOutWorkflow string `json:"fan_out_workflow,omitempty"`
 
-	// UnitEntityPrefix is the graph.query.prefix scope read authoritatively each
-	// evaluation — the blast radius of one fan-out. REQUIRED (no default: it is
-	// the set of entities this executor will act on).
+	// UnitEntityPrefix is the canonical one-to-six-token literal
+	// graph.query.prefix scope read authoritatively each evaluation — the blast
+	// radius of one fan-out. REQUIRED (no default: it is the set of entities this
+	// executor will act on).
 	UnitEntityPrefix string `json:"unit_entity_prefix"`
 
 	// DispatchSubject is published (with the unit entity ID as a reference, never
@@ -217,11 +219,19 @@ func (c Config) Validate() error {
 	if c.UnitEntityPrefix == "" {
 		return fmt.Errorf("unit_entity_prefix is required (it scopes the unit set this executor reads)")
 	}
+	if err := semtypes.ValidateEntityIDPrefix(c.UnitEntityPrefix); err != nil {
+		return fmt.Errorf("unit_entity_prefix must be a canonical one-to-six-token literal entity prefix: %w", err)
+	}
 	if c.DispatchSubject == "" {
 		return fmt.Errorf("dispatch_subject is required (it is where a dispatchable unit's reference is published)")
 	}
 	if c.FanOutWorkflow == "" {
 		return fmt.Errorf("fan_out_workflow must not be empty")
+	}
+	if c.FanOutInstanceID != "" {
+		if err := semtypes.ValidateEntityID(c.FanOutInstanceID); err != nil {
+			return fmt.Errorf("fan_out_instance_id must be a canonical six-part literal entity ID: %w", err)
+		}
 	}
 	// The framework-owned FanOut instance lifecycle uses the framework FanOut
 	// Participant type, whose Workflow() is the default name. Owning an instance

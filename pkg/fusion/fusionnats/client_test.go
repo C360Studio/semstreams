@@ -187,7 +187,6 @@ func TestResolve_EmptyPrefixRemainsMatchAll(t *testing.T) {
 func TestResolve_Semantic(t *testing.T) {
 	resp := map[string]any{"results": []map[string]any{
 		{"entity_id": "a.b.c.d.e.1", "similarity": 0.9},
-		{"entity_id": "", "similarity": 0.1}, // empty IDs are dropped
 		{"entity_id": "a.b.c.d.e.2", "similarity": 0.8},
 	}}
 	fake := &fakeRequester{resp: mustJSON(t, resp)}
@@ -375,16 +374,92 @@ func TestEntities_EmptyShortCircuits(t *testing.T) {
 	}
 }
 
+func TestAuthoritativeRepliesRejectPoisonBeforeProjection(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	tests := []struct {
+		name string
+		resp any
+		call func(*Client) (any, error)
+	}{
+		{
+			name: "prefix malformed root",
+			resp: graph.PrefixQueryResponse{Entities: []graph.EntityState{{ID: validID}, {ID: invalidEntityID}}},
+			call: func(c *Client) (any, error) {
+				return c.Resolve(context.Background(), fusion.ResolveQuery{Query: "acme.ops", Mode: fusion.ResolveModePrefix, Limit: 10})
+			},
+		},
+		{
+			name: "entity malformed subject",
+			resp: graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: invalidEntityID, Predicate: "test.state.value"}}},
+			call: func(c *Client) (any, error) {
+				return c.Entity(context.Background(), validID)
+			},
+		},
+		{
+			name: "batch malformed reference",
+			resp: map[string]any{"entities": []graph.EntityState{
+				{ID: validID},
+				{ID: validID, Triples: []message.Triple{{
+					Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
+				}}},
+			}},
+			call: func(c *Client) (any, error) {
+				return c.Entities(context.Background(), []string{validID})
+			},
+		},
+		{
+			name: "semantic malformed entity id",
+			resp: map[string]any{"results": []map[string]any{{"entity_id": validID}, {"entity_id": invalidEntityID}}},
+			call: func(c *Client) (any, error) {
+				return c.Resolve(context.Background(), fusion.ResolveQuery{Query: "widget", Mode: fusion.ResolveModeNL, Limit: 10})
+			},
+		},
+		{
+			name: "relationship malformed endpoint",
+			resp: []map[string]any{{
+				"from_entity_id": validID, "to_entity_id": invalidEntityID, "edge_type": "test.state.target",
+			}},
+			call: func(c *Client) (any, error) {
+				return c.Neighbors(context.Background(), validID, nil, fusion.Outgoing)
+			},
+		},
+		{
+			name: "name match malformed entity id",
+			resp: graph.NewQueryResponse(graph.NameData{Matches: []graph.NameMatch{{EntityID: invalidEntityID, MatchedName: "Widget"}}}),
+			call: func(c *Client) (any, error) {
+				return c.Names(context.Background(), "Widget", 10)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := New(&fakeRequester{resp: mustJSON(t, tt.resp)}, time.Second)
+			got, err := tt.call(client)
+			require.Error(t, err)
+			assert.True(t, graph.IsStateContractError(err))
+			assert.Nil(t, got, "no partial projection may escape")
+			var classified *errs.ClassifiedError
+			require.ErrorAs(t, err, &classified)
+			assert.Equal(t, errs.ErrorFatal, classified.Class)
+			assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
+		})
+	}
+}
+
 func TestNeighbors_OutgoingFiltersPredicates(t *testing.T) {
 	resp := []map[string]any{
-		{"from_entity_id": "seed", "to_entity_id": "callee1", "edge_type": "code.calls"},
-		{"from_entity_id": "seed", "to_entity_id": "other", "edge_type": "code.imports"},
-		{"from_entity_id": "seed", "to_entity_id": "callee2", "edge_type": "code.calls"},
+		{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.callee1", "edge_type": "code.calls"},
+		{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.other", "edge_type": "code.imports"},
+		{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.callee2", "edge_type": "code.calls"},
 	}
 	fake := &fakeRequester{resp: mustJSON(t, resp)}
 	c := New(fake, time.Second)
 
-	edges, err := c.Neighbors(context.Background(), "seed", []string{"code.calls"}, fusion.Outgoing)
+	edges, err := c.Neighbors(context.Background(), "a.b.c.d.e.seed", []string{"code.calls"}, fusion.Outgoing)
 	if err != nil {
 		t.Fatalf("Neighbors: %v", err)
 	}
@@ -401,19 +476,19 @@ func TestNeighbors_OutgoingFiltersPredicates(t *testing.T) {
 		t.Fatalf("got %d edges, want 2 (code.imports filtered out)", len(edges))
 	}
 	// outgoing target is to_entity_id
-	if edges[0].Target != "callee1" || edges[0].Predicate != "code.calls" {
+	if edges[0].Target != "a.b.c.d.e.callee1" || edges[0].Predicate != "code.calls" {
 		t.Errorf("edge[0] = %+v, want callee1/code.calls", edges[0])
 	}
 }
 
 func TestNeighbors_IncomingTargetsFromEnd(t *testing.T) {
 	resp := []map[string]any{
-		{"from_entity_id": "caller1", "to_entity_id": "seed", "edge_type": "code.calls"},
+		{"from_entity_id": "a.b.c.d.e.caller1", "to_entity_id": "a.b.c.d.e.seed", "edge_type": "code.calls"},
 	}
 	fake := &fakeRequester{resp: mustJSON(t, resp)}
 	c := New(fake, time.Second)
 
-	edges, err := c.Neighbors(context.Background(), "seed", []string{"code.calls"}, fusion.Incoming)
+	edges, err := c.Neighbors(context.Background(), "a.b.c.d.e.seed", []string{"code.calls"}, fusion.Incoming)
 	if err != nil {
 		t.Fatalf("Neighbors: %v", err)
 	}
@@ -422,20 +497,20 @@ func TestNeighbors_IncomingTargetsFromEnd(t *testing.T) {
 	if req["direction"] != "incoming" {
 		t.Errorf("direction = %q, want incoming", req["direction"])
 	}
-	if len(edges) != 1 || edges[0].Target != "caller1" {
+	if len(edges) != 1 || edges[0].Target != "a.b.c.d.e.caller1" {
 		t.Fatalf("incoming target should be from_entity_id; got %+v", edges)
 	}
 }
 
 func TestNeighbors_NoPredicatesMeansNoFilter(t *testing.T) {
 	resp := []map[string]any{
-		{"from_entity_id": "seed", "to_entity_id": "x", "edge_type": "a"},
-		{"from_entity_id": "seed", "to_entity_id": "y", "edge_type": "b"},
+		{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.x", "edge_type": "a"},
+		{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.y", "edge_type": "b"},
 	}
 	fake := &fakeRequester{resp: mustJSON(t, resp)}
 	c := New(fake, time.Second)
 
-	edges, err := c.Neighbors(context.Background(), "seed", nil, fusion.Outgoing)
+	edges, err := c.Neighbors(context.Background(), "a.b.c.d.e.seed", nil, fusion.Outgoing)
 	if err != nil {
 		t.Fatalf("Neighbors: %v", err)
 	}
@@ -446,10 +521,10 @@ func TestNeighbors_NoPredicatesMeansNoFilter(t *testing.T) {
 
 func TestNames_DedupesAndCaps(t *testing.T) {
 	fake := &fakeRequester{resp: mustJSON(t, graph.NewQueryResponse(graph.NameData{Matches: []graph.NameMatch{
-		{EntityID: "1", MatchedName: "Widget"},
-		{EntityID: "2", MatchedName: "Widget"}, // dup name, distinct entity
-		{EntityID: "3", MatchedName: "Gadget"},
-		{EntityID: "4", MatchedName: "Gizmo"},
+		{EntityID: "a.b.c.d.e.1", MatchedName: "Widget"},
+		{EntityID: "a.b.c.d.e.2", MatchedName: "Widget"}, // dup name, distinct entity
+		{EntityID: "a.b.c.d.e.3", MatchedName: "Gadget"},
+		{EntityID: "a.b.c.d.e.4", MatchedName: "Gizmo"},
 	}}))}
 	c := New(fake, time.Second)
 
@@ -483,3 +558,5 @@ func equalStrings(a, b []string) bool {
 	}
 	return true
 }
+
+// entity-id-audit:classify intentional-malformed "bad" line=381 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures

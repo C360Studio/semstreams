@@ -4,6 +4,7 @@
   "name": "Retry on Insufficient Evidence",
   "description": "When a researcher loop fails, retry with a broader search strategy. The retry agent receives the failed loop id as a reference — it uses read_loop_result to inspect what the previous attempt produced before choosing a different approach. Bounded by max_iterations + a when guard. See ADR-028.",
   "enabled": true,
+  "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [
     {
       "field": "agent.loop.role",

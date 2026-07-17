@@ -70,7 +70,7 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 	})
 	subscribe(t, ctx, nc, subjectRelationships, func(_ []byte) ([]byte, error) {
 		return json.Marshal([]map[string]any{
-			{"from_entity_id": "seed", "to_entity_id": "callee", "edge_type": "code.calls"},
+			{"from_entity_id": "a.b.c.d.e.seed", "to_entity_id": "a.b.c.d.e.callee", "edge_type": "code.calls"},
 		})
 	})
 
@@ -121,10 +121,10 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 	})
 
 	t.Run("Neighbors", func(t *testing.T) {
-		edges, err := c.Neighbors(ctx, "seed", []string{"code.calls"}, fusion.Outgoing)
+		edges, err := c.Neighbors(ctx, "a.b.c.d.e.seed", []string{"code.calls"}, fusion.Outgoing)
 		require.NoError(t, err)
 		require.Len(t, edges, 1)
-		require.Equal(t, "callee", edges[0].Target)
+		require.Equal(t, "a.b.c.d.e.callee", edges[0].Target)
 		require.Equal(t, "code.calls", edges[0].Predicate)
 	})
 

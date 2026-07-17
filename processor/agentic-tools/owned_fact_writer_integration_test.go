@@ -18,6 +18,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
@@ -80,10 +81,6 @@ func ofwTestClient(t *testing.T) *natsclient.Client {
 	return tc.Client
 }
 
-func ownedTriple(entityID, predicate, object string) message.Triple {
-	return message.Triple{Subject: entityID, Predicate: predicate, Object: object, Confidence: 1.0, Timestamp: time.Now()}
-}
-
 // --- The motivating bug: a re-plan that SHRINKS the package must not leave
 // stale same-prefix task facts behind, and must not touch sibling owners. ---
 
@@ -102,10 +99,10 @@ func TestIntegration_OwnedFactWriter_ReplaceShrinksPackage(t *testing.T) {
 		ID:          entityID,
 		MessageType: birthType,
 		Triples: []message.Triple{
-			ownedTriple(entityID, "change.demo.task-1", "alpha"),
-			ownedTriple(entityID, "change.demo.task-2", "beta"),
-			ownedTriple(entityID, "change.demo.task-3", "gamma"),
-			ownedTriple(entityID, "lifecycle.status.phase", "planning"), // sibling, must survive
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "task-1"), Object: "alpha", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "task-2"), Object: "beta", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "task-3"), Object: "gamma", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "lifecycle", "status", "phase"), Object: "planning", Confidence: 1.0, Timestamp: time.Now()}, // sibling, must survive
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -119,7 +116,7 @@ func TestIntegration_OwnedFactWriter_ReplaceShrinksPackage(t *testing.T) {
 	assert.Equal(t, []string{"change.demo.task-1", "change.demo.task-2", "change.demo.task-3"}, owned,
 		"read-back must return exactly the owned-prefix predicates, sorted")
 
-	revised := []message.Triple{ownedTriple(entityID, "change.demo.task-1", "alpha-revised")}
+	revised := []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "task-1"), Object: "alpha-revised", Confidence: 1.0, Timestamp: time.Now()}}
 	require.NoError(t, w.ReplaceTriples(ctx, entityID, revised, owned),
 		"clear the whole owned prefix, then write the revised package")
 
@@ -149,10 +146,10 @@ func TestIntegration_OwnedFactWriter_ReadOwnedPredicatesPrefixScoped(t *testing.
 	require.NoError(t, gi.CreateEntity(ctx, &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			ownedTriple(entityID, "change.demo.design", "d"),
-			ownedTriple(entityID, "change.demo.task-1", "a"),
-			ownedTriple(entityID, "change.other.task-1", "x"), // different slug
-			ownedTriple(entityID, "core.identity.type", "run"),
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "design"), Object: "d", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "demo", "task-1"), Object: "a", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "change", "other", "task-1"), Object: "x", Confidence: 1.0, Timestamp: time.Now()}, // different slug
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "core", "identity", "type"), Object: "run", Confidence: 1.0, Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -176,7 +173,7 @@ func TestIntegration_OwnedFactWriter_ReplaceMustExist(t *testing.T) {
 	const missing = "acme.spec.openspec.run.change.404"
 	w := agentictools.NewNATSOwnedFactWriter(natsClient)
 	err := w.ReplaceTriples(ctx, missing,
-		[]message.Triple{ownedTriple(missing, "change.demo.task-1", "a")}, nil)
+		[]message.Triple{{Subject: missing, Predicate: semantictest.Predicate(t, "change", "demo", "task-1"), Object: "a", Confidence: 1.0, Timestamp: time.Now()}}, nil)
 	require.Error(t, err, "replace on a non-existent entity must error (no auto-vivify)")
 	assert.Contains(t, err.Error(), gtypes.ErrorCodeEntityNotFound,
 		"the handler's entity_not_found code must surface to the caller")

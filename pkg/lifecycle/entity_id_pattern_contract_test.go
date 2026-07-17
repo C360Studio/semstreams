@@ -21,8 +21,8 @@ func TestWorkflowValidateUsesCanonicalEntityPatterns(t *testing.T) {
 			w.EntityIDPattern = "a.b.c.d.e.foo*"
 		}},
 		{name: "reference leading underscore", configure: func(w *Workflow) {
-			w.ReferencePredicates = []ReferenceSpec{{
-				Predicate: "mission.annotation.note", TargetPattern: "a.b.c.d.e._bad",
+			w.ReferencePredicates = []ReferenceSpec{{ // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
+				Predicate: "mission.annotation.note", TargetPattern: "a.b.c.d.e._bad", // entity-id-audit:classify intentional-malformed "a.b.c.d.e._bad" line=25 column=58 surface=go-field:.TargetPattern entity_id_pattern_invalid:first_byte leading underscore rejection fixture
 			}}
 		}},
 	}

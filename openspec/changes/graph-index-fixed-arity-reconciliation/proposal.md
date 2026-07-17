@@ -91,6 +91,10 @@ reader, format coexistence, online/in-place migration, or rollback contract.
   reference validation, independent replay/direct-NATS poison failure, and the final local quality/e2e reruns. Every
   owned-reference source/configuration/fixture update, clean NATS wipe/reseed, product e2e, and predicate archive gate
   remains required before v1 or any raw-key release; no persisted beta-state migration is required or supported.
+- PR #534 (`c8f0b92e`, final branch head `6ef169dd`) supplies the entity-ID authoritative write-seam evidence only.
+  This change still owns complete production CONTEXT/OUTGOING and remaining graph-index path controls, pinned
+  real-NATS maximum-key/filter exact-match conformance, and the activation gate. Those obligations are moved here,
+  not waived; open entity-ID replay, local-source, cutover, and final-quality prerequisites remain shared blockers.
 - The merged `graph-index-hardening` change must be corrected and archived before this change modifies
   production index behavior or seeds the new baseline `graph-index` specification. That governance work does
   not block benchmark-only code.

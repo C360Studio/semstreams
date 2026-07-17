@@ -121,7 +121,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
-        "entity_watch_patterns": ["c360.>"],
+        "entity_watch_buckets": {"ENTITY_STATES": ["c360.*.*.*.*.*"]},
         "ports": {
           "inputs": [
             {

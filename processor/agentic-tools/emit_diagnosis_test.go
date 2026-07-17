@@ -115,14 +115,14 @@ func TestEmitDiagnosisExecutor_HappyPath(t *testing.T) {
 		t.Fatalf("expected 7 triples, got %d", len(pub.triples))
 	}
 
-	byPredicate := map[string][]any{}
+	facts := map[string][]any{}
 	for _, tr := range pub.triples {
-		byPredicate[tr.Predicate] = append(byPredicate[tr.Predicate], tr.Object)
+		facts[tr.Predicate] = append(facts[tr.Predicate], tr.Object)
 	}
 
 	assertTriple := func(pred, wantObj string) {
 		t.Helper()
-		vals := byPredicate[pred]
+		vals := facts[pred]
 		if len(vals) == 0 {
 			t.Errorf("no triple with predicate %q", pred)
 			return

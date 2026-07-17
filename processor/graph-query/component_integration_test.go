@@ -277,7 +277,7 @@ func TestIntegration_PathSearch_Structure(t *testing.T) {
 
 	// Test PathSearch request structure
 	req := PathSearchRequest{
-		StartEntity: "test.entity.001",
+		StartEntity: "test.fixture.graph.query.entity.001",
 		MaxDepth:    3,
 	}
 
@@ -579,7 +579,8 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	// Test enrichCommunitySummaries — this calls resolveEntityLabels which
 	// requires loadEntities (no graph-ingest running), but enrichment should
 	// still populate MemberCount and gracefully handle label resolution failure.
-	enriched := graphQuery.enrichCommunitySummaries(ctx, commSummaries)
+	enriched, err := graphQuery.enrichCommunitySummaries(ctx, commSummaries)
+	require.NoError(t, err)
 	assert.Len(t, enriched, 2)
 	for _, cs := range enriched {
 		assert.Greater(t, cs.MemberCount, 0, "MemberCount should be populated after enrichment")
@@ -646,7 +647,7 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 						"id": "acme.ops.robotics.gcs.drone.001",
 						"triples": []map[string]any{
 							{"subject": "acme.ops.robotics.gcs.drone.001", "predicate": "dc.terms.title", "object": "Alpha Drone"},
-							{"subject": "acme.ops.robotics.gcs.drone.001", "predicate": "drone.status", "object": "active"},
+							{"subject": "acme.ops.robotics.gcs.drone.001", "predicate": "drone.state.status", "object": "active"},
 						},
 					},
 				},
@@ -680,7 +681,7 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 	response := GlobalSearchResponse{
 		Count: len(entityIDs),
 	}
-	graphQuery.enrichGlobalResponse(ctx, &response, "drone operations", entityIDs)
+	require.NoError(t, graphQuery.enrichGlobalResponse(ctx, &response, "drone operations", entityIDs))
 
 	assert.NotEmpty(t, response.CommunitySummaries, "CommunitySummaries should be populated")
 	assert.NotEmpty(t, response.Answer, "Answer should be synthesized")

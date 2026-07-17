@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -59,7 +60,7 @@ func typedObjectCases() []typedObjectCase {
 func TestExecuteAddTriple_SubstitutedObject_PreservesType(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	entityID := "c360.platform.robotics.mav1.drone.001"
+	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 
 	for _, tc := range typedObjectCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -71,14 +72,14 @@ func TestExecuteAddTriple_SubstitutedObject_PreservesType(t *testing.T) {
 			entity := &gtypes.EntityState{
 				ID: entityID,
 				Triples: []message.Triple{
-					{Subject: entityID, Predicate: "source.value", Object: tc.sourceObj},
+					{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "source", "value"), Object: tc.sourceObj},
 				},
 			}
 
 			action := Action{
 				Type:      ActionTypeAddTriple,
-				Predicate: "dest.value",
-				Object:    "$entity.triple.source.value",
+				Predicate: semantictest.Predicate(t, "test", "dest", "value"),
+				Object:    "$entity.triple.test.source.value",
 			}
 
 			_, err := executor.ExecuteAddTriple(ctx, action, &ExecutionContext{
@@ -108,7 +109,7 @@ func TestExecuteAddTriple_SubstitutedObject_PreservesType(t *testing.T) {
 func TestExecuteUpdateTriple_SubstitutedObject_PreservesType(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	entityID := "c360.platform.robotics.mav1.drone.001"
+	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 
 	for _, tc := range typedObjectCases() {
 		t.Run(tc.name, func(t *testing.T) {
@@ -119,14 +120,14 @@ func TestExecuteUpdateTriple_SubstitutedObject_PreservesType(t *testing.T) {
 			entity := &gtypes.EntityState{
 				ID: entityID,
 				Triples: []message.Triple{
-					{Subject: entityID, Predicate: "source.value", Object: tc.sourceObj},
+					{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "source", "value"), Object: tc.sourceObj},
 				},
 			}
 
 			action := Action{
 				Type:      ActionTypeUpdateTriple,
-				Predicate: "dest.value",
-				Object:    "$entity.triple.source.value",
+				Predicate: semantictest.Predicate(t, "test", "dest", "value"),
+				Object:    "$entity.triple.test.source.value",
 			}
 
 			err := executor.Execute(ctx, action, &ExecutionContext{
@@ -153,21 +154,21 @@ func TestExecuteUpdateTriple_SubstitutedObject_PreservesType(t *testing.T) {
 func TestExecuteAddTriple_MixedTemplate_FallsBackToString(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	entityID := "c360.platform.robotics.mav1.drone.001"
+	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 
 	mock := &mockTripleMutator{}
 	executor := NewActionExecutorWithMutator(nil, mock)
 	entity := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "source.value", Object: float64(0.5)},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "source", "value"), Object: float64(0.5)},
 		},
 	}
 
 	action := Action{
 		Type:      ActionTypeAddTriple,
-		Predicate: "dest.value",
-		Object:    "value-is-$entity.triple.source.value-end",
+		Predicate: semantictest.Predicate(t, "test", "dest", "value"),
+		Object:    "value-is-$entity.triple.test.source.value-end",
 	}
 
 	_, err := executor.ExecuteAddTriple(ctx, action, &ExecutionContext{
@@ -195,12 +196,12 @@ func TestExecuteAddTriple_LiteralObject_PreservesString(t *testing.T) {
 
 	action := Action{
 		Type:      ActionTypeAddTriple,
-		Predicate: "workflow.phase",
+		Predicate: semantictest.Predicate(t, "test", "workflow", "phase"),
 		Object:    "escalated",
 	}
 
 	_, err := executor.ExecuteAddTriple(ctx, action, &ExecutionContext{
-		EntityID: "c360.platform.robotics.mav1.drone.001",
+		EntityID: semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001"),
 	})
 	require.NoError(t, err)
 
@@ -220,7 +221,7 @@ func TestExecuteAddTriple_LiteralObject_PreservesString(t *testing.T) {
 func TestExecuteAddTriple_FirstMatchSemantic_MixedTypes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	entityID := "c360.platform.robotics.mav1.drone.001"
+	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
 	mock := &mockTripleMutator{}
 	executor := NewActionExecutorWithMutator(nil, mock)
 
@@ -230,15 +231,15 @@ func TestExecuteAddTriple_FirstMatchSemantic_MixedTypes(t *testing.T) {
 	entity := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "ambiguous", Object: float64(1.5)},
-			{Subject: entityID, Predicate: "ambiguous", Object: "second-stamp"},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "fixture", "ambiguous"), Object: float64(1.5)},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "fixture", "ambiguous"), Object: "second-stamp"},
 		},
 	}
 
 	action := Action{
 		Type:      ActionTypeAddTriple,
-		Predicate: "dest",
-		Object:    "$entity.triple.ambiguous",
+		Predicate: semantictest.Predicate(t, "test", "fixture", "dest"),
+		Object:    "$entity.triple.test.fixture.ambiguous",
 	}
 
 	_, err := executor.ExecuteAddTriple(ctx, action, &ExecutionContext{
@@ -331,14 +332,15 @@ func TestNumericCompare_AfterStringifiedObject_UsesNumericSemantics(t *testing.T
 				Enabled: true,
 				Logic:   expression.LogicAnd,
 				Conditions: []expression.ConditionExpression{
-					{Field: "metric.value", Operator: tt.operator, Value: tt.compareTo, Required: true},
+					{Field: semantictest.Predicate(t, "test", "metric", "value"), Operator: tt.operator, Value: tt.compareTo, Required: true},
 				},
 			}
 			rule, err := NewExpressionRule(def)
 			require.NoError(t, err)
 
-			entity := createTestEntityState("test.entity.id", []message.Triple{
-				{Subject: "test.entity.id", Predicate: "metric.value", Object: tt.objectVal},
+			entityID := semantictest.EntityID(t, "test", "rule", "typed", "numeric", "entity", "001")
+			entity := createTestEntityState(entityID, []message.Triple{
+				{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "metric", "value"), Object: tt.objectVal},
 			})
 
 			got := rule.EvaluateEntityState(entity)
@@ -355,20 +357,20 @@ func TestNumericCompare_AfterStringifiedObject_UsesNumericSemantics(t *testing.T
 // is locked.
 func TestSubstituteVariablesTyped_ReturnContract(t *testing.T) {
 	t.Parallel()
-	entityID := "c360.platform.robotics.mav1.drone.001"
-	relatedID := "c360.platform.fleet.alpha.fleet.001"
+	entityID := semantictest.EntityID(t, "c360", "platform", "robotics", "mav1", "drone", "001")
+	relatedID := semantictest.EntityID(t, "c360", "platform", "fleet", "alpha", "fleet", "001")
 
 	entity := &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "metric.value", Object: float64(0.83)},
-			{Subject: entityID, Predicate: "metric.active", Object: true},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "metric", "value"), Object: float64(0.83)},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "metric", "active"), Object: true},
 		},
 	}
 	related := &gtypes.EntityState{
 		ID: relatedID,
 		Triples: []message.Triple{
-			{Subject: relatedID, Predicate: "fleet.size", Object: int(7)},
+			{Subject: relatedID, Predicate: semantictest.Predicate(t, "test", "fleet", "size"), Object: int(7)},
 		},
 	}
 	ec := &ExecutionContext{
@@ -387,9 +389,9 @@ func TestSubstituteVariablesTyped_ReturnContract(t *testing.T) {
 		wantValue  any
 		wantTypeOf any // sample of expected Go type; nil when wantOK=false
 	}{
-		{"entity.triple float64", "$entity.triple.metric.value", true, float64(0.83), float64(0)},
-		{"entity.triple bool", "$entity.triple.metric.active", true, true, false},
-		{"related.triple int", "$related.triple.fleet.size", true, int(7), int(0)},
+		{"entity.triple float64", "$entity.triple.test.metric.value", true, float64(0.83), float64(0)},
+		{"entity.triple bool", "$entity.triple.test.metric.active", true, true, false},
+		{"related.triple int", "$related.triple.test.fleet.size", true, int(7), int(0)},
 		{"message scalar float", "$message.score", true, 0.42, float64(0)},
 		{"message scalar bool", "$message.flag", true, true, false},
 		{"message nested path", "$message.nested.deep", true, "value", ""},
@@ -399,14 +401,14 @@ func TestSubstituteVariablesTyped_ReturnContract(t *testing.T) {
 		{"message null value — typed nil propagates", "$message.nullable", true, nil, nil},
 		{"state.iteration int", "$state.iteration", true, int(3), int(0)},
 		{"state.max_iterations int", "$state.max_iterations", true, int(5), int(0)},
-		{"unresolved entity triple", "$entity.triple.missing", false, nil, nil},
-		{"mixed template", "prefix-$entity.triple.metric.value", false, nil, nil},
+		{"unresolved entity triple", "$entity.triple.test.fixture.missing", false, nil, nil},
+		{"mixed template", "prefix-$entity.triple.test.metric.value", false, nil, nil},
 		{"literal only", "escalated", false, nil, nil},
 		{"bare $", "$", false, nil, nil},
 		{"empty", "", false, nil, nil},
-		{"trailing space", "$entity.triple.metric.value ", false, nil, nil},
-		{"with .length suffix", "$entity.triple.metric.value.length", false, nil, nil},
-		{"with .triples suffix", "$entity.triple.metric.value.triples", false, nil, nil},
+		{"trailing space", "$entity.triple.test.metric.value ", false, nil, nil},
+		{"with .length suffix", "$entity.triple.test.metric.value.length", false, nil, nil},
+		{"with .triples suffix", "$entity.triple.test.metric.value.triples", false, nil, nil},
 		{"unsupported namespace $entity.id", "$entity.id", false, nil, nil},
 		{"unsupported namespace $now", "$now", false, nil, nil},
 	}

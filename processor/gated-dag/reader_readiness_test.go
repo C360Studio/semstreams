@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/require"
 )
 
@@ -17,6 +18,17 @@ type fakeRequester struct {
 	classifyCalls int
 	readyErr      error // when set, RequestReadyClassified fails
 	resp          []byte
+	responses     [][]byte
+	responseIndex int
+}
+
+func (f *fakeRequester) nextResponse() []byte {
+	if f.responseIndex >= len(f.responses) {
+		return f.resp
+	}
+	response := f.responses[f.responseIndex]
+	f.responseIndex++
+	return response
 }
 
 func (f *fakeRequester) RequestReadyClassified(_ context.Context, _ string, _ []byte, _, _ time.Duration) ([]byte, error) {
@@ -24,12 +36,12 @@ func (f *fakeRequester) RequestReadyClassified(_ context.Context, _ string, _ []
 	if f.readyErr != nil {
 		return nil, f.readyErr
 	}
-	return f.resp, nil
+	return f.nextResponse(), nil
 }
 
 func (f *fakeRequester) RequestClassified(_ context.Context, _ string, _ []byte, _ time.Duration) ([]byte, error) {
 	f.classifyCalls++
-	return f.resp, nil
+	return f.nextResponse(), nil
 }
 
 func newTestReader(nc requester, onNeverReady func(error)) *natsGraphReader {
@@ -85,3 +97,95 @@ func TestReader_ColdStartNeverReadyFiresSignalAndStaysUnwarmed(t *testing.T) {
 	require.Equal(t, 0, fr.classifyCalls)
 	require.Equal(t, 2, fired)
 }
+
+func TestReader_PoisonedAggregateHasNoWarmOrPartialSideEffect(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidEntityID := "bad"
+	resp, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{
+		{ID: validID},
+		{ID: validID, Triples: []message.Triple{{
+			Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
+		}}},
+	}})
+	require.NoError(t, err)
+	fr := &fakeRequester{resp: resp}
+	r := newTestReader(fr, nil)
+
+	states, err := r.ReadUnitSet(context.Background())
+	require.Error(t, err)
+	require.True(t, graph.IsStateContractError(err))
+	require.Nil(t, states, "the valid prefix of a poisoned page must not escape")
+	require.False(t, r.warmed, "poison must not change readiness state")
+	require.Equal(t, 1, fr.readyCalls)
+	require.Zero(t, fr.classifyCalls)
+}
+
+func TestReader_PoisonedSecondPageDoesNotPersistWarmState(t *testing.T) {
+	t.Parallel()
+
+	validID := "acme.ops.test.system.widget.001"
+	invalidSecondPageEntityID := "bad"
+	pageOne, err := json.Marshal(graph.PrefixQueryResponse{
+		Entities:   []graph.EntityState{{ID: validID}},
+		NextCursor: "page-two",
+	})
+	require.NoError(t, err)
+	pageTwo, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{{
+		ID: validID,
+		Triples: []message.Triple{{
+			Subject: validID, Predicate: "test.state.target", Object: invalidSecondPageEntityID, Datatype: message.EntityReferenceDatatype,
+		}},
+	}}})
+	require.NoError(t, err)
+	empty, err := json.Marshal(graph.PrefixQueryResponse{})
+	require.NoError(t, err)
+	fr := &fakeRequester{responses: [][]byte{pageOne, pageTwo, empty}}
+	r := newTestReader(fr, nil)
+
+	states, err := r.ReadUnitSet(context.Background())
+	require.Error(t, err)
+	require.True(t, graph.IsStateContractError(err))
+	require.Nil(t, states, "page one must not escape when page two poisons the aggregate")
+	require.False(t, r.warmed, "a canonical first page must not persist readiness before aggregate completion")
+	require.Equal(t, 1, fr.readyCalls, "the first cold page uses readiness")
+	require.Equal(t, 1, fr.classifyCalls, "later pages in the same call use steady-state requests")
+
+	_, err = r.ReadUnitSet(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, fr.readyCalls, "the next call must retry readiness after aggregate poison")
+	require.Equal(t, 1, fr.classifyCalls)
+	require.True(t, r.warmed)
+}
+
+func TestReader_ColdStartTruncationDoesNotPersistWarmState(t *testing.T) {
+	t.Parallel()
+
+	pageOne, err := json.Marshal(graph.PrefixQueryResponse{
+		Entities:   []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}},
+		NextCursor: "unread-page-two",
+	})
+	require.NoError(t, err)
+	empty, err := json.Marshal(graph.PrefixQueryResponse{})
+	require.NoError(t, err)
+	fr := &fakeRequester{responses: [][]byte{pageOne, empty}}
+	r := newTestReader(fr, nil)
+	r.maxUnits = 1
+
+	states, err := r.ReadUnitSet(context.Background())
+	require.NoError(t, err)
+	require.Len(t, states, 1)
+	require.False(t, r.warmed, "cursor truncation leaves an unread page and cannot persist readiness")
+	require.Equal(t, 1, fr.readyCalls)
+	require.Zero(t, fr.classifyCalls)
+
+	_, err = r.ReadUnitSet(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 2, fr.readyCalls, "the next call must restart through readiness after truncation")
+	require.Zero(t, fr.classifyCalls)
+	require.True(t, r.warmed)
+}
+
+// entity-id-audit:classify intentional-malformed "bad" line=105 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity gated DAG aggregate reference poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=129 column=31 surface=go-assignment:invalidSecondPageEntityID entity_id_invalid:arity gated DAG second-page aggregate poison fixture

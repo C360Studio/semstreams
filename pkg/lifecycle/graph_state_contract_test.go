@@ -29,7 +29,7 @@ func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
 	assertResetReason(t, err, graph.GraphStateReasonNoncanonicalPredicate)
 
 	// Sticky means later calls fail before reading, even if the offending key
-	// were repaired in place. Recovery requires the documented reset/reingest
+	// were repaired in place. Recovery requires the documented wipe/restart/reseed
 	// and process restart boundary.
 	delete(bucket.raw, entityID)
 	participant, err = mgr.Get(context.Background(), "fixture", entityID)
@@ -68,7 +68,7 @@ func TestHistoryReturnsNoPartialEventsWhenAnyRevisionIsPoisoned(t *testing.T) {
 }
 
 func poisonedLifecycleState(entityID string) []byte {
-	return []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"planning"}]}`)
+	return []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID + `","predicate":"legacy.predicate","object":"planning"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 }
 
 func assertResetReason(t *testing.T, err error, want graph.StateResetReason) {

@@ -108,6 +108,9 @@ func TestComponent_SynchronousHierarchy_IncludedBeforeWrite(t *testing.T) {
 	}
 }
 
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone" line=506 column=24 surface=go-field:.entityID entity_id_invalid:arity five-part hierarchy ID rejection fixture
+// entity-id-audit:classify intentional-malformed "c360.platform.robotics.mav1.drone.test001.extra" line=514 column=24 surface=go-field:.entityID entity_id_invalid:arity seven-part hierarchy ID rejection fixture
+
 func TestComponent_SynchronousHierarchy_SingleWrite(t *testing.T) {
 	tests := []struct {
 		name     string

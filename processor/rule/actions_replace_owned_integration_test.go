@@ -18,6 +18,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
@@ -95,7 +96,7 @@ func TestIntegration_ReplaceOwned_ReplaceExactlyOneValue(t *testing.T) {
 	require.NoError(t, gi.CreateEntity(ctx, &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: pred, Object: "initializing", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "initializing", Confidence: 1.0, Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -103,7 +104,7 @@ func TestIntegration_ReplaceOwned_ReplaceExactlyOneValue(t *testing.T) {
 
 	mutator := newTripleMutator(natsClient, nil)
 	rev, err := mutator.ReplaceOwned(ctx, "rule-1", "rule-pack.test", entityID, pred,
-		[]message.Triple{{Subject: entityID, Predicate: pred, Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
+		[]message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
 	require.NoError(t, err, "in-envelope replace against the real handler must succeed")
 	assert.Positive(t, rev, "a successful replace returns a non-zero KV revision")
 
@@ -131,9 +132,9 @@ func TestIntegration_ReplaceOwned_ClearRemovesPredicate(t *testing.T) {
 	require.NoError(t, gi.CreateEntity(ctx, &gtypes.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: pred, Object: "running", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()},
 			// A second, unrelated predicate that must survive the clear.
-			{Subject: entityID, Predicate: rulepacks.EntityIdentityType, Object: "drone", Confidence: 1.0, Timestamp: time.Now()},
+			{Subject: entityID, Predicate: semantictest.Predicate(t, "entity", "identity", "type"), Object: "drone", Confidence: 1.0, Timestamp: time.Now()},
 		},
 		Version:   1,
 		UpdatedAt: time.Now(),
@@ -165,7 +166,7 @@ func TestIntegration_ReplaceOwned_MustExist(t *testing.T) {
 	const missing = "acme.ops.robotics.gcs.drone.404"
 	mutator := newTripleMutator(natsClient, nil)
 	_, err := mutator.ReplaceOwned(ctx, "rule-1", "rule-pack.test", missing, rulepacks.WorkflowStatePhase,
-		[]message.Triple{{Subject: missing, Predicate: rulepacks.WorkflowStatePhase, Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
+		[]message.Triple{{Subject: missing, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
 	require.Error(t, err, "replace_owned on a non-existent entity must error (no auto-vivify)")
 	assert.Contains(t, err.Error(), gtypes.ErrorCodeEntityNotFound,
 		"the handler's entity_not_found code must surface to the caller")
@@ -210,7 +211,7 @@ func TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire(t *testing.T) {
 	const wantToken = "rule-pack.test#deadbeef01234567"
 	mutator := newTripleMutator(natsClient, nil)
 	_, err = mutator.ReplaceOwned(ctx, "rule-1", wantToken, entityID, rulepacks.WorkflowStatePhase,
-		[]message.Triple{{Subject: entityID, Predicate: rulepacks.WorkflowStatePhase, Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
+		[]message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
 	require.NoError(t, err, "fake responder replies success; the call must round-trip")
 
 	select {
