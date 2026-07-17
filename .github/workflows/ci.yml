@@ -114,7 +114,10 @@ jobs:
         # slowing every NATS round-trip until contention-sensitive full-stack tests
         # exhaust their wait windows or containers miss their start deadline
         # (gh#511, gh#199, and the gated-dag fullstack comment's "systemic lever").
-        run: go test -tags=integration -v -race -p 2 ./...
+        # The explicit 20m timeout is per package, so serial Docker-backed evidence
+        # within a package is not killed by Go's 10m default. -count=1 keeps this an
+        # uncached integration run suitable for release evidence.
+        run: go test -v -race -tags=integration -p 2 -timeout=20m -count=1 ./...
 
   build:
     name: Build

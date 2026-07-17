@@ -1103,9 +1103,9 @@ type entityIndexPlan struct {
 	indexed          int
 }
 
-// buildEntityIndexPlan collects and validates the complete derived-index candidate.
-// It performs no lifecycle or store I/O: callers may safely reject any late invalid
-// alias, name, context, relationship, key, filter, or value before applying a row.
+// buildEntityIndexPlan collects and validates the derived-index candidate without
+// lifecycle or store I/O. It may emit diagnostics when an optional row is skipped;
+// every required row is validated before the caller applies the plan.
 func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID string) (entityIndexPlan, error) {
 	plan := entityIndexPlan{
 		entityID:         entityID,
@@ -1129,6 +1129,13 @@ func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID strin
 		_, isVocabAlias := c.aliasPredicates[triple.Predicate]
 		if isVocabAlias || triple.Predicate == "core.identity.alias" {
 			if alias, ok := triple.Object.(string); ok && alias != "" {
+				if err := natsclient.ValidateKVLiteralKey(alias); err != nil {
+					c.logger.Warn("alias index: KV-unsafe alias skipped",
+						slog.String("entity_id", entityID),
+						slog.String("predicate", triple.Predicate),
+						slog.Any("error", err))
+					continue
+				}
 				plan.aliasWrites = append(plan.aliasWrites, aliasIndexWrite{alias: alias})
 			}
 		}
@@ -1167,11 +1174,6 @@ func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID strin
 			return entityIndexPlan{}, err
 		}
 		if err := natsclient.ValidateKVLiteralKey(predicateIndexKey(predicate, entityID)); err != nil {
-			return entityIndexPlan{}, err
-		}
-	}
-	for _, write := range plan.aliasWrites {
-		if err := natsclient.ValidateKVLiteralKey(write.alias); err != nil {
 			return entityIndexPlan{}, err
 		}
 	}
@@ -1220,6 +1222,9 @@ func (c *Component) applyEntityIndexPlan(ctx context.Context, plan entityIndexPl
 	if err := c.UpdateContextIndex(ctx, plan.entityID, plan.contextTriples); err != nil {
 		errList = append(errList, fmt.Errorf("context: %w", err))
 	}
+	// ALIAS_INDEX has no owner-complete axis and is intentionally outside
+	// replacement reconciliation. Skipping an unsafe candidate does not retract a
+	// previously stored alias for this entity; alias retirement remains explicit.
 	for _, write := range plan.aliasWrites {
 		if err := c.UpdateAliasIndex(ctx, write.alias, plan.entityID); err != nil {
 			errList = append(errList, fmt.Errorf("alias[%s]: %w", write.alias, err))
@@ -1233,10 +1238,10 @@ func (c *Component) applyEntityIndexPlan(ctx context.Context, plan entityIndexPl
 
 // processEntityUpdateFromData indexes an entity's relationships from its triples using
 // raw data. It is the core implementation used by both processEntityUpdate and
-// processEntityBatch. Returns nil on success (or a permanent, non-retryable skip such
-// as unparseable data — completing is correct there) and an aggregated error when one
-// or more REQUIRED index writes ultimately failed after retry (gh#474 P1b): the entity
-// is then marked failed, which withholds authoritative readiness until it re-indexes.
+// processEntityBatch. Returns nil on success and an error for incompatible authoritative
+// state or when one or more REQUIRED index writes ultimately fail after retry (gh#474
+// P1b). Required-write failure marks the entity failed and withholds authoritative
+// readiness until it re-indexes; incompatible state latches the reset-required contract.
 func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID string, data []byte) error {
 	var state graph.EntityState
 	if err := graph.UnmarshalEntityState(data, &state); err != nil {

@@ -83,6 +83,91 @@ Resource evidence:
 The raw layout passed every absolute representation gate. Hash-plus-catalog figures emitted by the companion run
 are comparison evidence only; no raw-versus-hash ratio or delta is a selection threshold.
 
+## Pending pre-tag owner-filter acceptance record
+
+The tables below are the required acceptance shape for the follow-up revision. Do not fill them from an uncommitted
+worktree or from an earlier decision run. Record the clean revision before executing either profile, and keep task
+`graph-index-replacement-semantics` 2.2 open until every row passes.
+
+| Provenance | Required value |
+|---|---|
+| SemStreams revision | Pending follow-up commit SHA |
+| Worktree state | Clean before both commands |
+| Run timestamp and timezone | Pending |
+| Host CPU and memory | Pending |
+| Docker client/server | Pending |
+| NATS server and image digest | `nats:2.12.4-alpine` and the pinned digest above |
+| Go SDK | `github.com/nats-io/nats.go v1.48.0` |
+
+Owner-filter latency rows use the exact output from `TestIntegration_OwnerFilterLoadHarness`. The CI shape is
+5,000 entities at four workers. The full shape is 21,000 entities at both the configured four-worker shape and the
+selected maximum of 16 workers. OUTGOING uses its exact entity key rather than a filtered lister, so its maximum
+proof appears in the maximum-key table rather than the per-worker latency table.
+
+| Store | Maximum key bytes | Owner discovery | Exact real-NATS match | Result |
+|---|---:|---|---|---|
+| PREDICATE | 451 | `*.*.*.entity6` | Pending | Pending |
+| NAME | 710 | `*.entity6.*` | Pending | Pending |
+| INCOMING | 902 | `*.*.*.*.*.*.source6.*` | Pending | Pending |
+| CONTEXT | 710 | `entity6.*.*` | Pending | Pending |
+| OUTGOING | 256 | Exact `entity6` key | Pending | Pending |
+
+The owner harness emits one `phase=seed` record before exercising either worker shape. Preserve it as the ingest
+baseline for task 2.2; it is distinct from the raw-versus-hash predicate candidate seed measurement below.
+
+| Profile | Entities | Seed rows | Elapsed | Throughput | Result |
+|---|---:|---:|---:|---:|---|
+| 5k CI | 5,000 | Pending | Pending | Pending | Pending |
+| 21k full | 21,000 | Pending | Pending | Pending | Pending |
+
+| Profile | Workers | Store | p50 | p95 | p99 | Max | Result |
+|---|---:|---|---:|---:|---:|---:|---|
+| 5k CI | 4 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | NAME | Pending | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | INCOMING | Pending | Pending | Pending | Pending | Pending |
+| 5k CI | 4 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 4 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 4 | NAME | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 4 | INCOMING | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 4 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 16 | PREDICATE | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 16 | NAME | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 16 | INCOMING | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 16 | CONTEXT | Pending | Pending | Pending | Pending | Pending |
+
+Record the concurrent phase separately because its catch-up, queue, and consumer evidence is per worker shape, not
+per store.
+
+| Profile | Workers | Operations | Catch-up | Throughput | Queue high-water | Consumers base/high/after | Result |
+|---|---:|---:|---:|---:|---:|---|---|
+| 5k CI | 4 | Pending | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 4 | Pending | Pending | Pending | Pending | Pending | Pending |
+| 21k full | 16 | Pending | Pending | Pending | Pending | Pending | Pending |
+
+| Profile | Workers | NATS RSS before/after | Subscriptions before/after | Slow consumers | Result |
+|---|---:|---|---|---:|---|
+| 5k CI | 4 | Pending | Pending | Pending | Pending |
+| 21k full | 4 | Pending | Pending | Pending | Pending |
+| 21k full | 16 | Pending | Pending | Pending | Pending |
+
+## Pending pre-tag predicate comparison
+
+Run `TestIntegration_PredicateLayoutSmoke` on the same clean follow-up revision. These values are descriptive
+comparison evidence only; each candidate is evaluated against the absolute budget.
+
+| Operation | Hash plus catalog | Raw nine-token | Notes |
+|---|---:|---:|---|
+| Seed throughput | Pending | Pending | Include catalog rows for hash. |
+| Maximum key bytes | Pending | Pending | Expected 321 and 451. |
+| Exact predicate p95/p99 | Pending | Pending | Same 21,000-member result set. |
+| Entity owner p95/p99 | Pending | Pending | One expected member. |
+| Maximum owner p95/p99 | Pending | Pending | Maximum canonical entity ID. |
+| Namespace p95/p99 | Pending | Pending | Catalog join versus raw category/domain filters. |
+| Exact under churn p95/p99 | Pending | Pending | Four writers, 2,000 mutations. |
+| Membership consumers | Pending | Pending | Baseline/high-water/after. |
+| Catalog consumers | Pending | Pending | Hash only; raw must remain 0/0/0. |
+| NATS RSS | Pending | Pending | Before/after bytes. |
+
 ## Interpreting a run
 
 A green smoke run proves the bounded physical key/filter usage, real-NATS match sets, the declared operating

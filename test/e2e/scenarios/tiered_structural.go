@@ -1965,8 +1965,9 @@ func (s *TieredScenario) executeTestPredicateStats(ctx context.Context, result *
 
 // compoundQueryResult holds the result of a compound predicate query.
 type compoundQueryResult struct {
-	matched int
-	latency time.Duration
+	matched  int
+	entities []string
+	latency  time.Duration
 }
 
 // sendCompoundPredicateQuery executes a compound predicate query and returns the result.
@@ -2007,44 +2008,20 @@ func (s *TieredScenario) sendCompoundPredicateQuery(ctx context.Context, predica
 	}
 
 	return &compoundQueryResult{
-		matched: result.Data.CompoundPredicateQuery.Matched,
-		latency: latency,
+		matched:  result.Data.CompoundPredicateQuery.Matched,
+		entities: result.Data.CompoundPredicateQuery.Entities,
+		latency:  latency,
 	}, nil
 }
 
 // executeTestPredicateCompound validates the compoundPredicateQuery GraphQL query.
 // Tests AND/OR logic across multiple predicates.
 func (s *TieredScenario) executeTestPredicateCompound(ctx context.Context, result *Result) error {
-	// First, get predicates to use in compound query
-	listQuery := map[string]any{
-		"query": `{ predicates { predicates { predicate entityCount } } }`,
-	}
-	listJSON, _ := json.Marshal(listQuery)
-
-	listReq, err := http.NewRequestWithContext(ctx, "POST", s.config.GraphQLURL, bytes.NewReader(listJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create predicate list request: %w", err)
-	}
-	listReq.Header.Set("Content-Type", "application/json")
-
-	listResp, err := http.DefaultClient.Do(listReq)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to list predicates: %v", err))
-		return nil
-	}
-	defer listResp.Body.Close()
-
-	listBody, _ := io.ReadAll(listResp.Body)
-	var predicatesResp predicateListResponse
-	if err := json.Unmarshal(listBody, &predicatesResp); err != nil || len(predicatesResp.Data.Predicates.Predicates) < 2 {
-		result.Warnings = append(result.Warnings, "Not enough predicates for compound query test (need at least 2)")
-		return nil
-	}
-
-	// Pick two predicates for testing
-	pred1 := predicatesResp.Data.Predicates.Predicates[0].Predicate
-	pred2 := predicatesResp.Data.Predicates.Predicates[1].Predicate
-	predicates := []string{pred1, pred2}
+	// Every structural temperature-sensor fixture carries both predicates (verified
+	// by executeValidateEntityTriples). A known-answer pair keeps AND coverage
+	// non-empty regardless of lexical predicate-index ordering.
+	predicates := []string{"sensor.measurement.fahrenheit", "geo.location.zone"}
+	knownEntityID := "c360.logistics.environmental.sensor.temperature.temp-sensor-001"
 
 	// Test OR query (union)
 	orResult, err := s.sendCompoundPredicateQuery(ctx, predicates, "OR")
@@ -2063,23 +2040,41 @@ func (s *TieredScenario) executeTestPredicateCompound(ctx context.Context, resul
 	result.Metrics["predicate_compound_or_latency_ms"] = orResult.latency.Milliseconds()
 	result.Metrics["predicate_compound_and_latency_ms"] = andResult.latency.Milliseconds()
 
-	// Validate set theory: AND <= OR (intersection is subset of union)
-	setTheoryValid := andResult.matched <= orResult.matched
+	coverageErr := validateCompoundPredicateCoverage(
+		orResult.matched, andResult.matched, andResult.entities, knownEntityID,
+	)
+	coverageValid := coverageErr == nil
 
 	result.Details["predicate_compound_test"] = map[string]any{
 		"predicates_tested": predicates,
 		"or_matched":        orResult.matched,
 		"and_matched":       andResult.matched,
+		"and_entities":      andResult.entities,
+		"known_entity":      knownEntityID,
 		"or_latency_ms":     orResult.latency.Milliseconds(),
 		"and_latency_ms":    andResult.latency.Milliseconds(),
-		"set_theory_valid":  setTheoryValid,
-		"success":           setTheoryValid,
-		"message":           fmt.Sprintf("Compound query: OR=%d, AND=%d (set theory %v)", orResult.matched, andResult.matched, setTheoryValid),
+		"set_theory_valid":  andResult.matched <= orResult.matched,
+		"and_non_empty":     andResult.matched > 0,
+		"success":           coverageValid,
+		"message":           fmt.Sprintf("Compound query: OR=%d, AND=%d (coverage valid %v)", orResult.matched, andResult.matched, coverageValid),
 	}
 
-	if !setTheoryValid {
-		return fmt.Errorf("set theory violation: AND (%d) > OR (%d)", andResult.matched, orResult.matched)
+	if coverageErr != nil {
+		return coverageErr
 	}
 
+	return nil
+}
+
+func validateCompoundPredicateCoverage(orMatched, andMatched int, andEntities []string, knownEntityID string) error {
+	if andMatched == 0 {
+		return errors.New("compound predicate AND matched no entities; intersection coverage was not exercised")
+	}
+	if andMatched > orMatched {
+		return fmt.Errorf("set theory violation: AND (%d) > OR (%d)", andMatched, orMatched)
+	}
+	if !slices.Contains(andEntities, knownEntityID) {
+		return fmt.Errorf("compound predicate AND omitted known fixture %s", knownEntityID)
+	}
 	return nil
 }

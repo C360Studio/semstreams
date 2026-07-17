@@ -111,8 +111,16 @@ workflow, stream, ObjectStore, or upstream source-system state.
 
 `PREDICATE_CATALOG` is intentionally absent from the current-bucket commands because ADR-078 retired it from the
 framework inventory. If the pre-cutover deployment has a legacy catalog under an old or overridden name, record
-that exact legacy name and its removal separately in the same reviewed maintenance-window command sheet. A fresh
-breaking deployment must not recreate it.
+that exact legacy name and its removal separately in the same reviewed maintenance-window command sheet. For an
+upgrading deployment that used the old default name, include this explicit legacy-only command:
+
+```bash
+# Legacy-only: run only when the reviewed pre-cutover deployment created this old default bucket.
+nats kv rm PREDICATE_CATALOG
+```
+
+This is not a current framework bucket. Omit the command for fresh deployments; use the literal resolved legacy
+name instead when the old deployment overrode it. A fresh breaking deployment must not recreate the catalog.
 
 The wipe is required for more than entity grammar. Old PREDICATE rows use an incompatible hashed layout; old
 catalog state has no reader; additive NAME, PREDICATE, and INCOMING memberships may contain stale A/B rows; and old
@@ -150,7 +158,7 @@ task lint
 go vet -tags=integration ./...
 go vet -tags=live_llm ./...
 go test -race ./...
-go test -race -tags=integration -p 2 ./...
+go test -race -tags=integration -p 2 -timeout=20m -count=1 ./...
 task schema:generate
 git diff --exit-code -- schemas specs
 go test ./test/contract/...
@@ -162,10 +170,11 @@ task e2e:semantic
 task e2e:agentic
 ```
 
-The integration race uses `-p 2` to bound concurrent testcontainer packages. Both tagged vet commands are required;
-skipping tests at runtime does not replace compile-time vet coverage. The final five E2E tiers must use the exact
-breaking revision and fresh volumes. Earlier green evidence from an implementation slice does not satisfy the final
-combined gate.
+The integration race uses `-p 2` to bound concurrent testcontainer packages. Its `-timeout=20m` applies separately
+to each package, while `-count=1` disables cached test results so the release evidence is from this execution. Both
+tagged vet commands are required; skipping tests at runtime does not replace compile-time vet coverage. The final
+five E2E tiers must use the exact breaking revision and fresh volumes. Earlier green evidence from an implementation
+slice does not satisfy the final combined gate.
 
 ## Explicit Non-Features
 
