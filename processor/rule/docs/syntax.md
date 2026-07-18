@@ -241,6 +241,12 @@ leaving the literal token in place and logging the unresolved-template warning:
 | `.triples` | JSON-encoded array of every matching value (ADR-048) | `"[]"` |
 | `.value` | The triple's scalar object value (gh#519) | `""`, and — unlike `.length`/`.triples` — **silently**, no Debug log either |
 
+> **Legacy-data note (pre-canonical buckets only):** on ENTITY_STATES written before the canonical predicate
+> contract (PR #532), a stale 4-part predicate literally named `a.b.c.value` is shadowed by the `.value` suffix
+> form (which resolves the 3-part `a.b.c` instead, warn-free). Fresh state cannot carry 4-part predicates.
+> Wipe/reseed per the pre-v1 cutover before relying on `.value` templates against pre-contract data.
+
+
 `.value` is arity-disambiguated: the suffix is only recognized when the text before
 it parses as a canonical 3-part `domain.category.property` predicate (the contract
 enforced by `vocabulary.ParsePredicate`). `$entity.triple.metrics.sample.value`
