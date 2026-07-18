@@ -31,6 +31,21 @@ type StatefulEvaluator struct {
 	// `$entity.lifecycle.phase` evaluate. The action layer reads via
 	// ActionExecutor.lifecycle independently.
 	lifecycleManager LifecycleManager
+
+	// metrics is the optional rule-processor Metrics instance wired by
+	// SetMetrics. nil (test constructions that don't call SetMetrics,
+	// or a metrics-less deployment) makes runActions' failure-counting
+	// a no-op — never a nil-deref.
+	metrics *Metrics
+}
+
+// SetMetrics installs the rule-processor Metrics instance runActions uses
+// to count action-execution failures (actionFailuresTotal). Same optional
+// setter pattern as SetLifecycleManager — called by the rule Processor
+// after construction when metrics are wired into the deployment. nil is
+// safe and disables the counter increment.
+func (e *StatefulEvaluator) SetMetrics(m *Metrics) {
+	e.metrics = m
 }
 
 // SetLifecycleManager installs the Lifecycle harness Manager used by
@@ -408,6 +423,13 @@ func (e *StatefulEvaluator) runActions(
 				"related_id", relatedID,
 				"action_type", action.Type,
 				"error", err)
+			// Every non-deny action-execution failure is otherwise only a
+			// log line — a fail-closed action (e.g. publish_agent rejecting
+			// a non-integer loop_max_iterations) is exactly the silent-
+			// failure class this repo hunts if nothing alerts on it.
+			if e.metrics != nil {
+				e.metrics.actionFailuresTotal.WithLabelValues(action.Type).Inc()
+			}
 		}
 	}
 }
