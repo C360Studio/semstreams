@@ -1,10 +1,12 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/metric"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -87,6 +89,37 @@ func TestServiceManager_StopAll_Idempotency(t *testing.T) {
 
 		require.NoError(t, manager.StopAll(time.Second))
 	})
+}
+
+// TestServiceManager_StopAll_CancellationBeforeStopAll drives the real gh#549
+// ordering with real services, not mocks: the parent context is cancelled (the
+// SIGTERM / Docker-restart analogue), each service's contextMonitor observes it
+// and self-transitions to stopped via performGracefulShutdown, and only then
+// does the manager visit Stop. StopAll must report a clean shutdown — the
+// heartbeat and metrics-forwarder overrides used to reject this ordering with a
+// plain error (gh#549).
+func TestServiceManager_StopAll_CancellationBeforeStopAll(t *testing.T) {
+	manager := createTestServiceManager(ManagerConfig{}, nil)
+
+	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
+	require.NoError(t, err)
+	mf := createTestMetricsForwarder(t, "1s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
+
+	manager.RegisterInstance("heartbeat", hb)
+	manager.RegisterInstance("metrics-forwarder", mf)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, hb.Start(ctx))
+	require.NoError(t, mf.Start(ctx))
+
+	cancel()
+	require.Eventually(t, func() bool {
+		return hb.Status() == StatusStopped && mf.Status() == StatusStopped
+	}, 2*time.Second, 5*time.Millisecond,
+		"services must self-stop when the parent context is cancelled")
+
+	require.NoError(t, manager.StopAll(time.Second),
+		"services already stopped by parent-context cancellation are a clean shutdown (gh#520/gh#549)")
 }
 
 // TestBaseService_StopIdempotent locks the per-service half of the contract:

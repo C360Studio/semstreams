@@ -133,6 +133,10 @@ type MetricsForwarder struct {
 	// Stop channel for goroutine coordination
 	stopChan chan struct{}
 
+	// stopOnce guards the one-shot teardown (ticker stop + stopChan close) so
+	// repeated Stop calls are safe (gh#549)
+	stopOnce sync.Once
+
 	// WaitGroup for goroutine tracking
 	wg sync.WaitGroup
 
@@ -181,11 +185,19 @@ func newMetricsForwarderWithPublisher(
 	return mf, nil
 }
 
-// Start begins metrics forwarding
+// Start begins metrics forwarding. Instances are single-use: once Stop has run
+// its teardown the instance cannot be restarted — create a new one via the
+// constructor (production disable→enable already does this via CreateService).
 func (mf *MetricsForwarder) Start(ctx context.Context) error {
 	// Check if already running
 	if mf.Status() == StatusRunning {
 		return fmt.Errorf("metrics forwarder already running")
+	}
+
+	select {
+	case <-mf.stopChan:
+		return fmt.Errorf("metrics forwarder instance already stopped; create a new instance")
+	default:
 	}
 
 	if err := mf.BaseService.Start(ctx); err != nil {
@@ -203,23 +215,23 @@ func (mf *MetricsForwarder) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully stops the MetricsForwarder
+// Stop gracefully stops the MetricsForwarder. Stop is idempotent per the
+// Service contract (gh#520): a service that already reached a terminal state —
+// e.g. via parent-context cancellation before the manager's StopAll visit — is
+// a clean shutdown, and repeated calls are safe (gh#549). Teardown still runs
+// on the already-stopped path so the ticker is released when cancellation wins
+// the race.
 func (mf *MetricsForwarder) Stop(timeout time.Duration) error {
-	// Check if not running
-	status := mf.Status()
-	if status != StatusRunning && status != StatusStarting {
-		return fmt.Errorf("metrics forwarder not running (status: %v)", status)
-	}
+	mf.stopOnce.Do(func() {
+		mf.logger.Info("MetricsForwarder stopping")
 
-	mf.logger.Info("MetricsForwarder stopping")
+		if mf.ticker != nil {
+			mf.ticker.Stop()
+		}
 
-	// Stop the ticker if it exists
-	if mf.ticker != nil {
-		mf.ticker.Stop()
-	}
-
-	// Signal stop and wait for goroutine
-	close(mf.stopChan)
+		// Signal the publishing loop to exit
+		close(mf.stopChan)
+	})
 
 	// Wait for publishing goroutine with timeout
 	done := make(chan struct{})
