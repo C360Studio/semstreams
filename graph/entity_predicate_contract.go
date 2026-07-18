@@ -247,3 +247,32 @@ func UnmarshalEntityState(data []byte, entity *EntityState) error {
 	}
 	return ValidateDecodedEntityState(entity)
 }
+
+// UnmarshalEntityStateTrusted decodes stored ENTITY_STATES bytes WITHOUT
+// re-validating the canonical entity-state contract (gh#562).
+//
+// It exists for exactly one caller class: the ENTITY_STATES OWNER's own
+// read-modify-write reads — graph-ingest's CAS merge and mutation closures.
+// Those bytes were validated by MarshalEntityState when they were written,
+// and every RMW cycle either commits a candidate re-validated by
+// MarshalEntityState or commits nothing at all (no-op cycles exit via
+// sentinel before any KV write). Resident noncanonical state therefore
+// cannot launder through a merge: it survives into the merged candidate and
+// the write gate rejects the whole write. Read-side validation on that lane
+// is redundant for enforcement — it only changes WHERE the failure is
+// reported — while sitting on the per-key-serialized RMW critical path
+// (ADR-072), where it measurably lowers the ingest ceiling.
+//
+// Every other reader MUST keep UnmarshalEntityState: external and
+// authoritative readers (query handlers, graph-view consumers, index
+// builders, lifecycle manager), poison-detection paths (the ENTITY_STATES
+// contract guard), and any surface exposing decoded state downstream. This
+// decoder does NOT reject noncanonical predicates or identities — that is its
+// contract, not a gap. Malformed JSON returns a plain decode error, not the
+// graph-state-reset classification.
+func UnmarshalEntityStateTrusted(data []byte, entity *EntityState) error {
+	if err := json.Unmarshal(data, entity); err != nil {
+		return fmt.Errorf("decode entity state: %w", err)
+	}
+	return nil
+}

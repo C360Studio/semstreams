@@ -938,10 +938,14 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 			return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
 		}
 
+		// gh#562: trusted decode on the owner's own RMW read; the
+		// MarshalEntityState write gate below re-validates the merged
+		// candidate, and classifyStoredStateRMWError re-attributes a
+		// failure to resident stored-state poison.
 		var currentState graph.EntityState
-		if err := graph.UnmarshalEntityState(current, &currentState); err != nil {
-			return nil, retry.NonRetryable(
-				fmt.Errorf("unmarshal current entity: %w", err))
+		if err := graph.UnmarshalEntityStateTrusted(current, &currentState); err != nil {
+			return nil, retry.NonRetryable(c.classifyStoredStateRMWError(current,
+				fmt.Errorf("unmarshal current entity: %w", err)))
 		}
 
 		// Re-apply the delta on each attempt: drop triples whose
@@ -984,7 +988,11 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		newEntity.Triples = merged
 		preserveStoredEntityMetadata(&newEntity, &currentState)
 
-		return graph.MarshalEntityState(&newEntity)
+		data, err := graph.MarshalEntityState(&newEntity)
+		if err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err)
+		}
+		return data, nil
 	})
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
