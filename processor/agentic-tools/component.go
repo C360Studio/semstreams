@@ -392,18 +392,20 @@ func (c *Component) handleToolCall(ctx context.Context, data []byte) {
 		slog.String("tool", call.Name),
 		slog.String("call_id", call.ID))
 
-	// Check if tool is allowed
-	if !c.isToolAllowed(call.Name) {
-		c.logger.Warn("Tool not allowed", "tool", call.Name)
+	// Check admission: global allowlist + per-loop advertised set (gh#551)
+	if rejection := c.admitToolCall(call); rejection != nil {
+		c.logger.Warn("Tool call rejected",
+			"tool", call.Name,
+			"reason", rejection.filterReason)
 
 		if c.metrics != nil {
-			c.metrics.recordToolFiltered(call.Name, "not_allowed")
+			c.metrics.recordToolFiltered(call.Name, rejection.filterReason)
 		}
 
 		result := agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("tool %q is not allowed", call.Name),
-			ErrorKind: agentic.ToolErrorNotFound,
+			Error:     rejection.message,
+			ErrorKind: rejection.kind,
 			LoopID:    call.LoopID,
 			TraceID:   call.TraceID,
 		}
@@ -525,6 +527,71 @@ func (c *Component) isToolAllowed(toolName string) bool {
 		return true
 	}
 	return slices.Contains(c.config.AllowedTools, toolName)
+}
+
+// toolAdmissionRejection describes why a tool call was refused admission,
+// shaped for the shared rejection path (ToolResult error + metrics label).
+type toolAdmissionRejection struct {
+	// message is the error text placed on the ToolResult. The per-loop
+	// rejection text is deliberately DISTINCT from the global "tool %q is
+	// not allowed" so callers (semdev's routing rules, gh#551) can tell
+	// "not in this deployment" apart from "not advertised to this loop".
+	message string
+	// kind classifies the rejection: ToolErrorNotFound for the global
+	// allowlist (pre-existing contract), ToolErrorPermission for the
+	// per-loop advertised set (the tool exists and is deployed; this loop
+	// lacks permission).
+	kind agentic.ToolErrorKind
+	// filterReason is the metrics label for recordToolFiltered.
+	filterReason string
+}
+
+// admitToolCall is the single admission seam for BOTH executor entry points
+// (handleToolCall off the wire and the direct Execute path). Two layers:
+//
+//  1. Global component allowlist (config.AllowedTools) — unchanged contract.
+//  2. Per-loop advertised tool set (gh#551): when the dispatching loop
+//     advertised a tool set (ToolCall.Metadata[MetadataKeyAdvertisedTools],
+//     stamped authoritatively by agentic-loop's dispatchToolCall), the call's
+//     name must be a member. Key ABSENT → no per-loop check (back-compat:
+//     loops without an advertised set stay unrestricted). Key PRESENT but
+//     empty/malformed → fail closed with a Warn naming the loop and raw
+//     value — a broken security-control value must not degrade to permissive
+//     (the IsKnownFilesystemPolicy precedent).
+//
+// Returns nil when the call is admitted.
+func (c *Component) admitToolCall(call agentic.ToolCall) *toolAdmissionRejection {
+	if !c.isToolAllowed(call.Name) {
+		return &toolAdmissionRejection{
+			message:      fmt.Sprintf("tool %q is not allowed", call.Name),
+			kind:         agentic.ToolErrorNotFound,
+			filterReason: "not_allowed",
+		}
+	}
+
+	advertised, present := agentic.AdvertisedToolsFromMetadata(call.Metadata)
+	if !present {
+		return nil
+	}
+	if len(advertised) == 0 {
+		c.logger.Warn("advertised tool set present but empty or malformed; failing closed",
+			slog.String("tool", call.Name),
+			slog.String("loop_id", call.LoopID),
+			slog.Any("raw_value", call.Metadata[agentic.MetadataKeyAdvertisedTools]))
+		return &toolAdmissionRejection{
+			message:      fmt.Sprintf("tool %q is not permitted for this loop (advertised tool set)", call.Name),
+			kind:         agentic.ToolErrorPermission,
+			filterReason: "not_advertised",
+		}
+	}
+	if !slices.Contains(advertised, call.Name) {
+		return &toolAdmissionRejection{
+			message:      fmt.Sprintf("tool %q is not permitted for this loop (advertised tool set)", call.Name),
+			kind:         agentic.ToolErrorPermission,
+			filterReason: "not_advertised",
+		}
+	}
+	return nil
 }
 
 // executeWithTimeout executes a tool call with the configured timeout.
@@ -769,16 +836,16 @@ func (c *Component) ListTools() []ToolDefinition {
 
 // Execute executes a tool call (for testing and direct invocation)
 func (c *Component) Execute(ctx context.Context, call agentic.ToolCall) (agentic.ToolResult, error) {
-	// Check if tool is allowed
-	if !c.isToolAllowed(call.Name) {
+	// Check admission: global allowlist + per-loop advertised set (gh#551)
+	if rejection := c.admitToolCall(call); rejection != nil {
 		result := agentic.ToolResult{
 			CallID:    call.ID,
-			Error:     fmt.Sprintf("tool %q is not allowed", call.Name),
-			ErrorKind: agentic.ToolErrorNotFound,
+			Error:     rejection.message,
+			ErrorKind: rejection.kind,
 			LoopID:    call.LoopID,
 			TraceID:   call.TraceID,
 		}
-		return result, errs.WrapInvalid(fmt.Errorf("tool %q is not allowed", call.Name), "Component", "Execute", "check tool allowed")
+		return result, errs.WrapInvalid(errors.New(rejection.message), "Component", "Execute", "check tool admission")
 	}
 
 	// Execute with timeout. If the (internal) deadline fired OR the

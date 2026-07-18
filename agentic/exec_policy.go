@@ -36,6 +36,51 @@ const MetadataKeyFilesystemPolicy = "agent.exec.filesystem_policy"
 // Empty == only out-of-worktree paths are writable.
 const MetadataKeyScratchPaths = "agent.exec.scratch_paths"
 
+// MetadataKeyAdvertisedTools is the ToolCall.Metadata key under which
+// agentic-loop dispatch stamps the loop's ADVERTISED tool set — the names of
+// the tool definitions cached for the loop at spawn (per-task task.Tools, or
+// global discovery when unset) — so the tool executor can enforce
+// advertise-and-enforce per loop (gh#551): a model that emits a tool outside
+// its advertised set is rejected at execution even when the tool is in the
+// executor's global AllowedTools. Defense-in-depth: providers normally only
+// emit advertised tools, but one executor multiplexing many roles (semdev's
+// coordinator/developer/reviewer) must not execute a call the loop never
+// advertised.
+//
+// []string when stamped; comes back from BaseMessage decode as []any (each
+// element still a Go string) — readers coerce via AdvertisedToolsFromMetadata.
+// Absent == loop has no cached tool set; executor applies only the global
+// allowlist (back-compat). Present-but-empty/malformed == executor fails
+// closed (rejects), per the IsKnownFilesystemPolicy precedent: an
+// unrecognized value on a security control must not degrade to permissive.
+//
+// Deliberately NOT a member of DispatchEnforcedMetadataKeys: that set's
+// contract is "stamped from the loop's cached TASK metadata"
+// (LoopManager.GetCachedMetadata), while this key is stamped from the loop's
+// tools CACHE (LoopManager.GetCachedTools) — like the MetadataKeyRunID stamp,
+// it is a framework fact dispatch derives itself, authoritatively
+// (OVERWRITE), at the same shared dispatchToolCall seam (ADR-067).
+const MetadataKeyAdvertisedTools = "agent.tools.advertised"
+
+// AdvertisedToolsFromMetadata resolves the per-loop advertised tool set from a
+// tool call's metadata. present reports whether the key exists at all —
+// callers MUST branch on it, because key-absent (no per-loop restriction,
+// back-compat) and key-present-but-empty/malformed (fail closed) have opposite
+// enforcement outcomes. tools is the coerced name list: JSON decode lands it
+// as []any (string elements); a native []string (in-process path) is also
+// accepted; non-string and empty elements are dropped; any other value type
+// yields (nil, true) so the executor rejects rather than silently allowing.
+func AdvertisedToolsFromMetadata(m map[string]any) (tools []string, present bool) {
+	if m == nil {
+		return nil, false
+	}
+	raw, ok := m[MetadataKeyAdvertisedTools]
+	if !ok {
+		return nil, false
+	}
+	return coerceStringSlice(raw), true
+}
+
 // Filesystem policy values. Deliberately match the sandbox-substrate filesystem
 // enum (ADR-052 vocabulary/sandbox: filesystem.read_only / filesystem.workspace_write)
 // so there is ONE filesystem-policy model across the framework and the future

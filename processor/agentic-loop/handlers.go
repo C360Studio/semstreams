@@ -1359,6 +1359,11 @@ func (h *MessageHandler) dispatchedFromQueue(result *HandlerResult, loopID strin
 // Unlike the loop_id writes these are authoritative (overwrite): the run
 // anchor is a framework fact derived from the loop's typed RunID, not a
 // caller-routable hint. Both keys stay absent for a standalone loop.
+//
+// Also stamps tc.Metadata[MetadataKeyAdvertisedTools] (gh#551) — the names of
+// the loop's cached tool definitions — authoritatively (overwrite), so the
+// tool executor enforces the loop's advertised tool set on every dispatch
+// path. Absent when the loop has no cached tools.
 func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, tc agentic.ToolCall) error {
 	if err := h.loopManager.AddPendingTool(loopID, tc.ID); err != nil {
 		return err
@@ -1408,6 +1413,29 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 				tc.Metadata[key] = v
 			}
 		}
+	}
+
+	// Stamp the loop's ADVERTISED tool set (gh#551) authoritatively from the
+	// tools CACHE — not from cached task metadata, hence not a
+	// DispatchEnforcedMetadataKeys member — so the tool executor can enforce
+	// advertise-and-enforce per loop. OVERWRITE, exactly like the RunID stamp
+	// above: the advertised set is a framework enforcement fact and a
+	// caller/model-supplied value must never widen it. Living at this shared
+	// seam it reaches every dispatch path (main, approval re-dispatch, queue
+	// dequeue). Absent when the loop has no cached tools (back-compat: loops
+	// spawned without an advertised set stay unrestricted at the executor).
+	if tools := h.loopManager.GetCachedTools(loopID); len(tools) > 0 {
+		names := make([]string, 0, len(tools))
+		for _, t := range tools {
+			names = append(names, t.Name)
+		}
+		tc.Metadata[agentic.MetadataKeyAdvertisedTools] = names
+	} else {
+		// No cached set: drop any stale caller-supplied value so absent-key
+		// semantics hold end-to-end (a leftover key could only spuriously
+		// reject, never widen — but the executor's fail-closed empty check
+		// would turn a malformed leftover into a hard reject).
+		delete(tc.Metadata, agentic.MetadataKeyAdvertisedTools)
 	}
 
 	toolMsg := message.NewBaseMessage(tc.Schema(), &tc, "agentic-loop")
