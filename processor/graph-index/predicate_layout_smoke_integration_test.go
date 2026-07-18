@@ -85,10 +85,16 @@ func activePredicateSmokeProfile() predicateSmokeProfile {
 			p95Budget: 3 * time.Second, p99Budget: 5 * time.Second, maxServerRSSBytes: 2 << 30,
 		}
 	}
+	// CI budgets carry ≥3× headroom over observed healthy latencies per the
+	// wall-clock-assertion discipline (gh#220): shared-runner contention put a
+	// namespace-domain wildcard at 3.29s against the old 3s budget (2026-07-18,
+	// second flake mode of the gh#555 class) with healthy p95 already 2.65s.
+	// The CI smoke exists to catch order-of-magnitude regressions; tight
+	// budgets belong to the opt-in "full" profile on a quiet box.
 	return predicateSmokeProfile{
 		name: "ci", entities: 5_000, spread: 20, churnWriters: 2, churnPerWriter: 100,
-		repetitions: 5, operationBudget: 3 * time.Second,
-		p95Budget: 3 * time.Second, p99Budget: 3 * time.Second, maxServerRSSBytes: 1 << 30,
+		repetitions: 5, operationBudget: 10 * time.Second,
+		p95Budget: 8 * time.Second, p99Budget: 9 * time.Second, maxServerRSSBytes: 1 << 30,
 	}
 }
 
