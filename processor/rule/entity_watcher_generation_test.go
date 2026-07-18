@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -16,7 +17,11 @@ import (
 
 type transactionalTestWatcher struct {
 	updates chan jetstream.KeyValueEntry
-	stopped bool
+	// stopped is atomic: Stop() is invoked both by the production watcher
+	// goroutine (handleEntityUpdatesForBucketKey's explicit pre-return
+	// Stop) and by test goroutines — an unsynchronized bool here is a
+	// genuine data race the detector fires on under CI scheduling.
+	stopped atomic.Bool
 	stopErr error
 }
 
@@ -26,7 +31,7 @@ func newTransactionalTestWatcher() *transactionalTestWatcher {
 
 func (w *transactionalTestWatcher) Updates() <-chan jetstream.KeyValueEntry { return w.updates }
 func (w *transactionalTestWatcher) Stop() error {
-	w.stopped = true
+	w.stopped.Store(true)
 	return w.stopErr
 }
 
@@ -82,8 +87,8 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 	require.NotNil(t, processor.entityWatcherCancels[newKey])
 	require.NotContains(t, processor.entityWatcherCancels, oldOneKey)
 	require.NotContains(t, processor.entityWatcherCancels, oldTwoKey)
-	require.True(t, oldOne.stopped)
-	require.True(t, oldTwo.stopped)
+	require.True(t, oldOne.stopped.Load())
+	require.True(t, oldTwo.stopped.Load())
 
 	// The generation fence rejects a retired watcher even if its transport did
 	// not stop. It cannot reach graph guard waiting, decoding, or dispatch.
@@ -138,8 +143,8 @@ func TestUpdateWatchBucketsRollsBackPreparedAdditions(t *testing.T) {
 	}, prepare)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "injected second watcher failure")
-	require.True(t, preparedWatcher.stopped, "prepared addition must be rolled back")
-	require.False(t, oldWatcher.stopped, "old watcher must remain active")
+	require.True(t, preparedWatcher.stopped.Load(), "prepared addition must be rolled back")
+	require.False(t, oldWatcher.stopped.Load(), "old watcher must remain active")
 	require.Equal(t, originalConfig, processor.config.EntityWatchBuckets)
 	require.Equal(t, map[string]jetstream.KeyWatcher{
 		watcherKey(gtypes.BucketEntityStates, oldPattern): oldWatcher,
