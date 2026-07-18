@@ -60,7 +60,7 @@ const (
 	// PredicateResearchLoopID stamps the raw research-pipeline loop ID
 	// (e.g. "rg_abc12345") on the loop entity as a dedicated triple
 	// so R0-R6 rules can substitute it into NATS publish subjects via
-	// `$entity.triple.research.loop_id`. The 6-part loop-execution
+	// `$entity.triple.research.loop.id`. The 6-part loop-execution
 	// entity ID has the loop ID as its last segment, but the
 	// substitution layer doesn't expose a "last-segment" accessor and
 	// the rules need the raw form for routing. Cheap one-extra-triple

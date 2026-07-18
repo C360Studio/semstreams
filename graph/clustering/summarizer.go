@@ -679,13 +679,18 @@ func (s *LLMSummarizer) BuildCorpusDF(entities []*gtypes.EntityState) {
 func parseEntityID(entityID string) llm.EntityParts {
 	parts := strings.Split(entityID, ".")
 	ep := llm.EntityParts{Full: entityID}
-	if len(parts) >= 6 {
+	// Entity IDs are EXACTLY 6 parts (org.platform.domain.system.type.instance) with
+	// no dotted instance — the single structural-identity contract enforced by
+	// message.IsValidEntityID. A non-6-part ID leaves EntityParts empty rather than
+	// mis-splitting (the prior `>= 6` + Join(parts[5:]) drift defined a second,
+	// looser contract for the same invariant).
+	if len(parts) == 6 {
 		ep.Org = parts[0]
 		ep.Platform = parts[1]
 		ep.Domain = parts[2]
 		ep.System = parts[3]
 		ep.Type = parts[4]
-		ep.Instance = strings.Join(parts[5:], ".") // Instance may contain dots
+		ep.Instance = parts[5]
 	}
 	return ep
 }

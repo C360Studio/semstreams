@@ -98,7 +98,7 @@ func TestSubstituteVariables_EntityParts_FullPipeline(t *testing.T) {
 // Pins two co-existence properties that the substitution-pass ordering
 // relies on for correctness:
 //
-//  1. `$entity.org` (the new part token) and `$entity.triple.org` (an
+//  1. `$entity.org` (the new part token) and `$entity.triple.test.fixture.org` (an
 //     existing triple-predicate token) are independently resolvable in
 //     the same template — neither pass interferes with the other. This
 //     is the regression a "reorder the substitution passes for perf"

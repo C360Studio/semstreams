@@ -31,6 +31,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // tripleRefRe matches both $entity.triple.* and $related.triple.*
@@ -217,6 +219,57 @@ func TestReferenceConfigs_AllTripleRefsResolveToKnownPredicates(t *testing.T) {
 		if allowed && justification == "" {
 			t.Errorf("predicate %q is in rulesStampedPredicates but has no justification — every allowlist entry needs a one-line reason naming the rule that stamps it",
 				r.predicate)
+		}
+	}
+}
+
+// TestReferenceConfigs_AllTripleRefsAreThreePart is the structural-identity lint
+// (enforce-structural-invariants): every $entity.triple.<predicate> /
+// $related.triple.<predicate> reference in a shipped rule config MUST be a valid
+// 3-part predicate (domain.category.property — vocabulary.IsValidPredicate). This
+// is the static half of the audit that gates the fail-closed ingest gate: a config
+// authoring a non-conforming predicate would be rejected at the mutation boundary
+// once enforcement is on, so it must never ship. The suffix forms (.length/.triples)
+// are already stripped by tripleRefRe, so the captured predicate is the bare token.
+func TestReferenceConfigs_AllTripleRefsAreThreePart(t *testing.T) {
+	root := mustFindRepoRoot(t)
+	configsDir := filepath.Join(root, "configs", "rules")
+
+	seen := map[string]string{} // predicate -> first file (dedup for stable output)
+	walkErr := filepath.WalkDir(configsDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		var v any
+		if json.Unmarshal(data, &v) != nil {
+			return nil // unparseable JSON is the sibling test's concern
+		}
+		extractStrings(v, func(s string) {
+			for _, m := range tripleRefRe.FindAllStringSubmatch(s, -1) {
+				if _, ok := seen[m[1]]; !ok {
+					seen[m[1]] = path
+				}
+			}
+		})
+		return nil
+	})
+	if walkErr != nil {
+		t.Fatalf("walking %s: %v", configsDir, walkErr)
+	}
+	if len(seen) == 0 {
+		t.Fatal("found no triple references — scanner likely broken")
+	}
+	for pred, file := range seen {
+		if !vocabulary.IsValidPredicate(pred) {
+			t.Errorf("config %s references $entity.triple.%s, which is NOT a valid 3-part predicate (domain.category.property). The ingest structural gate rejects non-3-part predicates; rename it to 3-part before shipping (enforce-structural-invariants).",
+				strings.TrimPrefix(file, root+"/"), pred)
 		}
 	}
 }

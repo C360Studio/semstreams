@@ -83,6 +83,13 @@ const (
 	// Callers should not retry without fixing the request.
 	ErrorCodeInvalidRequest = "invalid_request"
 
+	// ErrorCodeStructuralInvalid indicates a token in the mutation violated the
+	// structural-identity contract — an entity ID that is not exactly 6 parts, or a
+	// predicate that is not exactly 3 parts (domain.category.property). The token is
+	// malformed at its source; callers must fix the token, not retry. Emitted by the
+	// graph-ingest structural gate when enforcement is on.
+	ErrorCodeStructuralInvalid = "structural_invalid"
+
 	// ErrorCodeInternal is the catch-all for handler-internal
 	// failures (KV transport errors, unmarshal failures on stored
 	// state, etc.). Callers may retry as appropriate.

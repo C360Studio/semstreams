@@ -48,7 +48,7 @@ func (a *llmSynthesizerAdapter) Synthesize(ctx context.Context, systemPrompt, us
 // natsLoopStore adapts natsclient.KVStore to the LoopStore interface.
 // Key conventions:
 //
-//   - research.requested.<loopID>     (read; written by research_graph tool, PR 1)
+//   - research.request.received.<loopID>     (read; written by research_graph tool, PR 1)
 //   - execute.complete.<loopID>       (read; written by execute_subqueries, PR 4)
 //   - route.complete.<loopID>         (read; written by route_search, PR 3; nil-ok)
 //   - search_result.complete.<loopID> (write; R6 continuation rule watches this
@@ -71,7 +71,7 @@ func newNATSLoopStore(kv *natsclient.KVStore, registry *payloadregistry.Registry
 
 // Key helpers — package-private.
 
-func loopStoreKeyIntent(loopID string) string          { return "research.requested." + loopID }
+func loopStoreKeyIntent(loopID string) string          { return "research.request.received." + loopID }
 func loopStoreKeyExecuteComplete(loopID string) string { return "execute.complete." + loopID }
 func loopStoreKeyRouteComplete(loopID string) string   { return "route.complete." + loopID }
 func loopStoreKeySearchResultComplete(loopID string) string {

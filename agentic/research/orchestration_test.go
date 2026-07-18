@@ -114,7 +114,7 @@ func TestBuildAssessCompleteTriples_SufficientPaths(t *testing.T) {
 }
 
 // TestBuildKickoffTriples_HappyPath locks the wire contract R0 reads:
-// loop.role + research.requested + topic + loop_id + parent_loop +
+// loop.role + research.request.received + topic + loop_id + parent_loop +
 // parent_role + budget + max_iterations all share the loop entity
 // Subject so graph-ingest's per-Subject CAS path lands the batch
 // atomically. R0 must never see a half-populated chain identity (e.g.,

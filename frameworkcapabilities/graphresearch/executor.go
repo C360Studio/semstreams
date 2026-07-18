@@ -24,12 +24,12 @@ import (
 const ResearchGraphToolName = "research_graph"
 
 // researchTriggerKeyPrefix is the key prefix R0 watches in
-// AGENT_LOOPS. Full key shape: research.requested.<loopID>.
+// AGENT_LOOPS. Full key shape: research.request.received.<loopID>.
 //
 // PR 1 writes the trigger key only; PR 6 wires R0 to fire on it.
 // Centralising the prefix here keeps the tool and R0's rule
 // config in lockstep — a renaming requires touching both.
-const researchTriggerKeyPrefix = "research.requested."
+const researchTriggerKeyPrefix = "research.request.received."
 
 // loopIDPrefix is the prefix the research_graph tool uses when
 // minting new loop IDs. Mirrors the agentic-dispatch convention
@@ -51,7 +51,7 @@ const loopIDPrefix = "rg_"
 //     overwrite the previous loop's state.
 //
 //   - PutResearchTrigger writes the research_intent payload at key
-//     research.requested.<loopID>. R0 watches this key pattern (see
+//     research.request.received.<loopID>. R0 watches this key pattern (see
 //     ADR-045 §Rule chain) and fires the chain on write. Last-write-
 //     wins is fine here because the loop_id is freshly minted and
 //     unique per call.
@@ -69,7 +69,7 @@ type ResearchKVWriter interface {
 //     the operation by its loop ID.
 //
 //  2. The research_intent payload wrapped in a BaseMessage envelope
-//     at key research.requested.<loopID> — the R0 trigger key.
+//     at key research.request.received.<loopID> — the R0 trigger key.
 //
 // The tool returns StopLoop=true so the parent's current iteration
 // terminates; the continuation rule (R6 — landed in PR 6) resumes
@@ -110,9 +110,9 @@ func WithResearchGraphIDGenerator(gen func() string) ResearchGraphOption {
 }
 
 // WithResearchGraphTriplePublisher injects the TriplePublisher used to
-// stamp kickoff triples (loop.role, research.requested, research.topic,
-// research.loop_id, research.parent_loop/role, research.budget_tokens,
-// research.max_iterations) on the research-pipeline loop entity. R0 of
+// stamp kickoff triples (loop.role, research.request.received, research.request.topic,
+// research.loop.id, research.parent.loop/role, research.request.budget_tokens,
+// research.request.max_iterations) on the research-pipeline loop entity. R0 of
 // the ADR-045 rule chain fires on these. Nil-safe: leaves the
 // publisher unset, in which case Execute logs warn and continues —
 // useful for tests that don't exercise the rule wiring. Production
@@ -343,8 +343,8 @@ func (e *ResearchGraphExecutor) researchGraph(ctx context.Context, call agentic.
 	// agent capable of calling research_graph MUST populate
 	// TaskMessage.Metadata["role"] with the spawning role's name.
 	// Without it, parentRole is empty, the kickoff triple
-	// research.parent_role is omitted, and R6's continuation
-	// publish_agent substitutes `$entity.triple.research.parent_role`
+	// research.parent.role is omitted, and R6's continuation
+	// publish_agent substitutes `$entity.triple.research.parent.role`
 	// to a literal — the spawned task's Role field carries the
 	// unresolved template string and downstream role-registry lookups
 	// fail loudly.

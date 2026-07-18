@@ -5,6 +5,12 @@
   "title": "graph-ingest Configuration",
   "description": "Entity and triple ingestion processor",
   "properties": {
+    "allow_nonconforming_predicates": {
+      "type": "boolean",
+      "description": "Escape hatch: downgrade the structural predicate gate to observe-only (meter+log but commit). Default false = fail-closed reject of non-3-part predicates",
+      "default": false,
+      "category": "advanced"
+    },
     "enable_hierarchy": {
       "type": "boolean",
       "description": "Enable hierarchy inference",

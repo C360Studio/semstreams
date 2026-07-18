@@ -309,7 +309,7 @@ func newNATSLoopStore(kv *natsclient.KVStore, registry *payloadregistry.Registry
 
 // Key helpers — package-private.
 
-func loopStoreKeyIntent(loopID string) string           { return "research.requested." + loopID }
+func loopStoreKeyIntent(loopID string) string           { return "research.request.received." + loopID }
 func loopStoreKeyClassifyComplete(loopID string) string { return "classify.complete." + loopID }
 func loopStoreKeyRouteComplete(loopID string) string    { return "route.complete." + loopID }
 func loopStoreKeyExecuteComplete(loopID string) string  { return "execute.complete." + loopID }

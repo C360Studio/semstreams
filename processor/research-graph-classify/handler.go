@@ -48,7 +48,7 @@ type CandidateSet struct {
 // Three methods so the component can:
 //
 //   - GetIntent: load the research_intent payload from the
-//     research.requested.<loopID> key written by research_graph (PR 1).
+//     research.request.received.<loopID> key written by research_graph (PR 1).
 //   - PutClassifierOutput: persist the ClassifierOutput envelope at
 //     the classify.complete.<loopID> key — the trigger R1 watches.
 //   - PutSnapshot: optionally stash a copy of the classifier output
@@ -65,7 +65,7 @@ type LoopStore interface {
 }
 
 // errIntentNotFound is the sentinel returned by LoopStore.GetIntent
-// when no research.requested.<loopID> key exists. The handler
+// when no research.request.received.<loopID> key exists. The handler
 // surfaces it as a non-retryable error — a missing intent means R0
 // fired without the trigger key being written, which is a flow
 // configuration bug, not a transient failure.

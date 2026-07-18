@@ -179,7 +179,7 @@ func TestRegistry_ForeignEdgeClaimFor(t *testing.T) {
 	if err != nil || !ok || c.Owner != "sensorml-producer" {
 		t.Errorf("ForeignEdgeClaimFor(claimed) = %+v,%v,%v", c, ok, err)
 	}
-	if _, ok, _ := r.ForeignEdgeClaimFor(ctx, "sensorml.asset.v1", "unclaimed.edge"); ok {
+	if _, ok, _ := r.ForeignEdgeClaimFor(ctx, "sensorml.asset.v1", "test.unclaimed.edge"); ok {
 		t.Error("an unclaimed foreign edge must report ok=false (the seam rejects it)")
 	}
 	if _, ok, _ := r.ForeignEdgeClaimFor(ctx, "other.type.v1", isHostedBy); ok {

@@ -292,11 +292,43 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 	}
 }
 
+// validateTriplePredicates enforces the structural-identity predicate contract
+// (exactly 3-part domain.category.property — vocabulary.IsValidPredicate) at the
+// mutation boundary. For each malformed predicate it records a rejection
+// (mutation_rejections{reason=structural_predicate_invalid} counter + loud Warn)
+// via the existing recordMutationRejection path. Default is FAIL-CLOSED: it returns
+// a classified ErrorCodeStructuralInvalid on the first violation so the mutation is
+// rejected before persistence (openspec/changes/enforce-structural-invariants). The
+// escape hatch Config.AllowNonConformingPredicates downgrades to observe-only (meter
+// + log, write still commits) for a temporary migration/emergency. The entity-ID
+// half is already fail-closed via validateEntityID.
+func (c *Component) validateTriplePredicates(subject string, triples []message.Triple) error {
+	for i := range triples {
+		predicate := triples[i].Predicate
+		if vocabulary.IsValidPredicate(predicate) {
+			continue
+		}
+		c.recordMutationRejection(subject, "structural_predicate_invalid",
+			fmt.Sprintf("predicate %q is not a valid 3-part predicate (domain.category.property) on entity %q",
+				predicate, triples[i].Subject))
+		if !c.config.AllowNonConformingPredicates {
+			return rejectInvalid(graph.ErrorCodeStructuralInvalid,
+				fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property)", predicate))
+		}
+	}
+	return nil
+}
+
 // handleTripleAdd handles add triple requests from rule processor and other components
 func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.AddTripleRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
+	}
+
+	// Structural-identity predicate gate (fail-closed by default).
+	if err := c.validateTriplePredicates(SubjectTripleAdd, []message.Triple{req.Triple}); err != nil {
+		return nil, err
 	}
 
 	// AddTriple uses triple.Subject as entity ID
@@ -345,6 +377,11 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 			},
 			WrittenCount: 0,
 		})
+	}
+
+	// Structural-identity predicate gate (fail-closed by default).
+	if err := c.validateTriplePredicates(SubjectTripleAddBatch, req.Triples); err != nil {
+		return nil, err
 	}
 
 	written, failed, err := c.AddTriples(ctx, req.Triples)
@@ -555,6 +592,11 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	}
 	if err := validateMutationPredicates(req.Entity.Triples, nil); err != nil {
 		return nil, rejectFromError(err)
+	}
+
+	// Structural-identity predicate gate (fail-closed by default).
+	if err := c.validateTriplePredicates(SubjectEntityCreateWithTriples, req.Entity.Triples); err != nil {
+		return nil, err
 	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): the mutation API
@@ -805,6 +847,13 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	}
 	if err := validateMutationPredicates(req.AddTriples, req.RemoveTriples); err != nil {
 		return nil, rejectFromError(err)
+	}
+
+	// Structural-identity predicate gate (fail-closed by default) on the triples
+	// being written. RemoveTriples name predicates to DELETE — a malformed one is
+	// allowed through so a bad predicate can be cleaned up.
+	if err := c.validateTriplePredicates(SubjectEntityUpdateWithTriples, req.AddTriples); err != nil {
+		return nil, err
 	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): split off any

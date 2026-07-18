@@ -1515,7 +1515,7 @@ func (e *ActionExecutor) publishAgentOnce(ctx context.Context, action Action, ec
 	// overlay applies to all substituted strings on this iteration.
 	// Role substitution enables continuation patterns (ADR-045 R6)
 	// where the spawned task's role comes from a triple on the
-	// triggering entity (e.g., `$entity.triple.research.parent_role`).
+	// triggering entity (e.g., `$entity.triple.research.parent.role`).
 	// Existing rule packs that hardcode role values are unaffected —
 	// strings without `$`-prefixed tokens pass through unchanged.
 	subject := ec.SubstituteVariablesWithIterVar(action.Subject, iterVarName, iterVarValue)

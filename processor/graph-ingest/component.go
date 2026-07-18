@@ -395,6 +395,17 @@ type Config struct {
 	// once the mismatch metric reads zero. All fail-open cases (empty token,
 	// no claim reader, legacy/pre-fence owner, reader blip) stay fail-open.
 	EnforceOwnerLease bool `json:"enforce_owner_lease" schema:"type:bool,description:Reject writes whose OwnerToken does not match the live owner lease (ADR-056 PR-5); default false keeps observe-only metering,default:false,category:advanced"`
+	// AllowNonConformingPredicates is the escape hatch for the structural-identity
+	// predicate gate. Default false = FAIL-CLOSED: a mutation carrying a predicate
+	// that is not a valid 3-part domain.category.property token is rejected with
+	// ErrorCodeStructuralInvalid (metered as mutation_rejections{reason=
+	// structural_predicate_invalid} + loud Warn). Set true ONLY as a temporary
+	// migration/emergency measure to downgrade to observe-only (meter + log, but the
+	// write still commits) — e.g. while a sister repo is mid-migration off a legacy
+	// predicate. Default (Go zero) is fail-closed so enforcement does not depend on
+	// schema-default application. The entity-ID half is already fail-closed via
+	// validateEntityID. See openspec/changes/enforce-structural-invariants.
+	AllowNonConformingPredicates bool `json:"allow_nonconforming_predicates" schema:"type:bool,description:Escape hatch: downgrade the structural predicate gate to observe-only (meter+log but commit). Default false = fail-closed reject of non-3-part predicates,default:false,category:advanced"`
 	// IngestLanes is the number of keyed-concurrent ingest lanes (ADR-072,
 	// gh#480). Messages are partitioned by entity ID (same entity → one lane →
 	// serial in arrival order, preserving the arrival-order merge; different
@@ -1573,6 +1584,12 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	// their own subjects below.
 	own, foreign := c.normalizeProjection(ctx, entity.ID, entity.MessageType, entity.Triples)
 	entity.Triples = own
+
+	// Structural-identity predicate gate on the Graphable ingest path (observe-only
+	// by default; the primary vector for product/source-authored predicates).
+	if err := c.validateTriplePredicates("graph.ingest.entity", entity.Triples); err != nil {
+		return err
+	}
 
 	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
 	// used CreateEntity (Put = full-replace) here, which clobbered any

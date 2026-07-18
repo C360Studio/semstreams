@@ -180,7 +180,7 @@ func (r *searchGraphRetriever) FetchCandidates(ctx context.Context, topic string
 // natsLoopStore adapts natsclient.KVStore to the LoopStore interface.
 // Implementation choices:
 //
-//   - GetIntent reads research.requested.<loopID> and decodes via
+//   - GetIntent reads research.request.received.<loopID> and decodes via
 //     the production message.Decoder. NewTestDecoder isn't suitable
 //     here because production traffic goes through this path; we use
 //     a per-process decoder cached on the adapter.
@@ -214,7 +214,7 @@ func newNATSLoopStore(kv *natsclient.KVStore, registry *payloadregistry.Registry
 // loopStoreKeyIntent returns the AGENT_LOOPS key holding the
 // research_intent payload. Mirrors processor/agentic-tools/executors/
 // research_graph.go's researchTriggerKeyPrefix.
-func loopStoreKeyIntent(loopID string) string { return "research.requested." + loopID }
+func loopStoreKeyIntent(loopID string) string { return "research.request.received." + loopID }
 
 // loopStoreKeyClassifyComplete is R1's trigger key.
 func loopStoreKeyClassifyComplete(loopID string) string { return "classify.complete." + loopID }
