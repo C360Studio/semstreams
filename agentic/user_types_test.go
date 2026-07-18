@@ -530,6 +530,61 @@ func TestTaskMessage_Validate(t *testing.T) {
 			},
 			wantErr: `function_name required when tool_choice mode is "function"`,
 		},
+		{
+			name: "nil max_iterations uses component default",
+			task: TaskMessage{
+				TaskID: "task-123",
+				Role:   "general",
+				Model:  "gpt-4",
+				Prompt: "test",
+				// MaxIterations omitted (nil)
+			},
+			wantErr: "",
+		},
+		{
+			name: "max_iterations of 1 is valid",
+			task: TaskMessage{
+				TaskID:        "task-123",
+				Role:          "general",
+				Model:         "gpt-4",
+				Prompt:        "test",
+				MaxIterations: intPtr(1),
+			},
+			wantErr: "",
+		},
+		{
+			name: "max_iterations of 5 is valid",
+			task: TaskMessage{
+				TaskID:        "task-123",
+				Role:          "general",
+				Model:         "gpt-4",
+				Prompt:        "test",
+				MaxIterations: intPtr(5),
+			},
+			wantErr: "",
+		},
+		{
+			name: "max_iterations of 0 is rejected",
+			task: TaskMessage{
+				TaskID:        "task-123",
+				Role:          "general",
+				Model:         "gpt-4",
+				Prompt:        "test",
+				MaxIterations: intPtr(0),
+			},
+			wantErr: "max_iterations must be >= 1, got 0",
+		},
+		{
+			name: "negative max_iterations is rejected",
+			task: TaskMessage{
+				TaskID:        "task-123",
+				Role:          "general",
+				Model:         "gpt-4",
+				Prompt:        "test",
+				MaxIterations: intPtr(-1),
+			},
+			wantErr: "max_iterations must be >= 1, got -1",
+		},
 	}
 
 	for _, tt := range tests {
@@ -781,4 +836,55 @@ func TestTaskMessage_BackwardCompat_OldJSON(t *testing.T) {
 	assert.Equal(t, "t1", decoded.TaskID)
 	assert.Nil(t, decoded.Tools)
 	assert.Nil(t, decoded.Metadata)
+}
+
+// TestTaskMessage_MaxIterations_JSONRoundTrip verifies the pointer field's
+// nil-vs-set JSON shape (gh#528). Nil must omit the field entirely
+// (omitempty) so pre-existing spawners that never set a per-spawn budget
+// produce byte-identical wire payloads; a set value must round-trip the
+// exact int through the pointer.
+func TestTaskMessage_MaxIterations_JSONRoundTrip(t *testing.T) {
+	t.Run("nil omits field via omitempty", func(t *testing.T) {
+		original := TaskMessage{
+			TaskID: "task-mi-nil",
+			Role:   "general",
+			Model:  "fast",
+			Prompt: "no budget override",
+			// MaxIterations omitted
+		}
+
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+		assert.NotContains(t, string(data), "max_iterations",
+			"nil MaxIterations should be omitted from JSON entirely")
+
+		var decoded TaskMessage
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		assert.Nil(t, decoded.MaxIterations)
+	})
+
+	t.Run("set value round-trips", func(t *testing.T) {
+		original := TaskMessage{
+			TaskID:        "task-mi-set",
+			Role:          "general",
+			Model:         "fast",
+			Prompt:        "narrow the budget",
+			MaxIterations: intPtr(3),
+		}
+
+		data, err := json.Marshal(original)
+		require.NoError(t, err)
+
+		var decoded TaskMessage
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		require.NotNil(t, decoded.MaxIterations)
+		assert.Equal(t, 3, *decoded.MaxIterations)
+	})
+}
+
+// intPtr returns a pointer to v — test helper for TaskMessage.MaxIterations
+// table cases, which distinguish "unset" (nil) from "explicit zero" on the
+// JSON wire and therefore need a pointer, not a value.
+func intPtr(v int) *int {
+	return &v
 }

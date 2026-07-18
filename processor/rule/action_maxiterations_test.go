@@ -341,3 +341,77 @@ func TestActionMaxIterations_ExplicitID(t *testing.T) {
 		t.Errorf("on_enter fires = %d, want 2 (shared counter capped at 2)", executor.onEnterCalls)
 	}
 }
+
+// TestActionLoopMaxIterations_HotReloadWireRoundTrip extends the
+// definitionFromMap hot-reload round-trip coverage above (which pins the
+// firing-cap Action.MaxIterations wire shape) to the gh#528
+// Action.LoopMaxIterations field — the SPAWNED LOOP's iteration budget,
+// deliberately distinct from the firing cap. Unlike MaxIterations'
+// pointer-int sentinel, LoopMaxIterations is a plain substitutable
+// string, so it carries no float64-vs-int JSON-number ambiguity — but
+// operator-reachable config fields still need a round-trip test proving
+// the actual Action struct (not a shadow/hand-rolled type) marshals and
+// unmarshals the field under its real "loop_max_iterations" JSON tag via
+// the hot-reload path config_validation.go's parseActions helper drives
+// in production.
+func TestActionLoopMaxIterations_HotReloadWireRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  map[string]any
+		want string
+	}{
+		{
+			name: "unset stays empty",
+			raw: map[string]any{
+				"type":    ActionTypePublishAgent,
+				"subject": "agent.task.test",
+				"role":    "general",
+				"model":   "m",
+				"prompt":  "p",
+			},
+			want: "",
+		},
+		{
+			name: "literal value round-trips",
+			raw: map[string]any{
+				"type":                ActionTypePublishAgent,
+				"subject":             "agent.task.test",
+				"role":                "general",
+				"model":               "m",
+				"prompt":              "p",
+				"loop_max_iterations": "3",
+			},
+			want: "3",
+		},
+		{
+			name: "substitution template round-trips verbatim (resolved at fire time, not config-load time)",
+			raw: map[string]any{
+				"type":                ActionTypePublishAgent,
+				"subject":             "agent.task.test",
+				"role":                "general",
+				"model":               "m",
+				"prompt":              "p",
+				"loop_max_iterations": "$entity.triple.task.spec.budget",
+			},
+			want: "$entity.triple.task.spec.budget",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ruleMap := map[string]any{
+				"type":     "expression",
+				"on_enter": []any{tt.raw},
+			}
+			def, err := definitionFromMap("rule-loop-max-iter", ruleMap)
+			if err != nil {
+				t.Fatalf("definitionFromMap: %v", err)
+			}
+			if len(def.OnEnter) != 1 {
+				t.Fatalf("on_enter length = %d, want 1", len(def.OnEnter))
+			}
+			if got := def.OnEnter[0].LoopMaxIterations; got != tt.want {
+				t.Errorf("LoopMaxIterations = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

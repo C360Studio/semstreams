@@ -677,6 +677,11 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	if rp.lifecycleManager != nil {
 		rp.statefulEvaluator.SetLifecycleManager(rp.lifecycleManager)
 	}
+	// Wire the rule-processor Metrics so runActions can count non-deny
+	// action-execution failures (actionFailuresTotal). rp.metrics is
+	// nil-safe (newRuleMetrics returns nil when metricsRegistry is nil)
+	// and SetMetrics tolerates a nil argument.
+	rp.statefulEvaluator.SetMetrics(rp.metrics)
 
 	rp.logger.Info("State tracker initialized for stateful ECA rules")
 	return nil

@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -226,6 +227,71 @@ func TestAssembleSystemPrompt_PersonaSourceErrorFallsBack(t *testing.T) {
 	// Should not panic or return empty; default role-general content wins.
 	out := h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
 	assert.Contains(t, out, "general-purpose agent")
+}
+
+// intPtrForTest returns a pointer to v — local to this internal test
+// package (agenticloop), distinct from handlers_test.go's intPtr which
+// lives in the external agenticloop_test package and is not visible here.
+func intPtrForTest(v int) *int {
+	return &v
+}
+
+// TestEffectiveLoopMaxIterations locks the gh#528 clamp contract at the
+// single shared choke point HandleTask and assembleSystemPrompt both call
+// through (pre-merge review N1: before this helper existed,
+// assembleSystemPrompt read h.config.MaxIterations directly and could
+// diverge from the effective budget actually enforced on the loop entity).
+func TestEffectiveLoopMaxIterations(t *testing.T) {
+	tests := []struct {
+		name             string
+		spawn            *int
+		componentCeiling int
+		want             int
+	}{
+		{name: "nil spawn uses component ceiling", spawn: nil, componentCeiling: 20, want: 20},
+		{name: "spawn narrows below ceiling", spawn: intPtrForTest(2), componentCeiling: 20, want: 2},
+		{name: "spawn cannot widen past ceiling", spawn: intPtrForTest(50), componentCeiling: 5, want: 5},
+		{name: "spawn equal to ceiling is a no-op clamp", spawn: intPtrForTest(10), componentCeiling: 10, want: 10},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := effectiveLoopMaxIterations(TaskMessage{MaxIterations: tt.spawn}, tt.componentCeiling)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestAssembleSystemPrompt_UsesEffectiveClampedBudget is the end-to-end
+// regression lock for N1: a ContentFunc fragment reads
+// ctx.MaxIterations directly, so this drives the real assembleSystemPrompt
+// path (not a hand-rolled AssemblyContext) and asserts the RENDERED text
+// reflects the clamped effective budget, not the raw component ceiling.
+func TestAssembleSystemPrompt_UsesEffectiveClampedBudget(t *testing.T) {
+	config := DefaultConfig()
+	config.MaxIterations = 20
+	h := NewMessageHandler(config)
+
+	reg := prompt.NewRegistry()
+	reg.Add(prompt.Fragment{
+		ID:       "fixture-max-iterations-echo",
+		Category: prompt.CategorySystem,
+		ContentFunc: func(ctx *prompt.AssemblyContext) string {
+			return fmt.Sprintf("EFFECTIVE-MAX-ITERATIONS=%d", ctx.MaxIterations)
+		},
+	})
+	h.SetPromptRegistry(reg)
+
+	// Spawn narrows the component's 20-iteration ceiling down to 2. The
+	// rendered prompt must show 2, not the component's 20.
+	out := h.assembleSystemPrompt(context.Background(), TaskMessage{
+		Role: "general", Prompt: "x", MaxIterations: intPtrForTest(2),
+	})
+	assert.Contains(t, out, "EFFECTIVE-MAX-ITERATIONS=2")
+	assert.NotContains(t, out, "EFFECTIVE-MAX-ITERATIONS=20")
+
+	// Nil spawn value falls back to the component ceiling unchanged.
+	out = h.assembleSystemPrompt(context.Background(), TaskMessage{Role: "general", Prompt: "x"})
+	assert.Contains(t, out, "EFFECTIVE-MAX-ITERATIONS=20")
 }
 
 // TestToolNames covers the simple ToolDefinition → []string projection

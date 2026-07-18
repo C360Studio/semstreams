@@ -28,6 +28,17 @@ type Metrics struct {
 	// is not silent (critical in enforce mode). The emit is best-effort: a
 	// failure increments this counter but NEVER flips the verdict.
 	governanceVerdictAuditFailures *prometheus.CounterVec
+
+	// actionFailuresTotal counts every non-deny action-execution error
+	// runActions' generic failure branch swallows into a log line
+	// (stateful_evaluator.go). Labeled by action_type only — the closed
+	// set of Action.Type constants (ActionTypePublish, ActionTypeAddTriple,
+	// ...), NOT rule_id or entity_id, so cardinality stays bounded
+	// regardless of rule-pack size or fleet size. Without this, an
+	// operator-facing action misconfiguration (e.g. publish_agent's
+	// loop_max_iterations resolving to a non-integer) fails closed but
+	// invisibly — the classified error is real, but nothing alerts on it.
+	actionFailuresTotal *prometheus.CounterVec
 }
 
 // Package-level singleton (registered once to avoid duplicate registration panics)
@@ -144,6 +155,13 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 				Name:      "governance_verdict_audit_failures_total",
 				Help:      "Governance verdict-audit emits that failed (verdict applied but audit record lost; ADR-055 §3a)",
 			}, []string{"decision"}),
+
+			actionFailuresTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "rule",
+				Name:      "action_failures_total",
+				Help:      "Rule action executions that failed (non-deny errors from ActionExecutor.Execute), by action_type",
+			}, []string{"action_type"}),
 		}
 
 		registry.PrometheusRegistry().MustRegister(
@@ -161,6 +179,7 @@ func newRuleMetrics(registry *metric.MetricsRegistry, _ string) *Metrics {
 			ruleMetrics.stateTransitionsTotal,
 			ruleMetrics.debounceDelaysTotal,
 			ruleMetrics.governanceVerdictAuditFailures,
+			ruleMetrics.actionFailuresTotal,
 		)
 	})
 

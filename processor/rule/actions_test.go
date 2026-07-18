@@ -1358,6 +1358,168 @@ func TestAction_PublishAgent_EmptyToolChoice(t *testing.T) {
 	assert.Nil(t, task.ToolChoice, "ToolChoice should remain nil when action.ToolChoice unset")
 }
 
+// --- gh#528 / gh#529: loop_max_iterations (spawned-loop iteration budget) tests ---
+
+// TestAction_PublishAgent_LoopMaxIterations_Literal verifies a literal
+// loop_max_iterations string threads onto TaskMessage.MaxIterations as
+// *int (gh#528 "spawn narrows the budget" scenario).
+func TestAction_PublishAgent_LoopMaxIterations_Literal(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:              ActionTypePublishAgent,
+		Subject:           "agent.task.test",
+		Role:              "general",
+		Model:             "mock-model",
+		Prompt:            "p",
+		LoopMaxIterations: "2",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "001")}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.MaxIterations, "MaxIterations should round-trip onto TaskMessage")
+	assert.Equal(t, 2, *task.MaxIterations)
+}
+
+// TestAction_PublishAgent_LoopMaxIterations_SubstitutedFromEntityTriple
+// drives the spec scenario "substituted budget from an entity triple":
+// a publish_agent action with loop_max_iterations
+// "$entity.triple.task.spec.budget" fires on an entity carrying that
+// predicate with Object "3" — the spawned TaskMessage must carry
+// max_iterations 3. Built through the real publish_agent execution path
+// (executor.Execute), not a hand-rolled TaskMessage.
+func TestAction_PublishAgent_LoopMaxIterations_SubstitutedFromEntityTriple(t *testing.T) {
+	t.Parallel()
+	entityID := semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "002")
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	ec := &ExecutionContext{
+		EntityID: entityID,
+		Entity: &gtypes.EntityState{
+			Triples: []message.Triple{
+				{Predicate: "task.spec.budget", Object: "3"},
+			},
+		},
+	}
+
+	action := Action{
+		Type:              ActionTypePublishAgent,
+		Subject:           "agent.task.developer",
+		Role:              "developer",
+		Model:             "mock-model",
+		Prompt:            "implement it",
+		LoopMaxIterations: "$entity.triple.task.spec.budget",
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, ec))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	require.NotNil(t, task.MaxIterations, "substituted loop_max_iterations should round-trip onto TaskMessage")
+	assert.Equal(t, 3, *task.MaxIterations)
+}
+
+// TestAction_PublishAgent_LoopMaxIterations_NonIntegerSubstitutionFailsLoudly
+// drives the spec scenario "non-integer substitution fails loudly": a
+// substituted loop_max_iterations that is not a positive integer must
+// fail the action with a classified error, and no task is published —
+// never a silent skip that would leave the spawned loop at the
+// unbounded component default.
+func TestAction_PublishAgent_LoopMaxIterations_NonIntegerSubstitutionFailsLoudly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:              ActionTypePublishAgent,
+		Subject:           "agent.task.test",
+		Role:              "general",
+		Model:             "mock-model",
+		Prompt:            "p",
+		LoopMaxIterations: "unbounded",
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "003")})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "loop_max_iterations")
+
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified, "loop_max_iterations rejection must be a classified error, not a bare error")
+	assert.Equal(t, errs.ErrorInvalid, classified.Class)
+
+	assert.Empty(t, mock.published, "no task should be published when loop_max_iterations fails to resolve")
+}
+
+// TestAction_PublishAgent_LoopMaxIterations_ZeroFailsLoudly verifies the
+// floor is enforced after substitution too: "0" is syntactically an
+// integer but not a positive one, so it must be rejected the same way
+// non-numeric text is.
+func TestAction_PublishAgent_LoopMaxIterations_ZeroFailsLoudly(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:              ActionTypePublishAgent,
+		Subject:           "agent.task.test",
+		Role:              "general",
+		Model:             "mock-model",
+		Prompt:            "p",
+		LoopMaxIterations: "0",
+	}
+
+	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "004")})
+	require.Error(t, err)
+	assert.Empty(t, mock.published, "no task should be published when loop_max_iterations resolves to a non-positive integer")
+}
+
+// TestAction_PublishAgent_EmptyLoopMaxIterations verifies that an unset
+// LoopMaxIterations leaves TaskMessage.MaxIterations nil (back-compat:
+// existing flows that don't opt in fall back to the agentic-loop
+// component's configured default, unchanged).
+func TestAction_PublishAgent_EmptyLoopMaxIterations(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	mock := &mockPublisher{}
+	executor := NewActionExecutorFull(nil, nil, mock)
+
+	action := Action{
+		Type:    ActionTypePublishAgent,
+		Subject: "agent.task.test",
+		Role:    "general",
+		Model:   "mock-model",
+		Prompt:  "p",
+		// LoopMaxIterations omitted
+	}
+
+	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: semantictest.EntityID(t, "test", "rule", "actions", "loop-max-iterations", "entity", "005")}))
+	require.Len(t, mock.published, 1)
+
+	baseMsg, err := newActionsTestDecoder(t).Decode(mock.published[0].data)
+	require.NoError(t, err)
+	task, ok := baseMsg.Payload().(*agentic.TaskMessage)
+	require.True(t, ok)
+
+	assert.Nil(t, task.MaxIterations, "MaxIterations should remain nil when action.LoopMaxIterations unset")
+}
+
 // --- #134 / ADR-046 Phase 1: for_each iteration tests ---
 
 // TestAction_PublishAgent_ForEach_DispatchesPerItem verifies the core
@@ -1991,7 +2153,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=1992 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2154 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2687,7 +2849,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2690 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2852 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

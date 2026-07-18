@@ -2,6 +2,7 @@ package agenticloop
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -409,6 +410,16 @@ func TestMaxIterations_DrainsPendingTools(t *testing.T) {
 	if !result.MaxIterationsReached {
 		t.Error("MaxIterationsReached should be true")
 	}
+	// gh#529 / pre-merge review M2: assert the published failure REASON
+	// directly, not just the bool. Both exhaustion-detection paths
+	// (tool-drain here, and the model-response guard covered elsewhere)
+	// must agree on the wire-visible reason string "max_iterations".
+	if result.FailureState == nil {
+		t.Fatal("FailureState should be populated on the tool-drain max-iterations path")
+	}
+	if result.FailureState.Reason != "max_iterations" {
+		t.Errorf("FailureState.Reason = %q, want %q", result.FailureState.Reason, "max_iterations")
+	}
 
 	if pending := handler.loopManager.GetPendingTools(loopID); len(pending) != 0 {
 		t.Errorf("pending count after max-iterations = %d, want 0", len(pending))
@@ -420,6 +431,53 @@ func TestMaxIterations_DrainsPendingTools(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Error, "max iterations") {
 		t.Errorf("synth Error = %q, want to contain 'max iterations'", results[0].Error)
+	}
+}
+
+// TestHandleToolsComplete_NonExhaustionIncrementErrorPropagates is the M1
+// pre-merge review regression lock: handleToolsComplete's drain-path
+// previously inferred "max iterations reached" from ANY error
+// LoopManager.IncrementIteration returned, but that call can also fail
+// with an unrelated "loop not found" operational error — which must
+// propagate as an ordinary handler error, not be misreported as
+// max_iterations. Deletes the loop out from under IncrementIteration
+// (entity/cm captured beforehand) to force the non-sentinel branch.
+func TestHandleToolsComplete_NonExhaustionIncrementErrorPropagates(t *testing.T) {
+	handler := NewMessageHandler(DefaultConfig())
+	ctx := context.Background()
+
+	loopID, err := handler.loopManager.CreateLoop("task-1", "general", "m", 20)
+	if err != nil {
+		t.Fatalf("CreateLoop: %v", err)
+	}
+	entity, err := handler.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop: %v", err)
+	}
+	cm := handler.loopManager.GetContextManager(loopID)
+
+	// Remove the loop so the next IncrementIteration call inside
+	// handleToolsComplete hits the "loop not found" branch instead of
+	// the max-iterations sentinel — entity/cm above were already
+	// captured while the loop existed, mirroring a caller racing a
+	// concurrent deletion.
+	if err := handler.loopManager.DeleteLoop(loopID); err != nil {
+		t.Fatalf("DeleteLoop: %v", err)
+	}
+
+	result := &HandlerResult{}
+	_, err = handler.handleToolsComplete(ctx, loopID, entity, cm, result)
+	if err == nil {
+		t.Fatal("handleToolsComplete should propagate the non-exhaustion increment error")
+	}
+	if errors.Is(err, agentic.ErrMaxIterationsReached) {
+		t.Errorf("handleToolsComplete misreported a non-exhaustion error as max_iterations: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("handleToolsComplete error = %v, want it to surface the underlying 'loop not found' cause", err)
+	}
+	if result.MaxIterationsReached {
+		t.Error("MaxIterationsReached should remain false when increment failed for a non-exhaustion reason")
 	}
 }
 

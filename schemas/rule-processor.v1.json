@@ -90,6 +90,10 @@
                   "type": "string",
                   "description": "key"
                 },
+                "loop_max_iterations": {
+                  "type": "string",
+                  "description": "Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."
+                },
                 "max_iterations": {
                   "type": "integer",
                   "description": "max_iterations"
@@ -380,6 +384,10 @@
                   "type": "string",
                   "description": "key"
                 },
+                "loop_max_iterations": {
+                  "type": "string",
+                  "description": "Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."
+                },
                 "max_iterations": {
                   "type": "integer",
                   "description": "max_iterations"
@@ -579,6 +587,10 @@
                   "type": "string",
                   "description": "key"
                 },
+                "loop_max_iterations": {
+                  "type": "string",
+                  "description": "Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."
+                },
                 "max_iterations": {
                   "type": "integer",
                   "description": "max_iterations"
@@ -777,6 +789,10 @@
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "loop_max_iterations": {
+                  "type": "string",
+                  "description": "Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."
                 },
                 "max_iterations": {
                   "type": "integer",
@@ -995,6 +1011,10 @@
                 "key": {
                   "type": "string",
                   "description": "key"
+                },
+                "loop_max_iterations": {
+                  "type": "string",
+                  "description": "Iteration budget for the SPAWNED LOOP (agentic-loop's per-iteration cap on the agent this action spawns) — distinct from the action-level firing cap 'max_iterations' above, which bounds how many times this action itself fires. Supports variable substitution (literal or $entity.triple.* reference); must resolve to a positive integer or the action fails."
                 },
                 "max_iterations": {
                   "type": "integer",
