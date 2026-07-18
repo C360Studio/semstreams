@@ -1270,6 +1270,29 @@ func (c *Component) latchEntityStatePoison(contractErr *graph.StateContractError
 	return latched
 }
 
+// classifyStoredStateRMWError re-attributes a read-modify-write failure to
+// resident stored-state poison (gh#562). The owner's own RMW reads use
+// graph.UnmarshalEntityStateTrusted, so noncanonical STORED state no longer
+// fails on the read — it surfaces either as a trusted-decode failure
+// (unreadable JSON) or as a MarshalEntityState write-gate rejection that
+// would otherwise blame the merged CANDIDATE the caller submitted. On this
+// slow path (the write is already failing) re-validate the stored bytes: when
+// the poison predates the merge, return the graph-state-reset-required
+// classification (mirroring the ENTITY_STATES contract guard) instead of a
+// candidate-invalid error. A canonical stored state returns cycleErr
+// unchanged — the candidate really was at fault.
+//
+// Classification only — latching stays with its existing owners (the ingest
+// lane's processIngest, the contract guard watcher, and the query lane), so
+// their latch-once logging semantics are preserved.
+func (c *Component) classifyStoredStateRMWError(current []byte, cycleErr error) error {
+	var stored graph.EntityState
+	if err := graph.UnmarshalEntityState(current, &stored); err != nil {
+		return err
+	}
+	return cycleErr
+}
+
 func (c *Component) markEntityWatchLost() {
 	c.entityQueryMu.Lock()
 	c.entityWatchLost.Store(true)
@@ -2342,9 +2365,14 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		// Existing entity: merge triples + refresh latest-wins metadata.
 		// Hierarchy triples are NOT re-applied — they landed on the
 		// original create and would only produce duplicates here.
+		//
+		// gh#562: trusted decode — this is the owner's own RMW read on the
+		// per-key-serialized ingest hot path; MarshalEntityState below
+		// re-validates the merged candidate, so resident poison still fails
+		// the write (classified via classifyStoredStateRMWError).
 		var existing graph.EntityState
-		if err := graph.UnmarshalEntityState(current, &existing); err != nil {
-			return nil, err // non-retryable
+		if err := graph.UnmarshalEntityStateTrusted(current, &existing); err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err) // non-retryable
 		}
 		// gh#466: predicate-level merge (replace per (subject,predicate)), NOT raw
 		// append — otherwise a producer republishing the same entity accumulates
@@ -2377,10 +2405,11 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		existing.Version++
 		existing.UpdatedAt = time.Now()
 		data, err := graph.MarshalEntityState(&existing)
-		if err == nil {
-			bytesWritten = len(data)
+		if err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err)
 		}
-		return data, err
+		bytesWritten = len(data)
+		return data, nil
 	})
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
@@ -2832,9 +2861,10 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 		var entity graph.EntityState
 
 		if len(current) > 0 {
-			// Deserialize existing entity
-			if err := graph.UnmarshalEntityState(current, &entity); err != nil {
-				return nil, err // Non-retryable
+			// gh#562: trusted decode on the owner's own RMW read;
+			// MarshalEntityState below re-validates the final candidate.
+			if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
+				return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
 			}
 		} else {
 			// Must-exist (ADR-055): a triple targeting an absent entity is
@@ -2848,7 +2878,11 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 		entity.Version++
 		entity.UpdatedAt = time.Now()
 
-		return graph.MarshalEntityState(&entity)
+		data, err := graph.MarshalEntityState(&entity)
+		if err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err)
+		}
+		return data, nil
 	})
 
 	if err != nil {
@@ -2948,8 +2982,10 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			var entity graph.EntityState
 
 			if len(current) > 0 {
-				if err := graph.UnmarshalEntityState(current, &entity); err != nil {
-					return nil, err // Non-retryable
+				// gh#562: trusted decode on the owner's own RMW read;
+				// MarshalEntityState below re-validates the final candidate.
+				if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
+					return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
 				}
 			} else {
 				// Must-exist (ADR-055): a triple targeting an absent entity is
@@ -2962,7 +2998,11 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 			entity.Version++
 			entity.UpdatedAt = time.Now()
 
-			return graph.MarshalEntityState(&entity)
+			data, err := graph.MarshalEntityState(&entity)
+			if err != nil {
+				return nil, c.classifyStoredStateRMWError(current, err)
+			}
+			return data, nil
 		})
 
 		if casErr != nil {
@@ -3002,6 +3042,14 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 	return writtenCount, failedSubjects, errs.Wrap(innerErr, "Component", "AddTriples", "batch CAS partial failure")
 }
 
+// errNoOpRemove exits RemoveTriple's CAS closure when no stored triple
+// matches the predicate: a TRUE no-op. The caller maps it to nil success
+// BEFORE any KV write, so the closure's only success exit is a
+// MarshalEntityState-validated candidate (gh#562 review M1 — previously the
+// closure returned the current bytes and UpdateWithRetry CAS-rewrote them
+// verbatim, bumping the revision and re-firing every ENTITY_STATES watcher).
+var errNoOpRemove = errors.New("remove triple: no matching predicate (no-op)")
+
 // RemoveTriple removes a triple from an entity using CAS for concurrency safety
 func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string) error {
 	if err := validateEntityID(subject); err != nil {
@@ -3033,10 +3081,12 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 			return nil, natsclient.ErrKVKeyNotFound
 		}
 
-		// Deserialize existing entity
+		// Deserialize existing entity.
+		// gh#562: trusted decode on the owner's own RMW read;
+		// MarshalEntityState below re-validates the final candidate.
 		var entity graph.EntityState
-		if err := graph.UnmarshalEntityState(current, &entity); err != nil {
-			return nil, err // Non-retryable
+		if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
 		}
 
 		// Remove matching triples
@@ -3047,20 +3097,34 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 			}
 		}
 
-		// If nothing changed, return input unchanged to avoid unnecessary write
+		// No matching predicate: exit via sentinel, NOT by returning the
+		// current bytes — UpdateWithRetry CAS-writes whatever the closure
+		// returns, so `return current, nil` would be an identity rewrite
+		// (revision bump + watcher re-fire), not a skip. The caller maps
+		// the sentinel to silent success with no write committed.
 		if len(filtered) == len(entity.Triples) {
-			return current, nil
+			return nil, errNoOpRemove
 		}
 
 		entity.Triples = filtered
 		entity.Version++
 		entity.UpdatedAt = time.Now()
 
-		return graph.MarshalEntityState(&entity)
+		data, err := graph.MarshalEntityState(&entity)
+		if err != nil {
+			return nil, c.classifyStoredStateRMWError(current, err)
+		}
+		return data, nil
 	})
 
 	// Handle errors - ErrKVKeyNotFound means entity was deleted, which is fine
 	if err != nil {
+		// True no-op: no triple matched the predicate. Silent success with
+		// NO write committed — bytes and revision untouched, so no cache
+		// invalidation is needed either.
+		if errors.Is(err, errNoOpRemove) {
+			return nil
+		}
 		// Check if it's a wrapped "not found" error
 		if natsclient.IsKVNotFoundError(err) {
 			return nil // Entity was deleted, nothing to remove
