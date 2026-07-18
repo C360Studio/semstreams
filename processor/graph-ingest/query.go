@@ -58,7 +58,7 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 
 // handleQueryEntityNATS handles single entity query requests via NATS request/reply
 func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]byte, error) {
-	if err := c.checkEntityQueryReady(); err != nil {
+	if err := c.ensureEntityQueriesReady(); err != nil {
 		return nil, err
 	}
 	// Create context with timeout for KV operation
@@ -97,15 +97,15 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 			fmt.Errorf("internal error: %w", err))
 	}
 
-	if err := c.validateEntityQueryValue(entry.Value); err != nil {
+	if err := c.validateEntityQueryValue(ctx, req.ID, entry.Value, entry.Revision); err != nil {
 		return nil, err
 	}
-	return c.finalizeEntityQueryResponse(entry.Value, nil)
+	return entry.Value, nil
 }
 
 // handleQueryBatchNATS handles batch entity query requests via NATS request/reply
 func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]byte, error) {
-	if err := c.checkEntityQueryReady(); err != nil {
+	if err := c.ensureEntityQueriesReady(); err != nil {
 		return nil, err
 	}
 	// Create context with timeout for KV operations
@@ -121,7 +121,7 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 	}
 	// Handle empty IDs (return empty entities)
 	if len(req.IDs) == 0 {
-		return c.finalizeEntityQueryResponse([]byte(`{"entities":[]}`), nil)
+		return []byte(`{"entities":[]}`), nil
 	}
 
 	// Fetch entities with bounded concurrency and cache
@@ -131,10 +131,9 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 	}
 
 	// Return entities wrapped in a struct for consistency with loadEntities expectations
-	response, err := json.Marshal(map[string]any{
+	return json.Marshal(map[string]any{
 		"entities": entities,
 	})
-	return c.finalizeEntityQueryResponse(response, err)
 }
 
 // maxPrefixResponseBytes is the soft ceiling for the marshalled response body.
@@ -162,7 +161,7 @@ const maxPrefixResponseBytes = 800 * 1024
 //     i.e. non-deterministic) but is required for cursor correctness and is
 //     safe because callers have always treated the result as a set.
 func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]byte, error) {
-	if err := c.checkEntityQueryReady(); err != nil {
+	if err := c.ensureEntityQueriesReady(); err != nil {
 		return nil, err
 	}
 	// Create context with timeout for KV operation
@@ -284,8 +283,7 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 		NextCursor: nextCursor,
 	}
 
-	response, err := json.Marshal(resp)
-	return c.finalizeEntityQueryResponse(response, err)
+	return json.Marshal(resp)
 }
 
 // applyPrefixByteLimit trims an entity slice to fit within byteLimit bytes
@@ -334,8 +332,11 @@ func applyPrefixByteLimit(entities []graph.EntityState, byteLimit int) ([]graph.
 // Uses a three-tier lookup: TTL cache → KV suffix index → fallback full scan.
 // This enables NL queries to use partial entity IDs like "temp-sensor-001" which
 // get resolved to full 6-part IDs like "c360.logistics.environmental.sensor.temperature.temp-sensor-001".
+// Suffix resolution deliberately serves IDs WITHOUT decoding entity bytes
+// (design D5: resolution is not serving state) — a subsequent read of a
+// poisoned entity's state still fails with the typed classification.
 func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]byte, error) {
-	if err := c.checkEntityQueryReady(); err != nil {
+	if err := c.ensureEntityQueriesReady(); err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -359,8 +360,7 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 	if c.suffixCache != nil {
 		if fullID, ok := c.suffixCache.Get(req.Suffix); ok {
 			c.logger.Debug("suffix query cache hit", "suffix", req.Suffix, "matched", fullID)
-			response, marshalErr := json.Marshal(map[string]string{"id": fullID})
-			return c.finalizeEntityQueryResponse(response, marshalErr)
+			return json.Marshal(map[string]string{"id": fullID})
 		}
 	}
 
@@ -375,8 +375,7 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 			if c.suffixCache != nil {
 				c.suffixCache.Set(req.Suffix, matchedID) //nolint:errcheck
 			}
-			response, marshalErr := json.Marshal(map[string]string{"id": matchedID})
-			return c.finalizeEntityQueryResponse(response, marshalErr)
+			return json.Marshal(map[string]string{"id": matchedID})
 		}
 	}
 
@@ -394,17 +393,19 @@ func (c *Component) handleQuerySuffixNATS(ctx context.Context, data []byte) ([]b
 		}
 	}
 
-	response, err := json.Marshal(map[string]string{"id": matchedID})
-	return c.finalizeEntityQueryResponse(response, err)
+	return json.Marshal(map[string]string{"id": matchedID})
 }
 
+// ensureEntityQueriesReady is the plain atomic readiness check at query
+// handler entry. The flags settle inside Start before any subscription
+// registers, so no lock discipline is needed (design D2 — the old
+// entityQueryMu commit-point ceremony existed only to serialize the retired
+// surface-global poison latch and was deleted with it). Poison refusal is
+// per-entity and lives at each read's validating decode, not here.
 func (c *Component) ensureEntityQueriesReady() error {
-	if state := c.entityStatePoison.Load(); state != nil {
-		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, state)
-	}
 	if c.entityWatchLost.Load() {
 		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
-			errors.New("graph-ingest query not ready: ENTITY_STATES contract watcher unavailable"))
+			errors.New("graph-ingest query not ready: ENTITY_STATES snapshot sweep unavailable"))
 	}
 	if c.entityBootstrapStarted.Load() && !c.entityBootstrapComplete.Load() {
 		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
@@ -413,47 +414,31 @@ func (c *Component) ensureEntityQueriesReady() error {
 	return nil
 }
 
-func (c *Component) checkEntityQueryReady() error {
-	c.entityQueryMu.RLock()
-	defer c.entityQueryMu.RUnlock()
-	return c.ensureEntityQueriesReady()
-}
-
-// finalizeEntityQueryResponse is the commit point for successful query output.
-// A query-discovered poison takes entityQueryMu exclusively before latching;
-// concurrent queries only commit responses under the read side after rechecking.
-func (c *Component) finalizeEntityQueryResponse(data []byte, err error) ([]byte, error) {
-	if err != nil {
-		return nil, err
-	}
-	if c.beforeEntityQueryResponse != nil {
-		c.beforeEntityQueryResponse(data)
-	}
-	c.entityQueryMu.RLock()
-	defer c.entityQueryMu.RUnlock()
-	if err := c.ensureEntityQueriesReady(); err != nil {
-		return nil, err
-	}
-	return data, nil
-}
-
-func (c *Component) validateEntityQueryValue(data []byte) error {
+// validateEntityQueryValue enforces the per-read canonical decode on a single
+// entity read. Refusal derives solely from the bytes actually stored — the
+// poison inventory is observability-only and is never consulted. A poisoned
+// decode stamps the entity ID and records it in the inventory; a successful
+// decode clears any stale inventory entry for the key (D3c), so an
+// out-of-band repair recovers Health on its next read without a restart.
+func (c *Component) validateEntityQueryValue(ctx context.Context, entityID string, data []byte, revision uint64) error {
 	var state graph.EntityState
 	if err := graph.UnmarshalEntityState(data, &state); err != nil {
 		var contractErr *graph.StateContractError
 		if errors.As(err, &contractErr) {
-			c.latchEntityStatePoison(contractErr)
+			contractErr.EntityID = entityID
+			c.inventoryEntityPoison(ctx, contractErr, revision)
 		}
 		return c.classifyEntityQueryError(err)
 	}
-	return c.ensureEntityQueriesReady()
+	c.clearEntityPoisonOnValidRead(entityID, revision)
+	return nil
 }
 
 func (c *Component) classifyEntityQueryError(err error) error {
-	var contractErr *graph.StateContractError
-	if errors.As(err, &contractErr) {
-		c.latchEntityStatePoison(contractErr)
-		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, contractErr)
+	if graph.IsStateContractError(err) {
+		// Already fatal/graph_state_reset_required passes through unchanged
+		// (aggregate errors arrive pre-classified naming every poisoned entity).
+		return graph.ClassifyStateContractError(err)
 	}
 	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, err)
 }
@@ -577,9 +562,22 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 			var entity graph.EntityState
 			if err := graph.UnmarshalEntityState(entry.Value, &entity); err != nil {
+				// Stamp the entity ID here — the goroutine is where the
+				// identity is in scope (design D4) — and record the poison in
+				// the inventory with the failing revision so a single batch
+				// attempt inventories EVERY poisoned entity it touched (D5).
+				var contractErr *graph.StateContractError
+				if errors.As(err, &contractErr) {
+					contractErr.EntityID = entityID
+					c.inventoryEntityPoison(ctx, contractErr, entry.Revision)
+				}
 				results[idx].err = err
 				return
 			}
+
+			// A validating read succeeded — clear any stale inventory entry
+			// for this key (D3c). Steady-state cost: one atomic load.
+			c.clearEntityPoisonOnValidRead(entityID, entry.Revision)
 
 			// Populate cache
 			if c.entityCache != nil {
@@ -595,17 +593,57 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 		return nil, err
 	}
 
-	// Phase 3: Merge cached + fetched results
+	// Phase 3: Merge cached + fetched results. Poison fails the WHOLE read
+	// with one typed error naming every poisoned entity encountered in this
+	// attempt (design D5) — never a silent omission, and never a B-only
+	// response that hides A's poison.
+	var poisoned []*graph.StateContractError
+	var firstOtherErr error
 	entities := make([]graph.EntityState, 0, len(cached)+len(missIDs))
 	entities = append(entities, cached...)
 	for _, r := range results {
 		if r.err != nil {
-			return nil, r.err
+			var contractErr *graph.StateContractError
+			if errors.As(r.err, &contractErr) {
+				poisoned = append(poisoned, contractErr)
+			} else if firstOtherErr == nil {
+				firstOtherErr = r.err
+			}
+			continue
 		}
 		if r.ok {
 			entities = append(entities, r.entity)
 		}
 	}
+	if len(poisoned) > 0 {
+		return nil, aggregateEntityPoisonError(poisoned)
+	}
+	if firstOtherErr != nil {
+		return nil, firstOtherErr
+	}
 
 	return entities, nil
+}
+
+// aggregateEntityPoisonError builds the single typed failure for a
+// multi-entity read that encountered poisoned entities: fatal
+// graph_state_reset_required naming every poisoned entity (bounded list),
+// wrapping one typed cause so errors.As(*graph.StateContractError) is
+// preserved across the seam. Kills the one-repair-per-round-trip discovery
+// loop (design D5).
+func aggregateEntityPoisonError(poisoned []*graph.StateContractError) error {
+	ids := make([]string, 0, len(poisoned))
+	for _, p := range poisoned {
+		ids = append(ids, p.EntityID)
+	}
+	sort.Strings(ids)
+	sample := ids
+	suffix := ""
+	if len(sample) > entityPoisonSampleCap {
+		sample = sample[:entityPoisonSampleCap]
+		suffix = fmt.Sprintf(" (+%d more)", len(ids)-entityPoisonSampleCap)
+	}
+	return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+		fmt.Errorf("read encountered %d poisoned entities: %s%s: %w",
+			len(ids), strings.Join(sample, ", "), suffix, poisoned[0]))
 }

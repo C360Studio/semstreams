@@ -14,23 +14,26 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// watchEntityStates creates KV watchers for entity state changes
+// watchEntityStates creates KV watchers for entity state changes.
+//
+// Contract validation rides the pattern-watch input path itself: every value a
+// rule actually consumes is decoded through graph.UnmarshalEntityState before
+// dispatch, and a consumed contract violation latches the sticky
+// rule-evaluation kill switch (markGraphStateResetRequired). There is no
+// dedicated ENTITY_STATES contract-guard watcher — with zero configured
+// entity-watch patterns the processor holds no ENTITY_STATES watcher at all.
 func (rp *Processor) watchEntityStates(ctx context.Context) error {
 	// Store the watcher context for dynamic management
 	rp.mu.Lock()
 	rp.watcherCtx, rp.watcherCancelFunc = context.WithCancel(ctx)
 	watcherCtx := rp.watcherCtx
 	rp.mu.Unlock()
-	rp.graphStateGuardRequired.Store(true)
-	if err := rp.startGraphStateGuard(watcherCtx); err != nil {
-		return err
-	}
 
 	// Read the configured ENTITY_STATES patterns.
 	bucketPatterns := rp.getEffectiveBucketPatterns()
 
 	if len(bucketPatterns) == 0 {
-		rp.logger.Info("No rule entity patterns configured; authoritative graph guard remains active")
+		rp.logger.Info("No rule entity patterns configured; holding no ENTITY_STATES watchers")
 		return nil
 	}
 
@@ -47,125 +50,13 @@ func (rp *Processor) watchEntityStates(ctx context.Context) error {
 	return nil
 }
 
-func (rp *Processor) startGraphStateGuard(ctx context.Context) error {
-	bucket, err := rp.getOrCreateBucket(ctx, gtypes.BucketEntityStates)
-	if err != nil {
-		rp.markGraphStateGuardDegraded(ctx, err)
-		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady, err)
-	}
-	watcher, err := bucket.WatchAll(ctx)
-	if err != nil {
-		rp.markGraphStateGuardDegraded(ctx, err)
-		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady, err)
-	}
-	rp.mu.Lock()
-	rp.entityWatchers = append(rp.entityWatchers, watcher)
-	rp.mu.Unlock()
-	go rp.handleGraphStateGuard(ctx, watcher)
-	return nil
-}
-
-func (rp *Processor) handleGraphStateGuard(ctx context.Context, watcher jetstream.KeyWatcher) {
-	for {
-		select {
-		case <-ctx.Done():
-			watcher.Stop()
-			return
-		case <-rp.shutdown:
-			watcher.Stop()
-			return
-		case <-rp.graphStateGuardDone:
-			watcher.Stop()
-			return
-		case entry, ok := <-watcher.Updates():
-			if !ok {
-				if rp.graphGuardTransportCloseExpected(ctx) {
-					watcher.Stop()
-					return
-				}
-				rp.markGraphStateGuardDegraded(ctx, errors.New("authoritative ENTITY_STATES watcher closed unexpectedly"))
-				watcher.Stop()
-				return
-			}
-			if entry == nil {
-				rp.graphStateGuardReady.Store(true)
-				rp.graphStateGuardReadyOnce.Do(func() { close(rp.graphStateGuardReadyCh) })
-				continue
-			}
-			if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
-				rp.advanceGraphStateGuardRevision(entry.Revision())
-				continue
-			}
-			var state gtypes.EntityState
-			if err := gtypes.UnmarshalEntityState(entry.Value(), &state); err != nil {
-				rp.markGraphStateResetRequired(ctx, entry.Key(), err)
-				watcher.Stop()
-				return
-			}
-			rp.advanceGraphStateGuardRevision(entry.Revision())
-		}
-	}
-}
-
-func (rp *Processor) advanceGraphStateGuardRevision(revision uint64) {
-	if revision == 0 {
-		return
-	}
-	rp.graphStateProgressMu.Lock()
-	defer rp.graphStateProgressMu.Unlock()
-	if revision <= rp.graphStateGuardRevision.Load() {
-		return
-	}
-	rp.graphStateGuardRevision.Store(revision)
-	close(rp.graphStateProgress)
-	rp.graphStateProgress = make(chan struct{})
-}
-
-// waitGraphStateGuardRevision prevents an ENTITY_STATES pattern subscription
-// from overtaking the authoritative WatchAll validator. Revision R is safe to
-// evaluate only after the ordered guard has processed cleanly through R.
-func (rp *Processor) waitGraphStateGuardRevision(ctx context.Context, revision uint64) bool {
-	if revision == 0 {
-		return rp.waitGraphStateGuard(ctx)
-	}
-	for {
-		if rp.graphStateResetRequired.Load() || rp.graphStateGuardDegraded.Load() {
-			return false
-		}
-		rp.graphStateProgressMu.Lock()
-		if rp.graphStateGuardRevision.Load() >= revision {
-			rp.graphStateProgressMu.Unlock()
-			return rp.graphRuleEvaluationReady()
-		}
-		progress := rp.graphStateProgress
-		rp.graphStateProgressMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return false
-		case <-rp.shutdown:
-			return false
-		case <-rp.graphStateGuardDone:
-			return false
-		case <-progress:
-		}
-	}
-}
-
-func (rp *Processor) graphGuardTransportCloseExpected(ctx context.Context) bool {
-	if ctx.Err() != nil {
-		return true
-	}
-	select {
-	case <-rp.shutdown:
-		return true
-	default:
-		return false
-	}
-}
-
+// markGraphStateGuardDegraded latches the entity-watch lane degraded: a
+// configured ENTITY_STATES pattern watcher failed to start or closed
+// unexpectedly, so rule evaluation can no longer trust its view of graph
+// state. Sticky for the process lifetime, like reset-required, but with the
+// distinct index-not-ready code (transport fault, not contract poison).
 func (rp *Processor) markGraphStateGuardDegraded(ctx context.Context, err error) {
 	if rp.graphStateGuardDegraded.CompareAndSwap(false, true) {
-		rp.graphStateGuardReady.Store(false)
 		rp.logger.Warn("Rule evaluation disabled: graph-state guard degraded",
 			"code", gtypes.ErrorCodeIndexNotReady, "error", err)
 		if rp.lifecycleReporter != nil {
@@ -173,32 +64,17 @@ func (rp *Processor) markGraphStateGuardDegraded(ctx context.Context, err error)
 				rp.logger.Warn("Failed to report degraded lifecycle stage", "error", reportErr)
 			}
 		}
-		rp.graphStateGuardReadyOnce.Do(func() { close(rp.graphStateGuardReadyCh) })
 		rp.graphStateGuardDoneOnce.Do(func() { close(rp.graphStateGuardDone) })
 	}
 }
 
+// graphRuleEvaluationReady reports whether rule evaluation may derive output
+// from graph state. It is false once the sticky reset-required kill switch
+// has latched (a consumed ENTITY_STATES value violated the graph-state
+// contract) or the entity-watch lane has degraded. Both latches hold until
+// the process is restarted.
 func (rp *Processor) graphRuleEvaluationReady() bool {
-	if rp.graphStateResetRequired.Load() {
-		return false
-	}
-	if !rp.graphStateGuardRequired.Load() {
-		return true
-	}
-	return rp.graphStateGuardReady.Load() && !rp.graphStateGuardDegraded.Load()
-}
-
-func (rp *Processor) waitGraphStateGuard(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-rp.shutdown:
-		return false
-	case <-rp.graphStateGuardDone:
-		return false
-	case <-rp.graphStateGuardReadyCh:
-		return rp.graphRuleEvaluationReady()
-	}
+	return !rp.graphStateResetRequired.Load() && !rp.graphStateGuardDegraded.Load()
 }
 
 // getEffectiveBucketPatterns returns the configured ENTITY_STATES patterns.
@@ -501,16 +377,13 @@ func cloneEntityWatchBuckets(source map[string][]string) map[string][]string {
 
 // handleEntityUpdates processes updates from a NATS KV watcher.
 //
-// The processor-wide graph guard validates the complete authoritative snapshot
-// first. This pattern watcher then streams its bounded NATS bootstrap directly,
-// preserving Bootstrap=true for OnRecovery until its nil sentinel arrives. For
-// ENTITY_STATES, every entry also waits on the guard's revision watermark.
+// The pattern watcher streams its bounded NATS bootstrap directly, preserving
+// Bootstrap=true for OnRecovery until its nil sentinel arrives. Every
+// non-delete entry is decoded through the canonical graph-state decoder before
+// dispatch; a consumed contract violation latches the sticky rule-evaluation
+// kill switch (markGraphStateResetRequired).
 func (rp *Processor) handleEntityUpdates(ctx context.Context, watcher jetstream.KeyWatcher) {
-	rp.handleEntityUpdatesForBucket(ctx, watcher, gtypes.BucketEntityStates)
-}
-
-func (rp *Processor) handleEntityUpdatesForBucket(ctx context.Context, watcher jetstream.KeyWatcher, bucketName string) {
-	rp.handleEntityUpdatesForBucketKey(ctx, watcher, bucketName, "", 0)
+	rp.handleEntityUpdatesForKey(ctx, watcher, "", 0)
 }
 
 func (rp *Processor) handleManagedEntityUpdates(
@@ -519,13 +392,12 @@ func (rp *Processor) handleManagedEntityUpdates(
 	key string,
 	generation uint64,
 ) {
-	rp.handleEntityUpdatesForBucketKey(ctx, watcher, gtypes.BucketEntityStates, key, generation)
+	rp.handleEntityUpdatesForKey(ctx, watcher, key, generation)
 }
 
-func (rp *Processor) handleEntityUpdatesForBucketKey(
+func (rp *Processor) handleEntityUpdatesForKey(
 	ctx context.Context,
 	watcher jetstream.KeyWatcher,
-	bucketName string,
 	managedKey string,
 	managedGeneration uint64,
 ) {
@@ -540,10 +412,6 @@ func (rp *Processor) handleEntityUpdatesForBucketKey(
 	// NOTE: watcher.Stop() is called explicitly before each return, not via defer.
 	// This avoids a race condition in nats.go where Stop() can race with the
 	// internal message handler goroutine when using defer or calling from another goroutine.
-	if !rp.waitGraphStateGuard(ctx) {
-		watcher.Stop()
-		return
-	}
 
 	bootstrap := true
 
@@ -579,10 +447,6 @@ func (rp *Processor) handleEntityUpdatesForBucketKey(
 			}
 			if rp.graphStateResetRequired.Load() {
 				continue
-			}
-			if bucketName == gtypes.BucketEntityStates && !rp.waitGraphStateGuardRevision(ctx, entry.Revision()) {
-				watcher.Stop()
-				return
 			}
 
 			cursor := classifyEntityWatchEntry(entry)
@@ -1017,8 +881,11 @@ func (rp *Processor) entityPendingWorkAuthorizedLocked(work *entityPendingWork) 
 
 // markGraphStateResetRequired recognizes the shared ENTITY_STATES poison
 // signal and latches rule evaluation off until the process is restarted after
-// an operator reset/reingest. It returns true only for graph-state contract
-// failures so callers can keep their normal transient-error behavior.
+// an operator reset/reingest. It fires only for values rules actually consume
+// — pattern-watch deliveries and coalesced current-state fetches — because
+// contract validation rides the input path, not a dedicated guard watcher.
+// It returns true only for graph-state contract failures so callers can keep
+// their normal transient-error behavior.
 func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID string, err error) bool {
 	var contractErr *gtypes.StateContractError
 	if !errors.As(err, &contractErr) {
@@ -1026,7 +893,6 @@ func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID s
 	}
 
 	if rp.graphStateResetRequired.CompareAndSwap(false, true) {
-		rp.graphStateGuardReady.Store(false)
 		rp.logger.Error("Rule evaluation disabled: graph state reset required",
 			"code", gtypes.ErrorCodeGraphStateResetRequired,
 			"reason", contractErr.Reason,
@@ -1037,7 +903,6 @@ func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID s
 				rp.logger.Warn("Failed to report reset-required lifecycle stage", "error", reportErr)
 			}
 		}
-		rp.graphStateGuardReadyOnce.Do(func() { close(rp.graphStateGuardReadyCh) })
 		rp.graphStateGuardDoneOnce.Do(func() { close(rp.graphStateGuardDone) })
 	}
 	return true

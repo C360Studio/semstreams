@@ -66,11 +66,24 @@ const (
 )
 
 // StateContractError means the authoritative graph cannot be safely read
-// or projected. It is permanent until operators reset incompatible graph/index
-// buckets, reingest canonical sources, and restart the process.
+// or projected. Recovery is reader-class-conditional: the authoritative read
+// surface (graph-ingest's query lanes) scopes refusal to the poisoned entity
+// and recovers as soon as operators repair the stored bytes (delete +
+// recreate through canonical writes) — no restart required. Projection
+// owners (derived views built from watched or replayed entity state) stay in
+// sticky reset-required state and recover only by operator reset and process
+// restart.
+//
+// EntityID names the poisoned entity when the classification site knows it
+// (snapshot sweep entry key, queried entity ID, RMW target, mutation read
+// seam). It is additive and in-process only: the wire carries just the error
+// class and code, so consumers reconstructing the classification from headers
+// never see it. Err is excluded from JSON on purpose (error values do not
+// marshal usefully); the rendered Error() string is the transport for detail.
 type StateContractError struct {
-	Reason StateResetReason
-	Err    error
+	Reason   StateResetReason `json:"reason"`
+	EntityID string           `json:"entity_id,omitempty"`
+	Err      error            `json:"-"`
 }
 
 // Error implements error.
@@ -78,10 +91,14 @@ func (e *StateContractError) Error() string {
 	if e == nil {
 		return ErrorCodeGraphStateResetRequired
 	}
-	if e.Err == nil {
-		return fmt.Sprintf("%s: %s", ErrorCodeGraphStateResetRequired, e.Reason)
+	msg := fmt.Sprintf("%s: %s", ErrorCodeGraphStateResetRequired, e.Reason)
+	if e.EntityID != "" {
+		msg += fmt.Sprintf(": entity %s", e.EntityID)
 	}
-	return fmt.Sprintf("%s: %s: %v", ErrorCodeGraphStateResetRequired, e.Reason, e.Err)
+	if e.Err != nil {
+		msg += fmt.Sprintf(": %v", e.Err)
+	}
+	return msg
 }
 
 // Unwrap exposes the structural or JSON cause.

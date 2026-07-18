@@ -76,7 +76,7 @@ func TestEntityWatcherHardeningRealNATS(t *testing.T) {
 
 	require.Eventually(t, func() bool {
 		return counter.evaluated.Load() == 1
-	}, 5*time.Second, 10*time.Millisecond, "bootstrap entity must evaluate after the authoritative guard")
+	}, 5*time.Second, 10*time.Millisecond, "bootstrap entity must evaluate after watcher bootstrap")
 
 	// This ID matches both active patterns. The two live deliveries carry
 	// distinct provenance, but the batch fetches and evaluates the entity once.
