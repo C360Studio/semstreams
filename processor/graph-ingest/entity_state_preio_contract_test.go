@@ -70,6 +70,19 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 			},
 		},
 		{
+			// gh#562 write-cost: pins MergeEntity's kept entity-ID-only
+			// preflight — the ID is the CAS key and the hierarchy-probe key,
+			// so a malformed root ID must reject before any KV I/O even
+			// though the full candidate pass moved to the write gate.
+			name: "merge entity malformed root ID",
+			run: func(component *Component) error {
+				return component.MergeEntity(context.Background(), &graph.EntityState{
+					ID:      "bad",
+					Triples: []message.Triple{{Subject: validID, Predicate: validPredicate}},
+				})
+			},
+		},
+		{
 			name: "direct create empty subject",
 			run: func(component *Component) error {
 				return component.CreateEntity(context.Background(), emptySubjectEntity)
