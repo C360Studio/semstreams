@@ -143,7 +143,21 @@ func ValidateEntityStateContract(entity *EntityState) error {
 		}
 	}
 	for index := range entity.Triples {
-		if err := semtypes.ValidateEntityID(entity.Triples[index].Subject); err != nil {
+		// A subject byte-equal to the root ID is already proven canonical by
+		// the root check above — skip the re-validation. ENTITY_STATES
+		// candidates are single-subject in the overwhelming case
+		// (normalizeProjection splits foreign subjects off before commit), so
+		// this removes an O(triples) ValidateEntityID pass — with a
+		// strings.Split allocation per triple — from the MarshalEntityState
+		// write gate on the per-key-serialized RMW hot path (gh#562
+		// write-cost). Strictly verdict-preserving: equality to a validated ID
+		// implies validity, and any differing subject (valid or not) takes the
+		// full check with unchanged error precedence and TripleIndex.
+		subject := entity.Triples[index].Subject
+		if subject == entity.ID {
+			continue
+		}
+		if err := semtypes.ValidateEntityID(subject); err != nil {
 			return &EntityStateContractError{
 				Field: EntityStateContractFieldSubject, TripleIndex: index, Err: err,
 			}

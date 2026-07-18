@@ -2299,11 +2299,33 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	if entity == nil {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "MergeEntity", "entity cannot be nil")
 	}
+	// Entity-ID-only preflight (cheap subset): the ID is the CAS key and the
+	// hierarchy-probe key, so reject a malformed ID before any KV I/O.
+	//
+	// gh#562 write-cost: the full ValidateEntityStateContract pass that used to
+	// run here was redundant with the MarshalEntityState write gate inside the
+	// CAS closure — BOTH closure branches marshal a superset of the incoming
+	// candidate (create: candidate + hierarchy/profile stamps; merge:
+	// MergeTriples keeps every incoming triple), so an invalid candidate never
+	// commits under its own key, and classifyStoredStateRMWError keeps the
+	// caller-vs-resident attribution honest. Every production lane into
+	// MergeEntity already runs one caller-blaming full pass before side effects
+	// (prepareFactProjection on the Graphable ingest lane;
+	// validateMutationEntityState on the create_with_triples stub-restamp
+	// lane), so the pass here was a third full validation per mutation on the
+	// per-key-serialized hot path (ADR-072). Two narrow ergonomic changes for
+	// un-preflighted direct callers: (1) an incoming entity.indexing.profile
+	// triple dropped pre-merge on an already-profiled entity is no longer
+	// validated — it is dropped, not committed, so the store contract is
+	// unaffected; (2) with EnableHierarchy set, an invalid candidate with a
+	// valid ID reaches the pre-closure hierarchy step below, whose
+	// GetHierarchyTriples COMMITS container entities + inverse contains-edges +
+	// sibling edges before the write gate rejects the candidate itself — that
+	// pre-committed content is contract-valid and identical to what a later
+	// legitimate birth of the same ID would create, and dangling container
+	// references are tolerated by the referential-stub design.
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
-	}
-	if err := graph.ValidateEntityStateContract(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "MergeEntity", "validate entity state contract")
 	}
 	if err := ctx.Err(); err != nil {
 		return errs.Wrap(err, "Component", "MergeEntity", "context cancelled")
@@ -2845,6 +2867,13 @@ func (c *Component) invalidateEntityCacheEntry(id string) {
 
 // AddTriple adds a triple to an entity using CAS for concurrency safety
 func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error {
+	// Deliberately KEPT under the gh#562 write-cost dedup (unlike MergeEntity's
+	// removed candidate pass): this is an O(1-triple) caller-blaming preflight
+	// that runs BEFORE any KV I/O. Without it a malformed Subject would drive
+	// the CAS Get on a nonexistent key and misclassify as entity-not-found
+	// instead of invalid (and the pre-I/O contract test pins the ordering).
+	// The MarshalEntityState write gate below remains the authoritative
+	// full-pass over the committed union.
 	if err := graph.ValidateEntityStateContract(&graph.EntityState{
 		ID: triple.Subject, Triples: []message.Triple{triple},
 	}); err != nil {
