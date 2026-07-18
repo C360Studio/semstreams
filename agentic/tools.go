@@ -278,8 +278,10 @@ const (
 	// (missing required field, wrong type, schema violation).
 	ToolErrorInvalidArgs ToolErrorKind = "invalid_args"
 
-	// ToolErrorPermission means an external system refused the request
-	// due to authentication or authorization (e.g., HTTP 401/403).
+	// ToolErrorPermission means the request was refused on authorization
+	// grounds — an external system's auth failure (e.g., HTTP 401/403) or an
+	// internal framework policy refusal (approval filter, per-loop advertised
+	// tool set).
 	ToolErrorPermission ToolErrorKind = "permission"
 
 	// ToolErrorNetwork means a transport-level failure occurred

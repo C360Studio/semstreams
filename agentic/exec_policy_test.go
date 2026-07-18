@@ -102,6 +102,70 @@ func TestFilesystemPolicyFromMetadata_JSONRoundTrip(t *testing.T) {
 	}
 }
 
+// TestAdvertisedToolsFromMetadata covers the gh#551 accessor: the advertised
+// tool set arrives as []any after a BaseMessage JSON round-trip but may be a
+// native []string on the in-process path. The present flag must distinguish
+// key-absent (no per-loop restriction, back-compat) from key-present-but-
+// empty/malformed (executor fails closed) — collapsing the two would turn a
+// malformed security control into a silent allow-all.
+func TestAdvertisedToolsFromMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		meta        map[string]any
+		wantTools   []string
+		wantPresent bool
+	}{
+		{name: "nil metadata", meta: nil, wantTools: nil, wantPresent: false},
+		{
+			name:        "absent key",
+			meta:        map[string]any{"loop_id": "x"},
+			wantTools:   nil,
+			wantPresent: false,
+		},
+		{
+			name:        "[]any of strings (post-JSON-decode shape)",
+			meta:        map[string]any{MetadataKeyAdvertisedTools: []any{"decide", "query_entity"}},
+			wantTools:   []string{"decide", "query_entity"},
+			wantPresent: true,
+		},
+		{
+			name:        "native []string (in-process path)",
+			meta:        map[string]any{MetadataKeyAdvertisedTools: []string{"decide"}},
+			wantTools:   []string{"decide"},
+			wantPresent: true,
+		},
+		{
+			name:        "empty list is present-but-empty",
+			meta:        map[string]any{MetadataKeyAdvertisedTools: []any{}},
+			wantTools:   nil,
+			wantPresent: true,
+		},
+		{
+			name:        "non-list value is present-but-empty",
+			meta:        map[string]any{MetadataKeyAdvertisedTools: "decide"},
+			wantTools:   nil,
+			wantPresent: true,
+		},
+		{
+			name:        "list with non-string elements keeps only strings",
+			meta:        map[string]any{MetadataKeyAdvertisedTools: []any{"decide", 42, nil, ""}},
+			wantTools:   []string{"decide"},
+			wantPresent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotTools, gotPresent := AdvertisedToolsFromMetadata(tt.meta)
+			if gotPresent != tt.wantPresent {
+				t.Errorf("present = %v, want %v", gotPresent, tt.wantPresent)
+			}
+			if !reflect.DeepEqual(gotTools, tt.wantTools) {
+				t.Errorf("tools = %#v, want %#v", gotTools, tt.wantTools)
+			}
+		})
+	}
+}
+
 // TestDispatchEnforcedMetadataKeys_Membership locks the set that dispatch stamps
 // path-universally: the read-only policy keys AND the decide allowlist (whose
 // approval-redispatch gap is fixed at the same seam, ADR-067 §2).

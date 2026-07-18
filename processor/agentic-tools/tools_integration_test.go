@@ -335,6 +335,130 @@ func TestIntegration_ToolAllowedList(t *testing.T) {
 	assert.Contains(t, result.Error, "not allowed")
 }
 
+// TestIntegration_AdvertisedToolsEnforced drives the gh#551 acceptance case
+// through the PRODUCTION wire (JetStream consumer → production decoder →
+// handleToolCall → publishResult): global AllowedTools includes both "decide"
+// and "create_change"; a call for "create_change" carrying an advertised set
+// of only ["decide"] (stamped as []string, decoded off the wire as []any)
+// must be rejected with the per-loop error text — distinct from the global
+// "not allowed" rejection — while "decide" under the same metadata executes.
+func TestIntegration_AdvertisedToolsEnforced(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+
+	config := agentictools.Config{
+		Ports: &component.PortConfig{
+			Inputs: []component.PortDefinition{
+				{
+					Name:       "tool_calls",
+					Type:       "jetstream",
+					Subject:    "tool.execute.>",
+					StreamName: "AGENT",
+					Required:   true,
+				},
+			},
+			Outputs: []component.PortDefinition{
+				{
+					Name:       "tool_results",
+					Type:       "jetstream",
+					Subject:    "tool.result.*",
+					StreamName: "AGENT",
+				},
+			},
+		},
+		StreamName:         "AGENT",
+		ConsumerNameSuffix: "advertised-test",
+		AllowedTools:       []string{"decide", "create_change"},
+		Timeout:            "5s",
+	}
+
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	deps := component.Dependencies{
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	}
+
+	comp, err := agentictools.NewComponent(rawConfig, deps)
+	require.NoError(t, err)
+
+	toolsComp, ok := comp.(*agentictools.Component)
+	require.True(t, ok)
+	for _, name := range []string{"decide", "create_change"} {
+		require.NoError(t, toolsComp.RegisterToolExecutor(&integrationMockExecutor{
+			toolName:      name,
+			resultContent: name + " executed",
+		}))
+	}
+
+	lc, ok := comp.(component.LifecycleComponent)
+	require.True(t, ok)
+	require.NoError(t, lc.Initialize())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	require.NoError(t, lc.Start(ctx))
+	defer lc.Stop(5 * time.Second)
+
+	time.Sleep(200 * time.Millisecond)
+
+	received := make(map[string]agentic.ToolResult)
+	var receiveMu sync.Mutex
+
+	dec := payloadbuiltins.NewTestDecoder(t)
+	_, err = natsClient.Subscribe(ctx, "tool.result.>", func(_ context.Context, msg *nats.Msg) {
+		if baseMsg, decErr := dec.Decode(msg.Data); decErr == nil {
+			if result, ok := baseMsg.Payload().(*agentic.ToolResult); ok {
+				receiveMu.Lock()
+				received[result.CallID] = *result
+				receiveMu.Unlock()
+			}
+		}
+	})
+	require.NoError(t, err)
+
+	time.Sleep(100 * time.Millisecond)
+
+	// The loop advertised only "decide". Stamp as []string — the wire
+	// round-trip delivers []any to handleToolCall, the production shape.
+	advertised := map[string]any{
+		agentic.MetadataKeyAdvertisedTools: []string{"decide"},
+	}
+
+	publishToolCallMessage(t, natsClient, "tool.execute.create_change", &agentic.ToolCall{
+		ID:       "call_unadvertised",
+		Name:     "create_change",
+		LoopID:   "loop-adv-int",
+		Metadata: advertised,
+	})
+	publishToolCallMessage(t, natsClient, "tool.execute.decide", &agentic.ToolCall{
+		ID:       "call_advertised",
+		Name:     "decide",
+		LoopID:   "loop-adv-int",
+		Metadata: advertised,
+	})
+
+	require.Eventually(t, func() bool {
+		receiveMu.Lock()
+		defer receiveMu.Unlock()
+		return len(received) == 2
+	}, 5*time.Second, 100*time.Millisecond, "expected results for both calls")
+
+	receiveMu.Lock()
+	defer receiveMu.Unlock()
+
+	rejected := received["call_unadvertised"]
+	assert.NotEmpty(t, rejected.Error, "unadvertised tool must be rejected")
+	assert.Contains(t, rejected.Error, "is not permitted for this loop (advertised tool set)")
+	assert.NotContains(t, rejected.Error, "is not allowed",
+		"per-loop rejection must be distinguishable from the global-allowlist rejection")
+
+	admitted := received["call_advertised"]
+	assert.Empty(t, admitted.Error)
+	assert.Equal(t, "decide executed", admitted.Content)
+}
+
 // TestIntegration_ToolTimeout tests that long-running tools are cancelled
 func TestIntegration_ToolTimeout(t *testing.T) {
 	natsClient := getSharedNATSClient(t)
