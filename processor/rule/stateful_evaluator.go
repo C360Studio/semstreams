@@ -15,6 +15,11 @@ import (
 // Compile-time interface check
 var _ ActionExecutorInterface = (*ActionExecutor)(nil)
 
+// statePersistTimeout bounds the detached post-action MatchState persist
+// (gh#557): long enough to ride out a NATS hiccup during shutdown, short
+// enough not to stall the watcher drain noticeably.
+const statePersistTimeout = 3 * time.Second
+
 // StatefulEvaluator handles rule evaluation with state tracking.
 // It manages state transitions (entered/exited/none) and executes
 // the appropriate actions based on the transition type.
@@ -230,7 +235,18 @@ func (e *StatefulEvaluator) Evaluate(ctx context.Context, ev Evaluation) (Transi
 
 	matchState.FieldValues = captureTransitionFields(ev.Rule, ev.Entity)
 
-	if err := e.stateTracker.Set(ctx, *matchState); err != nil {
+	// Once actions have fired, persisting the state that records them is a
+	// durability obligation — the persist runs on a ctx detached from the
+	// caller's cancellation (gh#557). A SIGTERM landing mid-evaluation
+	// cancels the watcher ctx before Manager.StopAll's drain; aborting THIS
+	// write makes bootstrap re-derive a world where the actions never
+	// happened: OnRecovery silently never fires for on_recovery-only rules,
+	// and OnEnter/OnExit double-fire with a reset iteration cap. Pre-action
+	// paths stay cancellable — dropping before actions is a clean drop that
+	// bootstrap correctly re-derives.
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), statePersistTimeout)
+	defer cancelPersist()
+	if err := e.stateTracker.Set(persistCtx, *matchState); err != nil {
 		e.logger.Warn("Failed to persist rule state",
 			"rule_id", ev.Rule.ID,
 			"entity_key", entityKey,
