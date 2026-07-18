@@ -21,8 +21,12 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace either role.
 - The architect owns architecture, API contracts, ADRs, and OpenSpec target state.
 - The technical writer owns durable documentation and conservative OpenSpec task truth.
-- Canonical role contracts live in `.agents/contracts/`; canonical shared decision skills (kv-or-stream,
-  new-payload, orchestration-check, query-pattern) live in `.agents/skills/`. Platform adapters must remain thin.
+- Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
+- Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
+  Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle boundary),
+  new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS Direct). Read the
+  canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
+  names are thin adapters to it.
 
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data
