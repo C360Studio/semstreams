@@ -28,8 +28,8 @@ const Workflow = "mission"
 const EntityIDPattern = "*.*.lifecycle.gcs.mission.*"
 
 // Predicate names for projection (ADR-049). Manager.Transition writes
-// `mission.phase`; UpdateFromOperator writes `mission.owner_org_id`
-// and `mission.note`; the audit predicates carry source attribution.
+// `mission.state.phase`; UpdateFromOperator writes `mission.owner.org-id`
+// and `mission.state.note`; the audit predicates carry source attribution.
 const (
 	PredicatePhase       = "mission.state.phase"
 	PredicateOwnerOrgID  = "mission.owner.org-id"
@@ -81,9 +81,9 @@ var Transitions = lifecycle.Transitions{
 // State is a lifecycle.Participant for the Mission workflow.
 //
 // Field tags (ADR-049):
-//   - lifecycle:"id"                                       — identity
-//   - lifecycle:"phase,predicate=mission.phase"            — phase triple
-//   - lifecycle:"operator_writable,predicate=mission.*"    — patchable via operator API
+//   - lifecycle:"id"                                          — identity
+//   - lifecycle:"phase,predicate=mission.state.phase"         — phase triple
+//   - lifecycle:"operator_writable,predicate=mission.*"       — patchable via operator API
 //
 // The projection layer round-trips between the entity's triples in
 // ENTITY_STATES and this struct on every Get / Transition; the

@@ -61,7 +61,7 @@ var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]
 //
 // Mirrors tripleLengthRe's structure — capture group 1 is the
 // namespace ("entity" or "related"); group 2 is the predicate name
-// (which may itself contain dots — e.g. `gather.completed_child`).
+// (which may itself contain dots — e.g. `gather.child.completed`).
 // Trailing `\b` ensures we don't match a predicate genuinely ending
 // in `.triples` as a substring of a longer token.
 //
@@ -73,7 +73,7 @@ var tripleLengthRe = regexp.MustCompile(`\$(entity|related)\.triple\.([a-z0-9.-]
 // Handles both multi-valued triple patterns:
 //
 //   - Pattern A — N triples with the same predicate, each Object is
-//     scalar (e.g. gather.completed_child = N entries of distinct
+//     scalar (e.g. gather.child.completed = N entries of distinct
 //     TaskIDs). Each triple contributes one element.
 //   - Pattern B — single triple with list-shaped Object (e.g.
 //     coordinator.decision.subtopics = JSON-encoded []string).
@@ -509,7 +509,7 @@ func (ec *ExecutionContext) applyTripleLengthSubstitutions(template string) stri
 // Resolution semantics:
 //
 //   - Predicate found, N triples with scalar Objects (Pattern A,
-//     e.g. gather.completed_child) → JSON array of N strings.
+//     e.g. gather.child.completed) → JSON array of N strings.
 //   - Predicate found, single triple with list-shaped Object
 //     (Pattern B, e.g. coordinator.decision.subtopics) → JSON array
 //     of the list's elements.

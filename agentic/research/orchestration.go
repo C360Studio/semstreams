@@ -185,13 +185,13 @@ const SourceResearchGraphTool = "agent-research-graph"
 // loop.role gates which loops the rule scopes to). Triples are:
 //
 //   - loop.role = "research_pipeline" (gates R0 scope to this chain)
-//   - research.requested = "true" (the trigger marker)
-//   - research.topic = <topic>
-//   - research.loop_id = <loopID> (rule substitution into NATS subjects)
-//   - research.parent_loop = <parentLoopID> (continuation lineage)
-//   - research.parent_role = <parentRole> (R6 publish_agent role)
-//   - research.budget_tokens = <int>
-//   - research.max_iterations = <int>
+//   - research.request.received = "true" (the trigger marker)
+//   - research.request.topic = <topic>
+//   - research.loop.id = <loopID> (rule substitution into NATS subjects)
+//   - research.parent.loop = <parentLoopID> (continuation lineage)
+//   - research.parent.role = <parentRole> (R6 publish_agent role)
+//   - research.request.budget_tokens = <int>
+//   - research.request.max_iterations = <int>
 //
 // All triples share the loop entity Subject so the batch lands
 // atomically — R0 must not see a half-populated chain identity.

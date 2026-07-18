@@ -2,7 +2,7 @@
   "id": "research_kickoff_classify",
   "type": "expression",
   "name": "R0 — Kickoff: Classify",
-  "description": "ADR-045 R0. Fires when the research_graph tool stamps the kickoff triples on a research-pipeline loop entity. Dispatches nl_classify against the topic so R1 can route. Scoped via loop.role to ensure rules in this pack only fire on research-pipeline entities (not regular agent loops). The condition's research.requested=\"true\" is the trigger marker; research.topic / research.loop_id / research.parent_loop live alongside so the rule has everything it needs without re-reading the loop entity. Per-rule MaxIterations is not set — research.requested transitions false→true exactly once per loop entity (never removed), so on_enter naturally fires once.",
+  "description": "ADR-045 R0. Fires when the research_graph tool stamps the kickoff triples on a research-pipeline loop entity. Dispatches nl_classify against the topic so R1 can route. Scoped via loop.role to ensure rules in this pack only fire on research-pipeline entities (not regular agent loops). The condition's research.request.received=\"true\" is the trigger marker; research.request.topic / research.loop.id / research.parent.loop live alongside so the rule has everything it needs without re-reading the loop entity. Per-rule MaxIterations is not set — research.request.received transitions false→true exactly once per loop entity (never removed), so on_enter naturally fires once.",
   "enabled": true,
   "entity": {"pattern": "*.*.*.*.*.*"},
   "conditions": [

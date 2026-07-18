@@ -27,7 +27,7 @@ type GraphQueryClient = fusion.GraphQueryClient
 // an in-memory map.
 type LoopStore interface {
 	// GetIntent loads the research_intent payload from the
-	// research.requested.<loopID> key.
+	// research.request.received.<loopID> key.
 	GetIntent(ctx context.Context, loopID string) (*research.Intent, error)
 
 	// GetClassifierOutput loads the upstream ClassifierOutput from

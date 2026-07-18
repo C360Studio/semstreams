@@ -30,11 +30,12 @@ const (
 	// SubjectTripleRemove is the NATS subject for remove triple requests
 	SubjectTripleRemove = "graph.mutation.triple.remove"
 
-	// Entity-level mutation subjects. Triple-level subjects (above) treat
-	// the entity as upsert-target — AddTriple's CAS path creates the
-	// entity if it doesn't exist. The entity-level subjects below carry
-	// stricter semantics so CS API gateways (semconnect) can map them to
-	// HTTP create-or-conflict / must-exist / delete contracts without
+	// Entity-level mutation subjects. Triple-level subjects (above) are
+	// must-exist per ADR-055 — AddTriple/AddTriples reject a triple
+	// targeting an absent entity rather than auto-vivifying it. The
+	// entity-level subjects below carry explicit create/update semantics
+	// so CS API gateways (semconnect) can map them to HTTP
+	// create-or-conflict / must-exist / delete contracts without
 	// app-side shims. See GH #98 + docs/operations/22-adr045-phase1-plan.md
 	// (peer queue context).
 
@@ -292,11 +293,55 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 	}
 }
 
+// validateTriplePredicates enforces the structural-identity predicate contract
+// (canonical 3-part domain.category.property — vocabulary.IsValidPredicate, which
+// delegates to vocabulary.ParsePredicate) at the mutation-handler boundary. It is
+// unconditionally FAIL-CLOSED — no bypass configuration exists: on the first
+// malformed predicate it returns a classified ErrorCodeStructuralInvalid so the
+// mutation is rejected before persistence
+// (openspec/changes/enforce-structural-invariants). The gate does NOT meter
+// directly: the meteredMutation wrapper meters every classified handler error
+// exactly once by its code (mutation_rejections{reason=structural_invalid} +
+// loud Warn whose detail is err.Error(), naming the predicate) — a direct call
+// here would double-count the same rejection under a second reason label.
+// Behind it, the authoritative entity-state contract seam
+// (graph.MarshalEntityState / ValidateEntityStateContract, which every
+// ENTITY_STATES write path calls) independently rejects non-conforming
+// predicates, so the gate and the seam are two fail-closed layers. The
+// entity-ID half is already fail-closed via validateEntityID.
+//
+// Placement per lane: on triple.add / triple.add_batch this gate is the FIRST
+// predicate authority (it fires before AddTriple/AddTriples' contract check, so
+// the caller sees the specific structural_invalid code with no KV I/O spent). On
+// create_with_triples / update_with_triples / the Graphable ingest lane the
+// authoritative entity-state contract validation (validateMutationEntityState /
+// validateMutationPredicates / prepareFactProjection → ValidateEntityStateContract)
+// runs FIRST and rejects a malformed predicate with the generic invalid_request
+// classification + the predicate_contract_rejections{lane,reason} metric; this
+// gate is a defense-in-depth backstop there.
+func (c *Component) validateTriplePredicates(triples []message.Triple) error {
+	for i := range triples {
+		predicate := triples[i].Predicate
+		if vocabulary.IsValidPredicate(predicate) {
+			continue
+		}
+		return rejectInvalid(graph.ErrorCodeStructuralInvalid,
+			fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property) on entity %q",
+				predicate, triples[i].Subject))
+	}
+	return nil
+}
+
 // handleTripleAdd handles add triple requests from rule processor and other components
 func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.AddTripleRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
+	}
+
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates([]message.Triple{req.Triple}); err != nil {
+		return nil, err
 	}
 
 	// AddTriple uses triple.Subject as entity ID
@@ -345,6 +390,11 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 			},
 			WrittenCount: 0,
 		})
+	}
+
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates(req.Triples); err != nil {
+		return nil, err
 	}
 
 	written, failed, err := c.AddTriples(ctx, req.Triples)
@@ -555,6 +605,11 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 	}
 	if err := validateMutationPredicates(req.Entity.Triples, nil); err != nil {
 		return nil, rejectFromError(err)
+	}
+
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates(req.Entity.Triples); err != nil {
+		return nil, err
 	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): the mutation API
@@ -805,6 +860,17 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 	}
 	if err := validateMutationPredicates(req.AddTriples, req.RemoveTriples); err != nil {
 		return nil, rejectFromError(err)
+	}
+
+	// Structural-identity predicate gate (unconditionally fail-closed) on the
+	// triples being written. The gate skips RemoveTriples because they are
+	// deletions, not writes — but malformed remove-predicates are NOT a cleanup
+	// lane: validateMutationPredicates above already rejects them (validated as
+	// synthetic triples → invalid_request), and the triple.remove lane validates
+	// via vocabulary.ParsePredicate. Pre-v1, the remedy for a bad persisted
+	// predicate is wipe + reseed, not a lenient delete path.
+	if err := c.validateTriplePredicates(req.AddTriples); err != nil {
+		return nil, err
 	}
 
 	// Shared projection-normalization seam (ADR-056 Decision 4): split off any

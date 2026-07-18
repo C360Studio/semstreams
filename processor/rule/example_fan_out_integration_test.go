@@ -263,7 +263,7 @@ func phase3FireJoin(
 	rule, err := NewExpressionRule("direct-expression-test", rule03)
 	require.NoError(t, err)
 	require.True(t, rule.EvaluateEntityState(coordinator),
-		"rule 03 EvaluateEntityState must match when len(gather.completed_child) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
+		"rule 03 EvaluateEntityState must match when len(gather.child.completed) == .length(coordinator.decision.subtopics) — drives the production wire including SubstituteConditionValues + #149 .length substitution + #147 array operator wiring")
 
 	publisher := &mockPublisher{}
 	executor := NewActionExecutorFull(nil, nil, publisher)
@@ -277,7 +277,7 @@ func phase3FireJoin(
 	// ADR-048 PR 4 — assert the new `.triples` prompt-substitution
 	// works end-to-end through the production wire. Rule 03's
 	// prompt template now includes
-	// `$entity.triple.gather.completed_child.triples`; the
+	// `$entity.triple.gather.child.completed.triples`; the
 	// substitution should inline a JSON array of N strings (one
 	// per child TaskID accumulated on the coordinator entity) into
 	// the natural-language prompt.
@@ -319,7 +319,7 @@ func phase3FireJoin(
 	require.NoError(t, json.Unmarshal([]byte(jsonArr), &parsed),
 		"prompt JSON array must be valid JSON the consumer can parse per the canonical persona-prose template")
 	require.Len(t, parsed, len(expected),
-		"JSON array length should match the count of gather.completed_child triples on the coordinator")
+		"JSON array length should match the count of gather.child.completed triples on the coordinator")
 	for _, got := range parsed {
 		_, found := expected[got]
 		require.True(t, found,

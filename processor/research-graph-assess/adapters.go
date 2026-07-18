@@ -53,7 +53,7 @@ func (a *llmAssessorAdapter) Assess(ctx context.Context, systemPrompt, userPromp
 //
 // Key conventions:
 //
-//   - research.requested.<loopID>   (read; written by research_graph tool, PR 1)
+//   - research.request.received.<loopID>   (read; written by research_graph tool, PR 1)
 //   - execute.complete.<loopID>     (read; written by execute_subqueries, PR 4)
 //   - assess.complete.<loopID>      (write; R3 watches this — trigger)
 //   - assess.snapshot.<loopID>      (write; non-trigger queryable copy)
@@ -78,7 +78,7 @@ func newNATSLoopStore(kv *natsclient.KVStore, registry *payloadregistry.Registry
 // conceptual operation, not the literal key shape, so a Phase 2
 // reorganisation of trigger naming doesn't ripple across packages.
 
-func loopStoreKeyIntent(loopID string) string          { return "research.requested." + loopID }
+func loopStoreKeyIntent(loopID string) string          { return "research.request.received." + loopID }
 func loopStoreKeyExecuteComplete(loopID string) string { return "execute.complete." + loopID }
 func loopStoreKeyAssessComplete(loopID string) string  { return "assess.complete." + loopID }
 func loopStoreKeyAssessSnapshot(loopID string) string  { return "assess.snapshot." + loopID }

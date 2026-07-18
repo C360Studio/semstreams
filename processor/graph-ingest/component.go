@@ -1574,6 +1574,16 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	own, foreign := c.normalizeProjection(ctx, entity.ID, entity.MessageType, entity.Triples)
 	entity.Triples = own
 
+	// Structural-identity predicate gate on the Graphable ingest path
+	// (unconditionally fail-closed; the primary vector for product/source-authored
+	// predicates). On
+	// this lane it is a defense-in-depth backstop: prepareFactProjection above has
+	// already rejected any non-canonical predicate via the authoritative
+	// ValidateEntityStateContract, so this call cannot fire unless that seam moves.
+	if err := c.validateTriplePredicates(entity.Triples); err != nil {
+		return err
+	}
+
 	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
 	// used CreateEntity (Put = full-replace) here, which clobbered any
 	// pre-existing triples on the entity. The atomic mutation handlers

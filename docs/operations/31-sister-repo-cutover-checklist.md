@@ -31,7 +31,9 @@ changes. A missed window requires a separate migration proposal; it must not cre
 2. Bump to the breaking tag and build before touching persisted state.
 3. Run the shared entity-ID and predicate audits over source, configs, schemas, fixtures, and seed data. Fix every
    finding: canonical bounded six-part IDs, canonical three-part predicates, and no legacy `lineage.*` or
-   `reply_to` forms.
+   `reply_to` forms. Note: `triple.add` / `triple.add_batch` rejections for a non-canonical predicate now carry
+   error code `structural_invalid` (class `invalid`, do-not-retry) — branch on the class, not the code string, per
+   ADR-060.
 4. Give every rule-processor config an explicit `pack_id`. It must be 1–246 ASCII bytes matching
    `[A-Za-z0-9_=-]+`, contain no dot, and be unique across the enabled composition. Set
    `enable_graph_integration` explicitly because its default changed from `true` to `false`.

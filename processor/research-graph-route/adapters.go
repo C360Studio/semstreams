@@ -53,7 +53,7 @@ func (a *llmRouterAdapter) Route(ctx context.Context, systemPrompt, userPrompt s
 //
 // Key conventions:
 //
-//   - research.requested.<loopID>   (read; written by research_graph tool, PR 1)
+//   - research.request.received.<loopID>   (read; written by research_graph tool, PR 1)
 //   - classify.complete.<loopID>    (read; written by nl_classify, PR 2)
 //   - route.complete.<loopID>       (write; R2 watches this — trigger)
 //   - route.snapshot.<loopID>       (write; non-trigger queryable copy)
@@ -78,7 +78,7 @@ func newNATSLoopStore(kv *natsclient.KVStore, registry *payloadregistry.Registry
 // conceptual operation, not the literal key shape, so a Phase 2
 // reorganisation of trigger naming doesn't ripple across packages.
 
-func loopStoreKeyIntent(loopID string) string           { return "research.requested." + loopID }
+func loopStoreKeyIntent(loopID string) string           { return "research.request.received." + loopID }
 func loopStoreKeyClassifyComplete(loopID string) string { return "classify.complete." + loopID }
 func loopStoreKeyRouteComplete(loopID string) string    { return "route.complete." + loopID }
 func loopStoreKeyRouteSnapshot(loopID string) string    { return "route.snapshot." + loopID }

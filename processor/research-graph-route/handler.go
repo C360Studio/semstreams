@@ -31,7 +31,7 @@ type Router interface {
 // in-memory map.
 type LoopStore interface {
 	// GetIntent loads the research_intent payload from the
-	// research.requested.<loopID> key. Returned for the prompt's
+	// research.request.received.<loopID> key. Returned for the prompt's
 	// topic + hints context.
 	GetIntent(ctx context.Context, loopID string) (*research.Intent, error)
 

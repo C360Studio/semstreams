@@ -103,7 +103,7 @@ func TestDecideExecutor_ListTools(t *testing.T) {
 
 // TestDecideExecutor_UsesBatchPath confirms decide emits via
 // AddTriplesBatch (not the legacy per-triple loop). Atomicity matters
-// here because downstream rules match on coordinator.decision.next_action
+// here because downstream rules match on coordinator.decision.next-action
 // AND coordinator.decision.reason being co-present on the loop entity;
 // pre-2026-05-13 per-triple emission could leave one without the other
 // on graph-ingest degradation, breaking deterministic rule routing.

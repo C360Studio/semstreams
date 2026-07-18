@@ -249,10 +249,10 @@ func (s *Scenario) injectParentTask(ctx context.Context, result *scenarios.Resul
 		Prompt: "Investigate the research topic via research_graph — emit a single research_graph tool call with topic=\"drone hover anomalies\" and hints={domain:robotics}.",
 		// Metadata["role"] propagates through CacheMetadata →
 		// ToolCall.Metadata so the research_graph tool stamps
-		// research.parent_role for R6's continuation publish_agent.
+		// research.parent.role for R6's continuation publish_agent.
 		// A real agentic-dispatch flow populates this from the
 		// parent's role; e2e mirrors that explicitly so R6's
-		// `role: $entity.triple.research.parent_role` substitution
+		// `role: $entity.triple.research.parent.role` substitution
 		// resolves to "general" and the continuation task can dispatch.
 		Metadata: map[string]any{"role": "general"},
 		Tools: []agentic.ToolDefinition{
@@ -302,7 +302,7 @@ func (s *Scenario) waitForResearchPipelineLoop(ctx context.Context, result *scen
 		}
 		for _, k := range keys {
 			if strings.HasPrefix(k, "rg_") && !strings.Contains(k, ".") {
-				// Bare `rg_<id>` key (not `research.requested.rg_<id>`
+				// Bare `rg_<id>` key (not `research.request.received.rg_<id>`
 				// or `classify.complete.rg_<id>`) is the LoopEntity.
 				result.Details["research_loop_id"] = k
 				return nil
@@ -351,7 +351,7 @@ func (s *Scenario) waitForSearchResultStamp(ctx context.Context, result *scenari
 
 // verifyOrchestrationTriples fetches the research-pipeline loop entity
 // and asserts every expected orchestration triple is present. The full
-// set covers: kickoff (loop.role, research.requested, .topic, .loop_id,
+// set covers: kickoff (loop.role, research.request.received, .topic, .loop_id,
 // .parent_loop, .parent_role, .budget_tokens, .max_iterations) +
 // per-stage completion (classify, route, search_result) +
 // route-decision branch (research.route.action == "synthesize_directly").
@@ -483,7 +483,7 @@ func (s *Scenario) verifySearchResultEnvelope(ctx context.Context, result *scena
 
 // verifyR6Continuation confirms R6 published a continuation task back
 // to the parent role. The mock LLM's parent role gets the continuation
-// prompt (which contains $entity.triple.research.loop_id substituted +
+// prompt (which contains $entity.triple.research.loop.id substituted +
 // the topic) and falls through to the default completion content. We
 // verify that at least one agentic_dispatch_tasks_submitted_total or
 // loops_completed metric increment happened ABOVE baseline — the
