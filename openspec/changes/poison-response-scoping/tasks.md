@@ -113,7 +113,7 @@
   contracts
 - [x] 8.2 Bench + e2e evidence: ingest-lane before/after on this branch; `task e2e:structural`
   green pre-tag
-- [ ] 8.3 gh#562 reply: three-watcher localization presented as OUR inference on their
+- [x] 8.3 gh#562 reply: three-watcher localization presented as OUR inference on their
   measurement (not their conclusion), the consumer-report discriminator, candidate build
   offered for the beta.146-vs-candidate A/B
 - [ ] 8.4 After semboids A/B: record macro recovery on gh#562; any shortfall now indicts a
