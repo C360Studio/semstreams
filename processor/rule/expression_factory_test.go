@@ -668,7 +668,7 @@ func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T)
 		{
 			name: "field-to-field equality gate: revision matches → true",
 			triples: []message.Triple{
-				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+				{Subject: "test", Predicate: "openspec.change.validated", Object: "r42"},
 				{Subject: "test", Predicate: semantictest.Predicate(t, "openspec", "change", "revision"), Object: "r42"},
 			},
 			want: true,
@@ -676,14 +676,14 @@ func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T)
 		{
 			name: "absence is silent and non-matching: revision predicate absent → false, no warning",
 			triples: []message.Triple{
-				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+				{Subject: "test", Predicate: "openspec.change.validated", Object: "r42"},
 			},
 			want: false,
 		},
 		{
 			name: "mismatched revision → false",
 			triples: []message.Triple{
-				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+				{Subject: "test", Predicate: "openspec.change.validated", Object: "r42"},
 				{Subject: "test", Predicate: semantictest.Predicate(t, "openspec", "change", "revision"), Object: "r43"},
 			},
 			want: false,
@@ -705,7 +705,7 @@ func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T)
 				Enabled: true,
 				Conditions: []expression.ConditionExpression{
 					{
-						Field:    "openspec.validated",
+						Field:    "openspec.change.validated",
 						Operator: "eq",
 						Value:    "$entity.triple.openspec.change.revision.value",
 						Required: true,

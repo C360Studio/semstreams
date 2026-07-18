@@ -25,15 +25,23 @@ graph regardless of its producer (framework, rule-stamped, product, or agent-aut
 - **WHEN** a graph mutation targets a 6-part entity ID and carries only 3-part predicates
 - **THEN** it passes the structural gate and is persisted with existing merge semantics intact
 
-### Requirement: The structural gate MUST support an observe-only dry-run before fail-closed enforcement
+### Requirement: The structural gate MUST be unconditionally fail-closed with no bypass configuration
 
-Before enforcement rejects live writes, the structural gate MUST support an observe-only mode that
-validates every entity ID and predicate and increments a rejection metric
-(`graph_ingest_structural_rejects_total{kind,reason}`) WITHOUT rejecting the mutation, so a real violator
-surfaces as a counted, logged event rather than a silent reject. Fail-closed enforcement MUST NOT be
-enabled until the audit over the reference-config/vocabulary corpus and live ingest is clean.
+The handler-level structural gate MUST be unconditionally fail-closed: no bypass configuration exists
+that lets a structurally-invalid predicate pass the gate. Every violation is metered
+(`mutation_rejections{reason="structural_predicate_invalid"}`), logged loudly, and rejected with a
+classified validation error. Behind the gate, the authoritative persistence seam — the entity-state
+contract validation every `ENTITY_STATES` write path calls (`graph.MarshalEntityState` /
+`ValidateEntityStateContract`) — independently rejects structurally-invalid predicates, so the gate and
+the seam are two fail-closed layers and no configuration can weaken either. (An observe-only escape
+hatch was prototyped during this change and removed pre-release as provably inert: the seam's
+unconditional rejection meant the hatch could only swap the caller-visible error code, never permit
+persistence.)
 
-#### Scenario: Observe-only mode counts but does not reject
-- **WHEN** the gate is in observe-only mode and a mutation carries a structurally-invalid token
-- **THEN** the `graph_ingest_structural_rejects_total` metric increments with the kind and reason
-- **AND** the mutation is still persisted (dry-run does not change behavior beyond metrics/logs)
+#### Scenario: No configuration can weaken the gate
+- **WHEN** a mutation carries a non-3-part predicate on the `triple.add` or `triple.add_batch` lane,
+  under any component configuration
+- **THEN** the gate rejects the mutation with the classified structural code before any KV I/O
+- **AND** the `mutation_rejections{reason="structural_predicate_invalid"}` metric increments and a log
+  names the token
+- **AND** nothing from the mutation is written to `ENTITY_STATES`

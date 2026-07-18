@@ -30,11 +30,12 @@ const (
 	// SubjectTripleRemove is the NATS subject for remove triple requests
 	SubjectTripleRemove = "graph.mutation.triple.remove"
 
-	// Entity-level mutation subjects. Triple-level subjects (above) treat
-	// the entity as upsert-target — AddTriple's CAS path creates the
-	// entity if it doesn't exist. The entity-level subjects below carry
-	// stricter semantics so CS API gateways (semconnect) can map them to
-	// HTTP create-or-conflict / must-exist / delete contracts without
+	// Entity-level mutation subjects. Triple-level subjects (above) are
+	// must-exist per ADR-055 — AddTriple/AddTriples reject a triple
+	// targeting an absent entity rather than auto-vivifying it. The
+	// entity-level subjects below carry explicit create/update semantics
+	// so CS API gateways (semconnect) can map them to HTTP
+	// create-or-conflict / must-exist / delete contracts without
 	// app-side shims. See GH #98 + docs/operations/22-adr045-phase1-plan.md
 	// (peer queue context).
 
@@ -293,15 +294,29 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 }
 
 // validateTriplePredicates enforces the structural-identity predicate contract
-// (exactly 3-part domain.category.property — vocabulary.IsValidPredicate) at the
-// mutation boundary. For each malformed predicate it records a rejection
+// (canonical 3-part domain.category.property — vocabulary.IsValidPredicate, which
+// delegates to vocabulary.ParsePredicate) at the mutation-handler boundary. It is
+// unconditionally FAIL-CLOSED — no bypass configuration exists: on the first
+// malformed predicate it records a rejection
 // (mutation_rejections{reason=structural_predicate_invalid} counter + loud Warn)
-// via the existing recordMutationRejection path. Default is FAIL-CLOSED: it returns
-// a classified ErrorCodeStructuralInvalid on the first violation so the mutation is
-// rejected before persistence (openspec/changes/enforce-structural-invariants). The
-// escape hatch Config.AllowNonConformingPredicates downgrades to observe-only (meter
-// + log, write still commits) for a temporary migration/emergency. The entity-ID
-// half is already fail-closed via validateEntityID.
+// via the existing recordMutationRejection path and returns a classified
+// ErrorCodeStructuralInvalid so the mutation is rejected before persistence
+// (openspec/changes/enforce-structural-invariants). Behind it, the authoritative
+// entity-state contract seam (graph.MarshalEntityState /
+// ValidateEntityStateContract, which every ENTITY_STATES write path calls)
+// independently rejects non-conforming predicates, so the gate and the seam are
+// two fail-closed layers. The entity-ID half is already fail-closed via
+// validateEntityID.
+//
+// Placement per lane: on triple.add / triple.add_batch this gate is the FIRST
+// predicate authority (it fires before AddTriple/AddTriples' contract check, so
+// the caller sees the specific structural_invalid code with no KV I/O spent). On
+// create_with_triples / update_with_triples / the Graphable ingest lane the
+// authoritative entity-state contract validation (validateMutationEntityState /
+// validateMutationPredicates / prepareFactProjection → ValidateEntityStateContract)
+// runs FIRST and rejects a malformed predicate with the generic invalid_request
+// classification + the predicate_contract_rejections{lane,reason} metric; this
+// gate is a defense-in-depth backstop there.
 func (c *Component) validateTriplePredicates(subject string, triples []message.Triple) error {
 	for i := range triples {
 		predicate := triples[i].Predicate
@@ -311,10 +326,8 @@ func (c *Component) validateTriplePredicates(subject string, triples []message.T
 		c.recordMutationRejection(subject, "structural_predicate_invalid",
 			fmt.Sprintf("predicate %q is not a valid 3-part predicate (domain.category.property) on entity %q",
 				predicate, triples[i].Subject))
-		if !c.config.AllowNonConformingPredicates {
-			return rejectInvalid(graph.ErrorCodeStructuralInvalid,
-				fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property)", predicate))
-		}
+		return rejectInvalid(graph.ErrorCodeStructuralInvalid,
+			fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property)", predicate))
 	}
 	return nil
 }

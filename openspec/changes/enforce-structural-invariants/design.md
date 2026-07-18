@@ -102,6 +102,33 @@ reference-config + vocabulary corpus (a test/lint pass) and (b) live ingest, inc
 to fix/backfill first. Only once the audit is clean does the gate flip to fail-closed. This mirrors the
 strict-mode-flip discipline (dry-run + SKIP metric + clean gate before enforcing).
 
+**Reality found during apply — post-rebase (2026-07-18).** While this change was in flight, main
+independently landed a STRONGER predicate contract (`vocabulary/predicate_contract.go` `ParsePredicate`:
+canonical lower-kebab, per-segment charset + byte bounds) and wired it into the **authoritative
+persistence seam**: `graph.MarshalEntityState` / `ValidateEntityStateContract` — called by every
+`ENTITY_STATES` write path — now rejects any non-canonical predicate, and the mutation preflights
+(`validateMutationEntityState` / `validateMutationPredicates`, `prepareFactProjection` on the Graphable
+lane) reject it before the handler-level gate on the create_with_triples / update_with_triples / ingest
+lanes. Consequences reconciled into this change:
+
+- `IsValidPredicate` is now a thin delegate to `ParsePredicate` (still the single boolean surface the
+  gate + lint call) — strictly stronger than the "3 non-empty parts" floor this change specified.
+- The handler-level gate (`validateTriplePredicates`) is the FIRST predicate authority only on
+  `triple.add` / `triple.add_batch` (specific `structural_invalid` code + metric, no KV I/O spent); on
+  the other lanes it is a defense-in-depth backstop behind the seam, whose rejection classifies as the
+  generic `invalid_request` + `predicate_contract_rejections{lane,reason}`.
+- The planned observe-only **default** phase was overtaken: enforcement shipped fail-closed (the audit
+  in tasks 3.x ran as a static corpus pass, not a live dry-run). D4's "still persisted" dry-run
+  semantics are therefore unattainable in the current tree.
+- **Escape hatch REMOVED pre-release (2026-07-18).** An observe-only config escape hatch
+  (`allow_nonconforming_predicates`) was prototyped to downgrade the handler-level gate to
+  meter-and-log. Implementation proved it inert: the authoritative seam rejects unconditionally, so
+  the hatch could never permit persistence — it only swapped the caller-visible error code
+  (`invalid_request` instead of `structural_invalid`) while the rejection metric fired in both modes.
+  Since it had never been released, it was removed rather than shipped as dead operator surface: the
+  gate is unconditionally fail-closed and no bypass configuration exists (see the graph-ingest spec
+  delta's fail-closed requirement).
+
 ### D5 — Retire the 2-part fixture debt + lint it
 
 Migrate test fixtures using 2-part predicates (`agent.role`, `battery.level`, `source.value`, …) to
