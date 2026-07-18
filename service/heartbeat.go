@@ -60,6 +60,10 @@ type HeartbeatService struct {
 	// Stop channel for goroutine coordination
 	stopChan chan struct{}
 
+	// stopOnce guards the one-shot teardown (ticker stop + stopChan close) so
+	// repeated Stop calls are safe (gh#549)
+	stopOnce sync.Once
+
 	// WaitGroup for goroutine tracking
 	wg sync.WaitGroup
 
@@ -121,10 +125,18 @@ func NewHeartbeatService(rawConfig json.RawMessage, deps *Dependencies) (Service
 	return hb, nil
 }
 
-// Start begins the heartbeat service
+// Start begins the heartbeat service. Instances are single-use: once Stop has
+// run its teardown the instance cannot be restarted — create a new one via the
+// constructor (production disable→enable already does this via CreateService).
 func (hb *HeartbeatService) Start(ctx context.Context) error {
 	if hb.Status() == StatusRunning {
 		return fmt.Errorf("heartbeat service already running")
+	}
+
+	select {
+	case <-hb.stopChan:
+		return fmt.Errorf("heartbeat service instance already stopped; create a new instance")
+	default:
 	}
 
 	if err := hb.BaseService.Start(ctx); err != nil {
@@ -143,22 +155,23 @@ func (hb *HeartbeatService) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully stops the heartbeat service
+// Stop gracefully stops the heartbeat service. Stop is idempotent per the
+// Service contract (gh#520): a service that already reached a terminal state —
+// e.g. via parent-context cancellation before the manager's StopAll visit — is
+// a clean shutdown, and repeated calls are safe (gh#549). Teardown still runs
+// on the already-stopped path so the ticker is released when cancellation wins
+// the race.
 func (hb *HeartbeatService) Stop(timeout time.Duration) error {
-	status := hb.Status()
-	if status != StatusRunning && status != StatusStarting {
-		return fmt.Errorf("heartbeat service not running (status: %v)", status)
-	}
+	hb.stopOnce.Do(func() {
+		hb.logger.Info("Heartbeat service stopping")
 
-	hb.logger.Info("Heartbeat service stopping")
+		if hb.ticker != nil {
+			hb.ticker.Stop()
+		}
 
-	// Stop the ticker
-	if hb.ticker != nil {
-		hb.ticker.Stop()
-	}
-
-	// Signal stop and wait for goroutine
-	close(hb.stopChan)
+		// Signal the heartbeat loop to exit
+		close(hb.stopChan)
+	})
 
 	// Wait for goroutine with timeout
 	done := make(chan struct{})

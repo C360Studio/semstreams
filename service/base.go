@@ -267,21 +267,26 @@ func (s *BaseService) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop stops the service gracefully
+// Stop stops the service gracefully. Idempotent per the Service contract
+// (gh#520): an already-stopped/stopping service returns nil. Goroutine
+// signaling and draining still run on the already-terminal path because
+// parent-context cancellation (performGracefulShutdown) transitions status
+// without closing done, which would otherwise leave healthMonitor parked
+// forever (gh#549).
 func (s *BaseService) Stop(timeout time.Duration) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	// Check if already stopped or stopping
 	currentStatus := s.Status()
-	if currentStatus == StatusStopped || currentStatus == StatusStopping {
-		return nil // Already stopped or stopping
-	}
+	alreadyTerminal := currentStatus == StatusStopped || currentStatus == StatusStopping
 
-	// Transition to stopping status
-	s.status.Store(StatusStopping)
-	if s.metricsRegistry != nil {
-		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
+	if !alreadyTerminal {
+		// Transition to stopping status
+		s.status.Store(StatusStopping)
+		if s.metricsRegistry != nil {
+			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopping))
+		}
 	}
 
 	// Signal all goroutines to stop
@@ -323,11 +328,13 @@ func (s *BaseService) Stop(timeout time.Duration) error {
 		// Timeout - force shutdown
 	}
 
-	s.status.Store(StatusStopped)
-	if s.metricsRegistry != nil {
-		s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopped))
+	if !alreadyTerminal {
+		s.status.Store(StatusStopped)
+		if s.metricsRegistry != nil {
+			s.metricsRegistry.CoreMetrics().RecordServiceStatus(s.name, int(StatusStopped))
+		}
+		s.healthy.Store(false)
 	}
-	s.healthy.Store(false)
 
 	return nil
 }

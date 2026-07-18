@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -178,10 +179,55 @@ func TestHeartbeatService_StopNotRunning(t *testing.T) {
 		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
 	}
 
-	// Try to stop without starting
+	// Stop without Start: an already-stopped service is clean success per the
+	// Service contract (gh#520) — nil or ErrAlreadyStopped, never a fatal error.
 	err = hb.Stop(time.Second)
-	if err == nil {
-		t.Error("Stop() should return error when not running")
+	if err != nil && !errors.Is(err, ErrAlreadyStopped) {
+		t.Errorf("Stop() when not running = %v, want nil or ErrAlreadyStopped", err)
+	}
+}
+
+// TestHeartbeatService_StopIdempotent covers gh#549: repeated Stop calls are
+// safe (no double-close of stopChan) and every call reports success.
+func TestHeartbeatService_StopIdempotent(t *testing.T) {
+	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
+	if err != nil {
+		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
+	}
+
+	if err := hb.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	for i := range 3 {
+		if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+			t.Fatalf("Stop() call %d = %v, want nil or ErrAlreadyStopped", i+1, err)
+		}
+	}
+
+	if hb.Status() != StatusStopped {
+		t.Errorf("Status() = %v, want %v", hb.Status(), StatusStopped)
+	}
+}
+
+// TestHeartbeatService_StartAfterStop locks the single-use contract: once Stop
+// has run teardown, Start must fail loudly rather than report Running with a
+// dead heartbeat loop.
+func TestHeartbeatService_StartAfterStop(t *testing.T) {
+	hb, err := newHeartbeatServiceForTest(&HeartbeatConfig{Interval: "1s"}, nil)
+	if err != nil {
+		t.Fatalf("newHeartbeatServiceForTest() error = %v", err)
+	}
+
+	if err := hb.Start(context.Background()); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+		t.Fatalf("Stop() error = %v", err)
+	}
+
+	if err := hb.Start(context.Background()); err == nil {
+		t.Error("Start() after Stop should fail: instances are single-use")
 	}
 }
 
@@ -231,14 +277,21 @@ func TestHeartbeatService_ContextCancellation(t *testing.T) {
 	// Cancel context - this will cause the heartbeat loop to exit
 	cancel()
 
-	// Give goroutine time to exit
-	time.Sleep(50 * time.Millisecond)
+	// Wait for contextMonitor to observe cancellation and self-stop the service
+	deadline := time.Now().Add(2 * time.Second)
+	for hb.Status() != StatusStopped {
+		if time.Now().After(deadline) {
+			t.Fatalf("Status() = %v, want %v after context cancellation", hb.Status(), StatusStopped)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 
-	// After context cancellation, we need to clean up the ticker
-	// The Stop() call may fail if status already changed, which is acceptable
-	_ = hb.Stop(time.Second)
+	// Stop after cancellation already won the race is a clean shutdown and
+	// still completes ticker/goroutine teardown (gh#549).
+	if err := hb.Stop(time.Second); err != nil && !errors.Is(err, ErrAlreadyStopped) {
+		t.Errorf("Stop() after context cancellation = %v, want nil or ErrAlreadyStopped", err)
+	}
 
-	// Verify the service is stopped (either by context or explicit stop)
 	if hb.Status() != StatusStopped {
 		t.Errorf("Status() = %v, want %v after context cancellation", hb.Status(), StatusStopped)
 	}

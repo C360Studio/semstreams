@@ -737,9 +737,65 @@ func TestMetricsForwarder_StopBeforeStart(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	forwarder := createTestMetricsForwarder(t, "5s", mockNATS, registry)
 
-	// Stop without Start should return error
+	// Stop without Start: an already-stopped service is clean success per the
+	// Service contract (gh#520) — nil or ErrAlreadyStopped, never a fatal error.
 	err := forwarder.Stop(1 * time.Second)
-	assert.Error(t, err, "Stop before Start should return error")
+	if err != nil {
+		assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop before Start must be nil or ErrAlreadyStopped")
+	}
+}
+
+// TestMetricsForwarder_StopIdempotent covers gh#549: repeated Stop calls are
+// safe (no double-close of stopChan) and every call reports success.
+func TestMetricsForwarder_StopIdempotent(t *testing.T) {
+	forwarder := createTestMetricsForwarder(t, "5s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
+
+	require.NoError(t, forwarder.Start(context.Background()))
+
+	for i := range 3 {
+		if err := forwarder.Stop(time.Second); err != nil {
+			assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop() call %d must be nil or ErrAlreadyStopped", i+1)
+		}
+	}
+
+	assert.Equal(t, StatusStopped, forwarder.Status())
+}
+
+// TestMetricsForwarder_StopAfterContextCancellation covers the gh#549 ordering:
+// parent-context cancellation self-stops the service before Stop is called, and
+// Stop must treat that terminal state as a clean shutdown while still completing
+// ticker/goroutine teardown.
+func TestMetricsForwarder_StopAfterContextCancellation(t *testing.T) {
+	forwarder := createTestMetricsForwarder(t, "5s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	require.NoError(t, forwarder.Start(ctx))
+
+	cancel()
+	require.Eventually(t, func() bool {
+		return forwarder.Status() == StatusStopped
+	}, 2*time.Second, 5*time.Millisecond,
+		"service must self-stop when the parent context is cancelled")
+
+	if err := forwarder.Stop(time.Second); err != nil {
+		assert.ErrorIs(t, err, ErrAlreadyStopped, "Stop after cancellation must be nil or ErrAlreadyStopped")
+	}
+	assert.Equal(t, StatusStopped, forwarder.Status())
+}
+
+// TestMetricsForwarder_StartAfterStop locks the single-use contract: once Stop
+// has run teardown, Start must fail loudly rather than report Running with a
+// dead publishing loop.
+func TestMetricsForwarder_StartAfterStop(t *testing.T) {
+	forwarder := createTestMetricsForwarder(t, "5s", &metricsForwarderMockNATS{}, metric.NewMetricsRegistry())
+
+	require.NoError(t, forwarder.Start(context.Background()))
+	if err := forwarder.Stop(time.Second); err != nil {
+		require.ErrorIs(t, err, ErrAlreadyStopped)
+	}
+
+	assert.Error(t, forwarder.Start(context.Background()),
+		"Start after Stop must fail: instances are single-use")
 }
 
 // TestMetricsForwarder_ServiceImplementsInterface verifies Service interface implementation
