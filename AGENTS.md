@@ -22,6 +22,11 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - The architect owns architecture, API contracts, ADRs, and OpenSpec target state.
 - The technical writer owns durable documentation and conservative OpenSpec task truth.
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
+- Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
+  Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle boundary),
+  new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS Direct). Read the
+  canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
+  names are thin adapters to it.
 
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data
@@ -186,7 +191,7 @@ Every NATS KV bucket gives you three interfaces from one write:
 | Fact about the world (entity state, index, current status) | KV Watch | Re-delivers all current values (correct recovery) |
 | Request to do something (task, LLM call, tool execution) | JetStream Stream | Resumes from last ack (no re-execution) |
 
-Use `/kv-or-stream` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
+Use `/kv-or-stream` (Claude) or read `.agents/skills/kv-or-stream/SKILL.md` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
 
 ### Inference Tiers
 
@@ -210,7 +215,7 @@ Two layers: **Reactive Engine** (conditions + actions + workflows) and **Compone
 
 **Key rules**: Rules trigger, they don't orchestrate. Workflows coordinate, they don't execute. Components are workflow-agnostic. State ownership is exclusive.
 
-Use `/orchestration-check` for the full decision framework. See [Orchestration Layers](docs/concepts/14-orchestration-layers.md).
+Use `/orchestration-check` (Claude) or read `.agents/skills/orchestration-check/SKILL.md` for the full decision framework. See [Orchestration Layers](docs/concepts/14-orchestration-layers.md).
 
 ### Rules don't carry payloads
 
@@ -230,4 +235,4 @@ Polymorphic JSON deserialization via type-discriminated envelopes. Every new mes
 2. `MarshalJSON` method wrapping payload in `BaseMessage` (use type alias to avoid recursion)
 3. Package import (blank import if needed) so `init()` runs
 
-Use `/new-payload` for the step-by-step checklist with code templates. See [Payload Registry Guide](docs/concepts/15-payload-registry.md).
+Use `/new-payload` (Claude) or read `.agents/skills/new-payload/SKILL.md` for the step-by-step checklist with code templates. See [Payload Registry Guide](docs/concepts/15-payload-registry.md).
