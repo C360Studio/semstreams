@@ -501,10 +501,14 @@ func provePredicateSmokeConsumerLifecycle(
 	t.Helper()
 	evidence := predicateSmokeConsumerEvidence{}
 	evidence.membershipBaseline, evidence.membershipHighWater = provePredicateSmokeBucketConsumer(
-		t, ctx, stores.membershipRaw, stores.membershipStream, ">")
+		t, ctx, stores.membershipRaw, stores.membershipStream, ">", true)
 	if stores.catalogRaw != nil {
+		// Catalog streams are tiny (~22 rows): the ephemeral list consumer
+		// can deliver everything and vanish between Info polls, so
+		// above-baseline visibility is inherently racy there (gh#555).
+		// Observation-only; the leak check stays strict.
 		evidence.catalogBaseline, evidence.catalogHighWater = provePredicateSmokeBucketConsumer(
-			t, ctx, stores.catalogRaw, stores.catalogStream, ">")
+			t, ctx, stores.catalogRaw, stores.catalogStream, ">", false)
 	}
 	return evidence
 }
@@ -515,6 +519,7 @@ func provePredicateSmokeBucketConsumer(
 	raw jetstream.KeyValue,
 	stream jetstream.Stream,
 	filter string,
+	requireVisible bool,
 ) (int, int) {
 	t.Helper()
 	baselineInfo, err := stream.Info(ctx)
@@ -523,14 +528,29 @@ func provePredicateSmokeBucketConsumer(
 	lister, err := raw.ListKeysFiltered(ctx, filter)
 	require.NoError(t, err)
 	highWater := baseline
-	require.Eventually(t, func() bool {
+	observeVisibility := func() bool {
 		info, infoErr := stream.Info(ctx)
 		if infoErr != nil {
 			return false
 		}
 		highWater = max(highWater, info.State.Consumers)
 		return highWater > baseline
-	}, 5*time.Second, time.Millisecond, "filtered list consumer was never visible above baseline")
+	}
+	if requireVisible {
+		require.Eventually(t, observeVisibility, 5*time.Second, time.Millisecond,
+			"filtered list consumer was never visible above baseline")
+	} else {
+		// Best-effort observation for streams too small to guarantee the
+		// consumer outlives the polling granularity (gh#555): a consumer
+		// that delivered all keys can be gone before the first Info poll —
+		// the Stop() tolerance for ErrBadSubscription below anticipates
+		// exactly that fast-completion case.
+		deadline := time.Now().Add(time.Second)
+		for time.Now().Before(deadline) && !observeVisibility() {
+			time.Sleep(time.Millisecond)
+		}
+		t.Logf("consumer visibility (observation-only): baseline=%d high_water=%d", baseline, highWater)
+	}
 	stopErr := lister.Stop()
 	require.True(t, stopErr == nil || errors.Is(stopErr, gonats.ErrBadSubscription),
 		"stop held key lister: %v", stopErr)

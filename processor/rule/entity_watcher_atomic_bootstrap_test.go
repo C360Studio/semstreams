@@ -186,6 +186,13 @@ func TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap(t *testing.T) {
 
 	// The bootstrap replay must still have persisted a fresh MatchState
 	// so a LATER restart (this entity now has history) could recover.
+	// messagesEvaluated increments when evaluation BEGINS
+	// (evaluateRulesForEntityState) — the persist lands later in the same
+	// pass, so wait on the awaited state itself, not the counter (gh#557).
+	waitForRuleWatcher(t, func() bool {
+		st, stErr := tracker.Get(context.Background(), "recovery-rule", entityID)
+		return stErr == nil && st.IsMatching
+	})
 	persisted, err := tracker.Get(context.Background(), "recovery-rule", entityID)
 	if err != nil {
 		t.Fatalf("expected MatchState to be persisted after bootstrap Entered, got error: %v", err)
@@ -236,6 +243,15 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 	watcher1.updates <- nil // empty bootstrap — flips to live immediately
 	watcher1.updates <- validRuleEntityEntry(t, entityID, 1)
 	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor1.messagesEvaluated) == 1 })
+	// messagesEvaluated increments when evaluation BEGINS
+	// (evaluateRulesForEntityState) — the StatefulEvaluator persists
+	// MatchState later in the same pass. Waiting on the counter alone races
+	// the persist (the gh#557 CI flake); wait on the awaited state itself
+	// before tearing down the first watcher session.
+	waitForRuleWatcher(t, func() bool {
+		st, stErr := tracker.Get(context.Background(), "recovery-rule", entityID)
+		return stErr == nil && st.IsMatching
+	})
 	cancel1()
 
 	if got := liveExecutor.calls.Load(); got != 0 {
