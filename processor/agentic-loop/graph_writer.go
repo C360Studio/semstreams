@@ -312,7 +312,7 @@ func divergentTaskID(existing *gtypes.EntityState, incomingTaskID string) (exist
 // the loop entity when handleCompleteResponse detected a terminal-tool-
 // less completion. Three atomic triples on the loop entity:
 //
-//   - coordinator.decision.next_action = "needs_clarification" so
+//   - coordinator.decision.next-action = "needs_clarification" so
 //     existing recovery rules (e.g. SemTeams' needs-clarification-
 //     replan) match without changes.
 //   - coordinator.decision.reason = "[synthetic-no-terminal] {model

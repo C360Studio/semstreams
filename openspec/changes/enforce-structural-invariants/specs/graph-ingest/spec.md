@@ -28,9 +28,10 @@ graph regardless of its producer (framework, rule-stamped, product, or agent-aut
 ### Requirement: The structural gate MUST be unconditionally fail-closed with no bypass configuration
 
 The handler-level structural gate MUST be unconditionally fail-closed: no bypass configuration exists
-that lets a structurally-invalid predicate pass the gate. Every violation is metered
-(`mutation_rejections{reason="structural_predicate_invalid"}`), logged loudly, and rejected with a
-classified validation error. Behind the gate, the authoritative persistence seam — the entity-state
+that lets a structurally-invalid predicate pass the gate. Every violation is rejected with a classified
+validation error and metered exactly once — by the shared mutation-metering wrapper, under the error's
+code (`mutation_rejections{reason="structural_invalid"}`) — with a loud log whose detail names the
+offending predicate. Behind the gate, the authoritative persistence seam — the entity-state
 contract validation every `ENTITY_STATES` write path calls (`graph.MarshalEntityState` /
 `ValidateEntityStateContract`) — independently rejects structurally-invalid predicates, so the gate and
 the seam are two fail-closed layers and no configuration can weaken either. (An observe-only escape
@@ -42,6 +43,6 @@ persistence.)
 - **WHEN** a mutation carries a non-3-part predicate on the `triple.add` or `triple.add_batch` lane,
   under any component configuration
 - **THEN** the gate rejects the mutation with the classified structural code before any KV I/O
-- **AND** the `mutation_rejections{reason="structural_predicate_invalid"}` metric increments and a log
-  names the token
+- **AND** the `mutation_rejections{reason="structural_invalid"}` metric increments exactly once and a
+  log names the token
 - **AND** nothing from the mutation is written to `ENTITY_STATES`

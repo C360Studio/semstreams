@@ -22,10 +22,13 @@ import (
 
 // The structural-identity predicate gate (enforce-structural-invariants) rejects
 // non-3-part predicates at the mutation-handler boundary. It is unconditionally
-// FAIL-CLOSED — no bypass configuration exists: validateTriplePredicates meters
-// mutation_rejections{reason=structural_predicate_invalid}, logs a loud Warn,
-// AND returns a classified ErrorCodeStructuralInvalid so the write is rejected
-// before any KV I/O.
+// FAIL-CLOSED — no bypass configuration exists: validateTriplePredicates returns
+// a classified ErrorCodeStructuralInvalid so the write is rejected before any
+// KV I/O. Metering happens exactly ONCE, in the meteredMutation wrapper, which
+// meters every classified handler error by its code
+// (mutation_rejections{reason=structural_invalid}) and logs a loud Warn whose
+// detail names the predicate — the gate itself does not meter (a direct call
+// would double-count the same rejection under a second reason label).
 //
 // Lane map (see validateTriplePredicates' doc comment):
 //   - triple.add / triple.add_batch — this gate is the FIRST predicate authority.
@@ -68,12 +71,11 @@ func seedStructuralGateEntity(t *testing.T, comp *Component, entityID string) *g
 // unconditionally, so the hatch could only swap the caller-visible error code).
 func TestValidateTriplePredicates_FailClosed_RejectsClassified(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	const subj = "test.structural.enforce"
 
 	triples := []message.Triple{
 		{Subject: structuralGateEntity, Predicate: "agent.role", Object: "researcher"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 	}
-	err := comp.validateTriplePredicates(subj, triples)
+	err := comp.validateTriplePredicates(triples)
 	require.Error(t, err, "the gate must reject a non-3-part predicate")
 	var ce *errs.ClassifiedError
 	require.ErrorAs(t, err, &ce)
@@ -83,11 +85,9 @@ func TestValidateTriplePredicates_FailClosed_RejectsClassified(t *testing.T) {
 
 func TestValidateTriplePredicates_ValidPredicate_Untouched(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	// A conforming predicate must pass the fail-closed gate untouched.
-	const subj = "test.structural.valid"
-
-	counter := comp.mutationRejections.WithLabelValues(subj, "structural_predicate_invalid")
-	before := testutil.ToFloat64(counter)
+	// A conforming predicate must pass the fail-closed gate untouched. (Metering
+	// on rejection is the meteredMutation wrapper's job — asserted in the
+	// handler-level tests below.)
 
 	triples := []message.Triple{
 		{Subject: structuralGateEntity, Predicate: "sensor.temperature.celsius", Object: 22.5},
@@ -95,10 +95,8 @@ func TestValidateTriplePredicates_ValidPredicate_Untouched(t *testing.T) {
 		// literally "value" MUST pass (it is a real predicate, not a suffix).
 		{Subject: structuralGateEntity, Predicate: "sensorml.capability.value", Object: "50m"},
 	}
-	err := comp.validateTriplePredicates(subj, triples)
-	require.NoError(t, err, "conforming 3-part predicates pass even in enforce mode")
-	assert.InDelta(t, before, testutil.ToFloat64(counter), 0.0001,
-		"no rejection metered for valid predicates")
+	err := comp.validateTriplePredicates(triples)
+	require.NoError(t, err, "conforming 3-part predicates pass the fail-closed gate")
 }
 
 // TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted drives the
@@ -116,8 +114,13 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 	comp.logger = slog.New(slog.NewTextHandler(&logBuf, nil))
 
 	const absentID = "acme.ops.robotics.gcs.drone.404"
-	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, "structural_predicate_invalid")
+	// The meteredMutation wrapper is the SINGLE metering point: it meters the
+	// classified error by its code (reason=structural_invalid). The gate's old
+	// direct-meter cell must stay untouched (double-metering regression guard).
+	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, graph.ErrorCodeStructuralInvalid)
 	before := testutil.ToFloat64(counter)
+	gateDirectCell := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, "structural_predicate_invalid")
+	gateDirectBefore := testutil.ToFloat64(gateDirectCell)
 
 	handler := comp.meteredMutation(SubjectTripleAdd, comp.handleTripleAdd)
 	reqBytes, err := json.Marshal(graph.AddTripleRequest{Triple: message.Triple{
@@ -137,7 +140,9 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 	assert.True(t, errs.IsInvalid(err), "structural rejection classifies invalid (do-not-retry)")
 
 	assert.InDelta(t, before+1, testutil.ToFloat64(counter), 0.0001,
-		"mutation_rejections{subject=triple.add, reason=structural_predicate_invalid} must increment")
+		"mutation_rejections{subject=triple.add, reason=structural_invalid} must increment exactly once")
+	assert.InDelta(t, gateDirectBefore, testutil.ToFloat64(gateDirectCell), 0.0001,
+		"the gate must NOT meter directly — one rejection, one metric cell (no double-metering)")
 
 	_, getErr := comp.entityBucket.Get(ctx, absentID)
 	require.Error(t, getErr, "nothing may be persisted for the rejected mutation")
@@ -148,7 +153,7 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 	assert.Contains(t, logged, "graph mutation rejected", "a loud Warn must be emitted")
 	assert.Contains(t, logged, "agent.role", "the Warn must name the offending predicate")
 	assert.Contains(t, logged, SubjectTripleAdd, "the Warn must name the source subject")
-	assert.Contains(t, logged, "structural_predicate_invalid", "the Warn must name the reason")
+	assert.Contains(t, logged, graph.ErrorCodeStructuralInvalid, "the Warn must name the reason")
 }
 
 // TestHandleTripleAddBatch_InvalidPredicate_WholeBatchRejected pins D2's
@@ -304,7 +309,7 @@ func TestHandleTripleAdd_ValidPredicate_PersistsMergeIntact(t *testing.T) {
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
 
-	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, "structural_predicate_invalid")
+	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, graph.ErrorCodeStructuralInvalid)
 	before := testutil.ToFloat64(counter)
 
 	handler := comp.meteredMutation(SubjectTripleAdd, comp.handleTripleAdd)

@@ -297,16 +297,18 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 // (canonical 3-part domain.category.property — vocabulary.IsValidPredicate, which
 // delegates to vocabulary.ParsePredicate) at the mutation-handler boundary. It is
 // unconditionally FAIL-CLOSED — no bypass configuration exists: on the first
-// malformed predicate it records a rejection
-// (mutation_rejections{reason=structural_predicate_invalid} counter + loud Warn)
-// via the existing recordMutationRejection path and returns a classified
-// ErrorCodeStructuralInvalid so the mutation is rejected before persistence
-// (openspec/changes/enforce-structural-invariants). Behind it, the authoritative
-// entity-state contract seam (graph.MarshalEntityState /
-// ValidateEntityStateContract, which every ENTITY_STATES write path calls)
-// independently rejects non-conforming predicates, so the gate and the seam are
-// two fail-closed layers. The entity-ID half is already fail-closed via
-// validateEntityID.
+// malformed predicate it returns a classified ErrorCodeStructuralInvalid so the
+// mutation is rejected before persistence
+// (openspec/changes/enforce-structural-invariants). The gate does NOT meter
+// directly: the meteredMutation wrapper meters every classified handler error
+// exactly once by its code (mutation_rejections{reason=structural_invalid} +
+// loud Warn whose detail is err.Error(), naming the predicate) — a direct call
+// here would double-count the same rejection under a second reason label.
+// Behind it, the authoritative entity-state contract seam
+// (graph.MarshalEntityState / ValidateEntityStateContract, which every
+// ENTITY_STATES write path calls) independently rejects non-conforming
+// predicates, so the gate and the seam are two fail-closed layers. The
+// entity-ID half is already fail-closed via validateEntityID.
 //
 // Placement per lane: on triple.add / triple.add_batch this gate is the FIRST
 // predicate authority (it fires before AddTriple/AddTriples' contract check, so
@@ -317,17 +319,15 @@ func (c *Component) recordMutationRejection(subject, reason, detail string) {
 // runs FIRST and rejects a malformed predicate with the generic invalid_request
 // classification + the predicate_contract_rejections{lane,reason} metric; this
 // gate is a defense-in-depth backstop there.
-func (c *Component) validateTriplePredicates(subject string, triples []message.Triple) error {
+func (c *Component) validateTriplePredicates(triples []message.Triple) error {
 	for i := range triples {
 		predicate := triples[i].Predicate
 		if vocabulary.IsValidPredicate(predicate) {
 			continue
 		}
-		c.recordMutationRejection(subject, "structural_predicate_invalid",
-			fmt.Sprintf("predicate %q is not a valid 3-part predicate (domain.category.property) on entity %q",
-				predicate, triples[i].Subject))
 		return rejectInvalid(graph.ErrorCodeStructuralInvalid,
-			fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property)", predicate))
+			fmt.Errorf("predicate %q is not a valid 3-part predicate (domain.category.property) on entity %q",
+				predicate, triples[i].Subject))
 	}
 	return nil
 }
@@ -339,8 +339,8 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, fmt.Errorf("invalid request: %w", err))
 	}
 
-	// Structural-identity predicate gate (fail-closed by default).
-	if err := c.validateTriplePredicates(SubjectTripleAdd, []message.Triple{req.Triple}); err != nil {
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates([]message.Triple{req.Triple}); err != nil {
 		return nil, err
 	}
 
@@ -392,8 +392,8 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 		})
 	}
 
-	// Structural-identity predicate gate (fail-closed by default).
-	if err := c.validateTriplePredicates(SubjectTripleAddBatch, req.Triples); err != nil {
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates(req.Triples); err != nil {
 		return nil, err
 	}
 
@@ -607,8 +607,8 @@ func (c *Component) handleEntityCreateWithTriples(ctx context.Context, data []by
 		return nil, rejectFromError(err)
 	}
 
-	// Structural-identity predicate gate (fail-closed by default).
-	if err := c.validateTriplePredicates(SubjectEntityCreateWithTriples, req.Entity.Triples); err != nil {
+	// Structural-identity predicate gate (unconditionally fail-closed).
+	if err := c.validateTriplePredicates(req.Entity.Triples); err != nil {
 		return nil, err
 	}
 
@@ -862,10 +862,14 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		return nil, rejectFromError(err)
 	}
 
-	// Structural-identity predicate gate (fail-closed by default) on the triples
-	// being written. RemoveTriples name predicates to DELETE — a malformed one is
-	// allowed through so a bad predicate can be cleaned up.
-	if err := c.validateTriplePredicates(SubjectEntityUpdateWithTriples, req.AddTriples); err != nil {
+	// Structural-identity predicate gate (unconditionally fail-closed) on the
+	// triples being written. The gate skips RemoveTriples because they are
+	// deletions, not writes — but malformed remove-predicates are NOT a cleanup
+	// lane: validateMutationPredicates above already rejects them (validated as
+	// synthetic triples → invalid_request), and the triple.remove lane validates
+	// via vocabulary.ParsePredicate. Pre-v1, the remedy for a bad persisted
+	// predicate is wipe + reseed, not a lenient delete path.
+	if err := c.validateTriplePredicates(req.AddTriples); err != nil {
 		return nil, err
 	}
 

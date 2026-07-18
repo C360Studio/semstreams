@@ -23,7 +23,7 @@ as ADR-046 Phase 2 (`fan_out_gated`, GH #139).
   coordinator) and `agent.loop.task` (a unique TaskID) — both
   stamped natively by the agentic-loop.
 - `02-stamp-completion-on-parent.json` — investigator completes →
-  rule stamps `gather.completed_child` on the **parent loop entity**
+  rule stamps `gather.child.completed` on the **parent loop entity**
   via the new `subject` override (substitution-resolved to
   `$entity.triple.agent.loop.parent`). The triple's Object is the
   child's TaskID (`$entity.triple.agent.loop.task` — distinct per
@@ -33,10 +33,10 @@ as ADR-046 Phase 2 (`fan_out_gated`, GH #139).
   `read_loop_result` on each — rules carry references, not payloads
   (ADR-028).
 - `03-synthesize-when-all-complete.json` — fires on the parent loop
-  entity when `gather.completed_child` has length equal to the
+  entity when `gather.child.completed` has length equal to the
   source list length. The synthesizer's prompt is composed with
   the sibling loop IDs inlined as a JSON array (via
-  `$entity.triple.gather.completed_child.triples`, ADR-048 PR 4).
+  `$entity.triple.gather.child.completed.triples`, ADR-048 PR 4).
   The persona prose teaches the synthesizer to parse the inline
   JSON and iterate — no graph-query tool needed, and the
   chain-agents-no-graph discipline (per ADR-041 addendum) stays
@@ -57,11 +57,11 @@ rule 01: for_each subtopics → spawn investigator_loop_A, investigator_loop_B, 
          (each spawned loop natively carries agent.loop.parent=coordinator + agent.loop.task=<unique TaskID>)
   ↓ (parallel)
 rule 02 fires 3× as each investigator completes:
-  add_triple subject=coordinator predicate=gather.completed_child object=<unique TaskID>
+  add_triple subject=coordinator predicate=gather.child.completed object=<unique TaskID>
   ↓
-coordinator entity accumulates 3 gather.completed_child triples (one per distinct TaskID)
+coordinator entity accumulates 3 gather.child.completed triples (one per distinct TaskID)
   ↓
-rule 03 matches when length_eq(gather.completed_child, $entity.triple.coordinator.decision.subtopics.length) → spawn synthesizer
+rule 03 matches when length_eq(gather.child.completed, $entity.triple.coordinator.decision.subtopics.length) → spawn synthesizer
   (the .length suffix — #149 — resolves to the integer count of the source subtopics list,
    so the pack works for any decomposer fan-out width without per-width forking)
 synthesizer prompt has inlined JSON array of sibling loop IDs → parses JSON → read_loop_result per ID

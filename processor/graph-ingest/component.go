@@ -1574,12 +1574,13 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 	own, foreign := c.normalizeProjection(ctx, entity.ID, entity.MessageType, entity.Triples)
 	entity.Triples = own
 
-	// Structural-identity predicate gate on the Graphable ingest path (fail-closed
-	// by default; the primary vector for product/source-authored predicates). On
+	// Structural-identity predicate gate on the Graphable ingest path
+	// (unconditionally fail-closed; the primary vector for product/source-authored
+	// predicates). On
 	// this lane it is a defense-in-depth backstop: prepareFactProjection above has
 	// already rejected any non-canonical predicate via the authoritative
 	// ValidateEntityStateContract, so this call cannot fire unless that seam moves.
-	if err := c.validateTriplePredicates("graph.ingest.entity", entity.Triples); err != nil {
+	if err := c.validateTriplePredicates(entity.Triples); err != nil {
 		return err
 	}
 

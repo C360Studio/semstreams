@@ -29,7 +29,11 @@ single contract — there is no `>= 6` variant.
 A predicate MUST consist of exactly three dot-separated parts (`domain.category.property`), each part
 non-empty. A string with fewer than or more than three parts, or with an empty part, is not a valid
 predicate. The validator MUST check part count AND segment non-emptiness — a bare dot-count check is
-insufficient.
+insufficient. This requirement is the structural floor, not the full acceptance rule: the wired
+validator (`vocabulary.IsValidPredicate`, delegating to `vocabulary.ParsePredicate`) enforces the
+stronger canonical lower-kebab contract (per-segment charset `[a-z][a-z0-9]*(-[a-z0-9]+)*` and byte
+bounds — owned by the predicate-contract-enforcement capability), so a 3-part token with, e.g., an
+underscore still rejects.
 
 #### Scenario: A canonical three-part predicate is valid
 - **WHEN** `sensor.temperature.celsius` is validated

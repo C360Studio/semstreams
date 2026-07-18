@@ -40,19 +40,24 @@
 
 - [x] 2.1 Predicate structural validation (`vocabulary.IsValidPredicate`) wired at every
   triple-carrying write path: `handleTripleAdd`, `handleTripleAddBatch`,
-  `handleEntityCreateWithTriples`, `handleEntityUpdateWithTriples` (AddTriples only —
-  RemoveTriples names predicates to DELETE, so a malformed one is allowed through for cleanup), and
+  `handleEntityCreateWithTriples`, `handleEntityUpdateWithTriples` (AddTriples only — the gate
+  skips RemoveTriples because they are deletions, not writes; malformed remove-predicates are NOT a
+  cleanup lane — the upstream preflight `validateMutationPredicates` rejects them as synthetic
+  triples with `invalid_request`, and the triple.remove lane validates via
+  `vocabulary.ParsePredicate`; pre-v1 the remedy for a bad persisted predicate is wipe + reseed), and
   the Graphable ingest path (`ingestEntity`). SHIPPED CONFIG: none — the gate is unconditionally
   FAIL-CLOSED. An escape-hatch bool (`Config.AllowNonConformingPredicates`, replacing the
   originally-planned `StructuralPredicateEnforcement` enum) was prototyped and then REMOVED
   pre-release as provably inert: the authoritative persistence seam rejects unconditionally, so the
   hatch could only swap the caller-visible error code, never permit persistence. No bypass
   configuration exists (see design.md "Escape hatch REMOVED pre-release").
-- [x] 2.2 On an invalid predicate the gate calls the EXISTING
-  `recordMutationRejection(subject, "structural_predicate_invalid", detail)` (mutation_rejections
-  counter + loud WARN naming token+subject+reason). No new metric. On the lanes where the upstream
-  contract seam fires first, the specific reason is metered by upstream's
-  `predicate_contract_rejections{lane,reason}` instead.
+- [x] 2.2 On an invalid predicate the gate returns classified `ErrorCodeStructuralInvalid`; the
+  rejection is metered exactly ONCE by the `meteredMutation` wrapper, which meters every classified
+  handler error by its code (`mutation_rejections{subject,reason="structural_invalid"}` + loud WARN
+  whose detail names token + entity). No new metric; the gate does NOT meter directly (reviewer
+  finding: an earlier direct `recordMutationRejection` call double-counted the same rejection under
+  a second reason label — removed). On the lanes where the upstream contract seam fires first, the
+  specific reason is metered by upstream's `predicate_contract_rejections{lane,reason}` instead.
 - [x] 2.3 Unit tests (`structural_predicate_gate_test.go`): the gate rejects a non-3-part predicate
   with classified `structural_invalid` (`TestValidateTriplePredicates_FailClosed_RejectsClassified`
   — the always-fail-closed contract); a conforming predicate is untouched
@@ -72,7 +77,7 @@
   `configs/rules/**` must satisfy `vocabulary.IsValidPredicate`. Passing on the current tree.
 - [ ] 3.2 e2e validation: `task e2e:agentic` (research-graph + deep-research tiers) MUST run green —
   the research-predicate rename touches the shipped research pipeline. (Requires Docker; run before
-  merge — also the BREAKING e2e gate 6.2.)
+  merge — also the e2e prudence gate 6.2.)
 - [x] 3.3 **AUDIT RESULT — NOT CLEAN.** The audit surfaced real violators (validating the
   maintainer's concern). Restated against the CURRENT tree (upstream landed the renames in
   lower-kebab, stronger than this branch's original snake_case picks):
@@ -85,8 +90,10 @@
     research.parent.loop`, `research.parent_role→research.parent.role`, `research.loop_id→
     research.loop.id`, `loop.role→agent.loop.role` (reuse canonical); example-fan-out
     `gather.completed_child→gather.child.completed`; mission harness `mission.phase→
-    mission.state.phase` (`cmd/e2e-semstreams/mission/state.go`). **BREAKING: semteams (sister
-    repo) consumes the research predicates and MUST update in lockstep — coordinate before tag.**
+    mission.state.phase` (`cmd/e2e-semstreams/mission/state.go`). Lockstep note: semteams (sister
+    repo) consumes the research predicates — its lockstep update attaches to its **beta.149
+    adoption** (the renames shipped upstream; see docs/operations/31 cutover checklist), not to
+    this PR.
   - **`network.traffic.*` 4-part constants**: RESOLVED UPSTREAM by rename to 3-part kebab
     (`network.traffic.bytes-in/bytes-out/packets-in/packets-out` in `vocabulary/predicates.go`) —
     the earlier "dead 4-part constants, flag for removal" note is obsolete.
@@ -99,16 +106,18 @@
 ## 4. Flip fail-closed + loud log (D2)
 
 - [x] 4.1 Fail-closed SHIPPED unconditionally — no configuration knob: a structurally-invalid
-  predicate rejects the mutation with classified `ErrorCodeStructuralInvalid` via `rejectInvalid` +
-  `recordMutationRejection` on the triple.add lanes, and with the authoritative seam's classified
-  `invalid_request` on the create/update/ingest lanes. Loud Warn kept on all lanes. (Entity-ID
-  rejection already fail-closed. The prototyped `AllowNonConformingPredicates` hatch was removed
-  pre-release as inert — see 2.1 / design.md.)
+  predicate rejects the mutation with classified `ErrorCodeStructuralInvalid` via `rejectInvalid` on
+  the triple.add lanes (metered once by the `meteredMutation` wrapper as reason=`structural_invalid`
+  — see 2.2), and with the authoritative seam's classified `invalid_request` on the
+  create/update/ingest lanes. Loud Warn kept on all lanes. (Entity-ID rejection already fail-closed.
+  The prototyped `AllowNonConformingPredicates` hatch was removed pre-release as inert — see 2.1 /
+  design.md.)
 - [x] 4.2 Tests (`structural_predicate_gate_test.go`, driving the production `meteredMutation` →
   handler chain against the mock KV store): invalid predicate → mutation rejected with a classified
-  error, NOTHING persisted (store absence / entity-unchanged asserted), rejection metric
-  incremented, loud Warn asserted (subject + token + reason) — covering handleTripleAdd
-  (`structural_invalid`, fires before must-exist), handleTripleAddBatch (whole batch rejected,
+  error, NOTHING persisted (store absence / entity-unchanged asserted), rejection metered exactly
+  once by the wrapper (reason=`structural_invalid`; the gate's former direct-meter cell asserted
+  untouched — no double-metering), loud Warn asserted (subject + token + reason) — covering
+  handleTripleAdd (`structural_invalid`, fires before must-exist), handleTripleAddBatch (whole batch rejected,
   conforming sibling triple NOT persisted), handleEntityCreateWithTriples + 
   handleEntityUpdateWithTriples (seam-first: `invalid_request` + predicate_contract_rejections
   metric, entity unchanged), and the Graphable `ingestEntity` lane; regression: fully-conforming
@@ -165,9 +174,13 @@
   `go test -race -count=1 ./...` all packages ok, 0 FAIL; `task schema:generate` — regen updates
   `schemas/graph-ingest.v1.json` by REMOVING the `allow_nonconforming_predicates` field (hatch
   removed pre-release; intentional, ships with the change); no go.sum churn.
-- [ ] 6.2 **BREAKING-change e2e gate** (the fail-closed flip changes ingest accept/reject behavior):
-  run at least `task e2e:structural` (+ `e2e:semantic` if touched) green with `--build` BEFORE the
-  flip lands on main. Judge from log markers, not task exit.
+- [ ] 6.2 **e2e gate — prudence, not a BREAKING mandate.** Reviewer-verified vs beta.149: NO
+  previously-accepted write newly rejects — the fail-closed seam flip shipped upstream in beta.149.
+  This change's true caller-visible surface is (a) the triple-lane error-code string
+  (`structural_invalid` where the seam would say `invalid_request`), (b) the single-metric surface
+  (`mutation_rejections{reason="structural_invalid"}`, metered once by the wrapper), and (c) the
+  clustering `parseEntityID` display fix. Run `task e2e:structural` (+ `e2e:semantic` if touched)
+  green with `--build` before merge as prudence. Judge from log markers, not task exit.
 - [ ] 6.3 **semstreams-reviewer** pass (new write-boundary validation + RPC error contract + metric
   = silent-failure-class surface).
 - [x] 6.4 `openspec validate enforce-structural-invariants --strict` — passing (2026-07-18, after the

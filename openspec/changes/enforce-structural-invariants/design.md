@@ -128,6 +128,14 @@ lanes. Consequences reconciled into this change:
   Since it had never been released, it was removed rather than shipped as dead operator surface: the
   gate is unconditionally fail-closed and no bypass configuration exists (see the graph-ingest spec
   delta's fail-closed requirement).
+- **Not a BREAKING change vs beta.149.** Reviewer-verified: no write that beta.149 accepted is newly
+  rejected by this change — the fail-closed enforcement (the authoritative seam) shipped upstream in
+  beta.149. The true caller-visible surface here is (a) the triple.add / triple.add_batch error-code
+  string (`structural_invalid` where the seam alone would classify `invalid_request`), (b) the
+  single-metric surface (`mutation_rejections{reason="structural_invalid"}`, metered exactly once by
+  the shared wrapper), and (c) the clustering `parseEntityID` display fix (D3). The e2e tier in task
+  6.2 runs as prudence, not as a BREAKING mandate; the semteams research-predicate lockstep attaches
+  to its beta.149 adoption, not this PR.
 
 ### D5 — Retire the 2-part fixture debt + lint it
 
