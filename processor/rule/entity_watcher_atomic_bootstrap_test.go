@@ -135,6 +135,147 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	waitForRuleWatcher(t, func() bool { return executor.calls.Load() == 1 })
 }
 
+// TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap is the
+// negative leg of the gh#530 / rule-evaluation-completeness acceptance
+// contract: "never-matched entities do not recover". Deliberately does
+// NOT seed prior MatchState (unlike
+// TestRuleWatcherCleanBootstrapPreservesOnRecovery above) — the entity
+// currently matches (the test rule has no conditions, so any entity
+// state matches) but has no persisted history, so bootstrap replay must
+// treat it as a fresh Entered, not a recovery: OnRecovery must not fire
+// because the bootstrap-recovery fork requires hadPrevState=true.
+func TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap(t *testing.T) {
+	t.Parallel()
+	processor := newAtomicBootstrapProcessor(t)
+	processor.graphStateGuardRequired.Store(true)
+	guard := newAtomicBootstrapWatcher()
+	tracker := NewStateTracker(newMockKVBucket(), nil)
+	executor := &atomicRecoveryExecutor{}
+	processor.stateTracker = tracker
+	processor.statefulEvaluator = NewStatefulEvaluator(tracker, executor, nil)
+	recoveryRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	if err != nil {
+		t.Fatalf("NewTestRule: %v", err)
+	}
+	processor.rules["recovery-rule"] = recoveryRule
+	processor.ruleDefinitions["recovery-rule"] = Definition{
+		ID: "recovery-rule", Name: "Recovery Rule", Type: "test_rule",
+		Entity:     EntityConfig{Pattern: "*.*.*.*.*.*"},
+		OnRecovery: []Action{{Type: ActionTypePublish, Subject: "test.recovered"}},
+	}
+	// No tracker.Set seed here — this entity has no prior state.
+	entityID := "acme.ops.rule.gcs.mission.neverbefore"
+
+	watcher := newAtomicBootstrapWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go processor.handleGraphStateGuard(ctx, guard)
+	go processor.handleEntityUpdates(ctx, watcher)
+	watcher.updates <- validRuleEntityEntry(t, entityID, 1)
+	watcher.updates <- nil
+	guard.updates <- validRuleEntityEntry(t, entityID, 1)
+	guard.updates <- nil
+	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor.messagesEvaluated) == 1 })
+
+	// Give any (incorrect) async recovery firing a chance to land before
+	// asserting silence.
+	time.Sleep(30 * time.Millisecond)
+	if got := executor.calls.Load(); got != 0 {
+		t.Fatalf("OnRecovery fired for an entity with no prior match state: %d calls, want 0", got)
+	}
+
+	// The bootstrap replay must still have persisted a fresh MatchState
+	// so a LATER restart (this entity now has history) could recover.
+	persisted, err := tracker.Get(context.Background(), "recovery-rule", entityID)
+	if err != nil {
+		t.Fatalf("expected MatchState to be persisted after bootstrap Entered, got error: %v", err)
+	}
+	if !persisted.IsMatching {
+		t.Error("expected persisted MatchState.IsMatching=true after bootstrap first-match")
+	}
+}
+
+// TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery is the
+// full-cycle gh#530 / rule-evaluation-completeness proof: a LIVE
+// (non-bootstrap) match — not a manually-seeded MatchState — persists
+// state through the real dispatch path, and a genuine restart (a second
+// Processor + watcher session sharing the same StateTracker/bucket, the
+// established idiom for "restart" in this test file) then fires
+// OnRecovery exactly once. This is the piece
+// TestRuleWatcherCleanBootstrapPreservesOnRecovery doesn't cover: that
+// test seeds MatchState directly via tracker.Set rather than proving the
+// live path itself persists it.
+func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T) {
+	t.Parallel()
+	tracker := NewStateTracker(newMockKVBucket(), nil)
+	entityID := "acme.ops.rule.gcs.mission.livepersist"
+	ruleDef := Definition{
+		ID: "recovery-rule", Name: "Recovery Rule", Type: "test_rule",
+		Entity:     EntityConfig{Pattern: "*.*.*.*.*.*"},
+		OnRecovery: []Action{{Type: ActionTypePublish, Subject: "test.recovered"}},
+	}
+
+	// "Process instance 1": live traffic only. Sending the nil sentinel
+	// FIRST flips bootstrap=false before any real entry arrives, so the
+	// entity update below dispatches on the genuine live path.
+	liveExecutor := &atomicRecoveryExecutor{}
+	liveRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	if err != nil {
+		t.Fatalf("NewTestRule: %v", err)
+	}
+	processor1 := newAtomicBootstrapProcessor(t)
+	markRuleGuardClean(processor1)
+	processor1.stateTracker = tracker
+	processor1.statefulEvaluator = NewStatefulEvaluator(tracker, liveExecutor, nil)
+	processor1.rules["recovery-rule"] = liveRule
+	processor1.ruleDefinitions["recovery-rule"] = ruleDef
+
+	watcher1 := newAtomicBootstrapWatcher()
+	ctx1, cancel1 := context.WithCancel(context.Background())
+	go processor1.handleEntityUpdates(ctx1, watcher1)
+	watcher1.updates <- nil // empty bootstrap — flips to live immediately
+	watcher1.updates <- validRuleEntityEntry(t, entityID, 1)
+	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor1.messagesEvaluated) == 1 })
+	cancel1()
+
+	if got := liveExecutor.calls.Load(); got != 0 {
+		t.Fatalf("OnRecovery fired on a plain live Entered transition: %d calls, want 0", got)
+	}
+	persisted, err := tracker.Get(context.Background(), "recovery-rule", entityID)
+	if err != nil {
+		t.Fatalf("expected live match to persist MatchState, got error: %v", err)
+	}
+	if !persisted.IsMatching {
+		t.Fatal("expected persisted MatchState.IsMatching=true after live match")
+	}
+
+	// "Process instance 2": simulated restart — new Processor, new
+	// StatefulEvaluator, new watcher session, SAME StateTracker/bucket.
+	// Bootstrap replay of the same still-matching entity must now
+	// classify as recovery and fire OnRecovery exactly once.
+	restartExecutor := &atomicRecoveryExecutor{}
+	restartRule, err := NewTestRule("atomic-bootstrap-test", "recovery-rule", "Recovery Rule", nil, nil)
+	if err != nil {
+		t.Fatalf("NewTestRule: %v", err)
+	}
+	processor2 := newAtomicBootstrapProcessor(t)
+	markRuleGuardClean(processor2)
+	processor2.stateTracker = tracker
+	processor2.statefulEvaluator = NewStatefulEvaluator(tracker, restartExecutor, nil)
+	processor2.rules["recovery-rule"] = restartRule
+	processor2.ruleDefinitions["recovery-rule"] = ruleDef
+
+	watcher2 := newAtomicBootstrapWatcher()
+	ctx2, cancel2 := context.WithCancel(context.Background())
+	defer cancel2()
+	go processor2.handleEntityUpdates(ctx2, watcher2)
+	// Revision must advance past the live write's SourceRevision (1) or
+	// the stale-replay guard in StatefulEvaluator.Evaluate skips it.
+	watcher2.updates <- validRuleEntityEntry(t, entityID, 2)
+	watcher2.updates <- nil
+	waitForRuleWatcher(t, func() bool { return restartExecutor.calls.Load() == 1 })
+}
+
 func TestRuleWatcherLivePoisonLatchesBeforeAnyLaterAction(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)

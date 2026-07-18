@@ -215,6 +215,35 @@ type EntityStateEvaluator interface {
 }
 ```
 
+## Bootstrap Recovery and `on_recovery`-Only Rules
+
+When the processor restarts, each pattern watcher replays `ENTITY_STATES` with
+`Bootstrap=true` until it observes the nil sentinel that marks initial-state replay
+complete. A rule whose persisted `MatchState.IsMatching` was `true` before the
+restart, and whose entity still matches, is promoted to a synthetic `entered`
+transition on that replay so its recovery leg can re-run — see
+[State Recovery](state-tracking.md#state-recovery) for the transition mechanics.
+
+A rule may declare **only** `on_recovery` — no `on_enter`, `on_exit`, or
+`while_true` at all (gh#530). This expresses a pure fail-closed recovery park: the
+rule does nothing on ordinary matches (no actions to fire — `on_enter`/`while_true`
+are empty) but still persists `MatchState` on every live match, and fires its
+`on_recovery` actions exactly once for any entity that was matching across a
+restart. Entities that never matched before the restart do not fire recovery
+actions, even if they happen to match on the bootstrap replay itself — recovery
+requires prior persisted state (`hadPrevState`), not just a current match.
+
+```json
+{
+  "id": "in-flight-work-recovery",
+  "entity": {"pattern": "*.*.*.*.*.*"},
+  "conditions": [{"field": "work.task.status", "operator": "eq", "value": "in_progress"}],
+  "on_recovery": [
+    {"type": "publish", "subject": "work.recovery.needed"}
+  ]
+}
+```
+
 ## Entity Pattern vs Rule Pattern
 
 Two levels of filtering exist:

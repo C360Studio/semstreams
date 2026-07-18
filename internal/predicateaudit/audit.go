@@ -458,11 +458,25 @@ func literalCandidates(value string) []string {
 	return []string{value}
 }
 
+// substitutionCandidates extracts the predicate portion of every
+// $entity.triple.* / $related.triple.* reference in value, stripping
+// the known scalar-graceful suffixes (.length, .triples, .value —
+// rule-evaluation-completeness / gh#519) so the audit checks the actual
+// predicate identity rather than the suffixed token.
+//
+// This is a syntactic strip, not the substitution layer's arity
+// disambiguation (see applyTripleValueSubstitutions in
+// processor/rule/execution_context.go): a predicate genuinely NAMED
+// with a literal ".value"/".length"/".triples" trailing segment would
+// be mis-stripped here, same known/accepted collision the substitution
+// layer itself documents for .length. No production predicate does
+// this today (see execution_context.go's tripleLengthRe comment).
 func substitutionCandidates(value string) []string {
 	var out []string
 	for _, match := range substitutionRE.FindAllStringSubmatch(value, -1) {
 		predicate := strings.TrimSuffix(match[1], ".length")
 		predicate = strings.TrimSuffix(predicate, ".triples")
+		predicate = strings.TrimSuffix(predicate, ".value")
 		out = append(out, predicate)
 	}
 	return out

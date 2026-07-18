@@ -1005,6 +1005,110 @@ func TestStatefulEvaluator_BootstrapNoRecoveryWithoutOptIn(t *testing.T) {
 	}
 }
 
+// TestStatefulEvaluator_ActionlessLiveRule_PersistsMatchStateWithoutSpuriousFiring
+// is the gh#530 / rule-evaluation-completeness "consequential work" proof:
+// an on_recovery-ONLY rule — OnEnter, OnExit, and WhileTrue are all
+// nil/empty, only OnRecovery is populated — must, on a LIVE (non-
+// bootstrap) first match:
+//
+//  1. persist MatchState with IsMatching=true (so a later bootstrap
+//     replay has a "was matching" record to classify as recovery), and
+//  2. fire ZERO actions (OnEnter is empty — nothing to fire; OnRecovery
+//     only fires on the bootstrap-recovery fork, never on a plain live
+//     Entered transition).
+//
+// This is distinct from TestStatefulEvaluator_BootstrapRecovery_OnRecovery
+// above, which defines BOTH OnEnter and OnRecovery and only exercises the
+// bootstrap leg. Here OnEnter is genuinely absent, proving
+// hasStatefulRuleActions's OnRecovery-only admission doesn't depend on a
+// non-empty OnEnter existing to fall back to.
+func TestStatefulEvaluator_ActionlessLiveRule_PersistsMatchStateWithoutSpuriousFiring(t *testing.T) {
+	ctx := context.Background()
+	bucket := newMockKVBucket()
+	logger := slog.Default()
+	stateTracker := NewStateTracker(bucket, logger)
+	actionExecutor := &mockActionExecutor{}
+	evaluator := NewStatefulEvaluator(stateTracker, actionExecutor, logger)
+
+	entityID := semantictest.EntityID(t, "test", "rule", "stateful", "actionless", "entity", "001")
+
+	ruleDef := Definition{
+		ID:   "actionless-recovery-rule",
+		Type: "expression",
+		Name: "Actionless Recovery Rule",
+		OnRecovery: []Action{
+			{Type: ActionTypePublish, Subject: "test.recovered"},
+		},
+	}
+
+	// Sanity: this rule must actually reach the stateful evaluator via
+	// the shared gate — otherwise the rest of this test would trivially
+	// pass for the wrong reason (never evaluated at all).
+	if !hasStatefulRuleActions(ruleDef) {
+		t.Fatal("precondition failed: on_recovery-only rule must trip hasStatefulRuleActions")
+	}
+
+	// Live (non-bootstrap) first match — no prior state.
+	transition, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+	})
+	if err != nil {
+		t.Fatalf("Live evaluation error: %v", err)
+	}
+	if transition != TransitionEntered {
+		t.Errorf("Expected TransitionEntered on first live match, got %v", transition)
+	}
+	if actionExecutor.executeCallCount != 0 {
+		t.Errorf("Expected 0 actions fired (OnEnter is empty, OnRecovery doesn't fire on live Entered), got %d", actionExecutor.executeCallCount)
+	}
+
+	persisted, err := stateTracker.Get(ctx, ruleDef.ID, entityID)
+	if err != nil {
+		t.Fatalf("Expected MatchState to be persisted after live match, got error: %v", err)
+	}
+	if !persisted.IsMatching {
+		t.Error("Expected persisted MatchState.IsMatching=true after live match")
+	}
+
+	// Steady-state re-evaluation (still matching, not bootstrap): must
+	// remain a no-op (WhileTrue is empty) — no spurious firing.
+	transition2, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+	})
+	if err != nil {
+		t.Fatalf("Steady-state evaluation error: %v", err)
+	}
+	if transition2 != TransitionNone {
+		t.Errorf("Expected TransitionNone on steady-state re-evaluation, got %v", transition2)
+	}
+	if actionExecutor.executeCallCount != 0 {
+		t.Errorf("Expected 0 actions fired on steady-state (WhileTrue is empty), got %d", actionExecutor.executeCallCount)
+	}
+
+	// Simulated restart: bootstrap replay with the SAME persisted state
+	// (via the same stateTracker/bucket) and still-matching entity must
+	// now promote to recovery and fire OnRecovery exactly once.
+	transition3, err := evaluator.Evaluate(ctx, Evaluation{
+		Rule:              ruleDef,
+		EntityID:          entityID,
+		CurrentlyMatching: true,
+		Bootstrap:         true,
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap evaluation error: %v", err)
+	}
+	if transition3 != TransitionEntered {
+		t.Errorf("Expected synthetic TransitionEntered on bootstrap recovery, got %v", transition3)
+	}
+	if actionExecutor.executeCallCount != 1 {
+		t.Errorf("Expected exactly 1 OnRecovery execution on bootstrap, got %d", actionExecutor.executeCallCount)
+	}
+}
+
 // TestStatefulEvaluator_StaleRevisionShortCircuits verifies that a rule
 // evaluation skips without firing or persisting when the incoming revision is
 // not newer than the last recorded SourceRevision. This is the durable defense

@@ -1,12 +1,15 @@
 package rule
 
 import (
+	"bytes"
 	"encoding/json"
+	"log/slog"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -643,6 +646,86 @@ func TestExpressionRuleEvaluateEntityState(t *testing.T) {
 
 			if result != tt.want {
 				t.Errorf("EvaluateEntityState() = %v, want %v", result, tt.want)
+			}
+		})
+	}
+}
+
+// TestExpressionRuleEvaluateEntityState_TripleValueSubstitution is the
+// gh#519 / rule-evaluation-completeness production-wire acceptance test:
+// a condition Value carrying the `$entity.triple.<predicate>.value` form
+// must resolve through the SAME path a real rule takes —
+// NewExpressionRule(def).EvaluateEntityState(...) — not a helper-direct
+// substitution call. Mirrors the "field-to-field equality gate" and
+// "absence is silent and non-matching" scenarios in
+// openspec/changes/rule-evaluation-completeness/specs/rule-engine/spec.md.
+func TestExpressionRuleEvaluateEntityState_TripleValueSubstitution(t *testing.T) {
+	tests := []struct {
+		name    string
+		triples []message.Triple
+		want    bool
+	}{
+		{
+			name: "field-to-field equality gate: revision matches → true",
+			triples: []message.Triple{
+				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+				{Subject: "test", Predicate: semantictest.Predicate(t, "openspec", "change", "revision"), Object: "r42"},
+			},
+			want: true,
+		},
+		{
+			name: "absence is silent and non-matching: revision predicate absent → false, no warning",
+			triples: []message.Triple{
+				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+			},
+			want: false,
+		},
+		{
+			name: "mismatched revision → false",
+			triples: []message.Triple{
+				{Subject: "test", Predicate: "openspec.validated", Object: "r42"},
+				{Subject: "test", Predicate: semantictest.Predicate(t, "openspec", "change", "revision"), Object: "r43"},
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+			prevLogger := slog.Default()
+			slog.SetDefault(slog.New(handler))
+			t.Cleanup(func() { slog.SetDefault(prevLogger) })
+
+			def := Definition{
+				ID:      "openspec-revision-gate",
+				Type:    "expression",
+				Name:    "OpenSpec Revision Gate",
+				Enabled: true,
+				Conditions: []expression.ConditionExpression{
+					{
+						Field:    "openspec.validated",
+						Operator: "eq",
+						Value:    "$entity.triple.openspec.change.revision.value",
+						Required: true,
+					},
+				},
+			}
+
+			rule, err := NewExpressionRule("direct-expression-test", def)
+			if err != nil {
+				t.Fatalf("failed to create rule: %v", err)
+			}
+
+			entityState := createTestEntityState("test.entity.id", tt.triples)
+			result := rule.EvaluateEntityState(entityState)
+
+			if result != tt.want {
+				t.Errorf("EvaluateEntityState() = %v, want %v", result, tt.want)
+			}
+			if got := buf.String(); got != "" {
+				t.Errorf("expected no unresolved-template warning, got log: %s", got)
 			}
 		})
 	}
