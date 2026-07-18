@@ -6,6 +6,7 @@ package agentic_test
 
 import (
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
@@ -495,5 +496,30 @@ func TestLoopEntity_IncrementIteration(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestLoopEntity_IncrementIteration_ReturnsTypedSentinel locks the gh#529
+// / pre-merge review M1 contract: at-cap IncrementIteration must return
+// the exact agentic.ErrMaxIterationsReached sentinel (matchable via
+// errors.Is), not merely an error whose text happens to say "max
+// iterations reached". Callers upstream (processor/agentic-loop's
+// LoopManager.IncrementIteration, which can ALSO fail with an unrelated
+// "loop not found" error) rely on identity, not string content, to
+// distinguish budget exhaustion from other failures.
+func TestLoopEntity_IncrementIteration_ReturnsTypedSentinel(t *testing.T) {
+	entity := agentic.LoopEntity{
+		ID:            "loop-sentinel",
+		TaskID:        "task-sentinel",
+		State:         agentic.LoopStateExecuting,
+		Role:          "general",
+		Model:         "gpt-4",
+		Iterations:    5,
+		MaxIterations: 5,
+	}
+
+	err := entity.IncrementIteration()
+	if !errors.Is(err, agentic.ErrMaxIterationsReached) {
+		t.Fatalf("IncrementIteration() error = %v, want errors.Is match against agentic.ErrMaxIterationsReached", err)
 	}
 }

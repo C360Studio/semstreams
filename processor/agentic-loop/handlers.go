@@ -28,7 +28,14 @@ import (
 // tools are still in flight. Before this sentinel, the model-response
 // path fell through to the generic "handler_error" reason, forcing
 // reactive rules to string-match error text to detect budget exhaustion.
-var ErrMaxIterationsReached = errors.New("max_iterations")
+//
+// Aliases agentic.ErrMaxIterationsReached — LoopEntity.IncrementIteration
+// (agentic/state.go) returns that same sentinel on the tool-drain path
+// (handleToolsComplete below), and the import direction only works
+// agentic → agenticloop, so this package re-exports the canonical value
+// instead of declaring its own distinct error. Both detection paths
+// therefore compare against the exact same sentinel via errors.Is.
+var ErrMaxIterationsReached = agentic.ErrMaxIterationsReached
 
 // TaskMessage is an alias for agentic.TaskMessage for backward compatibility.
 // This allows existing code to use agenticloop.TaskMessage without modification.
@@ -620,7 +627,7 @@ func (h *MessageHandler) assembleSystemPrompt(ctx context.Context, task TaskMess
 		WorkflowStep:  task.WorkflowStep,
 		Tools:         toolNames(task.Tools),
 		Iteration:     0,
-		MaxIterations: h.config.MaxIterations,
+		MaxIterations: effectiveLoopMaxIterations(task, h.config.MaxIterations),
 		ParentLoopID:  task.ParentLoopID,
 		Provider:      h.resolveProvider(task.Model),
 	}
@@ -658,6 +665,23 @@ func BuildIterationBudgetMessage(iteration, maxIterations int) agentic.ChatMessa
 	return agentic.ChatMessage{Role: "system", Content: content}
 }
 
+// effectiveLoopMaxIterations resolves the per-spawn iteration budget: a
+// spawn-supplied task.MaxIterations may only narrow the
+// component-configured ceiling, never widen it — min(spawn, component).
+// Nil task.MaxIterations uses the component default unchanged (gh#528).
+//
+// Shared by HandleTask (the ceiling actually enforced on the created
+// LoopEntity) and assembleSystemPrompt (AssemblyContext.MaxIterations, the
+// value prompt fragments see) so the two can never diverge — pre-merge
+// review N1 caught assembleSystemPrompt passing the unclamped component
+// ceiling instead of the effective budget.
+func effectiveLoopMaxIterations(task TaskMessage, componentCeiling int) int {
+	if task.MaxIterations != nil {
+		return min(*task.MaxIterations, componentCeiling)
+	}
+	return componentCeiling
+}
+
 // HandleTask processes an incoming task message and creates a new loop
 func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (HandlerResult, error) {
 	// Check for cancellation before starting work
@@ -689,14 +713,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	var loopID string
 	var err error
 
-	// Effective iteration budget: a spawn-supplied task.MaxIterations may
-	// only narrow the component-configured ceiling, never widen it —
-	// min(spawn, component). Nil task.MaxIterations uses the component
-	// default unchanged. See agentic.TaskMessage.MaxIterations (gh#528).
-	effectiveMaxIterations := h.config.MaxIterations
-	if task.MaxIterations != nil {
-		effectiveMaxIterations = min(*task.MaxIterations, h.config.MaxIterations)
-	}
+	effectiveMaxIterations := effectiveLoopMaxIterations(task, h.config.MaxIterations)
 
 	if task.LoopID != "" {
 		loopID, err = h.loopManager.CreateLoopWithID(task.LoopID, task.TaskID, task.Role, task.Model, effectiveMaxIterations)
@@ -2025,6 +2042,17 @@ func (h *MessageHandler) handleToolsComplete(
 	// Increment iteration counter
 	err := h.loopManager.IncrementIteration(loopID)
 	if err != nil {
+		// LoopManager.IncrementIteration can fail for two structurally
+		// different reasons: budget exhaustion (agentic.ErrMaxIterationsReached,
+		// returned by LoopEntity.IncrementIteration) or an unrelated
+		// operational failure such as "loop not found". Only the sentinel
+		// means exhaustion — anything else must propagate as an ordinary
+		// handler error instead of being misreported as max_iterations
+		// (pre-merge review M1).
+		if !errors.Is(err, agentic.ErrMaxIterationsReached) {
+			return *result, errs.Wrap(err, "agentic-loop", "handleToolsComplete", "increment iteration")
+		}
+
 		// Max iterations reached - mark as failed.
 		// Drain any pending tools first so KV-persisted context for this
 		// loop carries clean tool-pair structure (mode d of orphan

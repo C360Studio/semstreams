@@ -3,6 +3,7 @@
 package agentic
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -209,10 +210,22 @@ func (e *LoopEntity) ResolveApproval() error {
 	return nil
 }
 
+// ErrMaxIterationsReached is the typed sentinel LoopEntity.IncrementIteration
+// returns when the loop's iteration counter has already met or exceeded its
+// configured budget (gh#529). Callers MUST branch on errors.Is against this
+// sentinel rather than treating any non-nil IncrementIteration error as
+// budget exhaustion — processor/agentic-loop.LoopManager.IncrementIteration
+// can also fail with an unrelated "loop not found" error, which is a
+// distinct operational failure and must not be misreported as
+// max_iterations. processor/agentic-loop.ErrMaxIterationsReached aliases
+// this value (the import direction only works agentic → agenticloop) so
+// both packages compare against the exact same sentinel.
+var ErrMaxIterationsReached = errors.New("max iterations reached")
+
 // IncrementIteration increments the iteration counter
 func (e *LoopEntity) IncrementIteration() error {
 	if e.Iterations >= e.MaxIterations {
-		return fmt.Errorf("max iterations reached")
+		return ErrMaxIterationsReached
 	}
 	e.Iterations++
 	return nil
