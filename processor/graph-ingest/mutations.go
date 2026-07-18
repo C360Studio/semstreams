@@ -549,7 +549,10 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 func (c *Component) restampStubOnCreate(ctx context.Context, entity *graph.EntityState) (bool, error) {
 	existing, _, err := c.fetchEntityState(ctx, entity.ID)
 	if err != nil {
-		return false, rejectInternal(fmt.Errorf("stub-restamp read-back for %s: %w", entity.ID, err))
+		// rejectFromError, not rejectInternal: a poisoned resident colliding
+		// with a create must surface the typed fatal graph_state_reset_required
+		// classification, not a retry-inviting internal (poison-response-scoping D5).
+		return false, rejectFromError(fmt.Errorf("stub-restamp read-back for %s: %w", entity.ID, err))
 	}
 	// Restamp ONLY for a real, valid, non-stub incoming envelope. !IsValid() rejects
 	// a zero/partial type (MergeEntity would overwrite the stub envelope to typeless
@@ -714,7 +717,10 @@ func (c *Component) handleEntityUpdate(ctx context.Context, data []byte) ([]byte
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return nil, rejectInternal(fmt.Errorf("fetch current entity failed: %w", err))
+		// rejectFromError, not rejectInternal: a resident-poison read failure
+		// must classify as the typed fatal graph_state_reset_required, never a
+		// retry-inviting transient internal (poison-response-scoping D5).
+		return nil, rejectFromError(fmt.Errorf("fetch current entity failed: %w", err))
 	}
 
 	if err := c.updateEntityAtRevision(ctx, req.Entity, currentRev); err != nil {
@@ -941,10 +947,11 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		// gh#562: trusted decode on the owner's own RMW read; the
 		// MarshalEntityState write gate below re-validates the merged
 		// candidate, and classifyStoredStateRMWError re-attributes a
-		// failure to resident stored-state poison.
+		// failure to resident stored-state poison (stamping the entity ID
+		// and recording the inventory entry — design D4).
 		var currentState graph.EntityState
 		if err := graph.UnmarshalEntityStateTrusted(current, &currentState); err != nil {
-			return nil, retry.NonRetryable(c.classifyStoredStateRMWError(current,
+			return nil, retry.NonRetryable(c.classifyStoredStateRMWError(ctx, req.Entity.ID, current,
 				fmt.Errorf("unmarshal current entity: %w", err)))
 		}
 
@@ -990,7 +997,7 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 
 		data, err := graph.MarshalEntityState(&newEntity)
 		if err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err)
+			return nil, c.classifyStoredStateRMWError(ctx, req.Entity.ID, current, err)
 		}
 		return data, nil
 	})
@@ -1002,6 +1009,9 @@ func (c *Component) handleEntityUpdateWithTriples(ctx context.Context, data []by
 		}
 		return nil, rejectFromError(err)
 	}
+
+	// Committed via the write gate — clear any stale poison entry (D3b).
+	c.clearEntityPoisonOnCommit(ctx, req.Entity.ID, 0)
 
 	// Primary update committed — invalidate the entity-query cache so a
 	// read-after-write via graph.ingest.query.* sees the new triples (the
@@ -1057,7 +1067,10 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 				map[string]any{"entity": req.Entity.ID},
 				fmt.Errorf("entity not found: %s", req.Entity.ID))
 		}
-		return nil, rejectInternal(fmt.Errorf("fetch current entity failed: %w", err))
+		// rejectFromError, not rejectInternal: a resident-poison read failure
+		// must classify as the typed fatal graph_state_reset_required, never a
+		// retry-inviting transient internal (poison-response-scoping D5).
+		return nil, rejectFromError(fmt.Errorf("fetch current entity failed: %w", err))
 	}
 
 	// CAS-on-condition: caller's expected rev must match what we just read.
@@ -1196,8 +1209,20 @@ func (c *Component) fetchEntityState(ctx context.Context, entityID string) (*gra
 	}
 	var state graph.EntityState
 	if err := graph.UnmarshalEntityState(entry.Value, &state); err != nil {
+		// Resident poison at a mutation read seam: stamp the entity ID (the
+		// identity is in scope here — design D4), record it in the inventory,
+		// and keep the typed cause errors.As-able through the wrap so callers
+		// classify the fatal graph_state_reset_required code, never a
+		// retry-inviting internal error.
+		var contractErr *graph.StateContractError
+		if errors.As(err, &contractErr) {
+			contractErr.EntityID = entityID
+			c.inventoryEntityPoison(ctx, contractErr, entry.Revision)
+		}
 		return nil, 0, fmt.Errorf("unmarshal entity state: %w", err)
 	}
+	// A validating read succeeded — clear any stale inventory entry (D3c).
+	c.clearEntityPoisonOnValidRead(entityID, entry.Revision)
 	return &state, entry.Revision, nil
 }
 

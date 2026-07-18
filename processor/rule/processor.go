@@ -108,19 +108,21 @@ type Processor struct {
 	mu                 sync.RWMutex
 
 	// graphStateResetRequired is sticky for the lifetime of the process. Once
-	// any ENTITY_STATES value violates the authoritative graph-state contract,
-	// rule evaluation must stop rather than derive output from a partial view.
-	graphStateResetRequired  atomic.Bool
-	graphStateGuardRequired  atomic.Bool
-	graphStateGuardReady     atomic.Bool
-	graphStateGuardDegraded  atomic.Bool
-	graphStateGuardReadyCh   chan struct{}
-	graphStateGuardDone      chan struct{}
-	graphStateGuardReadyOnce sync.Once
-	graphStateGuardDoneOnce  sync.Once
-	graphStateGuardRevision  atomic.Uint64
-	graphStateProgressMu     sync.Mutex
-	graphStateProgress       chan struct{}
+	// a consumed ENTITY_STATES value violates the authoritative graph-state
+	// contract, rule evaluation must stop rather than derive output from a
+	// partial view. Contract validation rides the entity-watch input path —
+	// the canonical decode of every value rules actually consume — not a
+	// dedicated ENTITY_STATES guard watcher; with zero configured entity-watch
+	// patterns the processor holds no ENTITY_STATES watcher at all.
+	graphStateResetRequired atomic.Bool
+	// graphStateGuardDegraded latches when a configured entity-watch lane
+	// cannot be trusted (a pattern watcher failed to start or closed
+	// unexpectedly). Sticky like reset-required, with a distinct error code.
+	graphStateGuardDegraded atomic.Bool
+	// graphStateGuardDone closes when either sticky latch above fires so
+	// entity-watch loops unwind promptly instead of draining dead updates.
+	graphStateGuardDone     chan struct{}
+	graphStateGuardDoneOnce sync.Once
 
 	// Active subscriptions flag
 	isSubscribed bool
@@ -255,24 +257,22 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 			Description: "Processes messages through configurable rules and generates alerts",
 			Version:     "1.0.0",
 		},
-		natsClient:             natsClient,
-		rules:                  make(map[string]Rule),
-		ruleDefinitions:        make(map[string]Definition),
-		ruleConfigs:            make(map[string]map[string]any),
-		matchCounters:          make(map[string]*atomic.Int64),
-		cronRules:              make(map[string]*CronRule),
-		messageCache:           msgCache,
-		config:                 config,
-		metricsRegistry:        metricsRegistry,
-		entityWatchers:         make([]jetstream.KeyWatcher, 0),
-		entityWatcherMap:       make(map[string]jetstream.KeyWatcher),
-		entityWatcherCancels:   make(map[string]context.CancelFunc),
-		entityDispatchRecords:  make(map[string]managedEntityWatcher),
-		graphStateGuardReadyCh: make(chan struct{}),
-		graphStateGuardDone:    make(chan struct{}),
-		graphStateProgress:     make(chan struct{}),
-		ownRevisions:           make(map[ruleRevKey]map[uint64]time.Time),
-		revisionTTL:            defaultRevisionTTL,
+		natsClient:            natsClient,
+		rules:                 make(map[string]Rule),
+		ruleDefinitions:       make(map[string]Definition),
+		ruleConfigs:           make(map[string]map[string]any),
+		matchCounters:         make(map[string]*atomic.Int64),
+		cronRules:             make(map[string]*CronRule),
+		messageCache:          msgCache,
+		config:                config,
+		metricsRegistry:       metricsRegistry,
+		entityWatchers:        make([]jetstream.KeyWatcher, 0),
+		entityWatcherMap:      make(map[string]jetstream.KeyWatcher),
+		entityWatcherCancels:  make(map[string]context.CancelFunc),
+		entityDispatchRecords: make(map[string]managedEntityWatcher),
+		graphStateGuardDone:   make(chan struct{}),
+		ownRevisions:          make(map[ruleRevKey]map[uint64]time.Time),
+		revisionTTL:           defaultRevisionTTL,
 		health: component.HealthStatus{
 			Healthy:    true,
 			LastCheck:  time.Now(),

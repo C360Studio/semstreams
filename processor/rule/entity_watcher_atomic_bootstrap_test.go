@@ -26,75 +26,127 @@ func (w *atomicBootstrapWatcher) Stop() error {
 	return nil
 }
 
-func TestRuleWatcherBootstrapIsAtomicAcrossPredicatePoisonOrdering(t *testing.T) {
+// TestWatchEntityStatesZeroPatternsHoldsNoEntityWatchers is the
+// poison-response-scoping fan-out contract: a rule processor configured with
+// zero entity-watch patterns holds ZERO ENTITY_STATES watchers — no dedicated
+// contract-guard watcher, no firehose fan-out for a feature it doesn't use.
+// newAtomicBootstrapProcessor wires a nil NATS client, so ANY attempt to reach
+// the ENTITY_STATES bucket (guard or pattern watcher alike) would fail loudly
+// instead of passing silently.
+func TestWatchEntityStatesZeroPatternsHoldsNoEntityWatchers(t *testing.T) {
 	t.Parallel()
-	valid := validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.valid", 1)
-	// Deliberately outside the configured rule pattern: the shared WatchAll
-	// guard, not a pattern subscriber, must still stop every rule action.
-	poison := poisonedRuleEntityEntry("acme.ops.other.gcs.device.poison", 2)
+	processor := newAtomicBootstrapProcessor(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
+	if err := processor.watchEntityStates(ctx); err != nil {
+		t.Fatalf("watchEntityStates with zero patterns: %v", err)
+	}
+	processor.mu.RLock()
+	trackedWatchers := len(processor.entityWatchers)
+	mappedWatchers := len(processor.entityWatcherMap)
+	processor.mu.RUnlock()
+	if trackedWatchers != 0 || mappedWatchers != 0 {
+		t.Fatalf("zero entity-watch patterns must hold zero ENTITY_STATES watchers, got %d tracked / %d mapped",
+			trackedWatchers, mappedWatchers)
+	}
+	if !processor.graphRuleEvaluationReady() {
+		t.Fatal("rule evaluation must be ready without any ENTITY_STATES watcher bootstrap")
+	}
+}
+
+// TestRuleWatcherConsumedBootstrapPoisonLatchesEvaluationOff proves the sticky
+// rule-evaluation kill switch fires on CONSUMED poison via the pattern-watch
+// input path itself (there is no dedicated contract-guard watcher). A poisoned
+// value delivered before any valid entry stops everything; a valid entry
+// consumed before the poison arrives evaluates at most once, then the latch
+// drops every later delivery.
+func TestRuleWatcherConsumedBootstrapPoisonLatchesEvaluationOff(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
-		name    string
-		entries []jetstream.KeyValueEntry
+		name            string
+		entries         func(t *testing.T) []jetstream.KeyValueEntry
+		wantEvaluations int64
 	}{
-		{name: "valid then poison", entries: []jetstream.KeyValueEntry{valid, poison}},
-		{name: "poison then valid", entries: []jetstream.KeyValueEntry{poison, valid}},
+		{
+			name: "poison then valid",
+			entries: func(t *testing.T) []jetstream.KeyValueEntry {
+				return []jetstream.KeyValueEntry{
+					poisonedRuleEntityEntry("acme.ops.rule.gcs.device.poison", 1),
+					validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.valid", 2),
+				}
+			},
+			wantEvaluations: 0,
+		},
+		{
+			name: "valid then poison then valid",
+			entries: func(t *testing.T) []jetstream.KeyValueEntry {
+				return []jetstream.KeyValueEntry{
+					validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.valid", 1),
+					poisonedRuleEntityEntry("acme.ops.rule.gcs.device.poison", 2),
+					validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.after", 3),
+				}
+			},
+			wantEvaluations: 1,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			processor := newAtomicBootstrapProcessor(t)
-			processor.graphStateGuardRequired.Store(true)
-			guard := newAtomicBootstrapWatcher()
 			watcher := newAtomicBootstrapWatcher()
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
-			go processor.handleGraphStateGuard(ctx, guard)
 			go processor.handleEntityUpdates(ctx, watcher)
 
-			watcher.updates <- valid
-			watcher.updates <- nil
-			for _, entry := range tc.entries {
-				guard.updates <- entry
+			for _, entry := range tc.entries(t) {
+				watcher.updates <- entry
 			}
 
 			waitForRuleWatcher(t, func() bool { return processor.graphStateResetRequired.Load() })
-			if got := atomic.LoadInt64(&processor.messagesEvaluated); got != 0 {
-				t.Fatalf("bootstrap evaluations = %d, want zero", got)
+			if processor.graphRuleEvaluationReady() {
+				t.Fatal("consumed poison must leave rule evaluation latched off")
+			}
+			// Give any (incorrect) late dispatch a chance to land before
+			// asserting the counters.
+			time.Sleep(30 * time.Millisecond)
+			if got := atomic.LoadInt64(&processor.messagesEvaluated); got != tc.wantEvaluations {
+				t.Fatalf("evaluations = %d, want %d", got, tc.wantEvaluations)
 			}
 			if got := atomic.LoadInt64(&processor.rulesTriggered); got != 0 {
-				t.Fatalf("bootstrap actions = %d, want zero", got)
+				t.Fatalf("actions after consumed poison = %d, want zero", got)
 			}
 		})
 	}
 }
 
-func TestRuleWatcherWaitsForSharedGuardBeforeBootstrapEvaluation(t *testing.T) {
+// TestRuleWatcherValidEntriesDoNotLatchKillSwitch is the negative leg: valid
+// consumed values evaluate normally and latch nothing.
+func TestRuleWatcherValidEntriesDoNotLatchKillSwitch(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	processor.graphStateGuardRequired.Store(true)
-	guard := newAtomicBootstrapWatcher()
 	watcher := newAtomicBootstrapWatcher()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go processor.handleGraphStateGuard(ctx, guard)
 	go processor.handleEntityUpdates(ctx, watcher)
 
-	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.buffered", 1)
-	time.Sleep(30 * time.Millisecond)
-	if got := atomic.LoadInt64(&processor.messagesEvaluated); got != 0 {
-		t.Fatalf("evaluation before bootstrap sentinel = %d, want zero", got)
-	}
+	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.boot", 1)
+	watcher.updates <- nil // bootstrap sentinel
+	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.live", 2)
+	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor.messagesEvaluated) == 2 })
 
-	watcher.updates <- nil
-	guard.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.buffered", 1)
-	guard.updates <- nil
-	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor.messagesEvaluated) == 1 })
+	if processor.graphStateResetRequired.Load() {
+		t.Fatal("valid consumed values must not latch the reset-required kill switch")
+	}
+	if processor.graphStateGuardDegraded.Load() {
+		t.Fatal("valid consumed values must not degrade the entity-watch lane")
+	}
+	if !processor.graphRuleEvaluationReady() {
+		t.Fatal("rule evaluation must remain ready on valid input")
+	}
 }
 
 func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	processor.graphStateGuardRequired.Store(true)
-	guard := newAtomicBootstrapWatcher()
 	tracker := NewStateTracker(newMockKVBucket(), nil)
 	executor := &atomicRecoveryExecutor{}
 	processor.stateTracker = tracker
@@ -122,16 +174,9 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 	watcher := newAtomicBootstrapWatcher()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go processor.handleGraphStateGuard(ctx, guard)
 	go processor.handleEntityUpdates(ctx, watcher)
 	watcher.updates <- validRuleEntityEntry(t, entityID, 1)
-	time.Sleep(30 * time.Millisecond)
-	if got := executor.calls.Load(); got != 0 {
-		t.Fatalf("OnRecovery calls before sentinel = %d, want zero", got)
-	}
 	watcher.updates <- nil
-	guard.updates <- validRuleEntityEntry(t, entityID, 1)
-	guard.updates <- nil
 	waitForRuleWatcher(t, func() bool { return executor.calls.Load() == 1 })
 }
 
@@ -147,8 +192,6 @@ func TestRuleWatcherCleanBootstrapPreservesOnRecovery(t *testing.T) {
 func TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	processor.graphStateGuardRequired.Store(true)
-	guard := newAtomicBootstrapWatcher()
 	tracker := NewStateTracker(newMockKVBucket(), nil)
 	executor := &atomicRecoveryExecutor{}
 	processor.stateTracker = tracker
@@ -169,12 +212,9 @@ func TestRuleWatcherNeverMatchedEntityDoesNotRecoverOnBootstrap(t *testing.T) {
 	watcher := newAtomicBootstrapWatcher()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go processor.handleGraphStateGuard(ctx, guard)
 	go processor.handleEntityUpdates(ctx, watcher)
 	watcher.updates <- validRuleEntityEntry(t, entityID, 1)
 	watcher.updates <- nil
-	guard.updates <- validRuleEntityEntry(t, entityID, 1)
-	guard.updates <- nil
 	waitForRuleWatcher(t, func() bool { return atomic.LoadInt64(&processor.messagesEvaluated) == 1 })
 
 	// Give any (incorrect) async recovery firing a chance to land before
@@ -231,7 +271,6 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 		t.Fatalf("NewTestRule: %v", err)
 	}
 	processor1 := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor1)
 	processor1.stateTracker = tracker
 	processor1.statefulEvaluator = NewStatefulEvaluator(tracker, liveExecutor, nil)
 	processor1.rules["recovery-rule"] = liveRule
@@ -275,7 +314,6 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 		t.Fatalf("NewTestRule: %v", err)
 	}
 	processor2 := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor2)
 	processor2.stateTracker = tracker
 	processor2.statefulEvaluator = NewStatefulEvaluator(tracker, restartExecutor, nil)
 	processor2.rules["recovery-rule"] = restartRule
@@ -295,7 +333,6 @@ func TestRuleWatcherLiveMatchPersistsStateForLaterBootstrapRecovery(t *testing.T
 func TestRuleWatcherLivePoisonLatchesBeforeAnyLaterAction(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor)
 	watcher := newAtomicBootstrapWatcher()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -317,44 +354,9 @@ func TestRuleWatcherLivePoisonLatchesBeforeAnyLaterAction(t *testing.T) {
 	}
 }
 
-func TestRuleWatcherRevisionBarrierBlocksLaterValidBehindEarlierPoison(t *testing.T) {
-	t.Parallel()
-	processor := newAtomicBootstrapProcessor(t)
-	processor.graphStateGuardRequired.Store(true)
-	guard := newAtomicBootstrapWatcher()
-	watcher := newAtomicBootstrapWatcher()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go processor.handleGraphStateGuard(ctx, guard)
-	go processor.handleEntityUpdates(ctx, watcher)
-
-	guard.updates <- nil
-	waitForRuleWatcher(t, processor.graphRuleEvaluationReady)
-
-	// Schedule the matching revision ahead of the authoritative stream. It
-	// must wait for the guard to validate through its revision. The earlier
-	// authoritative revision is poison, so no evaluation may occur.
-	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.after", 3)
-	select {
-	case <-time.After(30 * time.Millisecond):
-		if got := atomic.LoadInt64(&processor.messagesEvaluated); got != 0 {
-			t.Fatalf("revision 3 escaped its authoritative barrier: evaluations=%d", got)
-		}
-	}
-	guard.updates <- poisonedRuleEntityEntry("acme.ops.other.gcs.device.poison", 2)
-	waitForRuleWatcher(t, func() bool { return processor.graphStateResetRequired.Load() })
-	if got := atomic.LoadInt64(&processor.messagesEvaluated); got != 0 {
-		t.Fatalf("later valid revision evaluated after earlier poison: %d", got)
-	}
-	if got := atomic.LoadInt64(&processor.rulesTriggered); got != 0 {
-		t.Fatalf("later valid revision triggered actions after earlier poison: %d", got)
-	}
-}
-
 func TestRuleWatcherUnexpectedTransportCloseDegradesWithoutResetPoison(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor)
 	watcher := newAtomicBootstrapWatcher()
 	done := make(chan struct{})
 	go func() {
@@ -382,7 +384,6 @@ func TestRuleWatcherUnexpectedTransportCloseDegradesWithoutResetPoison(t *testin
 func TestRuleWatcherCloseAfterCancellationDoesNotReportPoison(t *testing.T) {
 	t.Parallel()
 	processor := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor)
 	watcher := newAtomicBootstrapWatcher()
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -400,30 +401,6 @@ func TestRuleWatcherCloseAfterCancellationDoesNotReportPoison(t *testing.T) {
 	}
 	if processor.graphStateResetRequired.Load() {
 		t.Fatal("normal cancellation was misreported as graph poison")
-	}
-}
-
-func TestRuleSharedGuardTransportCloseDegradesWithoutResetPoison(t *testing.T) {
-	t.Parallel()
-	processor := newAtomicBootstrapProcessor(t)
-	processor.graphStateGuardRequired.Store(true)
-	guard := newAtomicBootstrapWatcher()
-	done := make(chan struct{})
-	go func() {
-		processor.handleGraphStateGuard(context.Background(), guard)
-		close(done)
-	}()
-	close(guard.updates)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("shared guard did not stop after transport close")
-	}
-	if processor.graphStateResetRequired.Load() {
-		t.Fatal("shared-guard transport close was misclassified as reset-required")
-	}
-	if !processor.graphStateGuardDegraded.Load() {
-		t.Fatal("shared-guard transport close did not mark lane degraded")
 	}
 }
 
@@ -461,13 +438,6 @@ func poisonedRuleEntityEntry(entityID string, revision uint64) jetstream.KeyValu
 
 type atomicRecoveryExecutor struct {
 	calls atomic.Int64
-}
-
-func markRuleGuardClean(processor *Processor) {
-	processor.graphStateGuardRequired.Store(true)
-	processor.graphStateGuardReady.Store(true)
-	processor.graphStateGuardRevision.Store(^uint64(0))
-	processor.graphStateGuardReadyOnce.Do(func() { close(processor.graphStateGuardReadyCh) })
 }
 
 func (e *atomicRecoveryExecutor) Execute(context.Context, Action, *ExecutionContext) error {

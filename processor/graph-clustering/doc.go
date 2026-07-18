@@ -15,12 +15,15 @@
 //
 // # Architecture
 //
-// graph-clustering is a Tier 1+ component. It watches ENTITY_STATES for change
-// events and triggers community detection based on configurable thresholds.
+// graph-clustering is a Tier 1+ component. It polls ENTITY_STATES on a timer
+// and runs community detection each cycle; it holds no live ENTITY_STATES
+// watcher (the declared kv-watch input port is discovery metadata).
+// Authoritative entity bytes are contract-validated at consume time, and a
+// poisoned value latches a sticky whole-view reset-required projection state.
 //
 //	                    ┌───────────────────┐
 //	ENTITY_STATES ─────►│                   │
-//	   (KV watch)       │  graph-clustering ├──► COMMUNITY_INDEX (KV)
+//	   (KV reads)       │  graph-clustering ├──► COMMUNITY_INDEX (KV)
 //	                    │                   ├──► STRUCTURAL_INDEX (KV)
 //	                    │                   ├──► ANOMALY_INDEX (KV)
 //	                    └─────────┬─────────┘
@@ -84,16 +87,14 @@
 //
 // # Scheduling
 //
-// Community detection is triggered by:
-//   - Timer: Runs every detection_interval
-//   - Batch threshold: Runs when batch_size entity changes accumulate
-//
-// Whichever comes first triggers detection.
+// Community detection runs on a timer, every detection_interval. (batch_size
+// is accepted in config but batch-threshold triggering is not implemented.)
 //
 // # Port Definitions
 //
 // Inputs:
-//   - KV watch: ENTITY_STATES - watches for entity changes to count events
+//   - KV reads: ENTITY_STATES - polled during each detection cycle (the
+//     kv-watch port declaration is discovery metadata; no watcher is held)
 //
 // Outputs:
 //   - KV bucket: COMMUNITY_INDEX - stores detected communities
@@ -113,7 +114,7 @@
 // # Dependencies
 //
 // Upstream (reads during detection):
-//   - graph-ingest: watches ENTITY_STATES for change events
+//   - graph-ingest: writes ENTITY_STATES (authoritative entity state)
 //   - graph-index: reads OUTGOING_INDEX and INCOMING_INDEX for graph structure
 //   - graph-embedding: queries for similar entities via NATS request/reply
 //

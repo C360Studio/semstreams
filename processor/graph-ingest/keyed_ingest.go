@@ -168,13 +168,19 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 	if ingestErr != nil {
 		var stateErr *graph.StateContractError
 		if errors.As(ingestErr, &stateErr) {
-			if c.latchEntityStatePoison(stateErr) && c.logger != nil {
-				c.logger.Error("authoritative graph state requires reset; graph-ingest queries blocked",
-					slog.String("code", graph.ErrorCodeGraphStateResetRequired),
-					slog.String("reason", string(stateErr.Reason)))
-			}
-			if termErr := work.msg.Term(); termErr != nil {
-				c.logger.Error("Failed to terminate ingest blocked by authoritative graph state", slog.Any("error", termErr))
+			// Disposition split by FAULT (poison-response-scoping D8): this
+			// arrival's own candidate is valid — the RESIDENT state it must
+			// merge into is poisoned, which is the environment's fault and
+			// repairable (delete + recreate). Nak so the valid data survives
+			// the repair window and applies on redelivery, bounded by the
+			// consumer's existing MaxDeliver; backoff is the consumer's
+			// delivery policy. A structurally-invalid CANDIDATE (its own
+			// fault, can never succeed) stays Term'd. The inventory record and
+			// once-per-entity ERROR happened at the RMW classification seam
+			// (classifyStoredStateRMWError), so a redelivery loop cannot spam
+			// the log.
+			if nakErr := work.msg.Nak(); nakErr != nil {
+				c.logger.Error("Failed to Nak ingest blocked by resident poisoned state", slog.Any("error", nakErr))
 			}
 		} else {
 			c.recordEntityStateContractRejection("graphable", ingestErr)

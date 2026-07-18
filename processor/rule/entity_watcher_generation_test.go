@@ -18,7 +18,7 @@ import (
 type transactionalTestWatcher struct {
 	updates chan jetstream.KeyValueEntry
 	// stopped is atomic: Stop() is invoked both by the production watcher
-	// goroutine (handleEntityUpdatesForBucketKey's explicit pre-return
+	// goroutine (handleEntityUpdatesForKey's explicit pre-return
 	// Stop) and by test goroutines — an unsynchronized bool here is a
 	// genuine data race the detector fires on under CI scheduling.
 	stopped atomic.Bool
@@ -91,11 +91,11 @@ func TestUpdateWatchBucketsCommitsDesiredSetWhenOldStopFails(t *testing.T) {
 	require.True(t, oldTwo.stopped.Load())
 
 	// The generation fence rejects a retired watcher even if its transport did
-	// not stop. It cannot reach graph guard waiting, decoding, or dispatch.
+	// not stop. It cannot reach decoding or dispatch.
 	done := make(chan struct{})
 	go func() {
-		processor.handleEntityUpdatesForBucketKey(
-			context.Background(), oldTwo, gtypes.BucketEntityStates, oldTwoKey, 2,
+		processor.handleEntityUpdatesForKey(
+			context.Background(), oldTwo, oldTwoKey, 2,
 		)
 		close(done)
 	}()
@@ -161,7 +161,6 @@ func TestRetiredGenerationCannotDispatchDecodedUpdate(t *testing.T) {
 		entityID   = "acme.prod.robotics.gcs.drone.stale"
 	)
 	processor := newAtomicBootstrapProcessor(t)
-	markRuleGuardClean(processor)
 	rule := &patternSelectionRule{name: "robotics"}
 	processor.rules = map[string]Rule{"robotics": rule}
 	processor.ruleDefinitions = map[string]Definition{
@@ -275,6 +274,48 @@ func TestStaleDeleteDoesNotPurgeNewerPendingWatcherWork(t *testing.T) {
 
 	require.True(t, processor.entityCoalescer.Remove(pendingKey))
 	processor.entityEvaluationFence.releaseRetained(entityID, 1)
+}
+
+// TestUpdateWatchBucketsToZeroPatternsRetiresAllWatchers proves the dynamic
+// leg of the zero-pattern contract: reconfiguring to zero entity-watch
+// patterns retires every ENTITY_STATES watcher and prepares none — the
+// factory is never invoked, so the processor holds zero watchers afterward.
+func TestUpdateWatchBucketsToZeroPatternsRetiresAllWatchers(t *testing.T) {
+	t.Parallel()
+
+	const oldPattern = "acme.old.*.*.*.*"
+	oldWatcher := newTransactionalTestWatcher()
+	oldKey := watcherKey(gtypes.BucketEntityStates, oldPattern)
+	_, cancelOld := context.WithCancel(context.Background())
+	cfg := mustTestConfig(t, "watcher-zero-pattern-test")
+	cfg.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {oldPattern}}
+	processor := &Processor{
+		logger:               slog.Default(),
+		config:               &cfg,
+		watcherCtx:           context.Background(),
+		entityWatcherMap:     map[string]jetstream.KeyWatcher{oldKey: oldWatcher},
+		entityWatcherCancels: map[string]context.CancelFunc{oldKey: cancelOld},
+		entityDispatchRecords: map[string]managedEntityWatcher{
+			oldKey: {watcher: oldWatcher, generation: 1},
+		},
+		entityNextGeneration: 1,
+		entityWatchers:       []jetstream.KeyWatcher{oldWatcher},
+	}
+
+	factoryCalls := 0
+	err := processor.updateWatchBucketsWithFactory(
+		map[string][]string{},
+		func(context.Context, string, string) (jetstream.KeyWatcher, error) {
+			factoryCalls++
+			return newTransactionalTestWatcher(), nil
+		},
+	)
+	require.NoError(t, err)
+	require.Zero(t, factoryCalls, "zero patterns must prepare no ENTITY_STATES watchers")
+	require.True(t, oldWatcher.stopped.Load(), "existing watcher must be retired")
+	require.Empty(t, processor.entityWatcherMap)
+	require.Empty(t, processor.entityWatchers)
+	require.Empty(t, processor.entityDispatchRecords)
 }
 
 func TestUpdateWatchBucketsRejectsDuplicatePatternsBeforePrepare(t *testing.T) {

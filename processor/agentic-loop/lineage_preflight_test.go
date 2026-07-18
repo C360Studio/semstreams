@@ -172,7 +172,7 @@ func TestInvalidDecodedLineageTerminatesOnceAndHasNoBusinessSideEffects(t *testi
 		taskIntakeRejectionLane, taskIntakeRejectionReason))
 	beforeCreated := testutil.ToFloat64(component.metrics.loopsCreated)
 	err = consumeLongRunningInput(context.Background(), msg, time.Hour,
-		component.taskInputHandler(context.Background(), time.Minute))
+		component.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsInvalid(err) {
 		t.Fatalf("consume error = %v, want typed invalid rejection", err)
 	}
@@ -230,7 +230,7 @@ func TestTransientLineageWriteNAKsThenResumesPendingSpawnOnRedelivery(t *testing
 	beforeCreated := testutil.ToFloat64(component.metrics.loopsCreated)
 	first := &inputAckMsg{data: data}
 	err = consumeLongRunningInput(context.Background(), first, time.Hour,
-		component.taskInputHandler(context.Background(), time.Minute))
+		component.taskInputHandler(time.Minute))
 	if err == nil || !errs.IsTransient(err) {
 		t.Fatalf("first delivery error = %v, want transient error", err)
 	}
@@ -251,7 +251,7 @@ func TestTransientLineageWriteNAKsThenResumesPendingSpawnOnRedelivery(t *testing
 
 	second := &inputAckMsg{data: data}
 	if err := consumeLongRunningInput(context.Background(), second, time.Hour,
-		component.taskInputHandler(context.Background(), time.Minute)); err != nil {
+		component.taskInputHandler(time.Minute)); err != nil {
 		t.Fatalf("redelivery error = %v", err)
 	}
 	if !second.acked.Load() || second.naked.Load() || second.terminated.Load() {

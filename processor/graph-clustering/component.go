@@ -423,7 +423,6 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
 	graphStatePoison  atomic.Pointer[graph.StateContractError]
-	entityWatchLost   atomic.Bool
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
@@ -576,9 +575,6 @@ func (c *Component) Health() component.HealthStatus {
 		if c.graphStatePoison.Load() != nil {
 			status = graph.IndexStateResetRequired
 			lastErr = graph.ErrorCodeGraphStateResetRequired
-		} else if c.entityWatchLost.Load() {
-			status = graph.IndexStateDegraded
-			lastErr = graph.ErrorCodeIndexNotReady
 		}
 		if errorCount > 0 {
 			lastErr = "errors occurred during processing"
@@ -586,7 +582,7 @@ func (c *Component) Health() component.HealthStatus {
 	}
 
 	return component.HealthStatus{
-		Healthy:    c.running && errorCount == 0 && c.graphStatePoison.Load() == nil && !c.entityWatchLost.Load(),
+		Healthy:    c.running && errorCount == 0 && c.graphStatePoison.Load() == nil,
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
 		LastError:  lastErr,
@@ -716,25 +712,21 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Establish the authoritative-state contract watch before exposing query
-	// handlers. WatchAll's bootstrap sentinel gives us an atomic
-	// bootstrap-then-live boundary: pre-existing poison is latched before the
-	// first query can observe stale COMMUNITY_INDEX data, and later poison has
-	// no list/watch race.
-	if err := c.startEntityContractWatch(ctx); err != nil {
-		cancel()
-		return errs.Wrap(err, "Component", "Start", "entity-state contract watch")
-	}
-
-	// Set up query handlers only after authoritative state has been checked.
+	// Set up query handlers. Contract poison is detected at consume time on
+	// the input path (poison-response-scoping D7): every authoritative entity
+	// read flows through the latch-wired querier built below, so there is no
+	// dedicated ENTITY_STATES contract watcher and no per-write fan-out to
+	// clustering.
 	if err := c.setupQueryHandlers(ctx); err != nil {
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
 
-	// Create graph provider and detector. A poisoned bootstrap still starts the
-	// query surface so it can return the typed reset requirement, but no
-	// detector/enhancement/action worker may run against incompatible state.
+	// Create graph provider and detector. The sticky poison latch survives a
+	// same-instance Stop/Start (only a process restart clears it): a poisoned
+	// component restarts its query surface so it can return the typed reset
+	// requirement, but no detector/enhancement/action worker may run against
+	// incompatible state.
 	c.initProviderAndDetector()
 	poisoned := c.graphStatePoison.Load() != nil
 
@@ -956,7 +948,7 @@ func (c *Component) initProviderAndDetector() {
 		c.logger,
 	)
 
-	entityQuerier := &kvEntityQuerier{entityBucket: c.entityBucket, logger: c.logger}
+	entityQuerier := c.newEntityStateQuerier()
 	summarizer := clustering.NewStatisticalSummarizer()
 
 	detector := clustering.NewLPADetector(entityIDProvider, c.storage).
@@ -968,6 +960,18 @@ func (c *Component) initProviderAndDetector() {
 	detector.SetEntityProvider(entityQuerier)
 	c.detector = detector
 	c.graphProvider = entityIDProvider
+}
+
+// newEntityStateQuerier builds the consume-path ENTITY_STATES reader with the
+// component's sticky poison latch wired in. Every clustering read of
+// authoritative entity bytes flows through a querier built here (detector
+// summarization/corpus reads and LLM enhancement reads), so a poisoned value
+// observed at consume time latches the whole-view reset-required projection
+// state without a dedicated contract watcher (poison-response-scoping D7).
+func (c *Component) newEntityStateQuerier() *kvEntityQuerier {
+	querier := newKVEntityQuerier(c.entityBucket, c.logger)
+	querier.latchPoison = c.latchGraphStatePoison
+	return querier
 }
 
 // reportStage safely reports a lifecycle stage change.
@@ -1062,6 +1066,10 @@ func (c *Component) handleDetectionError(ctx context.Context, err error, operati
 	return false
 }
 
+// latchGraphStatePoison records an authoritative graph-state contract
+// violation observed at consume time. Contract poison is sticky for the
+// process lifetime: a later valid write cannot prove that previously derived
+// community output is sound, so recovery requires operator reset and restart.
 func (c *Component) latchGraphStatePoison(err error) bool {
 	var contractErr *graph.StateContractError
 	if !errors.As(err, &contractErr) {
@@ -1078,76 +1086,10 @@ func (c *Component) latchGraphStatePoison(err error) bool {
 func (c *Component) graphStateContractError(operation string) error {
 	contractErr := c.graphStatePoison.Load()
 	if contractErr == nil {
-		if c.entityWatchLost.Load() {
-			return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
-				errors.New("authoritative ENTITY_STATES watcher is unavailable"))
-		}
 		return nil
 	}
 	return errs.WrapFatal(contractErr, "Component", operation,
 		"authoritative graph state requires operator reset and canonical reingest")
-}
-
-// startEntityContractWatch validates the current ENTITY_STATES snapshot and
-// keeps watching live writes. Contract poison is sticky for the process
-// lifetime: a later valid write cannot prove that previously derived community
-// output is sound.
-func (c *Component) startEntityContractWatch(ctx context.Context) error {
-	watcher, err := c.entityBucket.WatchAll(ctx)
-	if err != nil {
-		return err
-	}
-
-	updates := watcher.Updates()
-	for {
-		select {
-		case <-ctx.Done():
-			_ = watcher.Stop()
-			return ctx.Err()
-		case entry, ok := <-updates:
-			if !ok {
-				_ = watcher.Stop()
-				return errors.New("ENTITY_STATES contract watch closed during bootstrap")
-			}
-			if entry == nil {
-				c.wg.Add(1)
-				go c.runEntityContractWatch(ctx, watcher, updates)
-				return nil
-			}
-			c.observeEntityContractEntry(entry)
-		}
-	}
-}
-
-func (c *Component) runEntityContractWatch(ctx context.Context, watcher jetstream.KeyWatcher, updates <-chan jetstream.KeyValueEntry) {
-	defer c.wg.Done()
-	defer watcher.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case entry, ok := <-updates:
-			if !ok {
-				if ctx.Err() == nil {
-					c.entityWatchLost.Store(true)
-				}
-				return
-			}
-			if entry != nil {
-				c.observeEntityContractEntry(entry)
-			}
-		}
-	}
-}
-
-func (c *Component) observeEntityContractEntry(entry jetstream.KeyValueEntry) {
-	if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
-		return
-	}
-	var state graph.EntityState
-	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-		c.latchGraphStatePoison(err)
-	}
 }
 
 // runStructuralAndAnomalyDetection runs structural computation and anomaly detection if enabled.
@@ -1465,8 +1407,9 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 		return errs.Wrap(err, "Component", "startEnhancementWorker", "create LLM summarizer")
 	}
 
-	// Create entity querier from entity bucket
-	querier := newKVEntityQuerier(c.entityBucket, c.logger)
+	// Create entity querier from entity bucket (latch-wired: enhancement reads
+	// of poisoned authoritative state must latch the projection reset too)
+	querier := c.newEntityStateQuerier()
 
 	// Create enhancement worker. LLMTimeout matches cfg.Timeout so the
 	// inner ctx.WithTimeout that wraps each LLM round-trip respects the
@@ -1668,6 +1611,15 @@ func (c *Component) resolveReviewLLMClient() llm.Client {
 type kvEntityQuerier struct {
 	entityBucket jetstream.KeyValue
 	logger       *slog.Logger
+
+	// latchPoison, when set, receives every authoritative decode failure so
+	// the owning component can latch its sticky projection reset state at
+	// consume time. The querier still fails the whole batch; the callback
+	// only guarantees detection is not lost when a caller (LPA
+	// summarization, enhancement worker) downgrades the batch error to a
+	// warning. This is the input-path replacement for the retired dedicated
+	// ENTITY_STATES contract watch (poison-response-scoping D7).
+	latchPoison func(error) bool
 }
 
 // newKVEntityQuerier creates an entity querier that reads from ENTITY_STATES
@@ -1716,6 +1668,9 @@ func (q *kvEntityQuerier) GetEntities(ctx context.Context, ids []string) ([]*gra
 
 		var entity graph.EntityState
 		if err := graph.UnmarshalEntityState(entry.Value(), &entity); err != nil {
+			if q.latchPoison != nil {
+				q.latchPoison(err)
+			}
 			return nil, errs.WrapFatal(err, "kvEntityQuerier", "GetEntities", "decode authoritative entity")
 		}
 

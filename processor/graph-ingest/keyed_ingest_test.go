@@ -227,7 +227,7 @@ func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
 	}
 }
 
-func TestProcessIngest_DirtyStoredStateTerminatesAndLatchesResetRequired(t *testing.T) {
+func TestProcessIngest_DirtyStoredStateNaksAndInventoriesPerEntity(t *testing.T) {
 	tests := []struct {
 		name        string
 		entityID    string
@@ -277,16 +277,30 @@ func TestProcessIngest_DirtyStoredStateTerminatesAndLatchesResetRequired(t *test
 			var stateErr *graph.StateContractError
 			require.True(t, errors.As(err, &stateErr), "dirty persisted state must retain its typed reset error")
 			assert.Equal(t, tt.resetReason, stateErr.Reason)
-			assert.True(t, msg.term.Load(), "permanent dirty state must terminate the current message")
-			assert.False(t, msg.nak.Load(), "permanent dirty state must not hot-loop via redelivery")
+			assert.Equal(t, tt.entityID, stateErr.EntityID, "RMW classification must stamp the entity ID")
+			// D8: resident poison is the ENVIRONMENT's fault — Nak so the valid
+			// arrival survives the repair window, never Term (permanent loss).
+			assert.True(t, msg.nak.Load(), "resident poison must Nak for redelivery after repair")
+			assert.False(t, msg.term.Load(), "resident poison must not destroy the valid arrival")
 			assert.False(t, msg.ack.Load())
 			assert.Equal(t, int32(0), guardStamps.Load(), "failed apply must not stamp the redelivery guard")
-			assert.Same(t, stateErr, component.entityStatePoison.Load(), "apply-discovered poison must latch process-wide")
-			assertIngestResetRequired(t, component.ensureEntityQueriesReady())
+			// Per-entity inventory replaces the retired surface-global latch:
+			// the entity is inventoried, queries stay READY.
+			rec, inventoried := poisonInventoryEntry(component, tt.entityID)
+			require.True(t, inventoried, "apply-discovered poison must be inventoried per-entity")
+			assert.Equal(t, tt.entityID, rec.contractErr.EntityID)
+			assert.NoError(t, component.ensureEntityQueriesReady(), "one poisoned entity must not gate the query surface")
 			assert.Equal(t, predicateBefore, testutil.ToFloat64(component.predicateContractRejections.WithLabelValues("graphable", "arity")), "stored poison is not a producer predicate rejection")
 			assert.Equal(t, entityBefore, testutil.ToFloat64(component.entityStateContractRejections.WithLabelValues("graphable", "subject", "arity")), "stored poison is not a producer entity-state rejection")
-			assert.Equal(t, 1, strings.Count(logs.String(), "code=graph_state_reset_required"), "first poison latch logs once")
+			assert.Equal(t, 1, strings.Count(logs.String(), "code=graph_state_reset_required"), "first inventory record logs once")
 			assert.Contains(t, logs.String(), "reason="+string(tt.resetReason))
+
+			// Redelivery loop dedup: a second delivery re-Naks without re-logging.
+			msg2 := &keyedIngestTestMsg{}
+			work.msg = msg2
+			require.Error(t, component.processIngest(context.Background(), 0, work))
+			assert.True(t, msg2.nak.Load())
+			assert.Equal(t, 1, strings.Count(logs.String(), "code=graph_state_reset_required"), "redelivery must not re-log an inventoried entity")
 		})
 	}
 }
@@ -317,8 +331,8 @@ func TestProcessIngest_GenericFatalApplyErrorTerminatesWithoutPoison(t *testing.
 	assert.True(t, msg.term.Load(), "generic fatal apply failure must Term")
 	assert.False(t, msg.nak.Load(), "generic fatal apply failure must not redeliver")
 	assert.False(t, msg.ack.Load())
-	assert.Nil(t, component.entityStatePoison.Load(), "generic fatal failure must not masquerade as graph-state poison")
-	assert.NoError(t, component.ensureEntityQueriesReady(), "generic fatal failure must not latch query reset-required")
+	assert.Equal(t, int64(0), component.entityPoisonSize.Load(), "generic fatal failure must not masquerade as graph-state poison")
+	assert.NoError(t, component.ensureEntityQueriesReady(), "generic fatal failure must not gate queries")
 	assert.Contains(t, logs.String(), "fatal ingest failure; terminating")
 	assert.NotContains(t, logs.String(), "code=graph_state_reset_required")
 }

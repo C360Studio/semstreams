@@ -33,8 +33,9 @@ import (
 
 // Ensure Component implements required interfaces
 var (
-	_ component.Discoverable       = (*Component)(nil)
-	_ component.LifecycleComponent = (*Component)(nil)
+	_ component.Discoverable        = (*Component)(nil)
+	_ component.LifecycleComponent  = (*Component)(nil)
+	_ component.DebugStatusProvider = (*Component)(nil)
 )
 
 // Package-level prometheus metric (registered once to avoid duplicate registration errors)
@@ -564,7 +565,7 @@ type Component struct {
 
 	// Domain resources
 	entityBucket      *natsclient.KVStore            // KV operations with CAS support
-	entityStateBucket jetstream.KeyValue             // raw bucket for the process-lifetime query contract guard
+	entityStateBucket jetstream.KeyValue             // raw bucket for the boot snapshot sweep
 	entityCache       cache.Cache[graph.EntityState] // Read-through cache for query handlers
 	suffixBucket      *natsclient.KVStore            // KV suffix index: suffix → fullID
 	suffixCache       cache.Cache[string]            // TTL cache for suffix resolution
@@ -596,15 +597,18 @@ type Component struct {
 	startTime               time.Time
 	wg                      sync.WaitGroup
 	cancel                  context.CancelFunc
-	entityStateWatcher      jetstream.KeyWatcher
-	entityStatePoison       atomic.Pointer[graph.StateContractError]
 	entityWatchLost         atomic.Bool
 	entityBootstrapStarted  atomic.Bool
 	entityBootstrapComplete atomic.Bool
-	entityQueryMu           sync.RWMutex
-	// beforeEntityQueryResponse is a deterministic test seam. Production leaves
-	// it nil; every successful query still passes through the final response gate.
-	beforeEntityQueryResponse func([]byte)
+
+	// Per-entity poison inventory (poison-response-scoping D2/D3). Observability
+	// only — no read or write path consults it for a decision; refusal derives
+	// solely from decoding stored bytes at each seam. entityPoisonSize mirrors
+	// len(entityPoison) so hot-path clear checks cost one atomic load when the
+	// inventory is empty (design D2, required). See poison_inventory.go.
+	entityPoisonMu   sync.Mutex
+	entityPoison     map[string]entityPoisonRecord
+	entityPoisonSize atomic.Int64
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -627,6 +631,7 @@ type Component struct {
 	ingestLag                     prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
 	redeliveriesDropped           prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
 	casRetries                    prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
+	poisonedEntities              prometheus.Gauge       // per-entity poison inventory size (single gauge, no per-entity labels)
 	metricsRegistry               *metric.MetricsRegistry
 
 	// Keyed-concurrent entity ingest (ADR-072, gh#480). The pool partitions
@@ -705,6 +710,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		ingestLag:                     getIngestLagMetric(deps.MetricsRegistry),
 		redeliveriesDropped:           getRedeliveriesDroppedMetric(deps.MetricsRegistry),
 		casRetries:                    getCasRetriesMetric(deps.MetricsRegistry),
+		poisonedEntities:              getPoisonedEntitiesMetric(deps.MetricsRegistry),
 		metricsRegistry:               deps.MetricsRegistry,
 	}
 
@@ -797,19 +803,23 @@ func (c *Component) Health() component.HealthStatus {
 
 	if c.running {
 		status = "running"
-		if state := c.entityStatePoison.Load(); state != nil {
-			status = graph.IndexStateResetRequired
-			lastErr = state.Error()
+		// A non-empty poison inventory degrades Health per-entity: status is
+		// "degraded", NOT "reset_required" (that stays a per-read error code —
+		// design D6), and the message carries count + a bounded ID/reason
+		// sample. Full enumeration rides DebugStatus.
+		if c.entityPoisonSize.Load() > 0 {
+			status = graph.IndexStateDegraded
+			lastErr = c.entityPoisonHealthMessage()
 		} else if c.entityWatchLost.Load() {
 			status = graph.IndexStateDegraded
-			lastErr = graph.ErrorCodeIndexNotReady + ": ENTITY_STATES contract watcher unavailable"
+			lastErr = graph.ErrorCodeIndexNotReady + ": ENTITY_STATES snapshot sweep unavailable"
 		} else if errorCount > 0 {
 			lastErr = "errors occurred during processing"
 		}
 	}
 
 	return component.HealthStatus{
-		Healthy: c.running && errorCount == 0 && c.entityStatePoison.Load() == nil &&
+		Healthy: c.running && errorCount == 0 && c.entityPoisonSize.Load() == 0 &&
 			!c.entityWatchLost.Load() && (!c.entityBootstrapStarted.Load() || c.entityBootstrapComplete.Load()),
 		LastCheck:  time.Now(),
 		ErrorCount: errorCount,
@@ -941,9 +951,11 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Query safety is independent from graph-ingest's write role. Drain the
-	// authoritative snapshot synchronously and keep the same watcher live. A
-	// watcher transport failure degrades only queries; ingest writers still boot
-	// so operators can repair state through canonical writes before restart.
+	// authoritative snapshot synchronously into the per-entity poison
+	// inventory, then STOP the watcher — graph-ingest holds no steady-state
+	// self-watch on ENTITY_STATES (poison-response-scoping D1). A transport
+	// failure degrades only queries; ingest writers still boot so operators
+	// can repair state through canonical writes before restart.
 	c.startEntityStateGuard(ctx, c.entityStateBucket)
 
 	// Initialize lifecycle reporter (throttled for high-throughput ingestion)
@@ -1010,8 +1022,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	submitCancel := c.ingestSubmitCancel
 	poolCancel := c.ingestPoolCancel
 	consumeCancel := c.cancel
-	entityStateWatcher := c.entityStateWatcher
-	c.entityStateWatcher = nil
 	c.mu.Unlock()
 
 	// ADR-072 M3 shutdown ordering, BEFORE tearing down KV/NATS:
@@ -1026,9 +1036,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 	if consumeCancel != nil {
 		consumeCancel()
-	}
-	if entityStateWatcher != nil {
-		_ = entityStateWatcher.Stop()
 	}
 	if pool != nil {
 		drainCtx, cancelDrain := context.WithTimeout(context.Background(), timeout)
@@ -1177,30 +1184,45 @@ func (c *Component) initStorage(ctx context.Context) error {
 	return nil
 }
 
-// startEntityStateGuard synchronously validates the current ENTITY_STATES
-// snapshot and then continues on the same WatchAll stream. It intentionally
-// does not fail graph-ingest startup on transport errors: this component is the
-// canonical writer and must remain available, while every query fails closed.
+// startEntityStateGuard synchronously validates the resident ENTITY_STATES
+// snapshot into the per-entity poison inventory, then STOPS the watcher —
+// graph-ingest holds no steady-state self-watch on the bucket it writes
+// (poison-response-scoping D1; steady-state detection rides the read points
+// that already exist). It intentionally does not fail startup on transport
+// errors: this component is the canonical writer and must remain available,
+// while every query fails closed until the sweep completes.
+//
+// Snapshot completeness leans on ENTITY_STATES History=1: with a per-subject
+// limit of 1 the pre-marker replay carries exactly the latest revision per
+// key, so gap-resets cannot inflate the received set and the nil
+// end-of-snapshot marker means the full resident state was seen. Raising the
+// bucket's history depth invalidates this marker math.
 func (c *Component) startEntityStateGuard(ctx context.Context, bucket jetstream.KeyValue) {
 	c.entityBootstrapStarted.Store(true)
 	watcher, err := bucket.WatchAll(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
 			c.markEntityWatchLost()
-			c.logger.Error("failed to start ENTITY_STATES query contract watcher", slog.Any("error", err))
+			c.logger.Error("failed to start ENTITY_STATES snapshot sweep watcher", slog.Any("error", err))
 		}
 		return
 	}
-	c.entityStateWatcher = watcher
 
+	// Drain bookkeeping is LAST-REVISION-WINS per key: a poisoned revision
+	// superseded by a valid (or tombstoned) pre-marker revision of the same
+	// key ends with no inventory entry.
+	sweep := make(map[string]entityPoisonRecord)
 	updates := watcher.Updates()
 	for {
 		select {
 		case <-ctx.Done():
-			_ = watcher.Stop()
+			c.stopEntityStateGuardWatcher(watcher, updates)
 			return
 		case entry, ok := <-updates:
 			if !ok {
+				// PRE-marker channel closure is a genuine transport failure:
+				// ingest writers still boot, entity queries stay not-ready
+				// (transient), and no poison is recorded from the failure.
 				_ = watcher.Stop()
 				if ctx.Err() == nil {
 					c.markEntityWatchLost()
@@ -1208,66 +1230,92 @@ func (c *Component) startEntityStateGuard(ctx context.Context, bucket jetstream.
 				return
 			}
 			if entry == nil {
+				// End-of-snapshot marker: the full resident snapshot was seen.
+				// Stop deliberately (never classified as watch loss), record
+				// the surviving sweep entries, then open the query surface.
+				c.stopEntityStateGuardWatcher(watcher, updates)
+				c.recordBootSweepPoison(ctx, sweep)
 				c.entityBootstrapComplete.Store(true)
-				c.wg.Add(1)
-				go c.runEntityStateGuard(ctx, watcher, updates)
 				return
 			}
-			c.validateEntityStateGuardEntry(entry)
+			c.sweepEntityStateGuardEntry(sweep, entry)
 		}
 	}
 }
 
-func (c *Component) runEntityStateGuard(
-	ctx context.Context,
-	watcher jetstream.KeyWatcher,
-	updates <-chan jetstream.KeyValueEntry,
-) {
-	defer c.wg.Done()
-	for {
-		select {
-		case <-ctx.Done():
-			_ = watcher.Stop()
-			return
-		case entry, ok := <-updates:
-			if !ok {
-				_ = watcher.Stop()
-				if ctx.Err() == nil {
-					c.markEntityWatchLost()
-				}
-				return
-			}
-			if entry != nil {
-				c.validateEntityStateGuardEntry(entry)
-			}
-		}
+// stopEntityStateGuardWatcher performs the deliberate snapshot-watcher stop
+// (design D1 mandatory shape): Stop(), then KEEP READING the updates channel
+// until nats.go closes it, discarding entries. The nats.go update callback
+// blocks on a full channel while holding the watcher mutex, so an unread
+// channel would wedge the connection's async-callback dispatcher (via
+// SetClosedHandler). The post-Stop closure here is deliberate and MUST NOT be
+// classified as watch loss.
+func (c *Component) stopEntityStateGuardWatcher(watcher jetstream.KeyWatcher, updates <-chan jetstream.KeyValueEntry) {
+	_ = watcher.Stop()
+	discarded := 0
+	for range updates {
+		discarded++ // deliberate drain-to-close; entries are discarded unvalidated
+	}
+	if discarded > 0 {
+		c.logger.Debug("snapshot sweep watcher drained to close",
+			slog.Int("discarded_entries", discarded))
 	}
 }
 
-func (c *Component) validateEntityStateGuardEntry(entry jetstream.KeyValueEntry) {
+// sweepEntityStateGuardEntry folds one pre-marker snapshot delivery into the
+// sweep map, last-revision-wins per key: a valid or tombstoned delivery erases
+// an earlier poisoned one for the same key.
+func (c *Component) sweepEntityStateGuardEntry(sweep map[string]entityPoisonRecord, entry jetstream.KeyValueEntry) {
 	if graph.IsKVTombstone(entry.Operation()) {
+		delete(sweep, entry.Key()) // key deleted: nothing resident to inventory
 		return
 	}
 	var state graph.EntityState
-	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-		var contractErr *graph.StateContractError
-		if !errors.As(err, &contractErr) {
-			contractErr = &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity, Err: err}
-		}
-		latched := c.latchEntityStatePoison(contractErr)
-		if latched {
-			c.logger.Error("authoritative graph state requires reset; graph-ingest queries blocked",
-				slog.String("code", graph.ErrorCodeGraphStateResetRequired),
-				slog.String("reason", string(contractErr.Reason)))
-		}
+	err := graph.UnmarshalEntityState(entry.Value(), &state)
+	if err == nil {
+		delete(sweep, entry.Key()) // valid revision supersedes an earlier poisoned one
+		return
 	}
+	var contractErr *graph.StateContractError
+	if !errors.As(err, &contractErr) {
+		contractErr = &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity, Err: err}
+	}
+	contractErr.EntityID = entry.Key()
+	sweep[entry.Key()] = entityPoisonRecord{contractErr: contractErr, revision: entry.Revision()}
 }
 
-func (c *Component) latchEntityStatePoison(contractErr *graph.StateContractError) bool {
-	c.entityQueryMu.Lock()
-	latched := c.entityStatePoison.CompareAndSwap(nil, contractErr)
-	c.entityQueryMu.Unlock()
-	return latched
+// recordBootSweepPoison moves the surviving sweep entries into the poison
+// inventory. The first bootSweepErrorLogCap new entries log individually as
+// structured ERRORs; the remainder is summarized by one count-only WARN so a
+// mass-poison boot cannot flood the log.
+func (c *Component) recordBootSweepPoison(ctx context.Context, sweep map[string]entityPoisonRecord) {
+	if len(sweep) == 0 {
+		return
+	}
+	keys := make([]string, 0, len(sweep))
+	for key := range sweep {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	logged := 0
+	for _, key := range keys {
+		rec := sweep[key]
+		if c.recordEntityPoison(rec.contractErr, rec.revision) {
+			if logged < bootSweepErrorLogCap {
+				c.logEntityPoisonRecorded(rec.contractErr, rec.revision)
+				logged++
+			}
+			// Close the cross-process record/repair window: a repair that
+			// completed after this key's snapshot delivery found no entry to
+			// clear; verifying against current bytes drops the stale record.
+			c.verifyEntityPoisonRecord(ctx, key)
+		}
+	}
+	if len(keys) > logged {
+		c.logger.Warn("boot snapshot sweep: additional poisoned entities inventoried past the log cap",
+			slog.Int("total", len(keys)),
+			slog.Int("logged_individually", logged))
+	}
 }
 
 // classifyStoredStateRMWError re-attributes a read-modify-write failure to
@@ -1277,26 +1325,31 @@ func (c *Component) latchEntityStatePoison(contractErr *graph.StateContractError
 // (unreadable JSON) or as a MarshalEntityState write-gate rejection that
 // would otherwise blame the merged CANDIDATE the caller submitted. On this
 // slow path (the write is already failing) re-validate the stored bytes: when
-// the poison predates the merge, return the graph-state-reset-required
-// classification (mirroring the ENTITY_STATES contract guard) instead of a
-// candidate-invalid error. A canonical stored state returns cycleErr
-// unchanged — the candidate really was at fault.
+// the poison predates the merge, stamp the RMW target's entity ID, record it
+// in the per-entity poison inventory, and return the
+// graph-state-reset-required classification instead of a candidate-invalid
+// error. A canonical stored state returns cycleErr unchanged — the candidate
+// really was at fault.
 //
-// Classification only — latching stays with its existing owners (the ingest
-// lane's processIngest, the contract guard watcher, and the query lane), so
-// their latch-once logging semantics are preserved.
-func (c *Component) classifyStoredStateRMWError(current []byte, cycleErr error) error {
+// entityID is the RMW target (the CAS key) — the closures are the only place
+// the identity is reliably in scope, so stamping happens here rather than at
+// any outer helper (design D4).
+func (c *Component) classifyStoredStateRMWError(ctx context.Context, entityID string, current []byte, cycleErr error) error {
 	var stored graph.EntityState
-	if err := graph.UnmarshalEntityState(current, &stored); err != nil {
-		return err
+	err := graph.UnmarshalEntityState(current, &stored)
+	if err == nil {
+		return cycleErr
 	}
-	return cycleErr
+	var contractErr *graph.StateContractError
+	if errors.As(err, &contractErr) {
+		contractErr.EntityID = entityID
+		c.inventoryEntityPoisonAtCurrentRevision(ctx, contractErr)
+	}
+	return err
 }
 
 func (c *Component) markEntityWatchLost() {
-	c.entityQueryMu.Lock()
 	c.entityWatchLost.Store(true)
-	c.entityQueryMu.Unlock()
 }
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
@@ -2394,7 +2447,7 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		// the write (classified via classifyStoredStateRMWError).
 		var existing graph.EntityState
 		if err := graph.UnmarshalEntityStateTrusted(current, &existing); err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err) // non-retryable
+			return nil, c.classifyStoredStateRMWError(ctx, entity.ID, current, err) // non-retryable
 		}
 		// gh#466: predicate-level merge (replace per (subject,predicate)), NOT raw
 		// append — otherwise a producer republishing the same entity accumulates
@@ -2428,7 +2481,7 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		existing.UpdatedAt = time.Now()
 		data, err := graph.MarshalEntityState(&existing)
 		if err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err)
+			return nil, c.classifyStoredStateRMWError(ctx, entity.ID, current, err)
 		}
 		bytesWritten = len(data)
 		return data, nil
@@ -2437,6 +2490,10 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "MergeEntity", "CAS update")
 	}
+
+	// A committed write passed the MarshalEntityState gate — clear any stale
+	// poison inventory entry (D3b). Steady-state cost: one atomic load.
+	c.clearEntityPoisonOnCommit(ctx, entity.ID, 0)
 
 	// Cache invalidation matches createEntity — readers must see the
 	// merged state on next Get.
@@ -2525,20 +2582,25 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	// conflict). The ErrKVKeyExists sentinel is bubbled verbatim so
 	// handlers can branch with errors.Is.
 	var writeErr error
+	var committedRev uint64
 	if atomicCreate {
-		_, writeErr = c.entityBucket.Create(ctx, entity.ID, data)
+		committedRev, writeErr = c.entityBucket.Create(ctx, entity.ID, data)
 		if writeErr != nil && errors.Is(writeErr, natsclient.ErrKVKeyExists) {
 			// Expected conflict shape — don't count as a component
 			// error and don't wrap (preserves sentinel identity).
 			return writeErr
 		}
 	} else {
-		_, writeErr = c.entityBucket.Put(ctx, entity.ID, data)
+		committedRev, writeErr = c.entityBucket.Put(ctx, entity.ID, data)
 	}
 	if writeErr != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
 	}
+
+	// Committed valid bytes at a known revision — clear any stale poison
+	// inventory entry (D3b: revision guard). Steady-state: one atomic load.
+	c.clearEntityPoisonOnCommit(ctx, entity.ID, committedRev)
 
 	// Invalidate cache on write (cache consistency)
 	if c.entityCache != nil {
@@ -2733,10 +2795,12 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 	}
 
 	// Update in KV bucket
-	if _, err := c.entityBucket.Put(ctx, entity.ID, data); err != nil {
+	rev, err := c.entityBucket.Put(ctx, entity.ID, data)
+	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "UpdateEntity", "KV store")
 	}
+	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
 
 	// Invalidate cache on write (cache consistency)
 	if c.entityCache != nil {
@@ -2788,12 +2852,14 @@ func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.En
 		return errs.Wrap(err, "Component", "updateEntityAtRevision", "entity serialization")
 	}
 
-	if _, err := c.entityBucket.Update(ctx, entity.ID, data, expectedRev); err != nil {
+	rev, err := c.entityBucket.Update(ctx, entity.ID, data, expectedRev)
+	if err != nil {
 		// ErrKVRevisionMismatch and other KV errors propagate verbatim so
 		// callers can branch with errors.Is(..., natsclient.ErrKVRevisionMismatch).
 		atomic.AddInt64(&c.errors, 1)
 		return err
 	}
+	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
 
 	if c.entityCache != nil {
 		c.entityCache.Delete(entity.ID) //nolint:errcheck
@@ -2829,6 +2895,10 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "DeleteEntity", "KV delete")
 	}
+
+	// The poisoned bytes (if any) are gone — clear the inventory entry (D3a).
+	// Delete + recreate is the canonical wire repair for a poisoned entity.
+	c.clearEntityPoisonOnDelete(entityID)
 
 	// Invalidate cache on delete (cache consistency)
 	if c.entityCache != nil {
@@ -2893,7 +2963,7 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 			// gh#562: trusted decode on the owner's own RMW read;
 			// MarshalEntityState below re-validates the final candidate.
 			if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
-				return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
+				return nil, c.classifyStoredStateRMWError(ctx, triple.Subject, current, err) // Non-retryable
 			}
 		} else {
 			// Must-exist (ADR-055): a triple targeting an absent entity is
@@ -2909,7 +2979,7 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 
 		data, err := graph.MarshalEntityState(&entity)
 		if err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err)
+			return nil, c.classifyStoredStateRMWError(ctx, triple.Subject, current, err)
 		}
 		return data, nil
 	})
@@ -2918,6 +2988,9 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "AddTriple", "CAS update")
 	}
+
+	// Committed via the write gate — clear any stale poison entry (D3b).
+	c.clearEntityPoisonOnCommit(ctx, triple.Subject, 0)
 
 	// Read-after-write coherence: the entity-query cache must not serve the
 	// pre-add state on the next graph.ingest.query.* read.
@@ -2990,6 +3063,11 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 	// response without string-sniffing. Mixed-reason batches (allAbsences=false)
 	// stay un-sentineled → handler leaves ErrorCode empty (unclassified).
 	allAbsences := true
+	// poisonErr preserves the FIRST typed resident-poison failure so the
+	// aggregated error can wrap it: without this the typed
+	// *graph.StateContractError would die as a FailedSubjects string and the
+	// whole-batch reply would misclassify as retryable-internal (design D4).
+	var poisonErr error
 	for i, subject := range subjects {
 		// Short-circuit on context cancellation: don't burn the retry
 		// budget for every remaining subject when the caller has
@@ -3014,7 +3092,7 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 				// gh#562: trusted decode on the owner's own RMW read;
 				// MarshalEntityState below re-validates the final candidate.
 				if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
-					return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
+					return nil, c.classifyStoredStateRMWError(ctx, subject, current, err) // Non-retryable
 				}
 			} else {
 				// Must-exist (ADR-055): a triple targeting an absent entity is
@@ -3029,7 +3107,7 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 
 			data, err := graph.MarshalEntityState(&entity)
 			if err != nil {
-				return nil, c.classifyStoredStateRMWError(current, err)
+				return nil, c.classifyStoredStateRMWError(ctx, subject, current, err)
 			}
 			return data, nil
 		})
@@ -3037,11 +3115,17 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 		if casErr != nil {
 			atomic.AddInt64(&c.errors, 1)
 			failedSubjects[subject] = casErr.Error()
+			var stateErr *graph.StateContractError
+			if poisonErr == nil && errors.As(casErr, &stateErr) {
+				poisonErr = casErr
+			}
 			if !errors.Is(casErr, natsclient.ErrKVKeyNotFound) {
 				allAbsences = false
 			}
 			continue
 		}
+		// Committed via the write gate — clear any stale poison entry (D3b).
+		c.clearEntityPoisonOnCommit(ctx, subject, 0)
 		// Read-after-write coherence: invalidate the just-written subject's
 		// cached entity so the next query reflects the appended triples.
 		c.invalidateEntityCacheEntry(subject)
@@ -3059,12 +3143,20 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 	}
 	sort.Strings(failed)
 	var innerErr error
-	if allAbsences {
+	switch {
+	case allAbsences:
 		// All failures were entity-not-found: wrap the sentinel so the handler
 		// can set ErrorCodeEntityNotFound without string-sniffing.
 		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v: %w",
 			len(failedSubjects), len(subjects), failed, natsclient.ErrKVKeyNotFound)
-	} else {
+	case poisonErr != nil:
+		// Resident poison in the batch: wrap the typed cause so the aggregated
+		// error stays errors.As-able as *graph.StateContractError and the
+		// whole-batch reply classifies fatal/graph_state_reset_required instead
+		// of dying as a FailedSubjects string.
+		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v: %w",
+			len(failedSubjects), len(subjects), failed, poisonErr)
+	default:
 		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v",
 			len(failedSubjects), len(subjects), failed)
 	}
@@ -3115,7 +3207,7 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 		// MarshalEntityState below re-validates the final candidate.
 		var entity graph.EntityState
 		if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err) // Non-retryable
+			return nil, c.classifyStoredStateRMWError(ctx, subject, current, err) // Non-retryable
 		}
 
 		// Remove matching triples
@@ -3141,7 +3233,7 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 
 		data, err := graph.MarshalEntityState(&entity)
 		if err != nil {
-			return nil, c.classifyStoredStateRMWError(current, err)
+			return nil, c.classifyStoredStateRMWError(ctx, subject, current, err)
 		}
 		return data, nil
 	})
@@ -3161,6 +3253,9 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 		atomic.AddInt64(&c.errors, 1)
 		return errs.Wrap(err, "Component", "RemoveTriple", "CAS update")
 	}
+
+	// Committed via the write gate — clear any stale poison entry (D3b).
+	c.clearEntityPoisonOnCommit(ctx, subject, 0)
 
 	// Read-after-write coherence: drop the cached entity so a query reflects
 	// the removed predicate (consumers clear markers via remove on reset).

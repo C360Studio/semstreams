@@ -2,19 +2,25 @@ package agenticloop
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/c360studio/semstreams/message"
 )
 
 type inputAckMsg struct {
@@ -65,61 +71,56 @@ func (m *inputAckMsg) TermWithReason(string) error {
 	return nil
 }
 
-func TestHandleSpawnIdentityFailure_GraphStatePoisonHasNoBusinessSideEffects(t *testing.T) {
+// Per-entity poison semantics (poison-response-scoping D9): the typed
+// graph_state_reset_required classification means THIS loop's entity is
+// poisoned. The loop fails through the normal terminal business-failure
+// path with the typed error preserved; no component-wide state changes.
+func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testing.T) {
 	t.Parallel()
 
-	loopManager := NewLoopManager()
+	handler := NewMessageHandler(DefaultConfig())
 	const loopID = "loop-poison"
-	if _, err := loopManager.CreateLoopWithID(loopID, "task-poison", "researcher", "model"); err != nil {
+	if _, err := handler.loopManager.CreateLoopWithID(loopID, "task-poison", "researcher", "model"); err != nil {
 		t.Fatalf("CreateLoopWithID() error = %v", err)
 	}
-	before, err := loopManager.GetLoop(loopID)
+	before, err := handler.loopManager.GetLoop(loopID)
 	if err != nil {
 		t.Fatalf("GetLoop() before error = %v", err)
 	}
-
-	trajectoryManager := NewTrajectoryManager()
-	if _, err := trajectoryManager.StartTrajectory(loopID); err != nil {
+	if _, err := handler.trajectoryManager.StartTrajectory(loopID); err != nil {
 		t.Fatalf("StartTrajectory() error = %v", err)
 	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	handler.logger = logger
 	c := &Component{
-		handler: &MessageHandler{loopManager: loopManager, trajectoryManager: trajectoryManager},
-		logger:  slog.New(slog.NewTextHandler(io.Discard, nil)),
-		// All business-output dependencies intentionally remain nil. Reaching
-		// handleLoopFailure would mutate the loop before attempting those outputs.
+		handler:   handler,
+		logger:    logger,
+		started:   true,
+		startTime: time.Now(),
 	}
-	loopManager.CacheResponseFormat(loopID, &agentic.ResponseFormat{Type: agentic.ResponseFormatJSONObject})
 	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
 
-	poisonCtx, cancelPoison := context.WithCancel(context.Background())
-	cancelPoison()
-	gotErr := c.handleSpawnIdentityFailure(poisonCtx, loopID, before, poison)
-	var classified *errs.ClassifiedError
-	if !errors.As(gotErr, &classified) ||
-		classified.Class != errs.ErrorFatal ||
-		classified.Code != graph.ErrorCodeGraphStateResetRequired {
-		t.Fatalf("handleSpawnIdentityFailure() error = %#v, want fatal/%q", classified, graph.ErrorCodeGraphStateResetRequired)
+	if gotErr := c.handleSpawnIdentityFailure(context.Background(), loopID, before, poison); gotErr != nil {
+		t.Fatalf("handleSpawnIdentityFailure() error = %v, want nil (per-loop failure is fully handled)", gotErr)
 	}
 
-	if _, err := loopManager.GetLoop(loopID); err == nil {
-		t.Fatal("poisoned pre-birth loop remained active; want in-memory creation rollback")
+	after, err := handler.loopManager.GetLoop(loopID)
+	if err != nil {
+		t.Fatalf("GetLoop() after error = %v", err)
 	}
-	if _, err := trajectoryManager.GetTrajectory(loopID); err == nil {
-		t.Fatal("poisoned pre-birth trajectory remained active; want in-memory creation rollback")
+	if after.State != agentic.LoopStateFailed || after.Outcome != agentic.OutcomeFailed {
+		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal business failure", after.State, after.Outcome)
 	}
-	if cached := loopManager.GetCachedResponseFormat(loopID); cached != nil {
-		t.Fatalf("poisoned pre-birth response format remained cached: %#v", cached)
+	if !strings.Contains(after.Error, graph.ErrorCodeGraphStateResetRequired) {
+		t.Fatalf("failed loop Error = %q, want the typed %q code preserved", after.Error, graph.ErrorCodeGraphStateResetRequired)
 	}
-	if health := c.Health(); health.Healthy || health.Status != graph.ErrorCodeGraphStateResetRequired {
-		t.Fatalf("Health() = %#v, want unhealthy %q", health, graph.ErrorCodeGraphStateResetRequired)
-	}
-	// The reset latch is checked before decoding or loop creation. A nil decoder
-	// would panic if this task reached ordinary intake.
-	latchedCtx, cancelLatched := context.WithCancel(context.Background())
-	cancelLatched()
-	if err := c.handleTaskMessage(latchedCtx, []byte("not decoded while reset-required")); !errors.Is(err, gotErr) {
-		t.Fatalf("latched task error = %v, want reset-required error %v", err, gotErr)
+
+	// One poisoned entity must not degrade the component: Health stays
+	// healthy and no component-wide latch blocks subsequent task intake.
+	if health := c.Health(); !health.Healthy || health.Status != "running" {
+		t.Fatalf("Health() = %#v, want healthy running (per-entity poison must not degrade the component)", health)
 	}
 }
 
@@ -128,17 +129,17 @@ func TestGraphStatePoisonRouting_DistinguishesOperationalErrors(t *testing.T) {
 
 	poison := &graph.StateContractError{Reason: graph.GraphStateReasonUnreadableEntity}
 	if !graph.IsStateContractError(poison) {
-		t.Fatal("StateContractError must route to the reset-required fail-closed path")
+		t.Fatal("StateContractError must route to the per-loop poison failure path")
 	}
 	remotePoison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
-		errors.New("remote graph reset required"))
+		errors.New("remote entity poison classification"))
 	if !graph.IsStateContractError(remotePoison) {
-		t.Fatal("wire-reconstructed reset-required code must route to the fail-closed path")
+		t.Fatal("wire-reconstructed graph_state_reset_required code must route to the per-loop poison failure path")
 	}
 
 	operational := errors.New("request timeout")
 	if graph.IsStateContractError(operational) {
-		t.Fatal("ordinary operational errors must continue to handleLoopFailure")
+		t.Fatal("ordinary operational errors must keep the spawn_identity_birth_failed reason")
 	}
 }
 
@@ -184,57 +185,106 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	}
 }
 
-func TestConsumeLongRunningInput_LatchedGraphPoisonHoldsUntilCancellation(t *testing.T) {
-	t.Parallel()
-
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	resetErr := graph.ClassifyStateContractError(&graph.StateContractError{
-		Reason: graph.GraphStateReasonNoncanonicalEntityID,
+// TestGraphStatePoisonFailsLoopWhileIntakeContinues drives the production
+// task-intake path end to end (envelope decode → HandleTask → graph birth →
+// lineage write) for two tasks. The first task's graph write returns the
+// typed poison classification: that loop fails terminally with the typed
+// error and its delivery is ACKed. The second task — a different loop /
+// different entity — must process normally, proving no component-wide latch
+// wedges task intake and Health stays healthy. This deliberately inverts the
+// retired hold-until-restart behavior (poison-response-scoping D9).
+func TestGraphStatePoisonFailsLoopWhileIntakeContinues(t *testing.T) {
+	configJSON, err := json.Marshal(DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	discoverable, err := NewComponent(configJSON, component.Dependencies{
+		Platform:        component.PlatformMeta{Org: "acme", Platform: "ops"},
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
 	})
-	c := &Component{logger: logger}
-	c.graphStateReset.Store(&graphStateResetLatch{err: resetErr})
-	msg := &inputAckMsg{
-		data:     []byte("must remain pending"),
-		progress: make(chan struct{}, 16),
+	if err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	handler := c.taskInputHandler(ctx, time.Millisecond)
-	done := make(chan error, 1)
-	go func() {
-		done <- consumeLongRunningInput(ctx, msg, time.Millisecond, handler)
-	}()
+	c := discoverable.(*Component)
+	// NATS-less Start marks the component running so Health reflects the
+	// steady state the assertions below depend on.
+	if err := c.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer c.Stop(time.Second)
 
-	// More heartbeats than both the 1ms ordinary work timeout and configured
-	// MaxDeliver=2 prove this is one lifecycle-held delivery, not repeated
-	// NAK/redelivery consuming the finite budget.
-	for i := 0; i < 3; i++ {
-		select {
-		case <-msg.progress:
-		case <-time.After(time.Second):
-			t.Fatal("timed out waiting for InProgress heartbeat")
+	poison := errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+		&graph.StateContractError{Reason: graph.GraphStateReasonNoncanonicalEntityID})
+	var lineageWrites atomic.Int32
+	c.testLineageWriteHook = func(_ context.Context, loopID string, _ map[string]any) error {
+		lineageWrites.Add(1)
+		if loopID == "loop-poisoned" {
+			return poison
 		}
-	}
-	if msg.acked.Load() {
-		t.Fatal("reset-required task was ACKed during operator repair")
-	}
-	if msg.naked.Load() || msg.nakCount.Load() != 0 {
-		t.Fatal("reset-required task was NAKed during operator repair and consumed delivery budget")
+		return nil
 	}
 
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("consumer cancellation error = %v, want context.Canceled", err)
+	consumeTask := func(loopID, taskID string) *inputAckMsg {
+		t.Helper()
+		task := validLineageTask(taskID)
+		task.LoopID = loopID
+		task.Metadata = map[string]any{
+			agentic.MetadataKeyRelatedLoops: map[string]any{"researcher": "upstream-loop"},
 		}
-	case <-time.After(time.Second):
-		t.Fatal("consumer did not release held task on cancellation")
+		envelope := message.NewBaseMessage(task.Schema(), &task, "test")
+		data, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := &inputAckMsg{data: data}
+		if err := consumeLongRunningInput(context.Background(), msg, time.Hour,
+			c.taskInputHandler(time.Minute)); err != nil {
+			t.Fatalf("consume(%s) error = %v, want nil", taskID, err)
+		}
+		return msg
 	}
-	if msg.acked.Load() {
-		t.Fatal("reset-required task was ACKed on cancellation")
+
+	// Task 1: touches the poisoned entity. The loop fails terminally with
+	// the typed error; the delivery is ACKed per the loop-failure
+	// convention (never held in flight, never Term'd as producer fault).
+	first := consumeTask("loop-poisoned", "task-poisoned-entity")
+	if !first.acked.Load() || first.naked.Load() || first.terminated.Load() {
+		t.Fatalf("poisoned-loop delivery ack state: ack=%v nak=%v term=%v, want ACK only",
+			first.acked.Load(), first.naked.Load(), first.terminated.Load())
 	}
-	if !msg.naked.Load() || msg.nakCount.Load() != 1 || time.Duration(msg.nakDelay.Load()) != 5*time.Second {
-		t.Fatalf("cancellation NAK count=%d delay=%s, want exactly one 5s delayed NAK", msg.nakCount.Load(), time.Duration(msg.nakDelay.Load()))
+	failed, err := c.handler.GetLoop("loop-poisoned")
+	if err != nil {
+		t.Fatalf("GetLoop(loop-poisoned) error = %v", err)
+	}
+	if failed.State != agentic.LoopStateFailed || failed.Outcome != agentic.OutcomeFailed {
+		t.Fatalf("poisoned loop state=%q outcome=%q, want terminal failure", failed.State, failed.Outcome)
+	}
+	if !strings.Contains(failed.Error, graph.ErrorCodeGraphStateResetRequired) {
+		t.Fatalf("poisoned loop Error = %q, want the typed %q code preserved", failed.Error, graph.ErrorCodeGraphStateResetRequired)
+	}
+
+	// Task 2: a different loop over a different entity processes normally —
+	// task intake was never wedged by the first loop's poison.
+	second := consumeTask("loop-healthy", "task-healthy-entity")
+	if !second.acked.Load() || second.naked.Load() || second.terminated.Load() {
+		t.Fatalf("healthy-loop delivery ack state: ack=%v nak=%v term=%v, want ACK only",
+			second.acked.Load(), second.naked.Load(), second.terminated.Load())
+	}
+	healthy, err := c.handler.GetLoop("loop-healthy")
+	if err != nil {
+		t.Fatalf("GetLoop(loop-healthy) error = %v", err)
+	}
+	if healthy.State == agentic.LoopStateFailed {
+		t.Fatalf("healthy loop state = %q, want non-failed active state", healthy.State)
+	}
+	if got := lineageWrites.Load(); got != 2 {
+		t.Fatalf("lineage writes = %d, want 2 (second task reached its graph write)", got)
+	}
+
+	// Health never degrades for this class: per-entity poison is a loop
+	// outcome, not a component condition.
+	if health := c.Health(); !health.Healthy || health.Status != "running" {
+		t.Fatalf("Health() = %#v, want healthy running after a poisoned loop", health)
 	}
 }
 
