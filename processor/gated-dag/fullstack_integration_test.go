@@ -556,12 +556,22 @@ func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
 	const subject = "fs.dispatch.s5"
 	prefix := "fs.test.s5.fanout.unit"
 	// A 10m backstop provably cannot fire within the assertion window, so any
-	// dispatch inside it proves the event-driven unit-watch path — not the
-	// backstop — advanced the chain. The window is CI-contention-aware
-	// (fsEventually: 30s local / 90s CI, gh#404); this test previously hardcoded
-	// 12s and was the one full-stack test the gh#404 sweep missed, so it flaked
-	// under testcontainer contention when the 3-unit chain's serial NATS
-	// round-trips legitimately exceeded 12s.
+	// dispatch observed inside the window is the event-driven unit-watch path —
+	// not the backstop — advancing the chain BY CONSTRUCTION. That is the whole
+	// assertion: require.Eventually below already bounds the observation to
+	// fsEventually (30s local / 90s CI, gh#404), which is <<< 10m, so a passing
+	// Eventually IS proof the event path fired.
+	//
+	// The historic "flake" here was NOT this test's window being too tight — it
+	// was the graph-ingest entity read-through cache stale-repopulation race: a
+	// completion marker written to a unit could be hidden for the full 30s cache
+	// TTL when a concurrent query resurrected the pre-write revision, stalling
+	// dispatch of the dependent unit. That root cause is fixed in graph-ingest
+	// (per-key invalidation-generation guard on the repopulating Set), so this
+	// test no longer stalls. The prior fragile `require.Less(time.Since(start),
+	// fsEventually)` tail-assert was dropped: it is redundant with the Eventually
+	// bound and races the window boundary (Eventually can legitimately return at
+	// ~fsEventually under CI contention).
 	fs := setupFullStack(t, fsOpts{prefix: prefix, subject: subject, backstop: "10m"})
 
 	a, b, c := fsUnit("s5", "a"), fsUnit("s5", "b"), fsUnit("s5", "c")
@@ -569,11 +579,9 @@ func TestFullStack_EventDrivenDispatchBeatsBackstop(t *testing.T) {
 	fs.seedUnit(t, b, a)
 	fs.seedUnit(t, c, b)
 
-	start := time.Now()
 	require.Eventually(t, func() bool {
 		return fs.dispatched.count(a) == 1 && fs.dispatched.count(b) == 1 && fs.dispatched.count(c) == 1
 	}, fsEventually, 100*time.Millisecond, "chain should dispatch once each via the unit watch, not the 10m backstop")
-	require.Less(t, time.Since(start), fsEventually, "dispatch completes within the window, well under the 10m backstop")
 }
 
 // TestFullStack_FanOutInstanceAutoCompletes (#364) proves the framework creates

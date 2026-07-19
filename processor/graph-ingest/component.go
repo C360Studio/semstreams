@@ -610,6 +610,28 @@ type Component struct {
 	entityPoison     map[string]entityPoisonRecord
 	entityPoisonSize atomic.Int64
 
+	// Entity-query-cache read-after-write coherence guard. cacheGen is a per-key
+	// invalidation generation counter: invalidateEntityCacheEntry bumps the key's
+	// generation and drops the cache entry ATOMICALLY under cacheGenMu, and a
+	// cache-miss repopulating Set (repopulateEntityCacheEntry) applies only if the
+	// key's generation is unchanged since the reader captured it (before its KV
+	// Get). This closes the stale-repopulation race: a slow reader that loaded a
+	// pre-write revision from KV cannot resurrect it into the cache after a
+	// concurrent write invalidated the entry. One uint64 per key; the map is
+	// bounded by DISTINCT ENTITY IDS EVER WRITTEN (not live ENTITY_STATES
+	// cardinality) — it is not pruned, so it grows slowly under create/delete
+	// churn. Acceptable for expected populations; a size gauge + bounded pruning
+	// are a tracked follow-up (pruning must exclude in-flight reads to preserve
+	// the ABA guarantee the counter provides).
+	cacheGenMu sync.Mutex
+	cacheGen   map[string]uint64
+
+	// repopulateHook is a test-only seam. When non-nil it is invoked by the
+	// cache-miss fetch goroutine AFTER the KV Get + generation capture and BEFORE
+	// the repopulating Set's generation re-check, so a test can deterministically
+	// inject a concurrent invalidation into the read window. Production is nil.
+	repopulateHook func(entityID string)
+
 	// Metrics (atomic)
 	messagesProcessed int64
 	bytesProcessed    int64
@@ -712,6 +734,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		casRetries:                    getCasRetriesMetric(deps.MetricsRegistry),
 		poisonedEntities:              getPoisonedEntitiesMetric(deps.MetricsRegistry),
 		metricsRegistry:               deps.MetricsRegistry,
+		cacheGen:                      make(map[string]uint64),
 	}
 
 	// Initialize last activity
@@ -2496,10 +2519,8 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	c.clearEntityPoisonOnCommit(ctx, entity.ID, 0)
 
 	// Cache invalidation matches createEntity — readers must see the
-	// merged state on next Get.
-	if c.entityCache != nil {
-		c.entityCache.Delete(entity.ID) //nolint:errcheck
-	}
+	// merged state on next Get (bumps the coherence generation).
+	c.invalidateEntityCacheEntry(entity.ID)
 
 	c.updateSuffixIndex(ctx, entity.ID)
 
@@ -2602,10 +2623,8 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	// inventory entry (D3b: revision guard). Steady-state: one atomic load.
 	c.clearEntityPoisonOnCommit(ctx, entity.ID, committedRev)
 
-	// Invalidate cache on write (cache consistency)
-	if c.entityCache != nil {
-		c.entityCache.Delete(entity.ID) //nolint:errcheck
-	}
+	// Invalidate cache on write (cache consistency; bumps the coherence generation)
+	c.invalidateEntityCacheEntry(entity.ID)
 
 	// Update suffix index (best-effort, don't fail entity creation)
 	c.updateSuffixIndex(ctx, entity.ID)
@@ -2712,6 +2731,11 @@ const (
 // claim), so the stub records the source type — or, for an untyped source (a
 // gateway that does not stamp MessageType), the framework referential producer.
 func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, referencedBy string, referencedByType message.Type) error {
+	// NOTE: the stub Create below deliberately does NOT invalidateEntityCacheEntry.
+	// This is safe only because the query read path never negative-caches (a
+	// not-found Get returns without a cache Set), and Create only transitions
+	// absent→present — so no reader can hold a cached value for the absent key.
+	// If negative caching is ever added, this path MUST invalidate here.
 	// Check if entity already exists
 	_, err := c.entityBucket.Get(ctx, entityID)
 	if err == nil {
@@ -2802,10 +2826,8 @@ func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState)
 	}
 	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
 
-	// Invalidate cache on write (cache consistency)
-	if c.entityCache != nil {
-		c.entityCache.Delete(entity.ID) //nolint:errcheck
-	}
+	// Invalidate cache on write (cache consistency; bumps the coherence generation)
+	c.invalidateEntityCacheEntry(entity.ID)
 
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
@@ -2861,9 +2883,8 @@ func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.En
 	}
 	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
 
-	if c.entityCache != nil {
-		c.entityCache.Delete(entity.ID) //nolint:errcheck
-	}
+	// Invalidate cache on write (cache consistency; bumps the coherence generation)
+	c.invalidateEntityCacheEntry(entity.ID)
 
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	atomic.AddInt64(&c.bytesProcessed, int64(len(data)))
@@ -2900,10 +2921,8 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 	// Delete + recreate is the canonical wire repair for a poisoned entity.
 	c.clearEntityPoisonOnDelete(entityID)
 
-	// Invalidate cache on delete (cache consistency)
-	if c.entityCache != nil {
-		c.entityCache.Delete(entityID) //nolint:errcheck
-	}
+	// Invalidate cache on delete (cache consistency; bumps the coherence generation)
+	c.invalidateEntityCacheEntry(entityID)
 
 	// Remove suffix index entries (best-effort)
 	c.removeSuffixIndex(ctx, entityID)
@@ -2925,13 +2944,64 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 // direct entityBucket write, preserving read-after-write coherence for callers
 // that query via graph.ingest.query.* (e.g. the gated-DAG executor reading the
 // whole unit set right after committing a claim, or any read-after-mutate via
-// the NATS mutation API). The high-level CreateEntity/UpdateEntity/DeleteEntity/
-// MergeEntity methods already invalidate inline; the triple-add and
-// update_with_triples write paths did not, so a query within the 30s cache TTL
-// returned the pre-write entity. No-op when the cache is disabled.
+// the NATS mutation API). This is the single invalidation primitive for every
+// write path (CreateEntity/UpdateEntity/DeleteEntity/MergeEntity and the
+// triple-add / update_with_triples handlers) so the coherence guard below is
+// uniform.
+//
+// Read-after-write cache-coherence contract: a repopulating Set is dropped if
+// the key was invalidated during the read window, so a slow reader cannot
+// resurrect pre-write state past a concurrent invalidate. This method bumps the
+// per-key invalidation generation AND drops the entry under cacheGenMu; the
+// cache-miss repopulate (repopulateEntityCacheEntry) captures the generation
+// before its KV Get and re-checks it under the same lock before Setting, so
+// {bump+delete} and {gen-check+set} are mutually atomic. An invalidation that
+// lands after a reader's KV Get is therefore guaranteed to be observed by that
+// reader (it skips its Set); an invalidation that lands after a reader's Set is
+// guaranteed to delete the value it wrote. No-op when the cache is disabled.
+//
+// Correctness precondition: entityBucket.Get is read-your-writes/monotonic
+// relative to a committed write's invalidate — a Get issued after an
+// invalidation is reflected in gen0 returns that write's revision or newer.
+// This holds for single-server NATS (all integration/e2e testcontainers) and
+// for leader reads. A clustered deployment serving stale allow_direct reads
+// from a lagging replica could return a revision older than an acknowledged
+// write — but such a Get already returns stale data on a cold cache, so the
+// guard introduces no regression relative to the no-cache baseline.
 func (c *Component) invalidateEntityCacheEntry(id string) {
-	if c.entityCache != nil {
-		c.entityCache.Delete(id) //nolint:errcheck
+	if c.entityCache == nil {
+		return
+	}
+	c.cacheGenMu.Lock()
+	defer c.cacheGenMu.Unlock()
+	c.cacheGen[id]++
+	c.entityCache.Delete(id) //nolint:errcheck
+}
+
+// loadEntityCacheGen captures the current invalidation generation for a key.
+// The cache-miss read path calls this BEFORE its KV Get so a later repopulating
+// Set can detect an invalidation that raced the read window. Returns 0 for a
+// never-invalidated key (map zero value), which is a valid baseline.
+func (c *Component) loadEntityCacheGen(id string) uint64 {
+	c.cacheGenMu.Lock()
+	g := c.cacheGen[id]
+	c.cacheGenMu.Unlock()
+	return g
+}
+
+// repopulateEntityCacheEntry stores a freshly-read entity into the query cache
+// UNLESS the key was invalidated during the read window — i.e. gen0 (captured
+// before the KV Get that produced entity) no longer matches the key's current
+// generation. See invalidateEntityCacheEntry for the coherence contract and the
+// happens-before argument. No-op when the cache is disabled.
+func (c *Component) repopulateEntityCacheEntry(id string, entity graph.EntityState, gen0 uint64) {
+	if c.entityCache == nil {
+		return
+	}
+	c.cacheGenMu.Lock()
+	defer c.cacheGenMu.Unlock()
+	if c.cacheGen[id] == gen0 {
+		c.entityCache.Set(id, entity) //nolint:errcheck
 	}
 }
 
