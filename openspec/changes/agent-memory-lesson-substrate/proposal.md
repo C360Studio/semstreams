@@ -8,77 +8,87 @@ That edge has been built twice at product level (semdragon guild lessons, off by
 semspec lesson-decomposer/curator, stranded) — the classic unnamed-framework-responsibility
 signal — while the framework's episodic raw material expires on 24h/7d retention cliffs before
 anything learns from it. ADR-080 records the decisions (push-based delivery, evidence-cited
-lessons, ops as debrief officer, align-by-annotation vocabulary posture); this change carries
-the mechanics. Now, because the contracts being set (predicate vocabulary, facet shape,
-retention interaction) are cheap in beta and expensive after 1.0, and semdragon's in-flight
-rules migration will otherwise produce a third per-product reinvention.
+lessons with a gated lifecycle, ops as debrief officer, align-by-annotation vocabulary
+posture); this change carries the mechanics. Now, because the contracts being set (predicate
+vocabulary, identity scheme, lifecycle, injection bounds) are cheap in beta and expensive
+after 1.0, and semdragon's in-flight rules migration will otherwise produce a third
+per-product reinvention. The 5-lens adversarial review has run; all findings are folded
+(`adversarial-review.md`).
 
 ## What Changes
 
 - New `lesson.*` predicate family in `vocabulary/agentic` (beside `ops.diagnosis.*`):
-  evidence-citation, storage/injection split (rich detail + bounded injection form),
-  provenance, and retirement metadata. PROV-O `StandardIRI` annotations where terms align;
-  PROV-O constants added to `vocabulary/standards.go` (annotation only, no RDF machinery).
+  evidence citations, `detail`/`injection_form` split, typed `applies_to` scope keys
+  (`id:`/`tag:` grammar), open `category`, enums for polarity/severity/status, lifecycle
+  fields. `lesson.evidence` registers with `WithIRI(vocabulary.ProvWasDerivedFrom)` — the
+  PROV-O constants already exist in `vocabulary/standards.go`; this is annotation only.
 - New `emit_lesson` tool executor in `processor/agentic-tools` — sibling of `emit_diagnosis`
-  on the ADR-027 ops seam. Evidence-free lessons are rejected at the writer. Lessons mint
-  first-class graph entities via the canonical mutation API (graph-ingest remains sole
-  ENTITY_STATES writer; semantic envelope per ADR-055).
-- Lessons delivery via push only: a fusion facet (`want:[lessons]`, relevance-filtered,
-  bounded top-K of injection forms) consumable at prompt/brief-assembly seams. No
-  agent-invoked lesson search tool exists or will.
-- Ops reference flow (`configs/flows/ops-agent.json`) and the ops e2e scenario extend to
-  exercise emit → store → facet-retrieve round-trip (first in-repo consumer; complete-system
-  PR discipline).
-- Removal: `processor/agentic-memory` (orphaned — `Register()` never called, no loadable
-  config references it, extraction path dormant per gh#317). Not **BREAKING**: no binary can
-  currently instantiate it. Its post-compaction hydration seam is recorded as a future fusion
-  consumer, not carried by this change.
-- Episodic retention interaction made explicit: debrief fires event-driven at chain-terminal
-  so distillation happens while full loop content (AGENT_LOOPS 24h, `agent.complete.*` 7d)
-  still exists. Retention-tier changes themselves stay in the gh#527 (ADR-073) track.
+  on the ADR-027 ops seam. Writer gates: ≥1 well-formed evidence entity ID, injection-form
+  byte bound (reject, never truncate), ≥1 typed `applies_to` key, per-loop emission cap.
+  **Content-derived entity identity** (UUIDv5) makes re-emission idempotent. Lessons mint
+  `{org}.{platform}.agent.lesson.record.{id}` via the canonical mutation API, born
+  `status=proposed`.
+- **Gated lifecycle**: only `active` lessons are injectable. Promotion (with evidence-existence
+  resolution) and retirement ride the canonical replace lane (`update_with_triples` via rule
+  `replace_owned` or a product curation writer); auto-promotion is explicit product config.
+- **v1 delivery = brief-assembly injection** (framework-owned, deterministic, bounded): at
+  loop dispatch, active lessons matching the loop's scope are rendered into the brief
+  (severity → stored emit-timestamp → ID ordering; K ≤ 25 default 10; total-byte bound;
+  entity IDs included for governed dereference). The `want:[lessons]` fusion facet is
+  **deferred** to the change that gives fusion a serving surface (the lens Engine currently
+  has no production consumer); it will reuse this matcher.
+- Ops reference flow (`configs/flows/ops-agent.json` + `-test.json`) and the ops e2e extend
+  to the full loop: emit → proposed entity → promote → next loop's brief carries the
+  injection form (hard-fail assertions; first in-repo consumer).
+- Removal: `processor/agentic-memory` (verified orphan — factory never registered; no
+  loadable config carries a live block; sweep enumeration corrected per review) plus the dead
+  context-event publish leg in `processor/agentic-loop/component.go` that fed it, and the
+  stale component-table/doc references. Not **BREAKING**: nothing can instantiate it.
+- Episodic retention interaction made explicit: debrief fires event-driven per loop
+  completion (chain-terminal triggering is product rule-pack work), so distillation happens
+  while full loop content (AGENT_LOOPS 24h, `agent.complete.*` 7d) still exists.
+  Retention-tier changes themselves stay in the gh#527 (ADR-073) track.
 
 ## Capabilities
 
 ### New Capabilities
 
-- `agentic-lessons`: the lesson artifact contract — `lesson.*` vocabulary and entity shape,
-  evidence-required write semantics via `emit_lesson` on the ops seam, injection-form bounds,
-  retirement metadata, and the push-only delivery rule (facet/brief injection; no agent
-  memory-search tools).
+- `agentic-lessons`: the lesson artifact contract — vocabulary and entity shape,
+  evidence-gated idempotent write via `emit_lesson` on the ops seam, the proposed→active→
+  retired lifecycle and its curation lane, and push-only bounded delivery at brief assembly
+  (no dedicated memory search tools).
 
 ### Modified Capabilities
 
-- `fusion`: adds the lessons facet — declaration-driven retrieval of bounded, relevance-ranked
-  lesson injection forms as a governed facet (same admission discipline as the graph facet,
-  gh#533: declaration-driven classification, absent-not-fabricated evidence).
+(none — the fusion facet delta was removed from this change by the adversarial review; it
+returns with the change that makes fusion servable)
 
 ## Impact
 
-- Code: `vocabulary/agentic` (+`vocabulary/standards.go` PROV-O constants),
-  `processor/agentic-tools` (new executor + registration), `pkg/fusion` (lessons facet),
-  `configs/flows/ops-agent.json` + `test/e2e/scenarios/ops`, removal of
-  `processor/agentic-memory`.
-- Schema/registry: new payload/predicate registrations → `task schema:generate` no-drift gate.
-- Consumers: **semteams** first (re-wires its dormant ops pack against the primitive; fixes
-  its stale `reviewer-qa` trigger on adoption); **semdragon** migrates guild-lessons onto it
-  during its rules migration; **semsource** is a candidate second producer/consumer
-  (extraction-correction lessons) but is not required by this change; semspec/semmem are
-  mined for design and retired, never revived.
-- Relationship to in-flight work: complements gh#527 retention Increment-0 (this change
-  defines *what must outlive* the episodic cliffs; #527 defines the tiers); no overlap with
-  the gh#161/#576 breaking wave.
+- Code: `vocabulary/agentic` (predicates + registration), `processor/agentic-tools` (new
+  executor + registration), `processor/agentic-loop` (brief-assembly injection step; prune
+  dead context-event publish leg), `configs/flows/ops-agent*.json`,
+  `test/e2e/scenarios/ops`, removal of `processor/agentic-memory`, docs/component tables.
+- Consumers: **semteams** first (re-wires its dormant ops pack; chain-terminal trigger rules;
+  a tracked upstream issue is filed by this change); **semdragon** migrates guild-lessons
+  during its rules migration; **semsource** is a candidate later producer (extraction-
+  correction lessons). semspec/semmem are mined for design and retired, never revived.
+- Relationship to in-flight work: complements gh#527 retention Increment-0; no overlap with
+  the gh#161/#576 breaking wave; the deferred fusion facet lands with future fusion-serving
+  work.
 
 ## Non-goals
 
-- No agent-invoked memory query/search tools (the retired `search_graph`/`query_*` friction
-  path; ADR-080 decision 2 binds).
+- No dedicated agent-invoked memory search/query tools (ADR-080 decision 2; generic
+  graph-read tools remain per-role-allowlisted, worker roles excluded by convention).
 - No separate memory store or subsystem — the graph + KV twofer is the memory store.
-- No automated pattern-mining/distillation beyond evidence-cited lessons through the ops
-  quality gate (unproven industry-wide; revisit on evidence).
-- No product semantics: lesson categories, curation policy, and which briefs receive which
-  lessons belong to products (semteams/semdragon/semsource), not the framework.
-- No revival of `processor/agentic-memory` or its LLM extraction path; no re-implementation
-  of its hydration component (seam noted for a future fusion consumer).
-- No third-party memory schema adoption (Mem0/Letta/Zep/POLE+O — none is a standard); no
-  full RDF/PROV machinery — `StandardIRI` annotations only.
-- No semteams/semdragon repo changes in this change (their adoption is product-side work).
+- No `want:[lessons]` fusion facet in this change (deferred with the fusion serving surface;
+  the matcher ships here and is reused there).
+- No ungated injection: no lesson reaches a brief without passing the promotion gate.
+- No automated pattern-mining beyond evidence-cited lessons through the ops quality gate.
+- No framework-owned category taxonomy (`lesson.category` is open; taxonomies are product
+  vocabulary), no product curation policies, no chain-terminal trigger rules (product
+  rule-pack work), no semteams/semdragon repo changes.
+- No revival of `processor/agentic-memory` or its LLM extraction path.
+- No third-party memory schema adoption; no RDF/PROV machinery beyond `StandardIRI`
+  annotations.
