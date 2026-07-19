@@ -25,9 +25,19 @@ type fakeGraph struct {
 	neighborsErr error
 
 	lastResolve fusion.ResolveQuery // captures the most recent Resolve args
+
+	// statusFn, when set, overrides status/statusErr per call (1-based call
+	// number) — the graph facet's ViewRevision re-sample needs a fake whose
+	// second Status answer differs from (or fails after) the first.
+	statusFn    func(call int) (fusion.IndexStatus, error)
+	statusCalls int
 }
 
 func (g *fakeGraph) Status(context.Context) (fusion.IndexStatus, error) {
+	g.statusCalls++
+	if g.statusFn != nil {
+		return g.statusFn(g.statusCalls)
+	}
 	return g.status, g.statusErr
 }
 func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]string, error) {

@@ -23,6 +23,7 @@ const (
 	WantRelations Want = "relations" // callers/callees, links/sections
 	WantPaths     Want = "paths"     // bounded outgoing relation paths from the seeds
 	WantImpact    Want = "impact"    // transitive reverse-relation closure of the seeds
+	WantGraph     Want = "graph"     // lossless structured projection: typed facts + directed edges + evidence
 )
 
 // Budget bounds a response. Zero fields take engine defaults.
@@ -126,17 +127,24 @@ type Miss struct {
 }
 
 // Response is the fused answer. Nodes is the payload; Index and Provenance are
-// the honesty envelope. Paths and Impact are optional facets, present only when
-// the request Wants them (WantPaths / WantImpact).
+// the honesty envelope. Paths, Impact, and Graph are optional facets, present
+// only when the request Wants them (WantPaths / WantImpact / WantGraph).
 type Response struct {
-	Index           IndexStatus `json:"index"`
-	Provenance      Provenance  `json:"provenance"`
-	Nodes           []Node      `json:"nodes,omitempty"`
-	Paths           []Path      `json:"paths,omitempty"`
-	Impact          *Impact     `json:"impact,omitempty"`
-	Misses          []Miss      `json:"misses,omitempty"`
-	Truncated       bool        `json:"truncated"`
-	ContractVersion string      `json:"contract_version"`
+	Index      IndexStatus `json:"index"`
+	Provenance Provenance  `json:"provenance"`
+	Nodes      []Node      `json:"nodes,omitempty"`
+	Paths      []Path      `json:"paths,omitempty"`
+	Impact     *Impact     `json:"impact,omitempty"`
+	// Graph is the structured graph projection (WantGraph): typed property
+	// facts, explicit directed edges, and verbatim evidence, with its own caps
+	// and view-revision contract. Its truncation metadata is self-contained —
+	// graph-facet truncation NEVER sets the top-level Truncated bit, and a
+	// request without the graph want omits the field entirely (the v1 wire
+	// shape is unchanged for non-requesting callers).
+	Graph           *GraphProjection `json:"graph,omitempty"`
+	Misses          []Miss           `json:"misses,omitempty"`
+	Truncated       bool             `json:"truncated"`
+	ContractVersion string           `json:"contract_version"`
 }
 
 const (
