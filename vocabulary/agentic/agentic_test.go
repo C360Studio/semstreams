@@ -71,6 +71,7 @@ func TestPredicateFormat(t *testing.T) {
 		agentic.ModelRateLimit,
 		// Loop
 		agentic.LoopOutcome,
+		agentic.LoopTerminalReason,
 		agentic.LoopRole,
 		agentic.LoopModelUsed,
 		agentic.LoopIterations,
@@ -331,6 +332,7 @@ func TestLoopPredicatesRegistered(t *testing.T) {
 		dataType  string
 	}{
 		{"LoopOutcome", agentic.LoopOutcome, "string"},
+		{"LoopTerminalReason", agentic.LoopTerminalReason, "string"},
 		{"LoopRole", agentic.LoopRole, "string"},
 		{"LoopModelUsed", agentic.LoopModelUsed, "string"},
 		{"LoopIterations", agentic.LoopIterations, "int"},

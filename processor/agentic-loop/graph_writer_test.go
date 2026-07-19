@@ -1189,3 +1189,46 @@ func TestWriteLineageTriplesPropagatesTypedPreflightFailureBeforeIO(t *testing.T
 		t.Fatalf("WriteLineageTriples error = %v, want typed invalid rejection", err)
 	}
 }
+
+// TestBuildLoopFailureTriples_TerminalReasonDistinguishesFailureClasses pins
+// the gh#569 acceptance: budget exhaustion and a transient model error both
+// stamp outcome="failed" but MUST carry distinct terminal-reason facts so a
+// rule can route on WHY (escalate vs retry). An event with no classified
+// reason stamps no terminal-reason triple at all.
+func TestBuildLoopFailureTriples_TerminalReasonDistinguishesFailureClasses(t *testing.T) {
+	loopEntityID := "acme.ops.agent.agentic-loop.execution.loopReason"
+
+	failedWith := func(reason string) []message.Triple {
+		return buildLoopFailureTriples(loopEntityID, &agentic.LoopFailedEvent{
+			LoopID:   "loopReason",
+			Outcome:  "failed",
+			Reason:   reason,
+			FailedAt: time.Now(),
+		}, "", 0)
+	}
+
+	exhausted := failedWith("max_iterations")
+	if got := objectFor(exhausted, agvocab.LoopTerminalReason); got != "max_iterations" {
+		t.Errorf("%s after budget exhaustion: got %v, want max_iterations", agvocab.LoopTerminalReason, got)
+	}
+
+	transient := failedWith("model_error")
+	if got := objectFor(transient, agvocab.LoopTerminalReason); got != "model_error" {
+		t.Errorf("%s after transient model error: got %v, want model_error", agvocab.LoopTerminalReason, got)
+	}
+
+	// The two failure classes must be distinguishable at the fact level —
+	// the whole point of gh#569.
+	if objectFor(exhausted, agvocab.LoopTerminalReason) == objectFor(transient, agvocab.LoopTerminalReason) {
+		t.Error("exhaustion and model-error failures carry identical terminal-reason facts")
+	}
+	// Outcome alone must NOT distinguish them (that's the gap being closed).
+	if objectFor(exhausted, agvocab.LoopOutcome) != objectFor(transient, agvocab.LoopOutcome) {
+		t.Error("fixture drift: both classes should stamp the same outcome value")
+	}
+
+	unclassified := failedWith("")
+	if predicateSet(unclassified)[agvocab.LoopTerminalReason] {
+		t.Errorf("%s must be absent when the event carries no classified reason", agvocab.LoopTerminalReason)
+	}
+}

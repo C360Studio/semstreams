@@ -385,6 +385,10 @@ func registerLoopPredicates() {
 		vocabulary.WithDescription("Terminal outcome of the loop execution (success, failed, cancelled)"),
 		vocabulary.WithDataType("string"))
 
+	vocabulary.Register(LoopTerminalReason,
+		vocabulary.WithDescription("Classified reason for a failed loop's terminal outcome (max_iterations, model_error, handler_error, graph_state_reset_required); absent on success"),
+		vocabulary.WithDataType("string"))
+
 	vocabulary.Register(LoopRole,
 		vocabulary.WithDescription("Role used during this loop execution"),
 		vocabulary.WithDataType("string"))
