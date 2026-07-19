@@ -390,42 +390,51 @@ func (rp *Processor) SetProjectionOwnerToken(token ownership.OwnerToken) {
 	rp.projectionOwnerToken = token
 }
 
-// Health returns current health status
+// Health returns current health status. Pure getter: the derived fields
+// (LastCheck, ErrorCount, Uptime) are computed into a local copy — mutating
+// the shared rp.health cache here raced under the read lock, which admits
+// concurrent holders (gh#566: the ComponentManager health-publish loop and
+// any health query call this concurrently).
 func (rp *Processor) Health() component.HealthStatus {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
 
-	rp.health.LastCheck = time.Now()
-	rp.health.ErrorCount = int(atomic.LoadInt64(&rp.errorCount))
+	health := rp.health
+	health.LastCheck = time.Now()
+	health.ErrorCount = int(atomic.LoadInt64(&rp.errorCount))
 	if !rp.startTime.IsZero() {
-		rp.health.Uptime = time.Since(rp.startTime)
+		health.Uptime = time.Since(rp.startTime)
 	}
 
-	return rp.health
+	return health
 }
 
-// DataFlow returns current data flow metrics
+// DataFlow returns current data flow metrics. Pure getter for the same
+// gh#566 reason as Health: derived rates land in a local copy, never the
+// shared rp.flowMetrics cache.
 func (rp *Processor) DataFlow() component.FlowMetrics {
 	rp.mu.RLock()
 	defer rp.mu.RUnlock()
+
+	metrics := rp.flowMetrics
 
 	// Calculate messages per second based on recent activity
 	evaluated := atomic.LoadInt64(&rp.messagesEvaluated)
 	if !rp.startTime.IsZero() && evaluated > 0 {
 		duration := time.Since(rp.startTime).Seconds()
 		if duration > 0 {
-			rp.flowMetrics.MessagesPerSecond = float64(evaluated) / duration
+			metrics.MessagesPerSecond = float64(evaluated) / duration
 		}
 	}
 
 	// Error rate calculation
 	if evaluated > 0 {
-		rp.flowMetrics.ErrorRate = float64(atomic.LoadInt64(&rp.errorCount)) / float64(evaluated)
+		metrics.ErrorRate = float64(atomic.LoadInt64(&rp.errorCount)) / float64(evaluated)
 	}
 
-	rp.flowMetrics.LastActivity = rp.lastActivity
+	metrics.LastActivity = rp.lastActivity
 
-	return rp.flowMetrics
+	return metrics
 }
 
 // Initialize loads rules and prepares the processor
