@@ -33,4 +33,4 @@
 - [x] 3.1 `go test -race ./pkg/fusion/...` unit + integration; vet; gofmt; schema no-drift;
   `task lint`
 - [x] 3.2 semstreams-reviewer pre-merge pass
-- [ ] 3.3 gh#533 reply: shape summary + acceptance mapping; rides the next tag
+- [x] 3.3 gh#533 reply: shape summary + acceptance mapping; rides the next tag
