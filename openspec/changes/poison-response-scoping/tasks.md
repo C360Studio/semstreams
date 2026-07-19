@@ -116,5 +116,6 @@
 - [x] 8.3 gh#562 reply: three-watcher localization presented as OUR inference on their
   measurement (not their conclusion), the consumer-report discriminator, candidate build
   offered for the beta.146-vs-candidate A/B
-- [ ] 8.4 After semboids A/B: record macro recovery on gh#562; any shortfall now indicts a
-  non-watcher contributor — file separately, do not widen this change
+- [x] 8.4 After semboids A/B: record macro recovery on gh#562; any shortfall now indicts a
+  non-watcher contributor — file separately, do not widen this change (recovery CONFIRMED on
+  their rig; recorded on gh#562 with tag v1.0.0-beta.152; no residual to file)
