@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/processor/agentic-loop/lessonmatch"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/types"
 )
@@ -113,6 +115,16 @@ type MessageHandler struct {
 	// per-iteration todo block — fragments and trajectory still work.
 	// Set via SetTodoReader at component boot.
 	todoReader TodoReader
+
+	// lessonReader lists active lesson-record entities for brief-assembly
+	// injection (ADR-080 push-based memory). Nil disables lesson injection
+	// entirely (back-compat) — the assembled prompt is unchanged. Set via
+	// SetLessonReader at component boot.
+	lessonReader LessonReader
+
+	// metrics records brief-assembly observability (lesson matched-vs-included
+	// counts). Nil-safe: unset in unit tests, wired at component boot.
+	metrics *loopMetrics
 
 	// platform identifies the org/platform pair used to construct loop
 	// entity IDs. Empty Org/Platform skips the todo read silently —
@@ -214,6 +226,19 @@ func (h *MessageHandler) SetPersonaFragments(src PersonaFragmentSource) {
 // Passing nil disables the per-iteration todo block.
 func (h *MessageHandler) SetTodoReader(r TodoReader) {
 	h.todoReader = r
+}
+
+// SetLessonReader installs the reader the handler uses to list active
+// lesson-record entities for brief-assembly injection (ADR-080). Passing nil
+// disables lesson injection — the assembled system prompt is left unchanged.
+func (h *MessageHandler) SetLessonReader(r LessonReader) {
+	h.lessonReader = r
+}
+
+// SetMetrics installs the component metrics used to record brief-assembly
+// observability (lesson matched-vs-included counts). Nil-safe.
+func (h *MessageHandler) SetMetrics(m *loopMetrics) {
+	h.metrics = m
 }
 
 // SetPlatform installs the org/platform pair used to construct loop
@@ -604,6 +629,16 @@ func (h *MessageHandler) buildInitialMessagesWithPrompt(task TaskMessage, assemb
 // loop. Deletions take effect on registry rebuild (component restart);
 // add-then-update is the common runtime edit and works in-place.
 func (h *MessageHandler) assembleSystemPrompt(ctx context.Context, task TaskMessage) string {
+	base := h.assembleBasePrompt(ctx, task)
+	lessons := h.assembleLessonBlock(ctx, task)
+	return joinPromptSections(base, lessons)
+}
+
+// assembleBasePrompt composes the persona/fragment system prompt, or "" when
+// the registry is unset or produces no content. This is the pre-ADR-080
+// assembleSystemPrompt body, extracted so the lesson-injection step can be
+// appended around it.
+func (h *MessageHandler) assembleBasePrompt(ctx context.Context, task TaskMessage) string {
 	if h.promptRegistry == nil {
 		return ""
 	}
@@ -632,6 +667,56 @@ func (h *MessageHandler) assembleSystemPrompt(ctx context.Context, task TaskMess
 		Provider:      h.resolveProvider(task.Model),
 	}
 	return prompt.Assemble(h.promptRegistry, actx).SystemMessage
+}
+
+// assembleLessonBlock fetches active lessons, runs the deterministic matcher
+// over the loop's scope, and renders a bounded, observable injection block
+// (ADR-080 push-based memory). Returns "" when no reader is wired (back-compat),
+// the platform is unknown, the read fails (best-effort — availability over
+// consistency, mirroring the todo read), or no active lesson matches the scope.
+//
+// Ordering is replay-stable: the matcher sorts on the lesson's IMMUTABLE
+// agent.lesson.created-at birth triple, never a KV revision or re-stamped update
+// time, so the same scope over unchanged graph state — including after an
+// ADR-073 from-zero reingest — injects the same lessons in the same order.
+func (h *MessageHandler) assembleLessonBlock(ctx context.Context, task TaskMessage) string {
+	if h.lessonReader == nil || h.platform.Org == "" || h.platform.Platform == "" {
+		return ""
+	}
+	scope := deriveLoopScope(task)
+	if len(scope.Tags) == 0 && len(scope.EntityIDs) == 0 {
+		return "" // empty scope matches nothing — skip the read entirely
+	}
+
+	recordPrefix := agentic.AgentLessonRecordPrefix(h.platform.Org, h.platform.Platform)
+	candidates, err := h.lessonReader.ReadLessons(ctx, recordPrefix)
+	if err != nil {
+		h.logger.Warn("lesson read failed; brief carries no lesson block this dispatch",
+			slog.Any("error", err),
+			slog.String("task_id", task.TaskID))
+		return ""
+	}
+
+	res := lessonmatch.Match(candidates, scope, lessonmatch.Opts{})
+	if h.metrics != nil {
+		h.metrics.recordLessonInjection(res.MatchedCount, res.IncludedCount)
+	}
+	return renderLessonBlock(res)
+}
+
+// joinPromptSections concatenates non-empty prompt sections with a blank-line
+// separator. Preserves the pre-ADR-080 contract: an empty base with an empty
+// lesson block yields "" (buildInitialMessagesWithPrompt then omits the system
+// message). A lesson block is delivered even when the base is empty (a
+// registry-less deployment still gets lessons if a reader is wired).
+func joinPromptSections(sections ...string) string {
+	nonEmpty := make([]string, 0, len(sections))
+	for _, s := range sections {
+		if s != "" {
+			nonEmpty = append(nonEmpty, s)
+		}
+	}
+	return strings.Join(nonEmpty, "\n\n")
 }
 
 // toolNames projects ToolDefinition.Name out of a task's tool allowlist so
@@ -1436,6 +1521,20 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 		// reject, never widen — but the executor's fail-closed empty check
 		// would turn a malformed leftover into a hard reject).
 		delete(tc.Metadata, agentic.MetadataKeyAdvertisedTools)
+	}
+
+	// Stamp the emitting loop's ROLE (agentic.MetadataKeyAgentRole) authoritatively
+	// from the loop entity, so tool executors can DERIVE role attribution (e.g.
+	// emit_lesson's agent.lesson.observed-role) without the model supplying a
+	// spoofable identity argument (ADR-080: attribution is derived, not supplied).
+	// OVERWRITE when the loop has a role, DELETE when roleless — exactly like the
+	// run anchor above: the role is a framework fact, so a caller/model-injected
+	// value must never survive. Living at this shared seam it reaches every
+	// dispatch path (main, approval re-dispatch, queue dequeue).
+	if role := h.loopManager.GetRole(loopID); role != "" {
+		tc.Metadata[agentic.MetadataKeyAgentRole] = role
+	} else {
+		delete(tc.Metadata, agentic.MetadataKeyAgentRole)
 	}
 
 	toolMsg := message.NewBaseMessage(tc.Schema(), &tc, "agentic-loop")

@@ -113,12 +113,11 @@ refs. See `docs/concepts/14-orchestration-layers.md` and ADR-049.
 ### Agentic Components
 **Status:** Implemented
 
-LLM-powered autonomous task execution with six specialized components:
+LLM-powered autonomous task execution with five specialized components:
 - agentic-loop: State machine, orchestration, trajectory capture
 - agentic-model: OpenAI-compatible LLM endpoint caller
 - agentic-tools: Tool dispatch with executor registry
 - agentic-dispatch: User message routing, commands, permissions
-- agentic-memory: Graph-backed persistent memory
 - agentic-governance: PII filtering, rate limiting, content governance
 
 Current state: Fully operational. Run `task e2e:agentic` for validation.

@@ -190,7 +190,7 @@ func run() error {
 	defer ownershipShutdown()
 
 	ownerReg, staticOwnerHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger,
-		loopExecutionProjectionContract())
+		loopExecutionProjectionContract(), lessonRecordProjectionContract())
 	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
 	// ordered shutdown.
 	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
@@ -820,6 +820,28 @@ func loopExecutionProjectionContract() projection.Contract {
 				agvocab.LoopWorkflowStep,
 				agvocab.LoopUser,
 				agvocab.LoopDescription,
+			},
+		}},
+	}
+}
+
+// lessonRecordProjectionContract returns the graph projection contract for
+// agent-lesson-record entities (ADR-080 gated lifecycle). Mirrors
+// cmd/semstreams/main.go — see that function's godoc for the full rationale.
+// Declaring it in BOTH binaries is the CLAUDE.md half-migrated-binary guard: a
+// lesson lifecycle owned group present in only one main would silently break
+// promotion in the other.
+func lessonRecordProjectionContract() projection.Contract {
+	return projection.Contract{
+		Name:          "agentic.lesson-record",
+		MessageType:   agentic.AgentLessonMessageType().Key(),
+		EntityPattern: "*.*.agent.lesson.record.*",
+		Groups: []projection.PredicateGroup{{
+			Mode: ownership.ModeReplaceOwned,
+			Predicates: []string{
+				agvocab.LessonStatus,
+				agvocab.LessonSupersededBy,
+				agvocab.LessonRetiredAt,
 			},
 		}},
 	}

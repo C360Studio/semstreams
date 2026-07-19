@@ -54,6 +54,11 @@ type loopMetrics struct {
 	governanceVerdictDuration                *prometheus.HistogramVec
 	governanceVerdictTotal                   *prometheus.CounterVec
 	governanceSubscribeBeforePublishFailures prometheus.Counter
+
+	// Lesson brief-assembly injection (ADR-080). kind=matched counts every
+	// active lesson whose scope matched at dispatch; kind=included counts those
+	// that survived the K + byte bounds. matched > included ⇒ truncation.
+	lessonInjection *prometheus.CounterVec
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -243,6 +248,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Name:      "tool_call_governance_subscribe_before_publish_failures_total",
 				Help:      "Times a verdict arrived for a call_id that no longer had a waiter registered, signalling the subscribe-before-publish race regressing (ADR-039 race-fix option 3). Non-zero rate means investigate immediately — verdicts are being dropped silently.",
 			}),
+
+			lessonInjection: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "lesson_injection_total",
+				Help:      "Lessons pushed into agent briefs at assembly (ADR-080). kind=matched sums every active lesson whose scope matched the dispatched loop; kind=included sums those that survived the K + total-byte bounds. A sustained kind=matched greatly exceeding kind=included means briefs are truncating lessons — raise K/byte budget or tighten scope.",
+			}, []string{"kind"}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -271,6 +283,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterHistogramVec("agentic-loop", "tool_call_governance_verdict_duration_seconds", metrics.governanceVerdictDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_call_governance_verdict_total", metrics.governanceVerdictTotal)
 			_ = registry.RegisterCounter("agentic-loop", "tool_call_governance_subscribe_before_publish_failures_total", metrics.governanceSubscribeBeforePublishFailures)
+			_ = registry.RegisterCounterVec("agentic-loop", "lesson_injection_total", metrics.lessonInjection)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopsCreated)
@@ -297,9 +310,24 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictDuration)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceVerdictTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.governanceSubscribeBeforePublishFailures)
+			_ = prometheus.DefaultRegisterer.Register(metrics.lessonInjection)
 		}
 	})
 	return metrics
+}
+
+// recordLessonInjection records the brief-assembly matched-vs-included counts
+// for one dispatch (ADR-080). Called once per assembleLessonBlock even when
+// counts are zero is unnecessary; the handler only calls it when a reader ran.
+// A zero included with non-zero matched is itself a signal (byte budget too
+// tight), so both are always emitted.
+func (m *loopMetrics) recordLessonInjection(matched, included int) {
+	if matched > 0 {
+		m.lessonInjection.WithLabelValues("matched").Add(float64(matched))
+	}
+	if included > 0 {
+		m.lessonInjection.WithLabelValues("included").Add(float64(included))
+	}
 }
 
 // RecordGovernanceVerdict observes the verdict duration and

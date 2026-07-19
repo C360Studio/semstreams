@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -31,8 +32,10 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
 // OpsPersonaMarker is the unique substring planted in the ops persona fragment
@@ -56,6 +59,45 @@ const (
 	SeedLoop1ID = "c360.ops.test.loops.loop.seed-loop-001"
 	SeedLoop2ID = "c360.ops.test.loops.loop.seed-loop-002"
 	SeedLoop3ID = "c360.ops.test.loops.loop.seed-loop-003"
+)
+
+// Lesson round-trip constants (ADR-080 §5). These are the single source of truth
+// the mock preset's emit_lesson args and the scenario's assertions share, exactly
+// as the SeedLoop* IDs align the diagnosis evidence.
+const (
+	// OpsRoleTag is the ops-agent loop role. Both scenario loops dispatch with
+	// default_role: ops (ops-agent-test.json), so brief assembly derives scope
+	// tag:ops for the inject loop — which must equal LessonAppliesToTag.
+	OpsRoleTag = "ops"
+
+	// LessonAppliesToTag is the typed scope key the emitted lesson carries. It is
+	// tag:<ops role> so a subsequent ops loop's tag:ops scope matches it at brief
+	// assembly (lessonmatch tag equality). If this drifts from OpsRoleTag the
+	// inject stage cannot fire — they are deliberately kept in lockstep.
+	LessonAppliesToTag = "tag:" + OpsRoleTag
+
+	// LessonCategory is the emitted lesson's open category classifier.
+	LessonCategory = "retry-policy"
+
+	// LessonSummary is the emitted lesson's one-line gist (part of the lesson's
+	// content-derived identity, but the scenario discovers the minted entity ID
+	// from the graph rather than recomputing the UUIDv5, so it need not be kept
+	// byte-identical to any hashing input here).
+	LessonSummary = "Bound retries on network timeouts to avoid burning the iteration budget"
+
+	// LessonInjectionForm is the emitted lesson's bounded injection form (< 320
+	// bytes, no control bytes). It is the load-bearing marker for the inject
+	// stage: brief assembly renders it VERBATIM into a subsequent ops loop's
+	// system prompt, and the mock preset's final two tool-call entries match on
+	// this exact string, so they fire only when injection genuinely occurred.
+	LessonInjectionForm = "Avoid unbounded retries on network timeouts; cap backoff at 3 attempts."
+
+	// InjectionProofFinding is the emit_diagnosis finding text the inject loop
+	// leaves ONLY on the injection-form-gated branch. Its presence in the graph
+	// is the deterministic end-to-end proof that the promoted lesson reached a
+	// subsequent loop's brief. Kept distinct from every loop-1 finding so the
+	// scenario can isolate it.
+	InjectionProofFinding = "INJECTION-PROOF: promoted lesson injection form reached a subsequent ops loop brief"
 )
 
 // Config holds configuration for the ops scenario.
@@ -98,6 +140,12 @@ type Scenario struct {
 	// cleanup can remove them on a second run of the scenario.
 	seededLoopKeys   []string
 	seededEntityKeys []string
+
+	// lessonEntityID is the {org}.{platform}.agent.lesson.record.{uuid5} entity
+	// the emit loop mints. Discovered from the graph in verifyLessonProposed
+	// (the UUIDv5 is content-derived, so the scenario reads it back rather than
+	// recomputing it) and consumed by promoteLesson + injectAndVerifyLesson.
+	lessonEntityID string
 }
 
 // NewScenario constructs an ops scenario.
@@ -107,7 +155,7 @@ func NewScenario(obs *client.ObservabilityClient, config *Config) *Scenario {
 	}
 	return &Scenario{
 		name:        "ops",
-		description: "Verifies ADR-027 Phase 1 ops agent: observe loops → emit_diagnosis → triples via HTTP (PR4)",
+		description: "Verifies ADR-027 ops agent (observe loops → emit_diagnosis → triples) and the ADR-080 §5 lesson round-trip (emit_lesson → proposed → promote → brief injection)",
 		config:      config,
 		obs:         obs,
 	}
@@ -165,6 +213,10 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 		{"inject-user-message", s.injectUserMessage},
 		{"wait-for-loop-completion", s.waitForLoopCompletion},
 		{"verify-diagnoses-via-http", s.verifyDiagnosesViaHTTP},
+		// ADR-080 §5 lesson round-trip, gated at every step:
+		{"verify-lesson-proposed", s.verifyLessonProposed}, // emit → proposed entity queryable
+		{"promote-lesson", s.promoteLesson},                // operator promotion flips it active
+		{"inject-and-verify-lesson", s.injectAndVerifyLesson},
 	}
 
 	for _, stage := range stages {
@@ -246,6 +298,18 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 			emitDiagMarker)
 	}
 	result.Details["emit_diagnosis_registered"] = true
+
+	// Confirm emit_lesson registered at startup (ADR-080 §5, first in-repo
+	// consumer). A missing line means registerEmitLesson was dropped from
+	// RegisterBuiltins or the ops allowed_tools no longer grants emit_lesson.
+	const emitLessonMarker = "Registered emit_lesson tool"
+	if !strings.Contains(logs, emitLessonMarker) {
+		return fmt.Errorf(
+			"emit_lesson not registered at startup: %q not found in logs — "+
+				"check processor/agentic-tools/executors/register.go registerEmitLesson wiring",
+			emitLessonMarker)
+	}
+	result.Details["emit_lesson_registered"] = true
 
 	// Smoke-check the /graph/triples HTTP endpoint (PR4).
 	triplesURL := s.config.BaseURL + "/graph/triples?limit=1"
@@ -404,28 +468,42 @@ func (s *Scenario) seedSyntheticLoops(ctx context.Context, result *scenarios.Res
 	return nil
 }
 
-// injectUserMessage publishes a user.message asking the ops agent to analyse
-// the recent completed loops and emit diagnoses.
+// injectUserMessage publishes the emit-loop's user.message asking the ops agent
+// to analyse the recent completed loops, emit diagnoses, and distil a lesson.
 func (s *Scenario) injectUserMessage(ctx context.Context, result *scenarios.Result) error {
+	msgID, err := s.publishUserMessage(ctx,
+		"Analyse the recent completed loops, emit diagnoses for anything worth attention, "+
+			"and distil a durable lesson for future ops loops.")
+	if err != nil {
+		return err
+	}
+	result.Details["message_id"] = msgID
+	return nil
+}
+
+// publishUserMessage publishes one user.message with the given content and
+// returns its message ID. Shared by the emit loop and the later inject loop so
+// both dispatch through the identical production wire (agentic-dispatch →
+// agent.task → agentic-loop).
+func (s *Scenario) publishUserMessage(ctx context.Context, content string) (string, error) {
 	msg := agentic.UserMessage{
 		MessageID:   fmt.Sprintf("e2e-ops-%d", time.Now().UnixNano()),
 		ChannelType: "cli",
 		ChannelID:   "e2e-test",
 		UserID:      "e2e-test-user",
-		Content:     "Analyse the recent completed loops and emit diagnoses for anything worth attention.",
+		Content:     content,
 		Timestamp:   time.Now(),
 	}
 	envelope := message.NewBaseMessage(msg.Schema(), &msg, "e2e-ops")
 	data, err := json.Marshal(envelope)
 	if err != nil {
-		return fmt.Errorf("marshal user message: %w", err)
+		return "", fmt.Errorf("marshal user message: %w", err)
 	}
 	subject := fmt.Sprintf("user.message.cli.%s", msg.MessageID)
 	if err := s.nats.Publish(ctx, subject, data); err != nil {
-		return fmt.Errorf("publish to %s: %w", subject, err)
+		return "", fmt.Errorf("publish to %s: %w", subject, err)
 	}
-	result.Details["message_id"] = msg.MessageID
-	return nil
+	return msg.MessageID, nil
 }
 
 // waitForLoopCompletion polls AGENT_LOOPS KV for the ops loop's own COMPLETE_*
@@ -599,6 +677,212 @@ func (s *Scenario) assertConfidenceTriples(
 	}
 	result.Details["confidence_triples_valid"] = true
 	return nil
+}
+
+// verifyLessonProposed is stage 2 of the ADR-080 §5 round-trip: the emit loop's
+// emit_lesson call must have minted exactly one agent.lesson.record entity, born
+// status="proposed" and carrying the injection form + scope key the inject stage
+// later depends on. The minted UUIDv5 is content-derived, so the scenario reads
+// the entity ID back from the graph (via /graph/triples) rather than recomputing
+// the hash — the framework's strongest assertion class.
+func (s *Scenario) verifyLessonProposed(ctx context.Context, result *scenarios.Result) error {
+	statusTriples, err := s.waitForTriples(ctx, agvocab.LessonStatus, 1)
+	if err != nil {
+		return fmt.Errorf(
+			"agent.lesson.status triple did not appear: %w — check the emit_lesson mock entry "+
+				"and that emit_lesson is in the ops allowed_tools", err)
+	}
+	if len(statusTriples) != 1 {
+		return fmt.Errorf("expected exactly 1 agent.lesson.status triple, got %d (subjects: %v)",
+			len(statusTriples), tripleSubjects(statusTriples))
+	}
+
+	lesson := statusTriples[0]
+	parts := strings.Split(lesson.Subject, ".")
+	if len(parts) != 6 || parts[2] != "agent" || parts[3] != "lesson" || parts[4] != "record" {
+		return fmt.Errorf("lesson subject %q does not match *.*.agent.lesson.record.* (6 parts)", lesson.Subject)
+	}
+	if status := fmt.Sprintf("%v", lesson.Object); status != "proposed" {
+		return fmt.Errorf("lesson %q status = %q, want %q (lessons are born proposed)", lesson.Subject, status, "proposed")
+	}
+	s.lessonEntityID = lesson.Subject
+	result.Details["lesson_entity_id"] = lesson.Subject
+	result.Details["lesson_status_born"] = "proposed"
+
+	// The injection form + scope key + evidence must be persisted, since the
+	// inject stage and the promotion gate depend on them.
+	if err := s.assertLessonObject(ctx, agvocab.LessonInjectionForm, LessonInjectionForm); err != nil {
+		return err
+	}
+	if err := s.assertLessonObject(ctx, agvocab.LessonAppliesTo, LessonAppliesToTag); err != nil {
+		return err
+	}
+	return s.assertLessonObject(ctx, agvocab.LessonEvidence, SeedLoop1ID)
+}
+
+// promoteLesson is stage 3: acting as the operator, drive the validated
+// LessonCurator promotion path (NOT an agent tool). NewNATSLessonCurator writes
+// through graph.mutation.entity.update_with_triples after resolving that every
+// cited evidence entity exists — SeedLoop1ID is seeded, so the evidence-existence
+// gate passes and the status flips proposed → active via a single-valued replace.
+func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) error {
+	if s.lessonEntityID == "" {
+		return fmt.Errorf("no lesson entity id captured from verify-lesson-proposed")
+	}
+	curator := agentictools.NewNATSLessonCurator(s.nats.Client(), slog.Default())
+	if err := curator.Promote(ctx, s.lessonEntityID); err != nil {
+		return fmt.Errorf(
+			"promote lesson %s: %w — the evidence-existence gate must resolve the seeded evidence entity %s",
+			s.lessonEntityID, err, SeedLoop1ID)
+	}
+	result.Details["lesson_promoted"] = true
+
+	// Assert the flip landed and is single-valued: exactly one status triple for
+	// this lesson, now "active".
+	deadline := time.Now().Add(s.config.CompleteTimeout)
+	var lastSeen string
+	for time.Now().Before(deadline) {
+		triples, err := s.queryTriples(ctx, agvocab.LessonStatus, "")
+		if err == nil {
+			lastSeen = lessonStatusFor(triples, s.lessonEntityID)
+			if lastSeen == "active" {
+				result.Details["lesson_status_after_promotion"] = "active"
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf(
+		"lesson %s status did not flip to active within %v (last seen %q) — "+
+			"check LessonCurator.Promote and the lessonRecordProjectionContract replace lane",
+		s.lessonEntityID, s.config.CompleteTimeout, lastSeen)
+}
+
+// injectAndVerifyLesson is stage 4: dispatch a SUBSEQUENT ops loop and prove the
+// promoted lesson's injection form reached its brief. The loop's role is ops
+// (default_role: ops), so brief assembly derives scope tag:ops, which matches the
+// lesson's applies_to tag:ops. The mock's injection-form-gated emit_diagnosis
+// fires ONLY when that injection form is present in the assembled system prompt,
+// leaving InjectionProofFinding in the graph — the deterministic end-to-end proof.
+func (s *Scenario) injectAndVerifyLesson(ctx context.Context, result *scenarios.Result) error {
+	msgID, err := s.publishUserMessage(ctx,
+		"Analyse the latest completed loops and apply any durable guidance from prior work.")
+	if err != nil {
+		return fmt.Errorf("dispatch inject loop: %w", err)
+	}
+	result.Details["inject_loop_message_id"] = msgID
+
+	deadline := time.Now().Add(s.config.CompleteTimeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		findings, err := s.queryTriples(ctx, "ops.diagnosis.finding", "")
+		if err != nil {
+			lastErr = err
+		} else {
+			for _, t := range findings {
+				if fmt.Sprintf("%v", t.Object) == InjectionProofFinding {
+					result.Details["injection_proof_finding_subject"] = t.Subject
+					result.Details["lesson_injection_confirmed"] = true
+					return nil
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf(
+			"injection-proof finding did not appear within %v (last query error: %v)",
+			s.config.CompleteTimeout, lastErr)
+	}
+	return fmt.Errorf(
+		"injection-proof finding %q did not appear within %v — the promoted lesson's injection form "+
+			"did not reach the subsequent ops loop's brief; check agentic-loop brief-assembly injection "+
+			"(SetLessonReader wiring, lessonmatch tag:%s scope, active-status filter)",
+		InjectionProofFinding, s.config.CompleteTimeout, OpsRoleTag)
+}
+
+// waitForTriples polls /graph/triples for the given predicate until at least
+// wantAtLeast triples are returned or the completion deadline elapses. Returns
+// the last non-empty result seen; the caller asserts the exact shape.
+func (s *Scenario) waitForTriples(ctx context.Context, predicate string, wantAtLeast int) ([]message.Triple, error) {
+	deadline := time.Now().Add(s.config.CompleteTimeout)
+	var latest []message.Triple
+	var lastErr error
+	for time.Now().Before(deadline) {
+		triples, err := s.queryTriples(ctx, predicate, "")
+		if err != nil {
+			lastErr = err
+		} else {
+			latest = triples
+			if len(triples) >= wantAtLeast {
+				return triples, nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return latest, fmt.Errorf("within %v (last error: %w)", s.config.CompleteTimeout, lastErr)
+	}
+	return latest, fmt.Errorf("within %v: got %d, want >= %d", s.config.CompleteTimeout, len(latest), wantAtLeast)
+}
+
+// assertLessonObject asserts the captured lesson entity carries a triple with
+// the given predicate whose object equals want. Queries by predicate only (the
+// endpoint's subject filter is exercised elsewhere as predicate-only) and filters
+// the captured subject in Go.
+func (s *Scenario) assertLessonObject(ctx context.Context, predicate, want string) error {
+	triples, err := s.queryTriples(ctx, predicate, "")
+	if err != nil {
+		return fmt.Errorf("query %s: %w", predicate, err)
+	}
+	for _, t := range triples {
+		if t.Subject == s.lessonEntityID && fmt.Sprintf("%v", t.Object) == want {
+			return nil
+		}
+	}
+	return fmt.Errorf("lesson %s missing %s == %q (found: %v)", s.lessonEntityID, predicate, want, lessonObjectsFor(triples, s.lessonEntityID))
+}
+
+// tripleSubjects lists the subjects of a triple slice for diagnostics.
+func tripleSubjects(triples []message.Triple) []string {
+	out := make([]string, 0, len(triples))
+	for _, t := range triples {
+		out = append(out, t.Subject)
+	}
+	return out
+}
+
+// lessonStatusFor returns the object of the status triple for entityID, or "".
+func lessonStatusFor(triples []message.Triple, entityID string) string {
+	for _, t := range triples {
+		if t.Subject == entityID {
+			return fmt.Sprintf("%v", t.Object)
+		}
+	}
+	return ""
+}
+
+// lessonObjectsFor lists the objects of triples whose subject is entityID.
+func lessonObjectsFor(triples []message.Triple, entityID string) []string {
+	out := []string{}
+	for _, t := range triples {
+		if t.Subject == entityID {
+			out = append(out, fmt.Sprintf("%v", t.Object))
+		}
+	}
+	return out
 }
 
 // extractConfidence parses a triple Object value as a float64 confidence score.

@@ -827,6 +827,26 @@ func (m *LoopManager) GetRunID(loopID string) string {
 	return entity.RunID
 }
 
+// GetRole returns the role of a loop (LoopEntity.Role), or the empty string
+// when the loop is unknown or roleless. Read-only counterpart used by dispatch
+// to stamp the agent role onto outgoing ToolCall.Metadata
+// (agentic.MetadataKeyAgentRole) so tool executors can DERIVE role attribution
+// (e.g. emit_lesson's agent.lesson.observed-role) without the model supplying a
+// spoofable identity argument. Returns "" rather than an error so the
+// best-effort dispatch stamp stays branchless — an unknown loop and a roleless
+// loop are indistinguishable to the consumer (both mean "no role"), and
+// dispatch must never fail over it.
+func (m *LoopManager) GetRole(loopID string) string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return ""
+	}
+	return entity.Role
+}
+
 // SetDepth sets the depth tracking for a loop in the multi-agent hierarchy
 func (m *LoopManager) SetDepth(loopID string, depth, maxDepth int) error {
 	m.mu.Lock()

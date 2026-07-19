@@ -54,7 +54,6 @@ User Message ───────► agentic-dispatch ─────► agenti
 | **agentic-loop** | State machine, orchestrates model calls and tool execution |
 | **agentic-model** | Calls OpenAI-compatible LLM endpoints with retry logic |
 | **agentic-tools** | Dispatches tool calls to registered executors |
-| **agentic-memory** | Graph-backed persistent memory (optional) |
 | **agentic-governance** | PII filtering, rate limiting, content governance (optional) |
 
 ## Running Your First Agent

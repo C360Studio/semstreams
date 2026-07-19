@@ -154,36 +154,6 @@
         }
       }
     },
-    "agentic-memory": {
-      "type": "processor",
-      "name": "agentic-memory",
-      "enabled": true,
-      "config": {
-        "stream_name": "AGENT",
-        "extraction": {
-          "llm_assisted": {
-            "enabled": false,
-            "model": "fast",
-            "trigger_iteration_interval": 5,
-            "trigger_context_threshold": 0.8
-          }
-        },
-        "hydration": {
-          "pre_task": true,
-          "post_compaction": true
-        },
-        "ports": {
-          "inputs": [
-            {"name": "compaction_events", "type": "jetstream", "subject": "agent.context.compaction.*", "stream_name": "AGENT", "required": true},
-            {"name": "hydrate_requests", "type": "jetstream", "subject": "agent.hydrate.*", "stream_name": "AGENT", "required": true}
-          ],
-          "outputs": [
-            {"name": "injected_context", "type": "jetstream", "subject": "agent.context.injected.*", "stream_name": "AGENT"},
-            {"name": "graph_mutations", "type": "nats", "subject": "graph.mutation.*"}
-          ]
-        }
-      }
-    },
     "agentic-governance": {
       "type": "processor",
       "name": "agentic-governance",

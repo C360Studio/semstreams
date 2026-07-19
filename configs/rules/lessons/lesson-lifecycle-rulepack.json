@@ -1,0 +1,62 @@
+{
+  "_doc": "Reference rule-processor config for the agent-lesson gated lifecycle (ADR-080 / agent-memory-lesson-substrate). The PRIMARY promotion/retirement path is the operator/product-invoked LessonCurator writer in processor/agentic-tools/lesson_promotion.go (Promote — evidence-existence-gated proposed->active; Retire; Supersede). This config declares the lesson lifecycle OWNED projection group (agent.lesson.status / .superseded-by / .retired-at in replace-owned mode) and ONE example replace_owned rule showing the MECHANICAL primitive a product wires to its OWN trigger. The example is a BIRTH-TIME suppression policy: it flips a freshly-born PROPOSED lesson's status straight to retired; it does NOT retire an already-active lesson and does NOT mutate category (category is immutable/identity-bearing — the rule only READS it as a condition). See README.md for both lanes. The projection_contracts block MUST mirror lessonRecordProjectionContract() in cmd/semstreams/main.go and cmd/e2e-semstreams/main.go; the birth predicates (created-at, category, polarity, severity, summary, detail, injection-form, evidence, applies-to, observed-role) are IMMUTABLE and deliberately absent from the owned group.",
+  "pack_id": "lesson-lifecycle",
+  "enable_graph_integration": true,
+  "entity_watch_buckets": {
+    "ENTITY_STATES": ["*.*.agent.lesson.record.*"]
+  },
+  "ports": {
+    "inputs": [
+      {
+        "name": "entity_states",
+        "subject": "ENTITY_STATES.>",
+        "type": "kv-watch",
+        "bucket": "ENTITY_STATES",
+        "description": "Watch agent.lesson.record entity state changes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "graph.mutation",
+        "subject": "graph.mutation.*",
+        "type": "nats",
+        "description": "Lesson lifecycle replace_owned mutations (update_with_triples)"
+      }
+    ]
+  },
+  "projection_contracts": [
+    {
+      "name": "agentic.lesson-record",
+      "message_type": "agentic.agent_lesson.v1",
+      "entity_pattern": "*.*.agent.lesson.record.*",
+      "groups": [
+        {
+          "mode": "replace-owned",
+          "predicates": [
+            "agent.lesson.status",
+            "agent.lesson.superseded-by",
+            "agent.lesson.retired-at"
+          ]
+        }
+      ]
+    }
+  ],
+  "inline_rules": [
+    {
+      "id": "auto-retire-suppressed-lesson-at-birth",
+      "type": "expression",
+      "name": "Auto-retire suppressed lessons at birth",
+      "description": "BIRTH-TIME suppression primitive (mechanical replace_owned). Illustrative product convention: an ops persona tags lessons that merely document an already-fixed anti-pattern — worth recording for audit, never worth injecting — with the OPEN category 'deprecated'. This rule fires when such a lesson is BORN (its OWNED status is still 'proposed' AND category is 'deprecated') and flips agent.lesson.status straight to 'retired' in one atomic update_with_triples mutation (single-valued replace, never append). The lesson stays durable in the graph for audit; brief injection never sees it (only 'active' lessons inject) and a curator never has to triage it. HONEST SCOPE: (1) it acts at BIRTH on a PROPOSED lesson — it does NOT retire an already-active lesson; the PRIMARY validated retirement path is LessonCurator.Retire (processor/agentic-tools/lesson_promotion.go). (2) It does NOT mutate category — category is an immutable, identity-bearing birth predicate (part of content-identity); the rule READS it as a condition and WRITES only the owned status predicate. There is no supported lane that changes an existing lesson's category. 'deprecated' is an illustrative product convention, not a framework enum (agent.lesson.category is OPEN). replace_owned requires agent.lesson.status to be a LITERAL predicate inside this pack's replace-owned projection group (enforced HARD-FAIL at load); status is a condition field AND the owned write target, both reachable.",
+      "enabled": true,
+      "entity": {"pattern": "*.*.agent.lesson.record.*"},
+      "conditions": [
+        {"field": "agent.lesson.status", "operator": "eq", "value": "proposed"},
+        {"field": "agent.lesson.category", "operator": "eq", "value": "deprecated"}
+      ],
+      "logic": "and",
+      "on_enter": [
+        {"type": "replace_owned", "predicate": "agent.lesson.status", "object": "retired"}
+      ]
+    }
+  ]
+}

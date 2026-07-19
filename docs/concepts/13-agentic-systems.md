@@ -208,8 +208,14 @@ When context approaches the model's token limit:
 2. **GC** removes tool results older than N iterations
 3. **Hydration** recovers relevant context from the knowledge graph
 
-Context events are published to `agent.context.compaction.*` for observability and integration with
-agentic-memory.
+Context events are published to `agent.context.compaction.*` for observability — the OTel span
+collector (`output/otel`) records each as a span event on the active loop span.
+
+This context manager handles a loop's *own* conversation history. Cross-loop learning — recalling
+what happened in prior loops, or applying durable guidance distilled from them — is a separate
+substrate that pushes into `system_prompt` at dispatch rather than hydrating mid-loop. See
+[Agent Memory](32-agent-memory.md) for the episodic/semantic/procedural model and how lessons are
+injected.
 
 ### Trajectory
 
@@ -479,24 +485,6 @@ The rule processor can observe and react to agent activity, but **does not drive
 - Agents are autonomous once started
 - This is intentional — agents should reason, not be puppeted
 
-### Optional: agentic-memory Integration
-
-The agentic-memory component provides graph-backed persistent memory:
-
-```text
-┌────────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  agentic-loop  │────▶│ agentic-memory  │────▶│   Graph      │
-│                │     │                 │     │  Processor   │
-│                │◀────│                 │     │              │
-└────────────────┘     └─────────────────┘     └──────────────┘
-  context.compaction.*   graph.mutation.*
-                         context.injected.*
-```
-
-- **Fact extraction**: Before context compaction, extract key facts to the graph
-- **Context hydration**: Recover relevant context from the graph after compaction
-- **Pre-task preparation**: Inject relevant prior knowledge before a task starts
-
 ### Optional: Graph Query as Tool
 
 Agents can query the knowledge graph via a registered tool, enabling access to accumulated knowledge.
@@ -544,7 +532,7 @@ or reporting what it couldn't do.
 
 ## SemStreams Agentic Components
 
-SemStreams provides five components for building agentic systems:
+SemStreams provides four core components for building agentic systems:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -572,12 +560,6 @@ SemStreams provides five components for building agentic systems:
 │ │ (OpenAI-   │ │ Registry     │                                     │
 │ │ compatible)│ │ Allowlist    │                                     │
 │ └────────────┘ └──────────────┘                                     │
-│            │                                                         │
-│            ▼                                                         │
-│   ┌──────────────────┐                                              │
-│   │ agentic-memory   │  Graph-backed persistent memory              │
-│   │                  │  Context hydration, fact extraction          │
-│   └──────────────────┘                                              │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -604,13 +586,6 @@ user.message.* ────▶ agentic-dispatch ────▶ agent.task.*
                            │                     │        agentic-tools ──▶ Executors
                            │                     │              │
                            │                     │◀──── tool.result.*
-                           │                     │
-                           │                     ├─────▶ agent.context.compaction.*
-                           │                     │              │
-                           │                     │              ▼
-                           │                     │       agentic-memory ──▶ Graph
-                           │                     │              │
-                           │                     │◀──── agent.context.injected.*
                            │                     │
                            │◀──── agent.complete.*
                            │

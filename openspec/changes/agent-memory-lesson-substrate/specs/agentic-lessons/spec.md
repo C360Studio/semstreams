@@ -14,8 +14,8 @@ citations.
 - **WHEN** `emit_lesson` is called with summary, detail, injection form, category, polarity,
   severity, at least one typed `applies_to` key, and at least one well-formed evidence entity ID
 - **THEN** an `agent.lesson.record` entity is created via `create_with_triples` carrying
-  `lesson.*` triples, the evidence references, attribution to the emitting loop, and
-  `lesson.status` of `proposed`
+  `agent.lesson.*` triples, the evidence references, attribution to the emitting loop, and
+  `agent.lesson.status` of `proposed`
 
 #### Scenario: Re-emitting an identical lesson is idempotent
 - **WHEN** `emit_lesson` is called twice with identical category, scope keys, summary, and
@@ -35,8 +35,8 @@ bound, rather than truncating silently.
 
 #### Scenario: Injection form within bound is accepted
 - **WHEN** `emit_lesson` is called with an injection form at or under the bound
-- **THEN** the lesson persists both `lesson.detail` (unbounded prose) and
-  `lesson.injection_form` (bounded) as distinct predicates
+- **THEN** the lesson persists both `agent.lesson.detail` (unbounded prose) and
+  `agent.lesson.injection-form` (bounded) as distinct predicates
 
 #### Scenario: Oversized injection form is rejected instructively
 - **WHEN** `emit_lesson` is called with an injection form over the bound
@@ -74,11 +74,11 @@ the calling loop, and the executor MUST enforce a per-loop emission cap.
 
 #### Scenario: Attribution is derived, not supplied
 - **WHEN** `emit_lesson` executes inside a loop with execution context
-- **THEN** the lesson carries `lesson.observed_role` and an `agent.action.executed-by`
+- **THEN** the lesson carries `agent.lesson.observed-role` and an `agent.action.executed-by`
   backlink derived from the loop context, without the caller passing identity parameters
 
 ### Requirement: Lessons carry a gated lifecycle and only active lessons are injectable
-Lessons SHALL be created with `lesson.status` of `proposed`, and the framework MUST exclude
+Lessons SHALL be created with `agent.lesson.status` of `proposed`, and the framework MUST exclude
 any lesson whose status is not `active` from brief injection. Promotion and retirement SHALL
 be single-valued replace-not-append writes through the canonical `update_with_triples` lane
 (rule `replace_owned` or a product curation writer), promotion MUST resolve that every cited
@@ -95,38 +95,38 @@ audit.
 - **THEN** the promotion is refused and the lesson remains `proposed`
 
 #### Scenario: Retired lesson leaves the brief, not the graph
-- **WHEN** an active lesson's `lesson.status` is replaced with `retired`
+- **WHEN** an active lesson's `agent.lesson.status` is replaced with `retired`
 - **THEN** subsequent brief assembly excludes it and the entity remains queryable through the
   graph gateway
 
 ### Requirement: Lesson predicates split rule-matchable fields from rule-opaque authored text
-The vocabulary SHALL register `lesson.polarity`, `lesson.severity`, and `lesson.status` as
-closed-enum rule-matchable predicates and `lesson.category` as an OPEN rule-matchable
+The vocabulary SHALL register `agent.lesson.polarity`, `agent.lesson.severity`, and `agent.lesson.status` as
+closed-enum rule-matchable predicates and `agent.lesson.category` as an OPEN rule-matchable
 predicate carrying no framework-defined value set, and MUST register the LLM-authored text
-predicates (`lesson.summary`, `lesson.detail`, `lesson.injection_form`) with
+predicates (`agent.lesson.summary`, `agent.lesson.detail`, `agent.lesson.injection-form`) with
 `WithRuleOpaque(true)` per house convention.
 
 #### Scenario: A rule routes on lesson enums
-- **WHEN** a rule condition matches `lesson.severity == "critical"`
+- **WHEN** a rule condition matches `agent.lesson.severity == "critical"`
 - **THEN** the rule engine evaluates it against lesson entities like any rule-visible predicate
 
 #### Scenario: Category is open
 - **WHEN** a product emits a lesson with a category value the framework has never seen
-- **THEN** the write succeeds; no framework-side closed set constrains `lesson.category`
+- **THEN** the write succeeds; no framework-side closed set constrains `agent.lesson.category`
 
 #### Scenario: Authored text is opaque to rules
-- **WHEN** the registry metadata for `lesson.summary`, `lesson.detail`, and
-  `lesson.injection_form` is inspected
+- **WHEN** the registry metadata for `agent.lesson.summary`, `agent.lesson.detail`, and
+  `agent.lesson.injection-form` is inspected
 - **THEN** each is registered rule-opaque
 
 ### Requirement: Standards grounding is annotation-only PROV-O alignment
 Lesson predicates that are semantically equivalent to W3C PROV-O terms SHALL carry
 `StandardIRI` annotations using the existing constants in `vocabulary/standards.go` (at
-minimum `lesson.evidence` → `ProvWasDerivedFrom`), and the framework MUST NOT introduce RDF or
+minimum `agent.lesson.evidence` → `ProvWasDerivedFrom`), and the framework MUST NOT introduce RDF or
 external-schema machinery beyond these annotations.
 
 #### Scenario: Evidence predicate carries its PROV-O equivalence
-- **WHEN** the predicate registration for `lesson.evidence` is inspected
+- **WHEN** the predicate registration for `agent.lesson.evidence` is inspected
 - **THEN** its metadata carries the `ProvWasDerivedFrom` StandardIRI
 
 ### Requirement: Active lessons reach agents by bounded deterministic push at brief assembly

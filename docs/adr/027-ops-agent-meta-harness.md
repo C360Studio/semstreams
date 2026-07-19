@@ -4,7 +4,7 @@
 
 **Accepted (Phase 1)** — refreshed 2026-04-18 with ADR-028 framing; Phase 1 shipped 2026-04-20. The Meta-Harness pattern and the three-phase delivery remain correct; this refresh clarifies that the ops agent is **Layer 4 of the three-layer orchestration architecture** and reuses the coordinator's runtime composition tools, not a parallel control path.
 
-Phase 1 (read-only diagnosis) is complete: the ops agent observes completed loops and graph telemetry, emits structured findings as `ops.diagnosis.*` triples via the `emit_diagnosis` tool, and is e2e-verified via `task e2e:ops`. Phase 2 and Phase 3 remain proposed.
+Phase 1 (read-only diagnosis) is complete: the ops agent observes completed loops and graph telemetry, emits structured findings as `ops.diagnosis.*` triples via the `emit_diagnosis` tool, and is e2e-verified via `task e2e:ops`. Phase 2 and Phase 3 remain proposed. The ops seam now carries a second emission tool beside `emit_diagnosis`: `emit_lesson` (ADR-080), which distills completed work into evidence-cited, lifecycle-gated `agent.lesson.*` records injected back into future loops.
 
 ## Role within the three-layer orchestration architecture
 
@@ -228,6 +228,10 @@ with sequential evaluation is simpler and sufficient for the initial implementat
 - [ADR-028](028-orchestration-architecture.md) — names the ops agent as Layer 4 of the three-layer architecture and explains why it reuses the coordinator's runtime composition tooling.
 - [ADR-026](026-coordinator-agent-dynamic-flow-composition.md) — defines the runtime composition tools this ADR reuses (`create_rule`, `manage_flow`, etc.) and the safety model they route through.
 - [ADR-025](025-semteams-consolidation.md) — upstreamed the Phase 0a query-readiness tests from semteams that prove the graph can answer the nine operational queries the ops agent depends on.
+- [ADR-080](080-push-based-agent-memory-and-lesson-artifacts.md) — the ops seam's second terminal
+  tool, `emit_lesson`, distills completed work into evidence-cited, lifecycle-gated lessons pushed
+  back into future loops' briefs. See [Agent Memory](../concepts/32-agent-memory.md) for the full
+  model.
 
 ## Implementation sequencing
 

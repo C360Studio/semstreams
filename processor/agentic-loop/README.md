@@ -338,12 +338,14 @@ The loop integrates with the rules engine for orchestration:
 6. Editor receives architect's output as context
 ```
 
-## agentic-memory Integration
+## Context Event Consumers
 
-The loop publishes context events that agentic-memory consumes:
+The loop publishes context (compaction lifecycle) events onto the AGENT stream
+for observability. The OTel span collector (`output/otel`) consumes them via its
+`agent.>` subscription and records each as a span event on the active loop span:
 
-- `compaction_starting` - agentic-memory extracts facts before compaction
-- `compaction_complete` - agentic-memory injects recovered context
+- `compaction_starting` - compaction about to run
+- `compaction_complete` - compaction finished (tokens saved recorded)
 
 ## Troubleshooting
 
@@ -381,7 +383,6 @@ The loop publishes context events that agentic-memory consumes:
 
 - [agentic-model](../agentic-model/) - LLM endpoint integration
 - [agentic-tools](../agentic-tools/) - Tool execution
-- [agentic-memory](../agentic-memory/) - Graph-backed agent memory
 - [agentic-dispatch](../agentic-dispatch/) - User message routing
 - [workflow](../workflow/) - Multi-step orchestration
 - [agentic types](../../agentic/) - Shared type definitions
