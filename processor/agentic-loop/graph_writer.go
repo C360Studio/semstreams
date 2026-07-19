@@ -887,6 +887,16 @@ func buildLoopFailureTriples(
 		triple(agvocab.LoopEndedAt, event.FailedAt.Format(time.RFC3339)),
 	}
 
+	// gh#569: surface the classified failure reason as a rule-readable fact —
+	// budget exhaustion ("max_iterations") and a transient model error
+	// ("model_error") both stamp outcome="failed" and were indistinguishable
+	// at the fact level, making reason-aware routes (escalate vs retry)
+	// impossible. The value is already classified upstream
+	// (failureReasonForHandlerError → LoopFailedEvent.Reason).
+	if event.Reason != "" {
+		triples = append(triples, triple(agvocab.LoopTerminalReason, event.Reason))
+	}
+
 	if modelEntityID != "" {
 		triples = append(triples, triple(agvocab.LoopModelUsed, modelEntityID))
 	}

@@ -397,6 +397,16 @@ const (
 	// DataType: string
 	LoopOutcome = "agent.loop.outcome"
 
+	// LoopTerminalReason is the classified reason a loop reached its
+	// terminal failure outcome — the graph-side companion to the
+	// LoopFailedEvent.Reason classification (gh#569): rules can route on
+	// WHY a loop failed (escalate on budget exhaustion vs retry on a
+	// transient model error). Stamped only on failure; absent on success.
+	// Example: "max_iterations", "model_error", "handler_error",
+	// "graph_state_reset_required"
+	// DataType: string
+	LoopTerminalReason = "agent.loop.terminal-reason"
+
 	// LoopRole is the role used during this loop execution.
 	// Example: "architect", "editor", "reviewer"
 	// DataType: string
