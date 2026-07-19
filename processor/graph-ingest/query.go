@@ -552,6 +552,13 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 				return
 			}
 
+			// Capture the per-key invalidation generation BEFORE the KV Get so
+			// the repopulating Set below can detect an invalidate that raced our
+			// read window (read-after-write coherence guard — see
+			// invalidateEntityCacheEntry). This load happens-before the Get in
+			// program order.
+			gen0 := c.loadEntityCacheGen(entityID)
+
 			entry, err := c.entityBucket.Get(ctx, entityID)
 			if err != nil {
 				if !natsclient.IsKVNotFoundError(err) {
@@ -579,10 +586,18 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 			// for this key (D3c). Steady-state cost: one atomic load.
 			c.clearEntityPoisonOnValidRead(entityID, entry.Revision)
 
-			// Populate cache
-			if c.entityCache != nil {
-				c.entityCache.Set(entityID, entity) //nolint:errcheck
+			// Test-only seam: deterministically inject a concurrent invalidation
+			// into the read window (between the KV Get and the repopulating Set).
+			// nil in production.
+			if c.repopulateHook != nil {
+				c.repopulateHook(entityID)
 			}
+
+			// Repopulate the read-through cache, but drop the Set if this key was
+			// invalidated during the read window (gen0 no longer current) — a slow
+			// reader must not resurrect pre-write state past a concurrent
+			// invalidate. See invalidateEntityCacheEntry for the contract.
+			c.repopulateEntityCacheEntry(entityID, entity, gen0)
 
 			results[idx] = fetchResult{entity: entity, ok: true}
 		}(i, id)
