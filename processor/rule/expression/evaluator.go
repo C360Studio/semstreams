@@ -47,7 +47,9 @@ func NewExpressionEvaluator() *Evaluator {
 	// per-child completion triples on the parent loop entity.
 	evaluator.operators[OpLengthEq] = operatorLengthEq
 	evaluator.operators[OpLengthGt] = operatorLengthGt
+	evaluator.operators[OpLengthGte] = operatorLengthGte
 	evaluator.operators[OpLengthLt] = operatorLengthLt
+	evaluator.operators[OpLengthLte] = operatorLengthLte
 	evaluator.operators[OpArrayContains] = operatorArrayContains
 
 	return evaluator
@@ -94,7 +96,7 @@ func RegisteredOperators() map[string]struct{} {
 // #147 / ADR-046 Phase 1 counter pattern.
 func isArrayOperator(op string) bool {
 	switch op {
-	case OpLengthEq, OpLengthGt, OpLengthLt, OpArrayContains:
+	case OpLengthEq, OpLengthGt, OpLengthGte, OpLengthLt, OpLengthLte, OpArrayContains:
 		return true
 	}
 	return false
@@ -642,6 +644,30 @@ func operatorLengthLt(fieldValue, compareValue interface{}) (bool, error) {
 		return false, fmt.Errorf("length_lt compare value: %w", err)
 	}
 	return got < want, nil
+}
+
+func operatorLengthGte(fieldValue, compareValue interface{}) (bool, error) {
+	got, err := arrayLen(fieldValue)
+	if err != nil {
+		return false, err
+	}
+	want, err := coerceToInt(compareValue)
+	if err != nil {
+		return false, fmt.Errorf("length_gte compare value: %w", err)
+	}
+	return got >= want, nil
+}
+
+func operatorLengthLte(fieldValue, compareValue interface{}) (bool, error) {
+	got, err := arrayLen(fieldValue)
+	if err != nil {
+		return false, err
+	}
+	want, err := coerceToInt(compareValue)
+	if err != nil {
+		return false, fmt.Errorf("length_lte compare value: %w", err)
+	}
+	return got <= want, nil
 }
 
 // operatorArrayContains reports whether the array fieldValue contains

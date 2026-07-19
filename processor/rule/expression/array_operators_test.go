@@ -204,7 +204,7 @@ func TestRegisteredOperators_NoSplitBrainBetweenDeclarationsAndWiring(t *testing
 		OpLessThan, OpLessThanEqual, OpGreaterThan, OpGreaterThanEqual,
 		OpContains, OpStartsWith, OpEndsWith, OpRegexMatch,
 		OpIn, OpNotIn, OpBetween,
-		OpLengthEq, OpLengthGt, OpLengthLt, OpArrayContains,
+		OpLengthEq, OpLengthGt, OpLengthGte, OpLengthLt, OpLengthLte, OpArrayContains,
 		OpTransition,
 	}
 	registered := RegisteredOperators()
@@ -221,10 +221,98 @@ func TestRegisteredOperators_NoSplitBrainBetweenDeclarationsAndWiring(t *testing
 // truth table.
 func TestIsArrayOperator(t *testing.T) {
 	t.Parallel()
-	for _, op := range []string{OpLengthEq, OpLengthGt, OpLengthLt, OpArrayContains} {
+	for _, op := range []string{OpLengthEq, OpLengthGt, OpLengthGte, OpLengthLt, OpLengthLte, OpArrayContains} {
 		assert.True(t, isArrayOperator(op), "%s should be array operator", op)
 	}
 	for _, op := range []string{OpEqual, OpContains, OpIn, OpRegexMatch, OpTransition, "made_up_operator"} {
 		assert.False(t, isArrayOperator(op), "%s should NOT be array operator", op)
 	}
+}
+
+// gh#568 — length_gte / length_lte complete the length family to match the
+// numeric family (lt/lte/gt/gte). The boundary case (length == N) is the
+// whole point: a "count >= budget B" escalate route needs len==B to fire,
+// which neither length_gt B nor length_eq B alone expresses in one condition.
+
+func TestOperatorLengthGte(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		field interface{}
+		cmp   interface{}
+		want  bool
+	}{
+		{"boundary: length 2 >= 2", []interface{}{"a", "b"}, 2, true},
+		{"above: length 3 >= 2", []interface{}{"a", "b", "c"}, 2, true},
+		{"below: length 1 >= 2", []interface{}{"a"}, 2, false},
+		{"zero field >= 0", []interface{}{}, 0, true},
+		{"nil field >= 1", nil, 1, false},
+		{"compare value as float (JSON unmarshal shape)", []interface{}{"a", "b"}, float64(2), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := operatorLengthGte(tc.field, tc.cmp)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestOperatorLengthLte(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name  string
+		field interface{}
+		cmp   interface{}
+		want  bool
+	}{
+		{"boundary: length 2 <= 2", []interface{}{"a", "b"}, 2, true},
+		{"below: length 1 <= 2", []interface{}{"a"}, 2, true},
+		{"above: length 3 <= 2", []interface{}{"a", "b", "c"}, 2, false},
+		{"nil field <= 0", nil, 0, true},
+		{"compare value as string-encoded integer", []interface{}{"a"}, "1", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := operatorLengthLte(tc.field, tc.cmp)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
+// TestEvaluator_LengthGteBudgetBoundaryEndToEnd mirrors the downstream
+// (semdev) attempt-budget shape that motivated gh#568: retry routes on
+// count < B (length_lt), escalate routes on count >= B (length_gte). At
+// exactly B attempts the escalate condition — and only it — matches.
+func TestEvaluator_LengthGteBudgetBoundaryEndToEnd(t *testing.T) {
+	t.Parallel()
+	ev := NewExpressionEvaluator()
+
+	const budget = 3
+	entity := &gtypes.EntityState{
+		Triples: []message.Triple{
+			{Predicate: "test.task.attempt", Object: "attempt-1"},
+			{Predicate: "test.task.attempt", Object: "attempt-2"},
+			{Predicate: "test.task.attempt", Object: "attempt-3"},
+		},
+	}
+
+	escalate, err := ev.Evaluate(entity, LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "test.task.attempt", Operator: OpLengthGte, Value: budget},
+		},
+		Logic: "and",
+	})
+	require.NoError(t, err)
+	assert.True(t, escalate, "count == B must fire the >= B escalate route")
+
+	retry, err := ev.Evaluate(entity, LogicalExpression{
+		Conditions: []ConditionExpression{
+			{Field: "test.task.attempt", Operator: OpLengthLt, Value: budget},
+		},
+		Logic: "and",
+	})
+	require.NoError(t, err)
+	assert.False(t, retry, "count == B must NOT fire the < B retry route")
 }
