@@ -1,0 +1,185 @@
+{
+  "_doc": "MINIMAL, COPYABLE lesson-substrate example (ADR-080 / agent-memory-lesson-substrate). This is the SMALLEST agentic flow that both EMITS lessons (emit_lesson tool) and RECEIVES them (automatic brief-assembly injection). It is a STARTING TEMPLATE, deliberately trimmed of the ops-agent's full observation toolset — copy it, rename the platform/role, point the model endpoint at your LLM, and add your own tools. See docs/concepts/32-agent-memory.md#worked-example for the runnable walkthrough and configs/rules/lessons/README.md for the promotion/retirement rulepack. Every tool name, predicate, and $entity reference here is grep-verified against the shipped vocab/registry.",
+  "_emit_side": "The single role below carries emit_lesson in agentic-tools.allowed_tools. When a finished loop reveals durable guidance, the agent calls emit_lesson (summary/detail/injection_form/category/polarity/severity/evidence_entity_ids/applies_to). The lesson is born status=proposed and is NOT injected until an operator/product promotes it to active (LessonCurator.Promote — evidence-existence gated; there is NO promote_lesson agent tool).",
+  "_receive_side": "Brief assembly derives this loop's scope from its role as tag:<default_role> (processor/agentic-loop/lessons.go deriveLoopScope). Any ACTIVE lesson whose agent.lesson.applies-to includes that tag is rendered verbatim into the system prompt — no tool call. So a lesson this role should receive must cite applies_to: \"tag:lesson-example\" (matching default_role below). Promote the emitted lesson and the NEXT loop of this role sees it.",
+  "_persona_note": "The emit contract that teaches the agent HOW to call emit_lesson lives in a persona fragment: configs/personas/fragments/lesson-example/00-identity.md (role dir name == default_role). It is loaded at boot by persona.LoadFromDirectory. The inline snippet is reproduced there; edit the .md, not this file, to change persona guidance (files in git are the source of truth; runtime update_persona edits are ephemeral). deriveLoopScope uses the loop's role, not the persona, so injection works even before you write a persona.",
+  "_prereqs": "To RUN this (not just --validate): a reachable NATS at nats.urls and an LLM endpoint at model_registry.endpoints.general.url (or a mock). The AGENT and TOOL streams are auto-derived from the jetstream OUTPUT ports below (config/streams.go EnsureStreams); the USER stream is declared explicitly under streams because it is an INPUT-only subject and is not derived from any output port.",
+  "version": "1.1.0",
+  "platform": {
+    "org": "c360",
+    "id": "lesson-example",
+    "type": "agentic",
+    "region": "local",
+    "instance_id": "lesson-example-001",
+    "environment": "example"
+  },
+  "tier": "agentic",
+  "nats": {
+    "urls": ["nats://localhost:4222"]
+  },
+  "streams": {
+    "USER": {
+      "subjects": ["user.>"],
+      "storage": "file",
+      "max_age": "1h"
+    }
+  },
+  "model_registry": {
+    "_doc": "Swap url/model for your real LLM endpoint (OpenAI-compatible). Left concrete so --validate passes; not dialed until the flow actually runs.",
+    "endpoints": {
+      "general": {
+        "provider": "openai",
+        "url": "http://localhost:8080/v1",
+        "model": "your-model-here",
+        "max_tokens": 8192,
+        "supports_tools": true,
+        "tool_format": "openai"
+      }
+    },
+    "defaults": {
+      "model": "general"
+    },
+    "capabilities": {
+      "general": { "preferred": ["general"] }
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Lesson Example",
+          "description": "Minimal ADR-080 lesson emit + receive template. GET /graph/triples?predicate=agent.lesson.status to inspect emitted lessons.",
+          "version": "1.0.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    }
+  },
+  "components": {
+    "agentic-dispatch": {
+      "_doc": "Routes user.message -> agent.task. default_role stamps every dispatched loop with role=lesson-example; brief assembly turns that into the tag:lesson-example scope used to match active lessons for injection.",
+      "type": "processor",
+      "name": "agentic-dispatch",
+      "enabled": true,
+      "config": {
+        "default_role": "lesson-example",
+        "auto_continue": false,
+        "stream_name": "USER",
+        "ports": {
+          "inputs": [
+            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT"},
+            {"name": "user.response", "type": "nats", "subject": "user.response.*"}
+          ]
+        }
+      }
+    },
+    "agentic-loop": {
+      "_doc": "The loop orchestrator. At dispatch it assembles the brief, injecting active lessons whose applies-to matches this loop's tag:lesson-example scope (SetLessonReader wiring). No lesson-specific config is required here — injection is on by default when the loop has a role.",
+      "type": "processor",
+      "name": "agentic-loop",
+      "enabled": true,
+      "config": {
+        "max_iterations": 8,
+        "timeout": "60s",
+        "stream_name": "AGENT",
+        "loops_bucket": "AGENT_LOOPS",
+        "consumer": {
+          "ack_wait": "60s",
+          "heartbeat_interval": "20s",
+          "max_deliver": 2
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
+            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
+          ],
+          "kv_write": [
+            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"},
+            {"name": "trajectories", "type": "kv-write", "bucket": "AGENT_TRAJECTORIES"}
+          ]
+        }
+      }
+    },
+    "agentic-model": {
+      "type": "processor",
+      "name": "agentic-model",
+      "enabled": true,
+      "config": {
+        "stream_name": "AGENT",
+        "timeout": "60s",
+        "retry": {
+          "max_attempts": 2,
+          "backoff": "exponential"
+        },
+        "ports": {
+          "inputs": [
+            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+          ],
+          "outputs": [
+            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+          ]
+        }
+      }
+    },
+    "agentic-tools": {
+      "_doc": "The tool executor. allowed_tools is deliberately MINIMAL: just emit_lesson (distil a lesson). emit_lesson returns StopLoop:false, so after emitting its lesson(s) the loop ends by NATURAL terminal-tool-less completion — the model returns a text-only response with no further tool call. There is no submit_work terminator (submit_work is NOT a registered executor and would 404 if called). A real emitter that gathers its own evidence would also add read_loop_result and query_entity so the agent can cite real 6-part evidence entity IDs; kept out here to stay minimal. Add your product's work tools alongside emit_lesson.",
+      "_emit_contract": "emit_lesson gates (rejected with an instructive error, never truncated): (1) >=1 well-formed 6-part evidence_entity_ids; (2) injection_form <= 320 bytes; (3) >=1 typed applies_to key (id:<prefix of 3+ segments> or tag:<token>); (4) per-loop cap (default 20). polarity is avoid|best_practice (rejected on mismatch); severity is info|warning|critical (clamped to info). Do NOT pass identity fields — loop/role attribution is derived by the framework.",
+      "type": "processor",
+      "name": "agentic-tools",
+      "enabled": true,
+      "config": {
+        "stream_name": "TOOL",
+        "timeout": "30s",
+        "allowed_tools": [
+          "emit_lesson"
+        ],
+        "ports": {
+          "inputs": [
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+          ],
+          "outputs": [
+            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
+          ],
+          "kv_read": [
+            {"name": "entity_states", "type": "kv-read", "bucket": "ENTITY_STATES"}
+          ]
+        }
+      }
+    },
+    "graph-ingest": {
+      "_doc": "Owns ENTITY_STATES. emit_lesson births each lesson entity through graph.mutation.entity.create_with_triples here; LessonCurator.Promote/Retire/Supersede flip agent.lesson.status through graph.mutation.entity.update_with_triples (single-valued replace). Required for any lesson to persist or be queryable via GET /graph/triples.",
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "enable_hierarchy": true,
+        "ports": {
+          "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+          ],
+          "outputs": [
+            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+          ]
+        }
+      }
+    }
+  }
+}

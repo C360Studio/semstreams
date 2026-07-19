@@ -151,6 +151,207 @@ enums, and nothing in SemStreams enforces or special-cases them:
 A product is free to invent its own set, mix taxonomies, or use none at all — `emit_lesson`
 accepts any non-empty string.
 
+## Worked Example
+
+This walks the full lesson lifecycle — configure → emit → query → promote →
+observe injection — against a running instance, using the minimal template flow
+[`configs/flows/lesson-example.json`](../../configs/flows/lesson-example.json)
+and its
+[persona fragment](../../configs/personas/fragments/lesson-example/00-identity.md).
+Every subject, predicate, endpoint, and API below is grep-verified against the
+shipped code. The template's role is `lesson-example` (org `c360`, platform
+`lesson-example`); substitute your own identity when you copy it.
+
+The automated end-to-end proof of this exact round-trip is the ops e2e scenario
+([`test/e2e/scenarios/ops/scenario.go`](../../test/e2e/scenarios/ops/scenario.go),
+stages `verify-lesson-proposed → promote-lesson → inject-and-verify-lesson`); run
+it with `task e2e:agentic` when you want the whole path exercised in CI.
+
+### 1. Configure the emitting + receiving agent
+
+The template is the smallest agentic flow that both emits and receives lessons.
+Two pieces do the work:
+
+- **Allowlist** — the `agentic-tools` component grants exactly one tool,
+  `emit_lesson`:
+
+  ```json
+  "allowed_tools": [
+    "emit_lesson"
+  ]
+  ```
+
+  `emit_lesson` returns `StopLoop: false`, so after emitting its lesson(s) the
+  loop ends by **natural terminal-tool-less completion** — the model returns a
+  text-only response with no further tool call. There is no `submit_work`
+  terminator (it is not a registered executor). A real emitter that gathers its
+  own evidence would also grant `read_loop_result` and `query_entity`; the
+  template omits them to stay minimal.
+
+- **Persona snippet** — the emit contract lives in the persona fragment (loaded at
+  boot by `persona.LoadFromDirectory`; the role-dir name `lesson-example` must
+  equal `agentic-dispatch.default_role`). Its load-bearing gates:
+
+  > - Evidence: cite at least one real, well-formed 6-part entity ID in
+  >   `evidence_entity_ids`.
+  > - Injection form: keep `injection_form` at or under 320 bytes.
+  > - Scope: supply at least one typed `applies_to` key. Use
+  >   `"tag:lesson-example"` so the lesson reaches future loops of this role.
+  > - `polarity` is `"avoid"` or `"best_practice"`; `severity`
+  >   (`info | warning | critical`) only orders lessons. Do NOT pass identity
+  >   fields — the framework derives loop/role attribution.
+
+The **receive** side needs no configuration: brief assembly derives this loop's
+scope from its role as `tag:lesson-example`
+(`processor/agentic-loop/lessons.go` `deriveLoopScope`) and injects any matching
+active lesson automatically.
+
+Validate the config with the real loader before running:
+
+```bash
+go run ./cmd/semstreams --config configs/flows/lesson-example.json --validate
+# ✓ Configuration is valid
+```
+
+### 2. Emit a lesson
+
+An agent produces a single `emit_lesson` tool call whose `Arguments` carry only
+intent (no identity fields). For the template's identity:
+
+```json
+{
+  "summary": "Bound retries on network timeouts to protect the iteration budget",
+  "detail": "Unbounded network-timeout retries burned the iteration budget before work ran; cap backoff, fail fast.",
+  "injection_form": "Avoid unbounded retries on network timeouts; cap at 3 attempts.",
+  "category": "retry-policy",
+  "polarity": "avoid",
+  "severity": "warning",
+  "evidence_entity_ids": ["c360.lesson-example.agent.agentic-loop.execution.loop-0001"],
+  "applies_to": ["tag:lesson-example"]
+}
+```
+
+Each argument maps to one `agent.lesson.*` predicate on the born entity;
+`evidence_entity_ids` cites the loop/trajectory/entity the lesson was derived
+from (a loop execution entity is
+`{org}.{platform}.agent.agentic-loop.execution.{loopID}`). The gates
+(`evidence`, `bound`, `grammar`, `cap`) reject a malformed call with an
+instructive error rather than truncating it.
+
+The lesson is born `status="proposed"` with a **content-derived** entity ID
+(`{org}.{platform}.agent.lesson.record.{uuid5}` over category + sorted
+`applies_to` + summary + sorted evidence), so re-emitting the identical lesson is
+idempotent. The tool result reports the minted ID and persisted status:
+
+```json
+{
+  "lesson_id": "c360.lesson-example.agent.lesson.record.<uuid5>",
+  "lesson_status": "proposed",
+  "lesson_created": true
+}
+```
+
+**Reproducing the emit without an LLM.** In production the `agentic-loop`
+dispatch stamps `loop_id` and the `agent.role` metadata onto the tool call and
+publishes it — as a `BaseMessage` envelope — to `tool.execute.emit_lesson`; the
+result returns on `tool.result.*`. The runnable no-LLM driver of exactly that
+wire is the integration test, which mirrors what a shell publish would have to
+construct:
+
+```bash
+go test -tags=integration -run TestIntegration_EmitLesson_ProductionWire \
+  ./processor/agentic-tools/
+```
+
+(see [`emit_lesson_integration_test.go`](../../processor/agentic-tools/emit_lesson_integration_test.go)).
+It publishes the enveloped `ToolCall` to `tool.execute.emit_lesson`, asserts the
+`proposed` entity landed in `ENTITY_STATES`, and proves the idempotent re-emit
+path — the same shape you would reproduce by hand.
+
+### 3. Query the proposed lesson
+
+The `service-manager` mux exposes `GET /graph/triples` in every flow (port from
+`service-manager.http_port`, `8080` in the template). Query by predicate:
+
+```bash
+curl 'http://localhost:8080/graph/triples?predicate=agent.lesson.status'
+```
+
+It returns a JSON array of triples; the freshly emitted lesson reads `proposed`:
+
+```json
+[
+  {
+    "subject": "c360.lesson-example.agent.lesson.record.<uuid5>",
+    "predicate": "agent.lesson.status",
+    "object": "proposed",
+    "source": "ops-emit-lesson",
+    "confidence": 1
+  }
+]
+```
+
+The endpoint also filters on `subject=` and `object=` (empty = wildcard), so
+`?predicate=agent.lesson.status&object=proposed` lists every proposed lesson.
+This is exactly how the ops scenario's `verifyLessonProposed` stage confirms the
+born state.
+
+### 4. Promote the lesson
+
+Promotion `proposed → active` is **operator/product-invoked**, not an agent tool
+(ADR-080 makes review the default gate; there is no `promote_lesson` tool). The
+validated path is `LessonCurator.Promote`, which resolves that **every** cited
+evidence entity exists in the graph before flipping the status via the
+single-valued replace lane (`graph.mutation.entity.update_with_triples`):
+
+```go
+curator := agentictools.NewNATSLessonCurator(natsClient, logger)
+if err := curator.Promote(ctx, lessonEntityID); err != nil {
+    // refused: a cited evidence entity is absent — the lesson stays proposed
+}
+```
+
+If any citation is missing, `Promote` **refuses** and the lesson stays
+`proposed`. `Retire` (→ `retired` + `retired-at`) and `Supersede` (→ `superseded`
++ `superseded-by`) live on the same curator and need no evidence check. Re-run the
+step-3 query and the status now reads `active`.
+
+> **Honest gap — config-only promotion is not viable for the validated path.**
+> A rule `replace_owned` action *can* mechanically flip `agent.lesson.status` to
+> `active` (status is in the lesson lifecycle owned group — see
+> [`configs/rules/lessons/README.md`](../../configs/rules/lessons/README.md)),
+> but a rule condition can only match the lesson's **own** fields; it cannot
+> resolve whether a *cited evidence entity* exists. So a bare-rule promotion is
+> **ungated** — it would promote lessons whose evidence may be absent, defeating
+> exactly the check ADR-080 requires. That is why the shipped reference rule is a
+> birth-time **retire** (`category="deprecated" → status="retired"`), which needs
+> no evidence check, and **not** a promote. The evidence-existence gate lives only
+> in Go (`LessonCurator.Promote`). A pure-config product therefore has no way to
+> reproduce validated promotion today; a first-class config/operator promotion
+> surface that carries the evidence gate is a candidate UX follow-up.
+
+### 5. Observe injection
+
+Dispatch a *subsequent* loop of the same role — publish a `user.message` that the
+`lesson-example` dispatch routes to a new loop. Brief assembly derives that loop's
+scope as `tag:lesson-example`, the matcher selects the now-`active` lesson (only
+`active` lessons are ever injected), and `renderLessonBlock`
+(`processor/agentic-loop/lessons.go`) renders it verbatim into the system prompt:
+
+```text
+[Lessons — durable guidance distilled from prior work; matched 1, showing 1]
+- Avoid unbounded retries on network timeouts; cap at 3 attempts. (c360.lesson-example.agent.lesson.record.<uuid5>)
+```
+
+The header states **matched-versus-included** counts, so any truncation by the
+count ceiling (default 10) or byte budget (default 4096) is visible in the prompt
+itself rather than silent. Each line pairs the `injection_form` with the lesson
+entity ID, which the agent can dereference via `query_entity` if it needs the
+lesson's full `detail` — there is no open-ended lesson-search tool. The ops
+scenario's `inject-and-verify-lesson` stage proves this end to end: its mock only
+fires an injection-gated diagnosis when the injection form is actually present in
+the assembled prompt.
+
 ## See Also
 
 - [ADR-080: Push-Based Agent Memory](../adr/080-push-based-agent-memory-and-lesson-artifacts.md) —
