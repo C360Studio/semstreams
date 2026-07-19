@@ -5,9 +5,9 @@
 - [x] 1.1 Run the 5-lens adversarial review against this change (ADR-079 precedent); record
       verdicts in `adversarial-review.md` (DONE 2026-07-19 — 5× READY-WITH-CHANGES, all
       findings folded into the drafts)
-- [ ] 1.2 Owner accepts the three review pivots (brief-assembly delivery with deferred fusion
+- [x] 1.2 Owner accepts the three review pivots (brief-assembly delivery with deferred fusion
       facet; proposed→active lifecycle; `agent.lesson.*` namespace); flip ADR-080 Status to
-      Accepted
+      Accepted (DONE 2026-07-19)
 
 ## 2. Vocabulary
 

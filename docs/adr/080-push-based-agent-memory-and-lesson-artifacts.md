@@ -2,12 +2,12 @@
 
 ## Status
 
-**Proposed (2026-07-19).** The 5-lens adversarial review has RUN (verdicts and resolutions in
-the change's `adversarial-review.md`: 5× READY-WITH-CHANGES, all findings folded). Three
-review-driven pivots need owner acceptance before this flips to Accepted: (1) v1 delivery at
-the brief-assembly seam with the fusion facet deferred, (2) the proposed→active lesson
-lifecycle, (3) the `agent.lesson.*` namespace. Companion OpenSpec change:
-`agent-memory-lesson-substrate`.
+**Accepted (2026-07-19).** The 5-lens adversarial review ran against the
+`agent-memory-lesson-substrate` change (verdicts and resolutions in its
+`adversarial-review.md`: 5× READY-WITH-CHANGES, all findings folded), and the owner accepted
+the three review-driven pivots: (1) v1 delivery at the brief-assembly seam with the fusion
+facet deferred, (2) the proposed→active lesson lifecycle, (3) the `agent.lesson.*` namespace.
+Companion OpenSpec change: `agent-memory-lesson-substrate`.
 
 ## Context
 
