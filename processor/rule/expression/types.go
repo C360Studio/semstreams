@@ -139,7 +139,9 @@ const (
 	OpNotIn         = "not_in"
 	OpLengthEq      = "length_eq"
 	OpLengthGt      = "length_gt"
+	OpLengthGte     = "length_gte"
 	OpLengthLt      = "length_lt"
+	OpLengthLte     = "length_lte"
 	OpArrayContains = "array_contains"
 
 	// State transition operator
