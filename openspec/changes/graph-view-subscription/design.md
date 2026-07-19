@@ -2,56 +2,85 @@
 
 ## Context
 
-Full decision, alternatives, coherence contract, and the verified per-site
-migration table live in **ADR-081** (`docs/adr/081-graph-view-subscription.md`).
-This design records the composition and the build boundary. The build is
-**owner-gated** — this change locks the contract (proposal + spec delta);
-implementation is a deferred phase.
+Full decision, alternatives, coherence contract (G1–G6), and the four-class
+migration scope live in **ADR-081** (`docs/adr/081-graph-view-subscription.md`),
+revised 2026-07-19 after the 5-lens adversarial review. This design records the
+composition and the build boundary. The contract locked first; the build was
+**green-lit 2026-07-19** after owner review and confirmation against the
+originating #579 evidence.
 
-## Composition (reuse, not a new subsystem)
+## Composition (corrected by the review)
 
-The reuse scan (ADR-081 Context, verified in code) established that every piece
-already exists; the primitive is a thin composition + one genuinely-new seam:
-
-| Concern | Reused from | New? |
+| Concern | Source | Verdict |
 |---|---|---|
-| One `WatchAll` → projection map (LWW/key) | ~7 hand-rolls (e.g. `graph/query/client.go:221`) | compose |
-| View-rate coalescing (newest-per-key/tick) | `processor/graph-index/revision_coalescer.go`, `pkg/cache/coalescing_set.go` | compose |
-| Sequence watermark | `pkg/revlag/watermark.go` | compose |
-| Read-after-write coherence (ABA gen guard) | `processor/graph-ingest/component.go:2943-3006` (ADR-079/PR #583) | apply the pattern to the fan-out seam |
-| **Subscriber fan-out seam** (`SnapshotAndSubscribe`, per-subscriber coalesce/drop) | — | **NEW** — the only new surface |
-| Trusted-decode fast path | #562 | reuse |
+| One `WatchAll` → projection map (LWW/key, tombstones in-lane) | pattern from the serving-projection hand-rolls | compose |
+| Decode + validate ONCE, poison surfaced per-key (G6) | `UnmarshalEntityState` + ADR-079 semantics | compose — **trusted decode (#562) is owner-only by its own contract; forbidden here** |
+| View-rate coalescing (greatest-rev op per key/tick) | `processor/graph-index/revision_coalescer.go` semantics | **lift into `pkg/graphview`** — unexported + processor-layer, not importable; `pkg/cache/coalescing_set.go` is keys-only (no revision retention), insufficient |
+| G1 sequence S | plain apply-counter under the projection mutex | new (trivial) — `revlag.Watermark` has its own lock; optional lag gauge only |
+| Subscriber fan-out seam (`SnapshotAndSubscribe`, delta-only attach, per-subscriber LWW buffer) | — | **NEW — the only new surface** |
+| Readiness gate + caught-up watermark + watcher-loss fail-closed (G5) | doctrine from ADR-066 / `markEntityWatchLost` / lifecycle guard degrade | apply at the view |
+| Coherence discipline | ADR-079 ABA guard (`graph-ingest/component.go:2943`, PR #583) | apply the pattern at BOTH seams (attach + tick) |
 
-Home: `pkg/graphview` (domain-agnostic; bucket + decode func injected). NOT
-`pkg/projection` — that name is taken by ADR-056 ownership binding.
+Home: `pkg/graphview` (domain-agnostic; bucket + decode func injected — decode
+returns `(T, keep bool, err error)` so consumers can skip non-record keys, map
+present-but-not-ready records to absent, and surface contract errors). NOT
+`pkg/projection` — taken by ADR-056. jetstream-in-pkg is precedented
+(`pkg/lifecycle`).
 
-## Coherence — the load-bearing seam
+## Coherence — the load-bearing seams
 
-The snapshot/register and the delta-apply/broadcast must be mutually atomic under
-the projection lock at one sequence S (G1), exactly analogous to graph-ingest's
-`{bump+delete}` / `{gen-check+set}` atomicity under `cacheGenMu`. A materialized
-view IS a cache; the stale-repopulation race fixed in PR #583 recurs here at the
-attach seam if the snapshot can be taken at S while a delta at ≤ S races into the
-broadcast set. The spec's coherence + snapshot-consistency requirements pin this;
-implementation must carry a deterministic regression test (mirror
-`cache_stale_repopulation_integration_test.go`: attach a subscriber mid-apply,
-prove no gap/dup/inversion).
+Two seams, not one:
+
+- **Attach seam:** `{snapshot + register}` atomic with delta application at one
+  sequence S under the projection lock.
+- **Tick seam (the one the naive composition gets wrong):** both existing
+  coalescers fire callbacks OUTSIDE their lock, so a detached batch holding
+  K@R5 can be enqueued to a subscriber that attached with a snapshot at K@R6 —
+  stale delivery, the PR #583 shape one seam over. Either value-capture +
+  subscriber-set iteration + enqueue form one critical section with the
+  projection lock, or every enqueue is revision-guarded against the
+  subscriber's per-key high-water.
+
+The regression suite must drive both (mirror
+`cache_stale_repopulation_integration_test.go`): racing attach; tick-detach →
+newer apply → attach → resume delivery; bootstrap-attach gating; watcher-loss
+fail-closed + re-bootstrap ghost-key reconciliation; poison surfacing.
+
+## Consumer modes (why the scope holds)
+
+- **snapshot + delta** — serving surfaces (SSE streams, caches, #211 later).
+- **delta-only** — work-triggers (enhancement/embedding workers): a trigger
+  feed, no snapshot, no second projection copy.
+- **invalidation + poison feed** — the bounded graph-query cache in
+  multi-reader processes: deltas drive `cache.Delete` + the poison latch (G6);
+  the client keeps its bounded read-through cache.
+- **NOT consumers** — per-revision pipelines and the lifecycle guard (ADR-081
+  Alternative 5): every-revision validation + barrier watermarks are not view
+  semantics; they keep raw `WatchAll`.
 
 ## Build boundary
 
 - **In this change (design):** ADR-081, the capability spec (contract), the
   cluster-boundary decision.
-- **Deferred (owner-gated build):** the `pkg/graphview` primitive, its coherence
-  regression test, and the first consumer migration (#571 graph-query reading from
-  the shared view is the natural first mover).
-- **Explicitly out of scope:** cross-process re-publish; the two `natsclient`
-  ergonomics (independent small fixes); the graph-ingest bootstrap sweep and
-  lifecycle per-workflow watchers (different patterns — ADR-081 table).
+- **Build (green-lit):** `pkg/graphview`, its coherence + degraded-
+  path regression suite, observability, and the first consumer migration —
+  **first mover: the agentic-dispatch AGENT_LOOPS SSE activity stream**
+  (in-repo, true per-client O(N×writeRate), serving-shaped; the purest #579
+  instance we own). The graph-query (#571) migration is follow-up, multi-reader
+  processes only.
+- **Explicitly out of scope:** cross-process re-publish (shape not
+  pre-approved); the two `natsclient` ergonomics (independent small fixes);
+  the per-revision pipelines; the graph-ingest bootstrap sweep; lifecycle
+  per-workflow watchers.
 
 ## Open questions (for the build phase)
 
-- Tick interval default (250ms vs 500ms) — measure against a real consumer.
-- Snapshot delivery for a large bucket (streamed vs single payload) — bounded by
-  live bucket cardinality; revisit if a view over a very large bucket is needed.
-- Whether the first migration (#571) also retires the whole-client poison latch or
-  keeps it layered — coordinate with the ADR-079 poison-scoping track.
+- Tick interval default (250ms vs 500ms) — measure against the SSE first mover.
+- Large-bucket snapshot delivery: single payload (bounded copy, delivered
+  outside the lock) vs streamed. Streamed delivery of a consistent-at-S
+  snapshot from a live projection needs copy-on-write/versioning that exists
+  nowhere in the composed prior art — treat streamed as a real design fork,
+  not a tuning knob; default to single-payload copy.
+- Whether the multi-reader #571 migration retires the whole-client poison
+  latch or keeps it layered over the G6 signal — coordinate with the ADR-079
+  poison-scoping track.
