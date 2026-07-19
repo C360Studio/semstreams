@@ -224,7 +224,7 @@ func run() error {
 	defer ownershipShutdown()
 
 	ownerReg, staticOwnerHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger,
-		loopExecutionProjectionContract())
+		loopExecutionProjectionContract(), lessonRecordProjectionContract())
 	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
 	// ordered shutdown.
 	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
@@ -788,6 +788,36 @@ func loopExecutionProjectionContract() projection.Contract {
 				agvocab.LoopWorkflowStep,
 				agvocab.LoopUser,
 				agvocab.LoopDescription,
+			},
+		}},
+	}
+}
+
+// lessonRecordProjectionContract returns the graph projection contract for
+// agent-lesson-record entities (ADR-080 gated lifecycle). It declares the three
+// MUTABLE lesson LIFECYCLE predicates — agent.lesson.status,
+// agent.lesson.superseded-by, agent.lesson.retired-at — as a ModeReplaceOwned
+// group on every entity matching *.*.agent.lesson.record.*, so promotion,
+// retirement, and supersession are single-valued REPLACE writes (rule
+// replace_owned or the LessonCurator owned-fact writer, ADR-056) and a
+// replace_owned action naming a lesson lifecycle predicate is inside a declared
+// owned envelope.
+//
+// The IMMUTABLE birth predicates (agent.lesson.created-at plus category /
+// polarity / severity / summary / detail / injection-form / evidence /
+// applies-to / observed-role) are DELIBERATELY excluded: they are stamped once
+// at emit and never replaced, so no owned group must authorize overwriting them.
+func lessonRecordProjectionContract() projection.Contract {
+	return projection.Contract{
+		Name:          "agentic.lesson-record",
+		MessageType:   agentic.AgentLessonMessageType().Key(),
+		EntityPattern: "*.*.agent.lesson.record.*",
+		Groups: []projection.PredicateGroup{{
+			Mode: ownership.ModeReplaceOwned,
+			Predicates: []string{
+				agvocab.LessonStatus,
+				agvocab.LessonSupersededBy,
+				agvocab.LessonRetiredAt,
 			},
 		}},
 	}

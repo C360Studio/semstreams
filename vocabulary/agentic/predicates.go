@@ -770,6 +770,144 @@ const (
 	OpsDiagnosisSeverity = "ops.diagnosis.severity"
 )
 
+// Lesson Predicates (ADR-080 — Push-Based Agent Memory / Lesson Substrate)
+//
+// Emitted by the ops agent's emit_lesson terminal tool (see
+// processor/agentic-tools/emit_lesson.go) onto a freshly-minted lesson record
+// entity per distilled lesson. Each emit_lesson call mints a content-derived
+// {org}.{platform}.agent.lesson.record.{uuid5} entity and attaches one triple
+// per predicate so downstream rules and curation lanes can branch
+// deterministically on polarity, severity, status, and scope without parsing
+// the LLM-authored prose. Lessons are born status="proposed"; only promotion to
+// "active" makes a lesson injectable at brief assembly (ADR-080 gated
+// lifecycle).
+//
+// Rule-visibility split follows the house LLM-authored-content discipline
+// (ADR-036): the enumerated/structural and reference predicates below stay
+// rule-matchable so rules and curation lanes can gate on them; the three
+// authored-text predicates (summary, detail, injection-form) register
+// rule-opaque so rules cannot predicate on model-sampled prose (Goodhart
+// feedback loop).
+//
+// Closed enums (polarity/severity/status) are documented here and enforced at
+// the emit_lesson writer / rule layer — the vocabulary registry stores no
+// allowed-value set, so "closed" means documented-and-writer-enforced.
+// category is intentionally OPEN: taxonomies are product vocabulary, not
+// framework enums (ADR-080).
+//
+// Note on the predicate identity: the family roots at the "agent" domain
+// (ADR-080 mandates the agent.lesson.* namespace — lesson artifacts unify with
+// the rest of agent memory under agent.*, while diagnosis stays ops.*). This
+// also matches the sibling agent-artifact predicates in this file
+// (agent.todo.*, agent.scratch.*) and aligns the predicate domain with the
+// entity's domain+system (agent.lesson) exactly as ops.diagnosis.* aligns with
+// its entity. The canonical predicate contract requires exactly three
+// lower-kebab segments (domain.category.property), so the flat conceptual
+// shorthand in design.md (lesson.category, lesson.injection_form) is realized
+// as agent.lesson.category, agent.lesson.injection-form, etc. — multi-word
+// properties use hyphens exactly as agent.todo.updated-at / ops.diagnosis.
+// observed-role do. Two-segment or underscored strings fail ParsePredicate and
+// panic at registration.
+const (
+	// LessonCategory is an OPEN product-taxonomy classifier for the lesson.
+	// No framework-closed value set — products partition their own taxonomy.
+	// Rule-matchable structural fact.
+	// Example: "retention-policy"
+	// DataType: string
+	LessonCategory = "agent.lesson.category"
+
+	// LessonPolarity is the lesson's directional stance. Closed value set:
+	// "avoid" | "best_practice". Rule-matchable.
+	// Example: "avoid"
+	// DataType: string
+	LessonPolarity = "agent.lesson.polarity"
+
+	// LessonSeverity is the urgency classification used to order lessons at
+	// brief assembly. Closed value set: "info" | "warning" | "critical"
+	// (note: "warning", not the ops.diagnosis family's "warn"). Rule-matchable.
+	// Example: "warning"
+	// DataType: string
+	LessonSeverity = "agent.lesson.severity"
+
+	// LessonStatus is the gated-lifecycle state. Closed value set:
+	// "proposed" | "active" | "retired" | "superseded". Born "proposed"; only
+	// "active" lessons are injectable. Single-valued — lifecycle transitions
+	// replace, never append (RemoveTriples + AddTriples). Rule-matchable.
+	// Example: "proposed"
+	// DataType: string
+	LessonStatus = "agent.lesson.status"
+
+	// LessonSummary is a short LLM-authored gist of the lesson. Rule-opaque
+	// authored prose — treat as untrusted content downstream.
+	// Example: "cap retention sweeps to entity-owned buckets"
+	// DataType: string
+	LessonSummary = "agent.lesson.summary"
+
+	// LessonDetail is the unbounded LLM-authored explanation of the lesson.
+	// Rule-opaque authored prose.
+	// Example: "When sweeping AGENT_LOOPS, scope deletes to COMPLETE_* keys so ..."
+	// DataType: string
+	LessonDetail = "agent.lesson.detail"
+
+	// LessonInjectionForm is the bounded string rendered verbatim into a
+	// downstream agent's brief when the lesson is active and in scope. Byte-
+	// bounded at the emit_lesson writer (rejected, never truncated). Rule-opaque
+	// authored prose.
+	// Example: "Avoid unscoped retention sweeps; scope deletes to COMPLETE_* keys."
+	// DataType: string
+	LessonInjectionForm = "agent.lesson.injection-form"
+
+	// LessonEvidence cites a supporting entity ID the lesson was derived from
+	// (>=1 enforced at the emit_lesson writer). Multi-valued: one triple per
+	// cited entity. Registered with StandardIRI prov:wasDerivedFrom so the
+	// citation exports as a PROV-O derivation edge (annotation only).
+	// Example: "acme.ops.agent.agentic-loop.execution.abc123"
+	// DataType: string (entity ID)
+	LessonEvidence = "agent.lesson.evidence"
+
+	// LessonAppliesTo is a deterministic scope key controlling which loops the
+	// lesson is briefed into. Grammar: "id:{entity-id-prefix}" | "tag:{token}"
+	// (e.g. "id:acme.ops.agent", "tag:researcher"). Multi-valued; rule-matchable.
+	// Example: "tag:researcher"
+	// DataType: string (scope key)
+	LessonAppliesTo = "agent.lesson.applies-to"
+
+	// LessonObservedRole is the agent role the lesson pertains to. Optional —
+	// omitted when the lesson is not role-specific. Rule-matchable.
+	// Example: "researcher"
+	// DataType: string
+	LessonObservedRole = "agent.lesson.observed-role"
+
+	// LessonRetiredAt is the lifecycle timestamp set when a lesson transitions
+	// out of "active". Single-valued — replace, never append.
+	// Example: "2026-07-19T12:00:00Z"
+	// DataType: time.Time
+	LessonRetiredAt = "agent.lesson.retired-at"
+
+	// LessonSupersededBy is the entity ID of the lesson that replaces this one
+	// on supersession. Single-valued — replace, never append.
+	// Example: "acme.ops.agent.lesson.record.def456"
+	// DataType: string (entity ID)
+	LessonSupersededBy = "agent.lesson.superseded-by"
+
+	// LessonCreatedAt is the IMMUTABLE wall-clock birth timestamp of the lesson
+	// entity — stamped once by emit_lesson at create time and NEVER re-written
+	// by a lifecycle transition. RFC3339 UTC. Rule-matchable, and crucially the
+	// replay-stable ordering key for brief-assembly injection: the matcher
+	// orders active lessons by severity → created-at → entity-ID. A triple's
+	// Timestamp field is re-stamped on every replace_owned promotion/retirement
+	// (single-valued lifecycle writes carry a fresh Timestamp), and the entity's
+	// UpdatedAt / KV revision advance on every write — so neither is a stable
+	// sort key. Only this birth triple is invariant across a curator's edits AND
+	// an ADR-073 from-zero reingest, so the injected order is identical on
+	// replay. NOT part of content-identity (idempotency unchanged; first-write-
+	// wins preserves the FIRST emit's created-at) and NOT in any replace-owned
+	// lifecycle set. Mirrors agent.scratch.created-at.
+	// Example: "2026-07-19T12:00:00Z"
+	// DataType: time.Time
+	LessonCreatedAt = "agent.lesson.created-at"
+)
+
 // Todo Predicates (ADR-036 — Agent-Private Observable State)
 //
 // Written by the write_todos tool onto the owning agent's loop entity.

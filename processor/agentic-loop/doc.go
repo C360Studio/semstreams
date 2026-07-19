@@ -313,13 +313,6 @@
 //  5. Rule spawns new loop with role="editor", parent_loop={loopID}
 //  6. Editor receives architect's output as context
 //
-// # agentic-memory Integration
-//
-// The loop publishes context events that agentic-memory consumes:
-//
-//   - compaction_starting: agentic-memory extracts facts before compaction
-//   - compaction_complete: agentic-memory injects recovered context
-//
 // # Quick Start
 //
 // Create and start the component:
@@ -412,7 +405,6 @@
 //   - agentic: Shared types (LoopEntity, AgentRequest, UserSignal, etc.)
 //   - processor/agentic-model: LLM endpoint integration
 //   - processor/agentic-tools: Tool execution framework
-//   - processor/agentic-memory: Graph-backed agent memory
 //   - processor/agentic-dispatch: User message routing
 //   - processor/workflow: Multi-step orchestration
 package agenticloop

@@ -192,6 +192,19 @@ const MetadataKeyRunID = "agent.run_id"
 // org/platform via agentic.ChainExecutionEntityID.
 const MetadataKeyRunEntityID = "agent.run_entity_id"
 
+// MetadataKeyAgentRole is the ToolCall.Metadata key under which agentic-loop
+// dispatch stamps the emitting loop's role (LoopEntity.Role). A tool executor
+// reads it to attribute a role to its output WITHOUT the model supplying (and
+// therefore being able to spoof) an identity parameter — e.g. emit_lesson
+// derives agent.lesson.observed-role from it (ADR-080: "attribution is derived,
+// not supplied").
+//
+// Stamped authoritatively (overwrite) when the loop has a role, and DELETED
+// when the role is empty, exactly like the run anchor: the role is a framework
+// fact derived from the loop entity, not a caller-routable hint, so a
+// caller/model-injected value must never survive. Absent for a roleless loop.
+const MetadataKeyAgentRole = "agent.role"
+
 // LineageTripleNamespace is the fixed framework-owned namespace for
 // cross-arc loop-ID lineage triples. Each entry in
 // TaskMessage.Metadata[MetadataKeyRelatedLoops] becomes a triple of the form:

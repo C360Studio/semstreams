@@ -161,19 +161,51 @@ func applyCRUDToolsPreset(server *mock.OpenAIServer) {
 	})
 }
 
-// applyOpsPreset scripts the ops-agent scenario's loop.
+// opsNeverMatchMarker is a sentinel that never appears in any assembled ops
+// prompt. It caps the inject loop: once the injection-proof entry fires, the
+// shared cursor advances onto this entry, which cannot match, so the mock falls
+// through to a plain completion and the loop terminates naturally.
+const opsNeverMatchMarker = "__ops_e2e_never_match_terminator__"
+
+// applyOpsPreset scripts the ops-agent scenario's TWO loops for the full gated
+// lesson round-trip (ADR-080, agent-memory-lesson-substrate §5).
+//
 // The ops persona fragment contains OpsPersonaMarker ("operations analyst agent"),
-// which the marker matches on after the PR3 file loader and ADR-029 step-3b
-// assembler wire the persona content into the LLM request.
+// which the first four entries match on after the PR3 file loader and ADR-029
+// step-3b assembler wire the persona content into the LLM request.
 //
-// The sequence scripts three emit_diagnosis calls — each referencing one of the
-// seeded synthetic loop entity IDs as evidence — followed by submit_work.
-// Four entries in the sequence; once exhausted the last entry sticks (submit_work).
-// The loop terminates naturally after submit_work because the executor returns
-// StopLoop=true.
+// Termination model: submit_work is NOT advertised to the model in this flow, so
+// an agent loop cannot terminate by calling it — instead each loop ends the way
+// the pre-existing ops scenario already relied on: once no scripted tool-call
+// entry matches the request, the mock returns a plain completion and the loop
+// finishes on a terminal-tool-less completion. The scripted entries therefore
+// only ever use tools the loop advertises (emit_diagnosis, emit_lesson).
 //
-// Findings are distinguishable by severity and observed_role so the e2e
-// assertions can verify the graph contains all three without inspecting prose.
+// The shared cursor advances ONLY when the current entry's marker matches the
+// request AND its tool is advertised, giving a clean two-loop hand-off:
+//
+// Loop 1 (emit) — the first user.message spawns an ops loop. Entries 0-3 all match
+// OpsPersonaMarker (present in every ops request), advancing the cursor through:
+//   - three emit_diagnosis calls (each citing a seeded loop as evidence),
+//   - one emit_lesson call (the first in-repo emit_lesson consumer): a durable
+//     lesson scoped tag:<ops role> and citing a REAL seeded entity so the later
+//     promotion's evidence-existence gate passes.
+//
+// The lesson is born status="proposed", so brief assembly does NOT inject it into
+// loop 1 (proposed lessons are excluded) — the injection-form string never appears
+// in a loop-1 request. After entry 3 fires, the cursor rests on entry 4, whose
+// marker is the injection form; loop 1 cannot match it, so loop 1 ends on a
+// completion with the cursor parked at entry 4.
+//
+// Loop 2 (inject) — after the scenario promotes the lesson to active, its second
+// user.message spawns a fresh ops loop. Brief assembly now renders the active,
+// tag:ops-scoped lesson's injection form into that loop's system prompt, so entry
+// 4 (Marker == the injection form) matches and fires emit_diagnosis leaving
+// InjectionProofFinding — the deterministic end-to-end proof. The cursor then
+// advances onto entry 5 (the never-match sentinel), which cannot match, so loop 2
+// ends on a completion instead of spinning. If injection regressed, entry 4's
+// marker is absent, it never fires, no InjectionProofFinding appears, and the
+// scenario's stage-4 poll hard-fails rather than passing silently.
 func applyOpsPreset(server *mock.OpenAIServer) {
 	server.WithRoleToolCallSequence([]mock.RoleToolCall{
 		{
@@ -216,11 +248,52 @@ func applyOpsPreset(server *mock.OpenAIServer) {
 			},
 		},
 		{
+			// Loop 1 emit stage: distil one durable lesson. Evidence cites the REAL
+			// seeded entity SeedLoop1ID so promotion's evidence-existence gate resolves;
+			// applies_to = tag:<ops role> so a later ops loop matches it; injection_form
+			// is under the 320-byte bound and doubles as the loop-2 marker below.
 			Marker:   opsscenario.OpsPersonaMarker,
-			ToolName: "submit_work",
+			ToolName: "emit_lesson",
 			Args: map[string]any{
-				"summary": "Emitted 3 findings: 1 error-severity probe connectivity issue, 1 warn-severity failure rate, 1 info-severity token burn. All findings reference seeded loop evidence entities. Review recommended for probe-role connectivity before next run.",
+				"summary":             opsscenario.LessonSummary,
+				"detail":              "Across the observed test-agent loops, network calls retried without a ceiling, exhausting the iteration budget before the task made progress. Bound retries and cap the backoff so a transient upstream outage cannot consume the whole loop.",
+				"injection_form":      opsscenario.LessonInjectionForm,
+				"category":            opsscenario.LessonCategory,
+				"polarity":            "avoid",
+				"severity":            "warning",
+				"evidence_entity_ids": []string{opsscenario.SeedLoop1ID},
+				"applies_to":          []string{opsscenario.LessonAppliesToTag},
 			},
+		},
+		{
+			// Loop 2 inject stage: fires ONLY when the promoted lesson's injection form
+			// reached this loop's brief (Marker == the injection-form string, which brief
+			// assembly renders verbatim into the system prompt). emit_diagnosis IS
+			// advertised, so this fires and leaves the deterministic proof triple
+			// InjectionProofFinding that the scenario asserts on. Loop 1's brief carries
+			// no active lesson, so loop 1 can never match this entry — the cursor parks
+			// here between the two loops.
+			Marker:   opsscenario.LessonInjectionForm,
+			ToolName: "emit_diagnosis",
+			Args: map[string]any{
+				"finding":        opsscenario.InjectionProofFinding,
+				"recommendation": "No action — this finding exists solely to prove the promoted lesson's injection form reached a subsequent loop's brief.",
+				"confidence":     0.99,
+				"evidence":       []string{opsscenario.SeedLoop1ID},
+				"observed_role":  "ops",
+				"severity":       "info",
+			},
+		},
+		{
+			// Never-match terminator: after the inject-proof fires, the cursor lands
+			// here; this marker cannot appear in any assembled prompt, so the mock falls
+			// through to a plain completion and loop 2 ends on a terminal-tool-less
+			// completion instead of re-firing the inject-proof every iteration to the
+			// cap. (submit_work is deliberately NOT advertised in this flow, so it cannot
+			// serve as the terminator — natural completion is how ops loops end here.)
+			Marker:   opsNeverMatchMarker,
+			ToolName: "emit_diagnosis",
+			Args:     map[string]any{},
 		},
 	})
 }

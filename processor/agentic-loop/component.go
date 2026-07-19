@@ -205,8 +205,13 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	// silently skip the read.
 	if deps.NATSClient != nil {
 		handler.SetTodoReader(NewNATSTodoReader(deps.NATSClient))
+		// Wire the brief-assembly lesson reader (ADR-080 push-based memory) so
+		// every dispatch's system prompt carries the active lessons matching the
+		// loop's scope. NATS-less deployments skip injection (nil reader).
+		handler.SetLessonReader(NewNATSLessonReader(deps.NATSClient))
 	}
 	handler.SetPlatform(deps.Platform)
+	handler.SetMetrics(getMetrics(deps.MetricsRegistry))
 
 	comp := &Component{
 		config:         config,
@@ -1572,7 +1577,9 @@ func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
 		}
 	}
 
-	// Publish context events for agentic-memory to consume
+	// Publish context events (compaction lifecycle) onto the AGENT stream for
+	// observability consumers — the OTel span collector (output/otel) enriches
+	// the active loop span with each event via its agent.> subscription.
 	for _, event := range result.ContextEvents {
 		c.publishContextEvent(ctx, event)
 	}

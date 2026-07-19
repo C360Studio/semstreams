@@ -21,6 +21,13 @@ type toolsMetrics struct {
 	// Filtering
 	filteredTotal *prometheus.CounterVec
 
+	// Writer-gate rejections (a tool's own contract gate bounced the call
+	// before any graph mutation), labelled by tool and the gate reason. Kept
+	// distinct from filteredTotal (governance/approval filtering upstream of
+	// the executor) and errorsTotal (execution failures): a rejection is a
+	// deliberate, instructive refusal that names the violated contract.
+	rejectionsTotal *prometheus.CounterVec
+
 	// Retries (opt-in via Config.ToolRetries policies)
 	retriesTotal     *prometheus.CounterVec
 	retriesExhausted *prometheus.CounterVec
@@ -75,6 +82,13 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 				Help:      "Total tool calls filtered by reason",
 			}, []string{"tool_name", "reason"}),
 
+			rejectionsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_tools",
+				Name:      "rejections_total",
+				Help:      "Total tool-call rejections by a tool's own writer-gate, labelled by tool name and gate reason",
+			}, []string{"tool_name", "reason"}),
+
 			retriesTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "agentic_tools",
@@ -104,6 +118,7 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = registry.RegisterCounterVec("agentic-tools", "errors_total", metrics.errorsTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "timeout_total", metrics.timeoutTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "filtered_total", metrics.filteredTotal)
+			_ = registry.RegisterCounterVec("agentic-tools", "rejections_total", metrics.rejectionsTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "retries_total", metrics.retriesTotal)
 			_ = registry.RegisterCounterVec("agentic-tools", "retries_exhausted_total", metrics.retriesExhausted)
 			_ = registry.RegisterGauge("agentic-tools", "registered", metrics.toolsRegistered)
@@ -114,6 +129,7 @@ func getMetrics(registry *metric.MetricsRegistry) *toolsMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.errorsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.timeoutTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.filteredTotal)
+			_ = prometheus.DefaultRegisterer.Register(metrics.rejectionsTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.retriesTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.retriesExhausted)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolsRegistered)
@@ -164,6 +180,13 @@ func (m *toolsMetrics) recordExecutionTimeout(toolName string, durationSeconds f
 // recordToolFiltered records a filtered tool call.
 func (m *toolsMetrics) recordToolFiltered(toolName, reason string) {
 	m.filteredTotal.WithLabelValues(toolName, reason).Inc()
+}
+
+// recordToolRejection records that a tool's own writer-gate bounced a call
+// before any graph mutation, labelled by the gate reason (e.g. evidence,
+// bound, grammar, cap for emit_lesson).
+func (m *toolsMetrics) recordToolRejection(toolName, reason string) {
+	m.rejectionsTotal.WithLabelValues(toolName, reason).Inc()
 }
 
 // recordToolRetry records that a retry was triggered for a tool by a

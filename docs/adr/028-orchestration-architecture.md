@@ -108,6 +108,11 @@ Commit to a three-layer agentic orchestration architecture:
 - **Phase 1 shipped 2026-04-20** — read-only observation + structured diagnosis triples
   via `emit_diagnosis`; flow composition tools deferred to Phase 2 via config-only
   enablement (add tools to `allowed_tools` + `approval_required`; no new code required).
+- **Procedural memory shipped (ADR-080)** — the ops seam gained a second emission tool,
+  `emit_lesson`, that distills completed work into evidence-cited, lifecycle-gated
+  `agent.lesson.*` records. Delivery is push, not query: active lessons are matched and
+  rendered into a loop's brief at dispatch, never fetched via an agent-invoked search
+  tool. See [Agent Memory](../concepts/32-agent-memory.md) for the full three-layer model.
 
 ## Implications for rule authors
 
@@ -188,5 +193,8 @@ Commit to a three-layer agentic orchestration architecture:
 - ADR-026 — coordinator agent (proposed, pending refresh with this
   framing).
 - ADR-027 — ops agent (proposed, pending refresh with this framing).
+- [ADR-080](080-push-based-agent-memory-and-lesson-artifacts.md) — push-based agent
+  memory and evidence-cited lesson artifacts; Layer 4's second emission tool
+  (`emit_lesson`) and the brief-assembly injection step that delivers it.
 - `processor/rule/` reliability work (this session) — prerequisite for
   Layer 2 being something we can rely on.

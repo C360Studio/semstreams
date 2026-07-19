@@ -202,6 +202,9 @@ func TestRegistration(t *testing.T) {
 		{agentic.DelegationFrom, agentic.IriDelegatedBy, true},
 		{agentic.DelegationTo, agentic.IriDelegatesTo, true},
 		{agentic.AccountabilityActor, agentic.IriActor, false},
+		// agent.lesson.evidence is annotated with the PROV-O derivation IRI
+		// (ADR-080; annotation only, constant lives in vocabulary/standards.go).
+		{agentic.LessonEvidence, vocabulary.ProvWasDerivedFrom, false},
 	}
 
 	for _, tt := range tests {
@@ -280,8 +283,11 @@ func TestPredicateCount(t *testing.T) {
 	// Scratch: 4 (id, text, created_at, chars)
 	// Web: 12 (url, title, snippet, text, source_query, observed_at, fetched_at,
 	//   observed_by, fetched_by, content_type, status_code, truncated)
-	// Total: 112 predicates
-	expectedMin := 112
+	// Lesson: 13 (ADR-080 — category, polarity, severity, status, summary,
+	//   detail, injection-form, evidence, applies-to, observed-role, retired-at,
+	//   superseded-by, created-at)
+	// Total: 125 predicates
+	expectedMin := 125
 	if len(predicates) < expectedMin {
 		t.Errorf("expected at least %d predicates, got %d", expectedMin, len(predicates))
 	}
@@ -565,5 +571,96 @@ func TestWebPredicatesRegistered(t *testing.T) {
 	}
 	if matchableCount != 8 {
 		t.Errorf("rule-matchable count = %d, want 8 (url, observed_at, fetched_at, observed_by, fetched_by, content_type, status_code, truncated)", matchableCount)
+	}
+}
+
+// TestLessonPredicatesRegistered asserts the 13 agent.lesson.* predicates
+// (ADR-080) land with the right data types and rule-opaque flags. The three
+// authored-text predicates (summary, detail, injection-form) are rule-opaque
+// per the LLM-authored-content discipline (rules predicating on model-sampled
+// prose create Goodhart feedback loops); the enumerated/structural and
+// reference predicates stay rule-matchable so curation rules can gate on them.
+func TestLessonPredicatesRegistered(t *testing.T) {
+	vocabulary.ClearRegistry()
+	defer vocabulary.ClearRegistry()
+
+	agentic.Register()
+
+	lessonPredicates := []struct {
+		name       string
+		predicate  string
+		dataType   string
+		ruleOpaque bool
+	}{
+		{"LessonCategory", agentic.LessonCategory, "string", false},
+		{"LessonPolarity", agentic.LessonPolarity, "string", false},
+		{"LessonSeverity", agentic.LessonSeverity, "string", false},
+		{"LessonStatus", agentic.LessonStatus, "string", false},
+		{"LessonSummary", agentic.LessonSummary, "string", true},
+		{"LessonDetail", agentic.LessonDetail, "string", true},
+		{"LessonInjectionForm", agentic.LessonInjectionForm, "string", true},
+		{"LessonEvidence", agentic.LessonEvidence, "string", false},
+		{"LessonAppliesTo", agentic.LessonAppliesTo, "string", false},
+		{"LessonObservedRole", agentic.LessonObservedRole, "string", false},
+		{"LessonRetiredAt", agentic.LessonRetiredAt, "time.Time", false},
+		{"LessonSupersededBy", agentic.LessonSupersededBy, "string", false},
+		{"LessonCreatedAt", agentic.LessonCreatedAt, "time.Time", false},
+	}
+
+	opaqueCount := 0
+	matchableCount := 0
+	for _, tt := range lessonPredicates {
+		meta := vocabulary.GetPredicateMetadata(tt.predicate)
+		if meta == nil {
+			t.Errorf("%s (%q): not registered", tt.name, tt.predicate)
+			continue
+		}
+		if meta.DataType != tt.dataType {
+			t.Errorf("%s: DataType = %q, want %q", tt.name, meta.DataType, tt.dataType)
+		}
+		if meta.RuleOpaque != tt.ruleOpaque {
+			t.Errorf("%s: RuleOpaque = %v, want %v (LLM-authored content must not be rule-predicable — Goodhart feedback loop)",
+				tt.name, meta.RuleOpaque, tt.ruleOpaque)
+		}
+		if tt.ruleOpaque {
+			opaqueCount++
+		} else {
+			matchableCount++
+		}
+	}
+
+	// ADR-080 rule-visibility split: 3 rule-opaque authored-text
+	// (summary, detail, injection-form) + 10 rule-matchable structural/reference.
+	if opaqueCount != 3 {
+		t.Errorf("rule-opaque count = %d, want 3 (summary, detail, injection-form)", opaqueCount)
+	}
+	if matchableCount != 10 {
+		t.Errorf("rule-matchable count = %d, want 10 (category, polarity, severity, status, evidence, applies-to, observed-role, retired-at, superseded-by, created-at)", matchableCount)
+	}
+
+	// agent.lesson.category is the OPEN classifier — rule-matchable, no closed
+	// value set enforced at the registry (product taxonomy; ADR-080). The registry
+	// has no enum mechanism, so "open" is asserted here as rule-matchable string.
+	catMeta := vocabulary.GetPredicateMetadata(agentic.LessonCategory)
+	if catMeta == nil {
+		t.Fatal("LessonCategory not registered")
+	}
+	if catMeta.RuleOpaque {
+		t.Error("LessonCategory must stay rule-matchable (open product taxonomy, not opaque prose)")
+	}
+
+	// agent.lesson.evidence carries the concrete PROV-O derivation IRI
+	// prov:wasDerivedFrom (annotation only; constant lives in standards.go).
+	evMeta := vocabulary.GetPredicateMetadata(agentic.LessonEvidence)
+	if evMeta == nil {
+		t.Fatal("LessonEvidence not registered")
+	}
+	if evMeta.StandardIRI != "http://www.w3.org/ns/prov#wasDerivedFrom" {
+		t.Errorf("LessonEvidence.StandardIRI = %q, want %q (prov:wasDerivedFrom)",
+			evMeta.StandardIRI, "http://www.w3.org/ns/prov#wasDerivedFrom")
+	}
+	if evMeta.StandardIRI != vocabulary.ProvWasDerivedFrom {
+		t.Errorf("LessonEvidence.StandardIRI = %q, want vocabulary.ProvWasDerivedFrom %q",
+			evMeta.StandardIRI, vocabulary.ProvWasDerivedFrom)
 	}
 }

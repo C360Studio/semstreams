@@ -104,6 +104,7 @@ var BuiltinGroupKeys = []string{
 	"read_loop_result",
 	"decide",
 	"emit_diagnosis",
+	"emit_lesson",
 	"write_todos",
 	"scratchpad",
 	"summarize_graph",
@@ -178,13 +179,14 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	gate("http_request", func() error { return registerHTTPRequest(reg, deps.NATSClient, deps.Platform, logger) })
 
 	if deps.NATSClient == nil {
-		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, query_entity); web_search and http_request fall back to text-only return without graph emission")
+		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, emit_lesson, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
 		gate("read_loop_result", func() error { return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket) })
 		gate("decide", func() error {
 			return registerDecide(reg, deps.NATSClient, deps.Platform, deps.RestrictedDecideActions, logger)
 		})
 		gate("emit_diagnosis", func() error { return registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger) })
+		gate("emit_lesson", func() error { return registerEmitLesson(reg, deps.NATSClient, deps.Platform, logger) })
 		gate("graph_query", func() error { return registerGraphQuery(ctx, reg, deps.NATSClient, logger) })
 		gate("write_todos", func() error { return registerWriteTodos(reg, deps.NATSClient, deps.Platform, logger) })
 		gate("scratchpad", func() error { return registerScratchpad(reg, deps.NATSClient, deps.Platform, logger) })

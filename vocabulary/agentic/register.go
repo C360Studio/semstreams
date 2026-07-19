@@ -30,6 +30,7 @@ func Register() {
 	registerStepPredicates()
 	registerCoordinatorPredicates()
 	registerOpsPredicates()
+	registerLessonPredicates()
 	registerOpsConfigPredicates()
 	registerIdentityPredicates()
 	registerTodoPredicates()
@@ -60,6 +61,72 @@ func registerOpsPredicates() {
 	} {
 		vocabulary.Register(predicate)
 	}
+}
+
+// registerLessonPredicates registers the agent.lesson.* family (ADR-080 —
+// push-based agent memory / lesson substrate). The enumerated/structural and
+// reference predicates stay rule-matchable so curation rules can gate on
+// polarity/severity/status/scope; the three authored-text predicates (summary,
+// detail, injection-form) register rule-opaque per the LLM-authored-content
+// discipline (ADR-036). agent.lesson.evidence carries StandardIRI
+// prov:wasDerivedFrom — annotation only; the PROV-O constant already lives in
+// vocabulary/standards.go.
+func registerLessonPredicates() {
+	vocabulary.Register(LessonCategory,
+		vocabulary.WithDescription("Open product-taxonomy classifier for the lesson; no framework-closed value set"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonPolarity,
+		vocabulary.WithDescription("Directional stance of the lesson; closed value set avoid|best_practice"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonSeverity,
+		vocabulary.WithDescription("Urgency classification ordering lessons at brief assembly; closed value set info|warning|critical"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonStatus,
+		vocabulary.WithDescription("Gated-lifecycle state; closed value set proposed|active|retired|superseded; single-valued (replace); only active is injectable"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonSummary,
+		vocabulary.WithDescription("Short LLM-authored gist of the lesson; rule-opaque authored prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(LessonDetail,
+		vocabulary.WithDescription("Unbounded LLM-authored explanation of the lesson; rule-opaque authored prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(LessonInjectionForm,
+		vocabulary.WithDescription("Bounded string rendered verbatim into a downstream brief; byte-bounded at the writer; rule-opaque authored prose"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithRuleOpaque(true))
+
+	vocabulary.Register(LessonEvidence,
+		vocabulary.WithDescription("Supporting entity ID the lesson was derived from (>=1 at the writer); multi-valued"),
+		vocabulary.WithDataType("string"),
+		vocabulary.WithIRI(vocabulary.ProvWasDerivedFrom))
+
+	vocabulary.Register(LessonAppliesTo,
+		vocabulary.WithDescription("Deterministic scope key controlling brief injection; grammar id:{prefix}|tag:{token}; multi-valued"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonObservedRole,
+		vocabulary.WithDescription("Agent role the lesson pertains to; optional"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonRetiredAt,
+		vocabulary.WithDescription("Lifecycle timestamp set when a lesson leaves active; single-valued (replace)"),
+		vocabulary.WithDataType("time.Time"))
+
+	vocabulary.Register(LessonSupersededBy,
+		vocabulary.WithDescription("Entity ID of the lesson that supersedes this one; single-valued (replace)"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LessonCreatedAt,
+		vocabulary.WithDescription("Immutable wall-clock birth timestamp of the lesson (RFC3339 UTC); replay-stable ordering key for brief injection; never re-stamped by lifecycle transitions"),
+		vocabulary.WithDataType("time.Time"))
 }
 
 func registerOpsConfigPredicates() {

@@ -157,6 +157,7 @@
           "get_flow_template",
           "list_components",
           "emit_diagnosis",
+          "emit_lesson",
           "submit_work"
         ],
         "ports": {

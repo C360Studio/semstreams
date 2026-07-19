@@ -1,5 +1,23 @@
 # Design: agent-memory-lesson-substrate
 
+> **Reconciliation (post-adversarial-review — authoritative order: ADR-080 →
+> proposal.md → tasks.md → spec delta → this file).** The Decisions below predate
+> the 5-lens review fold and are STALE where they conflict with the above. Do not
+> re-derive; the corrections are:
+> - **Namespace/predicates:** the family is `agent.lesson.*` (ADR-080), realized as
+>   contract-valid 3-part predicates (`agent.lesson.status`,
+>   `agent.lesson.injection-form`, …) — NOT the flat `lesson.category` /
+>   `lesson.injection_form` shorthand in Decision 2 (2-part + underscores fail
+>   `ParsePredicate` and panic at registration; PR #532 canonical predicate contract).
+> - **Entity ID:** `{org}.{platform}.agent.lesson.record.{uuid5}` — 6-part
+>   (`org.platform`/`agent`/`lesson`/`record`/`uuid5`) — NOT the `ops.lesson.record`
+>   in Decision 1. Lessons unify under `agent.*`; diagnosis stays `ops.*`.
+> - **Delivery:** framework-owned deterministic brief-assembly injection at the loop
+>   seam — NOT the `want:[lessons]` fusion facet in Decision 5. The facet is deferred
+>   to the change that makes fusion servable; the deterministic matcher ships here and
+>   is designed for that facet's later reuse.
+> - **No `lesson.confidence`:** Open Question resolved to omit in v1.
+
 ## Context
 
 ADR-080 (Proposed) records the decisions; the proposal records the why. Mechanically, this

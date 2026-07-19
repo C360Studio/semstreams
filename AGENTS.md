@@ -52,7 +52,6 @@ Flow-based component architecture:
 | `processor/agentic-model/` | LLM endpoint caller, retry logic |
 | `processor/agentic-tools/` | Tool dispatch, executor registry |
 | `processor/agentic-dispatch/` | User message routing, commands |
-| `processor/agentic-memory/` | Graph-backed persistent memory |
 | `processor/agentic-governance/` | PII filtering, rate limiting, content governance |
 
 ## Core Interface

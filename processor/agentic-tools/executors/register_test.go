@@ -333,7 +333,7 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 	t.Parallel()
 	want := []string{
 		"bash", "web_search", "http_request",
-		"read_loop_result", "decide", "emit_diagnosis",
+		"read_loop_result", "decide", "emit_diagnosis", "emit_lesson",
 		"write_todos", "scratchpad",
 		"summarize_graph", "search_graph", "flow_monitor",
 		"graph_query",
@@ -348,6 +348,32 @@ func TestBuiltinGroupKeys_Stability(t *testing.T) {
 		if BuiltinGroupKeys[i] != k {
 			t.Errorf("BuiltinGroupKeys[%d] = %q, want %q. Order matters for golden-test reproducibility.", i, BuiltinGroupKeys[i], k)
 		}
+	}
+}
+
+// TestBuiltins_EmitLessonWriteOnly_NoLessonSearchTool is the enumeration oracle
+// for the spec scenario "No dedicated lesson search tool exists" (ADR-080
+// decision 2: memory is PUSH, not pull). The built-in set MUST contain
+// emit_lesson (the sole agent-facing lesson WRITE path) and MUST NOT contain any
+// dedicated lesson search/list/query tool — lessons reach agents by bounded
+// deterministic brief injection, never a pull tool. Generic graph-read tools
+// (search_graph, query_entity) remain, governed by per-role allowlists.
+func TestBuiltins_EmitLessonWriteOnly_NoLessonSearchTool(t *testing.T) {
+	t.Parallel()
+
+	found := false
+	for _, k := range BuiltinGroupKeys {
+		if k == "emit_lesson" {
+			found = true
+		}
+		// Any lesson-named builtin OTHER than the emit (write) tool would be a
+		// dedicated lesson read surface — forbidden by ADR-080 decision 2.
+		if strings.Contains(strings.ToLower(k), "lesson") && k != "emit_lesson" {
+			t.Errorf("built-in tool group %q is a dedicated lesson tool other than emit_lesson; memory is push-only, no lesson search/list/query tool", k)
+		}
+	}
+	if !found {
+		t.Errorf("built-in tool groups must contain emit_lesson (the lesson write path); got %v", BuiltinGroupKeys)
 	}
 }
 
