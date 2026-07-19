@@ -177,9 +177,12 @@
 
 ## 8. Handoff + ship gates
 
-- [ ] 8.1 File the semteams upstream issue: adopt the lesson primitive (load/fix the dormant
+- [x] 8.1 File the semteams upstream issue: adopt the lesson primitive (load/fix the dormant
       ops pack incl. the stale `reviewer-qa` trigger, own chain-terminal trigger rules and
       promotion policy), referencing this change and ADR-080
+      (DONE 2026-07-19 — filed C360Studio/semteams#245; names the ops-pack revival, the
+      stale reviewer-qa trigger [ADR-041], promotion policy ownership, and the
+      submit_work allowlisted-≠-advertised gap)
 - [x] 8.2 `/preflight` — lint (revive clean), `-race` unit + integration, schema no-drift,
       contract tests; classify any failure fix-now / file-with-Skip / document
       (DONE 2026-07-19 — lint exit 0, unit `-race` 130 ok/0 FAIL, contract ok, schema no-drift,
@@ -198,5 +201,7 @@
       executor; ops loops end on natural terminal-tool-less completion] → deferred to §8.1 handoff.
       NITs [stale llm_extractor note in coincidental rulepack; 2 draft proposal docs] left per
       LEAVE-list scope.)
-- [ ] 8.4 PR (complete-system scope: vocab + executor + lifecycle lane + injection +
+- [x] 8.4 PR (complete-system scope: vocab + executor + lifecycle lane + injection +
       consumer + removal); merge; verify `openspec list` before any completion claim
+      (DONE 2026-07-19 — PR #580 squash-merged to main as 338e847e on green CI [Test 12m +
+      lint/build/schema]; branch deleted. Follow-up example: PR #581. openspec list verified.)
