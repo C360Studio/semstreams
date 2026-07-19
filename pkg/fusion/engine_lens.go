@@ -117,6 +117,11 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	if wants[WantPaths] {
 		resp.Paths = e.computePaths(ctx, ranked, lens)
 	}
+	// The graph projection is computed LAST so its post-fetch status re-sample
+	// (ViewRevision) trails every fetch the facet performed.
+	if wants[WantGraph] {
+		resp.Graph = e.computeGraph(ctx, ranked, lens, status.IndexedRevision)
+	}
 	return resp, nil
 }
 
