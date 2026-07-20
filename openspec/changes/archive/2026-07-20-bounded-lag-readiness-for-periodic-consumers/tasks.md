@@ -8,7 +8,7 @@
       unchanged; one `State`-label honesty fix (`failedCount→degraded`
       unconditional); scoped "no in-place index-format migration"; G5 follow-up
       noted; mechanics kept in the spec, not the ADR (DONE)
-- [ ] 1.2 Seed the `graph-index-readiness` capability spec (exact-`Ready`,
+- [x] 1.2 Seed the `graph-index-readiness` capability spec (exact-`Ready`,
       unconditional `failedCount→degraded`, bounded-lag interpretation with hard
       stops + empty-graph guard, clustering-under-lag + observability; verified
       against `graph/index_status.go` + `pkg/revlag/watermark.go`).
