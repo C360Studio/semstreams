@@ -21,11 +21,11 @@
 - [x] 2.1 `-race` unit (`./pkg/fusion/...` + any fusion integration), `go build
       ./...`, `go vet -tags=integration ./...`, `task lint`; semstreams-reviewer
       pass (touches the fusion contract).
-- [ ] 2.2 Close #592 with the decision comment: CLOSE (retry is the contract),
+- [x] 2.2 Close #592 with the decision comment: CLOSE (retry is the contract),
       the Path-A/Path-B reframe, the reopen trigger (continuous-write deployment
       also serving exact point queries — does not exist today), and the red
       herrings (`lifecycle/manager_query.go`, `rule/entity_watcher.go`, and the
       temporal/spatial/embedding "watcher unavailable" sites reuse
       `ErrorCodeIndexNotReady` for responder-up, NOT catch-up — do not widen a
       tolerance into them).
-- [ ] 2.3 Merge + archive this change; then the joint tag covers #591 + this fix.
+- [x] 2.3 Merge + archive this change; then the joint tag covers #591 + this fix.
