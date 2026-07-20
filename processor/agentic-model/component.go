@@ -428,17 +428,6 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 		return
 	}
 
-	// Strip tools if endpoint doesn't support them
-	if len(req.Tools) > 0 {
-		ep := c.modelRegistry.GetEndpoint(req.Model)
-		if ep != nil && !ep.SupportsTools {
-			c.logger.Warn("Stripping tools from request: endpoint does not support tool calling",
-				"model", req.Model,
-				"tool_count", len(req.Tools))
-			req.Tools = nil
-		}
-	}
-
 	c.logger.Debug("Processing agent request",
 		slog.String("request_id", req.RequestID),
 		slog.String("model", req.Model),
@@ -451,6 +440,16 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 		c.incrementErrors()
 		return
 	}
+
+	// Strip tools the served endpoint can't handle. req.Model can be a
+	// capability (coordinator/developer/reviewer); getClientForRequest already
+	// resolved it (capability chain + health failover), so deciding on the
+	// returned endpoint honors the resolved-endpoint contract (doc.go Endpoint
+	// Resolution) and matches the endpoint that actually serves the request —
+	// where a pre-resolution GetEndpoint(req.Model) would miss on a capability
+	// and skip the strip, and a ResolveEndpointName probe could diverge from a
+	// health-failed-over served endpoint.
+	stripUnsupportedTools(&req, endpoint, c.logger)
 
 	startTime := time.Now()
 	if c.metrics != nil {
@@ -469,6 +468,24 @@ func (c *Component) handleRequest(ctx context.Context, data []byte) {
 
 	c.recordHealthResult(ctx, endpointName, true, nil, "", latency)
 	c.handleModelSuccess(ctx, req, resp, duration)
+}
+
+// stripUnsupportedTools clears req.Tools when the served endpoint cannot handle
+// tool calls, honoring the resolved-endpoint contract (doc.go Endpoint
+// Resolution). endpoint is the endpoint getClientForRequest resolved and will
+// serve, so a capability request whose resolved endpoint lacks tool support is
+// stripped correctly. Returns true when tools were stripped.
+func stripUnsupportedTools(req *agentic.AgentRequest, endpoint *model.EndpointConfig, logger *slog.Logger) bool {
+	if len(req.Tools) == 0 || endpoint == nil || endpoint.SupportsTools {
+		return false
+	}
+	if logger != nil {
+		logger.Warn("Stripping tools from request: endpoint does not support tool calling",
+			"model", req.Model,
+			"tool_count", len(req.Tools))
+	}
+	req.Tools = nil
+	return true
 }
 
 // recordHealthResult forwards a request outcome to the health policy.
@@ -633,7 +650,7 @@ func (c *Component) resolveEndpoint(req agentic.AgentRequest) (*model.EndpointCo
 
 	// 1. Capability chain — first healthy endpoint wins.
 	for _, name := range chain {
-		candidate := c.modelRegistry.GetEndpoint(name)
+		candidate := c.modelRegistry.GetEndpoint(name) // modelresolveaudit:allow call-path resolution (resolveEndpoint chain names)
 		if candidate == nil {
 			continue
 		}
@@ -647,7 +664,7 @@ func (c *Component) resolveEndpoint(req agentic.AgentRequest) (*model.EndpointCo
 	}
 
 	// 2. Direct endpoint name — health-gated for the same reason.
-	if candidate := c.modelRegistry.GetEndpoint(req.Model); candidate != nil {
+	if candidate := c.modelRegistry.GetEndpoint(req.Model); candidate != nil { // modelresolveaudit:allow call-path resolution (resolveEndpoint direct probe; capability handled by chain above)
 		if c.healthPolicy.IsHealthy(req.Model) {
 			return candidate, req.Model, capability
 		}
@@ -659,7 +676,7 @@ func (c *Component) resolveEndpoint(req agentic.AgentRequest) (*model.EndpointCo
 	// 3. Default — NOT health-gated. Last guaranteed responder; we'd
 	// rather attempt and let the breaker re-record than queue dead air.
 	if defaultName := c.modelRegistry.GetDefault(); defaultName != "" {
-		if ep := c.modelRegistry.GetEndpoint(defaultName); ep != nil {
+		if ep := c.modelRegistry.GetEndpoint(defaultName); ep != nil { // modelresolveaudit:allow call-path resolution (resolveEndpoint default is a real endpoint)
 			return ep, defaultName, capability
 		}
 	}
@@ -667,7 +684,7 @@ func (c *Component) resolveEndpoint(req agentic.AgentRequest) (*model.EndpointCo
 	// 4. Last-ditch: chain unhealthy AND no default. Retry chain
 	// ignoring health so the next request result reaches the breaker.
 	for _, name := range chain {
-		if candidate := c.modelRegistry.GetEndpoint(name); candidate != nil {
+		if candidate := c.modelRegistry.GetEndpoint(name); candidate != nil { // modelresolveaudit:allow call-path resolution (resolveEndpoint chain retry)
 			c.logger.Warn("all chain endpoints unhealthy; attempting anyway",
 				slog.String("endpoint", name))
 			return candidate, name, capability

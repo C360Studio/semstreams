@@ -101,7 +101,7 @@ func NewContextManager(loopID, model string, config ContextConfig, opts ...Conte
 // resolveModelLimit looks up the model context window size from the model registry.
 func (cm *ContextManager) resolveModelLimit(modelName string) int {
 	if cm.modelRegistry != nil {
-		if limit := cm.modelRegistry.GetMaxTokens(modelName); limit > 0 {
+		if limit := cm.modelRegistry.GetMaxTokens(modelName); limit > 0 { // modelresolveaudit:allow GetMaxTokens resolves a capability to its endpoint internally (#594 fix)
 			return limit
 		}
 	}

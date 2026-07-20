@@ -280,11 +280,11 @@ func validateModelRegistry(registry *model.Registry) error {
 			return fmt.Errorf("missing model capability %s", capability)
 		}
 		endpointName := registry.Resolve(capability)
-		if endpointName == "" || registry.GetEndpoint(endpointName) == nil {
+		if endpointName == "" || registry.GetEndpoint(endpointName) == nil { // modelresolveaudit:allow endpointName is registry.Resolve(capability); input is provably a capability from requiredModelCapabilities, resolved to its preferred endpoint
 			return fmt.Errorf("model capability %s does not resolve to an endpoint", capability)
 		}
 	}
-	defaultEndpoint := registry.GetEndpoint(registry.GetDefault())
+	defaultEndpoint := registry.GetEndpoint(registry.GetDefault()) // modelresolveaudit:allow GetDefault returns a real endpoint name, never a capability
 	if defaultEndpoint == nil || !defaultEndpoint.SupportsTools {
 		return errors.New("a tool-capable default model endpoint is required")
 	}

@@ -182,12 +182,17 @@ func truncateToolResult(s string, maxBytes int) string {
 	return s[:cut] + marker
 }
 
-// resolveProvider looks up the LLM provider for a model endpoint name.
+// resolveProvider looks up the LLM provider for a model endpoint name or a
+// capability. Spawned loops carry a capability (coordinator/developer/reviewer)
+// in task.Model / entity.Model, so the name is resolved to its endpoint via
+// model.ResolveEndpointName first — a raw GetEndpoint on a capability misses and
+// returns "" (the #584/#594 accounting/aux-path resolution class). A real
+// endpoint name resolves to itself, unchanged.
 func (h *MessageHandler) resolveProvider(endpointName string) string {
 	if h.modelRegistry == nil || endpointName == "" {
 		return ""
 	}
-	ep := h.modelRegistry.GetEndpoint(endpointName)
+	ep := h.modelRegistry.GetEndpoint(model.ResolveEndpointName(h.modelRegistry, endpointName))
 	if ep == nil {
 		return ""
 	}

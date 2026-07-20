@@ -37,7 +37,7 @@ type tripleCollector struct {
 	batchSizes     []int
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=635 column=18 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed replay root rejection
+// entity-id-audit:classify intentional-malformed "bad" line=709 column=18 surface=go-field:EntityState.ID entity_id_invalid:arity verifies malformed replay root rejection
 
 func (tc *tripleCollector) handler(_ context.Context, data []byte) ([]byte, error) {
 	var req gtypes.AddTripleRequest
@@ -408,6 +408,80 @@ func TestWriteLoopCompletion_Integration(t *testing.T) {
 	}
 	if batch == 1 && sizes[0] != len(completionRequired) {
 		t.Errorf("expected batch size %d, got %d", len(completionRequired), sizes[0])
+	}
+}
+
+// TestWriteLoopCompletion_Integration_CapabilityResolves drives the #584 fix
+// through the production NATS wire: a loop whose Model is a CAPABILITY name must
+// stamp agent.loop.cost-usd AND record the RESOLVED endpoint in
+// agent.loop.model-used (not the capability). Pre-fix, computeCost/
+// ModelEndpointEntityID keyed the raw capability → no cost stamp and model-used
+// pointing at the capability. The endpoint path is covered above; this closes the
+// capability path end-to-end.
+func TestWriteLoopCompletion_Integration_CapabilityResolves(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
+	ctx := context.Background()
+
+	collector := &tripleCollector{}
+	collector.subscribeMutations(t, ctx, tc.Client)
+
+	reg := &model.Registry{
+		Capabilities: map[string]*model.CapabilityConfig{
+			"developer": {Preferred: []string{"big"}},
+		},
+		Endpoints: map[string]*model.EndpointConfig{
+			"big": {
+				Model:                  "claude-opus-4-5",
+				InputPricePer1MTokens:  15.0,
+				OutputPricePer1MTokens: 75.0,
+			},
+		},
+		Defaults: model.DefaultsConfig{Model: "big"},
+	}
+
+	w := agenticloop.NewGraphWriterForTest(tc.Client, reg, types.PlatformMeta{Org: "acme", Platform: "ops"})
+
+	event := &agentic.LoopCompletedEvent{
+		LoopID:      "loop-cap",
+		TaskID:      "task-cap",
+		Outcome:     "success",
+		Role:        "developer",
+		Model:       "developer", // a CAPABILITY name, not an endpoint
+		Iterations:  3,
+		TokensIn:    10000,
+		TokensOut:   2000,
+		CompletedAt: time.Now(),
+	}
+
+	w.WriteLoopCompletion(ctx, event)
+
+	var modelUsed string
+	var costStamped bool
+	for _, tr := range collector.getTriples() {
+		switch tr.Predicate {
+		case agvocab.LoopModelUsed:
+			if s, ok := tr.Object.(string); ok {
+				modelUsed = s
+			}
+		case agvocab.LoopCostUSD:
+			costStamped = true
+			if f, ok := tr.Object.(float64); ok && f <= 0 {
+				t.Errorf("cost-usd = %v, want > 0 for a priced capability loop", f)
+			}
+		}
+	}
+
+	wantModelID := agentic.ModelEndpointEntityID("acme", "ops", "big")      // resolved endpoint
+	capModelID := agentic.ModelEndpointEntityID("acme", "ops", "developer") // the pre-fix (bug) value
+	if modelUsed == "" {
+		t.Fatal("model-used not stamped for a capability loop")
+	}
+	if modelUsed != wantModelID {
+		t.Errorf("model-used = %q, want the RESOLVED endpoint ID %q (pre-fix bug stamped the capability %q)",
+			modelUsed, wantModelID, capModelID)
+	}
+	if !costStamped {
+		t.Error("cost-usd not stamped for a capability loop (the #584 bug)")
 	}
 }
 
