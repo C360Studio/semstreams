@@ -48,6 +48,15 @@ const (
 	defaultAnomalyReviewTimeout    = 60 * time.Second
 )
 
+// maxIndexLagTolerance caps IndexLagTolerance well above any modest steady-state
+// lag but far below "ungated". Bounded-lag clustering trades a bounded fraction of
+// stale edges for liveness (ADR-082); a tolerance of a million ENTITY_STATES
+// revisions behind is not bounded staleness — it effectively defeats the
+// bootstrap/cutover defer and almost certainly signals a mis-unit config (e.g. a
+// byte budget pasted into a revision-count field). Reject it rather than let it
+// silently ungate the gate.
+const maxIndexLagTolerance uint64 = 1_000_000
+
 // Config holds configuration for graph-clustering component
 type Config struct {
 	Ports                *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -66,6 +75,16 @@ type Config struct {
 	// clustering without a co-deployed graph-index handler; it MUST NOT be used during a
 	// format cutover.
 	AllowUngatedReads bool `json:"allow_ungated_reads" schema:"type:bool,description:Allow detection when graph-index readiness is unknown (standalone only; never during cutover),category:advanced"`
+
+	// IndexLagTolerance lets community detection — a periodic, whole-result-re-
+	// deriving consumer — run when graph-index is within this many ENTITY_STATES
+	// revisions of caught up, instead of deferring forever under continuous write
+	// (ADR-082, #590). It is a CONSUMER policy: the shared readiness status stays
+	// exactly honest; this reader decides how much staleness it accepts. Default 0
+	// == the exact Ready gate (contract-preserving). A degraded, reset-required, or
+	// empty (target==0) index still defers at ANY tolerance. Counts revisions (each
+	// may carry many relationships), so it is a coarse node-staleness proxy.
+	IndexLagTolerance uint64 `json:"index_lag_tolerance" schema:"type:int,description:Max ENTITY_STATES revision lag under which community detection still runs (0 = require exact index catch-up; a degraded/reset/empty index always defers regardless),category:advanced"`
 
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
@@ -194,6 +213,14 @@ func (c *Config) Validate() error {
 	// Validate max iterations
 	if c.MaxIterations <= 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "max_iterations must be greater than 0")
+	}
+
+	// Reject a pathological bounded-lag tolerance so it cannot silently defeat the
+	// bootstrap/cutover defer (ADR-082). See maxIndexLagTolerance rationale.
+	if c.IndexLagTolerance > maxIndexLagTolerance {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("index_lag_tolerance %d exceeds the sane maximum %d ENTITY_STATES revisions; a tolerance this large ungates bootstrap/cutover deferral",
+				c.IndexLagTolerance, maxIndexLagTolerance))
 	}
 
 	// Anomaly detection requires structural analysis
@@ -423,6 +450,7 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
 	graphStatePoison  atomic.Pointer[graph.StateContractError]
+	metrics           *clusteringMetrics
 
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
@@ -485,6 +513,7 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		natsClient:    natsClient,
 		logger:        logger,
 		modelRegistry: deps.ModelRegistry,
+		metrics:       getMetrics(deps.MetricsRegistry),
 	}
 
 	// Initialize last activity
@@ -1015,9 +1044,16 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 			// INCOMING_INDEX directly, so skip this cycle while graph-index is still
 			// building or degraded — running would derive communities from partial
 			// topology. The next tick retries once the index is ready.
-			if !c.graphIndexReady(ctx) {
+			ready, lag, statusKnown := c.graphIndexReady(ctx)
+			if !ready {
 				c.logger.Debug("graph-index not ready; deferring community detection")
 				continue
+			}
+			// Only record the lag gauge when we actually parsed a status. On the
+			// fail-open path (AllowUngatedReads, no reachable/parseable status) there
+			// is no lag to report — recording 0 would read as "verified caught up".
+			if statusKnown {
+				c.observeDetectionLag(lag)
 			}
 			c.runCommunityDetection(ctx)
 		}
@@ -1025,28 +1061,50 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 }
 
 // graphIndexReady reports whether it is safe to run community detection against the
-// INCOMING_INDEX (gh#474 Codex #6). It DEFERS only on an EXPLICIT not-ready/degraded
-// status — i.e. graph-index is up and reports it is still building or has unresolved
-// write failures, exactly the cutover/failure window where reading would derive
-// communities from partial topology. It FAILS OPEN when the status endpoint is
-// unreachable or unparseable: that means graph-index is absent (or not co-deployed),
-// a different failure mode than a mid-rebuild index, and blocking detection forever on
-// it would be wrong (and would break setups that run clustering without the handler).
-func (c *Component) graphIndexReady(ctx context.Context) bool {
+// INCOMING_INDEX (gh#474 Codex #6), the ENTITY_STATES revision lag the decision was
+// made at, and whether a status was actually parsed (statusKnown=false on the
+// fail-open paths, where there is no lag to report). As a periodic,
+// whole-result-re-deriving consumer, detection gates on the bounded-lag
+// interpretation (ADR-082): it runs when the index is not a hard stop
+// (degraded/reset/empty defer at ANY tolerance) AND is within index_lag_tolerance
+// revisions of caught up, instead of deferring forever under continuous write (#590).
+// With the default tolerance 0 this is exactly the old strict Ready gate.
+//
+// It FAILS OPEN when the status endpoint is unreachable or unparseable: that means
+// graph-index is absent (or not co-deployed), a different failure mode than a
+// mid-rebuild index, and blocking detection forever on it would be wrong (and would
+// break setups that run clustering without the handler).
+func (c *Component) graphIndexReady(ctx context.Context) (ready bool, lag uint64, statusKnown bool) {
 	respData, err := c.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
 	if err != nil {
 		// Unknown readiness — FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
 		// graph-index mid-cutover is indistinguishable from an absent one, and its stale
 		// bucket is not proof of completeness. Only an explicit standalone config proceeds.
 		c.logger.Debug("graph-index status unreachable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
-		return c.config.AllowUngatedReads
+		return c.config.AllowUngatedReads, 0, false
 	}
 	var status graph.IndexStatusResponse
 	if err := json.Unmarshal(respData, &status); err != nil {
 		c.logger.Debug("graph-index status unparseable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
-		return c.config.AllowUngatedReads
+		return c.config.AllowUngatedReads, 0, false
 	}
-	return status.Ready
+	return status.ReadyWithinLag(c.config.IndexLagTolerance), status.Lag, true
+}
+
+// observeDetectionLag makes the index lag a detection run proceeded at operator-
+// visible (ADR-082, #579 lesson): it records the gauge on every run and, when the
+// run is proceeding on bounded-stale topology (Lag>0), also emits an INFO log so the
+// staleness is not confined to a debug line. Lag>0 only occurs via the bounded-lag
+// path — an exact Ready run is caught up (Lag==0).
+func (c *Component) observeDetectionLag(lag uint64) {
+	if c.metrics != nil {
+		c.metrics.setIndexLagAtDetection(lag)
+	}
+	if lag > 0 {
+		c.logger.Info("community detection running under bounded index lag",
+			slog.Uint64("index_lag", lag),
+			slog.Uint64("index_lag_tolerance", c.config.IndexLagTolerance))
+	}
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.
