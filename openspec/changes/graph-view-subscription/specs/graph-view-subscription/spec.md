@@ -26,8 +26,10 @@ gh#562) is forbidden on the view path by that API's own contract.
 A graph view SHALL coalesce fan-out to a configurable view-rate tick, emitting at
 most one delta per changed key per window carrying the greatest-revision
 operation for that key, so serve-rate is decoupled from write-rate. A delta is
-either `upsert(key, value, revision)` or `delete(key, revision)`; tombstones flow
-through the same coalescing lane as upserts, last-writer-wins by revision.
+`upsert(key, value, revision)`, `delete(key, revision)`, or
+`poison(key, revision, error)`; tombstones and poison flow through the same
+coalescing lane as upserts, last-writer-wins by revision (an out-of-band lane
+could race the coalesced stream).
 
 #### Scenario: Multiple writes to one key within a window
 - **GIVEN** key K is written five times within one window
@@ -196,7 +198,9 @@ subscriber.
 A graph view SHALL offer a point-read surface (`Get(key)` / bounded list) over
 the same projection, coherent with the delta stream: a point read never returns
 a value older than one already applied by the view, and honors the readiness
-gate and poison semantics above.
+gate and poison semantics above. A point read of a poisoned key surfaces the
+typed poison error; list surfaces enumerate kept entries (poisoned keys are
+observable via point reads and the poison signal, not silently invented).
 
 #### Scenario: Point read is not staler than the stream
 - **GIVEN** the view applied K at revision R

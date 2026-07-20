@@ -689,6 +689,13 @@ gate, dispatch errors).
 | `semstreams_router_sse_connections_active` | gauge | — | Active SSE clients on `/activity` |
 | `semstreams_router_sse_events_total` | counter | event_type | SSE events emitted |
 | `semstreams_router_sse_errors_total` | counter | error_type | SSE connection errors |
+| `semstreams_router_activity_view_caught_up` | gauge | — | 1 when the shared AGENT_LOOPS activity view is caught up and its watcher healthy, 0 while bootstrapping or after watcher loss (staleness signal) |
+| `semstreams_router_activity_view_applied_revision` | gauge | — | Highest AGENT_LOOPS KV revision applied by the shared activity view (watermark) |
+| `semstreams_router_activity_view_subscribers` | gauge | — | SSE subscriptions attached to the shared activity view |
+| `semstreams_router_activity_view_max_pending_keys` | gauge | — | Largest per-subscriber pending-delta buffer at the last fan-out window (slow-client backlog) |
+| `semstreams_router_activity_view_poisoned_total` | counter | — | AGENT_LOOPS writes that failed validating decode, surfaced as per-key poison |
+| `semstreams_router_activity_view_coalesced_drops_total` | counter | — | Pending deltas overwritten before delivery (at-most-once coalescing on slow clients) |
+| `semstreams_router_activity_view_watcher_lost_total` | counter | — | Losses of the shared AGENT_LOOPS view watcher (each fails closed and re-bootstraps) |
 
 ### Trajectory Analysis
 

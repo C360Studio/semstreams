@@ -22,8 +22,15 @@ originating #579 evidence.
 | Coherence discipline | ADR-079 ABA guard (`graph-ingest/component.go:2943`, PR #583) | apply the pattern at BOTH seams (attach + tick) |
 
 Home: `pkg/graphview` (domain-agnostic; bucket + decode func injected — decode
-returns `(T, keep bool, err error)` so consumers can skip non-record keys, map
-present-but-not-ready records to absent, and surface contract errors). NOT
+is `func(key string, value []byte, meta EntryMeta) (T, keep bool, err error)`
+with `EntryMeta{Revision, Created}`, so consumers can skip non-record keys, map
+present-but-not-ready records to absent, surface contract errors, and preserve
+authoritative KV write timestamps; deltas carry `Created` for all ops incl.
+tombstones). A
+`keep=false` on a previously-kept key converges subscribers via a tombstone at
+that revision (silent projection removal would strand subscriber copies);
+poison on a key heals when a newer canonical write for that key decodes clean
+(ADR-079 per-entity semantics). NOT
 `pkg/projection` — taken by ADR-056. jetstream-in-pkg is precedented
 (`pkg/lifecycle`).
 

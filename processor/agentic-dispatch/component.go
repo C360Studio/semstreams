@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/graphview"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -97,6 +98,22 @@ type Component struct {
 
 	// Track consumers for cleanup
 	consumerInfos []consumerInfo
+
+	// Shared AGENT_LOOPS read view (ADR-081): ONE graphview.View serves every
+	// /activity SSE client. Lazily created on the first request — bucket
+	// absence stays a per-request condition, never a boot failure — and
+	// stopped with the component (stopActivityView).
+	activityViewMu sync.Mutex
+	activityView   *graphview.View[activityRecord]
+	// activityViewSource overrides the AGENT_LOOPS bucket handle in tests;
+	// production leaves it nil (resolved via natsClient.GetKeyValueBucket).
+	activityViewSource graphview.WatcherSource
+	// activityViewOpts appends extra view options in tests (e.g. a fast
+	// tick); production leaves it nil.
+	activityViewOpts []graphview.Option
+	// activityTestHooks run after the production metric hooks so tests can
+	// synchronize on view internals; production leaves the zero value.
+	activityTestHooks graphview.Hooks
 
 	// sendResponseFn is a test hook; production leaves this nil. When non-nil
 	// it replaces the NATS-publishing behavior of sendResponse.
@@ -284,6 +301,13 @@ func (c *Component) Start(ctx context.Context) error {
 
 // Stop halts processing with graceful shutdown
 func (c *Component) Stop(timeout time.Duration) error {
+	// Stop the shared activity view first (if the lazy first /activity
+	// request created it): attached SSE subscriptions receive the explicit
+	// terminal close and the single AGENT_LOOPS watcher shuts down. Runs
+	// before the started check so a component that served HTTP without
+	// Start (unit harnesses) still releases the watcher.
+	c.stopActivityView()
+
 	c.mu.Lock()
 	if !c.started {
 		c.mu.Unlock()

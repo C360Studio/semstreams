@@ -304,29 +304,6 @@ func TestHandleActivityStream_NoClient(t *testing.T) {
 	t.Skip("Requires integration test with real NATS infrastructure")
 }
 
-func TestMapKVOperation(t *testing.T) {
-	comp := newTestComponent(t)
-
-	tests := []struct {
-		name      string
-		operation jetstream.KeyValueOp
-		revision  uint64
-		expected  string
-	}{
-		{"create on revision 1", jetstream.KeyValuePut, 1, "loop_created"},
-		{"update on revision > 1", jetstream.KeyValuePut, 5, "loop_updated"},
-		{"delete", jetstream.KeyValueDelete, 3, "loop_deleted"},
-		{"unknown operation", jetstream.KeyValueOp(99), 1, "unknown"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := comp.mapKVOperation(tt.operation, tt.revision)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
 func TestActivityEventSerialization(t *testing.T) {
 	loop := &Loop{
 		LoopID: "loop-123",
@@ -407,6 +384,16 @@ func TestActivityEventTypeAndID(t *testing.T) {
 			op:         jetstream.KeyValueDelete,
 			revision:   3,
 			wantType:   "loop_deleted",
+			wantLoopID: bare,
+		},
+		{
+			// Folded from the retired mapKVOperation (production-dead helper
+			// deleted; activityEventTypeAndID owns the mapping).
+			name:       "unknown operation emits unknown",
+			key:        bare,
+			op:         jetstream.KeyValueOp(99),
+			revision:   1,
+			wantType:   "unknown",
 			wantLoopID: bare,
 		},
 	}
