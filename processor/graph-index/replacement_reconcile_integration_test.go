@@ -15,6 +15,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	clusteringdata "github.com/c360studio/semstreams/graph/clustering"
 	graphquery "github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -272,10 +273,20 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 	defer clusteringComponent.(component.LifecycleComponent).Stop(5 * time.Second)
 	communityKV, err := js.KeyValue(ctx, graph.BucketCommunityIndex)
 	require.NoError(t, err)
+	// The window must clear a full readiness HEARTBEAT, not just a detection tick.
+	// Under ADR-083 clustering gates on watched GRAPH_STATUS state, so it observes a
+	// readiness transition at producer-heartbeat granularity rather than instantly as
+	// the former per-tick request/reply did: graph-index publishes {target:0} on its
+	// first tick (pre-enumeration, a hard-stop `empty` defer) and the clustering gate
+	// cannot clear until the NEXT heartbeat carries state=ready. Measured: the gate
+	// clears exactly readiness.DefaultHeartbeat after index Start, so a 5s window
+	// expired on the boundary. Three heartbeats plus the 100ms detection tick and the
+	// persist leaves real margin without hiding a genuine stall.
 	require.Eventually(t, func() bool {
 		keys, keysErr := communityKV.Keys(ctx)
 		return keysErr == nil && len(keys) > 0
-	}, 5*time.Second, 25*time.Millisecond, "production graph-clustering cycle did not persist communities")
+	}, 3*readiness.DefaultHeartbeat+2*time.Second, 25*time.Millisecond,
+		"production graph-clustering cycle did not persist communities")
 
 	require.NoError(t, states.Delete(ctx, retiredSource))
 	sourceDeleteRevision, err := natsclient.BucketLastSeq(ctx, states)
@@ -365,6 +376,11 @@ func startReplacementIntegrationIndex(t *testing.T, ctx context.Context, nc *nat
 	require.NoError(t, err)
 	index := created.(*Component)
 	require.NoError(t, index.Initialize())
+	// Readiness is now observed through the GRAPH_STATUS heartbeat rather than an
+	// on-demand status request (ADR-083), so shorten the heartbeat — pre-Start, the
+	// only safe window — to keep waitPublicWatermark's granularity in the same range
+	// it had when every check computed the envelope fresh.
+	index.statusInterval = 100 * time.Millisecond
 	require.NoError(t, index.Start(ctx))
 	return index
 }
@@ -388,19 +404,28 @@ func replacementStateData(t *testing.T, entityID, name, statusPredicate, targetI
 	return data
 }
 
+// waitPublicWatermark blocks until the PUBLICLY observable readiness envelope shows the
+// index caught up to at least revision. "Publicly observable" moved from the removed
+// `graph.index.query.status` request/reply to the GRAPH_STATUS KV key (ADR-083); the
+// point of the gate is unchanged — these tests assert against what an outside consumer
+// can see, never against the component's in-process state.
 func waitPublicWatermark(t *testing.T, ctx context.Context, nc *natsclient.Client, revision uint64) {
 	t.Helper()
 	require.Eventually(t, func() bool {
-		data, err := nc.RequestClassified(ctx, "graph.index.query.status", []byte(`{}`), 2*time.Second)
+		bucket, err := nc.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
+		if err != nil {
+			return false
+		}
+		entry, err := bucket.Get(ctx, readiness.KeyGraphIndex)
 		if err != nil {
 			return false
 		}
 		var status graph.IndexStatusResponse
-		if json.Unmarshal(data, &status) != nil {
+		if json.Unmarshal(entry.Value(), &status) != nil {
 			return false
 		}
 		return status.Ready && status.IndexedRevision >= revision && status.TargetRevision >= revision
-	}, 8*time.Second, 20*time.Millisecond, "public status did not reach revision %d", revision)
+	}, 15*time.Second, 20*time.Millisecond, "public status did not reach revision %d", revision)
 }
 
 func assertReplacementPublicState(

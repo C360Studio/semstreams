@@ -22,8 +22,9 @@ predicate syntax. The wire contract MUST remain independent of the physical PRED
 
 ### Requirement: Query-visible memberships reflect the complete current projection
 
-Graph-index queries MUST observe the complete current ENTITY_STATES projection after `graph.index.query.status`
-reports the authoritative entity revision reached. This applies to exact predicate, predicate-list,
+Graph-index queries MUST observe the complete current ENTITY_STATES projection after the published
+readiness envelope (`GRAPH_STATUS` KV, ADR-083; formerly the removed `graph.index.query.status`
+subject) reports the authoritative entity revision reached. This applies to exact predicate, predicate-list,
 predicate-stats, compound-predicate, by-name, incoming, and traversal queries. Superseded and empty memberships
 MUST NOT remain query-visible. The contract does not imply synchronous indexing before that watermark or freshness
 of independently scheduled downstream processors such as graph-clustering.

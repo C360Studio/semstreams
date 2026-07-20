@@ -2,6 +2,12 @@
 
 ## Status
 
+**Transport superseded by ADR-083 — 2026-07-20.** The `Ready` contract below is
+unchanged and still load-bearing. Only its *distribution* moved: the
+`graph.index.query.status` request/reply described here was removed in favour of the
+watchable `GRAPH_STATUS` KV key, and the envelope gained an additive `staleness_ms`.
+Read the `graph-index-readiness` spec for current behavior.
+
 **Accepted** (2026-07-03, GH #431). Cross-repo (semstreams owns the
 index/embedding signals, semsource owns the `graph.query.status` aggregate).
 Implementation follows the Migration path below on

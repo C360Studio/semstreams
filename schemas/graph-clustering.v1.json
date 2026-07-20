@@ -299,11 +299,6 @@
         }
       }
     },
-    "index_lag_tolerance": {
-      "type": "integer",
-      "description": "Max ENTITY_STATES revision lag under which community detection still runs (0 = require exact index catch-up; a degraded/reset/empty index always defers regardless)",
-      "category": "advanced"
-    },
     "max_hop_distance": {
       "type": "integer",
       "description": "Maximum BFS traversal depth (default 10)",
@@ -312,6 +307,11 @@
     "max_iterations": {
       "type": "integer",
       "description": "Maximum iterations for LPA algorithm",
+      "category": "advanced"
+    },
+    "max_staleness": {
+      "type": "string",
+      "description": "Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless)",
       "category": "advanced"
     },
     "min_community_size": {

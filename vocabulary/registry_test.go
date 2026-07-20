@@ -336,7 +336,7 @@ func TestRegisterOverwrite(t *testing.T) {
 // that adds Description/IRI but OMITS the alias role must NOT strip that role.
 // The exact failure semsource hit converging pkg/fusion: re-registering
 // dc.terms.title with a description clobbered its label alias, so the NAME_INDEX
-// (and thus graph.query.byName + graph.index.query.status readiness) went empty.
+// (and thus graph.query.byName + the GRAPH_STATUS readiness envelope) went empty.
 func TestRegisterAmend_OmittedFieldsRetained(t *testing.T) {
 	defer SnapshotRegistry()()
 	ClearRegistry()

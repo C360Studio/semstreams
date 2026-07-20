@@ -9,10 +9,9 @@
 // imports natsclient (via a minimal requester interface) and the graph query
 // contracts, and returns the leaf fusion types.
 //
-// Subject mapping (all PUBLIC graph.query.* / graph.index.query.* subjects, the
-// stable external surface a standalone fusion service can reach):
+// Subject mapping (all PUBLIC graph.query.* subjects, the stable external surface a
+// standalone fusion service can reach):
 //
-//	Status              -> graph.index.query.status   (gh#397)
 //	Resolve(symbol)     -> graph.query.byName         (gh#376)
 //	Resolve(prefix)     -> graph.query.prefix
 //	Resolve(nl)         -> graph.query.semantic
@@ -21,7 +20,13 @@
 //	Neighbors           -> graph.query.relationships
 //	Names               -> graph.query.byName         (matched names for did_you_mean)
 //
-// Every call uses RequestClassified, so a classified handler error (ADR-060)
+// Status is NOT a subject. ADR-083 removed `graph.index.query.status` and distributes
+// the readiness envelope as KV state instead; Status reads
+// `GRAPH_STATUS/graph-index` at call time (`nats kv get GRAPH_STATUS graph-index` is
+// the equivalent operator probe). The transport this client is given must therefore
+// also provide KV access — *natsclient.Client does, so no construction changed.
+//
+// Every subject call uses RequestClassified, so a classified handler error (ADR-060)
 // surfaces as a typed *errs.ClassifiedError rather than a silently-decoded
 // "error: " body. Entity translates the entity_not_found classified error into
 // (nil, nil) to honor the interface's absence contract; every other error

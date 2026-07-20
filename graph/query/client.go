@@ -12,6 +12,7 @@ import (
 	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -107,6 +108,25 @@ type natsClient struct {
 	config     *Config
 	watchCtx   context.Context
 
+	// statusSource is where indexNotReadyErr watches graph-index's ADR-083 readiness
+	// envelope. It is always the NATS client in production (set at construction); the
+	// narrow interface exists so the gate's fail-closed matrix is unit-testable
+	// without a live NATS, which it was not while the gate rode request/reply.
+	statusSource readiness.BucketSource
+
+	// The GRAPH_STATUS watch behind the gate, bound on first use and guarded by
+	// statusMu. See readinessWatcher for why it is lazy rather than wired at
+	// construction.
+	statusMu     sync.Mutex
+	statusBound  bool
+	statusWaited bool
+	statusClosed bool
+	statusWatch  *readiness.Watcher
+	// statusBindWait is the one-shot budget for the watch's first delivery. It
+	// defaults to statusBindTimeout and is overridden only by tests, which must not
+	// spend seconds per unknown-readiness row.
+	statusBindWait time.Duration
+
 	// KV bucket handles
 	entityBucket   jetstream.KeyValue
 	spatialBucket  jetstream.KeyValue
@@ -157,10 +177,11 @@ func NewClientWithMetrics(
 	}
 
 	client := &natsClient{
-		natsClient: nc,
-		cache:      entityCache,
-		config:     config,
-		watchCtx:   ctx,
+		natsClient:   nc,
+		cache:        entityCache,
+		config:       config,
+		watchCtx:     ctx,
+		statusSource: nc,
 	}
 
 	return client, nil
@@ -406,35 +427,127 @@ func (qc *natsClient) CountEntities(ctx context.Context) (int, error) {
 	return len(keys), nil
 }
 
+// statusBindTimeout is the one-shot budget for the readiness watch's first delivery.
+// It is deliberately the 5s the status request/reply used, so the worst-case latency of
+// the FIRST gated read is unchanged by the transport move; every read after it is
+// local.
+const statusBindTimeout = 5 * time.Second
+
+// readinessWatcher returns the GRAPH_STATUS watch behind the gate, binding it on first
+// use, and reports whether readiness is observable at all. It is lazy rather than wired
+// in NewClientWithMetrics for two reasons: a client whose caller never touches a gated
+// read should not carry a watch goroutine, and this type is also constructed as a bare
+// struct literal (tests), which must reach the same single code path rather than a
+// second one.
+//
+// Every caller is serialized on statusMu, so the bind happens once regardless of how
+// many goroutines enter the gate together. The watch is started on the client's
+// LIFETIME context (watchCtx), never on the per-call context, or the first query to
+// finish would cancel the feed for every later one.
+func (qc *natsClient) readinessWatcher() *readiness.Watcher {
+	qc.statusMu.Lock()
+	defer qc.statusMu.Unlock()
+
+	if qc.statusClosed {
+		return nil
+	}
+	if qc.statusBound {
+		return qc.statusWatch
+	}
+	qc.statusBound = true
+	if qc.statusSource == nil {
+		// No source is a wiring gap, not a readiness answer: leave the watch nil and
+		// let the caller take its fail-closed unknown branch.
+		return nil
+	}
+	lifetime := qc.watchCtx
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
+	watch := readiness.NewWatcher(qc.statusSource, readiness.KeyGraphIndex)
+	if err := watch.Start(lifetime); err != nil {
+		return nil
+	}
+	qc.statusWatch = watch
+	return watch
+}
+
+// awaitFirstStatus spends the ONE bounded wait for the watch's first delivery. Without
+// it a cold client's first gated read would fail closed purely because the watch had
+// not delivered yet — a regression against the request/reply, which always produced an
+// answer or an error within its timeout. Spent once: with no graph-index deployed
+// nothing ever arrives, and a per-call wait would make every read in that (supported,
+// allow_ungated_reads) deployment stall for the budget.
+func (qc *natsClient) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher) {
+	qc.statusMu.Lock()
+	if qc.statusWaited {
+		qc.statusMu.Unlock()
+		return
+	}
+	qc.statusWaited = true
+	budget := qc.statusBindWait
+	qc.statusMu.Unlock()
+
+	if budget <= 0 {
+		budget = statusBindTimeout
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, budget)
+	defer cancel()
+	// Dropped deliberately: a timed-out wait is not the verdict. The Read that follows
+	// is, and it fails closed on the same unknown.
+	_ = watch.WaitForFirst(waitCtx)
+}
+
 // indexNotReadyErr gates a direct INCOMING_INDEX read on graph-index readiness (gh#474
 // Codex #6). It returns a classified ErrorCodeIndexNotReady only when graph-index is up
 // and EXPLICITLY reports not-ready (still building / degraded by an unresolved write
 // failure) — the cutover/failure window where a direct bucket read would return partial
 // topology. It FAILS CLOSED when status is unreachable or malformed unless the caller
 // explicitly enables AllowUngatedReads for a standalone deployment.
+//
+// ADR-083 moved the source from a `graph.index.query.status` request/reply to the
+// shared GRAPH_STATUS watch (graph/readiness). The gate PREDICATE is unchanged
+// bit-for-bit — still exact `Ready`, still fail-closed on anything unknown, still the
+// same single escape applying to exactly the unknown branch — only the transport moved.
+// Held state rather than a per-call round-trip is the point: the request travelled the
+// same connection as the ENTITY_STATES firehose and died under the very load that makes
+// readiness interesting (gh#590).
+//
+// The unknown set GREW to match what the subject already covered: no bucket, no key,
+// a deleted key, a backend fault, an undecodable value, and — new, because state
+// persists where a request/reply did not — a feed gone quiet past the freshness window
+// (or a key that was ALREADY stale when the watch bound), which is a producer that died
+// holding a Ready key. All of them are the one fail-closed branch below.
 func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 	notReady := errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
 		errors.New("graph index not ready"))
+	ungated := qc.config != nil && qc.config.AllowUngatedReads
 
-	respData, err := qc.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
-	if err != nil {
+	watch := qc.readinessWatcher()
+	if watch == nil {
+		if ungated {
+			return nil
+		}
+		return notReady
+	}
+	qc.awaitFirstStatus(ctx, watch)
+
+	reading := watch.Read()
+	if !reading.Fresh {
 		// Unknown readiness. FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
 		// graph-index during a cutover is indistinguishable from an intentionally-absent
 		// one, and a stale bucket without a reachable authoritative owner is not proof of
 		// completeness. Only an explicit standalone config opts into proceeding.
-		if qc.config != nil && qc.config.AllowUngatedReads {
+		if ungated {
 			return nil
 		}
 		return notReady
 	}
-	var st gtypes.IndexStatusResponse
-	if json.Unmarshal(respData, &st) != nil {
-		if qc.config != nil && qc.config.AllowUngatedReads {
-			return nil
-		}
-		return notReady
-	}
-	if !st.Ready {
+	// GateExact, evaluated through the canonical helper so the four consumers cannot
+	// drift: with a fresh envelope this is exactly `Ready`, unchanged from the
+	// pre-ADR-083 check. AllowUngatedReads never applies here — a status that WAS
+	// received and says not-ready is not an unknown one.
+	if proceed, _ := gtypes.EvaluateReadinessGate(reading.Status, true, gtypes.GateExact, gtypes.GateConfig{}); !proceed {
 		return notReady
 	}
 	return nil
@@ -702,8 +815,19 @@ func (qc *natsClient) Clear() error {
 	return nil
 }
 
-// Close shuts down the Client and releases resources
+// Close shuts down the Client and releases resources, including the readiness watch
+// goroutine if one was bound.
 func (qc *natsClient) Close() error {
+	qc.statusMu.Lock()
+	qc.statusClosed = true
+	watch := qc.statusWatch
+	qc.statusWatch = nil
+	qc.statusMu.Unlock()
+	// Stop outside the lock: it waits for the watch goroutine, and holding statusMu
+	// across that would block a concurrent gate decision behind shutdown.
+	if watch != nil {
+		watch.Stop()
+	}
 	return qc.cache.Close()
 }
 

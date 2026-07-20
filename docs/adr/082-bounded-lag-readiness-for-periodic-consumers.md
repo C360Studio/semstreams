@@ -2,6 +2,12 @@
 
 ## Status
 
+**Staleness unit superseded by ADR-083 — 2026-07-20.** The consumer-class split
+below stands: exact/point-query consumers gate on `Ready`, periodic/approximate ones
+may accept bounded staleness. Only the *quantity* changed — the bound is wall time
+(`max_staleness`), not revisions (`index_lag_tolerance`), because the correct
+revision count shifts with write rate and `coalesce_ms`. `ReadyWithinLag` is removed.
+
 Accepted — 2026-07-20. Decision-recording; build green-lit the same day (owner
 approval; tasks §2 of the `bounded-lag-readiness-for-periodic-consumers` change).
 Shaped by an architect decision and a 5-lens adversarial review

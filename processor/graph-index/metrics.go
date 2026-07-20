@@ -26,6 +26,11 @@ type indexMetrics struct {
 	indexedRevision prometheus.Gauge     // low-water-of-pending watermark
 	targetRevision  prometheus.Gauge     // ENTITY_STATES stream LastSeq target
 	readinessState  *prometheus.GaugeVec // one-hot over building|ready|degraded|reset_required
+	// statusPublishFailures counts heartbeat writes to GRAPH_STATUS that failed
+	// (ADR-083). A rising value is the producer-side half of a consumer reporting
+	// status_unknown: it says the envelope is not reaching the bucket, which the
+	// consumer alone cannot distinguish from a crashed producer.
+	statusPublishFailures prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -121,6 +126,13 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 				Name:      "readiness_state",
 				Help:      "Readiness state one-hot (building|ready|degraded|reset_required): current state=1, others=0, so catching-up is distinguishable from broken",
 			}, []string{"state"}),
+
+			statusPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_index",
+				Name:      "status_publish_failures_total",
+				Help:      "Readiness heartbeat writes to the GRAPH_STATUS KV key that failed (ADR-083): consumers go status_unknown and fail closed while this rises",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -137,6 +149,7 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = registry.RegisterGauge("graph-index", "indexed_revision", metrics.indexedRevision)
 			_ = registry.RegisterGauge("graph-index", "target_revision", metrics.targetRevision)
 			_ = registry.RegisterGaugeVec("graph-index", "readiness_state", metrics.readinessState)
+			_ = registry.RegisterCounter("graph-index", "status_publish_failures_total", metrics.statusPublishFailures)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.eventsProcessed)
@@ -151,6 +164,7 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.indexedRevision)
 			_ = prometheus.DefaultRegisterer.Register(metrics.targetRevision)
 			_ = prometheus.DefaultRegisterer.Register(metrics.readinessState)
+			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
 		}
 	})
 	return metrics
@@ -177,6 +191,11 @@ func (m *indexMetrics) setReadinessGauges(resp graph.IndexStatusResponse) {
 		}
 		m.readinessState.WithLabelValues(s).Set(v)
 	}
+}
+
+// recordStatusPublishFailure counts one failed GRAPH_STATUS heartbeat write (ADR-083).
+func (m *indexMetrics) recordStatusPublishFailure() {
+	m.statusPublishFailures.Inc()
 }
 
 func (m *indexMetrics) recordReconcileOperation(indexType, operation string, err error) {

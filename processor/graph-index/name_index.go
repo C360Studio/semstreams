@@ -246,25 +246,12 @@ func (c *Component) nameIndexIsReady(ctx context.Context) bool {
 	return true
 }
 
-// handleQueryStatusNATS serves graph.index.query.status (gh#397, enriched by
-// ADR-066): the deterministic-fusion honesty-envelope readiness signal. Ready now
-// means the index is CAUGHT UP (revision-lag: IndexedRevision >= query-time
-// TargetRevision), not merely "indexing started" (the old sticky NAME_INDEX signal
-// that fired minutes early, gh#431). Takes no request body; the response JSON shape
-// matches pkg/fusion.IndexStatus.
-func (c *Component) handleQueryStatusNATS(ctx context.Context, _ []byte) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-
-	data, err := json.Marshal(c.computeIndexStatus(ctx))
-	if err != nil {
-		// Unreachable (an all-scalar struct never fails to marshal), but classify it
-		// like every sibling handler so a caller decoding the reply cannot mistake an
-		// error body for a zero-value success status.
-		return nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeInternal, errors.New("internal error"))
-	}
-	return data, nil
-}
+// The readiness-status request handler that used to live here served
+// `graph.index.query.status` (gh#397, enriched by ADR-066). ADR-083 removed it: the
+// same computeIndexStatus projection is now published to the GRAPH_STATUS KV bucket on
+// the status tick, where consumers watch it (held state, no per-decision round-trip)
+// and operators probe it with `nats kv get GRAPH_STATUS graph-index`. See
+// setupQueryHandlers for why the subject was not kept alongside.
 
 // handleQueryByNameNATS resolves a name to ranked entity IDs (gh#376). Request
 // {name, limit}; response graph.NameData with matches ordered exact-case-first,

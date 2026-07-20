@@ -88,7 +88,7 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
 	}
 
-	indexed := c.watermark.Indexed()
+	indexed, indexedAt := c.watermark.IndexedAt()
 
 	target, err := natsclient.BucketLastSeq(ctx, c.entityStatesBucket)
 	if err != nil {
@@ -102,7 +102,15 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 	}
 
 	stuck, lastSynced := c.trackEmbeddingProgress(indexed, target)
-	return graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+	return graph.ComputeIndexStatus(graph.IndexStatusInputs{
+		Indexed:    indexed,
+		Target:     target,
+		Stuck:      stuck,
+		LastSynced: lastSynced,
+		// Commit time of the newest ENTITY_STATES revision that reached a terminal
+		// embedding outcome — the age-of-view input to staleness_ms (ADR-083).
+		IndexedAt: indexedAt,
+	})
 }
 
 // trackEmbeddingProgress is the COMPLETIONS-based stuck detector (ADR-066 §3). Unlike

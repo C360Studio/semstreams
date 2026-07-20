@@ -12,6 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -27,16 +28,26 @@ import (
 // red here instead of green (feedback_integration_tests_must_drive_production_wire).
 func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 	ctx := context.Background()
-	testClient := natsclient.NewTestClient(t)
+	// KV is required now that readiness is KV state rather than a subject.
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
+
+	// Readiness is NOT a subject after ADR-083: seed the real GRAPH_STATUS bucket
+	// through the shared producer-side helper, so this test locks the same bucket,
+	// key, and value encoding the producers write and every consumer reads. A drift
+	// between the two sides ships red here rather than as a permanently-unknown
+	// readiness in production.
+	statusBucket, err := readiness.EnsureBucket(ctx, nc)
+	require.NoError(t, err)
+	envelope, err := json.Marshal(graph.IndexStatusResponse{Ready: true, State: graph.IndexStateReady})
+	require.NoError(t, err)
+	_, err = statusBucket.Put(ctx, readiness.KeyGraphIndex, envelope)
+	require.NoError(t, err)
 
 	// Register a handler on each public subject the client maps onto, returning
 	// the exact production response shape. SubscribeForRequests applies the
 	// ADR-060 classified-error wrapper, so a returned ClassifiedError round-trips
 	// its Code on the wire — which is what Entity's not-found translation needs.
-	subscribe(t, ctx, nc, subjectStatus, func(_ []byte) ([]byte, error) {
-		return json.Marshal(graph.IndexStatusResponse{Ready: true, State: graph.IndexStateReady})
-	})
 	subscribe(t, ctx, nc, subjectByName, func(_ []byte) ([]byte, error) {
 		return json.Marshal(graph.NewQueryResponse(graph.NameData{Matches: []graph.NameMatch{
 			{EntityID: "a.b.c.d.e.1", MatchedName: "Widget"},
@@ -81,6 +92,32 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, st.Ready)
 		require.Equal(t, fusion.StateReady, st.State)
+	})
+
+	// The fail-closed half of the same real wire: a producer that stops publishing
+	// leaves its key behind, and the client must refuse to serve it as live rather
+	// than let a frozen index keep licensing authoritative-absence claims. Deleting
+	// the key is the sharper form of the same condition (a stale key needs a clock to
+	// age) and exercises the tombstone sentinel against real NATS.
+	//
+	// The client CONVERGES on the tombstone rather than seeing it synchronously: it
+	// holds state fed by a watch, so the delete has to travel to the watcher. That
+	// eventual convergence is the honest contract of distributing readiness as state
+	// (ADR-083) — the guarantee is that a deleted key stops reading as live within a
+	// delivery, not that it does so within the Delete call. Asserting it without a
+	// wait would be asserting a synchronous read the transport no longer performs.
+	t.Run("Status_absent_key_is_an_error", func(t *testing.T) {
+		require.NoError(t, statusBucket.Delete(ctx, readiness.KeyGraphIndex))
+		t.Cleanup(func() {
+			_, putErr := statusBucket.Put(ctx, readiness.KeyGraphIndex, envelope)
+			require.NoError(t, putErr)
+		})
+
+		require.Eventually(t, func() bool {
+			st, statusErr := c.Status(ctx)
+			return statusErr != nil && st == fusion.IndexStatus{}
+		}, 10*time.Second, 20*time.Millisecond,
+			"an unpublished readiness key must not read as a status")
 	})
 
 	t.Run("Resolve_symbol", func(t *testing.T) {

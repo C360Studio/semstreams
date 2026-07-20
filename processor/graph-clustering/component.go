@@ -20,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -48,14 +49,14 @@ const (
 	defaultAnomalyReviewTimeout    = 60 * time.Second
 )
 
-// maxIndexLagTolerance caps IndexLagTolerance well above any modest steady-state
-// lag but far below "ungated". Bounded-lag clustering trades a bounded fraction of
-// stale edges for liveness (ADR-082); a tolerance of a million ENTITY_STATES
-// revisions behind is not bounded staleness — it effectively defeats the
-// bootstrap/cutover defer and almost certainly signals a mis-unit config (e.g. a
-// byte budget pasted into a revision-count field). Reject it rather than let it
-// silently ungate the gate.
-const maxIndexLagTolerance uint64 = 1_000_000
+// maxStalenessCeiling caps max_staleness well above any real steady-state view age
+// but far below "ungated". Bounded-staleness clustering trades a bounded fraction of
+// stale edges for liveness (ADR-083 D4); a view an hour old is not bounded staleness
+// — it effectively defeats the bootstrap/cutover defer and almost certainly signals a
+// mis-unit config (e.g. "3000" read as seconds when milliseconds were meant). Reject
+// it rather than let it silently ungate the gate. An hour is ~120x the default
+// detection interval, so it constrains nothing an operator legitimately wants.
+const maxStalenessCeiling = time.Hour
 
 // Config holds configuration for graph-clustering component
 type Config struct {
@@ -76,15 +77,21 @@ type Config struct {
 	// format cutover.
 	AllowUngatedReads bool `json:"allow_ungated_reads" schema:"type:bool,description:Allow detection when graph-index readiness is unknown (standalone only; never during cutover),category:advanced"`
 
-	// IndexLagTolerance lets community detection — a periodic, whole-result-re-
-	// deriving consumer — run when graph-index is within this many ENTITY_STATES
-	// revisions of caught up, instead of deferring forever under continuous write
-	// (ADR-082, #590). It is a CONSUMER policy: the shared readiness status stays
-	// exactly honest; this reader decides how much staleness it accepts. Default 0
-	// == the exact Ready gate (contract-preserving). A degraded, reset-required, or
-	// empty (target==0) index still defers at ANY tolerance. Counts revisions (each
-	// may carry many relationships), so it is a coarse node-staleness proxy.
-	IndexLagTolerance uint64 `json:"index_lag_tolerance" schema:"type:int,description:Max ENTITY_STATES revision lag under which community detection still runs (0 = require exact index catch-up; a degraded/reset/empty index always defers regardless),category:advanced"`
+	// MaxStalenessStr lets community detection — a periodic, whole-result-re-deriving
+	// consumer — run while graph-index's view is at most this OLD, instead of
+	// deferring forever under continuous write (ADR-083, #590). It is a CONSUMER
+	// policy: the shared readiness envelope stays exactly honest; this reader decides
+	// how much staleness it accepts. Default "" / 0 == the exact Ready gate
+	// (contract-preserving). A degraded, reset-required, empty (target==0), or
+	// unknown-status index still defers at ANY tolerance.
+	//
+	// The unit is WALL TIME, not the revision count this field replaced
+	// (index_lag_tolerance, removed — BREAKING). gh#590's coalescer table showed the
+	// correct revision bound shifts 2-4x with coalesce_ms alone and again linearly
+	// with write rate, so no fixed count is right at two different loads; "how old is
+	// the topology I clustered" is invariant to both and is what an operator can
+	// actually reason about.
+	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless),category:advanced"`
 
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
@@ -104,8 +111,9 @@ type Config struct {
 	// community detection on explicit topology alone.
 	EntityIDEdges *EntityIDEdgesConfig `json:"entity_id_edges,omitempty" schema:"type:object,description:EntityID virtual-edge synthesis for community detection; omit to keep defaults (siblings + system-peers on),category:advanced"`
 
-	// Parsed duration (set by ApplyDefaults)
+	// Parsed durations (set by ApplyDefaults)
 	detectionInterval time.Duration
+	maxStaleness      time.Duration
 	// Resolved EntityID virtual-edge config (set by ApplyDefaults from
 	// EntityIDEdges over a DefaultEntityIDProviderConfig baseline).
 	entityIDEdges clustering.EntityIDProviderConfig
@@ -142,6 +150,41 @@ func rejectUnknownEntityIDEdgeKeys(raw json.RawMessage) error {
 	if err := dec.Decode(&probe); err != nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "graphclustering", "rejectUnknownEntityIDEdgeKeys",
 			fmt.Sprintf("entity_id_edges has a key that does not bind and would be silently ignored at runtime (gh#461/ADR-054): %v", err))
+	}
+	return nil
+}
+
+// removedConfigFields maps every field withdrawn from this component's operator
+// surface to the guidance that replaces it. encoding/json silently DROPS a key with
+// no matching struct field, so without this probe an operator upgrading past ADR-083
+// would keep a plausible-looking `index_lag_tolerance: 250` in their config, see no
+// error, and get the strict exact gate — the precise silent behavior change that
+// motivated the gate work in the first place. A removed knob must fail at load.
+//
+// The probe is targeted rather than a blanket DisallowUnknownFields on Config: it
+// gives the operator the replacement field by name, and it cannot reject unrelated
+// keys that other tooling may legitimately carry in the block.
+var removedConfigFields = map[string]string{
+	"index_lag_tolerance": `removed (ADR-083, BREAKING): the bounded-lag tolerance is now wall-time, not a revision count. Replace it with "max_staleness": "3s" (or omit it entirely for the exact catch-up gate). A revision count could not be right at two different write rates or coalesce_ms settings (gh#590)`,
+}
+
+// rejectRemovedConfigKeys fails the load when a withdrawn field is present, naming
+// its replacement. Called at factory time so the failure surfaces at startup with the
+// component name attached, not as a mysterious behavior change hours later.
+func rejectRemovedConfigKeys(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	var present map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &present); err != nil {
+		// Not an object, or malformed — the caller's own decode reports that.
+		return nil
+	}
+	for field, guidance := range removedConfigFields {
+		if _, found := present[field]; found {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "graphclustering", "rejectRemovedConfigKeys",
+				fmt.Sprintf("config field %q was %s", field, guidance))
+		}
 	}
 	return nil
 }
@@ -215,12 +258,8 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "max_iterations must be greater than 0")
 	}
 
-	// Reject a pathological bounded-lag tolerance so it cannot silently defeat the
-	// bootstrap/cutover defer (ADR-082). See maxIndexLagTolerance rationale.
-	if c.IndexLagTolerance > maxIndexLagTolerance {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
-			fmt.Sprintf("index_lag_tolerance %d exceeds the sane maximum %d ENTITY_STATES revisions; a tolerance this large ungates bootstrap/cutover deferral",
-				c.IndexLagTolerance, maxIndexLagTolerance))
+	if err := c.validateMaxStaleness(); err != nil {
+		return err
 	}
 
 	// Anomaly detection requires structural analysis
@@ -238,9 +277,40 @@ func (c *Config) Validate() error {
 	return nil
 }
 
+// validateMaxStaleness rejects an unparseable, negative, or pathological staleness
+// bound. It re-parses rather than reading the ApplyDefaults result because a parse
+// FAILURE leaves that result at zero, which is indistinguishable from the strict
+// default — silently tightening the gate on a typo instead of reporting it.
+func (c *Config) validateMaxStaleness() error {
+	if c.MaxStalenessStr == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(c.MaxStalenessStr)
+	if err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("max_staleness %q is not a duration (want e.g. \"3s\", \"1500ms\"): %v", c.MaxStalenessStr, err))
+	}
+	if d < 0 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("max_staleness %q is negative; use 0 (or omit it) to require exact index catch-up", c.MaxStalenessStr))
+	}
+	if d > maxStalenessCeiling {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("max_staleness %q exceeds the sane maximum %s; a tolerance this large ungates bootstrap/cutover deferral",
+				c.MaxStalenessStr, maxStalenessCeiling))
+	}
+	return nil
+}
+
 // DetectionInterval returns the parsed detection interval duration
 func (c *Config) DetectionInterval() time.Duration {
 	return c.detectionInterval
+}
+
+// MaxStaleness returns the parsed bounded-staleness tolerance. Zero means the exact
+// Ready gate. Valid only after ApplyDefaults.
+func (c *Config) MaxStaleness() time.Duration {
+	return c.maxStaleness
 }
 
 // ApplyDefaults sets default values for configuration
@@ -253,6 +323,14 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.detectionInterval == 0 {
 		c.detectionInterval = 30 * time.Second
+	}
+
+	// A parse failure deliberately leaves maxStaleness at 0 (the strict exact gate);
+	// Validate reports it rather than letting a typo quietly change the gate.
+	if c.MaxStalenessStr != "" {
+		if d, err := time.ParseDuration(c.MaxStalenessStr); err == nil && d > 0 {
+			c.maxStaleness = d
+		}
 	}
 
 	if c.BatchSize == 0 {
@@ -435,6 +513,24 @@ type Component struct {
 	reviewWorker    *inference.ReviewWorker
 	reviewLLMClient llm.Client // non-nil only when distinct from llmClient
 
+	// Readiness gate (ADR-083 §3). statusWatcher holds graph-index's last-known
+	// ADR-066 envelope from the GRAPH_STATUS KV bucket, so a detection tick decides
+	// against held state instead of a per-tick request/reply that dies under exactly
+	// the load that makes readiness interesting (gh#590). It is rebuilt on every
+	// Start: a stopped Watcher cannot be restarted.
+	statusWatcher *readiness.Watcher
+	// statusHeartbeat declares the producer's publish interval, which sets the
+	// freshness window (readiness.FreshnessMultiplier x heartbeat). Zero means
+	// readiness.DefaultHeartbeat. Unexported and not an operator knob (ADR-083 D2
+	// keeps the multiplier constant); tests shorten it so a feed-dies assertion
+	// costs milliseconds rather than three real heartbeats.
+	statusHeartbeat time.Duration
+	// lastDeferReason is the previous tick's gate outcome, used to log a VISIBLE
+	// line on every transition without emitting one per tick forever. Guarded by
+	// deferMu because Stop may race the detection goroutine's final tick.
+	deferMu         sync.Mutex
+	lastDeferReason graph.DeferReason
+
 	// Lifecycle state
 	mu                sync.RWMutex
 	running           bool
@@ -469,6 +565,11 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "config unmarshal")
+		}
+		// A field removed from the operator surface must fail the load, not be
+		// dropped by encoding/json and silently change the gate (ADR-083 §3.2).
+		if err := rejectRemovedConfigKeys(rawConfig); err != nil {
+			return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "removed config field")
 		}
 		// Reject phantom keys in anomaly_config that encoding/json silently drops
 		// (ADR-054). Operator configs bypass the strict checked-in-config test, so
@@ -733,6 +834,16 @@ func (c *Component) Start(ctx context.Context) error {
 	// Create community storage for the detector
 	c.storage = clustering.NewNATSCommunityStorage(communityBucket)
 
+	// Bind the readiness feed BEFORE the detection loop can tick, so the first tick
+	// decides against a delivered envelope rather than an artificial unknown. Start
+	// never fails on an absent bucket or key: a deployment running clustering without
+	// graph-index is a legitimate shape whose readiness is simply unknown, and
+	// allow_ungated_reads — not a fabricated envelope — is what covers it.
+	if err := c.startStatusWatcher(ctx); err != nil {
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "readiness status watcher")
+	}
+
 	// Initialize lifecycle reporter and wait for dependencies
 	c.initLifecycleReporter(ctx)
 
@@ -864,8 +975,18 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.cancel()
 	}
 
+	// Detach the readiness watcher under the lock but join it after unlocking: Stop
+	// blocks until the watch goroutine exits, and a stopped Watcher cannot be
+	// restarted, so the next Start builds a fresh one.
+	statusWatcher := c.statusWatcher
+	c.statusWatcher = nil
+
 	c.running = false
 	c.mu.Unlock()
+
+	if statusWatcher != nil {
+		statusWatcher.Stop()
+	}
 
 	// Wait for goroutines with timeout
 	done := make(chan struct{})
@@ -1044,67 +1165,176 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 			// INCOMING_INDEX directly, so skip this cycle while graph-index is still
 			// building or degraded — running would derive communities from partial
 			// topology. The next tick retries once the index is ready.
-			ready, lag, statusKnown := c.graphIndexReady(ctx)
-			if !ready {
-				c.logger.Debug("graph-index not ready; deferring community detection")
+			decision := c.evaluateReadiness()
+			if !decision.proceed {
+				c.recordDefer(decision)
 				continue
 			}
-			// Only record the lag gauge when we actually parsed a status. On the
-			// fail-open path (AllowUngatedReads, no reachable/parseable status) there
-			// is no lag to report — recording 0 would read as "verified caught up".
-			if statusKnown {
-				c.observeDetectionLag(lag)
-			}
+			c.observeDetectionRun(decision)
 			c.runCommunityDetection(ctx)
 		}
 	}
 }
 
-// graphIndexReady reports whether it is safe to run community detection against the
-// INCOMING_INDEX (gh#474 Codex #6), the ENTITY_STATES revision lag the decision was
-// made at, and whether a status was actually parsed (statusKnown=false on the
-// fail-open paths, where there is no lag to report). As a periodic,
-// whole-result-re-deriving consumer, detection gates on the bounded-lag
-// interpretation (ADR-082): it runs when the index is not a hard stop
-// (degraded/reset/empty defer at ANY tolerance) AND is within index_lag_tolerance
-// revisions of caught up, instead of deferring forever under continuous write (#590).
-// With the default tolerance 0 this is exactly the old strict Ready gate.
+// startStatusWatcher binds the consumer side of the ADR-083 readiness contract: a
+// watch on graph-index's key in the GRAPH_STATUS KV bucket, whose held envelope every
+// detection tick reads locally. It replaces the per-tick
+// `graph.index.query.status` request/reply, which travelled the same connection as
+// the ENTITY_STATES firehose in a single-binary deployment and so timed out under
+// load, failing closed with a log line indistinguishable from a genuine not-ready
+// (gh#590). There is no request/reply fallback by design — two distribution paths
+// would be two things to keep honest.
 //
-// It FAILS OPEN when the status endpoint is unreachable or unparseable: that means
-// graph-index is absent (or not co-deployed), a different failure mode than a
-// mid-rebuild index, and blocking detection forever on it would be wrong (and would
-// break setups that run clustering without the handler).
-func (c *Component) graphIndexReady(ctx context.Context) (ready bool, lag uint64, statusKnown bool) {
-	respData, err := c.natsClient.RequestClassified(ctx, "graph.index.query.status", []byte("{}"), 5*time.Second)
-	if err != nil {
-		// Unknown readiness — FAIL-CLOSED by default (gh#474 Codex #4): a crashed/restarting
-		// graph-index mid-cutover is indistinguishable from an absent one, and its stale
-		// bucket is not proof of completeness. Only an explicit standalone config proceeds.
-		c.logger.Debug("graph-index status unreachable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
-		return c.config.AllowUngatedReads, 0, false
+// Only wiring errors (nil source, empty key) fail here; an absent bucket or key is a
+// runtime UNKNOWN, not a startup error.
+func (c *Component) startStatusWatcher(ctx context.Context) error {
+	heartbeat := c.statusHeartbeat
+	if heartbeat <= 0 {
+		heartbeat = readiness.DefaultHeartbeat
 	}
-	var status graph.IndexStatusResponse
-	if err := json.Unmarshal(respData, &status); err != nil {
-		c.logger.Debug("graph-index status unparseable", slog.Bool("allow_ungated", c.config.AllowUngatedReads), slog.Any("error", err))
-		return c.config.AllowUngatedReads, 0, false
+	watcher := readiness.NewWatcher(c.natsClient, readiness.KeyGraphIndex,
+		readiness.WithHeartbeat(heartbeat),
+		readiness.WithLogger(c.logger))
+	if err := watcher.Start(ctx); err != nil {
+		return fmt.Errorf("start readiness watcher on %s/%s: %w",
+			readiness.BucketGraphStatus, readiness.KeyGraphIndex, err)
 	}
-	return status.ReadyWithinLag(c.config.IndexLagTolerance), status.Lag, true
+	c.statusWatcher = watcher
+	return nil
 }
 
-// observeDetectionLag makes the index lag a detection run proceeded at operator-
-// visible (ADR-082, #579 lesson): it records the gauge on every run and, when the
-// run is proceeding on bounded-stale topology (Lag>0), also emits an INFO log so the
-// staleness is not confined to a debug line. Lag>0 only occurs via the bounded-lag
-// path — an exact Ready run is caught up (Lag==0).
-func (c *Component) observeDetectionLag(lag uint64) {
+// gateDecision is one tick's readiness verdict plus everything needed to attribute it
+// without correlating log lines.
+type gateDecision struct {
+	// proceed reports whether community detection may run this tick.
+	proceed bool
+	// reason is the typed cause of a defer, and the defer_total label value. Empty
+	// (graph.DeferNone) on a proceed.
+	reason graph.DeferReason
+	// reading is the held readiness state the verdict was reached from.
+	reading readiness.Reading
+	// ungated marks a proceed that happened ONLY because allow_ungated_reads
+	// overrode an unknown status. Such a run has no verified view age, so it must
+	// not record a staleness of 0 — that would read as "verified caught up".
+	ungated bool
+}
+
+// evaluateReadiness decides whether it is safe to run community detection against the
+// INCOMING_INDEX (gh#474 Codex #6). As a periodic, whole-result-re-deriving consumer,
+// detection declares graph.GateBoundedStaleness: it runs when the status is FRESH, is
+// not a hard stop (degraded/reset/empty defer at ANY tolerance), and the view is
+// either caught up or no older than max_staleness. With the default tolerance 0 this
+// is exactly the strict Ready gate.
+//
+// The semantics live in graph.EvaluateReadinessGate, not here — one home for the
+// rule, four declared consumer modes (ADR-083 D4).
+//
+// Unknown status FAILS CLOSED by default (gh#474 Codex #4): a crashed or restarting
+// graph-index mid-cutover is indistinguishable from an absent one, and its stale
+// bucket is not proof of completeness. allow_ungated_reads is the standalone-deploy
+// escape, and it applies to EXACTLY the case it always applied to — no verifiable
+// status. It never ungates a status that was received and says not-ready.
+func (c *Component) evaluateReadiness() gateDecision {
+	// Read the watcher under the lock that guards it: Stop nils this field while the
+	// detection loop can still be inside a tick body (cancellation is observed at the
+	// top of the loop, not as a barrier mid-tick), so an unsynchronized read here
+	// races Stop's write. Read (not Stop) is what happens under the lock — Read never
+	// blocks on I/O, and Stop is deliberately joined outside c.mu.
+	c.mu.RLock()
+	watcher := c.statusWatcher
+	c.mu.RUnlock()
+
+	var reading readiness.Reading
+	if watcher != nil {
+		reading = watcher.Read()
+	} else {
+		// Defensive: the loop only runs after Start bound the watcher. Report it as
+		// unknown (fail closed) rather than proceeding on a zero envelope.
+		reading.Err = errors.New("readiness status watcher not started")
+	}
+
+	proceed, reason := graph.EvaluateReadinessGate(reading.Status, reading.Fresh,
+		graph.GateBoundedStaleness, graph.GateConfig{MaxStaleness: c.config.MaxStaleness()})
+	if proceed {
+		return gateDecision{proceed: true, reading: reading}
+	}
+	if reason == graph.DeferStatusUnknown && c.config.AllowUngatedReads {
+		return gateDecision{proceed: true, reading: reading, ungated: true}
+	}
+	return gateDecision{reason: reason, reading: reading}
+}
+
+// recordDefer makes a defer evidence rather than a bare constant. The gh#590
+// observer-discrepancy investigation cost three comment cycles because the old line
+// carried no fields: a transport failure and a genuinely-behind index logged
+// identically. Every defer now increments defer_total{reason} and carries the full
+// reading, and the FIRST defer of any reason (including a change of reason) is logged
+// at WARN so it is visible without raising the log level — repeats drop to Debug so a
+// long defer does not become a per-tick flood.
+func (c *Component) recordDefer(d gateDecision) {
 	if c.metrics != nil {
-		c.metrics.setIndexLagAtDetection(lag)
+		c.metrics.countDefer(d.reason)
 	}
-	if lag > 0 {
-		c.logger.Info("community detection running under bounded index lag",
-			slog.Uint64("index_lag", lag),
-			slog.Uint64("index_lag_tolerance", c.config.IndexLagTolerance))
+
+	attrs := []any{
+		slog.String("reason", string(d.reason)),
+		slog.Bool("status_known", d.reading.Known),
+		slog.Duration("status_age", d.reading.Age),
+		slog.String("state", d.reading.Status.State),
+		slog.Uint64("lag", d.reading.Status.Lag),
+		slog.Uint64("staleness_ms", d.reading.Status.StalenessMs),
+		slog.Duration("max_staleness", c.config.MaxStaleness()),
 	}
+	// The watch/bucket error is what separates "graph-index is not deployed here"
+	// from "the feed died" — both read as status_unknown at the gate.
+	if d.reading.Err != nil {
+		attrs = append(attrs, slog.Any("status_error", d.reading.Err))
+	}
+
+	if c.noteGateOutcome(d.reason) {
+		c.logger.Warn("community detection deferred", attrs...)
+		return
+	}
+	c.logger.Debug("community detection deferred", attrs...)
+}
+
+// observeDetectionRun makes the staleness a run proceeded at operator-visible
+// (ADR-083 D5, #579 lesson): it records the gauge on every verified run and, when the
+// run is proceeding on a bounded-stale view, also emits an INFO log so bounded
+// staleness cannot become silent staleness. A non-zero staleness only occurs via the
+// bounded-staleness path — an exact Ready run reports 0.
+func (c *Component) observeDetectionRun(d gateDecision) {
+	if c.noteGateOutcome(graph.DeferNone) {
+		c.logger.Info("readiness gate cleared; resuming community detection",
+			slog.Bool("status_known", d.reading.Known),
+			slog.String("state", d.reading.Status.State),
+			slog.Uint64("staleness_ms", d.reading.Status.StalenessMs))
+	}
+
+	// An ungated run verified nothing about the view; recording 0 would claim it did.
+	if d.ungated {
+		return
+	}
+	if c.metrics != nil {
+		c.metrics.setStalenessAtDetection(d.reading.Status.StalenessMs)
+	}
+	if d.reading.Status.StalenessMs > 0 {
+		c.logger.Info("community detection running under bounded view staleness",
+			slog.Uint64("staleness_ms", d.reading.Status.StalenessMs),
+			slog.Duration("max_staleness", c.config.MaxStaleness()),
+			slog.Uint64("index_lag", d.reading.Status.Lag))
+	}
+}
+
+// noteGateOutcome records this tick's outcome and reports whether it CHANGED. It
+// turns a steady state into one visible log line per transition instead of either
+// silence or a per-tick flood; defer_total remains the rate signal.
+func (c *Component) noteGateOutcome(reason graph.DeferReason) (changed bool) {
+	c.deferMu.Lock()
+	defer c.deferMu.Unlock()
+	changed = reason != c.lastDeferReason
+	c.lastDeferReason = reason
+	return changed
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.

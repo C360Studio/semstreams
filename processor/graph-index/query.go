@@ -78,13 +78,16 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 	}
 	c.querySubscriptions = append(c.querySubscriptions, sub)
 
-	// Subscribe to index-readiness status query (gh#397 — deterministic-fusion
-	// honesty envelope; Ready = NAME_INDEX populated).
-	sub, err = c.natsClient.SubscribeForRequests(ctx, "graph.index.query.status", c.handleQueryStatusNATS)
-	if err != nil {
-		return errs.Wrap(err, "Component", "setupQueryHandlers", "subscribe status query")
-	}
-	c.querySubscriptions = append(c.querySubscriptions, sub)
+	// There is deliberately no readiness-status subscription here. ADR-083 removed
+	// `graph.index.query.status`: the envelope is published as watchable KV state to
+	// GRAPH_STATUS/graph-index on the status tick, so `Get` is the point-in-time probe
+	// (`nats kv get GRAPH_STATUS graph-index`), `Watch` is the event feed, and history
+	// is the trajectory. A per-decision request/reply died under exactly the load that
+	// makes readiness interesting — in a single-binary deployment it shared the
+	// connection with the ENTITY_STATES firehose and timed out, failing closed with a
+	// log line indistinguishable from a genuine not-ready (gh#590). Restoring it as a
+	// convenience would mean two distribution paths to keep honest; it is a clean
+	// break, and an unmigrated requester gets a loud no-responders error.
 
 	c.logger.Info("query handlers registered",
 		slog.Any("subjects", []string{
@@ -96,7 +99,6 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 			"graph.index.query.predicateStats",
 			"graph.index.query.predicateCompound",
 			"graph.index.query.byName",
-			"graph.index.query.status",
 		}))
 
 	return nil
@@ -154,14 +156,35 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 // probe. Returns a transient ErrorCodeIndexNotReady while still building so a caller
 // retries rather than acting on the partial keyset a format cutover / cold replay is
 // still materialising (old aggregate keys are inert, new keys incomplete).
+//
+// This is graph.GateStickyBootstrap (ADR-083 D4), and it is the mode's IN-PROCESS
+// adopter: graph-index computes the envelope it gates on, so there is no transport to
+// lose and freshness is unconditionally true. It reads no KV status key — publishing
+// its own envelope and then reading it back would add a round-trip and a staleness
+// window to a decision it can make from local state.
+//
+// Two local overrides stay OUTSIDE the canonical helper because they are facts about
+// this component's own bookkeeping that the envelope does not carry, and both are
+// deliberately evaluated BEFORE the sticky flag so it can never mask them:
+//
+//   - resetState is fatal and carries its own error code (ErrorCodeGraphStateResetRequired),
+//     not the gate's transient one — the caller must stop, not retry.
+//   - failedCount > 0 is a known-incomplete index: a required write/delete failed and
+//     has not been repaired, so the index is not authoritative even after bootstrap
+//     (gh#474 P1b / Codex #2).
+//
+// The sticky flag is likewise checked before computing status, which is what makes the
+// mode "sticky": once bootstrapped this returns without a target-revision read. That
+// ordering is load-bearing in both directions — it keeps the hot path off a per-query
+// stream lookup, and it preserves the pre-ADR-083 behavior that a post-bootstrap
+// degraded (stuck-watermark) index keeps serving. Folding the status compute in ahead
+// of the sticky flag would newly defer that case; it is a semantic change, and it is
+// not this change.
 func (c *Component) ensureQueryReady(ctx context.Context) error {
 	if c.resetState.Load() != nil {
 		return errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
 			errors.New("graph state reset required: export if needed, clear graph/index buckets, and reingest canonical sources"))
 	}
-	// A known-incomplete index — a required write/delete failed and has not yet been
-	// repaired — is NEVER authoritative, even after bootstrap (gh#474 P1b / Codex #2).
-	// Check this first so the sticky bootstrap flag can't mask a later failure.
 	if c.failedCount.Load() > 0 {
 		return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
 			errors.New("index not ready: unresolved index write/delete failures"))
@@ -176,10 +199,28 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 	if c.watermark == nil {
 		return nil
 	}
-	if c.computeIndexStatus(ctx).Ready {
+	// BootstrapDone is false here by construction (the sticky flag short-circuited
+	// above), so the helper evaluates the bootstrap half of the mode: proceed exactly
+	// on Ready, defer on hard stops, an empty/pre-enumeration graph, and lag —
+	// bit-identical to the `computeIndexStatus(ctx).Ready` check it replaces, because
+	// hard stops and empty graphs both carry Ready == false.
+	status := c.computeIndexStatus(ctx)
+	proceed, reason := graph.EvaluateReadinessGate(status, true, graph.GateStickyBootstrap,
+		graph.GateConfig{BootstrapDone: false})
+	if proceed {
 		c.indexBootstrapped.Store(true)
 		return nil
 	}
+	// The typed reason is evidence, not a new wire contract: the classified code and
+	// message are unchanged (callers match on ErrorCodeIndexNotReady), and the reason
+	// rides the debug log so a bootstrap that will not complete can be attributed
+	// without correlating lines.
+	c.logger.Debug("reverse-index query gate deferred",
+		slog.String("reason", string(reason)),
+		slog.String("state", status.State),
+		slog.Uint64("indexed_revision", status.IndexedRevision),
+		slog.Uint64("target_revision", status.TargetRevision),
+		slog.Uint64("lag", status.Lag))
 	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
 		errors.New("index not ready: still catching up to ENTITY_STATES"))
 }

@@ -46,7 +46,7 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		return graph.IndexStatusResponse{Ready: ready, State: state}
 	}
 
-	indexed := c.watermark.Indexed()
+	indexed, indexedAt := c.watermark.IndexedAt()
 
 	statusBucket := c.entityStatesStatusBucket
 	if statusBucket == nil {
@@ -70,7 +70,17 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	}
 
 	stuck, lastSynced := c.trackReadinessProgress(indexed, target)
-	status := graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
+		Indexed:    indexed,
+		Target:     target,
+		Stuck:      stuck,
+		LastSynced: lastSynced,
+		// Commit time of the newest ENTITY_STATES revision this index covers — the
+		// age-of-view input to staleness_ms (ADR-083). Zero until the watermark
+		// covers a delivered revision, which the projection reports as "not
+		// computable" rather than as a fresh view.
+		IndexedAt: indexedAt,
+	})
 	return applyKnownIncompleteOverrides(status, target,
 		c.initialEnumerationComplete.Load(), c.failedCount.Load())
 }

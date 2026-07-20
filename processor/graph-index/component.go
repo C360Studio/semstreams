@@ -16,6 +16,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -237,10 +238,10 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // stores time.Time
 
-	// nameIndexReady is the sticky readiness signal for graph.index.query.status
-	// (gh#397). Set once the NAME_INDEX is known non-empty; an index does not
-	// un-build, so once true it stays true (O(1) steady state). Restart-safe: a
-	// not-yet-true status read does a one-time bucket check (handleQueryStatus).
+	// nameIndexReady is the sticky readiness signal the original gh#397 status answer
+	// used. Set once the NAME_INDEX is known non-empty; an index does not un-build, so
+	// once true it stays true (O(1) steady state). Restart-safe: a not-yet-true read
+	// does a one-time bucket check (nameIndexIsReady).
 	//
 	// DEPRECATED by ADR-066: readiness is now the revision-lag watermark below,
 	// which means "caught up," not "indexing started." Retained only for the
@@ -248,7 +249,8 @@ type Component struct {
 	nameIndexReady atomic.Bool
 
 	// watermark is the ADR-066 low-water-of-pending "caught up" tracker feeding the
-	// honest graph.index.query.status. Non-nil once Start wires the watcher.
+	// honest readiness envelope this component publishes to GRAPH_STATUS. Non-nil once
+	// Start wires the watcher.
 	watermark *revlag.Watermark
 
 	// Readiness stuck-detector state (ADR-066 §4), guarded by statusMu; touched only
@@ -259,6 +261,16 @@ type Component struct {
 	statusTargetMu  sync.Mutex
 	lastIndexedSeen uint64
 	lastProgressAt  time.Time
+
+	// statusPublisher writes the readiness envelope to this producer's GRAPH_STATUS
+	// key on every status tick (ADR-083). Non-nil once Start has created the bucket.
+	statusPublisher *readiness.Publisher
+
+	// statusInterval overrides the status heartbeat. It is a TEST SEAM only: the
+	// production interval is pinned to readiness.DefaultHeartbeat because consumers
+	// derive their freshness window from that same constant, so a configurable
+	// producer cadence would silently mis-set every consumer's unknown threshold.
+	statusInterval time.Duration
 
 	// Prometheus metrics
 	metrics *indexMetrics
@@ -283,7 +295,7 @@ type Component struct {
 	// Set ONLY on an observed catch-up — NOT on the initial-enumeration sentinel, which
 	// means "all pre-existing entries were DELIVERED to the worker pool," not "their
 	// async writes completed" (gh#474 Codex #1). Once true it never flips back; steady-
-	// state lag is surfaced via graph.index.query.status.
+	// state lag is surfaced via the GRAPH_STATUS readiness envelope.
 	indexBootstrapped atomic.Bool
 
 	// initialEnumerationComplete flips when the WatchAll initial-sync sentinel fires: every
@@ -571,6 +583,18 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
+	// Readiness status bucket (ADR-083). Created EAGERLY — first thing after the
+	// output buckets and long before the status tick loop — so a consumer that binds
+	// its watch the instant this component appears finds a bucket rather than
+	// permanent status_unknown. Fatal on failure, like every other bucket this
+	// component writes: it cannot Start without JetStream anyway (createOutputBuckets
+	// above already hard-requires it), and a silently absent status bucket would fail
+	// every downstream gate closed forever with no producer-side evidence.
+	if err := c.createStatusBucket(ctx); err != nil {
+		cancel()
+		return err
+	}
+
 	// Readiness watermark (ADR-066): must exist before the pool or the watcher so
 	// the first completion/observation has somewhere to land.
 	c.watermark = revlag.New()
@@ -728,6 +752,24 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 	return nil
 }
 
+// createStatusBucket creates-or-opens GRAPH_STATUS and wires this producer's publisher
+// (ADR-083). Creation is idempotent across producers: graph-embedding runs the same
+// EnsureBucket in the same binary, in either order, and natsclient's
+// CreateKeyValueBucket resolves both the already-exists and the concurrent-create race
+// to the existing handle.
+func (c *Component) createStatusBucket(ctx context.Context) error {
+	bucket, err := readiness.EnsureBucket(ctx, c.natsClient)
+	if err != nil {
+		if ctx.Err() != nil {
+			return errs.Wrap(ctx.Err(), "Component", "createStatusBucket", "context cancelled")
+		}
+		return errs.Wrap(err, "Component", "createStatusBucket",
+			fmt.Sprintf("KV bucket: %s", readiness.BucketGraphStatus))
+	}
+	c.statusPublisher = readiness.NewPublisher(bucket, readiness.KeyGraphIndex)
+	return nil
+}
+
 // assignBucket wraps a raw jetstream.KeyValue bucket with natsclient.KVStore
 // for CAS support, retry, and consistent error handling, then assigns it.
 func (c *Component) assignBucket(subject string, bucket jetstream.KeyValue) {
@@ -819,8 +861,11 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 			// Record every delivered revision (update AND delete) as in-flight for
 			// the readiness watermark before dispatch (ADR-066 §1). observedHigh
 			// advances here; complete() drains on processing return / after delete.
+			// entry.Created() is the KV COMMIT time (server-side), not local
+			// arrival: it is what makes staleness_ms mean "the view reflects the
+			// world as of T" and correctly counts delivery backlog (ADR-083 D3).
 			if c.watermark != nil {
-				c.watermark.Observe(entry.Revision(), entry.Key())
+				c.watermark.Observe(entry.Revision(), entry.Key(), entry.Created())
 			}
 
 			if graph.IsKVTombstone(entry.Operation()) {
@@ -1005,22 +1050,29 @@ func (c *Component) repairLoop(ctx context.Context) {
 	}
 }
 
-// statusMetricsInterval is how often the readiness envelope (ADR-066) is republished
-// as Prometheus gauges. A dedicated cadence (not the repair loop's 30s repair backoff)
-// keeps metric freshness independent of the repair schedule. Kept well above
-// sub-second because each refresh does a BucketLastSeq NATS read for the target; a few
-// seconds is ample for dashboards/alerts while never freezing at a stale value.
-const statusMetricsInterval = 5 * time.Second
+// statusMetricsInterval is the readiness heartbeat: how often the envelope (ADR-066)
+// is republished as Prometheus gauges AND written to the GRAPH_STATUS KV key
+// (ADR-083). A dedicated cadence (not the repair loop's 30s repair backoff) keeps
+// freshness independent of the repair schedule. Kept well above sub-second because
+// each refresh does a BucketLastSeq NATS read for the target; a few seconds is ample
+// for dashboards/alerts while never freezing at a stale value.
+//
+// It is DERIVED from readiness.DefaultHeartbeat rather than restated, because every
+// consumer's status-unknown threshold is FreshnessMultiplier x that constant: two
+// independent 5s literals would let a producer cadence change silently make consumers
+// declare a healthy producer dead.
+const statusMetricsInterval = readiness.DefaultHeartbeat
 
-// statusMetricsLoop periodically republishes the readiness envelope as gauges so an
-// operator can scrape readiness/lag/watermark without issuing a NATS status request —
-// the #579 silent-staleness class at the source. Runs until ctx is cancelled (Stop).
+// statusMetricsLoop periodically republishes the readiness envelope as gauges and as
+// GRAPH_STATUS KV state so an operator can scrape readiness/lag/watermark, and a
+// consumer can hold it, without issuing a NATS status request — the #579
+// silent-staleness class at the source. Runs until ctx is cancelled (Stop).
 func (c *Component) statusMetricsLoop(ctx context.Context) {
 	defer c.wg.Done()
-	// Publish once up front so the gauges are populated before the first tick rather
-	// than reading zero for the first interval.
+	// Publish once up front so the gauges and the KV key are populated before the
+	// first tick rather than reading zero (or absent) for the first interval.
 	c.refreshReadinessMetrics(ctx)
-	ticker := time.NewTicker(statusMetricsInterval)
+	ticker := time.NewTicker(c.statusTickInterval())
 	defer ticker.Stop()
 	for {
 		select {
@@ -1032,16 +1084,57 @@ func (c *Component) statusMetricsLoop(ctx context.Context) {
 	}
 }
 
-// refreshReadinessMetrics computes the current readiness envelope and publishes it as
-// gauges. Extracted from statusMetricsLoop so tests drive the real compute+set path
-// with no goroutine, sleep, or NATS status query. Tolerates the not-yet-ready compute
-// (nil watermark/bucket): computeIndexStatus returns {Ready:false, State:building} and
-// the gauges are set from that.
+// statusTickInterval is the heartbeat period, overridable only by tests (see
+// statusInterval) so an integration test can observe successive heartbeats without
+// sleeping through production cadence.
+func (c *Component) statusTickInterval() time.Duration {
+	if c.statusInterval > 0 {
+		return c.statusInterval
+	}
+	return statusMetricsInterval
+}
+
+// refreshReadinessMetrics computes the current readiness envelope ONCE and fans it out
+// to both distribution channels: the Prometheus gauges and the GRAPH_STATUS KV key.
+// The single compute is the contract, not an optimization — two computes at slightly
+// different instants would let the scraped gauges and the watched key disagree about
+// readiness, and a consumer reconciling them would have no way to tell which was
+// right. Extracted from statusMetricsLoop so tests drive the real path with no
+// goroutine or sleep. Tolerates the not-yet-ready compute (nil watermark/bucket):
+// computeIndexStatus returns {Ready:false, State:building} and both channels carry that.
 func (c *Component) refreshReadinessMetrics(ctx context.Context) {
-	if c.metrics == nil {
+	status := c.computeIndexStatus(ctx)
+	if c.metrics != nil {
+		c.metrics.setReadinessGauges(status)
+	}
+	c.publishReadinessStatus(ctx, status)
+}
+
+// publishReadinessStatus writes the envelope to the GRAPH_STATUS key (ADR-083).
+//
+// A failed write must never kill the tick loop or the component: the next heartbeat is
+// the recovery path, and consumers already fail closed (status_unknown) after three
+// missed heartbeats, so the correct behavior here is to leave evidence and keep
+// ticking. The warn is per-tick rather than rate-limited because the heartbeat is slow
+// enough (one line per interval) that the log stays readable, and the counter carries
+// the aggregate.
+func (c *Component) publishReadinessStatus(ctx context.Context, status graph.IndexStatusResponse) {
+	if c.statusPublisher == nil {
 		return
 	}
-	c.metrics.setReadinessGauges(c.computeIndexStatus(ctx))
+	if err := c.statusPublisher.Publish(ctx, status); err != nil {
+		if ctx.Err() != nil {
+			// Shutdown, not a failure: Stop cancels mid-Put on the way out.
+			return
+		}
+		if c.metrics != nil {
+			c.metrics.recordStatusPublishFailure()
+		}
+		c.logger.Warn("readiness status publish failed",
+			slog.String("bucket", readiness.BucketGraphStatus),
+			slog.String("key", c.statusPublisher.Key()),
+			slog.Any("error", err))
+	}
 }
 
 // repairFailedEntities enqueues reconciliation keys into the same ordered lanes as
