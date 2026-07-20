@@ -168,10 +168,11 @@ yet been repaired.
   authoritative `ENTITY_STATES` absence MUST delete the owner key. Explicit empty values are bounded
   by live-entity cardinality and MUST prevent historical relationship churn from leaving phantom
   outgoing query results.
-- **Readiness withholding.** While any entity is in the failed set, `graph.index.query.status` MUST
-  report not-ready, and the `INCOMING`, `OUTGOING`, `byName`, `ALIAS`, and every `PREDICATE` query
-  handler MUST return a typed `index_not_ready` error — including after initial bootstrap has
-  completed (a sticky "bootstrapped" flag MUST NOT mask a later failure).
+- **Readiness withholding.** While any entity is in the failed set, the published readiness envelope
+  (`GRAPH_STATUS` KV, ADR-083) MUST report not-ready, and the `INCOMING`, `OUTGOING`, `byName`,
+  `ALIAS`, and every `PREDICATE` query handler MUST return a typed `index_not_ready` error —
+  including after initial bootstrap has completed (a sticky "bootstrapped" flag MUST NOT mask a
+  later failure).
 - **Consumer propagation.** Consumers that read the reverse indexes — PathRAG traversal, the graph
   query client's incoming reads, and graph-clustering's community detection — MUST honor the
   not-ready signal (abort/defer) rather than convert it into an empty-but-successful result. Direct
@@ -202,7 +203,7 @@ yet been repaired.
 
 - **GIVEN** the index has bootstrapped and is serving queries
 - **WHEN** a required index write for an entity subsequently fails after retry
-- **THEN** `graph.index.query.status` reports not-ready
+- **THEN** the published readiness envelope (`GRAPH_STATUS` KV) reports not-ready
 - **AND** an `incoming` or `byName` query returns `index_not_ready`, not a partial result
 
 #### Scenario: a failed delete does not advertise ready
@@ -246,3 +247,4 @@ yet been repaired.
 
 - **WHEN** a `byName` lookup would hydrate more memberships than the read budget
 - **THEN** it returns a typed `resource_exhausted` error rather than an unbounded serial scan
+

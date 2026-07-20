@@ -155,17 +155,34 @@ relations facet's per-role cap.
 - **AND** the projection-level truncated flag is set
 - **AND** the v1 top-level truncated field is unaffected by graph-facet truncation
 
-### Requirement: The projection carries a view-revision consistency contract
+### Requirement: The projection reports view-revision observations, never a coherence claim
 
-The graph projection MUST report the indexed revision sampled before resolution and re-sampled
-after the fetch phase, and MUST mark the projection coherent only when the two are equal, so a
-consumer can accept a single-revision view or detect and refresh a response that spans
-revisions; a failed re-sample MUST report incoherent rather than guessing.
+The graph projection SHALL report the indexed revision sampled before resolution
+(start) and re-sampled after the fetch phase (end) as plain observations, and
+SHALL NOT carry any field claiming the projection reflects a single indexed
+revision — such a claim is not provable from samples of a heartbeat-published
+status feed (ADR-083). A failed re-sample SHALL report end=0 rather than a
+guessed revision. A consumer that needs a genuinely coherent single-revision
+view uses the graph-view-subscription capability (ADR-081); the fusion
+projection is best-effort ranked evidence.
 
-#### Scenario: a consumer can reject a spanning response
+#### Scenario: the observed span is reported verbatim
 
-- **GIVEN** the indexed revision advances between resolution and the final graph fetch
+- **GIVEN** the sampled indexed revision differs between the pre-resolution
+  sample and the post-fetch re-sample
 - **WHEN** the response is returned
-- **THEN** the view revision reports unequal start and end and coherent=false
-- **AND** a response built entirely at one revision reports equal bounds and coherent=true
+- **THEN** the view revision reports the unequal start and end bounds verbatim
+
+#### Scenario: the wire carries no coherence claim
+
+- **GIVEN** a response built entirely at one observed revision
+- **WHEN** the graph projection is serialized
+- **THEN** the view revision reports equal start and end bounds
+- **AND** no coherent field exists on the wire
+
+#### Scenario: a failed re-sample degrades honestly
+
+- **GIVEN** the post-fetch status re-sample fails
+- **WHEN** the response is returned
+- **THEN** the view revision reports end=0, never a guessed revision
 

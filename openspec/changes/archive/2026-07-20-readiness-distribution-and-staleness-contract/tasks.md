@@ -240,12 +240,18 @@ separate follow-up change with its own ADR — do not smuggle it in here.
       hits). ADR-066 and ADR-082 carry narrow status-line pointers to ADR-083
       (transport / staleness-unit only — neither is fully superseded, and old
       ADRs are history that must not be retrofitted).
-- [ ] 5.3 gh#590 follow-up comment when merged: what shipped, the
+- [x] 5.3 gh#590 follow-up comment when merged: what shipped, the
       `max_staleness` knob, the probe retarget, and that the held soak now
       validates a time bound. Coordinate the semboids reference value (design
       open question) with the owner.
-- [ ] 5.4 Sister-repo sweep (sweep-all-emitters discipline): file lockstep PRs
+- [x] 5.4 Sister-repo sweep (sweep-all-emitters discipline): file lockstep PRs
       where hits exist (sem\* is house-managed — migrate, don't shim).
+      **CLOSED AS TRANSFERRED (owner directive 2026-07-20, on merging #598):
+      the sweep itself is complete (all coordinates below + Break 3's UI
+      delete-absent-items path); filing the semsource/semconnect PRs is
+      owner-managed, deliberately sequenced AFTER the
+      `fusion-consistency-simplification` change lands so sister repos migrate
+      the readiness surface once (no tag before then).**
       **Sweep RE-VERIFIED 2026-07-20 across ALL ~20 local `sem*` repos, not just
       the four originally named** — `index_lag_tolerance` has ZERO adopters
       anywhere, so its removal is unconditionally safe, and only two repos have

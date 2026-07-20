@@ -11,28 +11,29 @@ bounded revision lag (`ReadyWithinLag`, ADR-082), so a continuously-written grap
 clusters instead of deferring forever, while a degraded, reset-required, empty,
 or over-lagged index still hard-defers. A known-incomplete index (a failed
 required write) reports `degraded` regardless of lag.
-
 ## Requirements
-
 ### Requirement: Ready reports exact revision coverage
-The `graph.index.query.status` `Ready` bool SHALL be true only when the index has
-applied every committed ENTITY_STATES revision at query time (`target > 0 &&
+The readiness envelope's `Ready` bool SHALL be true only when the index has
+applied every committed ENTITY_STATES revision at compute time (`target > 0 &&
 indexed >= target`) AND no required index write is unresolved; consumers that
-treat an empty result as an authoritative not-found (the fusion honesty envelope,
-direct reverse-index reads) SHALL gate on `Ready` and never on bounded lag. This
-change does NOT alter `Ready` or the wire fields.
+treat an empty result as an authoritative not-found (the fusion honesty
+envelope, direct reverse-index reads) SHALL gate on `Ready` and never on
+bounded staleness. `Ready` semantics are unchanged bit-for-bit by this change;
+what changes is distribution — the envelope lives in `GRAPH_STATUS` and the
+former `graph.index.query.status` subject is removed — and one additive field
+(`staleness_ms`); all pre-existing fields carry the same values as before.
 
 #### Scenario: Ready stays exact under continuous write
-- **GIVEN** a bucket under continuous write so `Lag > 0` at query time
+- **GIVEN** a bucket under continuous write so `Lag > 0` at compute time
 - **WHEN** the fusion honesty envelope or a reverse-index read checks readiness
 - **THEN** `Ready` is false and the consumer falls back (grep / not-ready error)
 - **AND** no symbol written in the last `Lag` revisions is returned as an authoritative miss
 
-#### Scenario: The status wire fields are unchanged for all consumers
-- **GIVEN** any consumer of `graph.index.query.status`
-- **WHEN** it reads the response
-- **THEN** `Ready`, `IndexedRevision`, `TargetRevision`, and `Lag` carry the same
-  values they carried before this change
+#### Scenario: Pre-existing envelope fields are value-compatible
+- **GIVEN** any consumer decoding the envelope from `GRAPH_STATUS`
+- **WHEN** it reads `Ready`, `State`, `IndexedRevision`, `TargetRevision`, and `Lag`
+- **THEN** they carry the same values the request/reply envelope carried before
+  this change; `staleness_ms` is purely additive
 
 ### Requirement: A known-incomplete index defers regardless of lag
 A known-incomplete index (`failedCount > 0`) SHALL report `State = degraded` regardless of revision lag. When a required index write or delete has failed and is not yet repaired the reverse index can report a smaller graph than exists, so the `failedCount → degraded` projection MUST be unconditional (not gated on `Ready`). This closes the hole where a bounded-lag consumer would treat a `building`-plus-small-lag known-incomplete index as runnable.
@@ -50,70 +51,91 @@ A known-incomplete index (`failedCount > 0`) SHALL report `State = degraded` reg
 - **THEN** it sees `Ready = false` exactly as before (only the `State` label moves `building → degraded`)
 
 ### Requirement: View-rate readiness interpretation with hard stops
-The status response SHALL expose a canonical `ReadyWithinLag(n)` interpretation
-that returns true if and only if `State` is neither `degraded` nor `reset_required`
-AND (`Ready` is true OR (`TargetRevision > 0` AND `Lag <= n`)); the `degraded` and
-`reset_required` states SHALL remain hard defers under any tolerance, an empty
-graph (`TargetRevision = 0`) SHALL never be reported ready by tolerance, and `n = 0`
-SHALL be equivalent to the exact `Ready` gate for every state and lag.
+The canonical view-rate interpretation SHALL be bounded **staleness in time**:
+a view-rate consumer proceeds if and only if `State` is neither `degraded` nor
+`reset_required` AND (`Ready` is true OR (`TargetRevision > 0` AND
+`staleness_ms <= max_staleness`)). The revision-count interpretation
+`ReadyWithinLag(n)` is REMOVED with its only consumer (pre-1.0 break-now;
+shipped one release, no known adopter configured it). An empty graph
+(`TargetRevision = 0`) SHALL never be reported ready by tolerance, and
+`max_staleness = 0` SHALL be equivalent to the exact `Ready` gate for every
+state, target, and staleness.
 
-#### Scenario: Building within tolerance is ready
-- **GIVEN** `State = building`, `TargetRevision = 500`, `Lag = 5`, `n = 100`
-- **WHEN** `ReadyWithinLag(n)` is evaluated
-- **THEN** it returns true
+#### Scenario: Building within staleness tolerance is ready
+- **GIVEN** `State = building`, `TargetRevision = 500`, `staleness_ms = 1200`,
+  `max_staleness = 3s`
+- **WHEN** the view-rate gate is evaluated
+- **THEN** it proceeds
 
 #### Scenario: Degraded and reset_required are hard stops
 - **GIVEN** `State = degraded` (or `reset_required`)
-- **WHEN** `ReadyWithinLag(n)` is evaluated for any `n`
-- **THEN** it returns false
+- **WHEN** the view-rate gate is evaluated for any `max_staleness`
+- **THEN** it defers
 
 #### Scenario: Empty graph is never ready by tolerance
-- **GIVEN** `TargetRevision = 0` (empty / pre-enumeration), so `Ready = false` and `Lag = 0`
-- **WHEN** `ReadyWithinLag(n)` is evaluated for any `n`
-- **THEN** it returns false (equal to `Ready`), because `Lag = 0` here does NOT mean caught-up
+- **GIVEN** `TargetRevision = 0` (empty / pre-enumeration)
+- **WHEN** the view-rate gate is evaluated for any `max_staleness`
+- **THEN** it defers
 
 #### Scenario: Zero tolerance equals exact Ready
-- **GIVEN** `n = 0`
-- **WHEN** `ReadyWithinLag(0)` is evaluated for any state, target, and lag
+- **GIVEN** `max_staleness = 0`
+- **WHEN** the view-rate gate is evaluated for any state, target, and staleness
 - **THEN** its result equals `Ready`
 
 ### Requirement: Community detection runs under bounded lag
 Community detection SHALL gate its periodic tick on a configurable
-`index_lag_tolerance` (ENTITY_STATES revisions, default 0) via `ReadyWithinLag`,
-so that a continuously-written graph within tolerance clusters instead of
-deferring forever, while a degraded index, a reset-required index, an empty
-graph, or lag beyond tolerance still defers. The tolerance counts ENTITY_STATES
-revisions (entity/node writes), each of which may carry many relationships, so
-a partition under sustained write reflects a bounded steady-state lag — it does
-not converge to zero; the bound trades a bounded fraction of stale edges for
-liveness.
+`max_staleness` (duration, default 0 = exact) via the canonical
+`bounded-staleness` mode, so a continuously-written graph within the staleness
+bound clusters instead of deferring forever, while a degraded index, a
+reset-required index, an empty graph, an over-stale view, or an **unknown
+status** still defers. The bound is wall-time and therefore invariant to write
+rate and `coalesce_ms` (the gh#590 coalescer table showed a revision-count bound
+shifts 2–4× with the coalesce dial alone). The former `index_lag_tolerance`
+(revisions) config field is REMOVED — **BREAKING** for the .156 config surface;
+no known deployment sets it.
 
-#### Scenario: Continuous write within tolerance clusters
-- **GIVEN** continuous write with `Lag <= index_lag_tolerance`, `State = building`, and `failedCount = 0`
+#### Scenario: Continuous write within the staleness bound clusters
+- **GIVEN** continuous write with fresh status, `State = building`, and
+  `staleness_ms <= max_staleness`
 - **WHEN** the detection tick fires
-- **THEN** community detection runs (no longer defers forever — the #590 fix)
+- **THEN** community detection runs
 
-#### Scenario: Broken, incomplete, empty, or over-lagged index still defers
-- **GIVEN** `Lag > index_lag_tolerance`, OR `State ∈ {degraded, reset_required}`, OR `TargetRevision = 0`
+#### Scenario: Unknown status defers even with a generous tolerance
+- **GIVEN** the status feed is stale (older than 3× heartbeat) and
+  `max_staleness` is large
 - **WHEN** the detection tick fires
-- **THEN** community detection defers
+- **THEN** detection defers with reason `status_unknown` (tolerance is never
+  evaluated against unknown state)
 
-#### Scenario: Default tolerance preserves current behavior
-- **GIVEN** `index_lag_tolerance = 0` (the code default)
+#### Scenario: Default preserves the exact gate
+- **GIVEN** `max_staleness = 0` (the code default)
 - **WHEN** readiness is evaluated over any run
 - **THEN** community detection runs exactly when the exact `Ready` gate would have
 
 ### Requirement: Clustering under lag is observable
-When community detection runs with `Lag > 0`, the lag it ran at SHALL be
-operator-visible — not only at debug level — so bounded-staleness clustering
-cannot become silent staleness. The derivation lag SHALL be exposed as a metric
-and surfaced at info level or on the detection stage/output.
+When community detection runs with a stale view, the staleness it ran at SHALL
+be operator-visible (metric + info-level or stage/output surface), and every
+**defer** SHALL be attributable: the defer log line carries structured fields
+(`status_known`, `status_age`, `state`, `lag`, `staleness_ms`,
+`reason`, and the watch/bucket error when present) and a `defer_total{reason}`
+counter distinguishes `hard_stop`, `over_staleness`, `status_unknown`, and
+`empty`. Bounded-staleness clustering can never become silent staleness, and a
+transport failure can never be mistaken for index state from the logs (the
+gh#590 investigation cost three comment cycles because the defer line was a
+bare constant).
 
 #### Scenario: A stale partition is visible
-- **GIVEN** `index_lag_tolerance = 200` and detection runs at `Lag = 150`
+- **GIVEN** `max_staleness = 3s` and detection runs at `staleness_ms = 1500`
 - **WHEN** an operator inspects metrics / logs / status after the run
-- **THEN** they can determine that the last partition ran at `Lag = 150` (not only that it "ran")
-- **AND** the signal is not confined to a debug log
+- **THEN** they can determine the last partition ran at ~1.5s staleness, not
+  only that it "ran", and the signal is not confined to a debug log
+
+#### Scenario: Defer reasons are countable and grep-able
+- **GIVEN** a deployment where detection is deferring
+- **WHEN** an operator reads `defer_total` by reason and any single defer log line
+- **THEN** they can distinguish a broken index (`hard_stop`), an over-stale view
+  (`over_staleness`), a dead status feed (`status_unknown`), and an empty graph
+  (`empty`) without correlating multiple log lines
 
 ### Requirement: Read consumers retry the readiness transient
 Reverse-index and by-name read handlers SHALL return the classified transient
@@ -145,9 +167,10 @@ every core read path that lacks its own incompleteness marker: when `Resolve`,
 top-level `!Ready` gate — rather than propagating a hard error, and a `Ready=false`
 envelope SHALL NOT carry `State="ready"`. Genuine, non-transient errors SHALL
 still propagate. The facet walks (impact / paths / graph projection) are OUT of
-scope: they carry their own per-facet honesty markers (`Truncated`, and the graph
-facet's `ViewRevision.Coherent`), so a readiness transient there yields an honest
-lower-bound and is handled identically to any other walk fault.
+scope: they carry their own per-facet honesty markers (`Truncated`; the graph
+facet carries no coherence claim — see the fusion capability spec), so a
+readiness transient there yields an honest lower-bound and is handled
+identically to any other walk fault.
 
 #### Scenario: A Resolve-path transient degrades, not errors
 - **GIVEN** `Fuse`'s top `Ready` gate passed but `Resolve` hits the readiness
@@ -163,14 +186,21 @@ lower-bound and is handled identically to any other walk fault.
 - **THEN** it propagates the error (not degraded to an empty envelope)
 
 ### Requirement: The readiness envelope is exposed as Prometheus metrics
-Every producer of the ADR-066 readiness envelope (graph-index, graph-embedding) SHALL expose it as scrapeable Prometheus gauges, not only over the NATS status subject. At minimum the gauges are `readiness` (1 when Ready else 0), `lag` (revisions behind target), `indexed_revision`, and `target_revision`, plus a `state`-labeled gauge distinguishing building / ready / degraded / reset_required. The gauges MUST reflect the same values `computeIndexStatus` returns and stay fresh independent of query traffic (refreshed on a periodic tick); this is additive — the NATS status envelope is unchanged.
+Every ADR-066 envelope producer (graph-index, graph-embedding) SHALL expose
+the envelope as scrapeable Prometheus gauges in addition to the
+`GRAPH_STATUS` KV key. At minimum the gauges are `readiness` (1 when Ready else
+0), `lag` (revisions behind target), `indexed_revision`, and `target_revision`,
+plus a `state`-labeled gauge distinguishing building / ready / degraded /
+reset_required. The gauges MUST reflect the same values `computeIndexStatus`
+returns and stay fresh independent of query traffic (refreshed on the same
+periodic tick that publishes the KV key — one compute feeds both).
 
-#### Scenario: Readiness and lag are scrapeable without a NATS query
+#### Scenario: Readiness and lag are scrapeable without a KV read
 - **GIVEN** graph-index is running and catching up under continuous write
 - **WHEN** Prometheus scrapes the component
 - **THEN** the `readiness`, `lag`, `indexed_revision`, and `target_revision`
   gauges are present and reflect the current `computeIndexStatus` values
-- **AND** no NATS `graph.index.query.status` request is required to read them
+- **AND** no KV read is required to observe them
 
 #### Scenario: State distinguishes catching-up from broken
 - **GIVEN** the index is `building` with lag, versus `degraded` or `reset_required`
@@ -178,8 +208,118 @@ Every producer of the ADR-066 readiness envelope (graph-index, graph-embedding) 
 - **THEN** the current state is identifiable (so "catching up" can be alerted
   differently from "broken"), not collapsed into `readiness=0`
 
-#### Scenario: Metrics stay fresh without query traffic
-- **GIVEN** no consumer is issuing `graph.index.query.status` requests
-- **WHEN** Prometheus scrapes over time
-- **THEN** the readiness gauges still update (refreshed on the component's tick),
-  never frozen at a stale last-queried value
+#### Scenario: Metrics and the KV key stay in agreement
+- **GIVEN** the periodic status tick
+- **WHEN** the envelope is computed
+- **THEN** the same struct is written to the gauges and to `GRAPH_STATUS`,
+  never two divergent computations
+
+### Requirement: Readiness is published as watchable KV state in a dedicated bucket
+Every ADR-066 envelope producer (graph-index, graph-embedding) SHALL publish
+its `IndexStatusResponse` JSON to its key in the dedicated `GRAPH_STATUS` KV
+bucket (History 3; one key per producer; owned by the envelope producers,
+separate from ENTITY_STATES and every graph-data bucket) on a fixed heartbeat
+tick (the existing 5s status tick), unconditionally each tick so the write
+doubles as a liveness heartbeat. The bucket SHALL be created by the producer at
+Start, before any consumer binding is required. The former
+`graph.index.query.status` request/reply subject and its handler are REMOVED
+(**BREAKING**, clean break — no fallback poll path); the KV twofer replaces it:
+`Get` for point-in-time probes, `Watch` for the event feed, history for the
+trajectory. Readiness status is operational component state, NOT a graph write:
+it never routes through graph-ingest and carries no ADR-055 semantic envelope.
+
+#### Scenario: Consumers hold last-known readiness without polling
+- **GIVEN** graph-index is running and publishing the envelope on its heartbeat tick
+- **WHEN** a consumer watches the producer's status key
+- **THEN** it receives the current envelope immediately on watch start and every
+  subsequent update, and can gate decisions on held state with no per-decision
+  NATS request
+
+#### Scenario: A point-in-time probe is a KV Get
+- **GIVEN** an operator or debug tool wanting current readiness
+- **WHEN** it reads the producer's key (e.g. `nats kv get GRAPH_STATUS graph-index`)
+- **THEN** it receives the same `computeIndexStatus` projection the gauges and
+  watchers see (one compute feeds gauges and the KV publish)
+
+#### Scenario: The removed status subject fails loudly, never silently
+- **GIVEN** an unmigrated requester of the former `graph.index.query.status` subject
+- **WHEN** it issues the request
+- **THEN** it receives a no-responders transport error (loud), never a stale or
+  fabricated envelope
+
+### Requirement: Consumers distinguish not-ready from status-unknown
+A readiness consumer SHALL judge status freshness by consumer-local arrival time
+(no cross-process clock comparison): the held status is fresh while the time
+since the last received update is within a bounded multiple (3×) of the
+producer's heartbeat interval, and **unknown** otherwise. A fresh not-ready
+status SHALL defer on its merits; an unknown status SHALL fail closed, with the
+existing `allow_ungated_reads` escape for standalone deployments. The two
+outcomes SHALL be distinguishable in logs and metrics (the gh#590 observer
+discrepancy was a transport failure wearing not-ready's log line).
+
+#### Scenario: A stalled status feed fails closed as unknown, not as not-ready
+- **GIVEN** the producer stops publishing (crash, connection loss) while a
+  consumer holds a last-known `Ready = true`
+- **WHEN** 3× the heartbeat interval elapses with no update
+- **THEN** the consumer treats readiness as unknown and fails closed
+- **AND** the defer is attributed to `status_unknown`, not to index state
+
+#### Scenario: A restarted consumer is fresh within one delivery
+- **GIVEN** a consumer restarts while the producer is healthy
+- **WHEN** its watch binds
+- **THEN** the current value is delivered immediately and status is fresh without
+  waiting a heartbeat
+
+### Requirement: The envelope carries view staleness in time
+The readiness envelope SHALL carry an additive `staleness_ms` field: `0` when
+`Ready`, otherwise the age of the view — now minus the commit timestamp of the
+newest fully-covered ENTITY_STATES revision (from KV entry timestamps, not
+delivery-arrival times, so delivered backlog ages the metric). The field is a
+floor: a revision not yet delivered to the producer cannot age it, and a total
+stall is still surfaced by the wall-clock stuck-detector flipping `State` to
+`degraded`. Wire compatibility: the field is additive; existing fields are
+unchanged.
+
+#### Scenario: Staleness reflects how old the served view is
+- **GIVEN** continuous write with the watermark N revisions behind, the oldest
+  covered revision committed at time T
+- **WHEN** the envelope is computed at time `now`
+- **THEN** `staleness_ms ≈ now − T` and grows if catch-up stalls, independent of
+  write rate and `coalesce_ms`
+
+#### Scenario: Caught up means zero staleness
+- **GIVEN** `Ready = true`
+- **WHEN** the envelope is computed
+- **THEN** `staleness_ms = 0`
+
+### Requirement: Consumers gate through the canonical readiness gate with a declared mode
+Readiness gate semantics SHALL live in one canonical helper (in `graph`,
+beside the envelope type) evaluated over the held status, its freshness, and a
+declared per-consumer mode: `exact` (fresh `Ready` or defer/error — the fusion
+top gate and `graph/query` client), `bounded-staleness` (no hard stop AND
+(`Ready` OR `staleness_ms ≤ max_staleness`) — community detection),
+`sticky-bootstrap` (exact until first pass, then open, local hard stops still
+override — graph-index's own reverse-index query gate), and `degrade-honest`
+(exact, with the caller degrading to an honest-empty result — fusion `Fuse`).
+The hard stops SHALL hold under every mode and tolerance: `degraded`,
+`reset_required`, and an empty / pre-enumeration graph (`TargetRevision = 0`)
+always defer. Exact/point-query consumers SHALL keep gating on exact `Ready`
+(the ADR-066 authoritative-absence license is unchanged), with
+`IndexedRevision >= myRev` remaining the per-key escape hatch.
+
+#### Scenario: Hard stops defer under every mode
+- **GIVEN** `State ∈ {degraded, reset_required}` or `TargetRevision = 0`
+- **WHEN** the gate is evaluated in any mode with any tolerance
+- **THEN** it defers (or errors, per mode)
+
+#### Scenario: Exact consumers are bit-compatible with today
+- **GIVEN** the fusion top gate or a `graph/query` reverse-index read
+- **WHEN** it gates through the canonical helper in `exact` mode
+- **THEN** it proceeds exactly when the pre-change `Ready` check would have
+
+#### Scenario: One gate, one semantics home
+- **GIVEN** the four consumer call sites after adoption
+- **WHEN** gate behavior must change
+- **THEN** the semantics change in the canonical helper, not in per-consumer
+  hand-rolled logic
+
