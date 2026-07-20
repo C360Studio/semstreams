@@ -1052,6 +1052,104 @@ func TestComputeCost(t *testing.T) {
 	}
 }
 
+// --- resolveModelAccounting (#584: cost-usd + model-used provenance) ---
+
+// TestResolveModelAccounting proves the completion/failure handler resolution
+// seam: a loop's model name — a CAPABILITY for spawned loops — is resolved to
+// its endpoint ONCE, and BOTH the cost and the model-used entity ID are keyed on
+// that resolved endpoint. Pre-fix, a capability name missed GetEndpoint so cost
+// was 0 (agent.loop.cost-usd omitted by the >0 gate) and the model-used triple
+// pointed at the capability, not the real endpoint.
+func TestResolveModelAccounting(t *testing.T) {
+	const org, platform = "acme", "ops"
+
+	// developer -> claude (priced); local is unpriced.
+	reg := &model.Registry{
+		Capabilities: map[string]*model.CapabilityConfig{
+			"developer": {Preferred: []string{"claude"}},
+			"cheap":     {Preferred: []string{"local"}},
+		},
+		Endpoints: map[string]*model.EndpointConfig{
+			"claude": {
+				Model:                  "claude-opus-4-5",
+				InputPricePer1MTokens:  3.0,
+				OutputPricePer1MTokens: 15.0,
+			},
+			"local": {Model: "llama3.2"}, // no pricing
+		},
+		Defaults: model.DefaultsConfig{Model: "claude"},
+	}
+
+	tests := []struct {
+		name          string
+		modelName     string
+		tokensIn      int
+		tokensOut     int
+		wantEntity    string
+		wantEntityFor string // endpoint name the entity ID must be keyed on
+		wantCost      float64
+	}{
+		{
+			name:          "capability resolves to priced endpoint (spawned loop)",
+			modelName:     "developer",
+			tokensIn:      1000,
+			tokensOut:     500,
+			wantEntityFor: "claude",
+			// (1000*3.0 + 500*15.0)/1e6 = 0.0105
+			wantCost: 0.0105,
+		},
+		{
+			name:          "direct endpoint name unchanged (direct-model loop)",
+			modelName:     "claude",
+			tokensIn:      1000,
+			tokensOut:     500,
+			wantEntityFor: "claude",
+			wantCost:      0.0105,
+		},
+		{
+			name:          "capability to unpriced endpoint -> zero cost",
+			modelName:     "cheap",
+			tokensIn:      5000,
+			tokensOut:     1000,
+			wantEntityFor: "local",
+			wantCost:      0,
+		},
+		{
+			name:          "unknown name unchanged, unpriced -> entity for raw name, zero cost",
+			modelName:     "mystery-model",
+			tokensIn:      1000,
+			tokensOut:     500,
+			wantEntityFor: "mystery-model",
+			wantCost:      0,
+		},
+		{
+			name:       "empty model omits entity and zeroes cost",
+			modelName:  "",
+			tokensIn:   1000,
+			tokensOut:  500,
+			wantEntity: "",
+			wantCost:   0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotEntity, gotCost := resolveModelAccounting(reg, org, platform, tc.modelName, tc.tokensIn, tc.tokensOut)
+
+			wantEntity := tc.wantEntity
+			if tc.wantEntityFor != "" {
+				wantEntity = agentic.ModelEndpointEntityID(org, platform, tc.wantEntityFor)
+			}
+			if gotEntity != wantEntity {
+				t.Errorf("modelEntityID = %q, want %q", gotEntity, wantEntity)
+			}
+			if math.Abs(gotCost-tc.wantCost) > 1e-9 {
+				t.Errorf("cost = %.10f, want %.10f", gotCost, tc.wantCost)
+			}
+		})
+	}
+}
+
 // --- buildLineageTriples ---
 
 // TestBuildLineageTriples_StampsLineagePredicates verifies that each

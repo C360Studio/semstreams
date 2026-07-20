@@ -187,6 +187,44 @@ func ResolveCapabilityTimeout(reg RegistryReader, capability string, defaultTime
 	return defaultTimeout
 }
 
+// ResolveEndpointName maps a name to a concrete endpoint name for name-keyed
+// registry lookups on the accounting/limit/aux paths — loop cost, context-window
+// size, provider — where the caller holds whatever name a loop was spawned with.
+//
+// INVARIANT: name-keyed model-registry lookups on the accounting/limit/aux paths
+// MUST resolve capabilities through this helper (or reg.Resolve) before the
+// lookup, matching the model CALL path's capability→endpoint resolution
+// (agentic-model resolveEndpoint). A loop spawned with a capability name
+// (coordinator/developer/reviewer) carries that capability into these lookups; a
+// raw Endpoints[name]/GetEndpoint(name)/GetMaxTokens(name) lookup MISSES on a
+// capability and silently returns wrong/zero endpoint accounting or limits — the
+// #584 (cost-usd) / #594 (max_tokens) bug class.
+//
+// Resolution is a strict superset of the raw lookup it replaces, so a real
+// endpoint name is unaffected:
+//   - a direct endpoint name returns unchanged (identity) — a real endpoint
+//     yields exactly what the raw lookup did;
+//   - a configured capability resolves to its preferred endpoint (reg.Resolve),
+//     matching ResolveEndpoint / ResolveCapabilityTimeout;
+//   - any other name (unknown, or a nil registry / empty name) returns unchanged,
+//     preserving the caller's not-found (0 / nil / "") behavior.
+//
+// Note reg.Resolve alone does NOT pass a direct endpoint name through — a
+// non-capability name resolves to Defaults.Model — so the endpoint-first probe
+// here is load-bearing for the "direct name → itself" guarantee.
+func ResolveEndpointName(reg RegistryReader, name string) string {
+	if reg == nil || name == "" {
+		return name
+	}
+	if reg.GetEndpoint(name) != nil {
+		return name
+	}
+	if reg.GetCapability(name) != nil {
+		return reg.Resolve(name)
+	}
+	return name
+}
+
 // EndpointConfig defines an available model endpoint.
 type EndpointConfig struct {
 	// Provider identifies the API type: "anthropic", "ollama", "openai", "openrouter".
@@ -370,8 +408,9 @@ type RegistryReader interface {
 	// the caller passed an endpoint name instead).
 	GetCapability(name string) *CapabilityConfig
 
-	// GetMaxTokens returns the context window size for an endpoint name.
-	// Returns 0 if the endpoint is not configured.
+	// GetMaxTokens returns the context window size for an endpoint name, or for
+	// a capability (resolved to its preferred endpoint — see ResolveEndpointName).
+	// Returns 0 if the name resolves to no configured endpoint.
 	GetMaxTokens(name string) int
 
 	// GetDefault returns the default endpoint name.
@@ -610,9 +649,12 @@ func (r *Registry) GetCapability(name string) *CapabilityConfig {
 	return capCfg
 }
 
-// GetMaxTokens returns the context window size for an endpoint name.
+// GetMaxTokens returns the context window size for an endpoint name, or for a
+// capability (resolved to its preferred endpoint via ResolveEndpointName so a
+// capability-named loop gets its real endpoint's window, not 0 — the #594 fix).
+// Returns 0 if the name resolves to no configured endpoint.
 func (r *Registry) GetMaxTokens(name string) int {
-	ep, ok := r.Endpoints[name]
+	ep, ok := r.Endpoints[ResolveEndpointName(r, name)]
 	if !ok {
 		return 0
 	}

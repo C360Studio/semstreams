@@ -455,12 +455,8 @@ func (w *graphWriter) WriteLoopCompletion(ctx context.Context, event *agentic.Lo
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
 
-	var modelEntityID string
-	if event.Model != "" {
-		modelEntityID = agentic.ModelEndpointEntityID(w.platform.Org, w.platform.Platform, event.Model)
-	}
-
-	cost := computeCost(w.modelRegistry, event.Model, event.TokensIn, event.TokensOut)
+	modelEntityID, cost := resolveModelAccounting(
+		w.modelRegistry, w.platform.Org, w.platform.Platform, event.Model, event.TokensIn, event.TokensOut)
 
 	triples := buildLoopCompletionTriples(loopEntityID, event, modelEntityID, cost)
 	if err := w.writeBatch(ctx, triples); err != nil {
@@ -485,12 +481,8 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 
 	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, event.LoopID)
 
-	var modelEntityID string
-	if event.Model != "" {
-		modelEntityID = agentic.ModelEndpointEntityID(w.platform.Org, w.platform.Platform, event.Model)
-	}
-
-	cost := computeCost(w.modelRegistry, event.Model, event.TokensIn, event.TokensOut)
+	modelEntityID, cost := resolveModelAccounting(
+		w.modelRegistry, w.platform.Org, w.platform.Platform, event.Model, event.TokensIn, event.TokensOut)
 
 	triples := buildLoopFailureTriples(loopEntityID, event, modelEntityID, cost)
 	if err := w.writeBatch(ctx, triples); err != nil {
@@ -971,8 +963,37 @@ func buildTrajectoryStepTriples(
 	return allTriples
 }
 
+// resolveModelAccounting maps modelName — a CAPABILITY for spawned loops
+// (coordinator/developer/reviewer), or an endpoint name for direct-model loops —
+// to its endpoint ONCE via model.ResolveEndpointName, then returns the
+// model-endpoint entity ID and the loop cost, BOTH keyed on the resolved
+// endpoint (the #584 fix). Keying on the raw capability produced a zero cost
+// (an unpriced capability name misses GetEndpoint) and a agent.loop.model-used
+// triple pointing at the capability instead of the real endpoint.
+//
+// Resolution is a superset of the prior raw use of modelName: a real endpoint
+// name resolves to itself, so direct-model loops are unchanged. An empty or
+// unresolvable modelName yields an empty entity ID (model-used omitted by the
+// build functions) and zero cost, matching prior behavior. Callers guard
+// org/platform non-empty before this point, so ModelEndpointEntityID is only
+// reached with well-formed parts.
+func resolveModelAccounting(
+	reg model.RegistryReader,
+	org, platform, modelName string,
+	tokensIn, tokensOut int,
+) (modelEntityID string, cost float64) {
+	resolved := model.ResolveEndpointName(reg, modelName)
+	if resolved != "" {
+		modelEntityID = agentic.ModelEndpointEntityID(org, platform, resolved)
+	}
+	cost = computeCost(reg, resolved, tokensIn, tokensOut)
+	return modelEntityID, cost
+}
+
 // computeCost calculates loop cost from token counts and endpoint pricing.
 // Returns 0.0 if the registry is nil, the endpoint is unknown, or pricing is not configured.
+// endpointName must already be a resolved endpoint name (capabilities are
+// resolved upstream in resolveModelAccounting via model.ResolveEndpointName).
 func computeCost(reg model.RegistryReader, endpointName string, tokensIn, tokensOut int) float64 {
 	if reg == nil {
 		return 0

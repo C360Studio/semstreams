@@ -406,10 +406,20 @@ func TestGetMaxTokens(t *testing.T) {
 		name string
 		want int
 	}{
+		// Direct endpoint names — behavior unchanged.
 		{"claude-sonnet", 200000},
 		{"qwen", 131072},
 		{"qwen-fast", 32768},
 		{"nonexistent", 0},
+		// Capability names resolve to their preferred endpoint's window
+		// (#594): previously these MISSED and returned 0, which made
+		// agentic-loop's resolveModelLimit fall to DefaultContextLimit and
+		// WARN. "planning" prefers claude-sonnet (200000); "coding" is
+		// RequiresTools and its first tool-capable endpoint is claude-sonnet;
+		// "fast" prefers qwen-fast (32768).
+		{"planning", 200000},
+		{"coding", 200000},
+		{"fast", 32768},
 	}
 
 	for _, tt := range tests {
@@ -417,6 +427,46 @@ func TestGetMaxTokens(t *testing.T) {
 			got := r.GetMaxTokens(tt.name)
 			if got != tt.want {
 				t.Fatalf("GetMaxTokens(%q) = %d, want %d", tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestResolveEndpointName is the shared accounting/limit/aux-path resolution
+// primitive behind the #584/#594 fix class: capabilities must resolve to their
+// preferred endpoint before a name-keyed lookup, while real endpoint names pass
+// through unchanged so priced/limited lookups are a strict superset of the raw
+// lookup they replace.
+func TestResolveEndpointName(t *testing.T) {
+	r := testRegistry()
+
+	tests := []struct {
+		name  string
+		input string
+		reg   RegistryReader
+		want  string
+	}{
+		// Direct endpoint names return unchanged (identity) — this is the
+		// load-bearing guarantee reg.Resolve alone would NOT provide.
+		{"direct endpoint claude-sonnet", "claude-sonnet", r, "claude-sonnet"},
+		{"direct endpoint qwen-fast", "qwen-fast", r, "qwen-fast"},
+		// Capabilities resolve to their preferred endpoint (matches
+		// ResolveEndpoint / ResolveCapabilityTimeout).
+		{"capability planning -> claude-sonnet", "planning", r, "claude-sonnet"},
+		{"capability coding (requires_tools) -> claude-sonnet", "coding", r, "claude-sonnet"},
+		{"capability fast -> qwen-fast", "fast", r, "qwen-fast"},
+		// Unknown / degenerate inputs return unchanged so callers keep their
+		// not-found behavior.
+		{"unknown name unchanged", "totally-unknown", r, "totally-unknown"},
+		{"empty name unchanged", "", r, ""},
+		{"nil registry returns name", "planning", nil, "planning"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveEndpointName(tt.reg, tt.input)
+			if got != tt.want {
+				t.Fatalf("ResolveEndpointName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
