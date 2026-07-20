@@ -299,6 +299,11 @@
         }
       }
     },
+    "index_lag_tolerance": {
+      "type": "integer",
+      "description": "Max ENTITY_STATES revision lag under which community detection still runs (0 = require exact index catch-up; a degraded/reset/empty index always defers regardless)",
+      "category": "advanced"
+    },
     "max_hop_distance": {
       "type": "integer",
       "description": "Maximum BFS traversal depth (default 10)",

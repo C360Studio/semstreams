@@ -50,6 +50,34 @@ const (
 	IndexStateResetRequired = "reset_required"
 )
 
+// ReadyWithinLag is the canonical bounded-lag readiness interpretation for
+// periodic, whole-result-re-deriving consumers (ADR-082) — community detection
+// today. It returns true iff the index is not a hard stop (degraded and
+// reset_required survive NO tolerance) AND either it is exactly caught up (Ready)
+// or its revision lag is within n.
+//
+// n is a per-CONSUMER tolerance, not a producer signal: exact/point-query
+// consumers (the fusion honesty envelope, direct reverse-index reads) MUST keep
+// gating on Ready and never call this — bounded lag would return a symbol written
+// in the last n revisions as an authoritative miss. n=0 is exact parity with Ready
+// for every state, target, and lag.
+//
+// The TargetRevision>0 guard is load-bearing (5-lens F1): an empty / pre-
+// enumeration graph has Lag==0 but Ready==false, so Lag==0 here does NOT mean
+// caught-up. Without the guard ReadyWithinLag(0) would report an empty graph ready
+// while Ready is false.
+//
+// INVARIANT the n=0≡Ready parity relies on: degraded and reset_required always
+// carry Ready==false (maintained by ComputeIndexStatus and the known-incomplete
+// overrides). If a future writer ever sets a hard-stop State with Ready==true this
+// short-circuit would diverge — preserve that projection when editing readiness.
+func (r IndexStatusResponse) ReadyWithinLag(n uint64) bool {
+	if r.State == IndexStateDegraded || r.State == IndexStateResetRequired {
+		return false
+	}
+	return r.Ready || (r.TargetRevision > 0 && r.Lag <= n)
+}
+
 // ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066)
 // from an indexed watermark, the query-time target (a stream LastSeq), a stuck flag
 // (the caller's stuck-watermark detector), and a last-synced timestamp. It is the

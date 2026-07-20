@@ -71,23 +71,33 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 
 	stuck, lastSynced := c.trackReadinessProgress(indexed, target)
 	status := graph.ComputeIndexStatus(indexed, target, stuck, lastSynced)
+	return applyKnownIncompleteOverrides(status, target,
+		c.initialEnumerationComplete.Load(), c.failedCount.Load())
+}
 
-	// An authoritatively empty graph (initial enumeration complete, 0/0) is ready even
-	// though the revision-lag check requires target>0 — otherwise a fresh empty graph
-	// never becomes ready and every reverse-index query is rejected forever (gh#474
-	// Codex #5). Gated on initialEnumerationComplete (enumeration DELIVERED) AND target==0
-	// specifically — NOT on a non-empty replay, whose workers may still be writing (#1).
-	if !status.Ready && target == 0 && c.initialEnumerationComplete.Load() {
+// applyKnownIncompleteOverrides layers the two graph-index-local readiness
+// invariants the shared ComputeIndexStatus projection cannot see onto its output.
+//
+// Empty-graph ready: an authoritatively empty graph (0/0 once initial enumeration
+// is DELIVERED) is ready even though the revision-lag check requires target>0 —
+// otherwise a fresh empty graph never becomes ready and every reverse-index query
+// is rejected forever (gh#474 Codex #5). Gated on target==0 AND enumeration
+// delivered — NOT on a non-empty replay whose workers may still be writing (#1).
+//
+// failedCount→degraded is UNCONDITIONAL (ADR-082, not gated on Ready): a failed
+// required write/delete can make the reverse index report a smaller graph than
+// exists even when the revision watermark is caught up, so this hard stop must
+// hold at any lag. Under continuous write Ready is already false (Lag>0), so the
+// old &&Ready guard SKIPPED the projection and left State=building — which a
+// bounded-lag consumer would treat as runnable and cluster on partial topology.
+// Applied AFTER the empty-graph override so a known-incomplete empty-after-
+// enumeration index reads degraded, not ready.
+func applyKnownIncompleteOverrides(status graph.IndexStatusResponse, target uint64, initialEnumerationComplete bool, failedCount int64) graph.IndexStatusResponse {
+	if !status.Ready && target == 0 && initialEnumerationComplete {
 		status.Ready = true
 		status.State = graph.IndexStateReady
 	}
-
-	// Withhold authoritative readiness while any entity's required index writes/deletes
-	// are unresolved (gh#474 P1b/#4): the reverse index is known-incomplete even when the
-	// revision watermark is caught up, so incoming/byName must not report a smaller graph
-	// than exists. Overrides the empty-graph case above; cleared when the repair loop
-	// drains the failed set.
-	if c.failedCount.Load() > 0 && status.Ready {
+	if failedCount > 0 {
 		status.Ready = false
 		status.State = graph.IndexStateDegraded
 	}
