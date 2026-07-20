@@ -31,7 +31,9 @@ func TestIndexReadiness(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := graph.ComputeIndexStatus(tt.indexed, tt.target, tt.stuck, "ts")
+			got := graph.ComputeIndexStatus(graph.IndexStatusInputs{
+				Indexed: tt.indexed, Target: tt.target, Stuck: tt.stuck, LastSynced: "ts",
+			})
 			if got.Ready != tt.wantReady {
 				t.Errorf("Ready = %v, want %v", got.Ready, tt.wantReady)
 			}
@@ -104,7 +106,9 @@ func TestApplyKnownIncompleteOverrides(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			base := graph.ComputeIndexStatus(tt.indexed, tt.target, tt.stuck, "ts")
+			base := graph.ComputeIndexStatus(graph.IndexStatusInputs{
+				Indexed: tt.indexed, Target: tt.target, Stuck: tt.stuck, LastSynced: "ts",
+			})
 			got := applyKnownIncompleteOverrides(base, tt.target, tt.enumComplete, tt.failedCount)
 			if got.Ready != tt.wantReady {
 				t.Errorf("Ready = %v, want %v", got.Ready, tt.wantReady)

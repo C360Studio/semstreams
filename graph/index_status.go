@@ -1,10 +1,13 @@
 package graph
 
-import "strconv"
+import (
+	"strconv"
+	"time"
+)
 
-// IndexStatusResponse is the wire shape of graph.index.query.status (gh#397,
-// enriched by ADR-066): the deterministic-fusion honesty envelope's readiness
-// signal.
+// IndexStatusResponse is the wire shape of the readiness envelope (gh#397,
+// enriched by ADR-066, distributed as GRAPH_STATUS KV state by ADR-083): the
+// deterministic-fusion honesty envelope's readiness signal.
 //
 // Ready is load-bearing — only Ready permits a caller to treat an empty result
 // as an authoritative not-found; when not Ready the caller must fall back (e.g.
@@ -35,6 +38,25 @@ type IndexStatusResponse struct {
 	TargetRevision uint64 `json:"target_revision,omitempty"`
 	// Lag is TargetRevision - IndexedRevision; 0 means caught up.
 	Lag uint64 `json:"lag,omitempty"`
+	// StalenessMs is the AGE OF THE VIEW in milliseconds (ADR-083): now minus the
+	// KV commit time of the newest ENTITY_STATES revision the index has fully
+	// covered. It is the view-rate consumer's tolerance unit because it is
+	// invariant to write rate and coalesce_ms, where a revision count is not
+	// (gh#590: the correct revision bound shifted 2-4x with the coalesce dial
+	// alone).
+	//
+	// PRESENCE ENCODING — 0 does NOT mean "zero staleness". It means the value
+	// carries no information: either Ready is true (no staleness to report) or the
+	// producer could not compute it (nothing covered yet / an early-return hard
+	// stop). Any COMPUTED staleness is reported as at least 1ms, so a consumer can
+	// treat `StalenessMs > 0` as the presence bit and never proceed on a
+	// not-ready envelope whose staleness is merely absent. EvaluateReadinessGate
+	// enforces this; hand-rolled comparisons must not.
+	//
+	// It is a FLOOR, not an oracle: a revision still undelivered server-side cannot
+	// age it. Total stalls surface through the wall-clock stuck detector
+	// (State=degraded), not through this field.
+	StalenessMs uint64 `json:"staleness_ms,omitempty"`
 	// Phase is the optional friendly projection (ingesting | indexing | ready);
 	// deferred — the numeric fields are load-bearing (ADR-066 open question).
 	Phase      string `json:"phase,omitempty"`
@@ -63,67 +85,93 @@ var AllIndexStates = []string{
 	IndexStateResetRequired,
 }
 
-// ReadyWithinLag is the canonical bounded-lag readiness interpretation for
-// periodic, whole-result-re-deriving consumers (ADR-082) — community detection
-// today. It returns true iff the index is not a hard stop (degraded and
-// reset_required survive NO tolerance) AND either it is exactly caught up (Ready)
-// or its revision lag is within n.
-//
-// n is a per-CONSUMER tolerance, not a producer signal: exact/point-query
-// consumers (the fusion honesty envelope, direct reverse-index reads) MUST keep
-// gating on Ready and never call this — bounded lag would return a symbol written
-// in the last n revisions as an authoritative miss. n=0 is exact parity with Ready
-// for every state, target, and lag.
-//
-// The TargetRevision>0 guard is load-bearing (5-lens F1): an empty / pre-
-// enumeration graph has Lag==0 but Ready==false, so Lag==0 here does NOT mean
-// caught-up. Without the guard ReadyWithinLag(0) would report an empty graph ready
-// while Ready is false.
-//
-// INVARIANT the n=0≡Ready parity relies on: degraded and reset_required always
-// carry Ready==false (maintained by ComputeIndexStatus and the known-incomplete
-// overrides). If a future writer ever sets a hard-stop State with Ready==true this
-// short-circuit would diverge — preserve that projection when editing readiness.
-func (r IndexStatusResponse) ReadyWithinLag(n uint64) bool {
-	if r.State == IndexStateDegraded || r.State == IndexStateResetRequired {
-		return false
-	}
-	return r.Ready || (r.TargetRevision > 0 && r.Lag <= n)
+// IndexStatusInputs are the observations ComputeIndexStatus projects into the
+// readiness envelope. It is a struct rather than a positional argument list
+// because two of the inputs are time.Time (IndexedAt, Now) and adjacent
+// same-typed parameters are a silent-swap footgun in a projection whose output
+// gates authoritative-absence claims.
+type IndexStatusInputs struct {
+	// Indexed is the low-water-of-pending watermark (revlag.Watermark.Indexed).
+	Indexed uint64
+	// Target is the query-time ENTITY_STATES stream LastSeq the index must reach.
+	Target uint64
+	// Stuck is the caller's own stuck-watermark detector verdict (-> degraded).
+	Stuck bool
+	// LastSynced is the last-advance timestamp, RFC3339, for the envelope field.
+	LastSynced string
+	// IndexedAt is the KV COMMIT time of the newest revision Indexed covers
+	// (revlag.Watermark.IndexedAt). ZERO means "not computable" — the projection
+	// then leaves StalenessMs at 0 rather than fabricating a fresh-looking view.
+	IndexedAt time.Time
+	// Now is the compute instant; the zero value means time.Now(). Tests set it to
+	// keep the staleness projection deterministic instead of asserting on the wall
+	// clock.
+	Now time.Time
 }
 
-// ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066)
-// from an indexed watermark, the query-time target (a stream LastSeq), a stuck flag
-// (the caller's stuck-watermark detector), and a last-synced timestamp. It is the
-// shared PROJECTION over pkg/revlag.Watermark used by every revision-lag consumer
-// (graph-index, graph-embedding); the watermark mechanism and the per-consumer
-// stuck-detector live elsewhere.
+// ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066,
+// extended with age-of-view staleness by ADR-083) from an indexed watermark, the
+// query-time target (a stream LastSeq), a stuck flag (the caller's stuck-watermark
+// detector), a last-synced timestamp, and the commit time of the indexed floor. It
+// is the shared PROJECTION over pkg/revlag.Watermark used by every revision-lag
+// producer (graph-index, graph-embedding); the watermark mechanism and the
+// per-producer stuck-detector live elsewhere.
 //
 //   - Ready = target > 0 && indexed >= target (no max(0,…) clamp — indexed <= target
 //     is structural in the watermark, so Lag cannot underflow).
 //   - State = ready ? "ready" : (stuck ? "degraded" : "building"); ready wins.
-func ComputeIndexStatus(indexed, target uint64, stuck bool, lastSynced string) IndexStatusResponse {
-	ready := target > 0 && indexed >= target
+//   - StalenessMs = 0 when Ready or when IndexedAt is unknown, else now-IndexedAt
+//     clamped to a 1ms minimum (see the presence encoding on the field).
+//
+// The staleness subtraction is the ONE place a NATS server commit timestamp meets
+// a local clock; under skew it is off by the skew. That is accepted (ADR-083 D3)
+// because the alternative — a revision count — is wrong by 2-4x under a coalesce
+// change alone. Consumer-side FRESHNESS deliberately does not compare clocks
+// (graph/readiness judges arrival locally).
+func ComputeIndexStatus(in IndexStatusInputs) IndexStatusResponse {
+	ready := in.Target > 0 && in.Indexed >= in.Target
 	var lag uint64
-	if target > indexed {
-		lag = target - indexed
+	if in.Target > in.Indexed {
+		lag = in.Target - in.Indexed
 	}
 	state := IndexStateBuilding
 	switch {
 	case ready:
 		state = IndexStateReady
-	case stuck:
+	case in.Stuck:
 		state = IndexStateDegraded
 	}
 	resp := IndexStatusResponse{
 		Ready:           ready,
 		State:           state,
-		IndexedRevision: indexed,
-		TargetRevision:  target,
+		IndexedRevision: in.Indexed,
+		TargetRevision:  in.Target,
 		Lag:             lag,
-		LastSynced:      lastSynced,
+		LastSynced:      in.LastSynced,
+		StalenessMs:     stalenessMs(ready, in.IndexedAt, in.Now),
 	}
-	if indexed > 0 {
-		resp.Revision = strconv.FormatUint(indexed, 10)
+	if in.Indexed > 0 {
+		resp.Revision = strconv.FormatUint(in.Indexed, 10)
 	}
 	return resp
+}
+
+// stalenessMs projects the age of the view. It returns 0 — the "no information"
+// encoding — when the view is caught up (nothing is stale) or when the floor's
+// commit time is unknown, and otherwise at least 1ms so that a computed staleness
+// is always distinguishable from an absent one.
+func stalenessMs(ready bool, indexedAt, now time.Time) uint64 {
+	if ready || indexedAt.IsZero() {
+		return 0
+	}
+	if now.IsZero() {
+		now = time.Now()
+	}
+	ms := now.Sub(indexedAt).Milliseconds()
+	if ms < 1 {
+		// Sub-millisecond age, or a local clock behind the server's. Report the
+		// minimum COMPUTED value rather than 0, which would read as "absent".
+		ms = 1
+	}
+	return uint64(ms)
 }

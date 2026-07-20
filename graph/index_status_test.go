@@ -1,93 +1,185 @@
 package graph
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+	"time"
+)
 
-// ReadyWithinLag is the single home for the bounded-lag hard-stop rule (ADR-082).
-// These cases pin every branch the 5-lens review flagged: the degraded/reset hard
-// stops, the empty-graph (target==0) guard, exact n=0 == Ready parity across ALL
-// states, and the Lag boundary at exactly n.
-func TestReadyWithinLag(t *testing.T) {
+// computeBase is a fixed compute instant so the staleness projection is asserted
+// exactly rather than against the wall clock.
+var computeBase = time.Date(2026, 7, 20, 12, 0, 0, 0, time.UTC)
+
+// TestComputeIndexStatus_Staleness pins the age-of-view projection (ADR-083 D3),
+// including the presence encoding that keeps an ABSENT staleness from reading as a
+// perfectly fresh view in a bounded-staleness gate.
+func TestComputeIndexStatus_Staleness(t *testing.T) {
 	tests := []struct {
-		name   string
-		status IndexStatusResponse
-		n      uint64
-		want   bool
+		name string
+		in   IndexStatusInputs
+		want uint64
 	}{
 		{
-			name:   "building within tolerance is ready",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, Lag: 5},
-			n:      100,
-			want:   true,
+			name: "caught up reports zero staleness",
+			in: IndexStatusInputs{
+				Indexed: 100, Target: 100,
+				IndexedAt: computeBase.Add(-90 * time.Second), Now: computeBase,
+			},
+			want: 0, // Ready: there is no staleness to report, however old the floor is
 		},
 		{
-			name:   "building at exactly the tolerance boundary is ready",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, Lag: 100},
-			n:      100,
-			want:   true,
+			name: "building reports the age of the covered floor",
+			in: IndexStatusInputs{
+				Indexed: 40, Target: 100,
+				IndexedAt: computeBase.Add(-1500 * time.Millisecond), Now: computeBase,
+			},
+			want: 1500,
 		},
 		{
-			name:   "building one past the tolerance boundary defers",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, Lag: 101},
-			n:      100,
-			want:   false,
+			name: "unknown floor commit time stays absent, never zero-as-fresh",
+			in: IndexStatusInputs{
+				Indexed: 40, Target: 100,
+				IndexedAt: time.Time{}, Now: computeBase,
+			},
+			want: 0,
 		},
 		{
-			name:   "degraded is a hard stop under any tolerance",
-			status: IndexStatusResponse{State: IndexStateDegraded, TargetRevision: 500, Lag: 5},
-			n:      1000,
-			want:   false,
+			name: "sub-millisecond age is clamped to the 1ms presence floor",
+			in: IndexStatusInputs{
+				Indexed: 40, Target: 100,
+				IndexedAt: computeBase.Add(-200 * time.Microsecond), Now: computeBase,
+			},
+			want: 1,
 		},
 		{
-			name:   "reset_required is a hard stop under any tolerance",
-			status: IndexStatusResponse{State: IndexStateResetRequired, TargetRevision: 500, Lag: 5},
-			n:      1000,
-			want:   false,
+			name: "a floor committed in the future (clock skew) still reports 1ms, not absent",
+			in: IndexStatusInputs{
+				Indexed: 40, Target: 100,
+				IndexedAt: computeBase.Add(2 * time.Second), Now: computeBase,
+			},
+			want: 1,
 		},
 		{
-			// The load-bearing empty-graph guard (5-lens F1): Lag==0 here does NOT
-			// mean caught-up because Ready==false and target==0.
-			name:   "empty graph (target 0) is never ready by tolerance",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 0, Lag: 0},
-			n:      100,
-			want:   false,
-		},
-		{
-			name:   "empty graph is not ready even at n=0",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 0, Lag: 0},
-			n:      0,
-			want:   false,
-		},
-		{
-			name:   "ready index is ready regardless of tolerance",
-			status: IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 500, Lag: 0},
-			n:      0,
-			want:   true,
+			name: "degraded still carries the age of what it has covered",
+			in: IndexStatusInputs{
+				Indexed: 40, Target: 100, Stuck: true,
+				IndexedAt: computeBase.Add(-45 * time.Second), Now: computeBase,
+			},
+			want: 45000,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.status.ReadyWithinLag(tt.n); got != tt.want {
-				t.Errorf("ReadyWithinLag(%d) = %v, want %v", tt.n, got, tt.want)
+			if got := ComputeIndexStatus(tt.in).StalenessMs; got != tt.want {
+				t.Errorf("StalenessMs = %d, want %d", got, tt.want)
 			}
 		})
 	}
 }
 
-// TestReadyWithinLag_ZeroToleranceEqualsReady proves n=0 is exact parity with the
-// Ready gate for every state/target/lag combination — INCLUDING the target==0 row,
-// where Ready is false and ReadyWithinLag(0) must also be false.
-func TestReadyWithinLag_ZeroToleranceEqualsReady(t *testing.T) {
-	statuses := []IndexStatusResponse{
-		{Ready: true, State: IndexStateReady, TargetRevision: 100, Lag: 0},
-		{Ready: false, State: IndexStateBuilding, TargetRevision: 100, Lag: 40},
-		{Ready: false, State: IndexStateBuilding, TargetRevision: 0, Lag: 0}, // empty graph
-		{Ready: false, State: IndexStateDegraded, TargetRevision: 100, Lag: 10},
-		{Ready: false, State: IndexStateResetRequired, TargetRevision: 100, Lag: 10},
-		{Ready: true, State: IndexStateReady, TargetRevision: 100, Lag: 0}, // caught up
+// TestComputeIndexStatus_PreExistingFieldsUnchanged is the value-compatibility guard
+// from the spec: adding staleness must not move Ready/State/Lag/Revision for any
+// pre-existing input.
+func TestComputeIndexStatus_PreExistingFieldsUnchanged(t *testing.T) {
+	tests := []struct {
+		name              string
+		in                IndexStatusInputs
+		wantReady         bool
+		wantState         string
+		wantLag           uint64
+		wantRevisionField string
+	}{
+		{
+			name:      "empty graph is not ready",
+			in:        IndexStatusInputs{Indexed: 0, Target: 0},
+			wantState: IndexStateBuilding,
+		},
+		{
+			name:              "caught up is ready",
+			in:                IndexStatusInputs{Indexed: 100, Target: 100},
+			wantReady:         true,
+			wantState:         IndexStateReady,
+			wantRevisionField: "100",
+		},
+		{
+			name:              "behind target is building with lag",
+			in:                IndexStatusInputs{Indexed: 40, Target: 100},
+			wantState:         IndexStateBuilding,
+			wantLag:           60,
+			wantRevisionField: "40",
+		},
+		{
+			name:              "stuck and behind is degraded",
+			in:                IndexStatusInputs{Indexed: 40, Target: 100, Stuck: true},
+			wantState:         IndexStateDegraded,
+			wantLag:           60,
+			wantRevisionField: "40",
+		},
+		{
+			name:              "ready wins over stuck",
+			in:                IndexStatusInputs{Indexed: 100, Target: 100, Stuck: true},
+			wantReady:         true,
+			wantState:         IndexStateReady,
+			wantRevisionField: "100",
+		},
 	}
-	for i, s := range statuses {
-		if got := s.ReadyWithinLag(0); got != s.Ready {
-			t.Errorf("case %d: ReadyWithinLag(0) = %v, want Ready = %v (%+v)", i, got, s.Ready, s)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ComputeIndexStatus(tt.in)
+			if got.Ready != tt.wantReady || got.State != tt.wantState ||
+				got.Lag != tt.wantLag || got.Revision != tt.wantRevisionField {
+				t.Errorf("got Ready=%v State=%q Lag=%d Revision=%q; want %v/%q/%d/%q",
+					got.Ready, got.State, got.Lag, got.Revision,
+					tt.wantReady, tt.wantState, tt.wantLag, tt.wantRevisionField)
+			}
+		})
+	}
+}
+
+// TestIndexStatusResponse_StalenessWireRoundTrip proves the additive field survives
+// the wire under the exact key consumers decode (`staleness_ms`), and that it is
+// omitted — not emitted as 0 — when absent. The graph-status KV value IS this JSON,
+// so the encoder/decoder pair here is the production one (plain encoding/json, no
+// payload-registry envelope: readiness is operational KV state, not a published
+// message payload).
+func TestIndexStatusResponse_StalenessWireRoundTrip(t *testing.T) {
+	src := ComputeIndexStatus(IndexStatusInputs{
+		Indexed: 40, Target: 100,
+		IndexedAt: computeBase.Add(-2500 * time.Millisecond), Now: computeBase,
+		LastSynced: "2026-07-20T12:00:00Z",
+	})
+	raw, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	var keyed map[string]any
+	if err := json.Unmarshal(raw, &keyed); err != nil {
+		t.Fatalf("unmarshal to map: %v", err)
+	}
+	if got, ok := keyed["staleness_ms"]; !ok || got != float64(2500) {
+		t.Fatalf("wire key staleness_ms = %v (present=%v), want 2500", got, ok)
+	}
+
+	var back IndexStatusResponse
+	if err := json.Unmarshal(raw, &back); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if back != src {
+		t.Errorf("round trip changed the envelope:\n got %+v\nwant %+v", back, src)
+	}
+
+	// Ready envelopes omit the key entirely, so an old decoder sees exactly what it
+	// saw before and a new one cannot mistake an absent value for a present zero.
+	readyRaw, err := json.Marshal(ComputeIndexStatus(IndexStatusInputs{Indexed: 100, Target: 100}))
+	if err != nil {
+		t.Fatalf("marshal ready: %v", err)
+	}
+	var readyKeyed map[string]any
+	if err := json.Unmarshal(readyRaw, &readyKeyed); err != nil {
+		t.Fatalf("unmarshal ready: %v", err)
+	}
+	if _, present := readyKeyed["staleness_ms"]; present {
+		t.Errorf("ready envelope emitted staleness_ms: %s", readyRaw)
 	}
 }

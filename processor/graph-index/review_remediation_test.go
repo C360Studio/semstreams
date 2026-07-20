@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -46,7 +47,7 @@ func TestAuthoritativeCandidateSkipsUnsafeAliasWithoutWithholdingReadiness(t *te
 	data, err := json.Marshal(state)
 	require.NoError(t, err)
 	const revision = uint64(7)
-	comp.watermark.Observe(revision, entityID)
+	comp.watermark.Observe(revision, entityID, time.Now())
 	comp.processEntityUpdate(context.Background(), &orderedTestEntry{
 		key: entityID, value: data, revision: revision, op: jetstream.KeyValuePut,
 	})
@@ -85,7 +86,7 @@ func TestAuthoritativeIdentityMismatchPoisonsBeforeIndexIOAndWithholdsWatermark(
 		}
 	}
 
-	comp.watermark.Observe(7, keyID)
+	comp.watermark.Observe(7, keyID, time.Now())
 	comp.processEntityWork(context.Background(), entityIndexWork{entityID: keyID, completionRevision: 7})
 
 	assert.Zero(t, puts.Load(), "identity mismatch must fail before derived-index I/O")

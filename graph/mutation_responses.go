@@ -118,7 +118,8 @@ const (
 	// aggregate keys are inert and the new keyset is still replaying. Serving the
 	// partial-to-empty new keyset would advertise a smaller graph than exists; the
 	// handler returns this transient code instead so a caller retries once the index
-	// reports caught-up (graph.index.query.status Ready), rather than acting on a
+	// reports caught-up (the GRAPH_STATUS readiness envelope's Ready bit — probe it
+	// with `nats kv get GRAPH_STATUS graph-index`), rather than acting on a
 	// silently-incomplete result.
 	ErrorCodeIndexNotReady = "index_not_ready"
 )

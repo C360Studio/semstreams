@@ -127,13 +127,16 @@ func TestHandleQueryByName_EmptyNameRejected(t *testing.T) {
 
 // --- gh#397 index-readiness status ---
 
+// queryStatus reads the readiness projection these tests assert on. It used to go
+// through the `graph.index.query.status` request handler; ADR-083 removed that subject
+// (the envelope is published to GRAPH_STATUS instead), so the tests now call the
+// projection the handler only ever marshalled. The coverage is unchanged — these cases
+// are about the legacy pre-watermark NAME_INDEX fallback inside computeIndexStatus,
+// never about the transport. The wire encoding of the envelope is covered where it now
+// happens, in the GRAPH_STATUS publish path.
 func queryStatus(t *testing.T, comp *Component) graph.IndexStatusResponse {
 	t.Helper()
-	respData, err := comp.handleQueryStatusNATS(context.Background(), nil)
-	require.NoError(t, err)
-	var st graph.IndexStatusResponse
-	require.NoError(t, json.Unmarshal(respData, &st))
-	return st
+	return comp.computeIndexStatus(context.Background())
 }
 
 func TestQueryStatus_NotReadyUntilNameIndexPopulated(t *testing.T) {

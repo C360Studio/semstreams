@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
@@ -261,6 +262,16 @@ type Component struct {
 	statusMu            sync.Mutex
 	lastCompletionsSeen uint64
 	lastProgressAt      time.Time
+
+	// statusPublisher writes the readiness envelope to this producer's GRAPH_STATUS
+	// key on every status tick (ADR-083). Non-nil once Start has created the bucket.
+	statusPublisher *readiness.Publisher
+
+	// statusInterval overrides the status heartbeat. It is a TEST SEAM only: the
+	// production interval is pinned to readiness.DefaultHeartbeat because consumers
+	// derive their freshness window from that same constant, so a configurable
+	// producer cadence would silently mis-set every consumer's unknown threshold.
+	statusInterval time.Duration
 }
 
 // CreateGraphEmbedding is the factory function for creating graph-embedding components
@@ -538,6 +549,19 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 	c.embeddingBucket = embeddingBucket
 
+	// Readiness status bucket (ADR-083). Created EAGERLY — right after the first
+	// bucket this component writes and long before the status tick loop — so a
+	// consumer that binds its watch the instant this component appears finds a bucket
+	// rather than permanent status_unknown. Fatal on failure, like every other bucket
+	// this component writes: it cannot Start without JetStream anyway (the
+	// EMBEDDINGS_CACHE create above already hard-requires it), and a silently absent
+	// status bucket would fail every downstream gate closed forever with no
+	// producer-side evidence.
+	if err := c.createStatusBucket(ctx); err != nil {
+		cancel()
+		return err
+	}
+
 	// Create embedder based on config
 	if err := c.createEmbedder(); err != nil {
 		cancel()
@@ -748,6 +772,24 @@ func (c *Component) createEmbeddingBuckets(ctx context.Context) (jetstream.KeyVa
 	return indexBucket, dedupBucket, nil
 }
 
+// createStatusBucket creates-or-opens GRAPH_STATUS and wires this producer's publisher
+// (ADR-083). Creation is idempotent across producers: graph-index runs the same
+// EnsureBucket in the same binary, in either order, and natsclient's
+// CreateKeyValueBucket resolves both the already-exists and the concurrent-create race
+// to the existing handle.
+func (c *Component) createStatusBucket(ctx context.Context) error {
+	bucket, err := readiness.EnsureBucket(ctx, c.natsClient)
+	if err != nil {
+		if ctx.Err() != nil {
+			return errs.Wrap(ctx.Err(), "Component", "createStatusBucket", "context cancelled")
+		}
+		return errs.Wrap(err, "Component", "createStatusBucket",
+			fmt.Sprintf("KV bucket: %s", readiness.BucketGraphStatus))
+	}
+	c.statusPublisher = readiness.NewPublisher(bucket, readiness.KeyGraphEmbedding)
+	return nil
+}
+
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
 	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
@@ -912,23 +954,30 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	return nil
 }
 
-// statusMetricsInterval is how often the readiness envelope (ADR-066 §3) is
-// republished as Prometheus gauges. Kept well above sub-second because each refresh
-// does a BucketLastSeq NATS read for the target; a few seconds is ample for
-// dashboards/alerts while never freezing at a stale value.
-const statusMetricsInterval = 5 * time.Second
+// statusMetricsInterval is the readiness heartbeat: how often the envelope (ADR-066 §3)
+// is republished as Prometheus gauges AND written to the GRAPH_STATUS KV key
+// (ADR-083). Kept well above sub-second because each refresh does a BucketLastSeq NATS
+// read for the target; a few seconds is ample for dashboards/alerts while never
+// freezing at a stale value.
+//
+// It is DERIVED from readiness.DefaultHeartbeat rather than restated, because every
+// consumer's status-unknown threshold is FreshnessMultiplier x that constant: two
+// independent 5s literals would let a producer cadence change silently make consumers
+// declare a healthy producer dead.
+const statusMetricsInterval = readiness.DefaultHeartbeat
 
-// statusMetricsLoop periodically republishes the readiness envelope as gauges so an
-// operator can scrape readiness/lag/watermark without issuing a NATS status request —
-// the #579 silent-staleness class at the source. The entity watcher is event-driven,
-// not periodic, so a dedicated tick is required to stay fresh when no writes or queries
+// statusMetricsLoop periodically republishes the readiness envelope as gauges and as
+// GRAPH_STATUS KV state so an operator can scrape readiness/lag/watermark, and a
+// consumer can hold it, without issuing a NATS status request — the #579
+// silent-staleness class at the source. The entity watcher is event-driven, not
+// periodic, so a dedicated tick is required to stay fresh when no writes or queries
 // arrive. Runs until ctx is cancelled (Stop).
 func (c *Component) statusMetricsLoop(ctx context.Context) {
 	defer c.wg.Done()
-	// Publish once up front so the gauges are populated before the first tick rather
-	// than reading zero for the first interval.
+	// Publish once up front so the gauges and the KV key are populated before the
+	// first tick rather than reading zero (or absent) for the first interval.
 	c.refreshReadinessMetrics(ctx)
-	ticker := time.NewTicker(statusMetricsInterval)
+	ticker := time.NewTicker(c.statusTickInterval())
 	defer ticker.Stop()
 	for {
 		select {
@@ -940,16 +989,58 @@ func (c *Component) statusMetricsLoop(ctx context.Context) {
 	}
 }
 
-// refreshReadinessMetrics computes the current readiness envelope and publishes it as
-// gauges. Extracted from statusMetricsLoop so tests drive the real compute+set path
-// with no goroutine, sleep, or NATS status query. Tolerates the not-yet-ready compute
-// (nil watermark/bucket): computeEmbeddingStatus returns {Ready:false, State:building}
-// and the gauges are set from that.
+// statusTickInterval is the heartbeat period, overridable only by tests (see
+// statusInterval) so an integration test can observe successive heartbeats without
+// sleeping through production cadence.
+func (c *Component) statusTickInterval() time.Duration {
+	if c.statusInterval > 0 {
+		return c.statusInterval
+	}
+	return statusMetricsInterval
+}
+
+// refreshReadinessMetrics computes the current readiness envelope ONCE and fans it out
+// to both distribution channels: the Prometheus gauges and the GRAPH_STATUS KV key.
+// The single compute is the contract, not an optimization — two computes at slightly
+// different instants would let the scraped gauges and the watched key disagree about
+// readiness, and a consumer reconciling them would have no way to tell which was
+// right. Extracted from statusMetricsLoop so tests drive the real path with no
+// goroutine or sleep. Tolerates the not-yet-ready compute (nil watermark/bucket):
+// computeEmbeddingStatus returns {Ready:false, State:building} and both channels carry
+// that.
 func (c *Component) refreshReadinessMetrics(ctx context.Context) {
-	if c.metrics == nil {
+	status := c.computeEmbeddingStatus(ctx)
+	if c.metrics != nil {
+		c.metrics.setReadinessGauges(status)
+	}
+	c.publishReadinessStatus(ctx, status)
+}
+
+// publishReadinessStatus writes the envelope to the GRAPH_STATUS key (ADR-083).
+//
+// A failed write must never kill the tick loop or the component: the next heartbeat is
+// the recovery path, and consumers already fail closed (status_unknown) after three
+// missed heartbeats, so the correct behavior here is to leave evidence and keep
+// ticking. The warn is per-tick rather than rate-limited because the heartbeat is slow
+// enough (one line per interval) that the log stays readable, and the counter carries
+// the aggregate.
+func (c *Component) publishReadinessStatus(ctx context.Context, status graph.IndexStatusResponse) {
+	if c.statusPublisher == nil {
 		return
 	}
-	c.metrics.setReadinessGauges(c.computeEmbeddingStatus(ctx))
+	if err := c.statusPublisher.Publish(ctx, status); err != nil {
+		if ctx.Err() != nil {
+			// Shutdown, not a failure: Stop cancels mid-Put on the way out.
+			return
+		}
+		if c.metrics != nil {
+			c.metrics.recordStatusPublishFailure()
+		}
+		c.logger.Warn("readiness status publish failed",
+			slog.String("bucket", readiness.BucketGraphStatus),
+			slog.String("key", c.statusPublisher.Key()),
+			slog.Any("error", err))
+	}
 }
 
 // ============================================================================
@@ -1045,9 +1136,10 @@ func (c *Component) validateEntityStateEntry(entry jetstream.KeyValueEntry) {
 func (c *Component) applyEntityWatchEntry(ctx context.Context, entry jetstream.KeyValueEntry) {
 	// Record each valid delivered revision before dispatch. During bootstrap this
 	// advances only the private projection; queries remain gated until nil proves
-	// the complete snapshot valid.
+	// the complete snapshot valid. entry.Created() is the KV COMMIT time, the
+	// age-of-view input to staleness_ms (ADR-083 D3) — never local arrival time.
 	if c.watermark != nil {
-		c.watermark.Observe(entry.Revision(), entry.Key())
+		c.watermark.Observe(entry.Revision(), entry.Key(), entry.Created())
 	}
 
 	if graph.IsKVTombstone(entry.Operation()) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -22,7 +23,10 @@ import (
 
 // setupIntegrationTest creates a real NATS container and component using natsclient.TestClient
 // Each test gets its own NATS container, so bucket isolation is automatic.
-func setupIntegrationTest(t *testing.T) (*Component, *natsclient.Client, func()) {
+// setupIntegrationTest starts a real graph-index against a real NATS. preStart hooks
+// run after Initialize and BEFORE Start, which is the only safe window for the
+// test-seam fields the tick goroutine reads at creation (statusInterval).
+func setupIntegrationTest(t *testing.T, preStart ...func(*Component)) (*Component, *natsclient.Client, func()) {
 	t.Helper()
 
 	ctx := context.Background()
@@ -50,6 +54,9 @@ func setupIntegrationTest(t *testing.T) (*Component, *natsclient.Client, func())
 	// Initialize and start component (ENTITY_STATES bucket already exists)
 	// Component.Start() calls setupQueryHandlers() which registers NATS subscriptions
 	require.NoError(t, graphIndexComp.Initialize())
+	for _, hook := range preStart {
+		hook(graphIndexComp)
+	}
 	require.NoError(t, graphIndexComp.Start(ctx))
 
 	// Wait for component and its query handlers to be ready
@@ -608,6 +615,10 @@ func TestQueryStatus_NonEmptyReplay_NotReadyUntilCaughtUp(t *testing.T) {
 	require.NoError(t, err)
 	graphIndexComp := comp.(*Component)
 	require.NoError(t, graphIndexComp.Initialize())
+	// Shorten the readiness heartbeat (pre-Start, the only safe window) so the
+	// GRAPH_STATUS assertion below observes the caught-up transition promptly instead
+	// of waiting out the 5s production cadence.
+	graphIndexComp.statusInterval = 100 * time.Millisecond
 	require.NoError(t, graphIndexComp.Start(ctx))
 	defer graphIndexComp.Stop(5 * time.Second)
 
@@ -627,16 +638,66 @@ func TestQueryStatus_NonEmptyReplay_NotReadyUntilCaughtUp(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 			continue // still not ready — the expected pre-catch-up window
 		}
-		// Incoming succeeded ⇒ the index must be authoritatively ready.
-		stMsg, sErr := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
-		require.NoError(t, sErr)
-		var st graph.IndexStatusResponse
-		require.NoError(t, json.Unmarshal(stMsg.Data, &st))
+		// Incoming succeeded ⇒ the index must be authoritatively ready. The projection
+		// is read IN-PROCESS, not from GRAPH_STATUS: the published key advances on the
+		// heartbeat tick, so a KV read here would lag the instant this invariant is
+		// about and turn a race-free assertion into a flake. (It read the status
+		// request/reply before ADR-083 removed the subject; that request answered from
+		// this same projection, so the assertion is unchanged.) The published key is
+		// asserted separately below, once it has had a tick to catch up.
+		st := graphIndexComp.computeIndexStatus(ctx)
 		assert.True(t, st.Ready,
 			"incoming query succeeded but status is not ready — the query gate bypassed the watermark (Codex #1)")
+
+		// Readiness stays externally observable after the subject removal: the same
+		// caught-up envelope reaches consumers as GRAPH_STATUS KV state.
+		requireStatusKeyEventually(ctx, t, testClient.Client,
+			func(s graph.IndexStatusResponse) bool { return s.Ready },
+			"published GRAPH_STATUS envelope never reported the caught-up index")
 		return
 	}
 	t.Fatal("index never became ready within the deadline")
+}
+
+// readStatusKey reads graph-index's published readiness envelope the way an operator
+// (`nats kv get GRAPH_STATUS graph-index`) and every migrated consumer now does. It
+// replaces the `graph.index.query.status` request/reply these tests used before
+// ADR-083 removed it. found is false while the bucket or key is absent — the producer
+// has not published yet — which is distinct from a decode failure.
+func readStatusKey(ctx context.Context, t *testing.T, nc *natsclient.Client) (status graph.IndexStatusResponse, found bool) {
+	t.Helper()
+	bucket, err := nc.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
+	if err != nil {
+		return graph.IndexStatusResponse{}, false
+	}
+	entry, err := bucket.Get(ctx, readiness.KeyGraphIndex)
+	if err != nil {
+		return graph.IndexStatusResponse{}, false
+	}
+	require.NoError(t, json.Unmarshal(entry.Value(), &status),
+		"published status value must decode as graph.IndexStatusResponse: %s", entry.Value())
+	return status, true
+}
+
+// requireStatusKeyEventually waits for the published envelope to satisfy pred. The
+// wait is inherent: the producer publishes on its heartbeat, so a consumer observes a
+// transition one tick after it happens. Callers that need a short wait shorten the
+// heartbeat via the setupIntegrationTest preStart hook.
+func requireStatusKeyEventually(
+	ctx context.Context, t *testing.T, nc *natsclient.Client,
+	pred func(graph.IndexStatusResponse) bool, msg string,
+) graph.IndexStatusResponse {
+	t.Helper()
+	var last graph.IndexStatusResponse
+	require.Eventually(t, func() bool {
+		status, found := readStatusKey(ctx, t, nc)
+		if !found {
+			return false
+		}
+		last = status
+		return pred(status)
+	}, 15*time.Second, 50*time.Millisecond, msg)
+	return last
 }
 
 // incomingQuerySucceeded reports whether a NATS reply body is a valid incoming-query
@@ -647,38 +708,37 @@ func incomingQuerySucceeded(body []byte) bool {
 	return json.Unmarshal(body, &resp) == nil && resp.Data.Relationships != nil
 }
 
+// TestQueryStatus_RevisionLag_Integration drives the full production wire — real
+// WatchAll delivery, real entry.Revision(), real BucketLastSeq against the KV backing
+// stream — to prove the ADR-066 caught-up contract end to end, and reads the result
+// the way ADR-083 distributes it: from the GRAPH_STATUS KV key the component publishes
+// on its heartbeat, not from the removed `graph.index.query.status` request/reply. The
+// readout changed; every assertion about the envelope did not.
 func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
-	_, natsClient, cleanup := setupIntegrationTest(t)
+	// A short heartbeat so each readiness transition is observable in KV promptly.
+	// The publish path itself is production — the same refreshReadinessMetrics tick
+	// that feeds the Prometheus gauges.
+	_, natsClient, cleanup := setupIntegrationTest(t, func(c *Component) {
+		c.statusInterval = 100 * time.Millisecond
+	})
 	defer cleanup()
 
 	ctx := context.Background()
-	nc := natsClient.GetConnection()
 
 	statusNow := func(t *testing.T) graph.IndexStatusResponse {
 		t.Helper()
-		msg, err := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
-		require.NoError(t, err)
-		var st graph.IndexStatusResponse
-		require.NoError(t, json.Unmarshal(msg.Data, &st))
-		return st
+		status, found := readStatusKey(ctx, t, natsClient)
+		require.True(t, found, "no readiness envelope published to %s/%s",
+			readiness.BucketGraphStatus, readiness.KeyGraphIndex)
+		return status
 	}
 
 	// Empty ENTITY_STATES: an authoritatively empty 0/0 graph is READY once initial
 	// enumeration completes (gh#474 Codex #5) — it must not reject queries forever
 	// just because target==0. The enumeration-complete sentinel is async, so wait.
-	require.Eventually(t, func() bool {
-		msg, err := nc.Request("graph.index.query.status", []byte(`{}`), 2*time.Second)
-		if err != nil {
-			return false
-		}
-		var s graph.IndexStatusResponse
-		if json.Unmarshal(msg.Data, &s) != nil {
-			return false
-		}
-		return s.Ready
-	}, 5*time.Second, 50*time.Millisecond, "empty enumerated graph must become ready")
-
-	st := statusNow(t)
+	st := requireStatusKeyEventually(ctx, t, natsClient,
+		func(s graph.IndexStatusResponse) bool { return s.Ready },
+		"empty enumerated graph must become ready")
 	assert.True(t, st.Ready, "empty enumerated graph reads ready (Codex #5)")
 	assert.Equal(t, graph.IndexStateReady, st.State)
 	assert.Zero(t, st.TargetRevision, "empty bucket target should be 0")
@@ -705,11 +765,17 @@ func TestQueryStatus_RevisionLag_Integration(t *testing.T) {
 	// Poll until caught up: Ready flips only when IndexedRevision >= TargetRevision.
 	// (statusNow runs in THIS goroutine — require.Eventually would run it in another,
 	// where testify's FailNow is illegal.)
+	//
+	// The published envelope trails the writes by up to one heartbeat, so Ready alone
+	// is not the stop condition here: the key still holds the pre-write ready envelope
+	// (0/0) for a tick after the Puts land. Wait for a ready envelope that has ALSO
+	// seen the writes. The old on-demand status request computed at read time and so
+	// needed no such qualifier — this is the readout changing, not the contract.
 	var final graph.IndexStatusResponse
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		final = statusNow(t)
-		if final.Ready {
+		if final.Ready && final.IndexedRevision >= uint64(n) {
 			break
 		}
 		time.Sleep(50 * time.Millisecond)

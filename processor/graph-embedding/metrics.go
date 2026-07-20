@@ -25,6 +25,11 @@ type embeddingMetrics struct {
 	indexedRevision prometheus.Gauge     // low-water-of-pending watermark
 	targetRevision  prometheus.Gauge     // ENTITY_STATES stream LastSeq target
 	readinessState  *prometheus.GaugeVec // one-hot over building|ready|degraded|reset_required
+	// statusPublishFailures counts heartbeat writes to GRAPH_STATUS that failed
+	// (ADR-083). A rising value is the producer-side half of a consumer reporting
+	// status_unknown: it says the envelope is not reaching the bucket, which the
+	// consumer alone cannot distinguish from a crashed producer.
+	statusPublishFailures prometheus.Counter
 	// contentUnresolved counts entities whose offloaded BODY (a StorageRef)
 	// could not be fetched because no content store is wired, so that body was
 	// excluded from the embedding (gh#414). The entity may still be embedded from
@@ -151,6 +156,13 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Name:      "readiness_state",
 				Help:      "Readiness state one-hot (building|ready|degraded|reset_required): current state=1, others=0, so catching-up is distinguishable from broken",
 			}, []string{"state"}),
+
+			statusPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "status_publish_failures_total",
+				Help:      "Readiness heartbeat writes to the GRAPH_STATUS KV key that failed (ADR-083): consumers go status_unknown and fail closed while this rises",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -169,6 +181,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterGauge("graph-embedding", "indexed_revision", metrics.indexedRevision)
 			_ = registry.RegisterGauge("graph-embedding", "target_revision", metrics.targetRevision)
 			_ = registry.RegisterGaugeVec("graph-embedding", "readiness_state", metrics.readinessState)
+			_ = registry.RegisterCounter("graph-embedding", "status_publish_failures_total", metrics.statusPublishFailures)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.embedderType)
@@ -185,6 +198,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.indexedRevision)
 			_ = prometheus.DefaultRegisterer.Register(metrics.targetRevision)
 			_ = prometheus.DefaultRegisterer.Register(metrics.readinessState)
+			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
 		}
 	})
 	return metrics
@@ -211,6 +225,11 @@ func (m *embeddingMetrics) setReadinessGauges(resp graph.IndexStatusResponse) {
 		}
 		m.readinessState.WithLabelValues(s).Set(v)
 	}
+}
+
+// recordStatusPublishFailure counts one failed GRAPH_STATUS heartbeat write (ADR-083).
+func (m *embeddingMetrics) recordStatusPublishFailure() {
+	m.statusPublishFailures.Inc()
 }
 
 // setEmbedderType sets the embedder type gauge.

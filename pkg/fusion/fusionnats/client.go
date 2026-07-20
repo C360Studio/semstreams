@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/fusion"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
@@ -17,8 +19,10 @@ import (
 // stable external surface (graph-query / graph-index passthroughs), NOT the
 // internal graph.ingest.*/graph.embedding.* subjects, so a standalone fusion
 // service reaches them through the same boundary as any other consumer.
+// Status is deliberately absent: ADR-083 removed `graph.index.query.status` and
+// readiness now travels as GRAPH_STATUS KV state (see Status below). Every other
+// subject here is untouched.
 const (
-	subjectStatus        = "graph.index.query.status"
 	subjectByName        = "graph.query.byName"
 	subjectPrefix        = "graph.query.prefix"
 	subjectSemantic      = "graph.query.semantic"
@@ -39,12 +43,25 @@ type requester interface {
 	RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error)
 }
 
-// Client is the production NATS implementation of fusion.RetrievalClient. It is
-// stateless beyond the request transport and timeout, so it is safe to share
-// across goroutines.
+// Client is the production NATS implementation of fusion.RetrievalClient. Every
+// method is safe to call from any goroutine: the subject calls are stateless, and
+// the readiness watch is guarded by statusMu.
 type Client struct {
 	nats    requester
 	timeout time.Duration
+
+	// statusMu guards the lazily-bound readiness watch below. A mutex rather than a
+	// sync.Once because Close must be able to stop a watch that a concurrent Status
+	// may be binding, and Once gives no way to interlock with that.
+	statusMu sync.Mutex
+	// statusBound records that binding was ATTEMPTED, so a permanent wiring failure
+	// (a transport with no KV) is not retried on every call.
+	statusBound bool
+	// statusWaited records that the one-shot bind wait has been spent; see Status.
+	statusWaited bool
+	statusClosed bool
+	statusErr    error
+	statusWatch  *readiness.Watcher
 }
 
 // Compile-time assertion that Client satisfies the engine's retrieval surface.
@@ -52,6 +69,11 @@ var _ fusion.RetrievalClient = (*Client)(nil)
 
 // New builds a retrieval client over the given NATS requester. A non-positive
 // timeout falls back to defaultTimeout.
+//
+// The signature is load-bearing: sister repos construct this as
+// `fusionnats.New(natsClient, 0)` with no lifecycle, so ADR-083's move of readiness
+// onto a KV WATCH must not become a construction change. The watch is therefore bound
+// lazily inside Status (see statusWatcher) rather than here.
 func New(nats requester, timeout time.Duration) *Client {
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -59,24 +81,157 @@ func New(nats requester, timeout time.Duration) *Client {
 	return &Client{nats: nats, timeout: timeout}
 }
 
-// Status reports graph readiness for the honesty envelope (graph.index.query.status).
+// Close stops the readiness watch. It is OPTIONAL and additive — a client that is
+// never closed keeps one watch goroutine for the process lifetime, which is what a
+// long-lived retrieval client wants; Close exists so tests and short-lived embedders
+// can reclaim it. Safe to call more than once, and safe on a client that never bound
+// a watch.
+func (c *Client) Close() {
+	c.statusMu.Lock()
+	if c.statusClosed {
+		c.statusMu.Unlock()
+		return
+	}
+	c.statusClosed = true
+	watch := c.statusWatch
+	c.statusWatch = nil
+	c.statusMu.Unlock()
+
+	// Stop outside the lock: it waits for the watch goroutine to exit, and holding
+	// statusMu across that would block a concurrent Status behind shutdown.
+	if watch != nil {
+		watch.Stop()
+	}
+}
+
+// statusWatcher returns the readiness watch, binding it on first use. Every caller is
+// serialized on statusMu, so the bind happens exactly once no matter how many
+// goroutines call Status concurrently.
+//
+// The watch is started with the CALLER'S context stripped of cancellation
+// (context.WithoutCancel): it must outlive the request that happened to trigger the
+// bind — a watch cancelled with the first query would leave every later one unknown —
+// while still carrying that context's values. Close is the only thing that stops it.
+func (c *Client) statusWatcher(ctx context.Context) (*readiness.Watcher, error) {
+	c.statusMu.Lock()
+	defer c.statusMu.Unlock()
+
+	if c.statusClosed {
+		return nil, errors.New("fusionnats: client closed")
+	}
+	if c.statusBound {
+		return c.statusWatch, c.statusErr
+	}
+	c.statusBound = true
+
+	// The KV watch is an OPTIONAL CAPABILITY of the transport, asserted through the
+	// narrow method set with its exact signature (a divergent embedded signature would
+	// silently fail the structural match). *natsclient.Client satisfies it, so no
+	// caller has to change its construction; a transport that does not is a wiring
+	// error, and saying so beats silently reporting a not-ready graph forever.
+	src, ok := c.nats.(readiness.BucketSource)
+	if !ok {
+		c.statusErr = fmt.Errorf(
+			"fusionnats: transport %T cannot watch %s (readiness moved to KV in ADR-083)",
+			c.nats, readiness.BucketGraphStatus)
+		return nil, c.statusErr
+	}
+	watch := readiness.NewWatcher(src, readiness.KeyGraphIndex)
+	if err := watch.Start(context.WithoutCancel(ctx)); err != nil {
+		c.statusErr = fmt.Errorf("fusionnats: start readiness watch on %s/%s: %w",
+			readiness.BucketGraphStatus, readiness.KeyGraphIndex, err)
+		return nil, c.statusErr
+	}
+	c.statusWatch = watch
+	return watch, nil
+}
+
+// awaitFirstStatus spends the ONE bounded wait for the watch's first delivery, so a
+// cold client's first Status does not report unknown merely because the watch has not
+// delivered yet. The budget is the client's own timeout — the exact budget the status
+// request/reply had — so the worst case of the first call is unchanged and every later
+// call is a local read. It is spent once: with no graph-index deployed nothing ever
+// arrives, and waiting per call would turn that deployment into a per-call stall.
+func (c *Client) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher) {
+	c.statusMu.Lock()
+	if c.statusWaited {
+		c.statusMu.Unlock()
+		return
+	}
+	c.statusWaited = true
+	c.statusMu.Unlock()
+
+	waitCtx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
+	// The error is deliberately dropped: a wait that times out is not itself the
+	// verdict. Read below is, and it fails closed on exactly the same unknown.
+	_ = watch.WaitForFirst(waitCtx)
+}
+
+// Status reports graph readiness for the honesty envelope.
+//
+// ADR-083 moved the source from the `graph.index.query.status` request/reply to the
+// shared GRAPH_STATUS watch (graph/readiness). Only the transport moved: every failure
+// to establish readiness still returns an error, exactly as a failed request did, and a
+// received envelope is still handed up verbatim, so Fuse's top gate and its
+// ErrorCodeIndexNotReady degrade paths see the same inputs they saw before. This is
+// `graph.GateExact` at the engine's top gate and `graph.GateDegradeHonest` in Fuse's
+// internal-read recovery — naming, not new behavior.
+//
+// Watching rather than reading per call is the point of the change: a per-decision
+// round-trip travels the same connection as the ENTITY_STATES firehose in a
+// single-binary deployment, so it times out under exactly the load that makes readiness
+// interesting (gh#590). The producer now pays one write per heartbeat and this client
+// holds the answer.
+//
+// The unknown set is what the subject already covered — no bucket, no key, a deleted
+// key, a backend fault, an undecodable value, a transport with no KV — plus one case
+// state adds that a request could not have: a feed that has gone quiet past the
+// freshness window, i.e. a producer that died holding a Ready key. All of them are one
+// error, because all of them were one error before.
 func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
-	// The handler ignores the body; send an empty object for convention parity
-	// with the other index query callers.
-	raw, err := c.request(ctx, subjectStatus, struct{}{})
+	watch, err := c.statusWatcher(ctx)
 	if err != nil {
 		return fusion.IndexStatus{}, err
+	}
+	c.awaitFirstStatus(ctx, watch)
+
+	reading := watch.Read()
+	if !reading.Fresh {
+		// Unknown readiness: never received, gone quiet, or a stale key held by a dead
+		// producer. Under request/reply every one of these was an error, and it stays
+		// one — a dead graph-index must not serve its final Ready=true forever, or the
+		// honesty envelope licenses authoritative-absence claims against a frozen index.
+		return fusion.IndexStatus{}, fmt.Errorf(
+			"fusionnats: readiness on %s/%s is unknown (known=%t age=%s): %w",
+			readiness.BucketGraphStatus, readiness.KeyGraphIndex,
+			reading.Known, reading.Age, unknownCause(reading))
 	}
 	// Decode straight into the target: graph.IndexStatusResponse and
 	// fusion.IndexStatus are field-identical by contract (ADR-066 §5), so a direct
 	// unmarshal keeps them changing together — a hand-copied remap silently drops
 	// any field added to the wire (as it did for IndexedRevision/Lag before the
 	// round-trip test below), which reads as a false-caught-up (Lag==0) downstream.
+	// This is why the reading carries the RAW wire bytes alongside its decoded
+	// envelope: taking the decoded struct would reintroduce exactly that remap.
 	var resp fusion.IndexStatus
-	if err := json.Unmarshal(raw, &resp); err != nil {
+	if err := json.Unmarshal(reading.Raw, &resp); err != nil {
 		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w", err)
 	}
 	return resp, nil
+}
+
+// unknownCause names why readiness could not be established, so the returned error is
+// actionable rather than a bare "unknown". A quiet feed carries no watch error at all,
+// hence the fallback.
+func unknownCause(reading readiness.Reading) error {
+	if reading.Err != nil {
+		return reading.Err
+	}
+	if reading.Known {
+		return errors.New("graph-index stopped publishing its readiness envelope")
+	}
+	return errors.New("no readiness envelope has been published")
 }
 
 // Resolve maps a query to seed entity IDs by mode, most relevant first. The mode

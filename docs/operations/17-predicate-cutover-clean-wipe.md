@@ -5,7 +5,7 @@ mixed-format graph indexes in place.
 
 ## Detect the condition
 
-`graph.index.query.status` reports:
+The readiness envelope — `nats kv get GRAPH_STATUS graph-index` — reports:
 
 ```json
 {
@@ -53,7 +53,9 @@ Canonical source systems remain authoritative and must be fixed before reseed.
 1. Deploy the matching breaking SemStreams and owned producer versions.
 2. Start SemStreams so it creates empty graph/index buckets.
 3. Reseed from canonical source events or regenerate Graphables from the authoritative source system.
-4. Poll `graph.index.query.status` until `ready` is true and the indexed revision reaches the target revision.
+4. Poll `nats kv get GRAPH_STATUS graph-index` until `ready` is true and the indexed revision reaches the target
+   revision. The producer republishes the key every 5s, so an operator watching it (`nats kv watch GRAPH_STATUS
+   graph-index`) sees each transition as it lands.
 5. Run exact and namespace query smoke tests for the renamed predicates before reopening writers.
 
 If reset-required returns, stop and audit the emitting producer. Repeating the reset without fixing the source will

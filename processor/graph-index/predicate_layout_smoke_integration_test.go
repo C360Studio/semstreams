@@ -501,6 +501,18 @@ type predicateSmokeConsumerEvidence struct {
 	catalogHighWater    int
 }
 
+// catalogConsumerVisibilityRequired is false because catalog streams are tiny
+// (~22 rows): the ephemeral list consumer can deliver every key and vanish between
+// Info polls, so observing it above baseline is inherently racy (gh#555).
+//
+// ONE constant feeds BOTH the observation and the assertion below. They disagreed
+// before — the observation was best-effort while the assertion demanded proof — so
+// a loaded machine that starved the polling goroutine failed a test whose own
+// comment said the case was tolerated. The leak check stays strict either way; that
+// is the invariant actually under test (a temporary consumer that cleans up), and
+// unlike visibility it cannot be missed by slow polling.
+const catalogConsumerVisibilityRequired = false
+
 func provePredicateSmokeConsumerLifecycle(
 	t *testing.T, ctx context.Context, stores predicateSmokeStores,
 ) predicateSmokeConsumerEvidence {
@@ -509,12 +521,10 @@ func provePredicateSmokeConsumerLifecycle(
 	evidence.membershipBaseline, evidence.membershipHighWater = provePredicateSmokeBucketConsumer(
 		t, ctx, stores.membershipRaw, stores.membershipStream, ">", true)
 	if stores.catalogRaw != nil {
-		// Catalog streams are tiny (~22 rows): the ephemeral list consumer
-		// can deliver everything and vanish between Info polls, so
-		// above-baseline visibility is inherently racy there (gh#555).
-		// Observation-only; the leak check stays strict.
+		// Observation-only; the leak check stays strict. See
+		// catalogConsumerVisibilityRequired for why.
 		evidence.catalogBaseline, evidence.catalogHighWater = provePredicateSmokeBucketConsumer(
-			t, ctx, stores.catalogRaw, stores.catalogStream, ">", false)
+			t, ctx, stores.catalogRaw, stores.catalogStream, ">", catalogConsumerVisibilityRequired)
 	}
 	return evidence
 }
@@ -576,17 +586,22 @@ func assertPredicateSmokeConsumerReturn(
 	evidence predicateSmokeConsumerEvidence,
 ) {
 	t.Helper()
-	assertStream := func(label string, stream jetstream.Stream, baseline, highWater int) {
-		require.Greater(t, highWater, baseline, "%s consumer high-water must prove temporary allocation", label)
+	assertStream := func(label string, stream jetstream.Stream, baseline, highWater int, proveAllocation bool) {
+		if proveAllocation {
+			require.Greater(t, highWater, baseline, "%s consumer high-water must prove temporary allocation", label)
+		}
+		// The leak check is unconditional: whether or not the consumer was ever
+		// caught in the act, it must not still be there.
 		require.Eventually(t, func() bool {
 			info, err := stream.Info(ctx)
 			return err == nil && info.State.Consumers == baseline
 		}, 5*time.Second, time.Millisecond, "%s consumers did not return to baseline", label)
 	}
 	assertStream("membership", stores.membershipStream,
-		evidence.membershipBaseline, evidence.membershipHighWater)
+		evidence.membershipBaseline, evidence.membershipHighWater, true)
 	if stores.catalogStream != nil {
-		assertStream("catalog", stores.catalogStream, evidence.catalogBaseline, evidence.catalogHighWater)
+		assertStream("catalog", stores.catalogStream,
+			evidence.catalogBaseline, evidence.catalogHighWater, catalogConsumerVisibilityRequired)
 	}
 }
 

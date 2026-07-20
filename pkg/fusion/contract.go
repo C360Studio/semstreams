@@ -74,7 +74,7 @@ const (
 // the caller must fall back (e.g. to grep) rather than treat empty as not-found.
 // Ready now means the index is CAUGHT UP (revision-lag), not merely started
 // (ADR-066). Field-identical to graph.IndexStatusResponse — the RetrievalClient
-// decodes graph.index.query.status directly into this; the two change together.
+// decodes the producer's envelope directly into this; the two change together.
 type IndexStatus struct {
 	Ready  bool       `json:"ready"`
 	State  IndexState `json:"state"`
@@ -86,9 +86,14 @@ type IndexStatus struct {
 	IndexedRevision uint64 `json:"indexed_revision,omitempty"`
 	TargetRevision  uint64 `json:"target_revision,omitempty"`
 	Lag             uint64 `json:"lag,omitempty"`
-	Phase           string `json:"phase,omitempty"`
-	Revision        string `json:"revision,omitempty"`
-	LastSynced      string `json:"last_synced,omitempty"`
+	// StalenessMs is the age of the view in milliseconds (ADR-083). 0 carries no
+	// information (Ready, or not computable); any computed staleness is >= 1ms.
+	// See graph.IndexStatusResponse.StalenessMs for the full presence encoding —
+	// fusion mirrors that field verbatim so the direct decode keeps working.
+	StalenessMs uint64 `json:"staleness_ms,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	Revision    string `json:"revision,omitempty"`
+	LastSynced  string `json:"last_synced,omitempty"`
 }
 
 // Ref points to a node by what a human reads — never the entity ID.

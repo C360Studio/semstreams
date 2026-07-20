@@ -95,14 +95,14 @@ func TestOrderedDispatcher_UpdateCannotFinishAfterDelete(t *testing.T) {
 		return nil
 	}
 
-	comp.watermark.Observe(1, entityID)
+	comp.watermark.Observe(1, entityID, time.Now())
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
 		entityID: entityID, completionRevision: 1,
 	}))
 	<-entered
 
 	entityDeleted.Store(true)
-	comp.watermark.Observe(2, entityID)
+	comp.watermark.Observe(2, entityID, time.Now())
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
 		entityID: entityID, completionRevision: 2,
 	}))
@@ -149,7 +149,7 @@ func TestAuthoritativeReconcilePreventsLateOlderWatcherClobber(t *testing.T) {
 	}))
 	require.Eventually(t, func() bool { return gets.Load() == 1 }, time.Second, time.Millisecond)
 
-	comp.watermark.Observe(1, entityID)
+	comp.watermark.Observe(1, entityID, time.Now())
 	require.NoError(t, comp.submitEntityWork(ctx, entityIndexWork{
 		entityID: entityID, completionRevision: 1,
 	}))
