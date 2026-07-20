@@ -69,20 +69,20 @@
       a mutation-verified regression test; lows fixed or documented
       (DONE 2026-07-19)
 
-## 3. Follow-ups (separate changes/issues)
+## 3. Follow-ups (separate changes/issues — all filed; tracked independently of this change)
 
-- [ ] 3.1 Split-out natsclient ergonomics: attribute the `nats: slow consumer`
-      log (subject/subscription); expose watcher pending-limit config
-- [ ] 3.2 message-logger KV-watch SSE (`message_logger_kv_watch.go:216`) reads
-      from shared views (per-bucket)
-- [ ] 3.3 Serving-projection migrations: community_cache + delta-only
+- [ ] 3.1 (#586) Split-out natsclient ergonomics: attribute the `nats: slow
+      consumer` log (subject/subscription); expose watcher pending-limit config
+- [ ] 3.2 (#587) message-logger KV-watch SSE (`message_logger_kv_watch.go:216`)
+      reads from shared views (per-bucket)
+- [ ] 3.3 (#588) Serving-projection migrations: community_cache + delta-only
       enhancement-worker attach (COMMUNITY_INDEX 2→1); embedding vector cache
       + delta-only worker attach (EMBEDDING_INDEX 2→1)
-- [ ] 3.4 graph-query client (#571, multi-reader processes ONLY): view deltas
+- [ ] 3.4 (#571) graph-query client (multi-reader processes ONLY): view deltas
       drive cache invalidation + poison latch via G6; single-reader embedder
       processes stay as-is (memory floor); coordinate latch layering with the
       ADR-079 poison-scoping track
-- [ ] 3.5 #340 docs: point "current-state projection" guidance at the view;
+- [ ] 3.5 (#340) docs: point "current-state projection" guidance at the view;
       note intermediate revisions live in the raw KV lane (spec G4)
-- [ ] 3.6 Dead code: remove or repurpose `graph/inference/storage.go:429`
+- [ ] 3.6 (#589) Dead code: remove or repurpose `graph/inference/storage.go:429`
       `Watch` (no production caller)
