@@ -131,7 +131,7 @@ separate follow-up change with its own ADR — do not smuggle it in here.
 
 ## 4b. BLOCKING — open decision from the pre-merge review (owner/architect call)
 
-- [ ] 4b.1 **`ViewRevision.Coherent` fail-open** (`pkg/fusion/engine_graph.go:210`).
+- [x] 4b.1 **`ViewRevision.Coherent` fail-open** (`pkg/fusion/engine_graph.go:210`).
       Found by `semstreams-reviewer`; **independently confirmed against the code**,
       not taken on the reviewer's word.
       Mechanism: `Fuse` samples readiness at its top gate, passes
@@ -206,6 +206,17 @@ separate follow-up change with its own ADR — do not smuggle it in here.
       so it is a third break for the same lockstep wave; semsource's
       delete-absent-items path needs a real replacement, not a re-tuned boolean.
       Recorded in ADR-083 Consequences so it is not shipped silently.
+      **IMPLEMENTED (owner-directed): the `Coherent` bool is DELETED.**
+      `ViewRevision` now carries `Start`/`End` as plain observations;
+      `graphViewRevision` no longer computes the claim; the unit suite asserts
+      the wire carries NO `coherent` key (regression pin). ADR-083 Consequences
+      records the resolution; migration doc gained Break 3 with a consumer
+      checklist; fusion capability delta REMOVES the view-revision consistency
+      contract requirement and ADDS the observations-only requirement; the
+      graph-index-readiness delta's fusion-degrade requirement drops its stale
+      `Coherent` parenthetical. Third break in the same lockstep wave —
+      semsource's delete-absent-items path must move to `pkg/graphview` or be
+      removed (tracked with the §5.4 lockstep PRs; ties to gh#597 part 1).
 
 ## 5. Decisions and docs
 

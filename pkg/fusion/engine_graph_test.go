@@ -23,7 +23,7 @@ import (
 //  4. evidence merges on one edge           → TestGraph_SameEdgeEvidence_OneEdgeTwoEntries
 //  5. absent evidence stays absent          → TestGraph_AbsentEvidence_OmittedFromWire
 //  6. truncation observable + independent   → TestGraph_FactCap_ObservableAndIndependent
-//  7. view-revision consistency contract    → TestGraph_ViewRevision
+//  7. view-revision observations            → TestGraph_ViewRevision
 //  8. v1 requests unaffected                → TestGraph_NotRequested_V1ShapeUnchanged
 
 // fuseGraph runs a graph-want fuse over g through lens, failing the test on a
@@ -349,10 +349,10 @@ func TestGraph_EvidenceCap_Truncates(t *testing.T) {
 }
 
 // TestGraph_ViewRevision (acceptance 7): the projection reports the indexed
-// revision sampled before resolve and re-sampled after the facet's last graph
-// fetch. Equal bounds are the coherent single-revision view; unequal bounds are
-// the documented weaker spanning contract a consumer can detect and refresh;
-// a failed re-sample degrades to End=0/Coherent=false rather than guessing.
+// revision sampled before resolve (Start) and re-sampled after the facet's
+// last graph fetch (End) — OBSERVATIONS of the assembly window, never a
+// coherence claim (the former Coherent bool was removed; ADR-083). A failed
+// re-sample degrades to End=0 rather than guessing.
 func TestGraph_ViewRevision(t *testing.T) {
 	seedEntity := func() *fusion.Entity {
 		return &fusion.Entity{ID: "S", Triples: []message.Triple{{Predicate: "acme.note.text", Object: "x"}}}
@@ -361,12 +361,12 @@ func TestGraph_ViewRevision(t *testing.T) {
 		return fusion.IndexStatus{Ready: true, State: fusion.StateReady, IndexedRevision: rev}
 	}
 
-	t.Run("coherent when the revision holds", func(t *testing.T) {
+	t.Run("stable bounds when the revision holds", func(t *testing.T) {
 		g := graphSeed(seedEntity())
 		g.statusFn = func(int) (fusion.IndexStatus, error) { return statusAt(100), nil }
 		resp := fuseGraph(t, g, refLens{})
 
-		want := fusion.ViewRevision{Start: 100, End: 100, Coherent: true}
+		want := fusion.ViewRevision{Start: 100, End: 100}
 		if resp.Graph.ViewRevision != want {
 			t.Errorf("view revision = %+v, want %+v", resp.Graph.ViewRevision, want)
 		}
@@ -375,7 +375,7 @@ func TestGraph_ViewRevision(t *testing.T) {
 		}
 	})
 
-	t.Run("spanning when the revision advances", func(t *testing.T) {
+	t.Run("spanning bounds when the revision advances", func(t *testing.T) {
 		g := graphSeed(seedEntity())
 		g.statusFn = func(call int) (fusion.IndexStatus, error) {
 			if call == 1 {
@@ -385,9 +385,9 @@ func TestGraph_ViewRevision(t *testing.T) {
 		}
 		resp := fuseGraph(t, g, refLens{})
 
-		want := fusion.ViewRevision{Start: 100, End: 105, Coherent: false}
+		want := fusion.ViewRevision{Start: 100, End: 105}
 		if resp.Graph.ViewRevision != want {
-			t.Errorf("view revision = %+v, want %+v (a consumer must be able to reject the span)", resp.Graph.ViewRevision, want)
+			t.Errorf("view revision = %+v, want %+v (the observed span must be reported verbatim)", resp.Graph.ViewRevision, want)
 		}
 	})
 
@@ -401,9 +401,27 @@ func TestGraph_ViewRevision(t *testing.T) {
 		}
 		resp := fuseGraph(t, g, refLens{})
 
-		want := fusion.ViewRevision{Start: 100, End: 0, Coherent: false}
+		want := fusion.ViewRevision{Start: 100, End: 0}
 		if resp.Graph.ViewRevision != want {
 			t.Errorf("view revision = %+v, want %+v (never guess a revision)", resp.Graph.ViewRevision, want)
+		}
+	})
+
+	// The wire must carry NO coherence claim: the field was deleted (ADR-083)
+	// because two heartbeat-grained samples agreeing cannot prove the reads
+	// between them hit one revision — consumers needing a coherent view use
+	// pkg/graphview. A resurrected "coherent" key is a contract regression.
+	t.Run("wire carries no coherent field", func(t *testing.T) {
+		g := graphSeed(seedEntity())
+		g.statusFn = func(int) (fusion.IndexStatus, error) { return statusAt(100), nil }
+		resp := fuseGraph(t, g, refLens{})
+
+		raw, err := json.Marshal(resp.Graph.ViewRevision)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(raw), "coherent") {
+			t.Errorf("view revision JSON must not claim coherence:\n%s", raw)
 		}
 	})
 }
@@ -588,7 +606,7 @@ func TestGraphProjection_ResponseJSONRoundTrip(t *testing.T) {
 				Evidence:  []fusion.GraphEvidence{{Source: "walker"}},
 				Truncated: true,
 			}},
-			ViewRevision: fusion.ViewRevision{Start: 41, End: 42, Coherent: false},
+			ViewRevision: fusion.ViewRevision{Start: 41, End: 42},
 			Truncated:    true,
 		},
 		Truncated:       false,

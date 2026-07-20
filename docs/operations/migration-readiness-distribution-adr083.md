@@ -3,8 +3,10 @@
 This is the SemStreams-local release note for the
 `readiness-distribution-and-staleness-contract` change (follow-on to gh#590). It is a
 clean pre-v1 break: there is no dual distribution path, no consumer fallback poll, and
-no deprecation window. Both breaks fail **loudly** — a no-responders transient and a
-config decode error — never silently.
+no deprecation window. Breaks 1 and 2 fail **loudly** — a no-responders transient and a
+config decode error — never silently. Break 3 removes a wire field; how loudly it
+surfaces depends on the consumer's decoder, so it gets an explicit consumer checklist
+below.
 
 ## What changed, and why
 
@@ -109,6 +111,41 @@ deployment that set it. Pick the time bound you actually want the view to be wit
 `degraded`, `reset_required`, and an empty/pre-enumeration index — defer under every
 tolerance, unchanged from ADR-082.
 
+## Break 3 — the fusion graph facet no longer claims coherence
+
+`view_revision.coherent` is REMOVED from the fusion graph projection (the opt-in
+`WantGraph` facet). `view_revision.start` and `view_revision.end` remain, as plain
+observations: the indexed revision sampled before seed resolution and re-sampled after
+the facet's last graph fetch.
+
+```jsonc
+// Before
+"view_revision": { "start": 41, "end": 41, "coherent": true }
+
+// After — observations only; no coherence claim exists on this wire
+"view_revision": { "start": 41, "end": 41 }
+```
+
+The field was deleted, not re-tuned, because it was never soundly provable: fusion
+assembles a projection from N independent reads with no snapshot, so two revision
+samples agreeing could never establish that no read between them was stale. ADR-083's
+heartbeat distribution turned the unsound signal into a vacuous one (both samples read
+the same held value, so it became ~always true), but the unsoundness predates the
+transport change. See ADR-083's Consequences.
+
+**Consumer checklist:**
+
+- A strict decoder that requires the `coherent` key fails decode — loud, fix by
+  dropping the field.
+- A lenient decoder reads it as absent/false. Any logic gated on `coherent == true`
+  goes permanently quiet; in particular, any path that used the claim to license
+  **deleting or reconciling items absent from the projection** must be rebuilt, not
+  re-gated. Absence from a fusion projection is never authoritative — a seed the
+  engine failed to hydrate is indistinguishable from one that does not exist (gh#597).
+- A consumer that genuinely needs a coherent single-revision view should use
+  `pkg/graphview` (ADR-081), which has real snapshot/revision semantics. Retrieval
+  fusion is best-effort ranked evidence.
+
 ## Diagnosing a defer
 
 The clustering defer path is now structured. One log line carries `status_known`,
@@ -132,3 +169,5 @@ logged.
 2. Migrate consumers off the removed subject onto `graph/readiness`.
 3. Swap `index_lag_tolerance` for `max_staleness` in every graph-clustering config.
 4. Retarget any monitoring or conformance probe that requested the status subject.
+5. Drop `view_revision.coherent` from fusion graph-facet decoders; move any
+   delete-absent-items reconciliation onto `pkg/graphview` or remove it.

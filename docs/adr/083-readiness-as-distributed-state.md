@@ -131,20 +131,32 @@ mixed-version rollout window where an un-upgraded consumer sees no responders;
 and the loss of a synchronous probe, replaced by `nats kv get GRAPH_STATUS
 graph-index`.
 
-One further cost is **not** yet paid, and is called out here rather than left to
-be discovered. The envelope's revision resolution is now the heartbeat: two reads
-of `IndexedRevision` inside one heartbeat return the *same* published value,
-where the removed handler computed it live per request and could differ between
-two calls milliseconds apart. Anything that inferred a fact from *comparing two
-samples* therefore loses its signal. The known instance is fusion's
-`ViewRevision.Coherent` (`pkg/fusion/engine_graph.go`), which samples readiness
-before and after a facet's fetch phase and reports coherence when the two agree —
-under held state they agree by construction, so it would assert "every read
-behind this projection happened at one indexed revision" for projections that
-span an unknown number of revisions. That matters because a downstream consumer
-uses it to license deleting entities absent from the projection, which is the
-authoritative-absence claim this ADR's Consequences say readiness must not
-license. Resolving it means either restoring a *provable* signal (sample identity
-carried alongside the envelope, so "same sample" is distinguishable from
-"observed stable") or narrowing the documented contract — a cross-repo decision,
-recorded here so it is not shipped silently.
+One further cost surfaced during review and is resolved by this ADR's third
+break. The envelope's revision resolution is now the heartbeat: two reads of
+`IndexedRevision` inside one heartbeat return the *same* published value, where
+the removed handler computed it live per request and could differ between two
+calls milliseconds apart. Anything that inferred a fact from *comparing two
+samples* therefore loses its signal. The known instance was fusion's
+`ViewRevision.Coherent` (`pkg/fusion/engine_graph.go`), which sampled readiness
+before and after a facet's fetch phase and reported coherence when the two
+agreed — under held state they agree by construction, so it would have asserted
+"every read behind this projection happened at one indexed revision" for
+projections spanning an unknown number of revisions. A downstream consumer used
+that claim to license deleting entities absent from the projection — the
+authoritative-absence claim these Consequences say readiness must not license.
+
+**Resolution: the `Coherent` field is DELETED, not re-tuned.** The claim was
+never soundly provable, before or after this change: fusion assembles from N
+reads across stores at different instants with no snapshot and no consistent
+cut, so two samples agreeing can sometimes *catch* an advance but can never
+*prove* the absence of one. Restoring a "provable" signal by carrying sample
+identity was considered and rejected — it buys a better heuristic wearing the
+same absolute-sounding word, adding mechanism in defense of a claim that should
+not exist. `ViewRevision.Start`/`End` remain as plain observations of the
+assembly window. A consumer that needs a genuinely coherent single-revision
+view uses `pkg/graphview` (ADR-081), which has real snapshot semantics;
+retrieval fusion is best-effort ranked evidence and says so. The general
+lesson stands for future work: moving a signal from computed-per-request to
+published-on-a-tick silently breaks anything that inferred a fact by comparing
+two samples — sweep for such inferences when changing a signal's publication
+cadence.

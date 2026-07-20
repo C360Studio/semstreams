@@ -55,12 +55,12 @@ const (
 // node/body budget, and every cut is reported through FactsTruncated /
 // FactsDropped / Truncated — never silently.
 //
-// ViewRevision is the projection's consistency contract: Coherent=true means
-// every read behind this projection happened at one indexed revision.
-// Coherent=false is the documented WEAKER contract — the projection may span
-// revisions (or the post-fetch re-sample failed), and a consumer that needs a
-// single-revision view must refresh and retry (bounded retry is the
-// consumer's policy). There is no snapshot isolation.
+// ViewRevision carries revision OBSERVATIONS, not a consistency claim: the
+// engine assembles a projection from N independent reads with no snapshot and
+// no read transaction, so no response field can prove the reads hit one
+// indexed revision (ADR-083). A consumer that needs a genuinely coherent
+// single-revision view must use pkg/graphview (ADR-081); this facet is
+// best-effort ranked evidence.
 type GraphProjection struct {
 	Nodes        []GraphNode  `json:"nodes"`
 	Edges        []GraphEdge  `json:"edges,omitempty"`
@@ -134,19 +134,19 @@ type GraphEvidence struct {
 	Context    string   `json:"context,omitempty"`
 }
 
-// ViewRevision is the projection's consistency bound: the graph's indexed
-// revision sampled before seed resolution (Start) and re-sampled after the
-// facet's last graph fetch (End). Coherent — Start == End with End
-// successfully sampled — asserts the whole projection reflects ONE indexed
-// revision. A failed re-sample reports End=0 / Coherent=false: the engine
-// degrades honestly rather than guessing.
+// ViewRevision is a pair of observations: the graph's indexed revision as
+// sampled before seed resolution (Start) and re-sampled after the facet's
+// last graph fetch (End). Since ADR-083 distributes status on a heartbeat,
+// both samples are heartbeat-grained — equal bounds mean the status feed did
+// not visibly advance during assembly, which can never prove the reads in
+// between hit one revision. The former Coherent bool claimed exactly that and
+// was removed (ADR-083, third break): two samples agreeing cannot establish
+// the absence of motion between them, before or after the transport change.
+// A failed re-sample reports End=0 — the engine degrades honestly rather
+// than guessing a revision.
 type ViewRevision struct {
 	Start uint64 `json:"start"`
 	End   uint64 `json:"end"`
-	// Coherent is meaningful only when End > 0: a status backend that never
-	// populates IndexedRevision yields {0,0,true}, a coherence claim carrying
-	// zero information. Production graph status populates revisions (ADR-066).
-	Coherent bool `json:"coherent"`
 }
 
 // computeGraph builds the graph projection for the ranked seeds. Facts and
@@ -193,21 +193,20 @@ func (e *Engine) computeGraph(ctx context.Context, seeds []*Entity, lens Lens, s
 		proj.Truncated = true
 	}
 
-	// Re-sample AFTER the facet's last graph fetch: equal bounds assert the
-	// projection reflects one indexed revision.
+	// Re-sample AFTER the facet's last graph fetch: the observed bounds of the
+	// assembly window, heartbeat-grained — never a coherence proof (ADR-083).
 	proj.ViewRevision = e.graphViewRevision(ctx, startRev)
 	return proj
 }
 
 // graphViewRevision re-samples the index status after the facet's fetch phase.
-// A failed re-sample reports End=0/Coherent=false — degrade honestly, never
-// guess a revision.
+// A failed re-sample reports End=0 — degrade honestly, never guess a revision.
 func (e *Engine) graphViewRevision(ctx context.Context, start uint64) ViewRevision {
 	status, err := e.graph.Status(ctx)
 	if err != nil {
 		return ViewRevision{Start: start}
 	}
-	return ViewRevision{Start: start, End: status.IndexedRevision, Coherent: start == status.IndexedRevision}
+	return ViewRevision{Start: start, End: status.IndexedRevision}
 }
 
 // collectIncomingGraphEdges walks the graph index for edges pointing AT seed,
