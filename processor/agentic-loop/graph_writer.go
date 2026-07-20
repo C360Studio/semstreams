@@ -416,7 +416,7 @@ func (w *graphWriter) WriteModelEndpoints(ctx context.Context) {
 	}
 
 	for _, name := range w.modelRegistry.ListEndpoints() {
-		ep := w.modelRegistry.GetEndpoint(name)
+		ep := w.modelRegistry.GetEndpoint(name) // modelresolveaudit:allow list-iteration (ListEndpoints yields real endpoint names)
 		if ep == nil {
 			continue
 		}
@@ -998,7 +998,7 @@ func computeCost(reg model.RegistryReader, endpointName string, tokensIn, tokens
 	if reg == nil {
 		return 0
 	}
-	ep := reg.GetEndpoint(endpointName)
+	ep := reg.GetEndpoint(endpointName) // modelresolveaudit:allow already-resolved (endpointName resolved upstream in resolveModelAccounting via ResolveEndpointName)
 	if ep == nil {
 		return 0
 	}

@@ -165,14 +165,14 @@ Respond with JSON: {"type": "<intent_type>", "loop_id": "<if applicable>", "sign
 // resolveEndpoint finds a suitable model endpoint for classification.
 func (c *LLMIntentClassifier) resolveEndpoint() *model.EndpointConfig {
 	// Try the configured model name
-	if ep := c.modelRegistry.GetEndpoint(c.modelName); ep != nil {
+	if ep := c.modelRegistry.GetEndpoint(c.modelName); ep != nil { // modelresolveaudit:allow call-path resolution (resolveEndpoint direct probe; capability handled by fallback chain below)
 		return ep
 	}
 
 	// Try capability-based resolution
 	chain := c.modelRegistry.GetFallbackChain(c.modelName)
 	for _, name := range chain {
-		if ep := c.modelRegistry.GetEndpoint(name); ep != nil {
+		if ep := c.modelRegistry.GetEndpoint(name); ep != nil { // modelresolveaudit:allow call-path resolution (resolveEndpoint chain names)
 			return ep
 		}
 	}
@@ -180,7 +180,7 @@ func (c *LLMIntentClassifier) resolveEndpoint() *model.EndpointConfig {
 	// Fall back to default
 	defaultName := c.modelRegistry.GetDefault()
 	if defaultName != "" {
-		return c.modelRegistry.GetEndpoint(defaultName)
+		return c.modelRegistry.GetEndpoint(defaultName) // modelresolveaudit:allow call-path resolution (resolveEndpoint default is a real endpoint)
 	}
 
 	return nil

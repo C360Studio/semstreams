@@ -245,7 +245,7 @@ func createSummarizer(deps component.Dependencies, logger *slog.Logger) (Summari
 		return nil, ""
 	}
 
-	ep := deps.ModelRegistry.GetEndpoint(endpointName)
+	ep := deps.ModelRegistry.GetEndpoint(endpointName) // modelresolveaudit:allow already-resolved (endpointName from ResolveSummarization is a real endpoint)
 	if ep == nil {
 		logger.Warn("summarization endpoint not found in registry", "endpoint", endpointName)
 		return nil, ""
