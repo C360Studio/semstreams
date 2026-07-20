@@ -898,6 +898,11 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 	// failed so a transient outage self-heals without waiting for another entity event.
 	c.wg.Add(1)
 	go c.repairLoop(ctx)
+
+	// Readiness-envelope metrics loop (ADR-066): republishes readiness/lag/watermark as
+	// scrapeable gauges independent of NATS status traffic (#579 at the source).
+	c.wg.Add(1)
+	go c.statusMetricsLoop(ctx)
 	return nil
 }
 
@@ -998,6 +1003,45 @@ func (c *Component) repairLoop(ctx context.Context) {
 			c.repairFailedEntities(ctx)
 		}
 	}
+}
+
+// statusMetricsInterval is how often the readiness envelope (ADR-066) is republished
+// as Prometheus gauges. A dedicated cadence (not the repair loop's 30s repair backoff)
+// keeps metric freshness independent of the repair schedule. Kept well above
+// sub-second because each refresh does a BucketLastSeq NATS read for the target; a few
+// seconds is ample for dashboards/alerts while never freezing at a stale value.
+const statusMetricsInterval = 5 * time.Second
+
+// statusMetricsLoop periodically republishes the readiness envelope as gauges so an
+// operator can scrape readiness/lag/watermark without issuing a NATS status request —
+// the #579 silent-staleness class at the source. Runs until ctx is cancelled (Stop).
+func (c *Component) statusMetricsLoop(ctx context.Context) {
+	defer c.wg.Done()
+	// Publish once up front so the gauges are populated before the first tick rather
+	// than reading zero for the first interval.
+	c.refreshReadinessMetrics(ctx)
+	ticker := time.NewTicker(statusMetricsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.refreshReadinessMetrics(ctx)
+		}
+	}
+}
+
+// refreshReadinessMetrics computes the current readiness envelope and publishes it as
+// gauges. Extracted from statusMetricsLoop so tests drive the real compute+set path
+// with no goroutine, sleep, or NATS status query. Tolerates the not-yet-ready compute
+// (nil watermark/bucket): computeIndexStatus returns {Ready:false, State:building} and
+// the gauges are set from that.
+func (c *Component) refreshReadinessMetrics(ctx context.Context) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.setReadinessGauges(c.computeIndexStatus(ctx))
 }
 
 // repairFailedEntities enqueues reconciliation keys into the same ordered lanes as

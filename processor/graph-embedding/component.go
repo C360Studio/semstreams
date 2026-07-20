@@ -904,7 +904,52 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	c.bootstrapStarted.Store(true)
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
+
+	// Readiness-envelope metrics loop (ADR-066 §3): republishes readiness/lag/watermark
+	// as scrapeable gauges independent of NATS status traffic (#579 at the source).
+	c.wg.Add(1)
+	go c.statusMetricsLoop(ctx)
 	return nil
+}
+
+// statusMetricsInterval is how often the readiness envelope (ADR-066 §3) is
+// republished as Prometheus gauges. Kept well above sub-second because each refresh
+// does a BucketLastSeq NATS read for the target; a few seconds is ample for
+// dashboards/alerts while never freezing at a stale value.
+const statusMetricsInterval = 5 * time.Second
+
+// statusMetricsLoop periodically republishes the readiness envelope as gauges so an
+// operator can scrape readiness/lag/watermark without issuing a NATS status request —
+// the #579 silent-staleness class at the source. The entity watcher is event-driven,
+// not periodic, so a dedicated tick is required to stay fresh when no writes or queries
+// arrive. Runs until ctx is cancelled (Stop).
+func (c *Component) statusMetricsLoop(ctx context.Context) {
+	defer c.wg.Done()
+	// Publish once up front so the gauges are populated before the first tick rather
+	// than reading zero for the first interval.
+	c.refreshReadinessMetrics(ctx)
+	ticker := time.NewTicker(statusMetricsInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.refreshReadinessMetrics(ctx)
+		}
+	}
+}
+
+// refreshReadinessMetrics computes the current readiness envelope and publishes it as
+// gauges. Extracted from statusMetricsLoop so tests drive the real compute+set path
+// with no goroutine, sleep, or NATS status query. Tolerates the not-yet-ready compute
+// (nil watermark/bucket): computeEmbeddingStatus returns {Ready:false, State:building}
+// and the gauges are set from that.
+func (c *Component) refreshReadinessMetrics(ctx context.Context) {
+	if c.metrics == nil {
+		return
+	}
+	c.metrics.setReadinessGauges(c.computeEmbeddingStatus(ctx))
 }
 
 // ============================================================================

@@ -50,6 +50,19 @@ const (
 	IndexStateResetRequired = "reset_required"
 )
 
+// AllIndexStates is the closed iteration domain for the one-hot readiness `state`
+// metric published by every producer of the envelope (graph-index, graph-embedding).
+// It lives next to the const block so it is the single source of truth: adding a new
+// readiness state means adding it HERE, and every one-hot state gauge picks it up
+// automatically — otherwise a new state would render as all-zeros (silent "no data",
+// not an alertable signal).
+var AllIndexStates = []string{
+	IndexStateBuilding,
+	IndexStateReady,
+	IndexStateDegraded,
+	IndexStateResetRequired,
+}
+
 // ReadyWithinLag is the canonical bounded-lag readiness interpretation for
 // periodic, whole-result-re-deriving consumers (ADR-082) — community detection
 // today. It returns true iff the index is not a hard stop (degraded and
