@@ -2,8 +2,12 @@ package fusion
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
+
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // The lens-driven engine entry (ADR-062). Resolves a query against the graph
@@ -87,10 +91,16 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	mode := lens.ResolveMode(req.Query)
 	seeds, err := e.graph.Resolve(ctx, ResolveQuery{Query: req.Query, Mode: mode, Scope: req.Scope, Limit: resolveLimit})
 	if err != nil {
+		if isIndexNotReady(err) {
+			return e.notReadyEnvelope(ctx, status), nil
+		}
 		return Response{}, err
 	}
 	entities, err := e.graph.Entities(ctx, seeds)
 	if err != nil {
+		if isIndexNotReady(err) {
+			return e.notReadyEnvelope(ctx, status), nil
+		}
 		return Response{}, err
 	}
 	if len(entities) == 0 {
@@ -105,7 +115,14 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 
 	wants := wantSet(req.Want)
 	resp := Response{Index: status, Provenance: ProvenanceForMode(mode), ContractVersion: ContractVersion}
-	resp.Nodes, resp.Truncated = e.buildNodes(ctx, ranked, lens, wants, newBudget(req.Budget))
+	nodes, truncated, err := e.buildNodes(ctx, ranked, lens, wants, newBudget(req.Budget))
+	if err != nil {
+		if isIndexNotReady(err) {
+			return e.notReadyEnvelope(ctx, status), nil
+		}
+		return Response{}, err
+	}
+	resp.Nodes, resp.Truncated = nodes, truncated
 	if len(resp.Nodes) == 0 {
 		resp.Misses = []Miss{{Query: req.Query}}
 	}
@@ -125,6 +142,38 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	return resp, nil
 }
 
+// isIndexNotReady reports whether err is the classified readiness transient a
+// graph read emits while the index is catching up to ENTITY_STATES. It matches on
+// the stable code (graph.ErrorCodeIndexNotReady), NOT errs.IsTransient — a real
+// connection timeout is also transient but must propagate as a hard error, not be
+// degraded to an empty envelope.
+func isIndexNotReady(err error) bool {
+	var ce *errs.ClassifiedError
+	return errors.As(err, &ce) && ce.Code == graph.ErrorCodeIndexNotReady
+}
+
+// notReadyEnvelope is the empty-honest degrade the top-level !Ready gate returns,
+// re-sampled so Lag / IndexedRevision reflect the current moment. degrade-consistency
+// (this change): every internal read that hits the readiness transient
+// (graph.ErrorCodeIndexNotReady) returns THIS — never a Ready=true envelope, never
+// a propagated hard error — so a first-catch-up race under load falls back exactly
+// like the top gate does. A re-sample failure keeps the passed status but forces
+// Ready=false, since the transient is itself proof the index is not ready.
+func (e *Engine) notReadyEnvelope(ctx context.Context, status IndexStatus) Response {
+	if cur, err := e.graph.Status(ctx); err == nil {
+		status = cur
+	}
+	status.Ready = false
+	// A Ready=false envelope must not carry State="ready": the transient is proof the
+	// index is not ready, so on a re-sample failure (stale top-gate status) or a raced
+	// re-sample back to ready, downgrade the friendly label to building (catching up)
+	// so it does not contradict the load-bearing Ready field.
+	if status.State == StateReady {
+		status.State = StateBuilding
+	}
+	return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}
+}
+
 // miss builds a ready+absent response with near-matches.
 func (e *Engine) miss(ctx context.Context, status IndexStatus, mode ResolveMode, query string) Response {
 	names, _ := e.graph.Names(ctx, query, 5)
@@ -136,24 +185,29 @@ func (e *Engine) miss(ctx context.Context, status IndexStatus, mode ResolveMode,
 	}
 }
 
-// buildNodes materializes ranked entities into Nodes within the budget.
-func (e *Engine) buildNodes(ctx context.Context, ranked []*Entity, lens Lens, wants map[Want]bool, bg *budgeter) ([]Node, bool) {
+// buildNodes materializes ranked entities into Nodes within the budget. It
+// surfaces the readiness transient (via nodeFor → relations → collectEdges) so
+// Fuse degrades the whole response rather than serving partial relations as ready.
+func (e *Engine) buildNodes(ctx context.Context, ranked []*Entity, lens Lens, wants map[Want]bool, bg *budgeter) ([]Node, bool, error) {
 	var nodes []Node
 	for _, ent := range ranked {
-		node := e.nodeFor(ctx, ent, lens, wants)
+		node, err := e.nodeFor(ctx, ent, lens, wants)
+		if err != nil {
+			return nil, false, err
+		}
 		if !bg.admit(len(node.Body)) {
-			return nodes, true
+			return nodes, true, nil
 		}
 		nodes = append(nodes, node)
 	}
-	return nodes, false
+	return nodes, false, nil
 }
 
 // nodeFor builds one Node, including only the requested facets. The body is
 // hydrated by dereferencing the lens's Hydrate HANDLE through the BodyResolver
 // (ADR-062 increment 4). Hydration is best-effort: a Hydrate or deref error omits
 // the body and does not fail the node (degrade-don't-fail).
-func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[Want]bool) Node {
+func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[Want]bool) (Node, error) {
 	loc := lens.Location(ent)
 	node := Node{
 		Name:     lens.Label(ent),
@@ -172,31 +226,47 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 		}
 	}
 	if wants[WantRelations] {
-		node.Relations = e.relations(ctx, ent, lens)
+		rels, err := e.relations(ctx, ent, lens)
+		if err != nil {
+			return Node{}, err
+		}
+		node.Relations = rels
 	}
-	return node
+	return node, nil
 }
 
-// relations expands a node's forward and reverse edges into role → refs.
-func (e *Engine) relations(ctx context.Context, ent *Entity, lens Lens) map[string][]Ref {
+// relations expands a node's forward and reverse edges into role → refs. It
+// returns the readiness transient (if a neighbor read hits it) so Fuse degrades
+// consistently; any other neighbor fault is swallowed (best-effort expansion).
+func (e *Engine) relations(ctx context.Context, ent *Entity, lens Lens) (map[string][]Ref, error) {
 	preds, fwd, rev := edgePredicates(lens.Edges(), FacetRelations)
 	if len(preds) == 0 {
-		return nil
+		return nil, nil
 	}
 	rels := map[string][]Ref{}
-	e.collectEdges(ctx, ent.ID, preds, Outgoing, fwd, lens, rels)
-	e.collectEdges(ctx, ent.ID, preds, Incoming, rev, lens, rels)
-	if len(rels) == 0 {
-		return nil
+	if err := e.collectEdges(ctx, ent.ID, preds, Outgoing, fwd, lens, rels); err != nil {
+		return nil, err
 	}
-	return rels
+	if err := e.collectEdges(ctx, ent.ID, preds, Incoming, rev, lens, rels); err != nil {
+		return nil, err
+	}
+	if len(rels) == 0 {
+		return nil, nil
+	}
+	return rels, nil
 }
 
-// collectEdges appends refs for one direction's edges, capped per role.
-func (e *Engine) collectEdges(ctx context.Context, id string, preds []string, dir Direction, roleByPred map[string]string, lens Lens, rels map[string][]Ref) {
+// collectEdges appends refs for one direction's edges, capped per role. It returns
+// the readiness transient (graph.ErrorCodeIndexNotReady) so Fuse degrades the whole
+// response instead of serving partial-as-ready; any OTHER Neighbors fault is
+// swallowed (best-effort expansion), preserving the prior behavior.
+func (e *Engine) collectEdges(ctx context.Context, id string, preds []string, dir Direction, roleByPred map[string]string, lens Lens, rels map[string][]Ref) error {
 	edges, err := e.graph.Neighbors(ctx, id, preds, dir)
 	if err != nil {
-		return
+		if isIndexNotReady(err) {
+			return err
+		}
+		return nil
 	}
 	for _, ed := range edges {
 		role := roleByPred[ed.Predicate]
@@ -207,6 +277,7 @@ func (e *Engine) collectEdges(ctx context.Context, id string, preds []string, di
 			rels[role] = append(rels[role], ref)
 		}
 	}
+	return nil
 }
 
 // refFor resolves a target entity ID to a human Ref.
