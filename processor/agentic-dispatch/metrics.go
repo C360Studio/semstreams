@@ -32,6 +32,16 @@ type routerMetrics struct {
 	sseConnectionsActive prometheus.Gauge
 	sseEventsTotal       *prometheus.CounterVec
 	sseErrorsTotal       *prometheus.CounterVec
+
+	// Shared AGENT_LOOPS activity view metrics (ADR-081, graph-view-
+	// subscription task 2.5) — fed by graphview hooks in activityViewHooks.
+	activityViewCaughtUp            prometheus.Gauge
+	activityViewAppliedRevision     prometheus.Gauge
+	activityViewSubscribers         prometheus.Gauge
+	activityViewMaxPendingKeys      prometheus.Gauge
+	activityViewPoisonedTotal       prometheus.Counter
+	activityViewCoalescedDropsTotal prometheus.Counter
+	activityViewWatcherLostTotal    prometheus.Counter
 }
 
 // Package-level metrics cache (keyed by registry to allow test isolation)
@@ -164,6 +174,56 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 			Name:      "sse_errors_total",
 			Help:      "Total number of SSE errors by type",
 		}, []string{"error_type"}),
+
+		// Shared AGENT_LOOPS activity view metrics
+		activityViewCaughtUp: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_caught_up",
+			Help:      "1 when the shared AGENT_LOOPS activity view is caught up and its watcher healthy, 0 while bootstrapping or after watcher loss (staleness signal)",
+		}),
+
+		activityViewAppliedRevision: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_applied_revision",
+			Help:      "Highest AGENT_LOOPS KV revision applied by the shared activity view (watermark)",
+		}),
+
+		activityViewSubscribers: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_subscribers",
+			Help:      "Number of SSE subscriptions attached to the shared activity view",
+		}),
+
+		activityViewMaxPendingKeys: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_max_pending_keys",
+			Help:      "Largest per-subscriber pending-delta buffer observed at the last fan-out window (slow-client backlog)",
+		}),
+
+		activityViewPoisonedTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_poisoned_total",
+			Help:      "Total AGENT_LOOPS writes that failed validating decode and were surfaced as per-key poison (G6)",
+		}),
+
+		activityViewCoalescedDropsTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_coalesced_drops_total",
+			Help:      "Total pending deltas overwritten before delivery across subscribers (at-most-once coalescing on slow clients)",
+		}),
+
+		activityViewWatcherLostTotal: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "router",
+			Name:      "activity_view_watcher_lost_total",
+			Help:      "Total losses of the shared AGENT_LOOPS view watcher (each fails closed and requires re-bootstrap)",
+		}),
 	}
 
 	// Register metrics with the metrics registry if available
@@ -181,6 +241,13 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = registry.RegisterGauge("router", "sse_connections_active", m.sseConnectionsActive)
 		_ = registry.RegisterCounterVec("router", "sse_events_total", m.sseEventsTotal)
 		_ = registry.RegisterCounterVec("router", "sse_errors_total", m.sseErrorsTotal)
+		_ = registry.RegisterGauge("router", "activity_view_caught_up", m.activityViewCaughtUp)
+		_ = registry.RegisterGauge("router", "activity_view_applied_revision", m.activityViewAppliedRevision)
+		_ = registry.RegisterGauge("router", "activity_view_subscribers", m.activityViewSubscribers)
+		_ = registry.RegisterGauge("router", "activity_view_max_pending_keys", m.activityViewMaxPendingKeys)
+		_ = registry.RegisterCounter("router", "activity_view_poisoned_total", m.activityViewPoisonedTotal)
+		_ = registry.RegisterCounter("router", "activity_view_coalesced_drops_total", m.activityViewCoalescedDropsTotal)
+		_ = registry.RegisterCounter("router", "activity_view_watcher_lost_total", m.activityViewWatcherLostTotal)
 	} else {
 		// Fallback to default prometheus registry for production
 		_ = prometheus.DefaultRegisterer.Register(m.messagesReceived)
@@ -196,6 +263,13 @@ func createAndRegisterMetrics(registry *metric.MetricsRegistry) *routerMetrics {
 		_ = prometheus.DefaultRegisterer.Register(m.sseConnectionsActive)
 		_ = prometheus.DefaultRegisterer.Register(m.sseEventsTotal)
 		_ = prometheus.DefaultRegisterer.Register(m.sseErrorsTotal)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewCaughtUp)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewAppliedRevision)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewSubscribers)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewMaxPendingKeys)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewPoisonedTotal)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewCoalescedDropsTotal)
+		_ = prometheus.DefaultRegisterer.Register(m.activityViewWatcherLostTotal)
 	}
 
 	return m
@@ -288,4 +362,46 @@ func (m *routerMetrics) recordSSEEvent(eventType string) {
 // recordSSEError records an SSE error by type.
 func (m *routerMetrics) recordSSEError(errorType string) {
 	m.sseErrorsTotal.WithLabelValues(errorType).Inc()
+}
+
+// recordActivityViewCaughtUp sets the activity view staleness gauge: true on
+// every caught-up transition, false on watcher loss (fail-closed).
+func (m *routerMetrics) recordActivityViewCaughtUp(up bool) {
+	v := 0.0
+	if up {
+		v = 1.0
+	}
+	m.activityViewCaughtUp.Set(v)
+}
+
+// recordActivityViewRevision advances the applied-revision watermark gauge.
+// Applies arrive in watch order (revision-ascending), so Set is monotonic.
+func (m *routerMetrics) recordActivityViewRevision(revision uint64) {
+	m.activityViewAppliedRevision.Set(float64(revision))
+}
+
+// recordActivityViewWatcherLost counts shared-watcher losses.
+func (m *routerMetrics) recordActivityViewWatcherLost() {
+	m.activityViewWatcherLostTotal.Inc()
+}
+
+// recordActivityViewPoison counts poisoned AGENT_LOOPS writes — incremented
+// once per write regardless of how many SSE clients are attached.
+func (m *routerMetrics) recordActivityViewPoison() {
+	m.activityViewPoisonedTotal.Inc()
+}
+
+// recordActivityViewSubscribers tracks the view's attached subscription count.
+func (m *routerMetrics) recordActivityViewSubscribers(n int) {
+	m.activityViewSubscribers.Set(float64(n))
+}
+
+// recordActivityViewFanOut records one fan-out window: pending deltas
+// overwritten before delivery (slow-client at-most-once drops) and the
+// largest per-subscriber pending buffer after enqueue.
+func (m *routerMetrics) recordActivityViewFanOut(overwritten, maxPending int) {
+	if overwritten > 0 {
+		m.activityViewCoalescedDropsTotal.Add(float64(overwritten))
+	}
+	m.activityViewMaxPendingKeys.Set(float64(maxPending))
 }

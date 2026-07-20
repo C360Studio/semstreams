@@ -865,194 +865,9 @@ func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID 
 	return subject, nil
 }
 
-// handleActivityStream streams real-time activity events via SSE.
-func (c *Component) handleActivityStream(w http.ResponseWriter, r *http.Request) {
-	ctx, requestID := c.withRequestID(w, r)
-	clientID := r.Header.Get("X-Client-ID")
-	if clientID == "" {
-		clientID = requestID
-	}
-
-	// Setup SSE headers
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("X-Accel-Buffering", "no")
-
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		c.metrics.recordSSEError("streaming_not_supported")
-		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	// Get KV bucket for AGENT_LOOPS
-	kv, err := c.natsClient.GetKeyValueBucket(ctx, "AGENT_LOOPS")
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to access KV bucket for activity stream",
-			slog.String("request_id", requestID),
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
-		c.metrics.recordSSEError("kv_bucket_access")
-		c.sendActivityError(w, flusher, "Failed to access AGENT_LOOPS bucket", err)
-		return
-	}
-
-	// Create watcher for all keys
-	watcher, err := kv.WatchAll(ctx)
-	if err != nil {
-		c.logger.ErrorContext(ctx, "failed to create KV watcher for activity stream",
-			slog.String("request_id", requestID),
-			slog.String("client_id", clientID),
-			slog.String("error", err.Error()))
-		c.metrics.recordSSEError("watcher_create")
-		c.sendActivityError(w, flusher, "Failed to create watcher", err)
-		return
-	}
-	defer func() {
-		if stopErr := watcher.Stop(); stopErr != nil {
-			c.logger.WarnContext(ctx, "failed to stop activity watcher",
-				slog.String("client_id", clientID),
-				slog.String("error", stopErr.Error()))
-		}
-	}()
-
-	// Track SSE connection
-	c.metrics.recordSSEConnect()
-	defer c.metrics.recordSSEDisconnect()
-
-	c.logger.InfoContext(ctx, "activity SSE client connected",
-		slog.String("request_id", requestID),
-		slog.String("client_id", clientID),
-		slog.String("remote_addr", r.RemoteAddr))
-
-	// Send initial connected event
-	c.sendActivityEvent(w, flusher, "connected", map[string]string{
-		"message":   "Watching for activity events",
-		"client_id": clientID,
-	})
-	c.metrics.recordSSEEvent("connected")
-
-	// Send retry directive
-	fmt.Fprintf(w, "retry: 5000\n\n")
-	flusher.Flush()
-
-	// Heartbeat ticker for connection health
-	heartbeatTicker := time.NewTicker(30 * time.Second)
-	defer heartbeatTicker.Stop()
-
-	// Stream events
-	for {
-		select {
-		case <-ctx.Done():
-			c.logger.InfoContext(ctx, "activity SSE client disconnected",
-				slog.String("client_id", clientID),
-				slog.String("reason", ctx.Err().Error()))
-			return
-
-		case <-heartbeatTicker.C:
-			// Send heartbeat comment to keep connection alive and detect stale connections
-			fmt.Fprintf(w, ":heartbeat %d\n\n", time.Now().Unix())
-			flusher.Flush()
-			c.metrics.recordSSEEvent("heartbeat")
-
-		case entry, ok := <-watcher.Updates():
-			if !ok {
-				c.logger.WarnContext(ctx, "KV watcher closed unexpectedly",
-					slog.String("client_id", clientID))
-				c.metrics.recordSSEError("watcher_closed")
-				c.sendActivityError(w, flusher, "Watcher closed unexpectedly", nil)
-				return
-			}
-
-			if entry == nil {
-				// Initial sync complete
-				c.sendActivityEvent(w, flusher, "sync_complete", map[string]string{
-					"message": "Initial sync complete",
-				})
-				c.metrics.recordSSEEvent("sync_complete")
-				continue
-			}
-
-			// COMPLETE_<loopID> keys carry terminal event payloads; all other
-			// keys carry agentic.LoopEntity live state.
-			//
-			// activityEventTypeAndID is the single decision point for deriving
-			// the wire event type and bare loop ID so the envelope LoopID always
-			// matches data.loop_id. Terminal-ness is wire-observable from
-			// event.Type == "loop_completed" without inspecting data fields.
-			rawKey := entry.Key()
-			eventType, bareLoopID := activityEventTypeAndID(rawKey, entry.Operation(), entry.Revision())
-			isCompletion := eventType == "loop_completed"
-
-			// Build activity event
-			event := ActivityEvent{
-				Type:      eventType,
-				LoopID:    bareLoopID,
-				Timestamp: entry.Created(),
-			}
-
-			// Project non-delete entries onto the canonical Loop wire type.
-			if entry.Operation() != jetstream.KeyValueDelete {
-				var loop Loop
-				var ok bool
-				if isCompletion {
-					if loop, ok = loopFromCompletion(entry.Value()); !ok {
-						c.logger.DebugContext(ctx, "activity stream: dropping undecodable completion payload",
-							slog.String("key", rawKey))
-					}
-				} else {
-					var e agentic.LoopEntity
-					if err := json.Unmarshal(entry.Value(), &e); err != nil {
-						c.logger.DebugContext(ctx, "activity stream: dropping undecodable loop entity",
-							slog.String("key", rawKey),
-							slog.String("error", err.Error()))
-					} else {
-						loop, ok = loopFromEntity(&e, c.deps.Platform.Org, c.deps.Platform.Platform), true
-					}
-				}
-				if ok {
-					event.Data = &loop
-				}
-			}
-
-			// Send SSE event
-			data, err := json.Marshal(event)
-			if err != nil {
-				c.logger.ErrorContext(ctx, "failed to marshal activity event",
-					slog.String("client_id", clientID),
-					slog.String("loop_id", bareLoopID),
-					slog.String("error", err.Error()))
-				c.metrics.recordSSEError("marshal_event")
-				continue
-			}
-
-			fmt.Fprintf(w, "event: activity\ndata: %s\n\n", data)
-			flusher.Flush()
-			c.metrics.recordSSEEvent(eventType)
-
-			c.logger.DebugContext(ctx, "sent activity event",
-				slog.String("client_id", clientID),
-				slog.String("loop_id", bareLoopID),
-				slog.String("event_type", eventType))
-		}
-	}
-}
-
-// mapKVOperation maps a KV operation to an activity event type.
-func (c *Component) mapKVOperation(op jetstream.KeyValueOp, revision uint64) string {
-	switch op {
-	case jetstream.KeyValuePut:
-		if revision == 1 {
-			return "loop_created"
-		}
-		return "loop_updated"
-	case jetstream.KeyValueDelete:
-		return "loop_deleted"
-	default:
-		return "unknown"
-	}
-}
+// handleActivityStream lives in http_activity.go: it streams the /activity
+// SSE wire from the component's shared AGENT_LOOPS graph view (ADR-081)
+// instead of a per-client kv.WatchAll.
 
 // activityEventTypeAndID derives the wire event type and bare loop ID from a
 // raw AGENT_LOOPS KV key, operation, and revision. It is the single source of
@@ -1061,11 +876,11 @@ func (c *Component) mapKVOperation(op jetstream.KeyValueOp, revision uint64) str
 //
 // For COMPLETE_<id> keys the prefix is stripped so the returned loopID matches
 // data.loop_id; eventType is always "loop_completed" for those keys.
-// For non-terminal keys, eventType is derived from op/revision via the same
-// mapping as mapKVOperation.
+// For non-terminal keys, eventType derives from op/revision: put at revision 1
+// is loop_created, later puts are loop_updated, deletes are loop_deleted.
 func activityEventTypeAndID(key string, op jetstream.KeyValueOp, revision uint64) (eventType, loopID string) {
-	if strings.HasPrefix(key, "COMPLETE_") {
-		return "loop_completed", strings.TrimPrefix(key, "COMPLETE_")
+	if strings.HasPrefix(key, completeKeyPrefix) {
+		return "loop_completed", strings.TrimPrefix(key, completeKeyPrefix)
 	}
 	switch op {
 	case jetstream.KeyValuePut:
@@ -1078,26 +893,6 @@ func activityEventTypeAndID(key string, op jetstream.KeyValueOp, revision uint64
 	default:
 		return "unknown", key
 	}
-}
-
-// sendActivityEvent sends an SSE event for activity stream.
-func (c *Component) sendActivityEvent(w http.ResponseWriter, flusher http.Flusher, event string, data interface{}) {
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		c.logger.Error("Failed to marshal activity event", slog.String("event", event), slog.String("error", err.Error()))
-		return
-	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, jsonData)
-	flusher.Flush()
-}
-
-// sendActivityError sends an error event via SSE.
-func (c *Component) sendActivityError(w http.ResponseWriter, flusher http.Flusher, message string, err error) {
-	errorData := map[string]string{"error": message}
-	if err != nil {
-		errorData["details"] = err.Error()
-	}
-	c.sendActivityEvent(w, flusher, "error", errorData)
 }
 
 // DebugState represents the internal state of the component for debugging.
