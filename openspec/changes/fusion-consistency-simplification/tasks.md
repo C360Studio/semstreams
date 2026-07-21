@@ -149,7 +149,14 @@
       an unscored mode (symbol/prefix) from advertising a perfect
       zero-relevance match. Join is by entity ID and the test is verified
       non-vacuous — a deliberately reordering fixture plus a stash-check that
-      a positional join swaps the two scores and fails.
+      a positional join swaps the two scores and fails. CORRECTED in review
+      round 1: `Rank` initially reported the RESPONSE position, which the
+      caller can count off the array and which the spec delta does not ask
+      for. It is the RESOLVE rank now — the gap between where resolve put an
+      entity and where ranking landed it is the whole diagnostic signal.
+      `Similarity` later became `*float64` so an available 0.0 is
+      distinguishable from "this mode does not score" without a companion
+      bool every non-Go consumer would have to learn.
 - [x] 4.6 `processor/research-graph-execute/adapters.go` (second in-repo
       batch consumer, found by review): reconcile `EntityState` against the
       requested set (or consume `missing`), and fix its comment blessing
@@ -178,7 +185,14 @@
       `Ready == false -> fall back` rewrite for semsource. Upgrade order
       gained steps 6-8. Pointer notes: ADR-066 absence license retired,
       ADR-082 consumer-class split retired (naming WHY the split was a
-      symptom), ADR-083 D4 gate-mode table superseded.
+      symptom), ADR-083 D4 gate-mode table superseded. LATER ADDED, from the
+      semboids adoption report + review round 3: `max_staleness` sizing —
+      the bound must clear BOTH the readiness heartbeat (the judged age
+      includes envelope arrival age, so a sub-heartbeat bound is
+      unsatisfiable and is now rejected at config validation) and the
+      consumer's own worst-case cycle (detection time scales with community
+      size). gh#605 carries the measurements and the open question about a
+      derived floor.
 - [ ] 5.2 At spec-sync time, rewrite the `graph-index-readiness` spec
       Purpose paragraph (still teaches the absence license verbatim; deltas
       cover requirements only). No docs/concepts pages teach gate modes
@@ -193,46 +207,75 @@
 
 ## 6. Gates (all BEFORE merge)
 
+**Gate evidence is versioned.** Three review rounds landed after the first green
+run, each changing behavior, so evidence is recorded against the commit it
+tested rather than as a standing claim. A gate cited against superseded code is
+not evidence for HEAD (CLAUDE.md's BREAKING ⇒ e2e rule).
+
+Rounds, in order:
+- `d479cd5b` — `semstreams-reviewer` round 1 (3 blockers)
+- `1b1029ac` — external PR #604 review (4 blocking + 3 medium)
+- `8327f00e` — `semstreams-reviewer` round 2 (2 HIGH + mediums) + the
+  semboids adoption response
+
 - [x] 6.1 `task lint` · full `go test -race ./...` (explicit FAIL grep) ·
       `task schema:generate` no-drift · contract tests ·
       `go vet -tags=integration` AND `-tags=live_llm` ·
-      `openspec validate --strict`.
+      `openspec validate --strict`. GREEN at `8327f00e`: 133 ok, 0 FAIL
+      lines, lint 0, openspec 31/31, schema regenerated and committed.
+      Re-run after every round, not once.
 - [x] 6.2 Branch integration sweep (`go test -race -tags=integration ./...`)
-      — framework-package change (graph/, pkg/fusion). DONE: 134 packages,
-      0 FAIL, verified from the log not the pipeline exit code. Found TWO
-      real defects the tagged `go vet` could only prove compiled: the
-      fusionnats real-wire assertions and one clustering fixture row. The
-      remaining red was substrate — a loaded Docker daemon timing out
-      container inspects at 180s (rotating tests, never an assertion);
-      it cleared once the sister-project NATS stack was stopped.
+      — framework-package change (graph/, pkg/fusion). Green at `1b1029ac`
+      (134 packages, 0 FAIL, read from the log not the pipeline exit code);
+      RE-RUNNING at `8327f00e`.
+      Found real defects a tagged `go vet` could only prove COMPILED: the
+      fusionnats real-wire assertions, a clustering fixture row, and — the
+      one that mattered — a DEADLOCK introduced while fixing a blocker
+      (graph-embedding's snapshot guard repointed at a latch that only
+      flips past that guard). Tagged vet is a pre-flight; the sweep is the
+      gate.
+      Substrate noise along the way, all diagnosed not waved away: a loaded
+      Docker daemon timing out container inspects at 180s, cleared by
+      stopping a sister stack.
 - [x] 6.3 BREAKING ⇒ e2e: `task e2e:statistical` AND `task e2e:semantic`
-      green, with log-level evidence (not exit codes through a pipe). DONE:
-      statistical — "Scenario completed successfully", validation_errors:0,
-      15 communities (matches the #598 baseline), entities_missing:0,
-      data_loss_percent:0. semantic — validation_errors:0,
-      known_answer_tests_passed 7/7 (matches #598 exactly), 16 communities.
-      Evidence read from the logs, not from exit codes. NOTE: the earlier
-      red integration runs were a loaded Docker daemon, not code — they
-      cleared once the sister-project NATS stack was stopped. RE-RUN after
-      the reviewer's blocking latch fix (the first evidence tested
-      superseded code): statistical + semantic both green again, semantic
-      7/7 known-answer, 0 of 46 steps failed. Two aborted attempts in
-      between were a COMPOSE PROJECT-NAME COLLISION, now fixed in
-      Taskfile.yml: every sem* repo keeps its compose files in
-      `docker/compose/`, so Compose derived the same project name
-      (`compose`) for all of them and our e2e teardown was deleting a
-      sister repo's containers — and a sister stack coming up mid-run
-      churned ours out from under a running scenario.
-- [x] 6.4 `semstreams-reviewer` pre-merge; fold findings. CHANGES REQUESTED;
-      all 3 blockers + 7 mediums folded. The sharp one: bootstrap_complete
-      latched on catch-up to the LIVE target, which under continuous write is
-      a measure-zero instant (gh#590 F1) — the bit would have read false
-      forever on a firehose deployment and every health gate would defer, i.e.
-      the change would NOT have fixed the bug it exists to fix. Now latches on
-      the enumeration-time target per D2. Also: Rank was the response position
-      (information-free; the caller can count the array) instead of the
-      resolve rank the spec requires; and the absence license survived at the
-      DEFINITION site (graph/index_status.go) though I had swept its mirror.
+      green, with log-level evidence (not exit codes through a pipe).
+      Green at `1b1029ac`: statistical "Scenario completed successfully",
+      validation_errors:0, 15 communities (matches the #598 baseline),
+      entities_missing:0, data_loss_percent:0; semantic validation_errors:0,
+      7/7 known-answer (matches #598 exactly), 0 of 46 steps failed.
+      RE-RUNNING at `8327f00e` — round 3 changed graph-embedding's bootstrap
+      semantics and added a config rejection, so the `1b1029ac` evidence does
+      not carry.
+      Two aborted attempts earlier were a COMPOSE PROJECT-NAME COLLISION,
+      fixed in Taskfile.yml: every sem* repo keeps compose files in
+      `docker/compose/`, so Compose derived the same project name for all of
+      them — our e2e teardown was deleting a sister repo's containers, and a
+      sister stack coming up mid-run churned ours out from under a running
+      scenario.
+- [x] 6.4 `semstreams-reviewer` pre-merge; fold findings. THREE review
+      rounds, all folded:
+      **Round 1** (`semstreams-reviewer`, pre-PR) — CHANGES REQUESTED, 3
+      blockers. The sharp one: `bootstrap_complete` latched on catch-up to
+      the LIVE target, a measure-zero instant under continuous write (gh#590
+      F1) — the bit would have read false forever on a firehose deployment
+      and every health gate would defer, i.e. the change would NOT have
+      fixed the bug it exists to fix. Also `Rank` was the response position
+      (information-free) rather than the resolve rank the spec requires, and
+      the retired absence license survived at the DEFINITION site though its
+      mirror had been swept.
+      **Round 2** (external, on PR #604) — 4 blocking + 3 medium. A withheld
+      response read as HEALTHY through the canonical gate when the defer came
+      from a dependency other than graph-index; unknown wire states passed a
+      deny-list check; the bounded-freshness arithmetic wrapped negative on an
+      out-of-range staleness; graph-embedding published bootstrap_complete on
+      DELIVERY rather than applied build.
+      **Round 3** (`semstreams-reviewer`, post-fix) — 2 HIGH. A
+      `max_staleness` at or below the readiness heartbeat is unsatisfiable
+      (measured: 52% of ticks proceed at 3s against a caught-up index), and
+      the round-2 sizing doc named the smaller cause; and the
+      graph-embedding applied-build stamp was MUTATION-GREEN — deleting it
+      left the package passing, while the same mutation on graph-index fails.
+      Both verified independently before fixing.
 
 ## 7. Close-out
 
