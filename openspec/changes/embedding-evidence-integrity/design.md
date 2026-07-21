@@ -126,8 +126,9 @@ success, and carries `sourceRevision` for the same guard.
   carries a real revision. Consistent with the pre-v1 re-embed posture.
 - **BREAKING (state).** The dedup key changes shape again (cap now in the key via
   truncated text; offloaded lane now keyed). Old `EMBEDDING_DEDUP` entries stop
-  matching and age out; the first pass re-embeds. No migration, same posture as
-  Track 0's key break — acceptable pre-v1, and cheaper now than a compat shim
-  maintained forever post-1.0.
+  matching; the first pass re-embeds. The bucket is untimed by design (not the live
+  index → no TTL), so stale keys never match and never expire — they must be
+  **wiped and reseeded**, not left to age out. Same posture as Track 0's key break —
+  acceptable pre-v1, and cheaper now than a compat shim maintained forever post-1.0.
 - **Persisting `SourceRevision` on generated records** slightly enlarges the stored
   JSON. Negligible; the field already exists on pending records.

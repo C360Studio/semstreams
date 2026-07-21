@@ -55,7 +55,7 @@ func TestIntegration_ScopedSearch_BothPaths(t *testing.T) {
 	} // kept sorted so assertDocsOnly can compare against the sorted result
 	save := func(id string, vec []float32) {
 		require.NoError(t, st.SavePending(ctx, id, "hash-"+id, "text", 0))
-		require.NoError(t, st.SaveGenerated(ctx, id, vec, "test", len(vec)))
+		require.NoError(t, st.SaveGenerated(ctx, id, vec, "test", len(vec), "hash-"+id, 0))
 	}
 	for _, id := range code {
 		save(id, []float32{1, 0, 0})

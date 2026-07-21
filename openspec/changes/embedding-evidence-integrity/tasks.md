@@ -7,86 +7,85 @@ surface; 6 is the gate.
 
 ## 1. Move dedup-key derivation to hop 2 (D1 / #623)
 
-- [ ] 1.1 Test: an offloaded (`StorageRef`) entity and an inline entity with
+- [x] 1.1 Test: an offloaded (`StorageRef`) entity and an inline entity with
       byte-identical resolved text produce the **same** dedup key and the second
       dedups (no regeneration). Fails today (offloaded lane has an empty key).
-- [ ] 1.2 Test: overwriting the body at a stable ObjectStore key changes the dedup
+- [x] 1.2 Test: overwriting the body at a stable ObjectStore key changes the dedup
       key and forces regeneration (no stale-body vector).
-- [ ] 1.3 In `worker.go`, derive `key := DedupKey(embedderIdentity, cap, text)`
+- [x] 1.3 In `worker.go`, derive `key := DedupKey(embedderIdentity, cap, text)`
       inside/after `getSourceText` (post-fetch, post-truncate) and use it for both
       the dedup check (`getOrGenerateEmbedding`) and `SaveDedup`. Stop consulting
       `record.ContentHash` as the key.
-- [ ] 1.4 In `component.go`, remove the hop-1 key derivation
+- [x] 1.4 In `component.go`, remove the hop-1 key derivation
       (`DedupKey(embedderIdentity(), text)` at the inline lane) and the
       offloaded-lane skip; hop-1 pending records carry an empty `ContentHash`.
-- [ ] 1.5 Thread the embedder identity + cap into the worker so hop 2 can build the
+- [x] 1.5 Thread the embedder identity + cap into the worker so hop 2 can build the
       key without a hop-1 value (confirm `embedderIdentity()` is reachable from the
       worker or passed at construction; no cross-goroutine race on identity per the
       Track 0 `atomic` fix).
 
 ## 2. Count skipped dedup (D1 observability / #623)
 
-- [ ] 2.1 Test: an entity embedded on a lane/condition where dedup is not consulted
+- [x] 2.1 Test: an entity embedded on a lane/condition where dedup is not consulted
       increments `dedup_skipped_total{reason}`.
-- [ ] 2.2 Register `dedup_skipped_total{reason}` in `processor/graph-embedding/metrics.go`
+- [x] 2.2 Register `dedup_skipped_total{reason}` in `processor/graph-embedding/metrics.go`
       and increment at the skip sites (worker metrics adapter). No phantom metric —
       assert a consumer in the test.
 
 ## 3. Text cap as contract (D2 / #602)
 
-- [ ] 3.1 Test: an operator-set cap is honored (truncate-at-word to the configured
+- [x] 3.1 Test: an operator-set cap is honored (truncate-at-word to the configured
       value) and round-trips through the config JSON (no shadow struct).
-- [ ] 3.2 Test: truncation emits a signal (counter/flag), not silence.
-- [ ] 3.3 Test: a cap change that alters the embedded byte range changes the dedup
+- [x] 3.2 Test: truncation emits a signal (counter/flag), not silence.
+- [x] 3.3 Test: a cap change that alters the embedded byte range changes the dedup
       key (identity-bearing) — this rides D1's key-over-truncated-text.
-- [ ] 3.4 Add the operator-reachable cap config field (replaces the hard-coded
+- [x] 3.4 Add the operator-reachable cap config field (replaces the hard-coded
       8000/4000 by embedder type); wire `maxSourceTextLen()` to read it with a
       sane default.
-- [ ] 3.5 Emit the truncation signal at `truncateAtWord` in `getSourceText`.
+- [x] 3.5 Emit the truncation signal at `truncateAtWord` in `getSourceText`.
 
 ## 4. Order writes by source revision under CAS (D3 / #614 part 2)
 
-- [ ] 4.1 Test: revisions N and N+1 of one entity generating concurrently — the
+- [x] 4.1 Test: revisions N and N+1 of one entity generating concurrently — the
       older completing last — leave the index holding **N+1**'s vector (drops the
       late N write). Fails today (unconditional `Put`).
-- [ ] 4.2 Test: two concurrent same-entity commits use revision CAS; no committed
+- [x] 4.2 Test: two concurrent same-entity commits use revision CAS; no committed
       vector is silently overwritten (assert via injected revision conflict + retry).
-- [ ] 4.3 Test: a persisted generated record's `ContentHash` and `Vector` come from
+- [x] 4.3 Test: a persisted generated record's `ContentHash` and `Vector` come from
       the same generation (never mixed across revisions).
-- [ ] 4.4 Test: `SaveGenerated`/`SaveFailed` still return `ErrRecordGone` when the
+- [x] 4.4 Test: `SaveGenerated`/`SaveFailed` still return `ErrRecordGone` when the
       pending record vanished (Track 0 drop-not-resurrect preserved).
-- [ ] 4.5 Add a revision-aware get (`GetEmbedding` returning `entry.Revision()`, or
+- [x] 4.5 Add a revision-aware get (`GetEmbedding` returning `entry.Revision()`, or
       a sibling) to `storage.go`.
-- [ ] 4.6 Change `SaveGenerated` signature to accept `contentHash` and
+- [x] 4.6 Change `SaveGenerated` signature to accept `contentHash` and
       `sourceRevision`; persist `SourceRevision` on generated records (stop
       dropping it); build the record's `ContentHash`+`Vector` from the passed data,
       not from `existing`.
-- [ ] 4.7 Implement the CAS loop: read `(existing, rev)`; `nil`→`ErrRecordGone`;
+- [x] 4.7 Implement the CAS loop: read `(existing, rev)`; `nil`→`ErrRecordGone`;
       `existing.SourceRevision > sourceRevision`→drop (return nil); else
       `Update(key, rec, rev)`; on `ErrRevisionMismatch` re-read and re-evaluate
       (bounded retries). Apply the same treatment to `SaveFailed`.
-- [ ] 4.8 Update the hop-2 call sites (`saveAndNotify`, `markFailed`) to pass the
+- [x] 4.8 Update the hop-2 call sites (`saveAndNotify`, `markFailed`) to pass the
       worker's own `contentHash` (from group 1) and `sourceRevision` (from the
       pending record it is completing).
 
 ## 5. Config surface + schema
 
-- [ ] 5.1 `task schema:generate`; commit the resulting `schemas/` diff (additive
+- [x] 5.1 `task schema:generate`; commit the resulting `schemas/` diff (additive
       cap field). JSON round-trip test for the new field.
-- [ ] 5.2 Confirm no shadow struct and the field is reachable end-to-end from
+- [x] 5.2 Confirm no shadow struct and the field is reachable end-to-end from
       operator config (factory overlay — apply the Track 0 lesson: a knob accepted
       and validated but never copied by the factory is a phantom).
 
 ## 6. Gate
 
-- [ ] 6.1 `go build ./...`, `go vet ./...` plain + `-tags=integration` + `-tags=live_llm`,
+- [x] 6.1 `go build ./...`, `go vet ./...` plain + `-tags=integration` + `-tags=live_llm`,
       `task lint` clean.
-- [ ] 6.2 `go test -race ./...` (0 FAIL); tagged integration on `graph/embedding`
+- [x] 6.2 `go test -race ./...` (0 FAIL); tagged integration on `graph/embedding`
       and `processor/graph-embedding`; contract tests.
-- [ ] 6.3 BREAKING (dedup key + `EMBEDDING_DEDUP` invalidation): a relevant e2e tier
-      green before merge (`task e2e:statistical` for BM25 dedup, `task e2e:semantic`
-      for neural). Re-measure `embedding_dedup_hits` / `fresh_generated_total`
-      against the Track 0 baseline recorded on #619 — confirm offloaded-lane dedup
-      is restored (fresh work should drop from the ~191 Track 0 figure back toward
-      HEAD's ~68).
+- [x] 6.3 BREAKING (dedup key + `EMBEDDING_DEDUP` invalidation): both tiers green,
+      `validation_errors:0`. Offloaded-lane dedup RESTORED: statistical fresh
+      191→**68** (exactly HEAD's baseline), dedup_hits 53→**177**; semantic fresh
+      **81**, dedup_hits **168**, known-answer **7/7**. Search quality recovered to
+      0.242 (statistical, one run, back in HEAD's 0.240–0.244 range).
 - [ ] 6.4 `openspec validate --strict`, then `/opsx:archive` on completion.

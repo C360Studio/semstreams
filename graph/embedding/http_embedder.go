@@ -30,9 +30,9 @@ type HTTPEmbedder struct {
 	// RESOLVED and is reported as such by Dimensions().
 	//
 	// It is atomic because the writer (a Generate call on some worker goroutine)
-	// and the readers are always on different goroutines: the component's
-	// embedderIdentity() runs on the hop-1 ENTITY_STATES watcher, and the hop-2
-	// worker pool is 5 goroutines by default.
+	// and the readers are always on different goroutines: the worker's
+	// embedderIdentity() and the Generate calls both run on the hop-2 worker pool
+	// (5 goroutines by default), so identity reads race the first-response write.
 	//
 	// The zero sentinel replaced a hardcoded 384 placeholder that was overwritten
 	// on the first response via `if dimensions == 384`. That could not tell

@@ -40,9 +40,10 @@ func newFixedWidthEmbedServer(t *testing.T, width int) *httptest.Server {
 //
 // HTTPEmbedder has no synchronization at all, and dimensions was mutated in place
 // on the first API response. Before Track 0 that was invisible because Dimensions()
-// had no callers outside the embedder. Track 0 added three, every one of them on a
-// different goroutine from the writer: the component's embedderIdentity() on the
-// hop-1 watcher goroutine, and two in the hop-2 workers (N=5 by default).
+// had no callers outside the embedder. Track 0 added callers on goroutines other
+// than the writer; since the hop-2 key move (#623) they are all in the hop-2 workers
+// (N=5 by default), where the worker's embedderIdentity() reads Dimensions() to build
+// the dedup key.
 //
 // The e2e semantic tier cannot surface this — TEI's default model is 384-dim, the
 // same as the old placeholder, so the write never changed the value.
@@ -176,11 +177,14 @@ func TestDedupKey_EmptyWhenIdentityUnresolved(t *testing.T) {
 	}
 }
 
-// TestWorkerSkipsDedupWhenEmbedderUnresolved covers the replay path that a
-// DedupKey guard alone does not reach: a pending record written by an EARLIER
-// process carries a non-empty ContentHash, and hop-2 reuses it verbatim. If this
-// process's embedder has not resolved its width yet, that lookup would compare
-// against, and its save would stamp, a width of 0.
+// TestWorkerSkipsDedupWhenEmbedderUnresolved proves an embedder that has not yet
+// resolved its vector width takes NO part in dedup — read or write.
+//
+// Since the hop-2 key move (#623) the worker derives the dedup key itself over the
+// bytes it embeds, and DedupKey withholds a key from a zero-width identity. So an
+// unresolved embedder yields an empty key: it never consults the durable bucket (no
+// stale hit) and never stamps it with a width-0 record that could never match again.
+// A pre-existing resolved record must be left untouched.
 func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 	t.Parallel()
 
@@ -203,12 +207,18 @@ func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 		},
 	}
 
-	w := NewWorker(s, unresolved, nil, discardLogger())
+	w := NewWorker(s, unresolved, nil, discardLogger()).WithMaxSourceTextLen(8000).WithEmbedderType("http")
 	// Start needs a real index bucket to watch; this exercises the hop-2 dedup
 	// decision directly, so only the context it reads from is supplied.
 	w.ctx = ctx
 
-	vector, err := w.getOrGenerateEmbedding("acme.ops.a.b.c.2", "text", staleKey)
+	// The worker derives the key itself now; an unresolved width yields "".
+	key := DedupKey(w.embedderIdentity(), "text")
+	if key != "" {
+		t.Fatalf("an unresolved embedder must yield an empty dedup key, got %q", key)
+	}
+
+	vector, err := w.getOrGenerateEmbedding("acme.ops.a.b.c.2", "text", key, 1)
 	if err != nil {
 		t.Fatalf("getOrGenerateEmbedding: %v", err)
 	}
@@ -219,13 +229,13 @@ func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 		t.Fatalf("vector = %v, want the freshly generated [1 2 3], not the stale record", vector)
 	}
 
-	// Nor may it write a record stamped with a width of 0, which could never match
-	// again and would just be permanent litter in a bucket that is never cleared.
+	// The pre-existing resolved record must be untouched — an unresolved worker
+	// neither reads nor overwrites the durable bucket.
 	rec, err := s.GetByContentHash(ctx, staleKey)
 	if err != nil {
 		t.Fatalf("GetByContentHash: %v", err)
 	}
-	if rec.Dimensions == 0 {
-		t.Fatal("an unresolved embedder wrote a dedup record with Dimensions 0")
+	if rec == nil || rec.Dimensions != 384 {
+		t.Fatalf("stale record altered by an unresolved embedder: %+v", rec)
 	}
 }

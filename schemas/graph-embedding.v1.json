@@ -25,6 +25,11 @@
       "description": "Embedder type (bm25 or http). HTTP requires model registry with embedding capability",
       "category": "basic"
     },
+    "max_text_len": {
+      "type": "integer",
+      "description": "Max characters of source text embedded per entity; text beyond is truncated at a word boundary. 0 uses a per-embedder default (4000 bm25 / 8000 neural)",
+      "category": "advanced"
+    },
     "ports": {
       "type": "string",
       "description": "Port configuration",

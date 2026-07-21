@@ -44,8 +44,10 @@ because #623's fix (derive the key where the truncated body is in hand) *subsume
   cannot desync from `Vector`.
 - **BREAKING (state, not API):** `EMBEDDING_DEDUP` keys change shape again (the cap
   and, for the offloaded lane, real content now participate). Existing entries stop
-  matching and age out; no migration, the first pass re-embeds. This is a pre-v1
-  state wipe consistent with Track 0's dedup-key break.
+  matching; the first pass re-embeds. `EMBEDDING_DEDUP` is untimed by design (it is
+  not the live index, so it correctly carries no TTL), so old-shape keys never
+  match *and* never expire — they must be **wiped and reseeded**, not left to age
+  out. This is a pre-v1 state wipe consistent with Track 0's dedup-key break.
 
 ## Capabilities
 

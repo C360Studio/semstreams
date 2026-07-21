@@ -37,9 +37,13 @@ func (s readerStore) Open(context.Context, string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader(s.data)), nil
 }
 
-type countingMetrics struct{ dedup, failed, resolveErr, resolved int }
+type countingMetrics struct {
+	dedup, failed, resolveErr, resolved, truncated, dedupSkipped int
+}
 
 func (m *countingMetrics) IncDedupHits()           { m.dedup++ }
+func (m *countingMetrics) IncDedupSkipped(string)  { m.dedupSkipped++ }
+func (m *countingMetrics) IncTruncated()           { m.truncated++ }
 func (m *countingMetrics) IncFailed()              { m.failed++ }
 func (m *countingMetrics) SetPending(float64)      {}
 func (m *countingMetrics) IncContentResolveError() { m.resolveErr++ }

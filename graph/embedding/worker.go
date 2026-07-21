@@ -57,6 +57,15 @@ type TerminalCallback func(entityID string, sourceRevision uint64)
 type WorkerMetrics interface {
 	// IncDedupHits increments the deduplication hits counter
 	IncDedupHits()
+	// IncDedupSkipped counts an embedding generated on a condition where the durable
+	// dedup bucket was NOT consulted (currently: an embedder whose vector width is
+	// unresolved, so no content-addressed key can be derived). It makes the
+	// avoided-reuse cost visible rather than inferred (#623): the offloaded-lane
+	// re-embed cost Track 0 measured, and, post-fix, its recovery.
+	IncDedupSkipped(reason string)
+	// IncTruncated counts one source-text truncation at the configured cap, so the
+	// bytes actually embedded are discoverable rather than silently dropped (#602).
+	IncTruncated()
 	// IncFailed increments the failed embeddings counter
 	IncFailed()
 	// SetPending sets the current pending embeddings gauge
@@ -119,12 +128,19 @@ type Worker struct {
 	wg       sync.WaitGroup
 
 	// Configuration
-	workers          int // Number of concurrent workers
-	maxSourceTextLen int // Max chars for source text (0 = unlimited)
+	workers          int    // Number of concurrent workers
+	maxSourceTextLen int    // Max chars for source text (0 = unlimited)
+	embedderType     string // "bm25" / "http" — the Type axis of the dedup key identity
 
 	// Logger
 	logger *slog.Logger
 }
+
+// dedupSkipReasonIdentityUnresolved labels a dedup skip caused by an embedder that
+// has not yet resolved its vector width (Dimensions() == 0), so DedupKey withholds a
+// key. It is the only skip condition after the hop-2 key move restored the offloaded
+// lane's dedup.
+const dedupSkipReasonIdentityUnresolved = "identity_unresolved"
 
 // NewWorker creates a new async embedding worker
 func NewWorker(
@@ -181,6 +197,16 @@ func (w *Worker) WithStoreResolver(r StoreResolver) *Worker {
 // Default: 0 (unlimited). Recommended: 4000 for BM25, 8000 for neural.
 func (w *Worker) WithMaxSourceTextLen(n int) *Worker {
 	w.maxSourceTextLen = n
+	return w
+}
+
+// WithEmbedderType sets the Type axis of the dedup-key identity ("bm25" / "http").
+// Hop 2 folds it (with the embedder's live Model/Dimensions and the text cap) into
+// the dedup key so a config that flips embedder type cannot serve a vector from the
+// prior vector space (gh#612). The worker derives the key itself now, so this is the
+// one identity field it cannot read from the Embedder interface.
+func (w *Worker) WithEmbedderType(t string) *Worker {
+	w.embedderType = t
 	return w
 }
 
@@ -393,7 +419,7 @@ func (w *Worker) handleKVEntry(
 	sourceText, err := w.getSourceText(&record)
 	if err != nil {
 		w.logger.Error("Failed to get source text", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("text extraction failed: %v", err))
+		w.markFailed(entityID, fmt.Sprintf("text extraction failed: %v", err), sourceRevision)
 		return
 	}
 
@@ -406,49 +432,73 @@ func (w *Worker) handleKVEntry(
 		return
 	}
 
+	// Derive the dedup key HERE, in hop 2, over the exact bytes that get embedded —
+	// the resolved and truncated body. This is the single derivation site (#623): it
+	// keys the inline and offloaded lanes identically, restoring dedup on the
+	// offloaded lane that hop 1 could not key (hop 1 holds only a storage address,
+	// not the body), and it folds in the effective text cap for free because the key
+	// is over the TRUNCATED text. The hop-1 record.ContentHash is no longer consulted.
+	dedupKey := DedupKey(w.embedderIdentity(), sourceText)
+
 	// Get or generate embedding vector
-	vector, err := w.getOrGenerateEmbedding(entityID, sourceText, record.ContentHash)
+	vector, err := w.getOrGenerateEmbedding(entityID, sourceText, dedupKey, sourceRevision)
 	if err != nil {
 		return // Error already logged and marked as failed
 	}
 
 	// Save and notify
-	w.saveAndNotify(entityID, vector)
+	w.saveAndNotify(entityID, vector, dedupKey, sourceRevision)
 	return
+}
+
+// embedderIdentity captures everything the dedup key depends on besides the text:
+// the embedder Type, its live Model and Dimensions, and the effective text cap. It
+// reads Model/Dimensions from the Embedder on each call rather than snapshotting
+// them, because HTTPEmbedder resolves its width lazily from the first response and
+// the value is documented safe to read concurrently from any worker goroutine (see
+// Embedder.Dimensions). MaxTextLen is included so a cap change (which changes WHICH
+// bytes are embedded) changes the key.
+func (w *Worker) embedderIdentity() EmbedderIdentity {
+	id := EmbedderIdentity{
+		Type:       w.embedderType,
+		MaxTextLen: w.maxSourceTextLen,
+	}
+	if w.embedder != nil {
+		id.Model = w.embedder.Model()
+		id.Dimensions = w.embedder.Dimensions()
+	}
+	return id
 }
 
 // getOrGenerateEmbedding returns an existing embedding via dedup or generates a new one.
 //
-// An empty contentHash means the producer could not derive a content-addressed
-// key for this record and dedup is DISABLED for it (see
-// queueEmbeddingWithStorageRef): generate unconditionally rather than key the
-// durable dedup bucket on something that is not the content.
-func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, contentHash string) ([]float32, error) {
-	// An embedder that cannot state its vector width takes no part in dedup, read
-	// or write. DedupKey already withholds a key from an unresolved identity, but
-	// that only covers records this process queued: a pending record replayed from
-	// an earlier process carries a non-empty ContentHash which hop-2 reuses
-	// verbatim. Consulting it would compare against a width of 0, and saving would
-	// leave a record stamped 0 that can never match again in a bucket that is
-	// never cleared.
-	dedupEnabled := contentHash != "" && w.embedder.Dimensions() > 0
+// key is the hop-2 dedup key derived over the resolved+truncated text. An empty key
+// means the embedder cannot state its vector width yet (DedupKey withholds a key from
+// an unresolved identity), so no content-addressed key exists: dedup is skipped and
+// the skip is COUNTED (IncDedupSkipped) so the avoided reuse is visible, not inferred
+// (#623). Both hops now derive the key here, so a replayed pending record's stale
+// hop-1 ContentHash is never consulted.
+func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, sourceRevision uint64) ([]float32, error) {
+	dedupEnabled := key != ""
 
 	// Check deduplication first
 	if dedupEnabled {
-		dedupRecord, err := w.storage.GetByContentHash(w.ctx, contentHash)
+		dedupRecord, err := w.storage.GetByContentHash(w.ctx, key)
 		if err != nil {
 			w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", err)
-			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", err))
+			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", err), sourceRevision)
 			return nil, err
 		}
 
-		if dedupRecord != nil && w.dedupRecordUsable(entityID, contentHash, dedupRecord) {
-			w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "content_hash", contentHash)
+		if dedupRecord != nil && w.dedupRecordUsable(entityID, key, dedupRecord) {
+			w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "dedup_key", key)
 			if w.metrics != nil {
 				w.metrics.IncDedupHits()
 			}
 			return dedupRecord.Vector, nil
 		}
+	} else if w.metrics != nil {
+		w.metrics.IncDedupSkipped(dedupSkipReasonIdentityUnresolved)
 	}
 
 	// Generate new embedding
@@ -456,22 +506,22 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, contentHash string
 	vectors, err := w.embedder.Generate(w.ctx, []string{sourceText})
 	if err != nil {
 		w.logger.Error("Failed to generate embedding", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("generation failed: %v", err))
+		w.markFailed(entityID, fmt.Sprintf("generation failed: %v", err), sourceRevision)
 		return nil, err
 	}
 
 	if len(vectors) == 0 {
 		w.logger.Error("No embedding generated", "entity_id", entityID)
-		w.markFailed(entityID, "no embedding returned")
+		w.markFailed(entityID, "no embedding returned", sourceRevision)
 		return nil, fmt.Errorf("no embedding returned")
 	}
 
 	vector := vectors[0]
 
-	// Save to dedup bucket. Skipped when dedup is disabled for this record.
+	// Save to dedup bucket. Skipped when no key could be derived for this record.
 	if dedupEnabled {
 		if err := w.storage.SaveDedup(
-			w.ctx, contentHash, vector, entityID, w.embedder.Model(), w.embedder.Dimensions(),
+			w.ctx, key, vector, entityID, w.embedder.Model(), w.embedder.Dimensions(),
 		); err != nil {
 			w.logger.Warn("Failed to save dedup record", "entity_id", entityID, "error", err)
 			// Continue anyway - not critical
@@ -491,13 +541,13 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, contentHash string
 // A record with no Model is UNUSABLE, not usable. Old-layout keys remain
 // reachable: EMBEDDING_INDEX pending records are durable KV with no TTL, and
 // Worker.Start uses WatchAll, which re-delivers every current value on restart.
-// handleKVEntry skips only non-pending records, so a pending record written by a
-// pre-fix binary replays as pending and hop-2 reuses its stored ContentHash — an
-// old-layout ContentHash(text) key — verbatim. Trusting an identityless record
-// there is precisely the bm25-vector-stamped-with-a-neural-model-name defect
-// gh#612 exists to prevent, on the bm25 -> http upgrade path that motivated it.
-// An identityless record predates the key contract, so it is regenerated: one
-// re-embed per legacy record, once.
+// dedupRecordUsable is defense-in-depth: hop 2 now derives the dedup key itself
+// (DedupKey folds embedder identity + cap), so a returned DedupRecord's identity
+// should already match by construction. This re-checks the record's Model and
+// Dimensions anyway, and rejects an identityless (legacy) record — a bm25 vector
+// stamped with a neural model's name is precisely the gh#612 defect on the
+// bm25 -> http upgrade path. A rejected record is regenerated: one re-embed per
+// legacy record, once.
 func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord) bool {
 	if r.Model == "" {
 		w.logger.Warn("Dedup record predates the embedder-identity key contract; regenerating",
@@ -515,11 +565,14 @@ func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord)
 	return false
 }
 
-// saveAndNotify saves the generated embedding and notifies callback.
-func (w *Worker) saveAndNotify(entityID string, vector []float32) {
+// saveAndNotify saves the generated embedding and notifies callback. contentHash is
+// the hop-2 dedup key of the embedded bytes and sourceRevision is the revision this
+// generation completes; both are stored on the record so its ContentHash+Vector
+// stay consistent and a late older-revision write is dropped (#614 part 2).
+func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash string, sourceRevision uint64) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
-	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions); err != nil {
+	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision); err != nil {
 		// The entity was tombstoned (or its pending record removed) while this
 		// vector was being generated. That is a normal race, not a failure: there
 		// is nothing to mark failed, and counting it would inflate the failure
@@ -531,8 +584,17 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32) {
 				"entity_id", entityID)
 			return
 		}
+		// A newer source revision's vector already landed. The vector THIS call holds
+		// is the older one; firing onGenerated would push it into a WithOnGenerated
+		// consumer's cache, exactly the stale-vector hazard ErrRecordGone guards
+		// against. Skip the callback; the newer write is authoritative.
+		if errors.Is(err, ErrSupersededRevision) {
+			w.logger.Debug("Embedding superseded by a newer revision; dropping vector",
+				"entity_id", entityID)
+			return
+		}
 		w.logger.Error("Failed to save generated embedding", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("save failed: %v", err))
+		w.markFailed(entityID, fmt.Sprintf("save failed: %v", err), sourceRevision)
 		return
 	}
 
@@ -561,9 +623,14 @@ func (w *Worker) getSourceText(record *Record) (string, error) {
 		}
 	}
 
-	// Truncate if configured
+	// Truncate if configured. Emit a signal so the bytes actually embedded are
+	// discoverable rather than silently dropped (#602) — the cap is part of what the
+	// vector depends on, so silent truncation hides that dependence.
 	if w.maxSourceTextLen > 0 && len(text) > w.maxSourceTextLen {
 		text = truncateAtWord(text, w.maxSourceTextLen)
+		if w.metrics != nil {
+			w.metrics.IncTruncated()
+		}
 	}
 
 	return text, nil
@@ -617,17 +684,28 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 	}
 	defer reader.Close()
 
-	// Read only what we need — no full memory load
+	// Read only what we need — no full memory load. Read one byte PAST the cap so a
+	// body that exceeds the cap is detectable: len(data) > limit means the store had
+	// more and this fetch truncated it. The offloaded lane truncates here (byte-cut
+	// via LimitReader), NOT at getSourceText's word-cut branch, so this is the only
+	// place offloaded truncation can be observed — without it, truncation of the
+	// primary (ContentStorable) lane is silent, which the #602 spec forbids.
 	limit := w.maxSourceTextLen
 	if limit <= 0 {
 		limit = defaultMaxSourceTextLen
 	}
-	data, err := io.ReadAll(io.LimitReader(reader, int64(limit)))
+	data, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
 	if err != nil {
 		if w.metrics != nil {
 			w.metrics.IncContentResolveError()
 		}
 		return "", fmt.Errorf("failed to read content from instance %q: %w", ref.StorageInstance, err)
+	}
+	if len(data) > limit {
+		data = data[:limit]
+		if w.metrics != nil {
+			w.metrics.IncTruncated()
+		}
 	}
 
 	// Detect likely JSON-wrapped content (StoredContent envelope).
@@ -648,15 +726,26 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 	return string(data), nil
 }
 
-// markFailed marks an embedding as failed
-func (w *Worker) markFailed(entityID, errorMsg string) {
+// markFailed marks an embedding as failed. sourceRevision is the revision this
+// failure completes, so a stale older-revision failure cannot clobber a newer
+// success under the storage ordering guard (#614 part 2).
+func (w *Worker) markFailed(entityID, errorMsg string, sourceRevision uint64) {
 	// Don't count context cancellation (shutdown) as a failure
 	if strings.Contains(errorMsg, "context canceled") {
 		w.logger.Debug("Skipping failure metric for context cancellation", "entity_id", entityID)
 		return
 	}
 
-	if err := w.storage.SaveFailed(w.ctx, entityID, errorMsg); err != nil {
+	if err := w.storage.SaveFailed(w.ctx, entityID, errorMsg, sourceRevision); err != nil {
+		// A newer source revision already resolved this entity; this older failure is
+		// moot. Do NOT count it — the entity is not in a failed state — and return
+		// before IncFailed so a superseded older revision cannot inflate the failure
+		// gauge.
+		if errors.Is(err, ErrSupersededRevision) {
+			w.logger.Debug("Embedding failure superseded by a newer revision; not counting",
+				"entity_id", entityID)
+			return
+		}
 		// A record that is already gone has nothing to annotate. The failure itself
 		// is still real and still counted below — only the "could not mark it" log
 		// is downgraded, so a tombstone race does not read as an operational fault.
