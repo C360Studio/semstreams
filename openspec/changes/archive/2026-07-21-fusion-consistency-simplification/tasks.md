@@ -193,7 +193,7 @@
       consumer's own worst-case cycle (detection time scales with community
       size). gh#605 carries the measurements and the open question about a
       derived floor.
-- [ ] 5.2 At spec-sync time, rewrite the `graph-index-readiness` spec
+- [x] 5.2 DONE at archive: rewrote the `graph-index-readiness` spec
       Purpose paragraph (still teaches the absence license verbatim; deltas
       cover requirements only). No docs/concepts pages teach gate modes
       (review-verified) — no further doc retargets.
@@ -352,10 +352,10 @@ Survey completed before deleting (the memo's three open verification questions):
       upgrade steps 3 and 7 corrected.
 - [x] 7.10 Spec deltas for the collapsed gate + graphview currency reporting;
       `openspec validate --strict`.
-- [ ] 7.11 Reference configs: no `max_staleness` value to choose — the open owner
+- [x] 7.11 Reference configs: no `max_staleness` value to choose — the open owner
       question dissolves (owner confirmed: drop it). Verify `configs/` carries
       neither key.
-- [ ] 7.12 Close gh#605 as dissolved (the tuning-dynamics problem cannot exist
+- [x] 7.12 Close gh#605 as dissolved (the tuning-dynamics problem cannot exist
       without a tolerance to tune).
 - [x] 7.13 Export `graph.AllDeferReasons` (mirroring `AllIndexStates`) and drive
       graph-clustering's `deferReasons` and both coverage tests from it. The
@@ -525,14 +525,27 @@ Survey completed before deleting (the memo's three open verification questions):
 
 ## 8. Close-out
 
-- [ ] 8.1 PR + owner merge; tag TOGETHER with #598's breaks (owner
+**All close-out executed 2026-07-21.** #604 squash-merged as `22be87d2` after CI
+green on the exact head SHA (verified, no `--auto`); branch deleted. gh#605
+commented + CLOSED as dissolved (issuecomment-5036363501) — the tuning problem
+cannot exist without a tolerance to tune. gh#597 commented
+(issuecomment-5036367507): part 1 shipped incl. the resolve-order ranking fix
+that is a plausible ingredient in their varying-failure report; cross-store half
+left OPEN and now countable via `..._batch_query_missing_total{reason}`. gh#592
+commented (issuecomment-5036370237): close-out deliberately superseded for read
+paths, reopen trigger retired, Break 4 audit called out as the one that does not
+announce itself. `graph-index-readiness` spec Purpose rewritten — it had still
+taught the retired absence license AND bounded-lag verbatim, which archiving
+would have promoted into current truth.
+
+- [x] 8.1 PR + owner merge; tag TOGETHER with #598's breaks (owner
       sequencing: no semsource tag before this change).
-- [ ] 8.2 gh#597 comment: part 1 shipped (drop path closed + resolve-order
+- [x] 8.2 gh#597 comment: part 1 shipped (drop path closed + resolve-order
       ranking fix), part-2 minimal slice shipped; REMAINS OPEN: the
       cross-store consistency gap (semantic index ranking an ID whose
       ENTITY_STATES read returns not-found) — now visible via the 4.2
       counter; file separately if the soak confirms it.
-- [ ] 8.3 gh#592 comment: close-out superseded deliberately for read paths
+- [x] 8.3 gh#592 comment: close-out superseded deliberately for read paths
       (ADR-084); reopen trigger retired.
-- [ ] 8.4 Archive change + update memory; sister lockstep PRs remain
+- [x] 8.4 Archive change + update memory; sister lockstep PRs remain
       owner-managed (with #598's wave).
