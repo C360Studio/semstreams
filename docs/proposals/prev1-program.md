@@ -9,9 +9,13 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Land Track 0 as one PR.** Eight mechanical fixes, all with verified failure
-> modes and no open design questions. Start with #610 — it is a live
-> nondeterministic outage.
+> **Decide the −6% search-quality question, then land Track 0 as one PR.** All
+> eight fixes are implemented, reviewed (5 review findings fixed), and gated: full
+> local suite green, all three e2e tiers green, and 4 statistical runs per side
+> against a HEAD baseline. Of the two alarms that held this up, `known_answer` was
+> noise and the community drop came with a ground-truth *improvement*. One real
+> finding remains — a consistent, non-overlapping 6.0% search-quality drop — and it
+> needs an owner call, not more measurement. See "Track 0 open questions".
 
 ---
 
@@ -72,6 +76,79 @@ stop.
 
 State: `gh issue view 610 611 612 614 615 619 620 621 --json number,state`
 
+Rows 5–8 are deliberately **slices**: #619 keeps its index-vs-stateless-TF
+decision, #620 keeps the ~400–500 LOC phantom-deletion bundle, #621 keeps items
+2–5, #614 keeps part 2 (revision CAS). Those remainders belong to the epics.
+
+### Track 0 implementation state (2026-07-21, uncommitted)
+
+All eight implemented. `semstreams-reviewer` returned CHANGES REQUESTED; all five
+findings are fixed:
+
+| Finding | Where | Resolution |
+|---|---|---|
+| BLOCKING — tombstone delete made a nil-deref **reachable**; panic killed a worker permanently | `storage.go:206`/`:237`, `worker.go:277` | drop-not-resurrect via `ErrRecordGone`; `recover()` moved inside the loop |
+| BLOCKING — `Model == ""` escape hatch reopened #612 on the upgrade path | `worker.go:441` | inverted to unusable; also fixed a second-order `SaveDedup` overwrite |
+| HIGH — `HTTPEmbedder.dimensions` race + placeholder split the dedup keyspace | `http_embedder.go:203` | `atomic.Int64`, CAS-once, `DedupKey` withholds a key when unresolved |
+| HIGH — rule startup budget was 10 attempts vs every sibling reader's 30 | `entity_watcher.go` | `startup_attempts`/`startup_interval_ms` config, sibling default 30×500ms |
+| HIGH — warn→fail e2e conversions need tiers green | — | structural, semantic, statistical all green |
+
+Gate: `go build`, `go vet` (plain + `integration` + `live_llm`), `task lint`,
+`go test -race ./...` (0 FAIL), contract tests, tagged integration on all touched
+packages, `task schema:generate` (additive only: `workers`, `startup_attempts`).
+`task entity-id:audit` is red on 3 candidates — **verified identical at HEAD** in
+a clean worktree (1173 extracted both sides), so pre-existing, not ours.
+
+### Track 0 open questions — BLOCKING the PR
+
+Measured against a HEAD baseline built in a clean worktree (two runs, stable):
+
+| statistical tier | HEAD | Track 0 |
+|---|---|---|
+| `embedding_dedup_hits` | 188 / 190 | **53** |
+| `embedding_generated_total` | 256 / 258 | 241 |
+| `known_answer_tests_passed` | **7/7** | **6/7** |
+| `communities_total` | **15** | **4** |
+
+- **The dedup collapse is explained and correct.** Those ~137 hits came from the
+  offloaded lane, which keyed on the ObjectStore *key* — an address, not content.
+  They were precisely the stale-vector hits #612 exists to remove. Dedup is now
+  disabled for that lane (`message.StorageReference` carries no digest, and
+  hashing the body at hop 1 means a second full read on the watcher's hot path).
+  **Cost is real and unmeasured: offloaded entities now re-embed on every update,
+  each a remote call on the neural tier.** The clean follow-up the implementer
+  named — derive the key inside hop 2 where `getSourceText` already holds the
+  fetched, truncated body, which also subsumes the inline lane — is the remaining
+  part of #612 and should be filed. A `dedup_skipped_total{reason}` counter is
+  the minimum; without it this is invisible.
+- **Settled by 4 runs per side** (statistical tier, HEAD in a clean worktree):
+
+  | metric | HEAD (n=4) | Track 0 (n=4) | verdict |
+  |---|---|---|---|
+  | `known_answer_tests_passed` | 6, 6, 7, 7 | 7, 5, 6, 6 | **noise — no regression.** HEAD is not stably 7/7; the single 7/7 that raised the alarm was the top of HEAD's own range |
+  | `communities_total` | 15, 15, 15, 15 | 4, 5, 5, 10 | real change, but see next row |
+  | `community_ground_truth_passed` | 0, 0, 0, 0 | 0, 1, 1, 1 | **improvement.** HEAD's stable 15 communities match ground truth 0/3 every run |
+  | `embedding_generated_total` | 241–257 | 253–256 | unchanged — we are not doing more embedding work |
+  | `embedding_dedup_hits` | 173–189 | 60–65 | explained (stale object-key hits removed) |
+  | `search_quality_score` | 0.2399–0.2437 | 0.2255–0.2287 | **real, consistent −6.0%. Ranges do not overlap.** |
+
+  So the two alarms resolved opposite ways. `known_answer` was noise. The
+  community drop is accompanied by a *consistent ground-truth improvement*
+  (0/3 → 1/3), which reads as #619 working — BM25 vectors no longer shift under
+  query traffic — rather than as damage; it is also consistent with the audit's
+  own finding that community membership is non-deterministic and low-quality.
+
+- **OPEN — the one thing that still needs an owner decision:** `search_quality_score`
+  drops 6.0% with **non-overlapping ranges** across 4 runs per side. Small in
+  absolute terms (both tiers are poor; semantic scores 0.75), but it is not noise.
+  Most likely cause is #619: removing query pollution changes document vectors, and
+  the pollution may have accidentally flattered this fixture. Decide whether a 6%
+  drop on a fixture-specific composite blocks a correctness fix that removes
+  query-order dependence. **Recommendation: it should not block** — the metric
+  measures a BM25 tier the audit already recommends shrinking, and #619's parent
+  decision (lexical index over an immutable snapshot vs stateless hashed TF) is an
+  Epic A item that will change this number again anyway.
+
 ---
 
 ## Epics
@@ -79,9 +156,15 @@ State: `gh issue view 610 611 612 614 615 619 620 621 --json number,state`
 Sequential, not parallel. Each is a candidate OpenSpec change **only if it carries
 genuine spec deltas** — A, B, and C qualify; D and E do not.
 
+**Epic A increment 1 is already scoped** (filed 2026-07-21 as #623): derive the
+dedup key at content resolution in hop 2, bundling **#623 + #602 + #614 part 2**.
+They share one seam — `graph/embedding/storage.go` + `worker.go` — and the key
+derivation subsumes #602's cap half, so splitting them means touching the same
+two files three times. Start Epic A here.
+
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | #600 #601 #602 #612 #613 #614 #616 #619 #599 | not started |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | #600 #601 #602 #612 **#623** #613 #614 #616 #619 #599 | not started |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard | #622 #527 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
@@ -166,3 +249,23 @@ Append one line per session. Newest last.
   `prev1-audit-synthesis.md`. 13 issues filed (#610–#622) + semsource#110.
   `sister-validation.yml` written and locally validated; not yet run in CI.
   **Timing decided by owner: breaking wave now, one shot.** Next: Track 0.
+- **2026-07-21 (session 2)** — Track 0 implemented (all 8) + reviewed + 5 review
+  findings fixed. Uncommitted. Full local gate green; structural, semantic and
+  statistical tiers all green. Two corrections to the plan worth carrying:
+  (1) **#610's issue text was wrong** — it prescribed "return a transient error,
+  the watcher already retries." Nothing retries: `processor.go:481` calls
+  `watchEntityStates` once and swallows the error with a Warn, and the degraded
+  latch is process-lifetime sticky. Deleting the create path alone would have
+  traded a nondeterministic graph-ingest outage for nondeterministic *permanent
+  rule-evaluation disablement*. The fix needed a bounded wait too.
+  (2) `sister-validation.yml` has zero runs because **the branch was never
+  pushed** — the workflow does not exist on GitHub at all (`gh run list` returns
+  404, not an empty list). Epic D's "unproven in CI" is really "not yet on main."
+  Ran 4 statistical-tier runs per side against a HEAD worktree baseline to settle
+  two suspected regressions: `known_answer` was **noise** (HEAD's own range is
+  6–7), and the community-count drop came with a consistent ground-truth
+  *improvement* (0/3 → 1/3). One real finding survives: search quality −6.0% with
+  non-overlapping ranges. **Method note worth keeping:** the first comparison used
+  the audit's quoted 43% dedup figure as the baseline and looked like a large
+  regression; building an actual HEAD baseline in a clean worktree is what
+  reframed it. Quoted numbers from a prior run are not a baseline.
