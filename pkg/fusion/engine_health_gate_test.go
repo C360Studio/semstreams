@@ -9,6 +9,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/fusion"
+	"github.com/stretchr/testify/assert"
 )
 
 // TestFuse_GatesOnHealthNotCoverage pins the ADR-084 D1 reversal at fusion's top gate.
@@ -125,6 +126,13 @@ func TestFuse_StatusUnknownDefersButWiringFails(t *testing.T) {
 
 func assertEmptyHonest(t *testing.T, resp fusion.Response) {
 	t.Helper()
+	// The envelope must stay inside the closed state set. An empty State reads
+	// downstream as an unrecognized phase rather than as a defer, and it would render
+	// as all-zeros in the one-hot readiness metric — a silent "no data" where an
+	// alertable signal belongs.
+	assert.Contains(t, []fusion.IndexState{
+		fusion.StateBuilding, fusion.StateDegraded, fusion.StateResetRequired, fusion.StateReady,
+	}, resp.Index.State, "deferred envelope carried an out-of-set State %q", resp.Index.State)
 	if len(resp.Nodes) != 0 {
 		t.Errorf("expected an empty-honest envelope, got %d nodes", len(resp.Nodes))
 	}

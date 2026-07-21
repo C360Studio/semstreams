@@ -173,10 +173,11 @@ func (c *Client) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher)
 // ADR-083 moved the source from the `graph.index.query.status` request/reply to the
 // shared GRAPH_STATUS watch (graph/readiness). Only the transport moved: every failure
 // to establish readiness still returns an error, exactly as a failed request did, and a
-// received envelope is still handed up verbatim, so Fuse's top gate and its
-// ErrorCodeIndexNotReady degrade paths see the same inputs they saw before. This is
-// `graph.GateExact` at the engine's top gate and `graph.GateDegradeHonest` in Fuse's
-// internal-read recovery — naming, not new behavior.
+// received envelope is handed up verbatim, so Fuse sees the producer's own fields.
+//
+// What the ENGINE does with them changed in ADR-084: the top gate is now the canonical
+// health gate with no freshness requirement, not the exact-coverage check this comment
+// used to describe. `GateExact` and `GateDegradeHonest` no longer exist.
 //
 // Watching rather than reading per call is the point of the change: a per-decision
 // round-trip travels the same connection as the ENTITY_STATES firehose in a
@@ -425,6 +426,23 @@ func (c *Client) Entities(ctx context.Context, ids []string) (fusion.Hydration, 
 	return reconcileHydration(ids, resp), nil
 }
 
+// unhydratedReason maps a handler-reported reason into fusion's CLOSED set. Both sets
+// are declared closed, so a raw cast would let an out-of-set or empty value from any
+// handler version reach the product surface and break a consumer's exhaustive switch —
+// the reply is untrusted input, and "the enums match today" is not a validation.
+// Anything unrecognized becomes `unknown`, which is the honest reading: something was
+// not hydrated and we cannot say why.
+func unhydratedReason(r graph.MissingReason) fusion.UnhydratedReason {
+	switch r {
+	case graph.MissingNotFound:
+		return fusion.UnhydratedNotFound
+	case graph.MissingError:
+		return fusion.UnhydratedError
+	default:
+		return fusion.UnhydratedUnknown
+	}
+}
+
 // reconcileHydration turns a batch reply into a total accounting of the requested IDs,
 // in request order. Split out from Entities so the set logic is unit-testable without a
 // transport — it is the part with the edge cases (duplicate requests, an ID reported in
@@ -440,7 +458,7 @@ func reconcileHydration(requested []string, resp graph.EntityBatchResponse) fusi
 	// missing AND returned an entity for is treated as hydrated: we hold the evidence.
 	reported := make(map[string]fusion.UnhydratedReason, len(resp.Missing))
 	for _, m := range resp.Missing {
-		reported[m.ID] = fusion.UnhydratedReason(m.Reason)
+		reported[m.ID] = unhydratedReason(m.Reason)
 	}
 
 	out := fusion.Hydration{Entities: make([]*fusion.Entity, 0, len(resp.Entities))}

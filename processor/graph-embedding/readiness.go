@@ -87,8 +87,14 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 			BootstrapComplete: bootstrapped,
 		}
 	}
-	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
-		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
+	// Uses the snapshot, not a second Load: re-reading here could see the sentinel fire
+	// between the two loads and fall through to stamp the STALE false onto an envelope
+	// ComputeIndexStatus may mark Ready — producing Ready=true with
+	// BootstrapComplete=false, the one shape the collapsed gate cannot tolerate (it asks
+	// health before coverage, so every consumer would defer on it).
+	if c.bootstrapStarted.Load() && !bootstrapped {
+		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding,
+			BootstrapComplete: false}
 	}
 	// A status call before Start wired the watcher (early boot / unit tests) reports
 	// building rather than panicking. Unreachable in production: setupQueryHandlers

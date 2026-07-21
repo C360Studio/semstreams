@@ -115,10 +115,14 @@ func decodeEntityStateResponse(data []byte) ([]graph.EntityState, []graph.Missin
 	return resp.Entities, resp.Missing, nil
 }
 
-// logMissing reports IDs the batch could not hydrate, reconciling against the requested
-// set so an under-reporting handler is still visible. A research walk that quietly
+// logMissing reports IDs the batch could not hydrate. A research walk that quietly
 // evidences 3 of 40 seeds and one that evidences 3 because 37 do not exist look
 // identical in the trajectory otherwise.
+//
+// It CONSUMES the handler's report rather than reconciling against the requested set
+// (task 4.6 allowed either). The requested count is carried for context only, so an
+// under-reporting handler stays invisible here — that reconciliation lives in
+// fusionnats.Entities, on the path where a dropped seed actually changes an answer.
 func (a *graphQueryAdapter) logMissing(requested []string, missing []graph.MissingEntity) {
 	if a.logger == nil {
 		return

@@ -93,7 +93,16 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 			// graph/query's allow_ungated_reads: that flag exists for a standalone
 			// deployment reading its own bucket, while fusion is a shared product
 			// surface whose empty answer other people act on.
-			return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}, nil
+			//
+			// The client returns a ZERO IndexStatus alongside this error, so State is
+			// stamped explicitly rather than shipped as "": an empty string is outside
+			// the closed state set every consumer switches on, and would read as a new
+			// unknown phase rather than as "we could not establish readiness".
+			return Response{
+				Index:           unknownReadinessStatus(status),
+				Provenance:      ProvenanceDeterministic,
+				ContractVersion: ContractVersion,
+			}, nil
 		}
 		// Broken wiring stays LOUD. Masking it as "the graph is busy" would make a
 		// permanent operator bug indistinguishable from transient backpressure, forever.
@@ -179,34 +188,61 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	return resp, nil
 }
 
-// applyScores attaches rank and resolve similarity to the returned nodes (ADR-084 D5),
+// unknownReadinessStatus is the envelope shipped when readiness could not be
+// established. It keeps whatever the client managed to report and forces the two fields
+// a consumer branches on into an honest, in-set state: not ready, and building rather
+// than empty. Building is the closest existing label for "cannot vouch for this index"
+// — the alternative is inventing a state value, which would break the one-hot metric
+// and every exhaustive switch downstream.
+func unknownReadinessStatus(status IndexStatus) IndexStatus {
+	status.Ready = false
+	if status.State == "" {
+		status.State = StateBuilding
+	}
+	return status
+}
+
+// applyScores attaches each node's RESOLVE rank and resolve similarity (ADR-084 D5),
 // opt-in via the request so the default wire shape is unchanged.
 //
-// Rank is the node's 1-based position in the RANKED order, which is what the caller
-// actually sees — not the resolve position, since ranking reorders. Similarity comes
-// from the seed and is joined BY ENTITY ID, never by slice position: ranking reorders
-// and the budget truncates, so any positional join would silently mislabel scores. That
-// is the same class of bug as the cache-order scramble this change already fixed, and
-// it is why the join is written this way rather than as a parallel-slice walk.
+// Rank is the seed's 1-based position in RESOLVE order — deliberately not the node's
+// position in the response, which the caller can already count off the array and which
+// therefore carries no information. The whole point of the field is that rankEntities
+// REORDERS (lexical affinity, ontology specificity, predicate salience), so the gap
+// between where resolve put an entity and where it came out is the diagnostic signal:
+// "why did this rank third when the index thought it was the best match?" is
+// answerable only from the pair.
 //
-// nodes[i] corresponds to ranked[i] by construction (buildNodes appends in order and
-// stops at the budget), so ranked supplies the entity ID that keys the lookup.
+// Both values are joined BY ENTITY ID. Ranking reorders and the budget truncates, so a
+// positional join would silently mislabel — the same class of bug as the cache-order
+// scramble this change already fixed. nodes[i] corresponds to ranked[i] by construction
+// (buildNodes appends in order and stops at the budget), so ranked supplies the join
+// key; the key is what is trusted, not the index.
 func applyScores(nodes []Node, ranked []*Entity, seeds []Seed) {
-	similarity := make(map[string]Seed, len(seeds))
-	for _, s := range seeds {
-		if s.HasSimilarity {
-			similarity[s.ID] = s
-		}
+	type score struct {
+		rank          int
+		similarity    float64
+		hasSimilarity bool
+	}
+	byID := make(map[string]score, len(seeds))
+	for i, s := range seeds {
+		byID[s.ID] = score{rank: i + 1, similarity: s.Similarity, hasSimilarity: s.HasSimilarity}
 	}
 	for i := range nodes {
-		nodes[i].Rank = i + 1
 		if i >= len(ranked) {
 			// Defensive: buildNodes cannot produce more nodes than ranked entities.
 			// Bailing beats indexing past the slice that supplies the join key.
 			continue
 		}
-		if seed, ok := similarity[ranked[i].ID]; ok {
-			nodes[i].Similarity = seed.Similarity
+		sc, ok := byID[ranked[i].ID]
+		if !ok {
+			// A node whose entity was never a seed (not reachable today — nodes are
+			// built from ranked seeds). Leaving rank unset beats inventing one.
+			continue
+		}
+		nodes[i].Rank = sc.rank
+		if sc.hasSimilarity {
+			nodes[i].Similarity = sc.similarity
 			nodes[i].HasSimilarity = true
 		}
 	}

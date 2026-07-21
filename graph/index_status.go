@@ -9,14 +9,24 @@ import (
 // enriched by ADR-066, distributed as GRAPH_STATUS KV state by ADR-083): the
 // deterministic-fusion honesty envelope's readiness signal.
 //
-// Ready is load-bearing — only Ready permits a caller to treat an empty result
-// as an authoritative not-found; when not Ready the caller must fall back (e.g.
-// to grep) rather than conclude absence. Ready now means the index is CAUGHT UP:
-// every committed ENTITY_STATES revision <= the query-time target has been
-// applied (revision-lag, ADR-066), not merely "indexing started" (the old sticky
-// NAME_INDEX-non-empty signal that fired minutes before the index was populated,
-// gh#431). Ready guarantees revision COVERAGE, not last-writer-wins freshness
+// Ready reports COVERAGE: every committed ENTITY_STATES revision <= the query-time
+// target has been applied (revision-lag, ADR-066), not merely "indexing started" (the
+// old sticky NAME_INDEX-non-empty signal that fired minutes before the index was
+// populated, gh#431). It guarantees revision coverage, not last-writer-wins freshness
 // under same-key churn (ADR-066 §1 Scope boundary).
+//
+// Ready LICENSES NOTHING ABOUT ABSENCE (ADR-084). It once carried an "only Ready
+// permits an authoritative not-found" contract; that is retired, because coverage
+// cannot answer the question — an index caught up to every revision ever committed
+// still knows nothing about a source that never published. No consumer may treat an
+// empty result as an authoritative not-found under ANY envelope state.
+//
+// Nor does Ready == false withhold a response any more: reads gate on HEALTH (State
+// plus BootstrapComplete), and a healthy index that is merely behind serves while
+// reporting StalenessMs. Under continuous write Ready is false essentially always,
+// which is what made it a poor proxy for soundness. Its remaining jobs are a caught-up
+// fast path for the freshness question, and being the value a caller compares its own
+// revision against via IndexedRevision — the one sound per-entity check.
 //
 // The JSON field names match pkg/fusion.IndexStatus so the fusion
 // RetrievalClient decodes this response directly into its honesty envelope; the

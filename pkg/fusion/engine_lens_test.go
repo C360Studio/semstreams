@@ -77,13 +77,33 @@ func (g *fakeGraph) Entities(_ context.Context, ids []string) (fusion.Hydration,
 		ents, err := g.entitiesFn(ids)
 		return fusion.Hydration{Entities: ents, Unhydrated: g.unhydrated}, err
 	}
+	// Models the production contract: the two lists together account for every
+	// requested ID exactly once. A fake that silently dropped unknown IDs would keep
+	// exercising the shape ADR-084 outlawed, and would let a regression in the
+	// engine's unhydrated handling pass unnoticed.
 	var out []*fusion.Entity
+	unhydrated := g.unhydrated
 	for _, id := range ids {
 		if e, ok := g.entities[id]; ok {
 			out = append(out, e)
+			continue
+		}
+		if !hasUnhydrated(unhydrated, id) {
+			unhydrated = append(unhydrated, fusion.Unhydrated{
+				Handle: id, Reason: fusion.UnhydratedUnknown,
+			})
 		}
 	}
-	return fusion.Hydration{Entities: out, Unhydrated: g.unhydrated}, nil
+	return fusion.Hydration{Entities: out, Unhydrated: unhydrated}, nil
+}
+
+func hasUnhydrated(list []fusion.Unhydrated, id string) bool {
+	for _, u := range list {
+		if u.Handle == id {
+			return true
+		}
+	}
+	return false
 }
 func (g *fakeGraph) Neighbors(_ context.Context, id string, preds []string, dir fusion.Direction) ([]fusion.Edge, error) {
 	if g.neighborsErr != nil {
@@ -261,10 +281,16 @@ func TestEngine_Relations(t *testing.T) {
 // TestEngine_Miss: ready + resolved-to-nothing yields a Miss with did_you_mean —
 // never an ambiguous empty.
 func TestEngine_Miss(t *testing.T) {
+	// A genuine miss is RESOLUTION finding nothing — not resolution finding a seed we
+	// then failed to fetch. ADR-084 split those: the second case reports `unhydrated`
+	// and deliberately synthesizes no Miss, because a failed read cannot support the
+	// claim "the graph was asked and had nothing". This fixture used to be the second
+	// case and passed only because the fake silently dropped unfetchable IDs; that case
+	// now lives in TestResponse_Unhydrated.
 	g := &fakeGraph{
 		status:   readyStatus(),
-		seeds:    map[string][]string{"Ghost": {"acme.ops.code.repo.symbol.Ghost"}}, // resolves an id…
-		entities: map[string]*fusion.Entity{},                                       // …but it doesn't exist
+		seeds:    map[string][]string{}, // "Ghost" resolves to nothing at all
+		entities: map[string]*fusion.Entity{},
 		names:    []string{"OnEvent", "OnError"},
 	}
 	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))

@@ -65,13 +65,19 @@ func TestFuse_IncludeScores(t *testing.T) {
 		assert.True(t, byName["Alpha"].HasSimilarity)
 	})
 
-	t.Run("rank is the returned position, 1-based", func(t *testing.T) {
+	t.Run("rank is the RESOLVE rank, not the response position", func(t *testing.T) {
+		// The distinguishing assertion. Alpha resolved FIRST and came out SECOND
+		// because ranking lifted Bravo on lexical affinity. If Rank were the response
+		// position it would read 1,2 top-to-bottom and tell the caller nothing they
+		// could not count — the gap between resolve rank and position IS the signal.
 		resp := fuse(t, newGraph(), fusion.Request{Query: query, IncludeScores: true})
 		require.Len(t, resp.Nodes, 2)
-		assert.Equal(t, 1, resp.Nodes[0].Rank)
-		assert.Equal(t, 2, resp.Nodes[1].Rank)
-		// Rank follows the RANKED order the caller sees, not resolve order.
-		assert.Equal(t, "Bravo", resp.Nodes[0].Name)
+		require.Equal(t, "Bravo", resp.Nodes[0].Name, "precondition: ranking must reorder")
+
+		assert.Equal(t, 2, resp.Nodes[0].Rank,
+			"Bravo resolved second; reporting 1 here would just be echoing the array index")
+		assert.Equal(t, 1, resp.Nodes[1].Rank,
+			"Alpha resolved first and was demoted by ranking — exactly the surprise this field explains")
 	})
 
 	t.Run("an unscored mode reports no similarity rather than zero", func(t *testing.T) {
@@ -84,7 +90,7 @@ func TestFuse_IncludeScores(t *testing.T) {
 		for _, n := range resp.Nodes {
 			assert.False(t, n.HasSimilarity, "an unscored mode must not claim a similarity")
 			assert.Zero(t, n.Similarity)
-			assert.NotZero(t, n.Rank, "rank is always available — it is position, not a score")
+			assert.NotZero(t, n.Rank, "rank is always available — every mode resolves in some order")
 		}
 	})
 

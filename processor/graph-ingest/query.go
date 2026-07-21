@@ -159,7 +159,12 @@ func (c *Component) reportBatchMissing(requested, missing []string) {
 	if len(logged) > maxLoggedMissingIDs {
 		logged = logged[:maxLoggedMissingIDs]
 	}
-	c.logger.Warn("batch entity query did not hydrate every requested ID",
+	// Debug, not Warn: with reads now serving under lag (ADR-084), a semantic index
+	// ranking an entity whose ENTITY_STATES write has not landed yet is ordinary
+	// operation, and warning on it would train operators to ignore the line. The
+	// COUNTER above is the alertable signal — it has a rate, which is what
+	// distinguishes normal churn from the gh#597 pathology.
+	c.logger.Debug("batch entity query did not hydrate every requested ID",
 		"requested", len(requested),
 		"missing", len(missing),
 		"reason", string(graph.MissingNotFound),

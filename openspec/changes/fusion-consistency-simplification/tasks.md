@@ -39,7 +39,7 @@
       post-bootstrap stuck-degraded serving exception is deliberate,
       query.go:176-182). DONE: only the gate call and its doc changed; check
       order and the sticky short-circuit are untouched.
-- [ ] 2.3 Pins land BEFORE the regate (tests-first): authoritatively-empty
+- [x] 2.3 Pins land BEFORE the regate (tests-first): authoritatively-empty
       graph proceeds everywhere; caught-up index + declared bound proceeds
       (presence-encoding wedge); client health gate defers on
       `bootstrap_complete=false` under `State=building` (cutover); responder
@@ -193,7 +193,7 @@
 
 ## 6. Gates (all BEFORE merge)
 
-- [ ] 6.1 `task lint` · full `go test -race ./...` (explicit FAIL grep) ·
+- [x] 6.1 `task lint` · full `go test -race ./...` (explicit FAIL grep) ·
       `task schema:generate` no-drift · contract tests ·
       `go vet -tags=integration` AND `-tags=live_llm` ·
       `openspec validate --strict`.
@@ -205,9 +205,25 @@
       remaining red was substrate — a loaded Docker daemon timing out
       container inspects at 180s (rotating tests, never an assertion);
       it cleared once the sister-project NATS stack was stopped.
-- [ ] 6.3 BREAKING ⇒ e2e: `task e2e:statistical` AND `task e2e:semantic`
-      green, with log-level evidence (not exit codes through a pipe).
-- [ ] 6.4 `semstreams-reviewer` pre-merge; fold findings.
+- [x] 6.3 BREAKING ⇒ e2e: `task e2e:statistical` AND `task e2e:semantic`
+      green, with log-level evidence (not exit codes through a pipe). DONE:
+      statistical — "Scenario completed successfully", validation_errors:0,
+      15 communities (matches the #598 baseline), entities_missing:0,
+      data_loss_percent:0. semantic — validation_errors:0,
+      known_answer_tests_passed 7/7 (matches #598 exactly), 16 communities.
+      Evidence read from the logs, not from exit codes. NOTE: the earlier
+      red integration runs were a loaded Docker daemon, not code — they
+      cleared once the sister-project NATS stack was stopped.
+- [x] 6.4 `semstreams-reviewer` pre-merge; fold findings. CHANGES REQUESTED;
+      all 3 blockers + 7 mediums folded. The sharp one: bootstrap_complete
+      latched on catch-up to the LIVE target, which under continuous write is
+      a measure-zero instant (gh#590 F1) — the bit would have read false
+      forever on a firehose deployment and every health gate would defer, i.e.
+      the change would NOT have fixed the bug it exists to fix. Now latches on
+      the enumeration-time target per D2. Also: Rank was the response position
+      (information-free; the caller can count the array) instead of the
+      resolve rank the spec requires; and the absence license survived at the
+      DEFINITION site (graph/index_status.go) though I had swept its mirror.
 
 ## 7. Close-out
 

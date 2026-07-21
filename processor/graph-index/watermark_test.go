@@ -257,3 +257,71 @@ func TestComputeIndexStatus_ReadyImpliesBootstrapComplete(t *testing.T) {
 		}
 	})
 }
+
+// TestLatchBootstrap_ContinuousWrite is the regression for the review's blocking
+// finding. The latch originally flipped only on Ready — caught up to the LIVE stream
+// target — which under continuous write is a measure-zero instant (gh#590 F1). On a
+// firehose deployment the bit would therefore read false forever, and because every
+// ADR-084 health gate defers on it, fusion and the graph/query client would withhold
+// permanently. That is the exact failure this change exists to end, reappearing with a
+// different defer reason.
+//
+// The latch is against the ENUMERATION-TIME target instead, which is fixed and
+// therefore reachable no matter how fast writes arrive.
+func TestLatchBootstrap_ContinuousWrite(t *testing.T) {
+	// Enumeration ended at revision 500. Writes never stop, so the live target runs
+	// ahead of the applied floor on every single tick — Ready is never true.
+	newComponent := func() *Component {
+		c := &Component{}
+		c.bootstrapTarget.Store(500)
+		c.initialEnumerationComplete.Store(true)
+		return c
+	}
+
+	t.Run("does not latch before the initial build is applied", func(t *testing.T) {
+		c := newComponent()
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 499, Target: 900}))
+		if got.BootstrapComplete {
+			t.Error("latched before the enumeration-time target was applied")
+		}
+	})
+
+	t.Run("latches once the enumeration-time target is applied, still under write", func(t *testing.T) {
+		c := newComponent()
+		// Applied floor reached 500; the live target is far ahead and Ready is false.
+		status := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 500, Target: 900})
+		if status.Ready {
+			t.Fatal("fixture no longer models continuous write; Ready must be false here")
+		}
+		got := c.latchBootstrap(status)
+		if !got.BootstrapComplete {
+			t.Error("a built index under continuous write never reports bootstrap_complete; " +
+				"every remote health gate would defer forever")
+		}
+	})
+
+	t.Run("stays latched as the live target keeps advancing", func(t *testing.T) {
+		c := newComponent()
+		c.latchBootstrap(graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 500, Target: 900}))
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 600, Target: 5000}))
+		if !got.BootstrapComplete {
+			t.Error("the latch cleared while writes continued")
+		}
+	})
+
+	t.Run("enumeration flag without an applied floor does not latch", func(t *testing.T) {
+		// Guards the ordering contract: bootstrapTarget is stored BEFORE the flag, so a
+		// reader seeing the flag sees a real target. A zero target here would latch on
+		// the first tick and hand out a bootstrap claim the build never earned.
+		c := &Component{}
+		c.bootstrapTarget.Store(500)
+		c.initialEnumerationComplete.Store(true)
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 0, Target: 900}))
+		if got.BootstrapComplete {
+			t.Error("latched with nothing applied")
+		}
+	})
+}

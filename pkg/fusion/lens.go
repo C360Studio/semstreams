@@ -188,9 +188,11 @@ type Lens interface {
 // whose catch-all is "deterministic" and only embedding is named: there,
 // ResolveMode is a CLOSED int enum so "unknown" is unreachable. Here ResolveMode
 // is an OPEN string type, so the catch-all must be the conservative tier —
-// "embedding" — because only "deterministic" permits a caller to treat an empty
-// result as an authoritative not-found, and an unclassified seed has not earned
-// that. CAUTION: this means any NEW deterministic mode added to the enum MUST be
+// "embedding" — because provenance is a claim about HOW an answer was produced,
+// and an unclassified seed has not earned the stronger claim. (The reasoning once
+// rested on "only deterministic permits an authoritative not-found"; ADR-084
+// retired that license entirely — no provenance tier licenses an absence claim —
+// but the conservative default stands on its own.) CAUTION: this means any NEW deterministic mode added to the enum MUST be
 // added to the deterministic case below, or it silently degrades to embedding
 // (no compile error — open string enum).
 func ProvenanceForMode(mode ResolveMode) Provenance {

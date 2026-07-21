@@ -135,6 +135,13 @@ type StatusReading struct {
 // the reason set: over_staleness is the one defer an operator answers by tuning a
 // tolerance, and a broken or half-built index answered that way sends them to the wrong
 // dial (gh#590 again, in a new costume).
+//
+// PRODUCER INVARIANT this ordering relies on: an envelope with Ready == true must also
+// carry BootstrapComplete == true. Health is answered BEFORE coverage, so a producer
+// that published a caught-up envelope while reporting an unfinished build would see
+// every consumer defer on it forever — pointing an operator at a cutover that already
+// finished. graph-index maintains it in latchBootstrap and on its caged early-boot
+// branch; a new producer must do the same.
 func EvaluateReadinessGate(reading StatusReading, want Freshness) (proceed bool, reason DeferReason) {
 	status := reading.Status
 	if !reading.Fresh {

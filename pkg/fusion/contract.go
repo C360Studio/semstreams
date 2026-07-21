@@ -181,9 +181,13 @@ type Node struct {
 	// Handle is an opaque continuation token (internally the entity ID). Not an
 	// addressing scheme: never parse or construct it.
 	Handle string `json:"handle,omitempty"`
-	// Rank is this node's 1-based position in the returned ordering. Present only
-	// when the request set IncludeScores. It reflects the RANKED order the caller
-	// sees, not the order seeds resolved in — ranking reorders.
+	// Rank is this node's 1-based position in RESOLVE order — where the index put it
+	// before the engine re-ranked. Present only when the request set IncludeScores.
+	//
+	// Deliberately not the node's position in the response: that is the array index,
+	// which the caller can already count. Ranking reorders (lexical, ontology,
+	// salience), so the GAP between resolve rank and response position is the whole
+	// signal — it is what makes "why did this come out third?" answerable.
 	Rank int `json:"rank,omitempty"`
 	// Similarity is the resolve mode's own relevance score, present only when
 	// IncludeScores was set AND the mode reports one (semantic does; symbol and
