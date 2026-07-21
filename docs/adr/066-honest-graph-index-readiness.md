@@ -2,11 +2,17 @@
 
 ## Status
 
-**Transport superseded by ADR-083 — 2026-07-20.** The `Ready` contract below is
-unchanged and still load-bearing. Only its *distribution* moved: the
+**Transport superseded by ADR-083 — 2026-07-20.** The
 `graph.index.query.status` request/reply described here was removed in favour of the
 watchable `GRAPH_STATUS` KV key, and the envelope gained an additive `staleness_ms`.
-Read the `graph-index-readiness` spec for current behavior.
+
+**Absence license superseded by ADR-084 — 2026-07-20.** `Ready` still means exactly
+what this ADR defines — revision COVERAGE — but the "only Ready permits an
+authoritative not-found" license it carried is retired: coverage says nothing about
+whether a source ever published, so it could never have answered absence. Read paths
+now gate on HEALTH and serve under ordinary lag. What survives unchanged is the
+false-negative guard's motivation and the envelope's numeric fields, which are now the
+load-bearing part. Read the `graph-index-readiness` spec for current behavior.
 
 **Accepted** (2026-07-03, GH #431). Cross-repo (semstreams owns the
 index/embedding signals, semsource owns the `graph.query.status` aggregate).

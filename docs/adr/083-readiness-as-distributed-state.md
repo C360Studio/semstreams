@@ -2,6 +2,11 @@
 
 ## Status
 
+**Gate-mode table superseded by ADR-084 — 2026-07-20.** D4's four declared consumer
+modes collapse into health + a freshness parameter; `GateMode`/`GateConfig` are
+removed. The distribution decision (KV state, heartbeat, freshness judged
+consumer-locally) and the staleness unit are unchanged and still current.
+
 Accepted — 2026-07-20. Decision-recording for the
 `readiness-distribution-and-staleness-contract` change. Addresses the post-close
 evidence on #590 (semboids coalescer table + observer discrepancy). Builds on

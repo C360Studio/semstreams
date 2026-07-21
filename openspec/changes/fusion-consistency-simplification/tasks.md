@@ -164,21 +164,32 @@
 
 ## 5. Docs + migration
 
-- [ ] 5.1 Migration notes joining the ADR-083 wave (one release-note set):
+- [x] 5.1 Migration notes joining the ADR-083 wave (one release-note set):
       gate meaning change, transient narrowing, `bootstrap_complete`,
       unhydrated/missing consumption, score opt-in, staleness-is-a-floor;
       explicit "what `Ready=false → fall back` becomes" section for
       semsource. UPDATE `docs/operations/migration-readiness-distribution-
       adr083.md` in place: its consumer snippet compile-breaks (GateExact),
       and its `max_staleness` "0 = exact" line is reaffirmed. Pointer notes
-      on ADR-066/082/083.
+      on ADR-066/082/083. DONE: retitled as ONE wave (two changes, one tag);
+      Breaks 4/5/6 added with a prominent "if you read one section" pointer,
+      because unlike Breaks 1-3 these compile fine and reach production
+      silently. Break 4 carries the explicit
+      `Ready == false -> fall back` rewrite for semsource. Upgrade order
+      gained steps 6-8. Pointer notes: ADR-066 absence license retired,
+      ADR-082 consumer-class split retired (naming WHY the split was a
+      symptom), ADR-083 D4 gate-mode table superseded.
 - [ ] 5.2 At spec-sync time, rewrite the `graph-index-readiness` spec
       Purpose paragraph (still teaches the absence license verbatim; deltas
       cover requirements only). No docs/concepts pages teach gate modes
       (review-verified) — no further doc retargets.
-- [ ] 5.3 File the fusion e2e coverage-gap issue: no e2e tier exercises
+- [x] 5.3 File the fusion e2e coverage-gap issue: no e2e tier exercises
       `Fuse`'s gate, `Entities` reconciliation, or `unhydrated` (house
       rule: tier doesn't cover the path ⇒ file the gap before tagging).
+      DONE: gh#599. Gap re-verified by grep first (nothing in test/e2e/
+      issues graph.query.batch or graph.query.semantic, nothing calls Fuse) —
+      the issue names why each of the three is specifically a LIVE-only
+      check, notably that the ordering bug is cache-residency dependent.
 
 ## 6. Gates (all BEFORE merge)
 

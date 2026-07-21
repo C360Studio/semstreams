@@ -1,12 +1,20 @@
-# Breaking Change: Readiness Is KV State, Staleness Is Time (ADR-083)
+# Breaking Change: Readiness Is KV State and Licenses Health, Not Absence (ADR-083 + ADR-084)
 
-This is the SemStreams-local release note for the
-`readiness-distribution-and-staleness-contract` change (follow-on to gh#590). It is a
-clean pre-v1 break: there is no dual distribution path, no consumer fallback poll, and
-no deprecation window. Breaks 1 and 2 fail **loudly** — a no-responders transient and a
-config decode error — never silently. Break 3 removes a wire field; how loudly it
-surfaces depends on the consumer's decoder, so it gets an explicit consumer checklist
-below.
+This is the SemStreams-local release note for **one wave with two changes**:
+`readiness-distribution-and-staleness-contract` (ADR-083, follow-on to gh#590) moved
+readiness onto KV state, and `fusion-consistency-simplification` (ADR-084) then retired
+the thing readiness had been wrongly asked to license. They ship under one tag so
+consumers migrate the readiness surface **once**.
+
+It is a clean pre-v1 break throughout: no dual distribution path, no consumer fallback
+poll, no deprecation window. Breaks 1 and 2 fail **loudly** — a no-responders transient
+and a config decode error. Break 3 removes a wire field and Breaks 4–6 change
+SEMANTICS, so those get explicit consumer checklists: a semantics change compiles fine
+and is exactly the kind that reaches production silently.
+
+**If you read only one section**, read
+[Break 4](#break-4--readiness-gates-on-health-not-coverage): `Ready == false` no longer
+means "fall back".
 
 ## What changed, and why
 
@@ -68,18 +76,21 @@ if !reading.Fresh {
     // reading.Err and reading.Age say why, for the log line.
 }
 proceed, reason := graph.EvaluateReadinessGate(
-    reading.Status, reading.Fresh, graph.GateExact, graph.GateConfig{})
+    graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh, Age: reading.Age},
+    graph.FreshnessNone()) // read path; see Break 5 for the freshness options
 ```
 
 Do not hand-roll a `Get` loop. `Get` and `Watch` are equally stale on a
 tick-published key, and `Get` adds a round-trip on the very connection whose
 saturation caused gh#590.
 
-**Fail-closed semantics are unchanged.** A received not-ready still defers; anything
+**Fail-closed semantics for UNKNOWN are unchanged.** Anything
 unknown (no bucket, no key, deleted key, backend fault, undecodable value) still fails
-closed. State distribution adds one case a request could not have: a feed gone quiet
-past the freshness window — a producer that died holding a `Ready` key — which is also
-unknown, so it also fails closed.
+closed. What a *received* envelope means did change — see Break 4.
+
+State distribution adds one case a request could not have: a feed gone quiet past the
+freshness window — a producer that died holding a `Ready` key — which is also unknown,
+so it also fails closed.
 
 ### Deployments without graph-index
 
@@ -146,12 +157,114 @@ transport change. See ADR-083's Consequences.
   `pkg/graphview` (ADR-081), which has real snapshot/revision semantics. Retrieval
   fusion is best-effort ranked evidence.
 
+## Break 4 — readiness gates on HEALTH, not coverage
+
+**This is the one that changes behavior without changing a signature.** It compiles,
+it type-checks, and it silently alters what your fallback path does.
+
+`Ready` reports COVERAGE: the index has applied every committed revision up to its
+target. Callers had been using it as a proxy for "is this index sound to read from",
+and those are different questions. Coverage was never evidence of soundness — an index
+caught up to every revision ever committed still knows nothing about a source that
+never published — and under continuous write `Ready` is false essentially always, so
+the proxy failed exactly when the graph was busiest. That is what made semsource retry
+the read-path transient (#592) and what made fusion return empty envelopes from a
+perfectly healthy graph.
+
+Reads now gate on **health**: fresh status, no hard stop, and initial build complete.
+
+| Situation | Before | Now |
+|---|---|---|
+| Healthy index, caught up | serves | serves |
+| Healthy index, behind under write | **withholds** | **serves**, reporting `staleness_ms` |
+| Initial build / gh#474 cutover incomplete | withholds | withholds (`bootstrap_complete=false`) |
+| `degraded` / `reset_required` | withholds | withholds |
+| Status unknown (feed dead/absent) | withholds | withholds |
+
+### What `Ready == false → fall back` becomes
+
+If your code looks like this, it is now wrong:
+
+```go
+if !status.Ready {
+    return fallbackToGrep()   // WRONG after ADR-084
+}
+```
+
+`Ready == false` is the steady state of a busy index. Ask the question you actually
+meant:
+
+```go
+// "Is this index sound to read from?" — the health question.
+proceed, reason := graph.EvaluateReadinessGate(
+    graph.StatusReading{Status: st, Fresh: fresh, Age: age}, graph.FreshnessNone())
+if !proceed { return fallbackToGrep() }   // reason says WHY
+
+// "Is the view fresh enough for me?" — only if you are a view-rate consumer.
+graph.FreshnessWithin(5 * time.Second)
+
+// "Is MY write visible?" — the one sound per-entity check.
+if status.IndexedRevision >= myRevision { /* my write is indexed */ }
+```
+
+`bootstrap_complete` is a NEW envelope field. An envelope without it reads `false` and
+therefore fails closed — which is why producers and consumers must move together.
+
+## Break 5 — gate modes collapse into health + a freshness parameter
+
+`GateMode`, `GateConfig`, and the four `Gate*` constants are gone. They were four
+dressings of one conflation. Replace a mode with a freshness declaration:
+
+| Before | Now |
+|---|---|
+| `GateExact` | `graph.FreshnessExact()` |
+| `GateBoundedStaleness` + `GateConfig{MaxStaleness: d}` | `graph.FreshnessWithin(d)` |
+| `GateDegradeHonest` | `graph.FreshnessNone()` — it always evaluated as exact; degrading is a caller choice |
+| `GateStickyBootstrap` | nothing — stickiness is a consumer-local latch, not a gate concern |
+
+The gate now takes a `graph.StatusReading{Status, Fresh, Age}` instead of loose
+arguments; passing `Age` is what closes the heartbeat window (a 2.5s-stale envelope
+received 2s ago describes a ~4.5s-old view). `FreshnessWithin(0)` and the zero value
+both mean EXACT — the strictest setting — so an unset config field cannot silently
+loosen a gate.
+
+Defer reason `empty` is now `bootstrap_incomplete`. If you alert on
+`defer_total{reason="empty"}`, retarget it.
+
+## Break 6 — partial hydration is reported
+
+`graph.query.batch` replies gain `missing: [{id, reason}]` naming every requested ID
+that did not hydrate, and fusion responses gain `unhydrated`. Both are additive and
+omitted when nothing was lost, so a fully-hydrated response is byte-unchanged.
+
+Previously an ID whose read came back not-found was simply absent from a shorter list,
+and no consumer could tell "this does not exist" from "this was not read" (gh#597).
+
+**Neither field licenses the inverse inference.** `not_found` says this read did not
+find the key. It does not say the entity never existed, and an `unhydrated` seed is a
+statement about the read, not about the world. Fusion deliberately synthesizes NO miss
+when every seed failed to hydrate.
+
+Two related fixes ride along:
+
+- `fusionnats.Entities` now returns entities in REQUESTED order. The engine ranks by
+  position, and graph-ingest returns cache hits first, so cache residency alone could
+  demote the top resolve seed.
+- `RetrievalClient.Resolve` returns `[]Seed{ID, Similarity, HasSimilarity}` instead of
+  `[]string`, and `Entities` returns a `Hydration` struct. Fusion responses can carry
+  per-node `rank` and `similarity` via the opt-in `include_scores` request field.
+
 ## Diagnosing a defer
 
 The clustering defer path is now structured. One log line carries `status_known`,
 `status_age`, `state`, `lag`, `staleness_ms`, `reason`, and the watch/bucket error
 when present, and `defer_total{reason}` counts by
-`hard_stop | over_staleness | status_unknown | empty`.
+`hard_stop | over_staleness | status_unknown | bootstrap_incomplete`.
+
+`bootstrap_incomplete` means the producer has not finished its initial build in its
+current process lifetime — a cold start or a gh#474 format cutover. It replaced
+`empty`, whose `TargetRevision == 0` proxy was wrong in both directions: false during a
+cutover, and true for the authoritatively-empty graph it then deferred forever.
 
 `status_unknown` means the *feed* is the problem (bucket missing, producer down,
 watcher starved) — not the index. That distinction is the one gh#590 spent three
@@ -171,3 +284,11 @@ logged.
 4. Retarget any monitoring or conformance probe that requested the status subject.
 5. Drop `view_revision.coherent` from fusion graph-facet decoders; move any
    delete-absent-items reconciliation onto `pkg/graphview` or remove it.
+6. **Audit every `!Ready → fall back` branch** (Break 4). This is the step that does
+   not announce itself: nothing fails to compile, and the symptom is a fallback path
+   that stopped firing — or one that keeps firing on a healthy graph.
+7. Replace `GateMode`/`GateConfig` call sites with a `Freshness` declaration
+   (Break 5); retarget `defer_total{reason="empty"}` alerts to
+   `bootstrap_incomplete`.
+8. Optionally consume `missing` / `unhydrated` (Break 6) — additive, and the only way
+   to tell a short result from a partial one.
