@@ -28,6 +28,25 @@ type IndexStatusResponse struct {
 	// They are empty during ordinary building/ready/degraded operation.
 	Code   string `json:"code,omitempty"`
 	Reason string `json:"reason,omitempty"`
+	// BootstrapComplete reports whether this producer has finished its INITIAL BUILD
+	// in the current process lifetime: enumeration of ENTITY_STATES plus replay up to
+	// the enumeration-time target, including the authoritatively-empty 0/0 outcome. It
+	// latches true once and resets to false on restart, so a restart into a format
+	// cutover re-gates (ADR-084 D2).
+	//
+	// It exists because health is otherwise not evaluable from the wire: an index
+	// halfway through a gh#474 cutover reports State=building with a plausible Lag,
+	// indistinguishable from an index that is merely behind. Ready cannot answer it
+	// (a caught-up index is bootstrapped, but a bootstrapped index under write is not
+	// caught up) and TargetRevision==0 cannot either (it is false during a cutover and
+	// wrongly deferred the empty graph).
+	//
+	// NOT omitempty, and absent reads FALSE — fail closed. An envelope from a
+	// pre-ADR-084 producer therefore defers every health gate until the lockstep
+	// upgrade lands; that is the accepted migration cost, and the explicit `false` on
+	// the wire keeps "old producer" distinguishable from "not yet bootstrapped" in a
+	// `nats kv get GRAPH_STATUS <producer>` dump.
+	BootstrapComplete bool `json:"bootstrap_complete"`
 	// IndexedRevision is the low-water-of-pending watermark: every delivered
 	// ENTITY_STATES revision <= this has been applied and nothing <= it is still
 	// in flight. A consumer that knows its own target revision can gate on

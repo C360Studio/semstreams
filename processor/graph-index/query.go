@@ -208,7 +208,10 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 	proceed, reason := graph.EvaluateReadinessGate(status, true, graph.GateStickyBootstrap,
 		graph.GateConfig{BootstrapDone: false})
 	if proceed {
-		c.indexBootstrapped.Store(true)
+		// computeIndexStatus already latched indexBootstrapped (latchBootstrap flips on
+		// the same Ready predicate this proceed decision reduces to), so there is no
+		// second Store here — one home for the latch keeps the wire bit and this gate
+		// from ever disagreeing.
 		return nil
 	}
 	// The typed reason is evidence, not a new wire contract: the classified code and

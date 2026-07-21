@@ -25,10 +25,11 @@ const degradedStuckAfter = 30 * time.Second
 func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusResponse {
 	if c.resetState.Load() != nil {
 		return graph.IndexStatusResponse{
-			Ready:  false,
-			State:  graph.IndexStateResetRequired,
-			Code:   graph.ErrorCodeGraphStateResetRequired,
-			Reason: c.graphStateResetReason(),
+			Ready:             false,
+			State:             graph.IndexStateResetRequired,
+			Code:              graph.ErrorCodeGraphStateResetRequired,
+			Reason:            c.graphStateResetReason(),
+			BootstrapComplete: c.indexBootstrapped.Load(),
 		}
 	}
 	// A status call before Start wired the watcher (early boot / unit tests that do
@@ -43,7 +44,11 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		if ready {
 			state = graph.IndexStateReady
 		}
-		return graph.IndexStatusResponse{Ready: ready, State: state}
+		// Deliberately does NOT latch bootstrap: this branch's Ready is the retired
+		// sticky NAME_INDEX signal, which fires before the index is populated (gh#431).
+		// Latching a wire bit that gates health off it would export exactly the false
+		// confidence ADR-066 removed.
+		return graph.IndexStatusResponse{Ready: ready, State: state, BootstrapComplete: c.indexBootstrapped.Load()}
 	}
 
 	indexed, indexedAt := c.watermark.IndexedAt()
@@ -63,9 +68,10 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		c.logger.Warn("index status: failed to read ENTITY_STATES LastSeq target",
 			slog.Any("error", err))
 		return graph.IndexStatusResponse{
-			Ready:           false,
-			State:           graph.IndexStateDegraded,
-			IndexedRevision: indexed,
+			Ready:             false,
+			State:             graph.IndexStateDegraded,
+			IndexedRevision:   indexed,
+			BootstrapComplete: c.indexBootstrapped.Load(),
 		}
 	}
 
@@ -81,8 +87,32 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		// computable" rather than as a fresh view.
 		IndexedAt: indexedAt,
 	})
-	return applyKnownIncompleteOverrides(status, target,
+	status = applyKnownIncompleteOverrides(status, target,
 		c.initialEnumerationComplete.Load(), c.failedCount.Load())
+	return c.latchBootstrap(status)
+}
+
+// latchBootstrap sets the process-lifetime bootstrap latch from a computed envelope and
+// stamps the wire bit (ADR-084 D2).
+//
+// The latch flips on the FIRST envelope whose post-override Ready is true, which is the
+// same predicate the reverse-index query gate uses (EvaluateReadinessGate under
+// sticky-bootstrap with BootstrapDone=false proceeds exactly on Ready, because hard
+// stops carry Ready==false). Driving it from the status projection rather than only
+// from an arriving query is what makes the bit honest on the wire: a deployment that
+// never issues a direct reverse-index query would otherwise heartbeat
+// bootstrap_complete=false forever while its index had been caught up for hours.
+//
+// Latching only — never cleared. A later hard stop (failedCount, stuck watermark, reset)
+// is carried by State, which every gate treats as unconditional; clearing the latch
+// there would conflate "never built" with "built, then broke", and the two want
+// different operator responses.
+func (c *Component) latchBootstrap(status graph.IndexStatusResponse) graph.IndexStatusResponse {
+	if status.Ready {
+		c.indexBootstrapped.Store(true)
+	}
+	status.BootstrapComplete = c.indexBootstrapped.Load()
+	return status
 }
 
 // applyKnownIncompleteOverrides layers the two graph-index-local readiness

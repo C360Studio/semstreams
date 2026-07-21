@@ -145,3 +145,56 @@ func TestTrackReadinessProgress_StuckDetector(t *testing.T) {
 		t.Fatal("caught-up index must never be degraded")
 	}
 }
+
+// TestLatchBootstrap pins the ADR-084 D2 latch: it flips on the first caught-up
+// envelope, never clears, and stamps every envelope thereafter. The predicate is
+// deliberately the same Ready the reverse-index query gate reduces to, so the wire bit
+// and that gate can never disagree.
+func TestLatchBootstrap(t *testing.T) {
+	t.Run("building does not latch", func(t *testing.T) {
+		c := &Component{}
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 40, Target: 100}))
+		if got.BootstrapComplete {
+			t.Error("an index still catching up reported bootstrap_complete")
+		}
+	})
+
+	t.Run("caught up latches", func(t *testing.T) {
+		c := &Component{}
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 100, Target: 100}))
+		if !got.BootstrapComplete || !c.indexBootstrapped.Load() {
+			t.Errorf("caught-up envelope did not latch: wire=%v latch=%v",
+				got.BootstrapComplete, c.indexBootstrapped.Load())
+		}
+	})
+
+	t.Run("authoritatively empty graph latches", func(t *testing.T) {
+		// The 0/0 outcome is a COMPLETED build, not a missing one (gh#474 Codex #5).
+		// It reaches the latch as Ready only through the empty-graph override, so this
+		// row is what keeps a fresh empty deployment from fail-closing forever.
+		c := &Component{}
+		base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 0, Target: 0})
+		got := c.latchBootstrap(applyKnownIncompleteOverrides(base, 0, true, 0))
+		if !got.BootstrapComplete {
+			t.Error("authoritatively empty graph never reports bootstrap_complete; health gates would defer forever")
+		}
+	})
+
+	t.Run("latch survives a later hard stop", func(t *testing.T) {
+		// "Built, then broke" must stay distinguishable from "never built": State
+		// carries the hard stop, the latch carries the history. Clearing it here would
+		// conflate two states that want different operator responses.
+		c := &Component{}
+		c.latchBootstrap(graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 100, Target: 100}))
+		base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 100, Target: 100})
+		degraded := c.latchBootstrap(applyKnownIncompleteOverrides(base, 100, true, 1))
+		if degraded.State != graph.IndexStateDegraded {
+			t.Fatalf("precondition: State = %q, want degraded", degraded.State)
+		}
+		if !degraded.BootstrapComplete {
+			t.Error("a degraded-after-bootstrap index reported bootstrap_complete=false")
+		}
+	})
+}

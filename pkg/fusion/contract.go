@@ -80,6 +80,12 @@ type IndexStatus struct {
 	State  IndexState `json:"state"`
 	Code   string     `json:"code,omitempty"`
 	Reason string     `json:"reason,omitempty"`
+	// BootstrapComplete reports whether the producer finished its initial build in
+	// its current process lifetime (ADR-084 D2) — the wire-observable form of the
+	// gh#474 cutover window. Absent reads false (fail closed). See
+	// graph.IndexStatusResponse.BootstrapComplete for the full contract; fusion
+	// mirrors the field verbatim so the direct decode keeps working.
+	BootstrapComplete bool `json:"bootstrap_complete"`
 	// IndexedRevision / TargetRevision / Lag expose the exact revision-lag so a
 	// caller that knows its own target revision can gate on IndexedRevision >=
 	// myRev rather than the coarse global Ready bool (ADR-066).

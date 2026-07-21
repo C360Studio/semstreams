@@ -16,7 +16,7 @@
 
 ## 2. Envelope + gate collapse
 
-- [ ] 2.0 `bootstrap_complete` on the envelope (D2): field on
+- [x] 2.0 `bootstrap_complete` on the envelope (D2): field on
       `graph.IndexStatusResponse` + `fusion.IndexStatus` mirror (lockstep
       comment updated); graph-index publishes from its bootstrap latch
       (true for the authoritatively-empty 0/0 outcome; resets on restart);

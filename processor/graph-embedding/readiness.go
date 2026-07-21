@@ -66,16 +66,25 @@ func (c *Component) handleEmbeddingStatusNATS(ctx context.Context, _ []byte) ([]
 // from the ENTITY_STATES stream LastSeq at query time, and the completions-based stuck
 // detector for the degraded state.
 func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatusResponse {
+	// bootstrapComplete is this producer's ADR-084 D2 latch: the ENTITY_STATES
+	// WatchAll initial-sync sentinel, which fires once the complete snapshot has been
+	// delivered and validated (including the empty-graph case, where the sentinel is
+	// the first update). It is stamped on EVERY envelope below, hard stops included,
+	// so a consumer can tell "still building its first snapshot" from "built, then
+	// broke" without correlating fields.
+	bootstrapped := c.bootstrapComplete.Load()
 	if c.resetState.Load() != nil {
 		return graph.IndexStatusResponse{
 			Ready: false, State: graph.IndexStateResetRequired,
 			Code: graph.ErrorCodeGraphStateResetRequired, Reason: c.graphStateResetReason(),
+			BootstrapComplete: bootstrapped,
 		}
 	}
 	if c.watchUnavailable.Load() {
 		return graph.IndexStatusResponse{
 			Ready: false, State: graph.IndexStateDegraded,
 			Code: graph.ErrorCodeIndexNotReady, Reason: "entity_state_watcher_unavailable",
+			BootstrapComplete: bootstrapped,
 		}
 	}
 	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
@@ -85,7 +94,8 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 	// building rather than panicking. Unreachable in production: setupQueryHandlers
 	// runs after both watermark and entityStatesBucket are set in Start.
 	if c.watermark == nil || c.entityStatesBucket == nil {
-		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
+		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding,
+			BootstrapComplete: bootstrapped}
 	}
 
 	indexed, indexedAt := c.watermark.IndexedAt()
@@ -95,14 +105,15 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		c.logger.Warn("embedding status: failed to read ENTITY_STATES LastSeq target",
 			slog.Any("error", err))
 		return graph.IndexStatusResponse{
-			Ready:           false,
-			State:           graph.IndexStateDegraded,
-			IndexedRevision: indexed,
+			Ready:             false,
+			State:             graph.IndexStateDegraded,
+			IndexedRevision:   indexed,
+			BootstrapComplete: bootstrapped,
 		}
 	}
 
 	stuck, lastSynced := c.trackEmbeddingProgress(indexed, target)
-	return graph.ComputeIndexStatus(graph.IndexStatusInputs{
+	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
 		Indexed:    indexed,
 		Target:     target,
 		Stuck:      stuck,
@@ -111,6 +122,8 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		// embedding outcome — the age-of-view input to staleness_ms (ADR-083).
 		IndexedAt: indexedAt,
 	})
+	status.BootstrapComplete = bootstrapped
+	return status
 }
 
 // trackEmbeddingProgress is the COMPLETIONS-based stuck detector (ADR-066 §3). Unlike

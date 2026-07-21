@@ -155,6 +155,14 @@ func publishing(t *testing.T, st graph.IndexStatusResponse) *fakeRequester {
 	return &fakeRequester{statusValue: mustJSON(t, st)}
 }
 
+// publishingRaw is publishing for a wire value that no current producer can emit —
+// notably an envelope from a producer predating a field, which a typed literal cannot
+// express because the Go struct always marshals the field.
+func publishingRaw(t *testing.T, value []byte) *fakeRequester {
+	t.Helper()
+	return &fakeRequester{statusValue: value}
+}
+
 // newStatusClient builds a client and stops its readiness watch when the test ends, so
 // no watch goroutine outlives the case that started it.
 func newStatusClient(t *testing.T, transport requester, timeout time.Duration) *Client {
@@ -815,3 +823,39 @@ func equalStrings(a, b []string) bool {
 }
 
 // entity-id-audit:classify intentional-malformed "bad" line=636 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+
+// TestStatus_BootstrapCompleteSurvivesProductionDecode is the lockstep guard for the
+// ADR-084 D2 bit: graph.IndexStatusResponse and fusion.IndexStatus change together, and
+// the proof runs through the PRODUCTION decoder rather than a hand-rolled unmarshal.
+// A dropped bit here reads as bootstrap_complete=false downstream, which fails closed —
+// silently deferring every health-gated read against a perfectly healthy index.
+func TestStatus_BootstrapCompleteSurvivesProductionDecode(t *testing.T) {
+	for _, bootstrapped := range []bool{true, false} {
+		envelope := graph.IndexStatusResponse{
+			Ready: false, State: graph.IndexStateBuilding,
+			IndexedRevision: 40, TargetRevision: 100, Lag: 60,
+			BootstrapComplete: bootstrapped,
+		}
+		c := newStatusClient(t, publishing(t, envelope), time.Second)
+		got, err := c.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if got.BootstrapComplete != bootstrapped {
+			t.Errorf("BootstrapComplete = %v, want %v (dropped on the wire or in the decode)",
+				got.BootstrapComplete, bootstrapped)
+		}
+	}
+
+	// A producer that predates the field decodes to false — the fail-closed migration
+	// contract, asserted through the real decoder because that is where a default
+	// would sneak in.
+	legacy := newStatusClient(t, publishingRaw(t, []byte(`{"ready":true,"state":"ready"}`)), time.Second)
+	got, err := legacy.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status (legacy): %v", err)
+	}
+	if got.BootstrapComplete {
+		t.Error("legacy envelope decoded bootstrap_complete=true; health gates would fail OPEN")
+	}
+}
