@@ -1,0 +1,163 @@
+name: Sister Validation
+
+# Runs the reference designs (semsource, semboids) against THIS checkout of
+# semstreams rather than against a published tag. The `go mod edit -replace`
+# step below is the whole point: it makes a sister repo's own e2e suite an
+# oracle for unreleased framework changes.
+#
+# Why this exists: the pre-v1 audit (docs/proposals/prev1-audit-synthesis.md)
+# found that the reference designs were doing the job of a pre-merge gate while
+# being triggered only after tagging. Every finding they produced (gh#600/601/602
+# from semsource, gh#590 from semboids) was therefore discovered against a
+# shipped surface, forcing sister lockstep for what would otherwise have been an
+# ordinary pre-merge fix.
+#
+# Deliberately NO path filters. The blocking bug that audit found was a change in
+# processor/rule/ that breaks ENTITY_STATES for every consumer — any plausible
+# path filter would have skipped it.
+
+on:
+  pull_request:
+  schedule:
+    # 07:00 UTC nightly — full sweep against main.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      semsource_ref:
+        description: "semsource branch/tag"
+        required: false
+        default: "main"
+      semboids_ref:
+        description: "semboids branch/tag"
+        required: false
+        default: "main"
+
+env:
+  GO_VERSION: "1.26"
+
+concurrency:
+  group: sister-validation-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Fast lane: highest-ROI dogfood, runs on every PR.
+  # semsource exercises the document/embedding/body path — the surface that
+  # produced the last three bug waves.
+  semsource:
+    name: semsource e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout semstreams (this PR)
+        uses: actions/checkout@v5
+        with:
+          path: semstreams
+
+      - name: Checkout semsource
+        uses: actions/checkout@v5
+        with:
+          repository: C360Studio/semsource
+          path: semsource
+          ref: ${{ inputs.semsource_ref || 'main' }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: |
+            semstreams/go.sum
+            semsource/go.sum
+
+      - name: Install task
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Point semsource at this semstreams
+        working-directory: semsource
+        run: |
+          go mod edit -replace github.com/c360studio/semstreams=../semstreams
+          go mod tidy
+
+      # A compile break here is a real finding: the sister no longer builds
+      # against this framework change. Surface it before spending Docker time.
+      - name: Build semsource against this semstreams
+        working-directory: semsource
+        run: go build ./...
+
+      - name: Pull NATS image
+        run: docker pull nats:2-alpine
+
+      - name: Run semsource e2e
+        working-directory: semsource
+        run: task test:e2e
+
+  # Nightly-only: broader and slower. semboids drives the real sim against real
+  # graph-ingest at high volume — the load-dial holdout.
+  semboids:
+    name: semboids integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name != 'pull_request'
+    steps:
+      - name: Checkout semstreams
+        uses: actions/checkout@v5
+        with:
+          path: semstreams
+
+      - name: Checkout semboids
+        uses: actions/checkout@v5
+        with:
+          repository: C360Studio/semboids
+          path: semboids
+          ref: ${{ inputs.semboids_ref || 'main' }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+          cache-dependency-path: |
+            semstreams/go.sum
+            semboids/go.sum
+
+      - name: Install task
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Point semboids at this semstreams
+        working-directory: semboids
+        run: |
+          go mod edit -replace github.com/c360studio/semstreams=../semstreams
+          go mod tidy
+
+      - name: Build semboids against this semstreams
+        working-directory: semboids
+        run: go build ./...
+
+      - name: Pull NATS image
+        run: docker pull nats:2-alpine
+
+      - name: Run semboids integration
+        working-directory: semboids
+        run: task test:integration
+
+  # Nightly-only: the internal core tier. Cheap (~10s of test time) and it is
+  # currently the ONLY e2e tier reachable from CI at all — ci.yml runs none.
+  semstreams-core:
+    name: semstreams e2e core
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name != 'pull_request'
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Run e2e core tier
+        run: task e2e:core
