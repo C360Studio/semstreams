@@ -138,16 +138,23 @@ Measured against a HEAD baseline built in a clean worktree (two runs, stable):
   query traffic — rather than as damage; it is also consistent with the audit's
   own finding that community membership is non-deterministic and low-quality.
 
-- **OPEN — the one thing that still needs an owner decision:** `search_quality_score`
-  drops 6.0% with **non-overlapping ranges** across 4 runs per side. Small in
-  absolute terms (both tiers are poor; semantic scores 0.75), but it is not noise.
-  Most likely cause is #619: removing query pollution changes document vectors, and
-  the pollution may have accidentally flattered this fixture. Decide whether a 6%
-  drop on a fixture-specific composite blocks a correctness fix that removes
-  query-order dependence. **Recommendation: it should not block** — the metric
+- **TRACKED, not blocking** (owner call 2026-07-21): `search_quality_score` drops
+  6.0% with **non-overlapping ranges** across 4 runs per side. Not noise, but it
   measures a BM25 tier the audit already recommends shrinking, and #619's parent
-  decision (lexical index over an immutable snapshot vs stateless hashed TF) is an
-  Epic A item that will change this number again anyway.
+  decision will move it again. Carry it forward rather than gate on it.
+
+  **Baseline for the next comparison — use these numbers, do not re-quote a single
+  run.** Statistical tier, `search_quality_score`, n=4 per side:
+
+  | | runs | range |
+  |---|---|---|
+  | HEAD (pre-Track-0) | 0.2421, 0.2399, 0.2437, 0.2415 | 0.2399–0.2437 |
+  | Track 0 | 0.2255, 0.2261, 0.2287, 0.2283 | 0.2255–0.2287 |
+
+  Re-measure when Epic A touches BM25 (#619's index-vs-stateless-TF decision) or
+  when #623 restores dedup on the offloaded lane. If a change claims to improve
+  search quality, it has to clear 0.2287 to be distinguishable from Track 0 at all.
+  Recorded on #619 as well so it surfaces when that work starts.
 
 ---
 
