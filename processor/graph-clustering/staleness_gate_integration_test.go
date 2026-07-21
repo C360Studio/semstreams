@@ -134,14 +134,30 @@ func (h *gateHarness) publishAndAwait(ctx context.Context, status graph.IndexSta
 // building is the envelope graph-index publishes while catching up. Built through the
 // production projection so Ready/State/Lag carry the values the real producer emits
 // rather than a hand-assembled shape that could drift from ComputeIndexStatus.
+// building projects a HEALTHY producer's envelope: a real graph-index stamps
+// bootstrap_complete once its initial build finished, and every case in these tables is
+// about freshness, not about health. The cutover case gets preBootstrap below, so the
+// two questions stay visibly separate in the fixtures the way they are in the gate.
 func building(indexed, target uint64, staleness time.Duration) graph.IndexStatusResponse {
 	now := time.Now()
-	return graph.ComputeIndexStatus(graph.IndexStatusInputs{
+	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
 		Indexed:   indexed,
 		Target:    target,
 		IndexedAt: now.Add(-staleness),
 		Now:       now,
 	})
+	status.BootstrapComplete = true
+	return status
+}
+
+// preBootstrap projects an index still doing its initial build (the gh#474 cutover
+// window): plausibly small lag, half-materialised keyset, bootstrap_complete false.
+func preBootstrap(indexed, target uint64, staleness time.Duration) graph.IndexStatusResponse {
+	status := building(indexed, target, staleness)
+	status.Ready = false
+	status.State = graph.IndexStateBuilding
+	status.BootstrapComplete = false
+	return status
 }
 
 // TestIntegration_StalenessGate_BoundedStaleness covers the spec scenarios for the
@@ -192,10 +208,20 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 			wantReason:  graph.DeferHardStop,
 		},
 		{
-			name:        "an empty graph is never ready by tolerance",
-			status:      building(0, 0, 0),
+			// Health outranks freshness: a half-built index is not "a bit stale", and
+			// no tolerance may wave it through (ADR-084 D1).
+			name:        "an unbootstrapped index defers under a generous tolerance",
+			status:      preBootstrap(490, 500, 100*time.Millisecond),
 			wantProceed: false,
-			wantReason:  graph.DeferEmpty,
+			wantReason:  graph.DeferBootstrapIncomplete,
+		},
+		{
+			// The counterpart the old TargetRevision==0 rule got wrong: 0/0 after
+			// enumeration is a COMPLETED build, and detection over an empty graph is a
+			// valid (empty) result rather than something to defer forever.
+			name:        "an authoritatively empty graph proceeds",
+			status:      graph.IndexStatusResponse{Ready: true, State: graph.IndexStateReady, BootstrapComplete: true},
+			wantProceed: true,
 		},
 		{
 			// A not-ready envelope whose staleness is merely ABSENT (the presence
@@ -239,7 +265,7 @@ func TestIntegration_StalenessGate_DefaultIsTheExactGate(t *testing.T) {
 		building(100, 100, 0),                   // caught up  → Ready true
 		building(60, 100, 500*time.Millisecond), // lagging, fresh view → Ready false
 		building(60, 100, 30*time.Second),       // lagging, ancient view → Ready false
-		building(0, 0, 0),                       // empty → Ready false
+		preBootstrap(0, 0, 0),                   // pre-enumeration → Ready false
 		{State: graph.IndexStateDegraded, TargetRevision: 100, Lag: 10, StalenessMs: 50},
 		{State: graph.IndexStateResetRequired},
 	}

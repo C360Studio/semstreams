@@ -26,6 +26,13 @@ type fakeGraph struct {
 
 	lastResolve fusion.ResolveQuery // captures the most recent Resolve args
 
+	// entitiesFn, when set, overrides the hydration result. The default below
+	// returns entities in the requested (resolve) order, which is what the
+	// production RetrievalClient owes the engine — a fake that can ONLY do that
+	// cannot exercise what happens when a transport breaks the promise, and the
+	// engine's ranking is position-based (see the resolve-order pin).
+	entitiesFn func(ids []string) ([]*fusion.Entity, error)
+
 	// statusFn, when set, overrides status/statusErr per call (1-based call
 	// number) — the graph facet's ViewRevision re-sample needs a fake whose
 	// second Status answer differs from (or fails after) the first.
@@ -50,6 +57,9 @@ func (g *fakeGraph) Entity(_ context.Context, id string) (*fusion.Entity, error)
 func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity, error) {
 	if g.entErr != nil {
 		return nil, g.entErr
+	}
+	if g.entitiesFn != nil {
+		return g.entitiesFn(ids)
 	}
 	var out []*fusion.Entity
 	for _, id := range ids {

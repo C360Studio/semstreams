@@ -234,10 +234,14 @@ func TestRecordDefer_IsEvidence(t *testing.T) {
 			want: []string{`"reason":"over_staleness"`, `"staleness_ms":12000`, `"max_staleness":3000000000`},
 		},
 		{
-			name:    "an empty graph is not confused with caught up",
-			reason:  graph.DeferEmpty,
+			// The gh#474 cutover window, now wire-observable (ADR-084 D2). It replaces
+			// the former `empty` reason: TargetRevision==0 was a proxy that was wrong
+			// in both directions — false mid-cutover, and true for the
+			// authoritatively-empty graph it then wrongly deferred.
+			name:    "an unbootstrapped index is not confused with caught up",
+			reason:  graph.DeferBootstrapIncomplete,
 			reading: readiness.Reading{Known: true, Fresh: true, Status: graph.IndexStatusResponse{State: graph.IndexStateBuilding}},
-			want:    []string{`"reason":"empty"`, `"lag":0`},
+			want:    []string{`"reason":"bootstrap_incomplete"`, `"lag":0`},
 		},
 		{
 			name:    "a producer never seen reports status_known false",

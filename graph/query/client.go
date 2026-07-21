@@ -543,11 +543,14 @@ func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 		}
 		return notReady
 	}
-	// GateExact, evaluated through the canonical helper so the four consumers cannot
-	// drift: with a fresh envelope this is exactly `Ready`, unchanged from the
-	// pre-ADR-083 check. AllowUngatedReads never applies here — a status that WAS
+	// Evaluated through the canonical helper so the consumers cannot drift. Freshness
+	// is declared EXACT here, preserving the pre-ADR-084 predicate bit-for-bit while
+	// the gate itself collapses; task 3.1 is where this read path declares its real
+	// (health-only) question. AllowUngatedReads never applies below — a status that WAS
 	// received and says not-ready is not an unknown one.
-	if proceed, _ := gtypes.EvaluateReadinessGate(reading.Status, true, gtypes.GateExact, gtypes.GateConfig{}); !proceed {
+	if proceed, _ := gtypes.EvaluateReadinessGate(
+		gtypes.StatusReading{Status: reading.Status, Fresh: true, Age: reading.Age},
+		gtypes.FreshnessExact()); !proceed {
 		return notReady
 	}
 	return nil

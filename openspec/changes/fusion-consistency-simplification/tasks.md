@@ -22,17 +22,23 @@
       (true for the authoritatively-empty 0/0 outcome; resets on restart);
       graph-embedding publishes from its own bootstrap; production-decoder
       round-trip tests both sides; absent-field-reads-false documented.
-- [ ] 2.1 Collapse `EvaluateReadinessGate` (D1): delete `GateMode`; health =
+- [x] 2.1 Collapse `EvaluateReadinessGate` (D1): delete `GateMode`; health =
       fresh ∧ no hard stop ∧ bootstrap_complete; freshness parameter
       exact | max_staleness | none; keep the `Ready` caught-up fast path
       (licenses proceed, never defers); compare `StalenessMs +
       reading.Age` against the bound; rename defer reason `empty` →
-      `bootstrap_incomplete`; rewrite the stale bit-parity comment.
-- [ ] 2.2 graph-index responder: retained UNCHANGED (its pre-bootstrap
+      `bootstrap_incomplete`; rewrite the stale bit-parity comment. DONE:
+      `GateMode`/`GateConfig` deleted; `Freshness` is a constructor-only type
+      (`FreshnessExact`/`Within`/`None`) whose ZERO VALUE is exact, so an
+      uninitialised field fails toward withholding; `StatusReading` carries
+      Fresh+Age so the bound is judged against staleness+age. Stickiness is no
+      longer a gate concept — it is the responder's local latch.
+- [x] 2.2 graph-index responder: retained UNCHANGED (its pre-bootstrap
       exactness IS bootstrap_complete in-process; reset/failedCount checks
       stay per-query; do NOT fold status ahead of the sticky flag — the
       post-bootstrap stuck-degraded serving exception is deliberate,
-      query.go:176-182).
+      query.go:176-182). DONE: only the gate call and its doc changed; check
+      order and the sticky short-circuit are untouched.
 - [ ] 2.3 Pins land BEFORE the regate (tests-first): authoritatively-empty
       graph proceeds everywhere; caught-up index + declared bound proceeds
       (presence-encoding wedge); client health gate defers on
@@ -41,10 +47,11 @@
       failedCount→degraded override holds with its ≤1-heartbeat envelope
       latency noted; ranking fixture pinning current resolve-order semantics
       (before 4.3's re-order lands, then updated to pin the fix).
-- [ ] 2.4 Migrate the graph-clustering call site (component.go:1256 — the
+- [x] 2.4 Migrate the graph-clustering call site (component.go:1256 — the
       review found it missing from this list) to the collapsed gate,
-      preserving unset/0 `max_staleness` = exact catch-up bit-for-bit; its
-      config schema text stays accurate.
+      preserving unset/0 `max_staleness` = exact catch-up bit-for-bit (via
+      `FreshnessWithin`'s non-positive⇒exact rule); its config schema text
+      stays accurate.
 
 ## 3. Read-path regate (deliberate #592 supersession)
 

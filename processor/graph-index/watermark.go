@@ -44,11 +44,16 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		if ready {
 			state = graph.IndexStateReady
 		}
-		// Deliberately does NOT latch bootstrap: this branch's Ready is the retired
-		// sticky NAME_INDEX signal, which fires before the index is populated (gh#431).
-		// Latching a wire bit that gates health off it would export exactly the false
-		// confidence ADR-066 removed.
-		return graph.IndexStatusResponse{Ready: ready, State: state, BootstrapComplete: c.indexBootstrapped.Load()}
+		// BootstrapComplete tracks this branch's own verdict rather than the process
+		// latch, preserving the producer invariant every consumer of the collapsed gate
+		// relies on: Ready implies BootstrapComplete. An envelope claiming to be caught
+		// up while reporting an unfinished build is self-contradictory, and the gate —
+		// which asks health before coverage — would defer on it forever.
+		//
+		// It deliberately does NOT set the process latch: this Ready is the retired
+		// sticky NAME_INDEX signal, which fires before the index is populated (gh#431),
+		// so a later honest compute must be free to report an incomplete build.
+		return graph.IndexStatusResponse{Ready: ready, State: state, BootstrapComplete: ready}
 	}
 
 	indexed, indexedAt := c.watermark.IndexedAt()

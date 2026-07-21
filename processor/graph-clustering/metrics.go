@@ -39,7 +39,7 @@ var deferReasons = []graph.DeferReason{
 	graph.DeferHardStop,
 	graph.DeferOverStaleness,
 	graph.DeferStatusUnknown,
-	graph.DeferEmpty,
+	graph.DeferBootstrapIncomplete,
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors).

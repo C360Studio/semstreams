@@ -1,6 +1,7 @@
 package graphindex
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -59,6 +60,13 @@ func TestIndexReadiness(t *testing.T) {
 // unconditional projection is the blocking fix — a known-incomplete index with a
 // small lag must read degraded, not building, or a bounded-lag consumer would run
 // clustering on partial topology.
+//
+// Propagation latency is part of the contract, not a defect (ADR-084 D7): the override
+// lands in-process immediately, but an ENVELOPE consumer learns about it only on the
+// next GRAPH_STATUS heartbeat, so a hard stop binds remote gates up to one heartbeat
+// late. In-process gates (the reverse-index responder's own failedCount check) are
+// stronger and are checked per query. Both are deliberate; the accepted window is
+// recorded here so a future reader does not "fix" it by shortening the heartbeat.
 func TestApplyKnownIncompleteOverrides(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -195,6 +203,57 @@ func TestLatchBootstrap(t *testing.T) {
 		}
 		if !degraded.BootstrapComplete {
 			t.Error("a degraded-after-bootstrap index reported bootstrap_complete=false")
+		}
+	})
+}
+
+// TestComputeIndexStatus_ReadyImpliesBootstrapComplete pins the producer invariant the
+// collapsed gate depends on. The gate asks health BEFORE coverage, so an envelope that
+// claims Ready while reporting an unfinished build is not merely odd — it defers
+// forever, and it does so with a reason (bootstrap_incomplete) that sends an operator
+// looking for a cutover that already finished.
+//
+// Every return path of computeIndexStatus is exercised, including the caged early-boot
+// fallback, which is exactly where the invariant broke once: it reported the retired
+// sticky NAME_INDEX Ready while stamping the process latch, which was still false.
+func TestComputeIndexStatus_ReadyImpliesBootstrapComplete(t *testing.T) {
+	assertInvariant := func(t *testing.T, name string, status graph.IndexStatusResponse) {
+		t.Helper()
+		if status.Ready && !status.BootstrapComplete {
+			t.Errorf("%s: Ready with BootstrapComplete=false — the health gate would defer on a caught-up index", name)
+		}
+	}
+
+	t.Run("caged early-boot fallback", func(t *testing.T) {
+		// watermark wired but no entity bucket: the fallback path. Whatever the legacy
+		// signal answers, the two bits must agree.
+		c := createTestComponentWithMockKV(t)
+		c.entityStatesBucket = nil
+		assertInvariant(t, "fallback", c.computeIndexStatus(context.Background()))
+	})
+
+	t.Run("projected envelopes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name                     string
+			indexed, target          uint64
+			enumComplete, hasFailure bool
+		}{
+			{name: "caught up", indexed: 100, target: 100},
+			{name: "building", indexed: 40, target: 100},
+			{name: "empty pre-enumeration", indexed: 0, target: 0},
+			{name: "empty after enumeration", indexed: 0, target: 0, enumComplete: true},
+			{name: "caught up with failures", indexed: 100, target: 100, hasFailure: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c := &Component{}
+				var failed int64
+				if tc.hasFailure {
+					failed = 1
+				}
+				base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: tc.indexed, Target: tc.target})
+				status := c.latchBootstrap(applyKnownIncompleteOverrides(base, tc.target, tc.enumComplete, failed))
+				assertInvariant(t, tc.name, status)
+			})
 		}
 	})
 }

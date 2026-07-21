@@ -1220,14 +1220,17 @@ type gateDecision struct {
 }
 
 // evaluateReadiness decides whether it is safe to run community detection against the
-// INCOMING_INDEX (gh#474 Codex #6). As a periodic, whole-result-re-deriving consumer,
-// detection declares graph.GateBoundedStaleness: it runs when the status is FRESH, is
-// not a hard stop (degraded/reset/empty defer at ANY tolerance), and the view is
-// either caught up or no older than max_staleness. With the default tolerance 0 this
-// is exactly the strict Ready gate.
+// INCOMING_INDEX (gh#474 Codex #6). Detection is a periodic, whole-result-re-deriving
+// consumer, so it declares a FRESHNESS requirement of max_staleness: it runs when the
+// index is healthy (fresh status, no hard stop, initial build complete) and the view is
+// either caught up or no older than the configured bound. With the default bound unset
+// or 0 that is exactly the strict caught-up gate — the shipped operator contract, and
+// the ONE consumer for which lag is genuinely a correctness input rather than a
+// property to report (a partial view yields a different community partition, not a
+// stale one).
 //
-// The semantics live in graph.EvaluateReadinessGate, not here — one home for the
-// rule, four declared consumer modes (ADR-083 D4).
+// The semantics live in graph.EvaluateReadinessGate, not here — one home for the rule,
+// two questions (ADR-084 D1).
 //
 // Unknown status FAILS CLOSED by default (gh#474 Codex #4): a crashed or restarting
 // graph-index mid-cutover is indistinguishable from an absent one, and its stale
@@ -1253,8 +1256,9 @@ func (c *Component) evaluateReadiness() gateDecision {
 		reading.Err = errors.New("readiness status watcher not started")
 	}
 
-	proceed, reason := graph.EvaluateReadinessGate(reading.Status, reading.Fresh,
-		graph.GateBoundedStaleness, graph.GateConfig{MaxStaleness: c.config.MaxStaleness()})
+	proceed, reason := graph.EvaluateReadinessGate(
+		graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh, Age: reading.Age},
+		graph.FreshnessWithin(c.config.MaxStaleness()))
 	if proceed {
 		return gateDecision{proceed: true, reading: reading}
 	}

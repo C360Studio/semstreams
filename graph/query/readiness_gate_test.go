@@ -157,11 +157,17 @@ func newGateClient(t *testing.T, source readiness.BucketSource, config *Config) 
 }
 
 func TestIndexNotReadyErr_GateMatrixIsBitCompatible(t *testing.T) {
+	// Every fixture carries BootstrapComplete because every real producer does
+	// (ADR-084 D2): the bit is stamped from the producer's own build latch, so an
+	// envelope without it models a pre-ADR-084 producer, not a healthy one. Omitting
+	// it here would silently turn each row into a bootstrap_incomplete defer and stop
+	// testing what the row is named for.
 	ready := gtypes.IndexStatusResponse{Ready: true, State: gtypes.IndexStateReady,
-		IndexedRevision: 100, TargetRevision: 100}
+		IndexedRevision: 100, TargetRevision: 100, BootstrapComplete: true}
 	building := gtypes.IndexStatusResponse{Ready: false, State: gtypes.IndexStateBuilding,
-		IndexedRevision: 40, TargetRevision: 100, Lag: 60, StalenessMs: 2500}
-	degraded := gtypes.IndexStatusResponse{Ready: false, State: gtypes.IndexStateDegraded}
+		IndexedRevision: 40, TargetRevision: 100, Lag: 60, StalenessMs: 2500, BootstrapComplete: true}
+	degraded := gtypes.IndexStatusResponse{Ready: false, State: gtypes.IndexStateDegraded,
+		BootstrapComplete: true}
 	staleReady, err := json.Marshal(ready)
 	require.NoError(t, err)
 
@@ -321,7 +327,7 @@ func TestIndexNotReadyErr_ReadsTheContractKey(t *testing.T) {
 // producer, so both are pinned here.
 func TestIndexNotReadyErr_BindsTheWatchOnce(t *testing.T) {
 	raw, err := json.Marshal(gtypes.IndexStatusResponse{Ready: true, State: gtypes.IndexStateReady,
-		IndexedRevision: 10, TargetRevision: 10})
+		IndexedRevision: 10, TargetRevision: 10, BootstrapComplete: true})
 	require.NoError(t, err)
 
 	var binds int

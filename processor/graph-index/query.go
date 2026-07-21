@@ -157,11 +157,13 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 // retries rather than acting on the partial keyset a format cutover / cold replay is
 // still materialising (old aggregate keys are inert, new keys incomplete).
 //
-// This is graph.GateStickyBootstrap (ADR-083 D4), and it is the mode's IN-PROCESS
-// adopter: graph-index computes the envelope it gates on, so there is no transport to
-// lose and freshness is unconditionally true. It reads no KV status key — publishing
-// its own envelope and then reading it back would add a round-trip and a staleness
-// window to a decision it can make from local state.
+// This is the IN-PROCESS adopter of the canonical gate: graph-index computes the
+// envelope it gates on, so there is no transport to lose and the reading is
+// unconditionally fresh. It reads no KV status key — publishing its own envelope and
+// then reading it back would add a round-trip and a staleness window to a decision it
+// can make from local state. Its pre-bootstrap exactness IS bootstrap_complete
+// evaluated in-process (ADR-084 D3), which is why this responder needs no change when
+// remote read paths regate onto health.
 //
 // Two local overrides stay OUTSIDE the canonical helper because they are facts about
 // this component's own bookkeeping that the envelope does not carry, and both are
@@ -199,14 +201,20 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 	if c.watermark == nil {
 		return nil
 	}
-	// BootstrapDone is false here by construction (the sticky flag short-circuited
-	// above), so the helper evaluates the bootstrap half of the mode: proceed exactly
-	// on Ready, defer on hard stops, an empty/pre-enumeration graph, and lag —
-	// bit-identical to the `computeIndexStatus(ctx).Ready` check it replaces, because
-	// hard stops and empty graphs both carry Ready == false.
+	// The gate is asked the same question it was asked before the ADR-084 collapse:
+	// health plus EXACT freshness, which for a fresh in-process envelope reduces to
+	// Ready — bit-identical to the `computeIndexStatus(ctx).Ready` check this replaced.
+	// Stickiness is NOT a gate concern: it is the local latch short-circuited above, so
+	// the helper never needs to know this consumer is sticky. In-process producers pass
+	// Fresh: true and Age: 0 — they compute the envelope themselves and have no
+	// transport to lose.
+	//
+	// computeIndexStatus latches indexBootstrapped on the way past, so a status that
+	// proceeds here already carries BootstrapComplete: true and the health check below
+	// cannot self-deadlock on its own latch.
 	status := c.computeIndexStatus(ctx)
-	proceed, reason := graph.EvaluateReadinessGate(status, true, graph.GateStickyBootstrap,
-		graph.GateConfig{BootstrapDone: false})
+	proceed, reason := graph.EvaluateReadinessGate(
+		graph.StatusReading{Status: status, Fresh: true}, graph.FreshnessExact())
 	if proceed {
 		// computeIndexStatus already latched indexBootstrapped (latchBootstrap flips on
 		// the same Ready predicate this proceed decision reduces to), so there is no

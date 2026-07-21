@@ -5,264 +5,264 @@ import (
 	"time"
 )
 
-// The gate is the single home for readiness semantics (ADR-083 D4), so these tests
-// pin the properties every adopter depends on: exact-mode bit-parity with Ready,
-// zero tolerance == Ready, hard stops that survive any tolerance, an empty graph
-// that is never ready by tolerance, and an unknown status that short-circuits BEFORE
-// tolerance is considered.
+// The gate is the single home for readiness semantics (ADR-084 D1), so these tests pin
+// the properties every adopter depends on. ADR-084 collapsed four consumer MODES into
+// two orthogonal questions — health (fresh ∧ no hard stop ∧ bootstrapped) and a
+// declared freshness requirement — so the pins here are about the questions, not about
+// per-consumer policies:
+//
+//   - health defers regardless of what freshness the consumer declared;
+//   - an unbootstrapped producer defers even when it looks merely "behind" (the gh#474
+//     cutover window, which is the reason the bit is on the wire at all);
+//   - coverage (Ready) may license a proceed but never causes a defer on its own;
+//   - the staleness presence bit is honored, and the reading's own age counts against
+//     the bound.
+
+// healthy is an envelope with nothing wrong: bootstrapped, no hard stop. Individual
+// cases vary only the fields they are about.
+func healthy(ready bool, stalenessMs uint64) IndexStatusResponse {
+	state := IndexStateBuilding
+	if ready {
+		state = IndexStateReady
+	}
+	return IndexStatusResponse{
+		Ready: ready, State: state, BootstrapComplete: true,
+		TargetRevision: 500, StalenessMs: stalenessMs,
+	}
+}
 
 func TestEvaluateReadinessGate(t *testing.T) {
 	tests := []struct {
 		name       string
-		status     IndexStatusResponse
-		fresh      bool
-		mode       GateMode
-		cfg        GateConfig
-		want       bool
+		reading    StatusReading
+		want       Freshness
+		proceed    bool
 		wantReason DeferReason
 	}{
 		{
-			name:   "exact proceeds on a fresh ready envelope",
-			status: IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 500},
-			fresh:  true, mode: GateExact,
-			want: true,
+			name:    "caught up proceeds under exact",
+			reading: StatusReading{Status: healthy(true, 0), Fresh: true},
+			want:    FreshnessExact(),
+			proceed: true,
 		},
 		{
-			name:   "exact defers while building",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, Lag: 60, StalenessMs: 20},
-			fresh:  true, mode: GateExact,
+			name: "lag defers under exact",
+			// Exact is the view-rate contract (clustering's unset/0 max_staleness),
+			// unchanged by ADR-084: this consumer asked for caught-up and is not.
+			reading:    StatusReading{Status: healthy(false, 200), Fresh: true},
+			want:       FreshnessExact(),
+			proceed:    false,
 			wantReason: DeferOverStaleness,
 		},
 		{
-			name:   "exact ignores a tolerance it was never given",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 100},
-			fresh:  true, mode: GateExact, cfg: GateConfig{MaxStaleness: time.Minute},
+			name: "lag proceeds when no freshness is required",
+			// The ADR-084 reversal: a read path asks a HEALTH question. Ordinary lag
+			// on a healthy, bootstrapped index is not a reason to withhold evidence.
+			reading: StatusReading{Status: healthy(false, 60_000), Fresh: true},
+			want:    FreshnessNone(),
+			proceed: true,
+		},
+		{
+			name:    "within the bound proceeds",
+			reading: StatusReading{Status: healthy(false, 2_000), Fresh: true},
+			want:    FreshnessWithin(3 * time.Second),
+			proceed: true,
+		},
+		{
+			name:       "over the bound defers",
+			reading:    StatusReading{Status: healthy(false, 9_000), Fresh: true},
+			want:       FreshnessWithin(3 * time.Second),
+			proceed:    false,
 			wantReason: DeferOverStaleness,
 		},
 		{
-			name:   "degrade-honest evaluates identically to exact",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 100},
-			fresh:  true, mode: GateDegradeHonest, cfg: GateConfig{MaxStaleness: time.Minute},
+			name: "the reading's own age counts against the bound",
+			// The heartbeat-window leak: a 2.5s-stale envelope received 2s ago
+			// describes a view that is now ~4.5s old. Judging the envelope's number
+			// alone would let a 3s bound pass a 4.5s-old view once per heartbeat.
+			reading: StatusReading{Status: healthy(false, 2_500), Fresh: true, Age: 2 * time.Second},
+			want:    FreshnessWithin(3 * time.Second),
+			proceed: false, wantReason: DeferOverStaleness,
+		},
+		{
+			name: "absent staleness never satisfies a bound",
+			// StalenessMs == 0 on a not-ready envelope is the PRESENCE encoding: the
+			// producer could not compute an age. Reading it as "0ms stale" would
+			// proceed on an unknown view — the inverse of what the bound is for.
+			reading:    StatusReading{Status: healthy(false, 0), Fresh: true},
+			want:       FreshnessWithin(time.Hour),
+			proceed:    false,
 			wantReason: DeferOverStaleness,
 		},
 		{
-			name:   "bounded staleness proceeds within tolerance",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 1200},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: 3 * time.Second},
-			want: true,
+			name: "an unbootstrapped index defers even under no freshness",
+			// The gh#474 cutover: State=building with a plausible lag, but the keyset
+			// is half-materialised. Health is the one question freshness cannot
+			// override, which is why this bit had to reach the wire.
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 10},
+				Fresh:  true,
+			},
+			want:       FreshnessNone(),
+			proceed:    false,
+			wantReason: DeferBootstrapIncomplete,
 		},
 		{
-			name:   "bounded staleness proceeds exactly at the boundary",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 3000},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: 3 * time.Second},
-			want: true,
+			name: "an authoritatively empty graph proceeds",
+			// 0/0 after enumeration is a COMPLETED build (gh#474 Codex #5). The
+			// producer encodes it as Ready at TargetRevision 0; a gate that deferred
+			// on target==0 would reject every query against a fresh empty deployment
+			// forever.
+			reading: StatusReading{
+				Status: IndexStatusResponse{Ready: true, State: IndexStateReady, BootstrapComplete: true},
+				Fresh:  true,
+			},
+			want:    FreshnessExact(),
+			proceed: true,
 		},
 		{
-			name:   "bounded staleness defers one millisecond past the boundary",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 3001},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: 3 * time.Second},
-			wantReason: DeferOverStaleness,
-		},
-		{
-			// The presence encoding: a not-ready envelope whose producer could not
-			// compute staleness carries 0, which must NOT read as "0ms stale".
-			name:   "bounded staleness defers on an absent staleness value",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 0},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: time.Hour},
-			wantReason: DeferOverStaleness,
-		},
-		{
-			name:   "unknown status defers even with a generous tolerance",
-			status: IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 500},
-			fresh:  false, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: time.Hour},
-			wantReason: DeferStatusUnknown,
-		},
-		{
-			// Freshness is judged before state: a dead feed holding a degraded
-			// envelope is attributed to the feed, not to the index.
-			name:   "unknown status outranks a stale hard stop",
-			status: IndexStatusResponse{State: IndexStateDegraded, TargetRevision: 500},
-			fresh:  false, mode: GateExact,
-			wantReason: DeferStatusUnknown,
-		},
-		{
-			name:   "unknown status defers sticky-bootstrap after its first pass",
-			status: IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 500},
-			fresh:  false, mode: GateStickyBootstrap, cfg: GateConfig{BootstrapDone: true},
-			wantReason: DeferStatusUnknown,
-		},
-		{
-			name:   "degraded is a hard stop under any tolerance",
-			status: IndexStatusResponse{State: IndexStateDegraded, TargetRevision: 500, StalenessMs: 5},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: time.Hour},
+			name: "degraded defers under no freshness",
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: IndexStateDegraded, BootstrapComplete: true},
+				Fresh:  true,
+			},
+			want:       FreshnessNone(),
+			proceed:    false,
 			wantReason: DeferHardStop,
 		},
 		{
-			name:   "reset_required is a hard stop under any tolerance",
-			status: IndexStatusResponse{State: IndexStateResetRequired, TargetRevision: 500, StalenessMs: 5},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: time.Hour},
+			name: "reset_required defers under no freshness",
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: IndexStateResetRequired, BootstrapComplete: true},
+				Fresh:  true,
+			},
+			want:       FreshnessNone(),
+			proceed:    false,
 			wantReason: DeferHardStop,
 		},
 		{
-			name:   "a hard stop overrides sticky-bootstrap's open gate",
-			status: IndexStatusResponse{State: IndexStateDegraded, TargetRevision: 500},
-			fresh:  true, mode: GateStickyBootstrap, cfg: GateConfig{BootstrapDone: true},
-			wantReason: DeferHardStop,
-		},
-		{
-			// The load-bearing empty guard: Lag == 0 here does NOT mean caught up.
-			name:   "empty graph is never ready by tolerance",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 0, Lag: 0, StalenessMs: 1},
-			fresh:  true, mode: GateBoundedStaleness, cfg: GateConfig{MaxStaleness: time.Hour},
-			wantReason: DeferEmpty,
-		},
-		{
-			name:   "empty graph defers in exact mode as empty, not over_staleness",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 0},
-			fresh:  true, mode: GateExact,
-			wantReason: DeferEmpty,
-		},
-		{
-			// graph-index's authoritatively-empty override sets Ready with target 0;
-			// that must still proceed, or a fresh empty graph never serves.
-			name:   "authoritatively empty but ready proceeds",
-			status: IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 0},
-			fresh:  true, mode: GateExact,
-			want: true,
-		},
-		{
-			name:   "sticky-bootstrap is exact before its first pass",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 5},
-			fresh:  true, mode: GateStickyBootstrap,
-			wantReason: DeferOverStaleness,
-		},
-		{
-			name:   "sticky-bootstrap is open after its first pass",
-			status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, Lag: 9000},
-			fresh:  true, mode: GateStickyBootstrap, cfg: GateConfig{BootstrapDone: true},
-			want: true,
+			name:       "an unknown status defers under no freshness",
+			reading:    StatusReading{Status: healthy(true, 0), Fresh: false},
+			want:       FreshnessNone(),
+			proceed:    false,
+			wantReason: DeferStatusUnknown,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, reason := EvaluateReadinessGate(tt.status, tt.fresh, tt.mode, tt.cfg)
-			if got != tt.want {
-				t.Errorf("proceed = %v, want %v", got, tt.want)
+			got, reason := EvaluateReadinessGate(tt.reading, tt.want)
+			if got != tt.proceed {
+				t.Errorf("proceed = %v, want %v", got, tt.proceed)
 			}
-			wantReason := tt.wantReason
-			if tt.want {
-				wantReason = DeferNone
+			if reason != tt.wantReason {
+				t.Errorf("reason = %q, want %q", reason, tt.wantReason)
 			}
-			if reason != wantReason {
-				t.Errorf("reason = %q, want %q", reason, wantReason)
+			if got && reason != DeferNone {
+				t.Errorf("a proceed carried defer reason %q", reason)
 			}
 		})
 	}
 }
 
-// gateMatrix is the cross-product of every envelope shape the parity properties must
-// hold over: each state, empty and non-empty targets, ready and not, and staleness
-// values on both sides of any tolerance.
-func gateMatrix() []IndexStatusResponse {
-	var out []IndexStatusResponse
-	for _, state := range AllIndexStates {
-		for _, target := range []uint64{0, 100} {
-			for _, staleness := range []uint64{0, 1, 5000} {
-				ready := state == IndexStateReady
-				lag := uint64(0)
-				if !ready && target > 0 {
-					lag = 60
+// TestEvaluateReadinessGate_HealthDefersUnderEveryFreshness is the ADR-084 D1
+// invariant that keeps freshness from being a severity dial: the health question is
+// answered first, and no freshness declaration — not even "none" — can talk past it.
+func TestEvaluateReadinessGate_HealthDefersUnderEveryFreshness(t *testing.T) {
+	unhealthy := map[string]IndexStatusResponse{
+		"degraded":          {State: IndexStateDegraded, BootstrapComplete: true, Ready: false},
+		"reset_required":    {State: IndexStateResetRequired, BootstrapComplete: true},
+		"not bootstrapped":  {State: IndexStateBuilding, TargetRevision: 10, StalenessMs: 1},
+		"degraded pre-boot": {State: IndexStateDegraded},
+	}
+	freshnesses := map[string]Freshness{
+		"exact":          FreshnessExact(),
+		"bounded":        FreshnessWithin(time.Hour),
+		"none":           FreshnessNone(),
+		"zero value":     {},
+		"nonpositive":    FreshnessWithin(-time.Second),
+		"huge tolerance": FreshnessWithin(1000 * time.Hour),
+	}
+	for statusName, status := range unhealthy {
+		for freshName, want := range freshnesses {
+			t.Run(statusName+"/"+freshName, func(t *testing.T) {
+				proceed, reason := EvaluateReadinessGate(
+					StatusReading{Status: status, Fresh: true}, want)
+				if proceed {
+					t.Errorf("an unhealthy index proceeded under %s freshness", freshName)
 				}
-				out = append(out, IndexStatusResponse{
-					Ready: ready, State: state, TargetRevision: target,
-					Lag: lag, StalenessMs: staleness,
-				})
-			}
-		}
-	}
-	// The authoritatively-empty override: Ready with target 0.
-	out = append(out, IndexStatusResponse{Ready: true, State: IndexStateReady, TargetRevision: 0})
-	return out
-}
-
-// TestEvaluateReadinessGate_ExactIsBitParityWithReady proves the exact modes proceed
-// exactly when the pre-ADR-083 `if !status.Ready { defer }` check would have, for
-// every envelope shape — the property the fusion honesty envelope and the
-// reverse-index reads rest on (ADR-066's authoritative-absence license).
-func TestEvaluateReadinessGate_ExactIsBitParityWithReady(t *testing.T) {
-	for _, mode := range []GateMode{GateExact, GateDegradeHonest} {
-		for _, s := range gateMatrix() {
-			// Fresh status is the precondition: an unknown feed is a transport fact
-			// the old per-call request path expressed as its own error branch.
-			got, reason := EvaluateReadinessGate(s, true, mode, GateConfig{})
-			if got != s.Ready {
-				t.Errorf("%s: proceed = %v, want Ready = %v (%+v)", mode, got, s.Ready, s)
-			}
-			if got && reason != DeferNone {
-				t.Errorf("%s: proceed carried reason %q (%+v)", mode, reason, s)
-			}
-			if !got && reason == DeferNone {
-				t.Errorf("%s: defer carried no reason (%+v)", mode, s)
-			}
-		}
-	}
-}
-
-// TestEvaluateReadinessGate_ZeroToleranceEqualsReady proves MaxStaleness = 0 is exact
-// parity with Ready in bounded-staleness mode for every state, target, and staleness
-// — including the rows where staleness is 0 (absent) or non-zero while not ready, so
-// the default config can never open the gate a hair wider than the exact one.
-func TestEvaluateReadinessGate_ZeroToleranceEqualsReady(t *testing.T) {
-	for _, s := range gateMatrix() {
-		got, _ := EvaluateReadinessGate(s, true, GateBoundedStaleness, GateConfig{MaxStaleness: 0})
-		if got != s.Ready {
-			t.Errorf("bounded-staleness(0): proceed = %v, want Ready = %v (%+v)", got, s.Ready, s)
-		}
-	}
-}
-
-// TestEvaluateReadinessGate_HardStopsSurviveEveryToleranceAndMode is the ADR-082
-// invariant carried forward: a broken index is not a stale one, and no mode or
-// tolerance may license work on it.
-func TestEvaluateReadinessGate_HardStopsSurviveEveryToleranceAndMode(t *testing.T) {
-	modes := []GateMode{GateExact, GateBoundedStaleness, GateStickyBootstrap, GateDegradeHonest}
-	tolerances := []time.Duration{0, time.Millisecond, time.Hour, 24 * 365 * time.Hour}
-	for _, state := range []string{IndexStateDegraded, IndexStateResetRequired} {
-		for _, mode := range modes {
-			for _, tol := range tolerances {
-				for _, bootstrapped := range []bool{false, true} {
-					s := IndexStatusResponse{State: state, TargetRevision: 500, Lag: 1, StalenessMs: 1}
-					cfg := GateConfig{MaxStaleness: tol, BootstrapDone: bootstrapped}
-					got, reason := EvaluateReadinessGate(s, true, mode, cfg)
-					if got {
-						t.Errorf("%s/%s tol=%v bootstrapped=%v: proceeded on a hard stop",
-							state, mode, tol, bootstrapped)
-					}
-					if reason != DeferHardStop {
-						t.Errorf("%s/%s tol=%v: reason = %q, want %q",
-							state, mode, tol, reason, DeferHardStop)
-					}
+				if reason == DeferOverStaleness {
+					t.Errorf("health defer misattributed as %q — an operator would tune a "+
+						"tolerance instead of fixing the index", reason)
 				}
-			}
+			})
 		}
 	}
 }
 
 // TestEvaluateReadinessGate_UnknownStatusNeverProceeds proves the fail-closed
-// short-circuit holds for every mode, tolerance, and envelope — the gh#590 lesson
-// that a transport failure must never be served as index state.
+// transport rule survives the collapse: a status the consumer cannot vouch for is a
+// TRANSPORT fact, evaluated before any index state, so no tolerance however generous
+// licenses proceeding on it (gh#590 — a status RTT timing out behind the firehose
+// logged identically to a genuine not-ready).
 func TestEvaluateReadinessGate_UnknownStatusNeverProceeds(t *testing.T) {
-	modes := []GateMode{GateExact, GateBoundedStaleness, GateStickyBootstrap, GateDegradeHonest}
-	for _, mode := range modes {
-		for _, s := range gateMatrix() {
-			cfg := GateConfig{MaxStaleness: time.Hour, BootstrapDone: true}
-			got, reason := EvaluateReadinessGate(s, false, mode, cfg)
-			if got {
-				t.Errorf("%s: proceeded on an unknown status (%+v)", mode, s)
+	freshnesses := []Freshness{FreshnessExact(), FreshnessWithin(time.Hour), FreshnessNone()}
+	for _, want := range freshnesses {
+		for _, s := range []IndexStatusResponse{
+			{Ready: true, State: IndexStateReady, BootstrapComplete: true},
+			{Ready: false, State: IndexStateBuilding, BootstrapComplete: true, StalenessMs: 1},
+			{},
+		} {
+			proceed, reason := EvaluateReadinessGate(StatusReading{Status: s, Fresh: false}, want)
+			if proceed {
+				t.Errorf("proceeded on an unknown status: %+v", s)
 			}
 			if reason != DeferStatusUnknown {
-				t.Errorf("%s: reason = %q, want %q (%+v)", mode, reason, DeferStatusUnknown, s)
+				t.Errorf("reason = %q, want %q — an unknown feed must not read as index state",
+					reason, DeferStatusUnknown)
 			}
 		}
+	}
+}
+
+// TestEvaluateReadinessGate_CoverageNeverDefers pins the review-driven half of D1:
+// coverage may LICENSE a proceed (a caught-up view answers any freshness requirement
+// with zero age, which is what keeps the staleness presence encoding sound) but is
+// never itself a reason to withhold. Before ADR-084 the two directions were fused into
+// one Ready bool, and that is what made ordinary lag look like a correctness problem.
+func TestEvaluateReadinessGate_CoverageNeverDefers(t *testing.T) {
+	for _, want := range []Freshness{FreshnessExact(), FreshnessWithin(time.Millisecond), FreshnessNone()} {
+		// Caught up: no staleness is reported (presence encoding), and every
+		// freshness declaration is satisfied — including a bound so tight that the
+		// staleness comparison alone would have rejected it.
+		proceed, reason := EvaluateReadinessGate(
+			StatusReading{Status: healthy(true, 0), Fresh: true, Age: time.Hour}, want)
+		if !proceed {
+			t.Errorf("a caught-up healthy index deferred as %q", reason)
+		}
+	}
+}
+
+// TestFreshness_ZeroValueIsStrictest pins the constructor contract. The zero value must
+// be EXACT, never "none": a Freshness reaching the gate through an uninitialised struct
+// field must fail toward withholding, and the shipped clustering operator contract
+// ("empty or 0 max_staleness = require exact index catch-up") depends on it — a silent
+// inversion there would loosen the strictest gate in the system by doing nothing.
+func TestFreshness_ZeroValueIsStrictest(t *testing.T) {
+	behind := StatusReading{Status: healthy(false, 5), Fresh: true}
+
+	if proceed, _ := EvaluateReadinessGate(behind, Freshness{}); proceed {
+		t.Error("the zero-value Freshness proceeded on a lagging index; it must mean exact")
+	}
+	if proceed, _ := EvaluateReadinessGate(behind, FreshnessExact()); proceed {
+		t.Error("FreshnessExact proceeded on a lagging index")
+	}
+	// An operator who writes 0 (or omits the field) gets exact, not unbounded.
+	for _, d := range []time.Duration{0, -time.Second} {
+		if proceed, _ := EvaluateReadinessGate(behind, FreshnessWithin(d)); proceed {
+			t.Errorf("FreshnessWithin(%s) proceeded; a non-positive bound must mean exact", d)
+		}
+	}
+	if proceed, _ := EvaluateReadinessGate(behind, FreshnessNone()); !proceed {
+		t.Error("FreshnessNone deferred on a healthy lagging index; none must mean no freshness requirement")
 	}
 }

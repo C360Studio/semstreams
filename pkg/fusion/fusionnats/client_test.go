@@ -822,7 +822,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=636 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+// entity-id-audit:classify intentional-malformed "bad" line=644 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
 
 // TestStatus_BootstrapCompleteSurvivesProductionDecode is the lockstep guard for the
 // ADR-084 D2 bit: graph.IndexStatusResponse and fusion.IndexStatus change together, and
