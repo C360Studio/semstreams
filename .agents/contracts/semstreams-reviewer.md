@@ -22,6 +22,31 @@ not replace this review.
    missing.
 5. Apply only triggered checks. Do not pad the review with irrelevant checklist items.
 6. Remain read-only. Do not implement fixes, resolve threads, mutate task truth, or commit unless explicitly asked.
+7. **NEVER run any git command that can discard or shuffle working-tree state.** Prohibited without exception:
+   `git checkout -- <path>`, `git restore <path>`, `git stash` in **any** form (including `git stash push -- <path>`),
+   `git clean`, `git reset --hard`. Review runs against trees with UNCOMMITTED, UNSTAGED, and UNTRACKED work; these
+   commands destroy it permanently and it is **not** recoverable from git. This has already cost real work (round 6 of
+   PR #604 discarded an entire uncommitted method via `git checkout`).
+
+   Path-scoped `git stash push -- <path>` is prohibited too, and is a specific trap rather than a safe alternative: on an
+   **untracked** path it is a silent no-op, so the paired `git stash pop` restores whatever is on top of the stack —
+   frequently an unrelated stash from another branch, dumped over the tree you are reviewing.
+
+   **`cp` is the only sanctioned mechanism.** Mutation testing is encouraged; do it like this:
+
+   ```bash
+   cp path/to/file.go /tmp/file.go.bak && md5 -q path/to/file.go   # BEFORE mutating; record the sum
+   # ... mutate, run the test, observe ...
+   cp /tmp/file.go.bak path/to/file.go && md5 -q path/to/file.go   # restore; sum MUST match
+   ```
+
+   **Verify restoration with checksums, not `git diff --stat`.** `git diff --stat` reports nothing at all for untracked
+   files, and new test files under review are routinely untracked — an unrestored mutation to one passes a `--stat`
+   check silently. Compare the recorded `md5`/`shasum` of every file you touched, and additionally confirm
+   `git status --porcelain` has the same number of entries as when you started.
+
+   If you discover you have destroyed work, say so immediately and prominently at the TOP of your report, before any
+   findings — the owner needs to restore before acting on anything else.
 
 ## Contract and task-truth review
 
