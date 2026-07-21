@@ -309,11 +309,6 @@
       "description": "Maximum iterations for LPA algorithm",
       "category": "advanced"
     },
-    "max_staleness": {
-      "type": "string",
-      "description": "Max age of the graph-index view under which community detection still runs (duration e.g. 15s; empty or 0 = require exact index catch-up). Must exceed BOTH the readiness heartbeat (5s — the judged age includes envelope arrival age) and this consumer's own worst-case detection cycle (detection time scales with community size); values at or below the heartbeat are rejected. A degraded reset-required unbootstrapped or unrecognized-state index always defers regardless",
-      "category": "advanced"
-    },
     "min_community_size": {
       "type": "integer",
       "description": "Minimum number of entities to form a community",

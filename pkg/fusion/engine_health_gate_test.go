@@ -194,13 +194,17 @@ func TestIndexStatus_GateProjectionCarriesEveryField(t *testing.T) {
 	if !projected.BootstrapComplete {
 		t.Error("BootstrapComplete dropped — every healthy index would defer as mid-cutover")
 	}
+	// Ready and StalenessMs no longer reach any gate decision — the gate reads health
+	// alone — but they must still SURVIVE the projection: StalenessMs is the reported
+	// view age a consumer stamps on its output, and dropping it would turn "we answered
+	// from a 44ms-old view" into a silent "caught up" via the presence encoding.
 	if !projected.Ready || projected.StalenessMs != 44 {
-		t.Error("the coverage fast path and staleness comparison lost their inputs")
+		t.Error("the reported coverage and view age were lost in projection")
 	}
 	// Belt and braces: the projection must satisfy the gate the same way the real
 	// envelope does.
 	if _, reason := graph.EvaluateReadinessGate(
-		graph.StatusReading{Status: projected, Fresh: true}, graph.FreshnessNone()); reason != graph.DeferHardStop {
+		graph.StatusReading{Status: projected, Fresh: true}); reason != graph.DeferHardStop {
 		t.Errorf("gate reason = %q, want hard_stop for a degraded projection", reason)
 	}
 }
@@ -257,8 +261,7 @@ func TestFuse_DeferredResponseNeverReadsHealthy(t *testing.T) {
 			// The envelope alone is NOT enough — assert that directly, so the test
 			// documents why the explicit flag has to exist.
 			proceed, _ := graph.EvaluateReadinessGate(
-				graph.StatusReading{Status: fusion.ExportReadinessEnvelope(resp.Index), Fresh: true},
-				graph.FreshnessNone())
+				graph.StatusReading{Status: fusion.ExportReadinessEnvelope(resp.Index), Fresh: true})
 			if proceed {
 				require.True(t, resp.Deferred,
 					"the carried envelope passes the canonical health gate, so ONLY the "+

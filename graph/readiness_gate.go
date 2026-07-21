@@ -1,10 +1,5 @@
 package graph
 
-import (
-	"math"
-	"time"
-)
-
 // The canonical readiness gate. Before it, four consumers implemented four gate
 // semantics — sticky-forever, per-tick exact-unless-configured, per-call exact with no
 // knob, and degrade-honest — and a transport failure in one of them was
@@ -15,85 +10,48 @@ import (
 // modes were four dressings of one conflation: readiness had been asked to answer
 // health, freshness, read-your-writes, AND authoritative absence at once, and the
 // fourth is not answerable at all — coverage says nothing about whether a source ever
-// published. What remains:
+// published.
 //
-//   - HEALTH — is this index sound to read from? Fresh status, no hard stop, initial
-//     build complete. Every consumer asks it, and no consumer can opt out.
-//   - FRESHNESS — how current does THIS consumer need the view to be? A parameter
-//     (exact | within(d) | none), not a policy, and never able to talk past health.
+// This change finished the collapse by deleting the SECOND question too. The freshness
+// parameter (exact | within(d) | none) survived ADR-084 only because coverage-derived
+// gating had been the mechanism behind the retired ADR-066 "empty means not-found only
+// if Ready" absence license; with the license gone, the machinery was serving exactly
+// one call site — periodic community detection, which is the safest possible consumer
+// of a stale view (idempotent, whole-result re-derivation, overwritten next cycle).
+// What remains is ONE question:
+//
+//   - HEALTH — is this index sound to read from? Fresh status, an interpretable state,
+//     no hard stop, initial build complete. Every consumer asks it; no consumer can opt
+//     out; nothing can talk past it.
+//
+// View age is REPORTED, never gating: IndexStatusResponse.StalenessMs rides the answer
+// and consumers stamp it on their output (community detection's
+// staleness_at_detection_ms gauge). "Only 'still building' and 'broken' justify
+// withholding; how far behind belongs on the answer."
 //
 // Read-your-writes, the one legitimately per-entity question, is not a gate concern at
 // all: a caller that knows its own revision compares it against
-// IndexStatusResponse.IndexedRevision directly.
-
-// Freshness is a consumer's declared view-currency requirement. Construct it with
-// FreshnessExact, FreshnessWithin, or FreshnessNone — the fields are unexported so
-// "exact" and "unbounded" cannot be confused by a partially-filled literal, and so the
-// ZERO VALUE is the strictest setting rather than the loosest.
-type Freshness struct {
-	// unbounded declares no freshness requirement at all (read paths).
-	unbounded bool
-	// bound is the tolerated view age; 0 with !unbounded means exact catch-up.
-	bound time.Duration
-}
-
-// FreshnessExact requires a caught-up view: the consumer proceeds only when the index
-// has applied every committed revision up to its target. It is the view-rate contract
-// for periodic whole-result re-derivation (community detection) and the zero value.
-func FreshnessExact() Freshness { return Freshness{} }
-
-// FreshnessWithin tolerates a view up to d old. A NON-POSITIVE d means exact — the
-// shipped operator contract is "empty or 0 max_staleness = require exact index
-// catch-up", and quietly reinterpreting an unset config field as "unbounded" would
-// loosen the strictest gate in the system by changing nothing an operator can see.
-func FreshnessWithin(d time.Duration) Freshness {
-	if d <= 0 {
-		return FreshnessExact()
-	}
-	return Freshness{bound: d}
-}
-
-// FreshnessNone declares no freshness requirement: the consumer wants the best
-// available evidence from a HEALTHY index and will report how stale it was rather than
-// withhold it. This is the read-path declaration (fusion, the graph/query client) and
-// the deliberate ADR-084 reversal of #592's read-path close-out — ordinary lag is a
-// property to report, not a fault to fail on.
-func FreshnessNone() Freshness { return Freshness{unbounded: true} }
+// IndexStatusResponse.IndexedRevision directly. Ready does not appear in this gate —
+// it is coverage, and coverage neither licenses nor withholds.
 
 // DeferReason is the typed cause of a defer. Its string form is the label value of the
 // defer_total{reason} counter and of the structured defer log field, so the set is
-// CLOSED: six reasons an operator acts on differently — a broken index, an index that
-// has not finished building, an over-stale view, a dead status feed, and an envelope
-// this consumer cannot interpret. The gh#590 investigation cost three comment cycles
-// because the defer line was a bare constant.
+// CLOSED: four reasons an operator acts on differently — a broken index, an index that
+// has not finished building, a dead status feed, and an envelope this consumer cannot
+// interpret. The gh#590 investigation cost three comment cycles because the defer line
+// was a bare constant.
 type DeferReason string
 
 // The closed defer-reason set.
 const (
 	// DeferNone is the reason attached to a proceed.
 	DeferNone DeferReason = ""
-	// DeferHardStop is a degraded or reset_required index: broken, not behind. It
-	// survives every freshness declaration.
+	// DeferHardStop is a degraded or reset_required index: broken, not behind.
 	DeferHardStop DeferReason = "hard_stop"
-	// DeferOverStaleness is a view older than the declared requirement — including
-	// exact, whose tolerance is zero, so "not caught up" lands here. It is the ONE
-	// reason an operator answers by tuning a tolerance, which is why no health
-	// verdict is ever reported under it.
-	DeferOverStaleness DeferReason = "over_staleness"
 	// DeferStatusUnknown is a status feed the consumer cannot vouch for (never
 	// received, or older than the freshness window). It fails closed and is never
 	// mistaken for index state.
 	DeferStatusUnknown DeferReason = "status_unknown"
-	// DeferStalenessUnknown is a bounded consumer facing an envelope whose view age
-	// could not be COMPUTED — the producer reported staleness 0 while not caught up,
-	// meaning its floor covers no delivered revision yet (cold start, or a floor below
-	// every in-flight revision). It is the sibling of DeferUnrecognizedState: both are
-	// "this envelope cannot answer the question", not "the answer is bad".
-	//
-	// Separated because over_staleness is the ONE reason an operator answers by tuning
-	// a tolerance, and no tolerance fixes an uncomputable age — sending them to that
-	// dial wastes the cycle the typed reason exists to save.
-	DeferStalenessUnknown DeferReason = "staleness_unknown"
 	// DeferUnrecognizedState is an envelope whose State is blank or outside
 	// AllIndexStates. It is NOT the same operator problem as a dead feed: the value
 	// arrived and decoded, so the producer is talking — it is saying something this
@@ -111,65 +69,77 @@ const (
 	DeferBootstrapIncomplete DeferReason = "bootstrap_incomplete"
 )
 
+// AllDeferReasons is the closed iteration domain for the typed defer reasons a gate can
+// return. It lives next to the const block so it is the single source of truth, exactly
+// as AllIndexStates is for wire states: adding a reason means adding it HERE, once, and
+// every consumer that pre-initializes counter series or validates a label set picks it
+// up automatically.
+//
+// The alternative — each consumer hand-maintaining its own copy — fails SILENTLY in the
+// direction that matters. A counter keyed off a private list drops any reason missing
+// from it (dropping is correct: an unbounded label is a cardinality leak), so a newly
+// added reason would defer in production while incrementing nothing, and the dashboard
+// would read as "no defers" rather than "unknown defers".
+//
+// DeferNone is deliberately absent: it is the reason attached to a PROCEED, not a defer,
+// and pre-initializing a "" series would publish a permanently-zero label.
+var AllDeferReasons = []DeferReason{
+	DeferHardStop,
+	DeferStatusUnknown,
+	DeferUnrecognizedState,
+	DeferBootstrapIncomplete,
+}
+
 // StatusReading is a consumer's local view of a producer's envelope: the envelope
-// itself plus the two facts only the consumer knows — whether it can still vouch for
-// the feed, and how long ago the value arrived. It is a struct rather than positional
-// arguments because Fresh and Age are otherwise an adjacent bool/duration pair in a
-// call that gates authoritative reads.
+// itself plus the one fact only the consumer knows — whether it can still vouch for
+// the feed. It is a struct rather than positional arguments so a new consumer-local
+// fact can be added without breaking every adopter.
 //
 // graph/readiness.Reading maps onto it directly; an IN-PROCESS producer that computes
-// its own envelope passes Fresh: true and Age: 0, having no transport to lose.
+// its own envelope passes Fresh: true, having no transport to lose.
 type StatusReading struct {
 	// Status is the last envelope received from the producer.
 	Status IndexStatusResponse
 	// Fresh reports that the reading is recent enough to vouch for. False means
 	// UNKNOWN, which fails closed — not "not ready".
 	Fresh bool
-	// Age is how long ago this value arrived, consumer-local. It is added to the
-	// envelope's own staleness when judging a bound, closing the heartbeat window: a
-	// 2.5s-stale envelope received 2s ago describes a ~4.5s-old view.
-	Age time.Duration
 }
 
 // EvaluateReadinessGate is the single home for readiness gate semantics. It answers the
-// health question, then the consumer's declared freshness question, and reports whether
-// to proceed plus the typed defer reason. How a caller REACTS to a defer (error, skip a
-// tick, serve an honest empty envelope) stays with the caller.
+// health question and reports whether to proceed plus the typed defer reason. How a
+// caller REACTS to a defer (error, skip a tick, serve an honest empty envelope) stays
+// with the caller.
 //
 // Evaluation order is load-bearing:
 //
 //  1. Unknown status short-circuits BEFORE anything else. A dead status feed is a
-//     transport fact; no freshness declaration, not even "none", licenses proceeding on
-//     state the consumer cannot vouch for.
+//     transport fact; nothing licenses proceeding on state the consumer cannot vouch
+//     for.
 //  2. An UNRECOGNIZED State defers. The check is an allow-list over AllIndexStates,
 //     not a deny-list for degraded/reset_required: a blank or future state must not
 //     read as "not degraded, therefore healthy".
-//  3. Hard stops (degraded, reset_required) defer under every freshness declaration.
+//  3. Hard stops (degraded, reset_required) defer.
 //  4. An incomplete initial build defers likewise — this is the wire-observable gh#474
 //     guard, and the reason bootstrap_complete had to leave the producer's process.
-//  5. Ready proceeds. Coverage LICENSES a proceed but never causes a defer: a caught-up
-//     view answers every freshness requirement with zero age, which is also what keeps
-//     the staleness presence encoding sound (a caught-up envelope reports no staleness,
-//     and without this fast path every bounded consumer would wedge exactly when the
-//     index caught up).
-//  6. No freshness requirement proceeds on a healthy index, however far behind.
-//  7. A bound proceeds when the envelope's staleness PLUS the reading's own age fits
-//     inside it, computed overflow-safely — an out-of-range staleness or a backwards
-//     local clock defers rather than wrapping into a false "fresh". Everything else is
-//     over_staleness.
+//  5. Everything else proceeds, however far behind the view is. Lag is not a fault; it
+//     is a property of the answer, carried on IndexStatusResponse.StalenessMs for the
+//     consumer to stamp on its output.
 //
-// Health verdicts are never reported as over_staleness. That separation is the point of
-// the reason set: over_staleness is the one defer an operator answers by tuning a
-// tolerance, and a broken or half-built index answered that way sends them to the wrong
-// dial (gh#590 again, in a new costume).
+// Ready is deliberately absent. It is COVERAGE, and coverage answers no question this
+// gate asks: it cannot license a proceed a health verdict already denied, and it cannot
+// withhold one a health verdict already allowed. A caller with a specific revision in
+// hand compares it against IndexedRevision itself.
 //
-// PRODUCER INVARIANT this ordering relies on: an envelope with Ready == true must also
-// carry BootstrapComplete == true. Health is answered BEFORE coverage, so a producer
-// that published a caught-up envelope while reporting an unfinished build would see
-// every consumer defer on it forever — pointing an operator at a cutover that already
-// finished. graph-index maintains it in latchBootstrap and on its caged early-boot
-// branch; a new producer must do the same.
-func EvaluateReadinessGate(reading StatusReading, want Freshness) (proceed bool, reason DeferReason) {
+// PRODUCER INVARIANT this ordering still relies on: an envelope with Ready == true must
+// also carry BootstrapComplete == true. Health is answered before coverage is consulted
+// anywhere, so a producer that published a caught-up envelope while reporting an
+// unfinished build would see every consumer defer on it forever — pointing an operator
+// at a cutover that already finished. It survived the ADR-085 collapse: deleting the
+// Ready fast path removed the gate's own READ of the field, not the obligation on
+// producers, because graph-index's sticky responder gate and every consumer's
+// IndexedRevision comparison still assume the two agree. graph-index maintains it in
+// latchBootstrap and on its caged early-boot branch; a new producer must do the same.
+func EvaluateReadinessGate(reading StatusReading) (proceed bool, reason DeferReason) {
 	status := reading.Status
 	if !reading.Fresh {
 		return false, DeferStatusUnknown
@@ -186,25 +156,7 @@ func EvaluateReadinessGate(reading StatusReading, want Freshness) (proceed bool,
 	if !status.BootstrapComplete {
 		return false, DeferBootstrapIncomplete
 	}
-	if status.Ready {
-		return true, DeferNone
-	}
-	if want.unbounded {
-		return true, DeferNone
-	}
-	if want.bound > 0 {
-		// StalenessMs > 0 is the PRESENCE bit, not a lower bound on age: a not-ready
-		// envelope with staleness 0 could not compute its age, and treating that as
-		// "0ms stale" would proceed on an unknown view. Producers clamp any computed
-		// staleness to >= 1ms so this test never rejects a real sub-millisecond value.
-		if status.StalenessMs == 0 {
-			return false, DeferStalenessUnknown
-		}
-		if age, ok := viewAge(status.StalenessMs, reading.Age); ok && age <= want.bound {
-			return true, DeferNone
-		}
-	}
-	return false, DeferOverStaleness
+	return true, DeferNone
 }
 
 // recognizedState reports whether a wire State is one this consumer understands.
@@ -216,35 +168,4 @@ func recognizedState(state string) bool {
 		}
 	}
 	return false
-}
-
-// maxStalenessMs is the largest StalenessMs that survives conversion to a
-// time.Duration without wrapping (Duration is int64 NANOseconds). Anything above it is
-// not a longer age — it is a corrupt or hostile value, and converting it yields a
-// NEGATIVE duration that would sail through any positive bound.
-const maxStalenessMs = uint64(math.MaxInt64 / int64(time.Millisecond))
-
-// viewAge is the total age a bound is judged against: the envelope's own staleness plus
-// how long ago the consumer received it. It reports ok=false when the inputs cannot be
-// combined into a trustworthy age, which the caller must treat as a DEFER.
-//
-// Both guards are fail-closed against arithmetic that would otherwise fail open:
-//   - a StalenessMs above maxStalenessMs wraps negative through time.Duration;
-//   - a negative Age (local clock stepping backwards between receipt and evaluation)
-//     would SUBTRACT from the age and make a stale view look fresh.
-func viewAge(stalenessMs uint64, age time.Duration) (time.Duration, bool) {
-	if stalenessMs > maxStalenessMs {
-		return 0, false
-	}
-	if age < 0 {
-		// A clock that ran backwards tells us nothing about how old the view is. Drop
-		// the local contribution rather than let it credit freshness; the envelope's
-		// own staleness still applies.
-		age = 0
-	}
-	total := time.Duration(stalenessMs) * time.Millisecond
-	if total > math.MaxInt64-age {
-		return 0, false
-	}
-	return total + age, true
 }

@@ -49,15 +49,6 @@ const (
 	defaultAnomalyReviewTimeout    = 60 * time.Second
 )
 
-// maxStalenessCeiling caps max_staleness well above any real steady-state view age
-// but far below "ungated". Bounded-staleness clustering trades a bounded fraction of
-// stale edges for liveness (ADR-083 D4); a view an hour old is not bounded staleness
-// — it effectively defeats the bootstrap/cutover defer and almost certainly signals a
-// mis-unit config (e.g. "3000" read as seconds when milliseconds were meant). Reject
-// it rather than let it silently ungate the gate. An hour is ~120x the default
-// detection interval, so it constrains nothing an operator legitimately wants.
-const maxStalenessCeiling = time.Hour
-
 // Config holds configuration for graph-clustering component
 type Config struct {
 	Ports                *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
@@ -76,49 +67,6 @@ type Config struct {
 	// clustering without a co-deployed graph-index handler; it MUST NOT be used during a
 	// format cutover.
 	AllowUngatedReads bool `json:"allow_ungated_reads" schema:"type:bool,description:Allow detection when graph-index readiness is unknown (standalone only; never during cutover),category:advanced"`
-
-	// MaxStalenessStr lets community detection — a periodic, whole-result-re-deriving
-	// consumer — run while graph-index's view is at most this OLD, instead of
-	// deferring forever under continuous write (ADR-083, #590). It is a CONSUMER
-	// policy: the shared readiness envelope stays exactly honest; this reader decides
-	// how much staleness it accepts. Default "" / 0 == the exact Ready gate
-	// (contract-preserving). A degraded, reset-required, empty (target==0), or
-	// unknown-status index still defers at ANY tolerance.
-	//
-	// The unit is WALL TIME, not the revision count this field replaced
-	// (index_lag_tolerance, removed — BREAKING). gh#590's coalescer table showed the
-	// correct revision bound shifts 2-4x with coalesce_ms alone and again linearly
-	// with write rate, so no fixed count is right at two different loads; "how old is
-	// the topology I clustered" is invariant to both and is what an operator can
-	// actually reason about.
-	//
-	// TWO floors, and at small values the FIRST dominates.
-	//
-	// (1) Above the readiness heartbeat (5s). The gate judges the envelope's staleness
-	// plus how long ago that envelope ARRIVED, and arrival age sweeps a full heartbeat
-	// between publishes — so a 3s bound proceeds on roughly half of ticks even against
-	// an essentially caught-up index. You cannot bound a view age below the interval at
-	// which you learn it, and reading the key per decision does not help (KV Get and
-	// Watch are equally stale on a tick-published key). Values at or below the
-	// heartbeat are REJECTED at config validation rather than left to defer
-	// mysteriously.
-	//
-	// (2) SET IT ABOVE THIS CONSUMER'S OWN WORST-CASE CYCLE. Detection time scales with
-	// community SIZE, so as a graph consolidates (many small communities into few large
-	// ones) a run can grow several-fold — a semboids adoption run measured 4.4s climbing
-	// to 23.7s across one 90s window on a 200-entity flock. A long run competes with the
-	// indexer for the same box, so the view is staler at the next tick; a tolerance that
-	// was ample while the graph was fragmented then starts tripping over_staleness for a
-	// reason that has nothing to do with index health, and clustering stops exactly when
-	// the graph got interesting.
-	//
-	// The value is therefore not purely "how fresh do I need my input" — for a consumer
-	// whose run time scales with its own output it is also a bet on that run time. Watch
-	// semstreams_graph_clustering_detection_duration_seconds against
-	// staleness_at_detection_ms: duration climbing toward a fixed max_staleness is the
-	// signature, and it is a tuning wrinkle rather than a soundness one (the gate is
-	// reporting a real view age).
-	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 15s; empty or 0 = require exact index catch-up). Must exceed BOTH the readiness heartbeat (5s — the judged age includes envelope arrival age) and this consumer's own worst-case detection cycle (detection time scales with community size); values at or below the heartbeat are rejected. A degraded reset-required unbootstrapped or unrecognized-state index always defers regardless,category:advanced"`
 
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
@@ -140,7 +88,6 @@ type Config struct {
 
 	// Parsed durations (set by ApplyDefaults)
 	detectionInterval time.Duration
-	maxStaleness      time.Duration
 	// Resolved EntityID virtual-edge config (set by ApplyDefaults from
 	// EntityIDEdges over a DefaultEntityIDProviderConfig baseline).
 	entityIDEdges clustering.EntityIDProviderConfig
@@ -192,7 +139,8 @@ func rejectUnknownEntityIDEdgeKeys(raw json.RawMessage) error {
 // gives the operator the replacement field by name, and it cannot reject unrelated
 // keys that other tooling may legitimately carry in the block.
 var removedConfigFields = map[string]string{
-	"index_lag_tolerance": `removed (ADR-083, BREAKING): the bounded-lag tolerance is now wall-time, not a revision count. Replace it with "max_staleness": "3s" (or omit it entirely for the exact catch-up gate). A revision count could not be right at two different write rates or coalesce_ms settings (gh#590)`,
+	"index_lag_tolerance": `removed (ADR-083, BREAKING): the bounded-lag tolerance was replaced by the wall-time "max_staleness", which has itself since been removed — readiness now gates on index HEALTH alone and no view-age tolerance exists to configure. Delete the field. A healthy index serves however far behind it is, and the view age of each detection run is reported on the semstreams_graph_clustering_staleness_at_detection_ms gauge`,
+	"max_staleness":       `removed (BREAKING): readiness gates on index HEALTH alone — a fresh status feed, an interpretable state, no degraded/reset_required hard stop, and a completed initial build. There is no view-age tolerance left to declare, because a healthy index serves however far behind it is: lag is a property to REPORT on the answer, not a fault to withhold it for. Delete the field. The view age each detection run proceeded at is reported on the semstreams_graph_clustering_staleness_at_detection_ms gauge — every run, not only the ones a tolerance admitted`,
 }
 
 // rejectRemovedConfigKeys fails the load when a withdrawn field is present, naming
@@ -285,10 +233,6 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "max_iterations must be greater than 0")
 	}
 
-	if err := c.validateMaxStaleness(); err != nil {
-		return err
-	}
-
 	// Anomaly detection requires structural analysis
 	if c.EnableAnomalyDetection && !c.EnableStructural {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "enable_anomaly_detection requires enable_structural to be true")
@@ -304,49 +248,9 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// validateMaxStaleness rejects an unparseable, negative, or pathological staleness
-// bound. It re-parses rather than reading the ApplyDefaults result because a parse
-// FAILURE leaves that result at zero, which is indistinguishable from the strict
-// default — silently tightening the gate on a typo instead of reporting it.
-func (c *Config) validateMaxStaleness() error {
-	if c.MaxStalenessStr == "" {
-		return nil
-	}
-	d, err := time.ParseDuration(c.MaxStalenessStr)
-	if err != nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
-			fmt.Sprintf("max_staleness %q is not a duration (want e.g. \"3s\", \"1500ms\"): %v", c.MaxStalenessStr, err))
-	}
-	if d < 0 {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
-			fmt.Sprintf("max_staleness %q is negative; use 0 (or omit it) to require exact index catch-up", c.MaxStalenessStr))
-	}
-	if d > maxStalenessCeiling {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
-			fmt.Sprintf("max_staleness %q exceeds the sane maximum %s; a tolerance this large ungates bootstrap/cutover deferral",
-				c.MaxStalenessStr, maxStalenessCeiling))
-	}
-	// The satisfiability floor is a property of the DISTRIBUTION contract, not of this
-	// consumer, so the rule lives on the framework and every bounded consumer inherits
-	// it. Validated against DefaultHeartbeat because that is what a Config can know:
-	// the watcher's heartbeat is not a config field, so production always runs the
-	// default (a test that overrides it also controls the envelopes it injects).
-	if err := readiness.ValidateStalenessBound(d, readiness.DefaultHeartbeat); err != nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
-			fmt.Sprintf("max_staleness %q: %v", c.MaxStalenessStr, err))
-	}
-	return nil
-}
-
 // DetectionInterval returns the parsed detection interval duration
 func (c *Config) DetectionInterval() time.Duration {
 	return c.detectionInterval
-}
-
-// MaxStaleness returns the parsed bounded-staleness tolerance. Zero means the exact
-// Ready gate. Valid only after ApplyDefaults.
-func (c *Config) MaxStaleness() time.Duration {
-	return c.maxStaleness
 }
 
 // ApplyDefaults sets default values for configuration
@@ -359,14 +263,6 @@ func (c *Config) ApplyDefaults() {
 	}
 	if c.detectionInterval == 0 {
 		c.detectionInterval = 30 * time.Second
-	}
-
-	// A parse failure deliberately leaves maxStaleness at 0 (the strict exact gate);
-	// Validate reports it rather than letting a typo quietly change the gate.
-	if c.MaxStalenessStr != "" {
-		if d, err := time.ParseDuration(c.MaxStalenessStr); err == nil && d > 0 {
-			c.maxStaleness = d
-		}
 	}
 
 	if c.BatchSize == 0 {
@@ -1256,17 +1152,22 @@ type gateDecision struct {
 }
 
 // evaluateReadiness decides whether it is safe to run community detection against the
-// INCOMING_INDEX (gh#474 Codex #6). Detection is a periodic, whole-result-re-deriving
-// consumer, so it declares a FRESHNESS requirement of max_staleness: it runs when the
-// index is healthy (fresh status, no hard stop, initial build complete) and the view is
-// either caught up or no older than the configured bound. With the default bound unset
-// or 0 that is exactly the strict caught-up gate — the shipped operator contract, and
-// the ONE consumer for which lag is genuinely a correctness input rather than a
-// property to report (a partial view yields a different community partition, not a
-// stale one).
+// INCOMING_INDEX (gh#474 Codex #6). It runs when the index is HEALTHY — fresh status,
+// interpretable state, no hard stop, initial build complete — and however far behind
+// the view happens to be.
 //
-// The semantics live in graph.EvaluateReadinessGate, not here — one home for the rule,
-// two questions (ADR-084 D1).
+// Detection used to declare a view-age tolerance (max_staleness) on top of that, and it
+// was the only call site in the repository that ever did. The tolerance existed to
+// serve an absence license that ADR-084 retired, and detection is the safest possible
+// consumer of a stale view: it is periodic, it re-derives the WHOLE partition from
+// scratch, and every result is overwritten on the next cycle — so a view a few seconds
+// behind yields a partition a few seconds behind, self-correcting, never a wrong one
+// that persists. Withholding the run instead just means the last partition (older
+// still) stays published. The view age each run proceeded at is stamped on the
+// staleness_at_detection_ms gauge, on EVERY run rather than only the ones a tolerance
+// admitted.
+//
+// The semantics live in graph.EvaluateReadinessGate, not here — one home for the rule.
 //
 // Unknown status FAILS CLOSED by default (gh#474 Codex #4): a crashed or restarting
 // graph-index mid-cutover is indistinguishable from an absent one, and its stale
@@ -1293,8 +1194,7 @@ func (c *Component) evaluateReadiness() gateDecision {
 	}
 
 	proceed, reason := graph.EvaluateReadinessGate(
-		graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh, Age: reading.Age},
-		graph.FreshnessWithin(c.config.MaxStaleness()))
+		graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh})
 	if proceed {
 		return gateDecision{proceed: true, reading: reading}
 	}
@@ -1323,7 +1223,6 @@ func (c *Component) recordDefer(d gateDecision) {
 		slog.String("state", d.reading.Status.State),
 		slog.Uint64("lag", d.reading.Status.Lag),
 		slog.Uint64("staleness_ms", d.reading.Status.StalenessMs),
-		slog.Duration("max_staleness", c.config.MaxStaleness()),
 	}
 	// The watch/bucket error is what separates "graph-index is not deployed here"
 	// from "the feed died" — both read as status_unknown at the gate.
@@ -1340,9 +1239,13 @@ func (c *Component) recordDefer(d gateDecision) {
 
 // observeDetectionRun makes the staleness a run proceeded at operator-visible
 // (ADR-083 D5, #579 lesson): it records the gauge on every verified run and, when the
-// run is proceeding on a bounded-stale view, also emits an INFO log so bounded
-// staleness cannot become silent staleness. A non-zero staleness only occurs via the
-// bounded-staleness path — an exact Ready run reports 0.
+// view was behind, also emits an INFO log carrying the age.
+//
+// This is the whole "report, don't gate" half of the readiness contract, and it matters
+// MORE now than it did under a tolerance: nothing withholds a run for age any more, so
+// the gauge and this line are the only places a stale partition announces itself. The
+// gauge records every run (0 = the view was exactly caught up) rather than only the
+// runs a tolerance admitted.
 func (c *Component) observeDetectionRun(d gateDecision) {
 	if c.noteGateOutcome(graph.DeferNone) {
 		c.logger.Info("readiness gate cleared; resuming community detection",
@@ -1359,9 +1262,8 @@ func (c *Component) observeDetectionRun(d gateDecision) {
 		c.metrics.setStalenessAtDetection(d.reading.Status.StalenessMs)
 	}
 	if d.reading.Status.StalenessMs > 0 {
-		c.logger.Info("community detection running under bounded view staleness",
+		c.logger.Info("community detection running on a lagging graph-index view",
 			slog.Uint64("staleness_ms", d.reading.Status.StalenessMs),
-			slog.Duration("max_staleness", c.config.MaxStaleness()),
 			slog.Uint64("index_lag", d.reading.Status.Lag))
 	}
 }

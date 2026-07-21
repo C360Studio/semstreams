@@ -105,14 +105,13 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		// permanent operator bug indistinguishable from transient backpressure, forever.
 		return Response{}, err
 	}
-	// Fusion is a read path: it asks the HEALTH question and declares no freshness
-	// requirement (ADR-084 D1). Adopting the canonical gate is the point — this was
+	// Fusion is a read path: it asks the HEALTH question, which is now the only question
+	// the gate asks (ADR-084 D1). Adopting the canonical gate is the point — this was
 	// hand-rolled as `!status.Ready`, the one exact-coverage check fusion never
 	// migrated, so a healthy index under write returned an empty envelope and the
 	// caller fell back to grep on a graph that could have answered.
 	if proceed, reason := graph.EvaluateReadinessGate(
-		graph.StatusReading{Status: status.readinessEnvelope(), Fresh: true},
-		graph.FreshnessNone()); !proceed {
+		graph.StatusReading{Status: status.readinessEnvelope(), Fresh: true}); !proceed {
 		return deferredResponse(status, string(reason)), nil
 	}
 

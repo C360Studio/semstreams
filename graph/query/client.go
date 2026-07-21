@@ -572,14 +572,13 @@ func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 		}
 		return notReady
 	}
-	// Evaluated through the canonical helper so the consumers cannot drift. This is a
-	// read path, so it declares NO freshness requirement: it wants the best available
-	// evidence from a healthy index and reports how stale it was, rather than
-	// withholding. AllowUngatedReads never applies below — a status that WAS received
-	// and says unhealthy is not an unknown one.
+	// Evaluated through the canonical helper so the consumers cannot drift. The gate
+	// asks about index HEALTH only: this path wants the best available evidence from a
+	// healthy index and reports how stale it was, rather than withholding it.
+	// AllowUngatedReads never applies below — a status that WAS received and says
+	// unhealthy is not an unknown one.
 	if proceed, _ := gtypes.EvaluateReadinessGate(
-		gtypes.StatusReading{Status: reading.Status, Fresh: true, Age: reading.Age},
-		gtypes.FreshnessNone()); !proceed {
+		gtypes.StatusReading{Status: reading.Status, Fresh: true}); !proceed {
 		return notReady
 	}
 	return nil

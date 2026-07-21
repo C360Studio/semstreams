@@ -60,6 +60,13 @@ const (
 	// CONSTANT, not config (owner decision): 3 tolerates a lost write and a slow
 	// delivery without letting a dead feed masquerade as live, and one fewer knob
 	// is one fewer way to configure a fail-open.
+	//
+	// "Freshness" here is about the ENVELOPE, not the view it describes — can this
+	// consumer still vouch for the status reading it is holding, or has the producer
+	// gone quiet? That is a transport-liveness question, and it is what
+	// StatusReading.Fresh answers and what the health gate fails closed on. It is NOT
+	// the retired view-age concept (how far behind ENTITY_STATES the index itself is);
+	// view age is reported on IndexStatusResponse.StalenessMs and gates nothing.
 	FreshnessMultiplier = 3
 	// defaultRebindDelay is how long the watcher waits before re-opening the bucket
 	// or watch after a failure. Well under the freshness window, so a transient
@@ -83,51 +90,6 @@ func FreshnessWindow(heartbeat time.Duration) time.Duration {
 		heartbeat = DefaultHeartbeat
 	}
 	return time.Duration(FreshnessMultiplier) * heartbeat
-}
-
-// MinBoundedStaleness is the smallest max-staleness tolerance a consumer can declare
-// and still have it satisfiable, given a producer publishing every heartbeat.
-//
-// The bound is judged against the view's CURRENT age: the staleness the producer
-// computed plus how long ago that envelope arrived. Arrival age sweeps 0 -> heartbeat
-// between publishes, so a bound at or below one heartbeat is unsatisfiable for part of
-// every cycle no matter how caught-up the index is — measured at a 5s heartbeat, a 3s
-// bound proceeds on roughly half of ticks against an essentially caught-up view.
-//
-// The underlying rule is not a tuning preference: YOU CANNOT BOUND A QUANTITY BELOW THE
-// INTERVAL AT WHICH YOU LEARN IT. Reading the key per decision does not help either —
-// KV Get and Watch are equally stale on a tick-published key (ADR-083), which is why
-// the answer is a floor rather than a faster probe.
-//
-// This is the floor for SATISFIABILITY, not the recommended value. A consumer whose own
-// run time scales with its data must also clear its worst-case cycle (gh#605).
-func MinBoundedStaleness(heartbeat time.Duration) time.Duration {
-	if heartbeat <= 0 {
-		heartbeat = DefaultHeartbeat
-	}
-	return heartbeat
-}
-
-// ValidateStalenessBound reports why a declared max-staleness tolerance cannot work at
-// this heartbeat, or nil if it can. Zero means "exact catch-up" and is always valid —
-// it does not go through the staleness comparison at all.
-//
-// Exposed on the framework rather than written into one consumer's config validation
-// because the constraint belongs to the DISTRIBUTION contract, not to community
-// detection: every consumer that declares a bounded freshness inherits it.
-func ValidateStalenessBound(bound, heartbeat time.Duration) error {
-	if bound <= 0 {
-		return nil
-	}
-	if floor := MinBoundedStaleness(heartbeat); bound <= floor {
-		return fmt.Errorf(
-			"max-staleness bound %s is at or below the readiness heartbeat %s, so it can never be "+
-				"satisfied reliably: the gate judges the envelope's staleness plus its arrival age, "+
-				"and arrival age sweeps up to one full heartbeat between publishes. Declare a bound "+
-				"above %s (and above this consumer's own worst-case cycle), or 0 for exact catch-up",
-			bound, floor, floor)
-	}
-	return nil
 }
 
 // Reading is the consumer-side answer: the last-known envelope plus everything

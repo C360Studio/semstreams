@@ -158,11 +158,22 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 // keyset a format cutover / cold replay is still materialising (old aggregate keys are
 // inert, new keys incomplete).
 //
-// Note the gate never fires on ORDINARY lag: once the latch is set this returns
-// immediately, and before it is set the envelope necessarily carries
-// BootstrapComplete=false, so the helper short-circuits on that fact and the staleness
-// comparison is unreachable here. The declared FreshnessExact below is therefore about
-// the pre-bootstrap probe, not a per-query catch-up requirement.
+// The gate never fires on ORDINARY lag. Once the latch is set this returns immediately;
+// before it is set, the ONE remaining question the gate asks of a locally-computed,
+// unconditionally-fresh envelope is bootstrap_complete — which is exactly the gh#474
+// cutover guard this helper exists for, preserved intact as DeferBootstrapIncomplete.
+//
+// A previous version of this comment claimed the pre-latch envelope "necessarily carries
+// BootstrapComplete=false, so the staleness comparison is unreachable". That reasoning
+// was WRONG, and the correction is the one behavior change here. computeIndexStatus
+// latches indexBootstrapped on the way past, so on the single call where the latch flips
+// the envelope it returns already carries BootstrapComplete: true — while Ready is still
+// false, which under continuous write is the normal case. The old FreshnessExact
+// therefore fell through past every health check to an over_staleness defer, producing
+// one spurious transient IndexNotReady that self-healed on the very next call (the latch
+// short-circuits it). That faithfully reproduced pre-ADR-084 behavior, so it was never a
+// regression — but it was reachable, not unreachable. With freshness gone, that call now
+// proceeds immediately, which is what the caller wanted all along.
 //
 // This is the IN-PROCESS adopter of the canonical gate: graph-index computes the
 // envelope it gates on, so there is no transport to lose and the reading is
@@ -208,25 +219,21 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 	if c.watermark == nil {
 		return nil
 	}
-	// The gate is asked the same question it was asked before the ADR-084 collapse:
-	// health plus EXACT freshness, which for a fresh in-process envelope reduces to
-	// Ready — bit-identical to the `computeIndexStatus(ctx).Ready` check this replaced.
-	// Stickiness is NOT a gate concern: it is the local latch short-circuited above, so
-	// the helper never needs to know this consumer is sticky. In-process producers pass
-	// Fresh: true and Age: 0 — they compute the envelope themselves and have no
-	// transport to lose.
+	// The gate is asked the health question, which for this consumer reduces to
+	// bootstrap_complete plus the hard stops. Stickiness is NOT a gate concern: it is
+	// the local latch short-circuited above, so the helper never needs to know this
+	// consumer is sticky. In-process producers pass Fresh: true — they compute the
+	// envelope themselves and have no transport to lose.
 	//
 	// computeIndexStatus latches indexBootstrapped on the way past, so a status that
 	// proceeds here already carries BootstrapComplete: true and the health check below
 	// cannot self-deadlock on its own latch.
 	status := c.computeIndexStatus(ctx)
-	proceed, reason := graph.EvaluateReadinessGate(
-		graph.StatusReading{Status: status, Fresh: true}, graph.FreshnessExact())
+	proceed, reason := graph.EvaluateReadinessGate(graph.StatusReading{Status: status, Fresh: true})
 	if proceed {
-		// computeIndexStatus already latched indexBootstrapped (latchBootstrap flips on
-		// the same Ready predicate this proceed decision reduces to), so there is no
-		// second Store here — one home for the latch keeps the wire bit and this gate
-		// from ever disagreeing.
+		// computeIndexStatus already latched indexBootstrapped (latchBootstrap owns the
+		// flip), so there is no second Store here — one home for the latch keeps the
+		// wire bit and this gate from ever disagreeing.
 		return nil
 	}
 	// The typed reason is evidence, not a new wire contract: the classified code and

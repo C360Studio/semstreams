@@ -78,9 +78,15 @@ type IndexStatusResponse struct {
 	// carries no information: either Ready is true (no staleness to report) or the
 	// producer could not compute it (nothing covered yet / an early-return hard
 	// stop). Any COMPUTED staleness is reported as at least 1ms, so a consumer can
-	// treat `StalenessMs > 0` as the presence bit and never proceed on a
-	// not-ready envelope whose staleness is merely absent. EvaluateReadinessGate
-	// enforces this; hand-rolled comparisons must not.
+	// treat `StalenessMs > 0` as the presence bit and never read an absent age as
+	// "0ms fresh".
+	//
+	// It is REPORTED, never gating. EvaluateReadinessGate does not look at this field:
+	// readiness withholds an answer only for index health, and how far behind the view
+	// is rides on the answer instead (community detection stamps it on
+	// staleness_at_detection_ms). A consumer that surfaces it must carry the presence
+	// encoding with it — publishing a bare 0 as "caught up" is the one way to turn an
+	// unknown age back into a false claim.
 	//
 	// It is a FLOOR, not an oracle: a revision still undelivered server-side cannot
 	// age it. Total stalls surface through the wall-clock stuck detector

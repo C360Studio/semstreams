@@ -1,23 +1,23 @@
 package graph
 
 import (
-	"math"
 	"testing"
-	"time"
 )
 
 // The gate is the single home for readiness semantics (ADR-084 D1), so these tests pin
 // the properties every adopter depends on. ADR-084 collapsed four consumer MODES into
-// two orthogonal questions — health (fresh ∧ no hard stop ∧ bootstrapped) and a
-// declared freshness requirement — so the pins here are about the questions, not about
-// per-consumer policies:
+// two orthogonal questions; this change deleted the second one, leaving exactly one:
 //
-//   - health defers regardless of what freshness the consumer declared;
+//   - HEALTH — fresh status ∧ interpretable state ∧ no hard stop ∧ bootstrapped.
+//
+// So the pins here are about that question and about the things that must NOT be able
+// to influence it:
+//
+//   - each of the four defer reasons fires on its own condition, and only on it;
 //   - an unbootstrapped producer defers even when it looks merely "behind" (the gh#474
 //     cutover window, which is the reason the bit is on the wire at all);
-//   - coverage (Ready) may license a proceed but never causes a defer on its own;
-//   - the staleness presence bit is honored, and the reading's own age counts against
-//     the bound.
+//   - view age never gates anything, at any magnitude, in either encoding;
+//   - coverage (Ready) neither licenses nor withholds — it is absent from the gate.
 
 // healthy is an envelope with nothing wrong: bootstrapped, no hard stop. Individual
 // cases vary only the fields they are about.
@@ -36,79 +36,49 @@ func TestEvaluateReadinessGate(t *testing.T) {
 	tests := []struct {
 		name       string
 		reading    StatusReading
-		want       Freshness
 		proceed    bool
 		wantReason DeferReason
 	}{
 		{
-			name:    "caught up proceeds under exact",
+			name:    "caught up proceeds",
 			reading: StatusReading{Status: healthy(true, 0), Fresh: true},
-			want:    FreshnessExact(),
 			proceed: true,
 		},
 		{
-			name: "lag defers under exact",
-			// Exact is the view-rate contract (clustering's unset/0 max_staleness),
-			// unchanged by ADR-084: this consumer asked for caught-up and is not.
-			reading:    StatusReading{Status: healthy(false, 200), Fresh: true},
-			want:       FreshnessExact(),
-			proceed:    false,
-			wantReason: DeferOverStaleness,
+			// The inverse of the retired "lag defers under exact" row. Lag on a healthy,
+			// bootstrapped index is a property of the ANSWER, not a fault: only "still
+			// building" and "broken" justify withholding. Community detection — the last
+			// consumer that ever declared a view-age tolerance — is the safest possible
+			// reader of a stale view (periodic, idempotent, overwritten next cycle).
+			name:    "lag proceeds",
+			reading: StatusReading{Status: healthy(false, 200), Fresh: true},
+			proceed: true,
 		},
 		{
-			name: "lag proceeds when no freshness is required",
-			// The ADR-084 reversal: a read path asks a HEALTH question. Ordinary lag
-			// on a healthy, bootstrapped index is not a reason to withhold evidence.
+			// The inverse of the retired "over the bound defers" row: there is no bound.
+			name:    "a minute-old view proceeds",
 			reading: StatusReading{Status: healthy(false, 60_000), Fresh: true},
-			want:    FreshnessNone(),
 			proceed: true,
 		},
 		{
-			name:    "within the bound proceeds",
-			reading: StatusReading{Status: healthy(false, 2_000), Fresh: true},
-			want:    FreshnessWithin(3 * time.Second),
+			// The inverse of the retired "absent staleness never satisfies a bound" row.
+			// StalenessMs == 0 on a not-ready envelope is still the PRESENCE encoding —
+			// the producer could not compute an age — but an uncomputable age no longer
+			// blocks anything, because nothing consults the age. It is reported, and a
+			// consumer that surfaces it carries the encoding with it.
+			name:    "an uncomputable view age proceeds",
+			reading: StatusReading{Status: healthy(false, 0), Fresh: true},
 			proceed: true,
 		},
 		{
-			name:       "over the bound defers",
-			reading:    StatusReading{Status: healthy(false, 9_000), Fresh: true},
-			want:       FreshnessWithin(3 * time.Second),
-			proceed:    false,
-			wantReason: DeferOverStaleness,
-		},
-		{
-			name: "the reading's own age counts against the bound",
-			// The heartbeat-window leak: a 2.5s-stale envelope received 2s ago
-			// describes a view that is now ~4.5s old. Judging the envelope's number
-			// alone would let a 3s bound pass a 4.5s-old view once per heartbeat.
-			reading: StatusReading{Status: healthy(false, 2_500), Fresh: true, Age: 2 * time.Second},
-			want:    FreshnessWithin(3 * time.Second),
-			proceed: false, wantReason: DeferOverStaleness,
-		},
-		{
-			name: "absent staleness never satisfies a bound",
-			// StalenessMs == 0 on a not-ready envelope is the PRESENCE encoding: the
-			// producer could not compute an age. Reading it as "0ms stale" would
-			// proceed on an unknown view — the inverse of what the bound is for.
-			//
-			// Attributed to staleness_unknown, not over_staleness: no tolerance fixes
-			// an uncomputable age, and over_staleness is the one reason an operator
-			// answers by reaching for the tolerance dial.
-			reading:    StatusReading{Status: healthy(false, 0), Fresh: true},
-			want:       FreshnessWithin(time.Hour),
-			proceed:    false,
-			wantReason: DeferStalenessUnknown,
-		},
-		{
-			name: "an unbootstrapped index defers even under no freshness",
+			name: "an unbootstrapped index defers",
 			// The gh#474 cutover: State=building with a plausible lag, but the keyset
-			// is half-materialised. Health is the one question freshness cannot
-			// override, which is why this bit had to reach the wire.
+			// is half-materialised. This is the one "not yet" the gate still enforces,
+			// and the reason the bit had to reach the wire.
 			reading: StatusReading{
 				Status: IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 500, StalenessMs: 10},
 				Fresh:  true,
 			},
-			want:       FreshnessNone(),
 			proceed:    false,
 			wantReason: DeferBootstrapIncomplete,
 		},
@@ -122,40 +92,45 @@ func TestEvaluateReadinessGate(t *testing.T) {
 				Status: IndexStatusResponse{Ready: true, State: IndexStateReady, BootstrapComplete: true},
 				Fresh:  true,
 			},
-			want:    FreshnessExact(),
 			proceed: true,
 		},
 		{
-			name: "degraded defers under no freshness",
+			name: "degraded defers",
 			reading: StatusReading{
 				Status: IndexStatusResponse{State: IndexStateDegraded, BootstrapComplete: true},
 				Fresh:  true,
 			},
-			want:       FreshnessNone(),
 			proceed:    false,
 			wantReason: DeferHardStop,
 		},
 		{
-			name: "reset_required defers under no freshness",
+			name: "reset_required defers",
 			reading: StatusReading{
 				Status: IndexStatusResponse{State: IndexStateResetRequired, BootstrapComplete: true},
 				Fresh:  true,
 			},
-			want:       FreshnessNone(),
 			proceed:    false,
 			wantReason: DeferHardStop,
 		},
 		{
-			name:       "an unknown status defers under no freshness",
+			name:       "an unknown status defers",
 			reading:    StatusReading{Status: healthy(true, 0), Fresh: false},
-			want:       FreshnessNone(),
 			proceed:    false,
 			wantReason: DeferStatusUnknown,
+		},
+		{
+			name: "an uninterpretable state defers",
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: "rebuilding", BootstrapComplete: true},
+				Fresh:  true,
+			},
+			proceed:    false,
+			wantReason: DeferUnrecognizedState,
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, reason := EvaluateReadinessGate(tt.reading, tt.want)
+			got, reason := EvaluateReadinessGate(tt.reading)
 			if got != tt.proceed {
 				t.Errorf("proceed = %v, want %v", got, tt.proceed)
 			}
@@ -169,113 +144,113 @@ func TestEvaluateReadinessGate(t *testing.T) {
 	}
 }
 
-// TestEvaluateReadinessGate_HealthDefersUnderEveryFreshness is the ADR-084 D1
-// invariant that keeps freshness from being a severity dial: the health question is
-// answered first, and no freshness declaration — not even "none" — can talk past it.
-func TestEvaluateReadinessGate_HealthDefersUnderEveryFreshness(t *testing.T) {
-	unhealthy := map[string]IndexStatusResponse{
-		"degraded":          {State: IndexStateDegraded, BootstrapComplete: true, Ready: false},
-		"reset_required":    {State: IndexStateResetRequired, BootstrapComplete: true},
-		"not bootstrapped":  {State: IndexStateBuilding, TargetRevision: 10, StalenessMs: 1},
-		"degraded pre-boot": {State: IndexStateDegraded},
-	}
-	freshnesses := map[string]Freshness{
-		"exact":          FreshnessExact(),
-		"bounded":        FreshnessWithin(time.Hour),
-		"none":           FreshnessNone(),
-		"zero value":     {},
-		"nonpositive":    FreshnessWithin(-time.Second),
-		"huge tolerance": FreshnessWithin(1000 * time.Hour),
-	}
-	for statusName, status := range unhealthy {
-		for freshName, want := range freshnesses {
-			t.Run(statusName+"/"+freshName, func(t *testing.T) {
-				proceed, reason := EvaluateReadinessGate(
-					StatusReading{Status: status, Fresh: true}, want)
-				if proceed {
-					t.Errorf("an unhealthy index proceeded under %s freshness", freshName)
-				}
-				if reason == DeferOverStaleness {
-					t.Errorf("health defer misattributed as %q — an operator would tune a "+
-						"tolerance instead of fixing the index", reason)
-				}
-			})
+// TestEvaluateReadinessGate_ViewAgeNeverGates is the load-bearing pin of this change,
+// and it is the inverse of every row the freshness table used to hold. No StalenessMs —
+// zero, one, absurd, or the uint64 ceiling that used to wrap NEGATIVE through
+// time.Duration and needed an overflow guard — can change a health verdict, in either
+// direction. The arithmetic that guard protected is gone because the comparison is
+// gone: there is nothing left to fail open.
+//
+// This is what "gate on health; REPORT freshness" means mechanically. A stale view
+// yields a stale ANSWER carrying its own age (IndexStatusResponse.StalenessMs, stamped
+// by consumers onto e.g. staleness_at_detection_ms), never a withheld one.
+func TestEvaluateReadinessGate_ViewAgeNeverGates(t *testing.T) {
+	ages := []uint64{0, 1, 1_000, 60_000, 86_400_000, 1 << 62, 1<<63 - 1, 1<<64 - 1}
+
+	t.Run("a healthy index proceeds at every view age", func(t *testing.T) {
+		for _, ms := range ages {
+			proceed, reason := EvaluateReadinessGate(
+				StatusReading{Status: healthy(false, ms), Fresh: true})
+			if !proceed {
+				t.Errorf("StalenessMs=%d deferred as %q; view age must never withhold an answer", ms, reason)
+			}
 		}
-	}
+	})
+
+	t.Run("an unhealthy index defers at every view age", func(t *testing.T) {
+		// The other direction: a tiny (or absent) age cannot buy a broken index a
+		// proceed either. Health is answered without consulting the number at all.
+		unhealthy := map[DeferReason]IndexStatusResponse{
+			DeferHardStop:            {State: IndexStateDegraded, BootstrapComplete: true},
+			DeferBootstrapIncomplete: {State: IndexStateBuilding, TargetRevision: 10},
+			DeferUnrecognizedState:   {State: "", BootstrapComplete: true},
+		}
+		for want, status := range unhealthy {
+			for _, ms := range ages {
+				status.StalenessMs = ms
+				proceed, reason := EvaluateReadinessGate(StatusReading{Status: status, Fresh: true})
+				if proceed {
+					t.Errorf("%q proceeded at StalenessMs=%d", want, ms)
+				}
+				if reason != want {
+					t.Errorf("StalenessMs=%d gave reason %q, want %q", ms, reason, want)
+				}
+			}
+		}
+	})
 }
 
 // TestEvaluateReadinessGate_UnknownStatusNeverProceeds proves the fail-closed
 // transport rule survives the collapse: a status the consumer cannot vouch for is a
-// TRANSPORT fact, evaluated before any index state, so no tolerance however generous
-// licenses proceeding on it (gh#590 — a status RTT timing out behind the firehose
-// logged identically to a genuine not-ready).
+// TRANSPORT fact, evaluated before any index state, so no envelope contents however
+// healthy-looking license proceeding on it (gh#590 — a status RTT timing out behind the
+// firehose logged identically to a genuine not-ready).
 func TestEvaluateReadinessGate_UnknownStatusNeverProceeds(t *testing.T) {
-	freshnesses := []Freshness{FreshnessExact(), FreshnessWithin(time.Hour), FreshnessNone()}
-	for _, want := range freshnesses {
-		for _, s := range []IndexStatusResponse{
-			{Ready: true, State: IndexStateReady, BootstrapComplete: true},
-			{Ready: false, State: IndexStateBuilding, BootstrapComplete: true, StalenessMs: 1},
-			{},
-		} {
-			proceed, reason := EvaluateReadinessGate(StatusReading{Status: s, Fresh: false}, want)
-			if proceed {
-				t.Errorf("proceeded on an unknown status: %+v", s)
-			}
-			if reason != DeferStatusUnknown {
-				t.Errorf("reason = %q, want %q — an unknown feed must not read as index state",
-					reason, DeferStatusUnknown)
-			}
+	for _, s := range []IndexStatusResponse{
+		{Ready: true, State: IndexStateReady, BootstrapComplete: true},
+		{Ready: false, State: IndexStateBuilding, BootstrapComplete: true, StalenessMs: 1},
+		{},
+	} {
+		proceed, reason := EvaluateReadinessGate(StatusReading{Status: s, Fresh: false})
+		if proceed {
+			t.Errorf("proceeded on an unknown status: %+v", s)
+		}
+		if reason != DeferStatusUnknown {
+			t.Errorf("reason = %q, want %q — an unknown feed must not read as index state",
+				reason, DeferStatusUnknown)
 		}
 	}
 }
 
-// TestEvaluateReadinessGate_CoverageNeverDefers pins the review-driven half of D1:
-// coverage may LICENSE a proceed (a caught-up view answers any freshness requirement
-// with zero age, which is what keeps the staleness presence encoding sound) but is
-// never itself a reason to withhold. Before ADR-084 the two directions were fused into
-// one Ready bool, and that is what made ordinary lag look like a correctness problem.
-func TestEvaluateReadinessGate_CoverageNeverDefers(t *testing.T) {
-	for _, want := range []Freshness{FreshnessExact(), FreshnessWithin(time.Millisecond), FreshnessNone()} {
-		// Caught up: no staleness is reported (presence encoding), and every
-		// freshness declaration is satisfied — including a bound so tight that the
-		// staleness comparison alone would have rejected it.
-		proceed, reason := EvaluateReadinessGate(
-			StatusReading{Status: healthy(true, 0), Fresh: true, Age: time.Hour}, want)
-		if !proceed {
-			t.Errorf("a caught-up healthy index deferred as %q", reason)
-		}
+// TestEvaluateReadinessGate_CoverageNeitherLicensesNorWithholds pins Ready's total
+// absence from the gate. Before ADR-084 the two directions were fused into one Ready
+// bool, and that is what made ordinary lag look like a correctness problem; the
+// freshness parameter then kept half of it alive as an opt-in. Now the bit is inert
+// here: flipping it changes NO verdict, healthy or not. A caller that genuinely needs
+// read-your-writes compares its own revision against IndexedRevision itself.
+func TestEvaluateReadinessGate_CoverageNeitherLicensesNorWithholds(t *testing.T) {
+	states := []struct {
+		name   string
+		status IndexStatusResponse
+	}{
+		{"healthy", IndexStatusResponse{State: IndexStateBuilding, BootstrapComplete: true, StalenessMs: 9_000}},
+		{"degraded", IndexStatusResponse{State: IndexStateDegraded, BootstrapComplete: true}},
+		{"unbootstrapped", IndexStatusResponse{State: IndexStateBuilding, TargetRevision: 10}},
+		{"unrecognized", IndexStatusResponse{State: "future_state", BootstrapComplete: true}},
 	}
-}
+	for _, tc := range states {
+		t.Run(tc.name, func(t *testing.T) {
+			notCovered := tc.status
+			notCovered.Ready = false
+			covered := tc.status
+			covered.Ready = true
 
-// TestFreshness_ZeroValueIsStrictest pins the constructor contract. The zero value must
-// be EXACT, never "none": a Freshness reaching the gate through an uninitialised struct
-// field must fail toward withholding, and the shipped clustering operator contract
-// ("empty or 0 max_staleness = require exact index catch-up") depends on it — a silent
-// inversion there would loosen the strictest gate in the system by doing nothing.
-func TestFreshness_ZeroValueIsStrictest(t *testing.T) {
-	behind := StatusReading{Status: healthy(false, 5), Fresh: true}
+			gotNo, reasonNo := EvaluateReadinessGate(StatusReading{Status: notCovered, Fresh: true})
+			gotYes, reasonYes := EvaluateReadinessGate(StatusReading{Status: covered, Fresh: true})
 
-	if proceed, _ := EvaluateReadinessGate(behind, Freshness{}); proceed {
-		t.Error("the zero-value Freshness proceeded on a lagging index; it must mean exact")
-	}
-	if proceed, _ := EvaluateReadinessGate(behind, FreshnessExact()); proceed {
-		t.Error("FreshnessExact proceeded on a lagging index")
-	}
-	// An operator who writes 0 (or omits the field) gets exact, not unbounded.
-	for _, d := range []time.Duration{0, -time.Second} {
-		if proceed, _ := EvaluateReadinessGate(behind, FreshnessWithin(d)); proceed {
-			t.Errorf("FreshnessWithin(%s) proceeded; a non-positive bound must mean exact", d)
-		}
-	}
-	if proceed, _ := EvaluateReadinessGate(behind, FreshnessNone()); !proceed {
-		t.Error("FreshnessNone deferred on a healthy lagging index; none must mean no freshness requirement")
+			if gotNo != gotYes || reasonNo != reasonYes {
+				t.Errorf("Ready changed the verdict: false→(%v,%q) true→(%v,%q); coverage must be inert",
+					gotNo, reasonNo, gotYes, reasonYes)
+			}
+		})
 	}
 }
 
 // TestEvaluateReadinessGate_UnrecognizedStateFailsClosed pins the allow-list. The gate
 // used to check only for degraded/reset_required, so a blank or future State read as
 // "not a hard stop, therefore healthy" and proceeded — a fail-OPEN on exactly the field
-// ADR-084 made load-bearing when health replaced coverage.
+// ADR-084 made load-bearing when health replaced coverage, and now the ONLY thing
+// standing between a garbled envelope and a served answer.
 //
 // A blank State is reachable without any malice: an empty envelope, a partially written
 // key, or a consumer built against a newer producer that added a state.
@@ -284,16 +259,13 @@ func TestEvaluateReadinessGate_UnrecognizedStateFailsClosed(t *testing.T) {
 		status := IndexStatusResponse{
 			State: state, BootstrapComplete: true, TargetRevision: 100, StalenessMs: 1,
 		}
-		for _, want := range []Freshness{FreshnessExact(), FreshnessWithin(time.Hour), FreshnessNone()} {
-			proceed, reason := EvaluateReadinessGate(
-				StatusReading{Status: status, Fresh: true}, want)
-			if proceed {
-				t.Errorf("State %q proceeded; an uninterpretable state must fail closed", state)
-			}
-			if reason != DeferUnrecognizedState {
-				t.Errorf("State %q gave reason %q, want %q — the operator action is a version "+
-					"check, not a tolerance tweak", state, reason, DeferUnrecognizedState)
-			}
+		proceed, reason := EvaluateReadinessGate(StatusReading{Status: status, Fresh: true})
+		if proceed {
+			t.Errorf("State %q proceeded; an uninterpretable state must fail closed", state)
+		}
+		if reason != DeferUnrecognizedState {
+			t.Errorf("State %q gave reason %q, want %q — the operator action is a version "+
+				"check, not a config tweak", state, reason, DeferUnrecognizedState)
 		}
 	}
 
@@ -303,68 +275,143 @@ func TestEvaluateReadinessGate_UnrecognizedStateFailsClosed(t *testing.T) {
 		_, reason := EvaluateReadinessGate(StatusReading{
 			Status: IndexStatusResponse{State: state, BootstrapComplete: true, Ready: true},
 			Fresh:  true,
-		}, FreshnessNone())
+		})
 		if reason == DeferUnrecognizedState {
 			t.Errorf("declared state %q was rejected as unrecognized", state)
 		}
 	}
 }
 
-// TestEvaluateReadinessGate_StalenessArithmeticCannotFailOpen pins the overflow guards.
-// StalenessMs is a uint64 off the wire and time.Duration is int64 NANOseconds, so a
-// large value wraps NEGATIVE and sails under any positive bound — MaxUint64 converts to
-// -1ms. A backwards local clock does the same thing from the other side, subtracting
-// from the age. Both directions are fail-open, which is the one direction this gate is
-// not allowed to fail in.
-func TestEvaluateReadinessGate_StalenessArithmeticCannotFailOpen(t *testing.T) {
-	bound := FreshnessWithin(3 * time.Second)
+// TestEvaluateReadinessGate_HealthOrderIsAttributable pins the evaluation ORDER, which
+// is what makes a defer reason an operator instruction rather than a label. Each row
+// stacks a further fault on top of the previous one; the reason reported must stay the
+// OUTERMOST (most fundamental) fact, because an operator handed "bootstrap_incomplete"
+// for a dead status feed goes and watches a build that no one is reporting on.
+func TestEvaluateReadinessGate_HealthOrderIsAttributable(t *testing.T) {
+	// A maximally broken envelope: dead feed, garbage state, degraded, unbootstrapped.
+	worst := IndexStatusResponse{State: "gibberish", BootstrapComplete: false, StalenessMs: 5_000}
 
-	t.Run("an out-of-range staleness defers", func(t *testing.T) {
-		for _, ms := range []uint64{math.MaxUint64, math.MaxUint64 - 1, math.MaxInt64} {
-			proceed, reason := EvaluateReadinessGate(StatusReading{
-				Status: healthy(false, ms), Fresh: true,
-			}, bound)
+	tests := []struct {
+		name    string
+		reading StatusReading
+		want    DeferReason
+	}{
+		{
+			name:    "a dead feed outranks everything in the envelope",
+			reading: StatusReading{Status: worst, Fresh: false},
+			want:    DeferStatusUnknown,
+		},
+		{
+			name:    "an uninterpretable state outranks the hard stop it might be hiding",
+			reading: StatusReading{Status: worst, Fresh: true},
+			want:    DeferUnrecognizedState,
+		},
+		{
+			name: "a hard stop outranks an incomplete build",
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: IndexStateDegraded, BootstrapComplete: false},
+				Fresh:  true,
+			},
+			want: DeferHardStop,
+		},
+		{
+			name: "an incomplete build is reported once nothing more fundamental is wrong",
+			reading: StatusReading{
+				Status: IndexStatusResponse{State: IndexStateBuilding, BootstrapComplete: false},
+				Fresh:  true,
+			},
+			want: DeferBootstrapIncomplete,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proceed, reason := EvaluateReadinessGate(tt.reading)
 			if proceed {
-				t.Errorf("StalenessMs=%d proceeded under a 3s bound — the conversion wrapped negative", ms)
+				t.Fatal("an unhealthy index proceeded")
 			}
-			if reason != DeferOverStaleness {
-				t.Errorf("StalenessMs=%d gave %q, want over_staleness", ms, reason)
+			if reason != tt.want {
+				t.Errorf("reason = %q, want %q", reason, tt.want)
 			}
-		}
-	})
+		})
+	}
+}
 
-	t.Run("a backwards local clock cannot credit freshness", func(t *testing.T) {
-		// The envelope says the view is 10s old; the local clock claims the reading
-		// arrived "in the future". Crediting that would make a 10s-old view pass a 3s
-		// bound.
-		proceed, _ := EvaluateReadinessGate(StatusReading{
-			Status: healthy(false, 10_000), Fresh: true, Age: -30 * time.Second,
-		}, bound)
+// TestDeferReasons_AreTheClosedSet guards the metric label vocabulary. Every reason the
+// gate can emit must be one of the four declared constants: the graph-clustering
+// defer_total{reason} label set is enumerated from them, and countDefer silently DROPS
+// an unrecognized value rather than leak cardinality — so a fifth reason introduced
+// without updating that list would go uncounted, which is precisely the invisible-defer
+// shape gh#590 cost three cycles on.
+func TestDeferReasons_AreTheClosedSet(t *testing.T) {
+	// Sourced from AllDeferReasons, NOT a literal — this is the test that proves the
+	// canonical list and the gate agree, so hand-copying the names here would let both
+	// drift together unnoticed. It stays a real assertion because `seen` below is built
+	// by EXECUTING the gate: a reason the gate emits but AllDeferReasons omits fails the
+	// first check, and a reason AllDeferReasons declares but no reading reaches fails the
+	// second.
+	//
+	// KNOWN LIMIT, verified by mutation: this cannot catch a new reason returned from a
+	// branch no reading below reaches — such a mutant passes, because `seen` only ever
+	// contains what the table provokes. The readings are therefore load-bearing, not
+	// illustrative: a new gate branch needs a new row here, or its reason is unguarded.
+	closed := map[DeferReason]bool{}
+	for _, reason := range AllDeferReasons {
+		closed[reason] = true
+	}
+
+	// A spread of envelopes wide enough to reach every branch, including the
+	// combinations a real producer emits under load.
+	readings := []StatusReading{
+		{Status: healthy(true, 0), Fresh: false},
+		{Status: healthy(false, 0), Fresh: true},
+		{Status: healthy(false, 1<<63), Fresh: true},
+		{Status: IndexStatusResponse{}, Fresh: true},
+		{Status: IndexStatusResponse{State: IndexStateDegraded, BootstrapComplete: true}, Fresh: true},
+		{Status: IndexStatusResponse{State: IndexStateResetRequired, BootstrapComplete: true}, Fresh: true},
+		{Status: IndexStatusResponse{State: IndexStateBuilding}, Fresh: true},
+		{Status: IndexStatusResponse{State: "someday"}, Fresh: true},
+	}
+	seen := map[DeferReason]bool{}
+	for _, r := range readings {
+		proceed, reason := EvaluateReadinessGate(r)
 		if proceed {
-			t.Error("a negative reading age subtracted from the view age and passed the bound")
+			if reason != DeferNone {
+				t.Errorf("proceed carried reason %q", reason)
+			}
+			continue
 		}
-	})
+		if !closed[reason] {
+			t.Errorf("gate emitted %q, which is outside the closed reason set — "+
+				"defer_total would silently drop it", reason)
+		}
+		seen[reason] = true
+	}
+	for reason := range closed {
+		if !seen[reason] {
+			t.Errorf("no reading produced %q; the table no longer covers every branch", reason)
+		}
+	}
+}
 
-	t.Run("a negative age does not reject an otherwise fresh view", func(t *testing.T) {
-		// Dropping the local contribution is the conservative reading, not a blanket
-		// defer: the envelope's own staleness still decides.
-		proceed, _ := EvaluateReadinessGate(StatusReading{
-			Status: healthy(false, 500), Fresh: true, Age: -time.Second,
-		}, bound)
-		if !proceed {
-			t.Error("a 500ms-stale view was rejected because the local clock stepped back")
-		}
-	})
+// TestStatusReading_ZeroValueFailsClosed pins the struct's fail-direction. With the
+// Freshness parameter gone, StatusReading is the gate's ENTIRE input, so an
+// uninitialised one reaching it must withhold rather than serve. Fresh's zero value is
+// false, which is the safe direction — this test exists so a future field reordering or
+// an inverted "Stale bool" rename cannot flip it silently.
+func TestStatusReading_ZeroValueFailsClosed(t *testing.T) {
+	proceed, reason := EvaluateReadinessGate(StatusReading{})
+	if proceed {
+		t.Fatal("the zero-value StatusReading proceeded; an uninitialised reading must fail closed")
+	}
+	if reason != DeferStatusUnknown {
+		t.Errorf("reason = %q, want %q — nothing was ever received", reason, DeferStatusUnknown)
+	}
 
-	t.Run("the largest safe staleness still evaluates", func(t *testing.T) {
-		// Just under the conversion ceiling: enormous, so it must defer on the BOUND
-		// rather than on the range guard — proving the guard is not swallowing the
-		// normal path.
-		proceed, reason := EvaluateReadinessGate(StatusReading{
-			Status: healthy(false, maxStalenessMs), Fresh: true,
-		}, bound)
-		if proceed || reason != DeferOverStaleness {
-			t.Errorf("proceed=%v reason=%q, want a plain over_staleness defer", proceed, reason)
-		}
-	})
+	// And the deliberate in-process shape (a producer computing its own envelope, with
+	// no transport to lose) is the ONLY thing that opens it: Fresh must be set
+	// explicitly, and the envelope must still pass health on its own merits.
+	proceed, _ = EvaluateReadinessGate(StatusReading{Status: healthy(false, 250), Fresh: true})
+	if !proceed {
+		t.Error("an in-process healthy reading deferred; Fresh: true is the whole opt-in")
+	}
 }
