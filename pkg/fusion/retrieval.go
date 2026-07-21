@@ -21,12 +21,12 @@ type RetrievalClient interface {
 	// (ADR-084). A quiet or unvouchable feed returns ErrReadinessUnknown; a wiring
 	// failure returns a plain error.
 	Status(ctx context.Context) (IndexStatus, error)
-	// Resolve maps a query to seed entity IDs, most relevant first. Its
-	// arguments are a struct rather than positional so the NL-only Scope does
-	// not force symbol/prefix callers to pass an ignored value, and so a future
-	// resolve dimension adds a field instead of re-breaking every impl and fake
-	// (ADR-071).
-	Resolve(ctx context.Context, q ResolveQuery) ([]string, error)
+	// Resolve maps a query to seeds, most relevant first. Both its argument and its
+	// result are structs rather than bare values, for the same reason: the NL-only
+	// Scope must not force symbol/prefix callers to pass an ignored value, and a
+	// future resolve dimension should add a field instead of re-breaking every impl
+	// and fake (ADR-071).
+	Resolve(ctx context.Context, q ResolveQuery) ([]Seed, error)
 	// Entity returns an entity by ID, or (nil, nil) if the read found nothing.
 	// "Found nothing" is not proof of absence — see Hydration.
 	Entity(ctx context.Context, id string) (*Entity, error)
@@ -48,6 +48,35 @@ type RetrievalClient interface {
 	Neighbors(ctx context.Context, id string, predicates []string, dir Direction) ([]Edge, error)
 	// Names suggests entity display names near a query (for a miss's did_you_mean).
 	Names(ctx context.Context, query string, limit int) ([]string, error)
+}
+
+// Seed is one resolved candidate, most relevant first.
+//
+// It carries Similarity because the graph.query.semantic wire already reports a
+// per-result score and the resolve surface was throwing it away — the engine could rank
+// only by the ORDER seeds arrived in, so a caller asking "how confident is this match?"
+// had nothing to read. Modes that carry no score (symbol, prefix) leave it zero, which
+// is why HasSimilarity exists rather than treating 0 as a value.
+type Seed struct {
+	// ID is the resolved entity ID.
+	ID string
+	// Similarity is the resolve mode's own relevance score, when it has one.
+	// Semantic resolve reports cosine similarity; symbol and prefix report none.
+	Similarity float64
+	// HasSimilarity distinguishes "this mode scored it 0" from "this mode does not
+	// score". Without it a prefix seed would surface as a perfect zero-relevance
+	// match, which is a claim the prefix wire never made.
+	HasSimilarity bool
+}
+
+// SeedIDs projects seeds to their IDs, for the batch-hydration call and anywhere else
+// that needs the identity set rather than the scores.
+func SeedIDs(seeds []Seed) []string {
+	ids := make([]string, 0, len(seeds))
+	for _, s := range seeds {
+		ids = append(ids, s.ID)
+	}
+	return ids
 }
 
 // Hydration is a batch fetch's outcome: the entities that loaded, in requested order,

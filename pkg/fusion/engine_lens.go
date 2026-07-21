@@ -118,7 +118,7 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		}
 		return Response{}, err
 	}
-	hydration, err := e.graph.Entities(ctx, seeds)
+	hydration, err := e.graph.Entities(ctx, SeedIDs(seeds))
 	if err != nil {
 		if isIndexNotReady(err) {
 			return e.notReadyEnvelope(ctx, status), nil
@@ -157,6 +157,9 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		return Response{}, err
 	}
 	resp.Nodes, resp.Truncated = nodes, truncated
+	if req.IncludeScores {
+		applyScores(resp.Nodes, ranked, seeds)
+	}
 	if len(resp.Nodes) == 0 {
 		resp.Misses = []Miss{{Query: req.Query}}
 	}
@@ -174,6 +177,39 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		resp.Graph = e.computeGraph(ctx, ranked, lens, status.IndexedRevision)
 	}
 	return resp, nil
+}
+
+// applyScores attaches rank and resolve similarity to the returned nodes (ADR-084 D5),
+// opt-in via the request so the default wire shape is unchanged.
+//
+// Rank is the node's 1-based position in the RANKED order, which is what the caller
+// actually sees — not the resolve position, since ranking reorders. Similarity comes
+// from the seed and is joined BY ENTITY ID, never by slice position: ranking reorders
+// and the budget truncates, so any positional join would silently mislabel scores. That
+// is the same class of bug as the cache-order scramble this change already fixed, and
+// it is why the join is written this way rather than as a parallel-slice walk.
+//
+// nodes[i] corresponds to ranked[i] by construction (buildNodes appends in order and
+// stops at the budget), so ranked supplies the entity ID that keys the lookup.
+func applyScores(nodes []Node, ranked []*Entity, seeds []Seed) {
+	similarity := make(map[string]Seed, len(seeds))
+	for _, s := range seeds {
+		if s.HasSimilarity {
+			similarity[s.ID] = s
+		}
+	}
+	for i := range nodes {
+		nodes[i].Rank = i + 1
+		if i >= len(ranked) {
+			// Defensive: buildNodes cannot produce more nodes than ranked entities.
+			// Bailing beats indexing past the slice that supplies the join key.
+			continue
+		}
+		if seed, ok := similarity[ranked[i].ID]; ok {
+			nodes[i].Similarity = seed.Similarity
+			nodes[i].HasSimilarity = true
+		}
+	}
 }
 
 // isIndexNotReady reports whether err is the classified readiness transient a

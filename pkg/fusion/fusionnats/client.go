@@ -248,7 +248,7 @@ func unknownCause(reading readiness.Reading) error {
 // Resolve maps a query to seed entity IDs by mode, most relevant first. The mode
 // selects the subject; an unknown mode is an error rather than a silent default
 // (ResolveMode is an open string enum).
-func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]string, error) {
+func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]fusion.Seed, error) {
 	switch q.Mode {
 	case fusion.ResolveModeSymbol:
 		return c.resolveByName(ctx, q.Query, q.Limit)
@@ -261,22 +261,24 @@ func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]string, 
 	}
 }
 
-// resolveByName resolves a symbol to ranked entity IDs via graph.query.byName.
-func (c *Client) resolveByName(ctx context.Context, query string, limit int) ([]string, error) {
+// resolveByName resolves a symbol to ranked seeds via graph.query.byName. The byName
+// wire reports rank by ORDER and carries no score, so the seeds carry none — reporting
+// a zero would claim a relevance the wire never asserted.
+func (c *Client) resolveByName(ctx context.Context, query string, limit int) ([]fusion.Seed, error) {
 	matches, err := c.byNameMatches(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(matches))
+	seeds := make([]fusion.Seed, 0, len(matches))
 	for _, m := range matches {
-		ids = append(ids, m.EntityID)
+		seeds = append(seeds, fusion.Seed{ID: m.EntityID})
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 // resolvePrefix resolves an ID prefix to entity IDs via graph.query.prefix. Only
 // the first page is taken — resolve seeds are bounded by limit, not exhaustive.
-func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]string, error) {
+func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]fusion.Seed, error) {
 	if err := validatePrefix(query); err != nil {
 		return nil, err
 	}
@@ -291,11 +293,13 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate prefix: %w", err)
 	}
-	ids := make([]string, 0, len(resp.Entities))
+	// Prefix resolve is an enumeration, not a ranking: it carries no score, so the
+	// seeds carry none.
+	seeds := make([]fusion.Seed, 0, len(resp.Entities))
 	for i := range resp.Entities {
-		ids = append(ids, resp.Entities[i].ID)
+		seeds = append(seeds, fusion.Seed{ID: resp.Entities[i].ID})
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 // resolveSemantic resolves a natural-language query to embedding-ranked entity
@@ -304,7 +308,7 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 // request body ONLY when non-empty, so an unscoped call is byte-identical to the
 // pre-scope wire shape (every existing caller, and every symbol/prefix path,
 // sends none).
-func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]string, error) {
+func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]fusion.Seed, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -316,22 +320,30 @@ func (c *Client) resolveSemantic(ctx context.Context, query string, scope []stri
 	if err != nil {
 		return nil, err
 	}
+	// Similarity is decoded because the semantic wire has always reported it and this
+	// decode had always dropped it — the engine could rank only by arrival order, so a
+	// caller asking "how good is this match?" had nothing to read.
 	var resp struct {
 		Results []struct {
-			EntityID string `json:"entity_id"`
+			EntityID   string  `json:"entity_id"`
+			Similarity float64 `json:"similarity"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode semantic: %w", err)
 	}
+	seeds := make([]fusion.Seed, 0, len(resp.Results))
 	ids := make([]string, 0, len(resp.Results))
 	for _, r := range resp.Results {
+		seeds = append(seeds, fusion.Seed{
+			ID: r.EntityID, Similarity: r.Similarity, HasSimilarity: true,
+		})
 		ids = append(ids, r.EntityID)
 	}
 	if err := graph.ValidateDecodedEntityIDs(ids); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate semantic: %w", err)
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 func validatePrefix(prefix string) error {

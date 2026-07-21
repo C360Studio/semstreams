@@ -397,8 +397,8 @@ func TestResolve_Symbol(t *testing.T) {
 	if req["name"] != "Widget" {
 		t.Errorf("request name = %v, want Widget", req["name"])
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 
@@ -415,8 +415,8 @@ func TestResolve_Prefix(t *testing.T) {
 	if fake.lastSubject != subjectPrefix {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectPrefix)
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 
@@ -462,8 +462,8 @@ func TestResolve_Semantic(t *testing.T) {
 	if fake.lastSubject != subjectSemantic {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectSemantic)
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 

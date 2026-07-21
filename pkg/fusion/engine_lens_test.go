@@ -34,6 +34,9 @@ type fakeGraph struct {
 	entitiesFn func(ids []string) ([]*fusion.Entity, error)
 	// unhydrated, when set, is reported alongside whatever entitiesFn returns.
 	unhydrated []fusion.Unhydrated
+	// seedsFn, when set, overrides seed resolution so a test can attach similarity
+	// scores the way the semantic wire does.
+	seedsFn func(q fusion.ResolveQuery) []fusion.Seed
 
 	// statusFn, when set, overrides status/statusErr per call (1-based call
 	// number) — the graph facet's ViewRevision re-sample needs a fake whose
@@ -49,9 +52,19 @@ func (g *fakeGraph) Status(context.Context) (fusion.IndexStatus, error) {
 	}
 	return g.status, g.statusErr
 }
-func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]string, error) {
+func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]fusion.Seed, error) {
 	g.lastResolve = q
-	return g.seeds[q.Query], g.resolveErr
+	if g.seedsFn != nil {
+		return g.seedsFn(q), g.resolveErr
+	}
+	// Seeds default to unscored, matching the symbol/prefix wires. A test that needs
+	// similarity sets seedsFn — modelling every mode as scored would let a positional
+	// score join pass here while mislabelling in production.
+	out := make([]fusion.Seed, 0, len(g.seeds[q.Query]))
+	for _, id := range g.seeds[q.Query] {
+		out = append(out, fusion.Seed{ID: id})
+	}
+	return out, g.resolveErr
 }
 func (g *fakeGraph) Entity(_ context.Context, id string) (*fusion.Entity, error) {
 	return g.entities[id], nil

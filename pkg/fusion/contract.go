@@ -53,6 +53,10 @@ type Request struct {
 	// resolve modes.
 	Scope  []string `json:"scope,omitempty"`
 	Budget Budget   `json:"budget,omitzero"`
+	// IncludeScores asks for per-node rank and resolve similarity. Opt-in so the
+	// default response is byte-unchanged: scores are debugging and calibration
+	// signal, and most callers act on the ordering rather than the numbers.
+	IncludeScores bool `json:"include_scores,omitempty"`
 }
 
 // Provenance records how an answer was produced so callers can calibrate trust.
@@ -177,6 +181,17 @@ type Node struct {
 	// Handle is an opaque continuation token (internally the entity ID). Not an
 	// addressing scheme: never parse or construct it.
 	Handle string `json:"handle,omitempty"`
+	// Rank is this node's 1-based position in the returned ordering. Present only
+	// when the request set IncludeScores. It reflects the RANKED order the caller
+	// sees, not the order seeds resolved in — ranking reorders.
+	Rank int `json:"rank,omitempty"`
+	// Similarity is the resolve mode's own relevance score, present only when
+	// IncludeScores was set AND the mode reports one (semantic does; symbol and
+	// prefix do not). Joined to this node by entity ID, never by position.
+	Similarity float64 `json:"similarity,omitempty"`
+	// HasSimilarity distinguishes "scored 0" from "this mode does not score", which
+	// omitempty alone cannot express on a float.
+	HasSimilarity bool `json:"has_similarity,omitempty"`
 }
 
 // Miss reports a query that resolved to nothing, with near-matches.

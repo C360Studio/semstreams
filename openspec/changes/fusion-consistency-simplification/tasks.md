@@ -136,10 +136,20 @@
       retrieval.go:18-19,31, graph-query passthrough comment
       (query.go:183-185), graph-ingest Phase-3 comment; JSON round-trip +
       default-wire-shape-unchanged tests.
-- [ ] 4.5 Score passthrough (D5): rank always (post-reorder position),
+- [x] 4.5 Score passthrough (D5): rank always (post-reorder position),
       similarity where the resolve mode provides one (semantic decode
       struct gains the field), joined by entity ID; opt-in request bool
-      with JSON round-trip test; omitempty wire fields.
+      with JSON round-trip test; omitempty wire fields. DONE, with an OWNER
+      DECISION deviating from D5: D5 said "no RetrievalClient.Resolve break
+      needed... similarity rides the existing decode struct gaining one
+      field", which does not work — Resolve returned []string, so a decoded
+      similarity had no path to the engine, and the graph.query.semantic wire
+      was already reporting a score fusionnats dropped on the floor. Resolve
+      now returns []Seed{ID, Similarity, HasSimilarity}; HasSimilarity keeps
+      an unscored mode (symbol/prefix) from advertising a perfect
+      zero-relevance match. Join is by entity ID and the test is verified
+      non-vacuous — a deliberately reordering fixture plus a stash-check that
+      a positional join swaps the two scores and fails.
 - [x] 4.6 `processor/research-graph-execute/adapters.go` (second in-repo
       batch consumer, found by review): reconcile `EntityState` against the
       requested set (or consume `missing`), and fix its comment blessing
