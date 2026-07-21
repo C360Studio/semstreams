@@ -67,6 +67,20 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 		}
 		ruleConfig.Consumer = userConfig.Consumer
 
+		// ENTITY_STATES startup-wait budget (gh#610). Overlay only positive
+		// values: this factory copies field-by-field onto defaultConfig(), so an
+		// omitted knob arrives as 0 and must not clobber the sibling-reader
+		// default. Without this overlay the knobs would be accepted, validated,
+		// and published in the schema while the processor kept the hard-coded
+		// budget — an operator-facing lie of exactly the kind this program exists
+		// to delete.
+		if userConfig.StartupAttempts > 0 {
+			ruleConfig.StartupAttempts = userConfig.StartupAttempts
+		}
+		if userConfig.StartupInterval > 0 {
+			ruleConfig.StartupInterval = userConfig.StartupInterval
+		}
+
 		// ADR-056 #278 inc 2: the pack-level projection-producer declaration.
 		// These ride the operator config through to ProjectionBindings(), which
 		// the composition root reads ONCE before StartAll to bind ownership.

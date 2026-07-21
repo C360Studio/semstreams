@@ -264,13 +264,31 @@ type AnomalyStatusCounts struct {
 // EmbeddingMetrics contains embedding queue health metrics (Phase 4).
 // These metrics provide visibility into the embedding pipeline flow.
 type EmbeddingMetrics struct {
-	// QueuedTotal is the total number of embeddings sent to the queue
-	QueuedTotal int64 `json:"queued_total"`
+	// ResolvedTotal is the number of embeddings that reached a vector, whether
+	// freshly computed or reused from the dedup cache. It is read verbatim from
+	// semstreams_graph_embedding_embeddings_generated_total, which despite its
+	// name increments on BOTH paths — see the METRIC SEMANTICS block in
+	// validateEmbeddingQueueHealth. It is NOT generated + dedup_hits; that sum
+	// counts every cache hit twice.
+	//
+	// It replaces a queued_total field that was read from
+	// semstreams_graph_embedding_queued_total — a metric no production code has
+	// ever exported. That field was therefore a hard 0 in every result JSON ever
+	// emitted, presented as a real measurement (gh#615). graph-embedding exports
+	// no queue-admission counter, so rather than reinstate a fabricated number
+	// this reports the real work that was accounted for.
+	ResolvedTotal int64 `json:"resolved_total"`
 
-	// GeneratedTotal is the total number of embeddings successfully generated
-	GeneratedTotal int64 `json:"generated_total"`
+	// FreshGeneratedTotal is ResolvedTotal - DedupHits: the embeddings actually
+	// computed rather than served from cache.
+	//
+	// This is the number that tracks embedding cost — on the neural tier it is
+	// the count of remote embedder calls — and no other field reports it. A
+	// change confined to the fresh/reused split is invisible in ResolvedTotal.
+	FreshGeneratedTotal int64 `json:"fresh_generated_total"`
 
-	// DedupHits is the count of embeddings deduplicated (reused from cache)
+	// DedupHits is the count of embeddings served from the dedup cache. A subset
+	// of ResolvedTotal, never an addition to it.
 	DedupHits int64 `json:"dedup_hits"`
 
 	// FailedTotal is the count of failed embedding generations
@@ -279,7 +297,8 @@ type EmbeddingMetrics struct {
 	// PendingCount is the current queue depth (should be 0 at test end)
 	PendingCount int64 `json:"pending_count"`
 
-	// DedupRate is the deduplication efficiency (dedupHits / queuedTotal)
+	// DedupRate is the share of resolutions served from cache
+	// (DedupHits / ResolvedTotal), in the range [0,1].
 	DedupRate float64 `json:"dedup_rate,omitempty"`
 
 	// QueueDrained indicates if the queue was empty at validation time
@@ -530,20 +549,19 @@ func buildComponentAndOutputResults(tr *TieredResults, result *Result) {
 
 // buildEmbeddingMetrics populates embedding queue metrics.
 func buildEmbeddingMetrics(tr *TieredResults, result *Result) {
-	queuedTotal := getInt64Metric(result, "embedding_queued_total")
-	generatedTotal := getInt64Metric(result, "embedding_generated_total")
-	if queuedTotal == 0 && generatedTotal == 0 {
+	resolvedTotal := getInt64Metric(result, "embedding_resolved_total")
+	if resolvedTotal == 0 {
 		return
 	}
+	freshTotal := getInt64Metric(result, "embedding_fresh_generated_total")
 	dedupHits := getInt64Metric(result, "embedding_dedup_hits")
 	failedTotal := getInt64Metric(result, "embedding_failed_total")
 	pendingCount := getInt64Metric(result, "embedding_pending_count")
-	dedupRate := 0.0
-	if queuedTotal > 0 {
-		dedupRate = float64(dedupHits) / float64(queuedTotal)
-	}
+	// Share of resolutions served from cache. The denominator is resolvedTotal
+	// because dedup hits are a subset of it, not an addend.
+	dedupRate := float64(dedupHits) / float64(resolvedTotal)
 	tr.Embeddings = &EmbeddingMetrics{
-		QueuedTotal: queuedTotal, GeneratedTotal: generatedTotal, DedupHits: dedupHits,
+		ResolvedTotal: resolvedTotal, FreshGeneratedTotal: freshTotal, DedupHits: dedupHits,
 		FailedTotal: failedTotal, PendingCount: pendingCount, DedupRate: dedupRate,
 		QueueDrained: pendingCount == 0, NoFailures: failedTotal == 0,
 	}

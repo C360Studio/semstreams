@@ -520,3 +520,100 @@ func TestBM25Embedder_NaturalLanguageQuerySimilarity(t *testing.T) {
 		t.Logf("Doc tokens: %v", embedder.tokenize(doc))
 	}
 }
+
+// TestBM25Embedder_GenerateQueryIsReadOnly pins gh#619: a semantic search must not
+// ingest the user's query as a corpus document.
+//
+// Pre-fix, GenerateQuery delegated straight to Generate, so every search did
+// docCount++, folded the query's terms into termDocCount, and dragged
+// avgDocLength toward the length of a 2-4 token query — shifting both the IDF
+// weights and the length-normalization denominator for every document embedded
+// afterwards. A graph's rankings drifted as a function of how often it had been
+// searched. The existing tests missed this because they assert dimensionality
+// and single-instance determinism, neither of which the mutation disturbs.
+//
+// This does NOT claim BM25's statistics are now correct — they remain
+// process-local and unpersisted. That is the open decision in gh#619.
+func TestBM25Embedder_GenerateQueryIsReadOnly(t *testing.T) {
+	ctx := context.Background()
+
+	corpus := []string{
+		"forklift operation manual for warehouse staff",
+		"battery charging procedure and safety interlocks",
+		"quarterly maintenance schedule for lifting equipment",
+	}
+
+	// Two embedders seeded identically: one gets searched, one never does.
+	searched := NewBM25Embedder(BM25Config{Dimensions: 128})
+	pristine := NewBM25Embedder(BM25Config{Dimensions: 128})
+	for _, e := range []*BM25Embedder{searched, pristine} {
+		if _, err := e.Generate(ctx, corpus); err != nil {
+			t.Fatalf("seed corpus: %v", err)
+		}
+	}
+
+	wantDocCount := searched.docCount
+	wantAvgLen := searched.avgDocLength
+	wantTotalLen := searched.totalDocLength
+	wantVocab := len(searched.termDocCount)
+
+	// A short query — the shape that most distorts avgDocLength.
+	if _, err := searched.GenerateQuery(ctx, []string{"forklift safety"}); err != nil {
+		t.Fatalf("GenerateQuery: %v", err)
+	}
+
+	if searched.docCount != wantDocCount {
+		t.Errorf("GenerateQuery mutated docCount: %d -> %d (a search is not a document)", wantDocCount, searched.docCount)
+	}
+	if searched.avgDocLength != wantAvgLen {
+		t.Errorf("GenerateQuery mutated avgDocLength: %v -> %v", wantAvgLen, searched.avgDocLength)
+	}
+	if searched.totalDocLength != wantTotalLen {
+		t.Errorf("GenerateQuery mutated totalDocLength: %d -> %d", wantTotalLen, searched.totalDocLength)
+	}
+	if got := len(searched.termDocCount); got != wantVocab {
+		t.Errorf("GenerateQuery mutated termDocCount cardinality: %d -> %d", wantVocab, got)
+	}
+
+	// The consequence that actually matters: the NEXT document must embed to the
+	// identical vector whether or not a search happened in between.
+	const nextDoc = "warehouse forklift inspection checklist"
+	afterSearch, err := searched.Generate(ctx, []string{nextDoc})
+	if err != nil {
+		t.Fatalf("Generate after search: %v", err)
+	}
+	neverSearched, err := pristine.Generate(ctx, []string{nextDoc})
+	if err != nil {
+		t.Fatalf("Generate without search: %v", err)
+	}
+	if len(afterSearch[0]) != len(neverSearched[0]) {
+		t.Fatalf("dimension mismatch: %d vs %d", len(afterSearch[0]), len(neverSearched[0]))
+	}
+	for i := range afterSearch[0] {
+		if afterSearch[0][i] != neverSearched[0][i] {
+			t.Fatalf("an intervening search changed a later document's embedding at dim %d: %v vs %v (gh#619)",
+				i, afterSearch[0][i], neverSearched[0][i])
+		}
+	}
+}
+
+// TestBM25Embedder_GenerateStillLearns guards the other side of the gh#619 split:
+// only GenerateQuery went read-only. Generate remains the corpus mutator, because
+// the ingest path's incremental IDF is what makes the vectors useful at all.
+func TestBM25Embedder_GenerateStillLearns(t *testing.T) {
+	ctx := context.Background()
+	embedder := NewBM25Embedder(BM25Config{Dimensions: 128})
+
+	if _, err := embedder.Generate(ctx, []string{"forklift alpha", "forklift beta"}); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if embedder.docCount != 2 {
+		t.Errorf("docCount = %d, want 2 (Generate must still learn)", embedder.docCount)
+	}
+	embedder.mu.RLock()
+	df := embedder.termDocCount["forklift"]
+	embedder.mu.RUnlock()
+	if df != 2 {
+		t.Errorf("termDocCount[forklift] = %d, want 2", df)
+	}
+}

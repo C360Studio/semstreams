@@ -21,6 +21,17 @@ const (
 	EmbeddingDedupBucket = "EMBEDDING_DEDUP"
 )
 
+// ErrRecordGone reports that the EMBEDDING_INDEX record a save was meant to
+// UPDATE no longer exists, so the save was dropped without writing.
+//
+// It is a normal outcome, not a fault: since gh#614 the hop-1 entity tombstone
+// deletes an entity's index key from the watcher goroutine while a hop-2 worker
+// may still be inside an embedder round trip for that same entity. Callers should
+// treat it as "this entity is no longer supposed to have an embedding" and stop —
+// in particular they must not report it as a generation failure or fire the
+// generated callback, which would push a vector for a dead entity into caches.
+var ErrRecordGone = errors.New("embedding index record no longer exists")
+
 // Status represents the processing status of an embedding
 type Status string
 
@@ -68,11 +79,20 @@ type StorageRef struct {
 	Key             string `json:"key"`
 }
 
-// DedupRecord stores content-addressed embeddings for deduplication
+// DedupRecord stores content-addressed embeddings for deduplication.
+//
+// Model and Dimensions record WHICH vector space the stored vector belongs to.
+// The dedup KEY already folds in embedder identity (see DedupKey, gh#612), so a
+// mismatch here should be unreachable; carrying the fields anyway makes a stale
+// record detectable after the fact instead of silently servable — the original
+// defect was that a bm25 vector could be returned and re-stamped with a neural
+// model's name with nothing in the record to contradict it.
 type DedupRecord struct {
 	Vector         []float32 `json:"vector"`
 	EntityIDs      []string  `json:"entity_ids"` // Entities sharing this content
 	FirstGenerated time.Time `json:"first_generated"`
+	Model          string    `json:"model,omitempty"`
+	Dimensions     int       `json:"dimensions,omitempty"`
 }
 
 // ScoredEntity pairs an entity ID with its cosine similarity score.
@@ -191,6 +211,25 @@ func (s *Storage) SaveGenerated(ctx context.Context, entityID string, vector []f
 		return errs.WrapTransient(err, "Storage", "SaveGenerated", "get existing record")
 	}
 
+	// The record vanished while the vector was being generated. DROP the write;
+	// do not resurrect the key.
+	//
+	// SaveGenerated is an UPDATE lane — it exists to carry the pending record's
+	// ContentHash forward — and both ways the key can disappear mean "this entity
+	// must not have a vector right now": the entity was tombstoned in ENTITY_STATES
+	// (hop-1 DeleteEmbedding, gh#614), or the no-source-text path deleted its
+	// pending record. Writing here would re-create exactly the dangling vector
+	// gh#614 removes: semantic search keeps returning an entity ID that graph-query
+	// can no longer resolve, and nothing deletes it a second time because the
+	// tombstone has already fired.
+	//
+	// Dropping fails in the recoverable direction instead. If the entity returns,
+	// hop-1 writes a fresh pending record and hop-2 regenerates from it; the only
+	// cost is one re-embed. A resurrected vector has no such self-correction.
+	if existing == nil {
+		return ErrRecordGone
+	}
+
 	record := &Record{
 		EntityID:    entityID,
 		Vector:      vector,
@@ -223,6 +262,15 @@ func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string) err
 	existing, err := s.GetEmbedding(ctx, entityID)
 	if err != nil {
 		return errs.WrapTransient(err, "Storage", "SaveFailed", "get existing record")
+	}
+
+	// Nothing to mark: the record is already gone. SaveFailed only ever annotates an
+	// existing record, so a missing key means the entity was tombstoned (or its
+	// pending record deleted) while generation was in flight. Creating a failed
+	// record here would leave a permanent EMBEDDING_INDEX entry for an entity that
+	// no longer exists — the tombstone that would have cleaned it up already ran.
+	if existing == nil {
+		return ErrRecordGone
 	}
 
 	existing.Status = StatusFailed
@@ -284,8 +332,19 @@ func (s *Storage) GetByContentHash(ctx context.Context, contentHash string) (*De
 	return &record, nil
 }
 
-// SaveDedup saves a content-addressed embedding for deduplication
-func (s *Storage) SaveDedup(ctx context.Context, contentHash string, vector []float32, entityID string) error {
+// SaveDedup saves a content-addressed embedding for deduplication.
+//
+// model and dimensions identify the vector space the vector belongs to; callers
+// pass the generating embedder's own values so a stale record is auditable
+// (gh#612). contentHash MUST come from DedupKey, not ContentHash — the durable
+// dedup bucket outlives any one embedder configuration.
+func (s *Storage) SaveDedup(
+	ctx context.Context,
+	contentHash string,
+	vector []float32,
+	entityID, model string,
+	dimensions int,
+) error {
 	if contentHash == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveDedup", "content_hash is empty")
 	}
@@ -297,16 +356,28 @@ func (s *Storage) SaveDedup(ctx context.Context, contentHash string, vector []fl
 	}
 
 	var record *DedupRecord
-	if existing != nil {
-		// Add entity to existing list
+	if existing != nil && existing.Model == model && existing.Dimensions == dimensions {
+		// Same vector space: this entity simply shares content with earlier ones,
+		// so it joins the record and the stored vector stands.
 		record = existing
 		record.EntityIDs = append(record.EntityIDs, entityID)
 	} else {
-		// Create new dedup record
+		// No record, or a record from a different/unknown vector space — REPLACE it.
+		//
+		// This branch must not merely backfill identity onto the old record. Doing
+		// that stamped a legacy identityless record with the current model's name
+		// while keeping its old vector, so the next entity with the same content
+		// passed dedupRecordUsable's identity check and was served that stale
+		// vector: gh#612 surviving one hop past its own guard. The vector passed in
+		// here was generated by the current embedder and is authoritative for this
+		// key, so the prior entity list goes with the prior vector — those entities
+		// regenerate under the same rule and re-join.
 		record = &DedupRecord{
 			Vector:         vector,
 			EntityIDs:      []string{entityID},
 			FirstGenerated: time.Now(),
+			Model:          model,
+			Dimensions:     dimensions,
 		}
 	}
 

@@ -1,7 +1,10 @@
 package graphquery
 
 import (
+	"encoding/json"
 	"fmt"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -380,4 +383,115 @@ func containsAll(s string, subs ...string) bool {
 		}
 	}
 	return true
+}
+
+// TestSortAndCapEntityIDsDeterministic pins gh#621: the global-search candidate
+// corpus is ordered BEFORE the resource cap is applied, so the retained subset is
+// a pure function of the candidate set.
+//
+// The pre-fix code ranged the candidate map straight into a slice and sliced it
+// to MaxTotalEntitiesInSearch. Go randomizes map iteration order, so past the cap
+// the same query against an unchanged graph kept a different arbitrary 10,000
+// entities on every call — and that partial corpus feeds LLM answer synthesis.
+// Repeating the call is the whole test: one run can coincide, fifty cannot.
+func TestSortAndCapEntityIDsDeterministic(t *testing.T) {
+	const (
+		limit      = 25
+		candidates = 500
+	)
+	idSet := make(map[string]bool, candidates)
+	for i := 0; i < candidates; i++ {
+		idSet[fmt.Sprintf("acme.ops.robotics.gcs.drone.%04d", i)] = true
+	}
+
+	want, truncated := sortAndCapEntityIDs(idSet, limit)
+	if !truncated {
+		t.Fatalf("truncated = false with %d candidates over a limit of %d", candidates, limit)
+	}
+	if len(want) != limit {
+		t.Fatalf("len = %d, want %d", len(want), limit)
+	}
+	if !sort.StringsAreSorted(want) {
+		t.Fatalf("result is not sorted: %v", want)
+	}
+	// Sorting first means the cap keeps a defined prefix, not an arbitrary one.
+	if want[0] != "acme.ops.robotics.gcs.drone.0000" || want[limit-1] != "acme.ops.robotics.gcs.drone.0024" {
+		t.Errorf("cap did not retain the lexicographically smallest %d IDs: first=%q last=%q", limit, want[0], want[limit-1])
+	}
+
+	for run := 0; run < 50; run++ {
+		got, gotTruncated := sortAndCapEntityIDs(idSet, limit)
+		if !gotTruncated {
+			t.Fatalf("run %d: truncated = false", run)
+		}
+		if !slices.Equal(got, want) {
+			t.Fatalf("run %d returned a different subset of the SAME candidate set (gh#621)\n first got:  %v\n first want: %v", run, got[:3], want[:3])
+		}
+	}
+}
+
+// TestSortAndCapEntityIDsUnderLimit covers the non-truncating paths: the flag must
+// stay false so a complete corpus is never reported as partial.
+func TestSortAndCapEntityIDsUnderLimit(t *testing.T) {
+	idSet := map[string]bool{
+		"acme.ops.robotics.gcs.drone.003": true,
+		"acme.ops.robotics.gcs.drone.001": true,
+		"acme.ops.robotics.gcs.drone.002": true,
+	}
+
+	ids, truncated := sortAndCapEntityIDs(idSet, 10)
+	if truncated {
+		t.Errorf("truncated = true with 3 candidates under a limit of 10")
+	}
+	want := []string{
+		"acme.ops.robotics.gcs.drone.001",
+		"acme.ops.robotics.gcs.drone.002",
+		"acme.ops.robotics.gcs.drone.003",
+	}
+	if !slices.Equal(ids, want) {
+		t.Errorf("ids = %v, want %v", ids, want)
+	}
+
+	// Exactly at the limit is not truncation.
+	if _, atLimit := sortAndCapEntityIDs(idSet, 3); atLimit {
+		t.Errorf("truncated = true when the candidate count equals the limit")
+	}
+
+	// limit <= 0 means no cap.
+	if all, capped := sortAndCapEntityIDs(idSet, 0); capped || len(all) != 3 {
+		t.Errorf("limit=0 should not cap: capped=%v len=%d", capped, len(all))
+	}
+
+	if empty, capped := sortAndCapEntityIDs(map[string]bool{}, 10); capped || len(empty) != 0 {
+		t.Errorf("empty set: capped=%v len=%d", capped, len(empty))
+	}
+}
+
+// TestGlobalSearchResponseEntitiesTruncatedJSON pins the operator/agent-visible
+// half of gh#621: truncation is reported on the wire, not just avoided silently.
+// omitempty means a complete corpus stays absent from the payload.
+func TestGlobalSearchResponseEntitiesTruncatedJSON(t *testing.T) {
+	truncatedJSON, err := json.Marshal(GlobalSearchResponse{EntitiesTruncated: true})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !strings.Contains(string(truncatedJSON), `"entities_truncated":true`) {
+		t.Errorf("truncation flag missing from response payload: %s", truncatedJSON)
+	}
+
+	var round GlobalSearchResponse
+	if err := json.Unmarshal(truncatedJSON, &round); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if !round.EntitiesTruncated {
+		t.Errorf("EntitiesTruncated did not survive the round trip")
+	}
+
+	completeJSON, err := json.Marshal(GlobalSearchResponse{})
+	if err != nil {
+		t.Fatalf("marshal complete: %v", err)
+	}
+	if strings.Contains(string(completeJSON), "entities_truncated") {
+		t.Errorf("complete response should omit the flag entirely: %s", completeJSON)
+	}
 }

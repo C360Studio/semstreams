@@ -104,12 +104,22 @@ func NewBM25Embedder(cfg BM25Config) *BM25Embedder {
 }
 
 // GenerateQuery embeds query-side text. BM25 is a symmetric bag-of-words model —
-// there is no query/document asymmetry, so it is identical to Generate (gh#438).
-// Like Generate, it folds the text's terms into the corpus IDF statistics (the
-// pre-gh#438 query path already did this via the direct Generate call, so behavior
-// is unchanged); a read-only query vectorization would be a separate follow-up.
+// there is no query/document asymmetry, so the returned vector is what Generate
+// would produce for the same text against the same statistics (gh#438).
+//
+// It is READ-ONLY over the corpus statistics (gh#619). Searching is not
+// observing a document: folding the query's terms into docCount/termDocCount and
+// its (typically 2-4 token) length into avgDocLength shifted the IDF weights and
+// the length-normalization denominator for every document embedded afterwards,
+// so a graph's rankings drifted as a function of how many times it had been
+// searched. Generate remains the only mutator.
+//
+// This does NOT make BM25 a correct lexical index — the statistics are still
+// process-local, unpersisted, and order-dependent across restarts. That is the
+// open decision in gh#619 (real index over an immutable snapshot vs. a stateless
+// hashed TF vector); this only stops searches from corrupting the corpus.
 func (b *BM25Embedder) GenerateQuery(ctx context.Context, texts []string) ([][]float32, error) {
-	return b.Generate(ctx, texts)
+	return b.embed(ctx, texts, false)
 }
 
 // Generate creates BM25-based embeddings for the given texts.
@@ -117,6 +127,17 @@ func (b *BM25Embedder) GenerateQuery(ctx context.Context, texts []string) ([][]f
 // This updates internal document statistics incrementally, so the embedder
 // "learns" vocabulary and IDF scores from all texts it processes.
 func (b *BM25Embedder) Generate(ctx context.Context, texts []string) ([][]float32, error) {
+	return b.embed(ctx, texts, true)
+}
+
+// embed is the shared vectorization path for Generate and GenerateQuery.
+//
+// learn selects the corpus-statistics side effect: Generate passes true (each
+// document is folded into the statistics after its own vector is computed),
+// GenerateQuery passes false. The vector math itself is identical — a document
+// is always scored against the statistics as they stood BEFORE it was observed,
+// which is exactly the read-only query case.
+func (b *BM25Embedder) embed(ctx context.Context, texts []string, learn bool) ([][]float32, error) {
 	// Check for cancellation before expensive operation
 	select {
 	case <-ctx.Done():
@@ -174,8 +195,10 @@ func (b *BM25Embedder) Generate(ctx context.Context, texts []string) ([][]float3
 		embedding := b.computeBM25Vector(doc.termFreq, len(doc.tokens))
 		embeddings[i] = embedding
 
-		// Update statistics for next iteration
-		b.updateStats(doc.tokens)
+		// Update statistics for next iteration (document side only)
+		if learn {
+			b.updateStats(doc.tokens)
+		}
 	}
 
 	return embeddings, nil

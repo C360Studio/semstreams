@@ -39,27 +39,80 @@ func (s *TieredScenario) detectCommunityVariant(result *Result) string {
 // 1. min_embedding_coverage (50% of entities have embeddings)
 // 2. initial_delay (2s) + detection_interval (30s) to run
 // So we need to wait at least 60 seconds for the first detection cycle.
+//
+// The community fetch happens on EVERY iteration. It used to sit inside an
+// `if clusteringRuns >= 1` branch keyed on semstreams_clustering_runs_total —
+// a metric no production code exports — so the branch was unreachable, the
+// success log below was dead, and every call burned the full 90s before making
+// a single point-in-time fetch with no retry (gh#615).
+//
+// Nonempty COMMUNITY_INDEX is NOT on its own evidence that this run's clustering
+// finished: COMMUNITY_INDEX is durable NATS state, so if the JetStream volume
+// survives from an earlier run, the very first poll returns that run's
+// communities and every downstream quality check then validates stale output.
+// Every tier task tears down with `docker compose ... down -v` (Taskfile.yml:173,
+// taskfiles/e2e/{structural,statistical}.yml:13, taskfiles/e2e/common.yml:29-31),
+// so the named volume normally goes with the stack and the exposure is bounded to
+// a run against an already-up stack or a task killed before its defer — but
+// "usually torn down" is not a property the wait should depend on.
+//
+// So the wait also requires current-cycle evidence: the completed-detection-run
+// count must exceed a baseline captured before polling started. The counter lives
+// in the graph-clustering process, which starts at 0 on every container start, so
+// on a clean run the baseline is 0 and the first completed cycle satisfies it at
+// no extra cost. On a dirty-volume run, preexisting communities no longer count
+// because they carry no run of THIS process.
 func (s *TieredScenario) waitForCommunities(ctx context.Context) ([]*clustering.Community, error) {
-	var communities []*clustering.Community
-	var err error
+	// initial_delay + detection_interval + processing.
+	const maxWait = 90 * time.Second
+	return s.waitForCommunitiesFrom(ctx, s.natsClient, maxWait)
+}
 
-	// First, wait for at least one clustering run to complete
-	// This ensures community detection has actually executed
+// communitySource is the narrow read waitForCommunitiesFrom performs. Taking it
+// as a parameter keeps the staleness logic testable without a live NATS; the
+// only production implementation is *client.NATSValidationClient.
+type communitySource interface {
+	GetAllCommunities(ctx context.Context) ([]*clustering.Community, error)
+}
+
+func (s *TieredScenario) waitForCommunitiesFrom(
+	ctx context.Context,
+	source communitySource,
+	maxWait time.Duration,
+) ([]*clustering.Community, error) {
+	const pollInterval = 500 * time.Millisecond
+
 	startWait := time.Now()
-	maxWait := 90 * time.Second // Allow time for initial_delay + detection_interval + processing
-	pollInterval := 500 * time.Millisecond
+	deadline := startWait.Add(maxWait)
 
-	for time.Since(startWait) < maxWait {
-		// Check if clustering has run
-		clusteringRuns, _ := s.metrics.SumMetricsByName(ctx, "semstreams_clustering_runs_total")
-		if clusteringRuns >= 1 {
-			// Clustering has run, now check for communities
-			communities, err = s.natsClient.GetAllCommunities(ctx)
-			if err == nil && len(communities) > 0 {
-				fmt.Printf("[COMMUNITY WAIT] Found %d communities after %.1fs (clustering_runs=%.0f)\n",
-					len(communities), time.Since(startWait).Seconds(), clusteringRuns)
+	baselineRuns, err := s.clusteringRunCount(ctx)
+	if err != nil {
+		// Without the run counter there is no way to tell this run's communities
+		// from a previous run's. Both tiers that call this deploy graph-clustering
+		// and the histogram is registered in its constructor, so the counter is
+		// scrapeable at 0 from startup; failing to read it is a real fault.
+		return nil, fmt.Errorf("cannot establish a clustering-run baseline, so community freshness is unverifiable: %w", err)
+	}
+
+	var lastFetchErr error
+	var sawCommunities int
+	for {
+		communities, fetchErr := source.GetAllCommunities(ctx)
+		switch {
+		case fetchErr != nil:
+			lastFetchErr = fetchErr
+		case len(communities) > 0:
+			sawCommunities = len(communities)
+			runs, runErr := s.clusteringRunCount(ctx)
+			if runErr == nil && runs > baselineRuns {
+				fmt.Printf("[COMMUNITY WAIT] Found %d communities after %.1fs (clustering runs=%.0f, baseline=%.0f)\n",
+					len(communities), time.Since(startWait).Seconds(), runs, baselineRuns)
 				return communities, nil
 			}
+		}
+
+		if !time.Now().Before(deadline) {
+			break
 		}
 
 		select {
@@ -69,15 +122,64 @@ func (s *TieredScenario) waitForCommunities(ctx context.Context) ([]*clustering.
 		}
 	}
 
-	// Final attempt after timeout
-	communities, err = s.natsClient.GetAllCommunities(ctx)
-	if len(communities) > 0 {
-		fmt.Printf("[COMMUNITY WAIT] Found %d communities after timeout\n", len(communities))
-		return communities, nil
+	waited := time.Since(startWait).Seconds()
+	diagnostic := s.clusteringRunDiagnostic(ctx)
+
+	if sawCommunities > 0 {
+		// The one case that used to pass silently.
+		fmt.Printf("[COMMUNITY WAIT] %d communities present but no detection run completed in %.1fs (%s)\n",
+			sawCommunities, waited, diagnostic)
+		return nil, fmt.Errorf(
+			"found %d communities but no community-detection run completed during the %.1fs wait "+
+				"(runs still at baseline %.0f, %s): these communities predate this run and validating them would validate stale output",
+			sawCommunities, waited, baselineRuns, diagnostic)
 	}
 
-	fmt.Printf("[COMMUNITY WAIT] No communities found after %.1fs\n", time.Since(startWait).Seconds())
-	return communities, err
+	fmt.Printf("[COMMUNITY WAIT] No communities found after %.1fs (%s)\n", waited, diagnostic)
+
+	if lastFetchErr != nil {
+		return nil, fmt.Errorf("no communities after %.1fs (%s); last fetch error: %w",
+			waited, diagnostic, lastFetchErr)
+	}
+	return nil, fmt.Errorf("no communities after %.1fs (%s)", waited, diagnostic)
+}
+
+// clusteringRunCount returns the number of COMPLETED community-detection runs
+// recorded by the graph-clustering process currently being scraped.
+//
+// Unlike clusteringRunDiagnostic this is load-bearing, so a missing subsystem is
+// an error rather than a phrase: waitForCommunities uses the value to prove a
+// detection cycle happened during the wait, and a silent 0 there would restore
+// exactly the "accept whatever is in the bucket" behavior it exists to prevent.
+func (s *TieredScenario) clusteringRunCount(ctx context.Context) (float64, error) {
+	reading, err := s.metrics.SumMetricInSubsystem(ctx, clusteringSubsystem, clusteringRunsMetric)
+	if err != nil {
+		return 0, err
+	}
+	if !reading.SubsystemPresent {
+		return 0, fmt.Errorf(
+			"no %s series scraped: graph-clustering is not deployed or not reachable, "+
+				"so a completed detection run cannot be confirmed", clusteringSubsystem)
+	}
+	return reading.Sum, nil
+}
+
+// clusteringRunDiagnostic renders the completed-detection-run count as a short
+// human-readable phrase for wait logs and timeout errors.
+//
+// It is deliberately non-fatal: this is context on why a wait ended, not a gate.
+// It still reports a broken metric name explicitly instead of printing a
+// plausible 0, so the failure mode that produced gh#615 stays visible here too.
+func (s *TieredScenario) clusteringRunDiagnostic(ctx context.Context) string {
+	reading, err := s.metrics.SumMetricInSubsystem(ctx, clusteringSubsystem, clusteringRunsMetric)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("clustering runs unknown: %v", err)
+	case !reading.SubsystemPresent:
+		return "graph-clustering not deployed or not scraped"
+	default:
+		return fmt.Sprintf("clustering runs=%.0f", reading.Sum)
+	}
 }
 
 // waitForLLMEnhancement waits for LLM enhancement to complete for ML variant
@@ -601,56 +703,144 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 func (s *TieredScenario) validateEmbeddingQueueHealth(ctx context.Context, result *Result) error {
 	fmt.Println("[EMBEDDING QUEUE] Validating embedding queue health...")
 
-	// Fetch embedding queue metrics from Prometheus using SumMetricsByName
-	pending, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_pending")
-	failed, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_errors_total")
-	dedupHits, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_dedup_hits_total")
-	generated, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_embeddings_generated_total")
-	queued, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_queued_total")
+	// Every name here is verified against processor/graph-embedding/metrics.go.
+	// A sixth read, semstreams_graph_embedding_queued_total, was removed: no
+	// production code has ever exported it, so it contributed a hard 0 that then
+	// travelled into operator-facing result JSON as though it were data (gh#615).
+	// Errors are propagated rather than discarded — this validator runs only in
+	// tiers that deploy graph-embedding, so a missing name means the check is
+	// broken, not that the component is idle.
+	// One snapshot, four reads. resolved/dedup/fresh are arithmetically related,
+	// so scraping them independently would let the pipeline advance between calls
+	// and yield a negative "fresh" that is an artifact rather than a finding.
+	snapshot, err := s.metrics.FetchSnapshot(ctx)
+	if err != nil {
+		return fmt.Errorf("embedding queue health is unverifiable: %w", err)
+	}
 
-	// Record metrics for structured results
-	result.Metrics["embedding_queued_total"] = int64(queued)
-	result.Metrics["embedding_generated_total"] = int64(generated)
+	readings := map[string]float64{}
+	for _, name := range []string{
+		embeddingSubsystem + "pending",
+		embeddingSubsystem + "errors_total",
+		embeddingSubsystem + "dedup_hits_total",
+		embeddingsGeneratedMetric,
+	} {
+		reading, err := client.SumMetricInSnapshot(snapshot, embeddingSubsystem, name)
+		if err != nil {
+			return fmt.Errorf("embedding queue health is unverifiable: %w", err)
+		}
+		if !reading.SubsystemPresent {
+			return fmt.Errorf(
+				"embedding queue health is unverifiable: no %s series scraped, so graph-embedding is not deployed in a tier that requires it",
+				embeddingSubsystem)
+		}
+		readings[name] = reading.Sum
+	}
+
+	pending := readings[embeddingSubsystem+"pending"]
+	failed := readings[embeddingSubsystem+"errors_total"]
+	dedupHits := readings[embeddingSubsystem+"dedup_hits_total"]
+	resolved := readings[embeddingsGeneratedMetric]
+
+	// METRIC SEMANTICS — read this before touching the arithmetic below.
+	//
+	// semstreams_graph_embedding_embeddings_generated_total does NOT count fresh
+	// generations. graph/embedding/worker.go:394 calls saveAndNotify() on the
+	// return of getOrGenerateEmbedding() for BOTH branches — the dedup-hit branch
+	// (worker.go:427, which also increments dedup_hits_total) and the
+	// embedder.Generate() branch. saveAndNotify fires onGenerated, which
+	// processor/graph-embedding/component.go:876 wires to
+	// recordEmbeddingGenerated(). So the counter increments once per embedding
+	// RESOLVED, cache hit or not, and dedup_hits_total is a strict subset of it.
+	//
+	// Therefore:
+	//   resolved = embeddings_generated_total        (NOT generated + dedupHits;
+	//                                                 that double-counts reuse)
+	//   fresh    = resolved - dedupHits              (the vectors actually
+	//                                                 computed — on the neural
+	//                                                 tier, the remote calls)
+	//
+	// The earlier `resolved := generated + dedupHits` made cache reuse look like
+	// extra throughput and hid a 2.81x change in real embedding work behind a
+	// flat-looking total. Nothing else reports fresh generations, so it is
+	// surfaced as its own field rather than left to be re-derived downstream.
+	fresh := resolved - dedupHits
+	dedupExceedsResolved := fresh < 0
+	if dedupExceedsResolved {
+		// Impossible within one snapshot given the subset relation above, so this
+		// means the invariant this comment documents has been broken in production
+		// code — not a benign race. Report it; do not silently clamp away the only
+		// evidence.
+		fresh = 0
+	}
+
+	result.Metrics["embedding_resolved_total"] = int64(resolved)
+	result.Metrics["embedding_fresh_generated_total"] = int64(fresh)
 	result.Metrics["embedding_dedup_hits"] = int64(dedupHits)
 	result.Metrics["embedding_failed_total"] = int64(failed)
 	result.Metrics["embedding_pending_count"] = int64(pending)
 
-	// Log queue stats for observability
-	fmt.Printf("[EMBEDDING QUEUE] Stats: generated=%.0f, dedup_hits=%.0f, failed=%.0f, pending=%.0f\n",
-		generated, dedupHits, failed, pending)
+	fmt.Printf("[EMBEDDING QUEUE] Stats: resolved=%.0f (fresh=%.0f, dedup_hits=%.0f), failed=%.0f, pending=%.0f\n",
+		resolved, fresh, dedupHits, failed, pending)
 
-	// Validate queue is drained
-	if pending > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Embedding queue not fully drained: %.0f pending items", pending))
-	}
-
-	// Validate no failures
-	if failed > 0 {
-		result.Warnings = append(result.Warnings,
-			fmt.Sprintf("Embedding failures detected: %.0f failed", failed))
-	}
-
-	// Calculate and log dedup efficiency
-	if queued > 0 {
-		dedupRate := dedupHits / queued * 100
-		fmt.Printf("[EMBEDDING QUEUE] Dedup efficiency: %.1f%% (%.0f hits / %.0f queued)\n",
-			dedupRate, dedupHits, queued)
+	dedupRate := 0.0
+	if resolved > 0 {
+		dedupRate = dedupHits / resolved * 100
+		fmt.Printf("[EMBEDDING QUEUE] Dedup efficiency: %.1f%% (%.0f hits / %.0f resolved)\n",
+			dedupRate, dedupHits, resolved)
 	}
 
 	result.Details["embedding_queue_health"] = map[string]any{
-		"queued_total":    queued,
-		"generated_total": generated,
-		"dedup_hits":      dedupHits,
-		"failed_total":    failed,
-		"pending_count":   pending,
-		"queue_drained":   pending == 0,
-		"no_failures":     failed == 0,
+		"resolved_total":        resolved,
+		"fresh_generated_total": fresh,
+		"dedup_hits":            dedupHits,
+		"failed_total":          failed,
+		"pending_count":         pending,
+		"queue_drained":         pending == 0,
+		"no_failures":           failed == 0,
 	}
 
-	if pending == 0 && failed == 0 {
-		fmt.Println("[EMBEDDING QUEUE] Health check passed: queue drained, no failures")
+	// The queue draining to empty is not on its own a healthy pipeline — a
+	// pipeline that never accepted anything also reports drained and zero
+	// failures. This validator used to print "Health check passed" for exactly
+	// that state. Assert that work actually happened.
+	if resolved == 0 {
+		return fmt.Errorf(
+			"embedding pipeline did nothing: 0 embeddings resolved (pending=%.0f, failed=%.0f)",
+			pending, failed)
 	}
+
+	// A non-drained queue and a nonzero failure count are the two conditions this
+	// stage exists to detect. They were recorded as result.Warnings and then
+	// returned nil, so validate-embedding-queue-health was marked completed with
+	// undrained work or failed embeddings — a stage that could not fail for the
+	// reason it was written. Warnings stay for the operator report; the error is
+	// what makes the gate a gate.
+	var violations []string
+	if pending > 0 {
+		msg := fmt.Sprintf("embedding queue not drained: %.0f pending", pending)
+		violations = append(violations, msg)
+		result.Warnings = append(result.Warnings, msg)
+	}
+	if failed > 0 {
+		msg := fmt.Sprintf("embedding failures detected: %.0f failed", failed)
+		violations = append(violations, msg)
+		result.Warnings = append(result.Warnings, msg)
+	}
+	if dedupExceedsResolved {
+		msg := fmt.Sprintf(
+			"dedup_hits_total (%.0f) exceeds embeddings_generated_total (%.0f) in one scrape: "+
+				"dedup hits are supposed to be a subset of resolutions, so the worker's metric wiring changed",
+			dedupHits, resolved)
+		violations = append(violations, msg)
+		result.Warnings = append(result.Warnings, msg)
+	}
+	if len(violations) > 0 {
+		return fmt.Errorf("embedding queue is unhealthy: %s", strings.Join(violations, "; "))
+	}
+
+	fmt.Printf("[EMBEDDING QUEUE] Health check passed: %.0f embeddings resolved (%.0f fresh), queue drained, no failures\n",
+		resolved, fresh)
 
 	return nil
 }
