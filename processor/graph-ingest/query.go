@@ -125,16 +125,51 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 	}
 
 	// Fetch entities with bounded concurrency and cache
-	entities, err := c.fetchEntitiesConcurrent(ctx, req.IDs, defaultMaxConcurrent)
+	entities, missing, err := c.fetchEntitiesConcurrent(ctx, req.IDs, defaultMaxConcurrent)
 	if err != nil {
 		return nil, c.classifyEntityQueryError(err)
 	}
+	c.reportBatchMissing(req.IDs, missing)
 
-	// Return entities wrapped in a struct for consistency with loadEntities expectations
-	return json.Marshal(map[string]any{
-		"entities": entities,
-	})
+	resp := graph.EntityBatchResponse{Entities: entities}
+	for _, id := range missing {
+		resp.Missing = append(resp.Missing, graph.MissingEntity{
+			ID: id, Reason: graph.MissingNotFound,
+		})
+	}
+	return json.Marshal(resp)
 }
+
+// reportBatchMissing makes partial hydration observable. It is the gh#597 soak
+// instrumentation: the open question there is whether a dropped ID's KV read was
+// genuinely not-found at the moment of failure, and until now nothing recorded that a
+// batch came back short at all — the symptom reached the user as a missing search
+// result several hops away.
+//
+// The log carries the IDs (bounded) because "which one" is the whole question; the
+// counter carries only counts, since entity IDs are an unbounded label space.
+func (c *Component) reportBatchMissing(requested, missing []string) {
+	if len(missing) == 0 {
+		return
+	}
+	if c.batchMissing != nil {
+		c.batchMissing.WithLabelValues(string(graph.MissingNotFound)).Add(float64(len(missing)))
+	}
+	logged := missing
+	if len(logged) > maxLoggedMissingIDs {
+		logged = logged[:maxLoggedMissingIDs]
+	}
+	c.logger.Warn("batch entity query did not hydrate every requested ID",
+		"requested", len(requested),
+		"missing", len(missing),
+		"reason", string(graph.MissingNotFound),
+		"missing_ids", logged)
+}
+
+// maxLoggedMissingIDs bounds the ID list on the defer log. A batch is already capped
+// well below this in practice; the bound exists so a pathological caller cannot turn
+// one log line into a payload.
+const maxLoggedMissingIDs = 20
 
 // maxPrefixResponseBytes is the soft ceiling for the marshalled response body.
 // Conservative count cap (MaxPrefixQueryLimit = 1000) is the primary guard;
@@ -237,8 +272,12 @@ func (c *Component) handleQueryPrefixNATS(ctx context.Context, data []byte) ([]b
 		pageKeys = pageKeys[:limit]
 	}
 
-	// Fetch full entities with bounded concurrency and cache.
-	entities, err := c.fetchEntitiesConcurrent(ctx, pageKeys, defaultMaxConcurrent)
+	// Fetch full entities with bounded concurrency and cache. Missing IDs are
+	// deliberately NOT reported here: pageKeys came from a live key scan moments ago,
+	// so an absence is a concurrent delete rather than an unanswerable question about a
+	// caller-supplied ID. The prefix contract is "what is under this prefix now", and a
+	// key deleted mid-page is honestly not under it.
+	entities, _, err := c.fetchEntitiesConcurrent(ctx, pageKeys, defaultMaxConcurrent)
 	if err != nil {
 		return nil, c.classifyEntityQueryError(err)
 	}
@@ -490,10 +529,18 @@ func (c *Component) suffixFallbackScan(ctx context.Context, suffix string) (stri
 
 // fetchEntitiesConcurrent fetches entities by IDs using bounded concurrency with cache.
 // Cache hits skip KV entirely; cache misses are fetched with bounded concurrency.
-// Returns entities in non-deterministic order (callers process as sets).
-func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, maxConcurrent int) ([]graph.EntityState, error) {
+//
+// It returns the entities found AND the IDs whose read came back not-found, because the
+// caller cannot recover the second set from the first: the entity slice is ordered
+// cache-hits-then-misses, so it carries no correspondence to the requested order, and a
+// caller diffing the sets would have to re-derive what this function already knew. That
+// gap is the gh#597 drop path — a requested ID silently absent from a shorter list.
+//
+// Order remains non-deterministic by contract; callers that need request order restore
+// it themselves (fusionnats.Entities does, because fusion ranks by position).
+func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, maxConcurrent int) ([]graph.EntityState, []string, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if maxConcurrent <= 0 {
 		maxConcurrent = defaultMaxConcurrent
@@ -517,13 +564,14 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 	// Phase 2: Fetch cache misses with bounded concurrency
 	if len(missIDs) == 0 {
-		return cached, nil
+		return cached, nil, nil
 	}
 
 	type fetchResult struct {
-		entity graph.EntityState
-		err    error
-		ok     bool
+		entity   graph.EntityState
+		err      error
+		ok       bool
+		notFound bool
 	}
 
 	results := make([]fetchResult, len(missIDs))
@@ -561,7 +609,12 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 			entry, err := c.entityBucket.Get(ctx, entityID)
 			if err != nil {
-				if !natsclient.IsKVNotFoundError(err) {
+				if natsclient.IsKVNotFoundError(err) {
+					// Not an error — this ID simply is not in the bucket. It is
+					// REPORTED rather than dropped so the caller can tell a short
+					// list from a partial one (gh#597).
+					results[idx].notFound = true
+				} else {
 					results[idx].err = err
 				}
 				return
@@ -605,18 +658,21 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 	wg.Wait()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
-	// Phase 3: Merge cached + fetched results. Poison fails the WHOLE read
-	// with one typed error naming every poisoned entity encountered in this
-	// attempt (design D5) — never a silent omission, and never a B-only
-	// response that hides A's poison.
+	// Phase 3: Merge cached + fetched results. Poison fails the WHOLE read with one
+	// typed error naming every poisoned entity encountered in this attempt (design D5),
+	// and never a B-only response that hides A's poison.
+	//
+	// A not-found ID is different in kind: it does not fail the call, it is collected
+	// and REPORTED. Partiality was never the bug — invisibility was.
 	var poisoned []*graph.StateContractError
 	var firstOtherErr error
+	var missing []string
 	entities := make([]graph.EntityState, 0, len(cached)+len(missIDs))
 	entities = append(entities, cached...)
-	for _, r := range results {
+	for i, r := range results {
 		if r.err != nil {
 			var contractErr *graph.StateContractError
 			if errors.As(r.err, &contractErr) {
@@ -626,18 +682,22 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 			}
 			continue
 		}
+		if r.notFound {
+			missing = append(missing, missIDs[i])
+			continue
+		}
 		if r.ok {
 			entities = append(entities, r.entity)
 		}
 	}
 	if len(poisoned) > 0 {
-		return nil, aggregateEntityPoisonError(poisoned)
+		return nil, nil, aggregateEntityPoisonError(poisoned)
 	}
 	if firstOtherErr != nil {
-		return nil, firstOtherErr
+		return nil, nil, firstOtherErr
 	}
 
-	return entities, nil
+	return entities, missing, nil
 }
 
 // aggregateEntityPoisonError builds the single typed failure for a

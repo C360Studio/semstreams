@@ -86,11 +86,19 @@
       surface split (D6): fusionnats returns a typed readiness-unknown for
       quiet/stale feeds (engine → defer envelope) while wiring failures
       stay loud errors; no ungated escape.
-- [ ] 4.2 `graph.query.batch` handler (graph-ingest/query.go): `missing:
+- [x] 4.2 `graph.query.batch` handler (graph-ingest/query.go): `missing:
       [{id, reason}]`, closed enum, first-error contract preserved (`error`
       reserved); fix the stale "never a silent omission" comment; structured
       log + counter for missing-per-call (the gh#597 soak instrumentation:
-      was the dropped ID's Get not-found at fail time?).
+      was the dropped ID's Get not-found at fail time?). DONE: typed
+      `graph.EntityBatchResponse` + `MissingEntity`/`MissingReason` (closed
+      set incl. the reserved `error` and client-only `unknown`);
+      `fetchEntitiesConcurrent` returns missing IDs (the caller cannot
+      recover them — the entity slice carries no correspondence to the
+      request); `semstreams_graph_ingest_batch_query_missing_total{reason}`
+      + a bounded-ID Warn; prefix caller deliberately ignores missing (its
+      IDs came from a live key scan). Integration test pins reconcilability
+      AND that a complete batch's raw bytes are unchanged.
 - [ ] 4.3 `fusionnats.Entities`: ID-set reconciliation (handler report
       authoritative; synthesize `unknown` for IDs in neither list; one entry
       per ID) + restore resolve order before returning (fixes the live

@@ -64,7 +64,7 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	readerDone := make(chan struct{})
 	go func() {
 		defer close(readerDone)
-		_, _ = c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
+		_, _, _ = c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
 	}()
 
 	// Wait until the reader has read rev1 and is paused before its Set.
@@ -88,7 +88,7 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	// A fresh read MUST observe rev2 (the marker), never a resurrected rev1.
 	// Without the guard the paused reader's Set writes rev1 back into the cache
 	// after AddTriple's invalidate, so this read hits stale state and fails.
-	got, err := c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
+	got, _, err := c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
 	require.NotNil(t, got[0].GetTriple(markerPred),
