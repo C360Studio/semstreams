@@ -498,20 +498,36 @@ func (qc *natsClient) awaitFirstStatus(ctx context.Context, watch *readiness.Wat
 	_ = watch.WaitForFirst(waitCtx)
 }
 
-// indexNotReadyErr gates a direct INCOMING_INDEX read on graph-index readiness (gh#474
-// Codex #6). It returns a classified ErrorCodeIndexNotReady only when graph-index is up
-// and EXPLICITLY reports not-ready (still building / degraded by an unresolved write
-// failure) — the cutover/failure window where a direct bucket read would return partial
-// topology. It FAILS CLOSED when status is unreachable or malformed unless the caller
-// explicitly enables AllowUngatedReads for a standalone deployment.
+// indexNotReadyErr gates a direct INCOMING_INDEX read on graph-index HEALTH (gh#474
+// Codex #6, narrowed by ADR-084). It returns a classified ErrorCodeIndexNotReady when
+// graph-index is up and reports something WRONG — degraded by an unresolved write
+// failure, reset-required, or still doing its initial build — which is the cutover/
+// failure window where a direct bucket read would return partial topology. It FAILS
+// CLOSED when status is unreachable or malformed unless the caller explicitly enables
+// AllowUngatedReads for a standalone deployment.
 //
-// ADR-083 moved the source from a `graph.index.query.status` request/reply to the
-// shared GRAPH_STATUS watch (graph/readiness). The gate PREDICATE is unchanged
-// bit-for-bit — still exact `Ready`, still fail-closed on anything unknown, still the
-// same single escape applying to exactly the unknown branch — only the transport moved.
-// Held state rather than a per-call round-trip is the point: the request travelled the
-// same connection as the ENTITY_STATES firehose and died under the very load that makes
-// readiness interesting (gh#590).
+// ADR-084 NARROWED this gate: it no longer fires on ordinary revision lag. The
+// doc-comment on the transient it emits always said its job was the gh#474 cutover
+// window, but gating on exact `Ready` made it fire on any write burst — a healthy index
+// two revisions behind was reported as not-ready, and the caller either retried into
+// the same window or fell back. That is what sent semsource retrying this transient
+// under #592, and it is the conflation ADR-084 names: coverage was being used as a
+// proxy for soundness. Lag is now a property to REPORT (staleness_ms on the envelope),
+// not a fault to withhold on; the half-built index — the case this gate exists for — is
+// caught by bootstrap_complete, which is a fact about the build rather than about how
+// far behind it happens to be. This DELIBERATELY supersedes #592's read-path close-out
+// and ships in the same wave as ADR-083's breaks so consumers migrate once.
+//
+// What did NOT change: hard stops still withhold; the unknown branch still fails closed;
+// AllowUngatedReads still scopes to exactly the unknown branch and never to a received
+// status. Read-your-writes callers are unaffected and better served — they compare their
+// own revision against the envelope's IndexedRevision, which ADR-084 makes the one sound
+// per-entity check.
+//
+// ADR-083 moved the source from a `graph.index.query.status` request/reply to the shared
+// GRAPH_STATUS watch (graph/readiness). Held state rather than a per-call round-trip is
+// the point: the request travelled the same connection as the ENTITY_STATES firehose and
+// died under the very load that makes readiness interesting (gh#590).
 //
 // The unknown set GREW to match what the subject already covered: no bucket, no key,
 // a deleted key, a backend fault, an undecodable value, and — new, because state
@@ -543,14 +559,14 @@ func (qc *natsClient) indexNotReadyErr(ctx context.Context) error {
 		}
 		return notReady
 	}
-	// Evaluated through the canonical helper so the consumers cannot drift. Freshness
-	// is declared EXACT here, preserving the pre-ADR-084 predicate bit-for-bit while
-	// the gate itself collapses; task 3.1 is where this read path declares its real
-	// (health-only) question. AllowUngatedReads never applies below — a status that WAS
-	// received and says not-ready is not an unknown one.
+	// Evaluated through the canonical helper so the consumers cannot drift. This is a
+	// read path, so it declares NO freshness requirement: it wants the best available
+	// evidence from a healthy index and reports how stale it was, rather than
+	// withholding. AllowUngatedReads never applies below — a status that WAS received
+	// and says unhealthy is not an unknown one.
 	if proceed, _ := gtypes.EvaluateReadinessGate(
 		gtypes.StatusReading{Status: reading.Status, Fresh: true, Age: reading.Age},
-		gtypes.FreshnessExact()); !proceed {
+		gtypes.FreshnessNone()); !proceed {
 		return notReady
 	}
 	return nil

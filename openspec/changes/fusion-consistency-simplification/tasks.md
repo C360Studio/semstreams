@@ -55,10 +55,15 @@
 
 ## 3. Read-path regate (deliberate #592 supersession)
 
-- [ ] 3.1 `graph/query/client.go` `indexNotReadyErr`: health question via
+- [x] 3.1 `graph/query/client.go` `indexNotReadyErr`: health question via
       the collapsed gate (needs 2.0); serves under ordinary lag on a
       healthy, built index; fail-closed unknown branch and
-      `AllowUngatedReads` scope unchanged.
+      `AllowUngatedReads` scope unchanged. DONE: declares `FreshnessNone`;
+      the gate matrix test is rewritten to pin the reversal (healthy+lagging
+      SERVES) alongside the rows that deliberately did not move — every
+      unknown shape still fails closed, the escape still never applies to a
+      received status, code/class unmoved. A `preBootstrap` fixture pins the
+      gh#474 cutover still deferring.
 - [ ] 3.2 graph-index responder: verify-only (near-no-op per review — the
       responder never lag-gates post-bootstrap today). Confirm with tests;
       no narrowing applied to `ensureQueryReady` beyond 2.2's constraint.

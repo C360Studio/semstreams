@@ -156,7 +156,16 @@ func newGateClient(t *testing.T, source readiness.BucketSource, config *Config) 
 	}
 }
 
-func TestIndexNotReadyErr_GateMatrixIsBitCompatible(t *testing.T) {
+// TestIndexNotReadyErr_GateMatrix pins the read-path gate after ADR-084 narrowed it
+// from coverage to HEALTH. The rows that changed are named as such: a healthy index
+// merely behind now SERVES, because lag is a property to report (staleness_ms) rather
+// than a fault to withhold on, and the case this gate actually exists for — a
+// half-built index during a gh#474 cutover — is caught by bootstrap_complete instead.
+//
+// The rows that did NOT change are the point of keeping the matrix whole: every
+// unknown-status shape still fails closed, the escape still scopes to exactly those
+// shapes and never to a received status, and the classified code/class stay put.
+func TestIndexNotReadyErr_GateMatrix(t *testing.T) {
 	// Every fixture carries BootstrapComplete because every real producer does
 	// (ADR-084 D2): the bit is stamped from the producer's own build latch, so an
 	// envelope without it models a pre-ADR-084 producer, not a healthy one. Omitting
@@ -168,6 +177,11 @@ func TestIndexNotReadyErr_GateMatrixIsBitCompatible(t *testing.T) {
 		IndexedRevision: 40, TargetRevision: 100, Lag: 60, StalenessMs: 2500, BootstrapComplete: true}
 	degraded := gtypes.IndexStatusResponse{Ready: false, State: gtypes.IndexStateDegraded,
 		BootstrapComplete: true}
+	// The gh#474 cutover window: plausible small lag, half-materialised keyset. Lag
+	// alone cannot distinguish it from ordinary catch-up, which is precisely why the
+	// build fact had to reach the wire (ADR-084 D2).
+	preBootstrap := gtypes.IndexStatusResponse{Ready: false, State: gtypes.IndexStateBuilding,
+		IndexedRevision: 98, TargetRevision: 100, Lag: 2, StalenessMs: 30}
 	staleReady, err := json.Marshal(ready)
 	require.NoError(t, err)
 
@@ -188,10 +202,23 @@ func TestIndexNotReadyErr_GateMatrixIsBitCompatible(t *testing.T) {
 			wantDeferUngatedOff: false, wantDeferUngatedOn: false,
 		},
 		{
-			// A RECEIVED not-ready is index state, not unknown readiness: the escape
-			// never applied to it before and must not now.
-			name:                "explicit not-ready defers, escape does not apply",
+			// THE ADR-084 REVERSAL. Before: any lag withheld the read, so a write burst
+			// made a perfectly sound index report not-ready and callers retried into the
+			// same window (#592). Now: healthy and behind is a served read whose
+			// staleness the envelope reports.
+			name:                "healthy but lagging now SERVES (ADR-084 narrowing)",
 			newSource:           func(t *testing.T) readiness.BucketSource { return servingStatus(t, building) },
+			wantDeferUngatedOff: false, wantDeferUngatedOn: false,
+		},
+		{
+			// The case the gate exists for, and the reason the narrowing is safe: a
+			// half-materialised keyset is caught by the build fact, not by lag. A
+			// RECEIVED unhealthy status is index state, not unknown readiness, so the
+			// escape does not apply to it — before or after.
+			name: "mid-bootstrap (gh#474 cutover) defers, escape does not apply",
+			newSource: func(t *testing.T) readiness.BucketSource {
+				return servingStatus(t, preBootstrap)
+			},
 			wantDeferUngatedOff: true, wantDeferUngatedOn: true,
 		},
 		{
