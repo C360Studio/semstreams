@@ -60,21 +60,33 @@ func (m *MockProvider) GetEdgeWeight(_ context.Context, fromID, toID string) (fl
 	return 0.0, nil
 }
 
-// MockCommunityStorage implements CommunityStorage for testing
+// MockCommunityStorage implements CommunityStorage for testing.
+//
+// Communities are keyed by (level, ID) to mirror the real KV key format
+// ({level}.{community_id}). This matters: LPA community IDs are seed entity IDs,
+// so the same ID legitimately appears at multiple levels. An ID-only map would
+// let a level-blind Prune pass.
 type MockCommunityStorage struct {
-	communities     map[string]*Community
-	entityCommunity map[int]map[string]string // level -> entityID -> communityID
+	communities     map[int]map[string]*Community // level -> communityID -> Community
+	entityCommunity map[int]map[string]string     // level -> entityID -> communityID
+
+	// pruneErr, when set, makes Prune fail. Used to prove that a prune failure
+	// leaves a correct-but-superset index instead of failing the detection run.
+	pruneErr error
 }
 
 func NewMockCommunityStorage() *MockCommunityStorage {
 	return &MockCommunityStorage{
-		communities:     make(map[string]*Community),
+		communities:     make(map[int]map[string]*Community),
 		entityCommunity: make(map[int]map[string]string),
 	}
 }
 
 func (m *MockCommunityStorage) SaveCommunity(_ context.Context, community *Community) error {
-	m.communities[community.ID] = community
+	if m.communities[community.Level] == nil {
+		m.communities[community.Level] = make(map[string]*Community)
+	}
+	m.communities[community.Level][community.ID] = community
 
 	// Update entity -> community mapping
 	if m.entityCommunity[community.Level] == nil {
@@ -87,47 +99,104 @@ func (m *MockCommunityStorage) SaveCommunity(_ context.Context, community *Commu
 	return nil
 }
 
+// GetCommunity scans levels in ascending order, matching NATSCommunityStorage.
 func (m *MockCommunityStorage) GetCommunity(_ context.Context, id string) (*Community, error) {
-	if community, ok := m.communities[id]; ok {
-		return community, nil
+	for level := 0; level < MaxCommunityLevels; level++ {
+		if byID, ok := m.communities[level]; ok {
+			if community, ok := byID[id]; ok {
+				return community, nil
+			}
+		}
 	}
 	return nil, nil
 }
 
 func (m *MockCommunityStorage) GetCommunitiesByLevel(_ context.Context, level int) ([]*Community, error) {
 	communities := make([]*Community, 0)
-	for _, community := range m.communities {
-		if community.Level == level {
-			communities = append(communities, community)
-		}
+	for _, community := range m.communities[level] {
+		communities = append(communities, community)
 	}
 	return communities, nil
 }
 
-func (m *MockCommunityStorage) GetEntityCommunity(ctx context.Context, entityID string, level int) (*Community, error) {
-	if levelMap, ok := m.entityCommunity[level]; ok {
-		if communityID, ok := levelMap[entityID]; ok {
-			return m.GetCommunity(ctx, communityID)
+func (m *MockCommunityStorage) GetEntityCommunity(_ context.Context, entityID string, level int) (*Community, error) {
+	levelMap, ok := m.entityCommunity[level]
+	if !ok {
+		return nil, nil
+	}
+	communityID, ok := levelMap[entityID]
+	if !ok {
+		return nil, nil
+	}
+	// Resolve within the same level - an entity mapping is level-scoped.
+	if byID, ok := m.communities[level]; ok {
+		if community, ok := byID[communityID]; ok {
+			return community, nil
 		}
 	}
 	return nil, nil
 }
 
 func (m *MockCommunityStorage) DeleteCommunity(_ context.Context, id string) error {
-	delete(m.communities, id)
+	for _, byID := range m.communities {
+		delete(byID, id)
+	}
+	return nil
+}
+
+// Prune drops every (level, ID) and entity mapping not present in keep,
+// mirroring NATSCommunityStorage.Prune's key-derivation semantics.
+func (m *MockCommunityStorage) Prune(_ context.Context, keep []*Community) error {
+	if m.pruneErr != nil {
+		return m.pruneErr
+	}
+
+	keepCommunities := make(map[int]map[string]struct{})
+	keepEntities := make(map[int]map[string]struct{})
+	for _, c := range keep {
+		if c == nil {
+			continue
+		}
+		if keepCommunities[c.Level] == nil {
+			keepCommunities[c.Level] = make(map[string]struct{})
+			keepEntities[c.Level] = make(map[string]struct{})
+		}
+		keepCommunities[c.Level][c.ID] = struct{}{}
+		for _, entityID := range c.Members {
+			keepEntities[c.Level][entityID] = struct{}{}
+		}
+	}
+
+	for level, byID := range m.communities {
+		for id := range byID {
+			if _, ok := keepCommunities[level][id]; !ok {
+				delete(byID, id)
+			}
+		}
+	}
+	for level, byEntity := range m.entityCommunity {
+		for entityID := range byEntity {
+			if _, ok := keepEntities[level][entityID]; !ok {
+				delete(byEntity, entityID)
+			}
+		}
+	}
+
 	return nil
 }
 
 func (m *MockCommunityStorage) Clear(_ context.Context) error {
-	m.communities = make(map[string]*Community)
+	m.communities = make(map[int]map[string]*Community)
 	m.entityCommunity = make(map[int]map[string]string)
 	return nil
 }
 
 func (m *MockCommunityStorage) GetAllCommunities(_ context.Context) ([]*Community, error) {
-	communities := make([]*Community, 0, len(m.communities))
-	for _, community := range m.communities {
-		communities = append(communities, community)
+	communities := make([]*Community, 0)
+	for _, byID := range m.communities {
+		for _, community := range byID {
+			communities = append(communities, community)
+		}
 	}
 	return communities, nil
 }

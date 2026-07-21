@@ -141,7 +141,7 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// PHASE 1: Archive LLM-enhanced communities before clearing
+	// PHASE 1: Archive LLM-enhanced communities before the rebuild
 	// This preserves expensive LLM summaries (typically 5-20s per community) that can be
 	// transferred to new communities with similar membership (≥80% overlap).
 	var archivedEnhanced []*Community
@@ -160,10 +160,13 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		}
 	}
 
-	// Clear existing communities
-	if err := d.storage.Clear(ctx); err != nil {
-		return nil, errs.WrapTransient(err, "LPADetector", "DetectCommunities", "clear storage")
-	}
+	// NOTE: the index is deliberately NOT cleared here. Detection has been
+	// measured from 4.4s to 23.7s, and on a 30s cycle a clear-then-rebuild leaves
+	// COMMUNITY_INDEX empty for most of the wall clock — every consumer reading
+	// mid-window (graph-query's GraphRAG cache latches ready and never unlatches)
+	// gets an authoritative-looking empty answer. Instead we overwrite in place
+	// and Prune the leftovers once, at the end: readers see old ∪ new, a slightly
+	// stale partition rather than a confidently empty one. See ADR-085.
 
 	// Get all entities
 	entityIDs, err := d.graphProvider.GetAllEntityIDs(ctx)
@@ -172,6 +175,10 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 	}
 
 	if len(entityIDs) == 0 {
+		// A graph with no entities has no communities. Prune everything so the
+		// index matches the graph rather than retaining a partition for entities
+		// that no longer exist.
+		d.pruneToPartition(ctx, nil)
 		return make(map[int][]*Community), nil
 	}
 
@@ -220,7 +227,31 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		}
 	}
 
+	// PHASE 3: Drop whatever the previous partition left behind. Must run after
+	// every level has been saved — pruning earlier would reopen the empty window
+	// this design exists to close.
+	keep := make([]*Community, 0, len(entityIDs))
+	for _, levelCommunities := range result {
+		keep = append(keep, levelCommunities...)
+	}
+	d.pruneToPartition(ctx, keep)
+
 	return result, nil
+}
+
+// pruneToPartition removes index state left over from the previous partition.
+//
+// A prune failure is deliberately NOT fatal. Every community in keep was already
+// persisted by the time we get here, so the index is CORRECT — it merely carries
+// stale extra entries, which the next detection cycle will re-prune. Failing the
+// run would throw away a good partition to punish a bookkeeping error, and
+// (worse) would surface as a detection error to callers who got valid results.
+func (d *LPADetector) pruneToPartition(ctx context.Context, keep []*Community) {
+	if err := d.storage.Prune(ctx, keep); err != nil {
+		d.logger.Warn("Failed to prune stale communities — index is correct but may carry "+
+			"stale entries until the next detection cycle",
+			"kept", len(keep), "error", err)
+	}
 }
 
 // detectCommunitiesAtLevel runs LPA on a set of entities

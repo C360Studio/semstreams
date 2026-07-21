@@ -68,6 +68,13 @@ func (m *FailingMockStorage) DeleteCommunity(_ context.Context, _ string) error 
 	return nil
 }
 
+func (m *FailingMockStorage) Prune(_ context.Context, _ []*Community) error {
+	if m.failOn == "Prune" {
+		return m.err
+	}
+	return nil
+}
+
 func (m *FailingMockStorage) Clear(_ context.Context) error {
 	if m.failOn == "Clear" {
 		return m.err
@@ -114,22 +121,25 @@ func TestLPADetector_ProviderGetNeighborsError(t *testing.T) {
 }
 
 // Test storage failures
-func TestLPADetector_StorageClearError(t *testing.T) {
+// A prune failure is non-fatal by design: the partition is already persisted, so
+// the index is correct and merely carries stale extras until the next cycle.
+// (Replaces the old StorageClearError test — DetectCommunities no longer clears.)
+func TestLPADetector_StoragePruneErrorIsNotFatal(t *testing.T) {
 	provider := NewMockProvider()
 	provider.AddEntity("A")
 	provider.AddEntity("B")
 
 	storage := &FailingMockStorage{
-		failOn: "Clear",
+		failOn: "Prune",
 		err:    errors.New("storage unavailable"),
 	}
 
 	detector := NewLPADetector(provider, storage)
 	ctx := context.Background()
 
-	_, err := detector.DetectCommunities(ctx)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "storage unavailable")
+	result, err := detector.DetectCommunities(ctx)
+	require.NoError(t, err)
+	assert.NotEmpty(t, result[0], "detection returns its partition even when the prune fails")
 }
 
 func TestLPADetector_StorageSaveError(t *testing.T) {
