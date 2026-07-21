@@ -192,15 +192,29 @@ Shipped 2026-07-21: `.github/workflows/sister-validation.yml` — semsource e2e 
 PR, semsource + semboids + `e2e:core` nightly, all against **this checkout** via
 `go mod edit -replace`.
 
-**Two things still open on D:**
+**Status on D — first CI run happened 2026-07-21 (PR #626):**
 
-- The workflow is **unproven in CI** — because it lives only on this branch and has
-  never been on the default branch. It was validated locally (the replace-and-build
-  mechanic works and immediately caught real drift — semsource at beta.156 does not
-  compile against main: `fusion.RetrievalClient.Resolve` now returns `[]fusion.Seed`,
-  `Entities` returns `fusion.Hydration`). `gh run list --workflow=sister-validation.yml`
-  returns **404, not empty** — it does not exist on GitHub yet. **Landing this branch
-  is what fires it for the first time.**
+- **The gate fired for the first time** (run 29871032706, `on: pull_request`). It
+  works: `go mod edit -replace` built semsource@main against semstreams@main and
+  ran semsource's full e2e suite. The nightly-only jobs (semboids, `e2e:core`)
+  correctly skipped on a PR.
+- **The local prediction was WRONG and is corrected here.** The baton claimed
+  semsource@beta.156 "does not compile against main" (fusion API drift:
+  `Resolve`→`[]fusion.Seed`, `Entities`→`fusion.Hydration`). In CI, semsource@main
+  **compiled and ran fine** against semstreams@main — no compile break. The
+  framework integration is healthy: **28,379 entities ingested end-to-end**
+  (java 27,875 / web 83 / git 3 / config 35) across all four domains.
+- **One narrow failure**, and it is product-domain, not substrate: semsource's docs
+  source emits entities typed `"chunk"` where semsource's own e2e test expects
+  `'doc'` (`semsource test/e2e/e2e_test.go:1426`, in `TestE2E_OSH_JavaMavenIngest`).
+  This is **main-vs-main drift the gate surfaced** — independent of Track 0 (which
+  never touched doc/chunk typing) and of this PR (which only added the gate). Per
+  the Product Boundary the doc-vs-chunk type is semsource-owned; most likely
+  semsource's docs source started chunking while its e2e assertion stayed on the
+  old label. **Owner action: confirm on the semsource side and either fix the
+  emitter or update the assertion; file a semsource-asks entry if it is actually a
+  semstreams contract change.** Do not carry the disproven compile-drift story
+  forward.
 - **Main has no required checks**, so this gate is advisory until made required.
   A green check that cannot block a merge is a notification, not a gate.
 
