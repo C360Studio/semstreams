@@ -28,9 +28,20 @@ type Embedder interface {
 	// embedders (BM25) implement this identically to Generate.
 	GenerateQuery(ctx context.Context, texts []string) ([][]float32, error)
 
-	// Dimensions returns the dimensionality of embeddings produced by this embedder.
+	// Dimensions returns the dimensionality of embeddings produced by this embedder,
+	// or 0 if it is not yet known.
 	//
 	// For example, all-MiniLM-L6-v2 produces 384-dimensional vectors.
+	//
+	// Implementations that discover the width from a remote endpoint (HTTPEmbedder)
+	// report 0 until the first successful response. Implementations MUST return 0
+	// rather than a plausible default: callers fold this value into durable
+	// content-addressed keys (DedupKey), where a guessed width silently partitions
+	// the dedup bucket into pre-guess and post-guess halves. Callers must treat 0
+	// as "no stable vector space yet" and skip keyed dedup entirely.
+	//
+	// This value must be safe to read concurrently with Generate — the graph-embedding
+	// component reads it from the hop-1 watcher goroutine and from every hop-2 worker.
 	Dimensions() int
 
 	// Model returns the model identifier used by this embedder.

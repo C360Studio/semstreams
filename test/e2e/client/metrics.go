@@ -388,6 +388,90 @@ func (c *MetricsClient) SumMetricsByName(ctx context.Context, metricName string)
 	return sum, nil
 }
 
+// SubsystemMetric is the result of summing one metric within a Prometheus
+// subsystem whose *presence* is itself evidence.
+//
+// E2E tiers deploy different component sets — the structural tier runs neither
+// graph-embedding nor graph-clustering — so those series are legitimately absent
+// from its scrape. A gate over such a metric must separate three states that a
+// bare (float64, error) pair collapses into an indistinguishable 0:
+//
+//	SubsystemPresent=false             the component is not deployed, so zero is
+//	                                   PROVEN rather than assumed.
+//	SubsystemPresent=true, Found=false the component IS deployed but exports no
+//	                                   such name — metric-name drift, returned
+//	                                   as an error.
+//	Found=true                         Sum is a real reading.
+//
+// The middle state is gh#615: e2e gates polled metric names that no production
+// code ever exported, discarded the resulting "metric not found" into _, read 0,
+// and therefore passed unconditionally for their entire existence.
+type SubsystemMetric struct {
+	// Name is the fully qualified metric name that was requested.
+	Name string `json:"name"`
+
+	// Subsystem is the name prefix owned by the producing component.
+	Subsystem string `json:"subsystem"`
+
+	// Sum is the total across all label combinations. Meaningful only when Found.
+	Sum float64 `json:"sum"`
+
+	// Found reports whether at least one series carried Name.
+	Found bool `json:"found"`
+
+	// SubsystemPresent reports whether any series carried Subsystem, i.e.
+	// whether the producing component is deployed and scraped at all.
+	SubsystemPresent bool `json:"subsystem_present"`
+
+	// SeriesInSubsystem is how many series carried Subsystem, for diagnostics.
+	SeriesInSubsystem int `json:"series_in_subsystem"`
+}
+
+// SumMetricInSubsystem sums metricName across labels while also reporting whether
+// the owning subsystem was scraped at all.
+//
+// It returns an error when the subsystem is present but metricName is not: a
+// deployed component that does not export the name being gated on means the gate
+// is measuring nothing, which is strictly worse than a failing gate because it
+// looks like a pass. Absence of the whole subsystem is NOT an error — it is the
+// expected reading for a tier that does not deploy the component.
+func (c *MetricsClient) SumMetricInSubsystem(
+	ctx context.Context,
+	subsystem, metricName string,
+) (SubsystemMetric, error) {
+	if !strings.HasPrefix(metricName, subsystem) {
+		return SubsystemMetric{}, fmt.Errorf(
+			"metric %q does not belong to subsystem %q: the caller's prefix and name disagree",
+			metricName, subsystem)
+	}
+
+	snapshot, err := c.FetchSnapshot(ctx)
+	if err != nil {
+		return SubsystemMetric{}, fmt.Errorf("fetching metrics snapshot: %w", err)
+	}
+
+	out := SubsystemMetric{Name: metricName, Subsystem: subsystem}
+	for _, metric := range snapshot.Metrics {
+		if strings.HasPrefix(metric.Name, subsystem) {
+			out.SubsystemPresent = true
+			out.SeriesInSubsystem++
+		}
+		if metric.Name == metricName {
+			out.Sum += metric.Value
+			out.Found = true
+		}
+	}
+
+	if out.SubsystemPresent && !out.Found {
+		return out, fmt.Errorf(
+			"metric %q is not exported even though subsystem %q is scraped (%d other series present): "+
+				"the metric name is misspelled or was renamed in production code",
+			metricName, subsystem, out.SeriesInSubsystem)
+	}
+
+	return out, nil
+}
+
 // CaptureBaseline takes a snapshot of all counter metrics for later comparison
 func (c *MetricsClient) CaptureBaseline(ctx context.Context) (*MetricsBaseline, error) {
 	snapshot, err := c.FetchSnapshot(ctx)

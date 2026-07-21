@@ -20,49 +20,129 @@ import (
 
 // Structural variant validation functions for rules-only testing
 
+// Prometheus subsystem prefixes owned by the components the structural tier must
+// NOT exercise. configs/structural.json deploys neither graph-embedding nor
+// graph-clustering, so absence of these prefixes is the tier passing, and their
+// presence with work recorded is the tier failing.
+const (
+	embeddingSubsystem  = "semstreams_graph_embedding_"
+	clusteringSubsystem = "semstreams_graph_clustering_"
+)
+
+// embeddingsGeneratedMetric counts embeddings produced by graph-embedding.
+const embeddingsGeneratedMetric = embeddingSubsystem + "embeddings_generated_total"
+
+// clusteringRunsMetric counts COMPLETED community-detection runs.
+//
+// graph-clustering exports no runs_total counter — the name this gate used to
+// poll, semstreams_clustering_runs_total, exists nowhere in production code
+// (gh#615). It does export detection_duration_seconds, a histogram observed
+// exactly once per completed run in runDetectionCycle immediately after
+// DetectCommunities returns, so that histogram's _count series IS the run count.
+//
+// Gating on it beats adding a fresh counter: it is already wired to the single
+// code path that means "clustering ran", whereas a parallel counter would be one
+// more thing to keep in sync with it. Because the histogram is registered in the
+// component constructor rather than on first use, the series reads 0 while
+// graph-clustering is deployed but idle — precisely the state this tier must
+// distinguish from "not deployed".
+const clusteringRunsMetric = clusteringSubsystem + "detection_duration_seconds_count"
+
 // executeValidateZeroEmbeddings validates that NO embeddings were generated (structural tier constraint)
 func (s *TieredScenario) executeValidateZeroEmbeddings(ctx context.Context, result *Result) error {
-	embeddingCount, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_embeddings_generated_total")
-
-	result.Metrics["embeddings_generated"] = int(embeddingCount)
-
-	constraintMet := int(embeddingCount) <= s.config.ExpectedEmbeddings
-
-	result.Details["zero_embeddings_validation"] = map[string]any{
-		"embeddings_generated": int(embeddingCount),
-		"expected":             s.config.ExpectedEmbeddings,
-		"constraint_met":       constraintMet,
-		"message":              fmt.Sprintf("Embeddings: %d (expected %d for structural tier)", int(embeddingCount), s.config.ExpectedEmbeddings),
-	}
-
-	// Structural tier constraint: embeddings MUST be zero (or within expected limit)
-	if !constraintMet {
-		return fmt.Errorf("structural tier constraint violated: embeddings=%d (expected max %d)",
-			int(embeddingCount), s.config.ExpectedEmbeddings)
-	}
-
-	return nil
+	return s.validateTierMustNotRun(ctx, zeroConstraint{
+		subsystem:  embeddingSubsystem,
+		metric:     embeddingsGeneratedMetric,
+		component:  "graph-embedding",
+		noun:       "embeddings",
+		limit:      s.config.ExpectedEmbeddings,
+		metricKey:  "embeddings_generated",
+		detailsKey: "zero_embeddings_validation",
+		countKey:   "embeddings_generated",
+	}, result)
 }
 
 // executeValidateZeroClusters validates that NO clustering occurred (structural tier constraint)
 func (s *TieredScenario) executeValidateZeroClusters(ctx context.Context, result *Result) error {
-	clusteringCount, _ := s.metrics.SumMetricsByName(ctx, "semstreams_clustering_runs_total")
+	return s.validateTierMustNotRun(ctx, zeroConstraint{
+		subsystem:  clusteringSubsystem,
+		metric:     clusteringRunsMetric,
+		component:  "graph-clustering",
+		noun:       "clustering runs",
+		limit:      s.config.ExpectedClusters,
+		metricKey:  "clustering_runs",
+		detailsKey: "zero_clusters_validation",
+		countKey:   "clustering_runs",
+	}, result)
+}
 
-	result.Metrics["clustering_runs"] = int(clusteringCount)
+// zeroConstraint describes a "this tier must not perform work X" check.
+type zeroConstraint struct {
+	subsystem  string // Prometheus prefix owned by the component
+	metric     string // fully qualified metric proving the work happened
+	component  string // component name, for operator-facing messages
+	noun       string // human-readable unit of work
+	limit      int    // maximum tolerated count
+	metricKey  string // key under result.Metrics
+	detailsKey string // key under result.Details
+	countKey   string // count field name inside the details map
+}
 
-	constraintMet := int(clusteringCount) <= s.config.ExpectedClusters
-
-	result.Details["zero_clusters_validation"] = map[string]any{
-		"clustering_runs": int(clusteringCount),
-		"expected":        s.config.ExpectedClusters,
-		"constraint_met":  constraintMet,
-		"message":         fmt.Sprintf("Clustering runs: %d (expected %d for structural tier)", int(clusteringCount), s.config.ExpectedClusters),
+// validateTierMustNotRun enforces a zeroConstraint and — unlike the
+// discard-into-_ form it replaces — can tell "the metric reads zero" apart from
+// "no such metric exists".
+//
+// Three outcomes, only one of which used to be reachable:
+//
+//   - subsystem absent: the component is not deployed. The constraint is proven,
+//     not merely unobserved, and that distinction is recorded in the result.
+//   - subsystem present, metric missing: the gate is measuring nothing. Fail,
+//     because a silent pass here is what let gh#615 survive unnoticed.
+//   - metric present: compare against the limit as intended.
+func (s *TieredScenario) validateTierMustNotRun(
+	ctx context.Context,
+	c zeroConstraint,
+	result *Result,
+) error {
+	reading, err := s.metrics.SumMetricInSubsystem(ctx, c.subsystem, c.metric)
+	if err != nil {
+		// Unverifiable is a failure, not a pass. The whole point of gh#615 is
+		// that an unresolvable metric name previously read as compliance.
+		result.Details[c.detailsKey] = map[string]any{
+			"constraint_met": false,
+			"verifiable":     false,
+			"metric":         c.metric,
+			"message": fmt.Sprintf("Cannot verify %s constraint for %s: %v",
+				c.noun, c.component, err),
+		}
+		return fmt.Errorf("structural tier constraint for %s is unverifiable: %w", c.component, err)
 	}
 
-	// Structural tier constraint: clustering MUST NOT occur
+	count := int(reading.Sum)
+	constraintMet := count <= c.limit
+
+	var message string
+	if !reading.SubsystemPresent {
+		message = fmt.Sprintf("%s is not deployed in this tier: no %s series scraped, so %s are provably 0 (expected max %d)",
+			c.component, c.subsystem, c.noun, c.limit)
+	} else {
+		message = fmt.Sprintf("%s: %d (expected max %d for structural tier)", c.noun, count, c.limit)
+	}
+
+	result.Metrics[c.metricKey] = count
+	result.Details[c.detailsKey] = map[string]any{
+		c.countKey:          count,
+		"expected":          c.limit,
+		"constraint_met":    constraintMet,
+		"verifiable":        true,
+		"metric":            c.metric,
+		"component_scraped": reading.SubsystemPresent,
+		"message":           message,
+	}
+
 	if !constraintMet {
-		return fmt.Errorf("structural tier constraint violated: clustering_runs=%d (expected max %d)",
-			int(clusteringCount), s.config.ExpectedClusters)
+		return fmt.Errorf("structural tier constraint violated: %s=%d from %s (expected max %d)",
+			c.metricKey, count, c.metric, c.limit)
 	}
 
 	return nil

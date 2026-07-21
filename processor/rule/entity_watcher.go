@@ -7,10 +7,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/resource"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -82,25 +82,58 @@ func (rp *Processor) getEffectiveBucketPatterns() map[string][]string {
 	return rp.config.EntityWatchBuckets
 }
 
-// getOrCreateBucket gets or creates a KV bucket by name.
-// Uses appropriate defaults based on bucket purpose.
-func (rp *Processor) getOrCreateBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
+// getEntityStatesBucket resolves the ENTITY_STATES bucket for watching.
+//
+// The rule processor is a READER of ENTITY_STATES and never its owner —
+// graph-ingest creates the bucket and owns its retention. This function must
+// therefore never create: a reader that creates wins the cold-boot race against
+// the owner (component_manager starts components concurrently from a map
+// iteration, so the winner is re-rolled every boot) and imposes its own config
+// on the live graph. This path previously created with TTL: 7*24h, which either
+// tripped graph-ingest's AssertNoLifecycleRetention — taking the whole graph
+// pipeline down nondeterministically — or, in a split deploy where no guard
+// runs, silently expired the live graph on a rolling 7-day window (ADR-068 D1,
+// missed emitter of gh#484).
+//
+// Because the owner may not have created the bucket yet on a cold cluster, wait
+// for it rather than failing on first miss: watchEntityStates latches
+// graphStateGuardDegraded for the process lifetime, so an unretried transient
+// miss would permanently disable rule evaluation with only a Warn to show for
+// it. Same bounded-startup primitive the sibling ENTITY_STATES readers use.
+func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
 	if bucketName != gtypes.BucketEntityStates {
 		return nil, unsupportedEntityWatchBucket(bucketName)
 	}
-	// Try to get existing bucket first
-	bucket, err := rp.natsClient.GetKeyValueBucket(ctx, bucketName)
-	if err == nil {
-		return bucket, nil
+
+	js, err := rp.natsClient.JetStream()
+	if err != nil {
+		return nil, errs.Wrap(err, "Processor", "getEntityStatesBucket", "JetStream connection")
 	}
 
-	return rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      bucketName,
-		Description: "Entity state storage",
-		History:     10,
-		TTL:         7 * 24 * time.Hour, // 7 days
-		MaxBytes:    -1,                 // Unlimited
-	})
+	attempts, interval := rp.config.startupWaitBudget()
+
+	watcherCfg := resource.DefaultConfig()
+	watcherCfg.StartupAttempts = attempts
+	watcherCfg.StartupInterval = interval
+	watcherCfg.Logger = rp.logger
+	bucketWatcher := resource.NewWatcher(
+		bucketName,
+		func(checkCtx context.Context) error {
+			_, checkErr := js.KeyValue(checkCtx, bucketName)
+			return checkErr
+		},
+		watcherCfg,
+	)
+
+	if !bucketWatcher.WaitForStartup(ctx) {
+		return nil, errs.WrapTransient(
+			errs.ErrStorageUnavailable,
+			"Processor", "getEntityStatesBucket",
+			fmt.Sprintf("bucket %s not available after %d attempts", bucketName, attempts),
+		)
+	}
+
+	return js.KeyValue(ctx, bucketName)
 }
 
 // startWatcherForBucketPattern starts a KV watcher for a specific bucket and pattern.
@@ -167,7 +200,7 @@ func (rp *Processor) prepareEntityWatcher(ctx context.Context, bucketName, patte
 	if err := validateEntityWatchPattern(bucketName, pattern); err != nil {
 		return nil, err
 	}
-	bucket, err := rp.getOrCreateBucket(ctx, bucketName)
+	bucket, err := rp.getEntityStatesBucket(ctx, bucketName)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "Processor", "prepareEntityWatcher", "get ENTITY_STATES bucket")
 	}

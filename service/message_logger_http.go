@@ -3,15 +3,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 func init() {
@@ -349,8 +351,26 @@ func (ml *MessageLogger) handleGetSubjects(w http.ResponseWriter, r *http.Reques
 	}
 }
 
+// kvBucketProvider is the narrow NATS capability the read-only KV query
+// endpoint is allowed to use. It deliberately exposes lookup only: a query
+// endpoint must never be able to create a bucket (see queryKVBucket).
+type kvBucketProvider interface {
+	GetKeyValueBucket(ctx context.Context, name string) (jetstream.KeyValue, error)
+}
+
+// The production NATS client must satisfy the read-only query capability.
+var _ kvBucketProvider = (*natsclient.Client)(nil)
+
 // handleKVQuery queries NATS KV buckets (development/test only)
 func (ml *MessageLogger) handleKVQuery(w http.ResponseWriter, r *http.Request) {
+	ml.handleKVQueryWith(w, r, ml.natsClient)
+}
+
+// handleKVQueryWith is handleKVQuery with the bucket source injected, so the
+// endpoint's behavior can be driven without a live NATS server.
+func (ml *MessageLogger) handleKVQueryWith(w http.ResponseWriter, r *http.Request, provider kvBucketProvider) {
+	ctx := r.Context()
+
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -402,7 +422,7 @@ func (ml *MessageLogger) handleKVQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query KV bucket
-	result, err := ml.queryKVBucket(bucket, pattern, limit)
+	result, err := ml.queryKVBucket(ctx, provider, bucket, pattern, limit)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, fmt.Sprintf("Bucket not found: %s", bucket), http.StatusNotFound)
@@ -422,20 +442,34 @@ func (ml *MessageLogger) handleKVQuery(w http.ResponseWriter, r *http.Request) {
 }
 
 // queryKVBucket queries a NATS KV bucket
-func (ml *MessageLogger) queryKVBucket(bucket, pattern string, limit int) (map[string]any, error) {
-	ctx := context.Background()
-
-	// Create or get KV bucket using resilient pattern
-	// For query endpoints, we create with minimal config if it doesn't exist
-	kv, err := ml.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      bucket,
-		Description: fmt.Sprintf("KV bucket %s (auto-created by query)", bucket),
-		History:     5,                  // Minimal history for query buckets
-		TTL:         7 * 24 * time.Hour, // 7 days
-		MaxBytes:    -1,                 // Unlimited
-	})
+func (ml *MessageLogger) queryKVBucket(
+	ctx context.Context,
+	provider kvBucketProvider,
+	bucket, pattern string,
+	limit int,
+) (map[string]any, error) {
+	// Look up the bucket; never create it. The bucket name here is
+	// caller-supplied and unvalidated beyond path-traversal characters, so
+	// creating on read is doubly wrong:
+	//
+	//   1. A reader that creates wins the cold-boot race against the bucket's
+	//      real owner and imposes its own retention on the live graph. This
+	//      endpoint used to create with a 7-day TTL, so a debugging GET for
+	//      SPATIAL_INDEX/COMMUNITY_INDEX/EMBEDDING_INDEX on a cluster where the
+	//      owner had not started yet left that index silently expiring forever
+	//      after — live graph state and required current indexes never carry
+	//      TTL or lifecycle eviction (ADR-068 D1). For ENTITY_STATES it also
+	//      trips graph-ingest's AssertNoLifecycleRetention, wedging its next
+	//      restart.
+	//   2. A typo'd bucket name must 404, not materialize a permanent bucket.
+	//
+	// Mirrors getKVBucketForWatch in message_logger_kv_watch.go.
+	kv, err := provider.GetKeyValueBucket(ctx, bucket)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create/get KV bucket %s: %w", bucket, err)
+		if errors.Is(err, jetstream.ErrBucketNotFound) {
+			return nil, fmt.Errorf("bucket %s not found: %w", bucket, err)
+		}
+		return nil, fmt.Errorf("failed to get KV bucket %s: %w", bucket, err)
 	}
 
 	// List keys matching pattern

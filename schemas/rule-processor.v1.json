@@ -1278,6 +1278,16 @@
         "type": "string"
       },
       "category": "basic"
+    },
+    "startup_attempts": {
+      "type": "integer",
+      "description": "Max attempts to wait for ENTITY_STATES at startup",
+      "category": "advanced"
+    },
+    "startup_interval_ms": {
+      "type": "integer",
+      "description": "Interval between startup attempts in milliseconds",
+      "category": "advanced"
     }
   },
   "required": [

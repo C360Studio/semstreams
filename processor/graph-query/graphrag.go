@@ -148,6 +148,13 @@ type GlobalSearchResponse struct {
 	// DegradedReason classifies why synthesis was degraded.
 	// "answer_synthesis_timeout" | "answer_synthesis_error" | "".
 	DegradedReason string `json:"degraded_reason,omitempty"`
+	// EntitiesTruncated is true when the candidate entity corpus collected from
+	// the selected communities exceeded MaxTotalEntitiesInSearch and was capped
+	// before loading. Entities, Count and Answer are then derived from a PREFIX
+	// of the sorted candidate set, NOT from the full community membership —
+	// consumers (and answer synthesis in particular) must not present the result
+	// as exhaustive. Same contract as graph.SummaryData.EntitySampleTruncated.
+	EntitiesTruncated bool `json:"entities_truncated,omitempty"`
 }
 
 // Relationship represents a relationship between two entities in search results
@@ -1121,6 +1128,30 @@ func parseEntityIDsFromResults(data []byte) ([]string, error) {
 	return ids, nil
 }
 
+// sortAndCapEntityIDs turns a candidate entity-ID set into a deterministically
+// ordered slice capped at limit, reporting whether the cap bit.
+//
+// Go randomizes map iteration order, so truncating a slice built by ranging a
+// set retains an ARBITRARY subset that differs on every call: past the limit,
+// the same query against an unchanged graph returned a different corpus — and
+// therefore a different synthesized answer — run to run (gh#621). Sorting first
+// makes the retained prefix a pure function of the candidate set. Set membership
+// guarantees the IDs are unique, so lexical order is a total order on them and
+// no secondary tie-break is required for stability.
+//
+// A limit <= 0 means no cap.
+func sortAndCapEntityIDs(idSet map[string]bool, limit int) (ids []string, truncated bool) {
+	ids = make([]string, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	if limit > 0 && len(ids) > limit {
+		return ids[:limit], true
+	}
+	return ids, false
+}
+
 // globalSearchTextBased performs text-based global search using community summaries.
 // This is the fallback when semantic search is unavailable.
 func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchRequest, startTime time.Time, requestSize int) ([]byte, error) {
@@ -1166,15 +1197,13 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		}
 	}
 
-	// Convert to slice
-	entityIDs := make([]string, 0, len(entityIDSet))
-	for id := range entityIDSet {
-		entityIDs = append(entityIDs, id)
-	}
-
-	// Enforce resource limit
-	if len(entityIDs) > MaxTotalEntitiesInSearch {
-		entityIDs = entityIDs[:MaxTotalEntitiesInSearch]
+	// Order deterministically, THEN enforce the resource limit (gh#621).
+	entityIDs, truncated := sortAndCapEntityIDs(entityIDSet, MaxTotalEntitiesInSearch)
+	if truncated {
+		c.logger.Warn("globalSearchTextBased: candidate corpus truncated",
+			"candidates", len(entityIDSet),
+			"limit", MaxTotalEntitiesInSearch,
+			"communities", len(topCommunities))
 	}
 
 	// Load entities via graph-ingest
@@ -1213,9 +1242,10 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 
 	// Build response
 	response := GlobalSearchResponse{
-		Entities:   matchedEntities,
-		Count:      len(matchedEntities),
-		DurationMs: time.Since(startTime).Milliseconds(),
+		Entities:          matchedEntities,
+		Count:             len(matchedEntities),
+		DurationMs:        time.Since(startTime).Milliseconds(),
+		EntitiesTruncated: truncated,
 	}
 
 	// Conditionally include summaries (default: true)

@@ -47,6 +47,11 @@
         "type": "string"
       },
       "category": "advanced"
+    },
+    "workers": {
+      "type": "integer",
+      "description": "Number of concurrent embedding worker goroutines",
+      "category": "advanced"
     }
   },
   "required": [],

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/model"
@@ -21,9 +22,28 @@ import (
 // Uses the standard OpenAI SDK for consistency and compatibility.
 // See Dockerfile.tei and docker-compose.services.yml for ready-to-use TEI setup.
 type HTTPEmbedder struct {
-	client      *openai.Client
-	model       string
-	dimensions  int
+	client *openai.Client
+	model  string
+
+	// dimensions is the vector width this endpoint actually returns, discovered
+	// from the first successful response and latched thereafter. 0 means NOT YET
+	// RESOLVED and is reported as such by Dimensions().
+	//
+	// It is atomic because the writer (a Generate call on some worker goroutine)
+	// and the readers are always on different goroutines: the component's
+	// embedderIdentity() runs on the hop-1 ENTITY_STATES watcher, and the hop-2
+	// worker pool is 5 goroutines by default.
+	//
+	// The zero sentinel replaced a hardcoded 384 placeholder that was overwritten
+	// on the first response via `if dimensions == 384`. That could not tell
+	// "undetected" from "genuinely 384", and for any other width it split the
+	// dedup keyspace in two — entities queued before the first response keyed on
+	// 384, entities after on the real width, with the boundary set by race timing.
+	// Dimensions are resolved lazily rather than at construction so that a
+	// temporarily unreachable endpoint degrades the component instead of failing
+	// its Start.
+	dimensions atomic.Int64
+
 	cache       Cache
 	logger      *slog.Logger
 	queryPrefix string // prepended to query-side text only (gh#438)
@@ -116,10 +136,10 @@ func NewHTTPEmbedder(cfg HTTPConfig) (*HTTPEmbedder, error) {
 		logger = slog.Default()
 	}
 
+	// dimensions is left at its zero value: unresolved until the first response.
 	return &HTTPEmbedder{
 		client:      client,
 		model:       cfg.Model,
-		dimensions:  384, // Will be detected on first call
 		cache:       cfg.Cache,
 		logger:      logger,
 		queryPrefix: cfg.QueryPrefix,
@@ -201,9 +221,14 @@ func (h *HTTPEmbedder) embed(ctx context.Context, texts []string) ([][]float32, 
 			originalIndex := uncachedIndexes[i]
 			embeddings[originalIndex] = data.Embedding
 
-			// Update dimensions on first call
-			if h.dimensions == 384 && len(data.Embedding) > 0 {
-				h.dimensions = len(data.Embedding)
+			// Latch the real vector width on the first response that carries one.
+			// CompareAndSwap makes this resolve-once: later responses cannot churn
+			// the value, so every dedup key derived after resolution is stable.
+			if len(data.Embedding) > 0 {
+				if h.dimensions.CompareAndSwap(0, int64(len(data.Embedding))) {
+					h.logger.Info("resolved embedding dimensions from endpoint",
+						"model", h.model, "dimensions", len(data.Embedding))
+				}
 			}
 
 			// Cache the embedding
@@ -220,9 +245,14 @@ func (h *HTTPEmbedder) embed(ctx context.Context, texts []string) ([][]float32, 
 	return embeddings, nil
 }
 
-// Dimensions returns the dimensionality of embeddings produced.
+// Dimensions returns the dimensionality of embeddings produced, or 0 if the
+// endpoint has not answered yet.
+//
+// 0 is reported honestly rather than guessed. Callers that key durable state on
+// the vector space (DedupKey) must refuse to build a key from an unresolved
+// identity; inventing a width there is what partitioned EMBEDDING_DEDUP.
 func (h *HTTPEmbedder) Dimensions() int {
-	return h.dimensions
+	return int(h.dimensions.Load())
 }
 
 // Model returns the model identifier.

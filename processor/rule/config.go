@@ -37,6 +37,16 @@ type Config struct {
 	// Operational KV values need a separately designed typed decoder/evaluator.
 	EntityWatchBuckets map[string][]string `json:"entity_watch_buckets" schema:"type:object,description:ENTITY_STATES patterns for the typed EntityState evaluator,category:advanced"`
 
+	// Bounded wait for ENTITY_STATES to exist at startup. The rule processor is
+	// a reader and never creates the bucket (gh#610), so on a cold cluster it
+	// must wait for graph-ingest rather than race it. Budget matches every
+	// sibling ENTITY_STATES reader (graph-index, -spatial, -temporal,
+	// graph-embedding, graph-clustering): 30 × 500ms ≈ 15s. Under-provisioning
+	// here is expensive — exhausting the budget latches the graph-state guard
+	// degraded for the process lifetime.
+	StartupAttempts int `json:"startup_attempts,omitempty" schema:"type:int,description:Max attempts to wait for ENTITY_STATES at startup,category:advanced"`
+	StartupInterval int `json:"startup_interval_ms,omitempty" schema:"type:int,description:Interval between startup attempts in milliseconds,category:advanced"`
+
 	// Debounce delay for rule evaluation (settling time for entity state)
 	// Default is 0 (disabled) to ensure rules evaluate against each state change.
 	// Set to a positive value (e.g., 100) to batch rapid updates and evaluate final state only.
@@ -138,6 +148,33 @@ func NewConfig(packID string) (Config, error) {
 
 // defaultConfig provides the internal overlay base used by the component
 // factory before it applies the operator's required pack_id.
+// Startup-wait budget for ENTITY_STATES, matching every sibling reader of the
+// bucket. Kept as named constants so entity_watcher.go can floor a
+// zero-valued config to the same budget rather than silently inheriting
+// resource.DefaultConfig's smaller one.
+const (
+	defaultStartupAttempts = 30  // ~15 seconds with the interval below
+	defaultStartupInterval = 500 // milliseconds
+)
+
+// startupWaitBudget returns the ENTITY_STATES startup-wait budget, flooring a
+// zero or negative value to the sibling default. Without this floor a Config
+// that never went through defaultConfig (tests, partial operator JSON) would
+// inherit resource.DefaultConfig's smaller 10-attempt budget, giving this
+// reader a third of every other ENTITY_STATES reader's patience for the same
+// bucket — see getEntityStatesBucket.
+func (c Config) startupWaitBudget() (attempts int, interval time.Duration) {
+	attempts = c.StartupAttempts
+	if attempts <= 0 {
+		attempts = defaultStartupAttempts
+	}
+	intervalMs := c.StartupInterval
+	if intervalMs <= 0 {
+		intervalMs = defaultStartupInterval
+	}
+	return attempts, time.Duration(intervalMs) * time.Millisecond
+}
+
 func defaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
@@ -171,6 +208,8 @@ func defaultConfig() Config {
 		AlertCooldownPeriod:    "2m",
 		EnableGraphIntegration: false,
 		DebounceDelayMs:        0, // Disabled by default for real-time rule evaluation
+		StartupAttempts:        defaultStartupAttempts,
+		StartupInterval:        defaultStartupInterval,
 		Consumer: struct {
 			Enabled        bool   `json:"enabled"`
 			AckWaitSeconds int    `json:"ack_wait_seconds"`

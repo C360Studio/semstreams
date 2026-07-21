@@ -264,8 +264,16 @@ type AnomalyStatusCounts struct {
 // EmbeddingMetrics contains embedding queue health metrics (Phase 4).
 // These metrics provide visibility into the embedding pipeline flow.
 type EmbeddingMetrics struct {
-	// QueuedTotal is the total number of embeddings sent to the queue
-	QueuedTotal int64 `json:"queued_total"`
+	// ResolvedTotal is the number of embedding requests that reached an outcome,
+	// derived as GeneratedTotal + DedupHits.
+	//
+	// It replaces a queued_total field that was read from
+	// semstreams_graph_embedding_queued_total — a metric no production code has
+	// ever exported. That field was therefore a hard 0 in every result JSON ever
+	// emitted, presented as a real measurement (gh#615). graph-embedding exports
+	// no queue-admission counter, so rather than reinstate a fabricated number
+	// this reports the real work that was accounted for.
+	ResolvedTotal int64 `json:"resolved_total"`
 
 	// GeneratedTotal is the total number of embeddings successfully generated
 	GeneratedTotal int64 `json:"generated_total"`
@@ -279,7 +287,7 @@ type EmbeddingMetrics struct {
 	// PendingCount is the current queue depth (should be 0 at test end)
 	PendingCount int64 `json:"pending_count"`
 
-	// DedupRate is the deduplication efficiency (dedupHits / queuedTotal)
+	// DedupRate is the deduplication efficiency (dedupHits / resolvedTotal)
 	DedupRate float64 `json:"dedup_rate,omitempty"`
 
 	// QueueDrained indicates if the queue was empty at validation time
@@ -530,20 +538,20 @@ func buildComponentAndOutputResults(tr *TieredResults, result *Result) {
 
 // buildEmbeddingMetrics populates embedding queue metrics.
 func buildEmbeddingMetrics(tr *TieredResults, result *Result) {
-	queuedTotal := getInt64Metric(result, "embedding_queued_total")
+	resolvedTotal := getInt64Metric(result, "embedding_resolved_total")
 	generatedTotal := getInt64Metric(result, "embedding_generated_total")
-	if queuedTotal == 0 && generatedTotal == 0 {
+	if resolvedTotal == 0 && generatedTotal == 0 {
 		return
 	}
 	dedupHits := getInt64Metric(result, "embedding_dedup_hits")
 	failedTotal := getInt64Metric(result, "embedding_failed_total")
 	pendingCount := getInt64Metric(result, "embedding_pending_count")
 	dedupRate := 0.0
-	if queuedTotal > 0 {
-		dedupRate = float64(dedupHits) / float64(queuedTotal)
+	if resolvedTotal > 0 {
+		dedupRate = float64(dedupHits) / float64(resolvedTotal)
 	}
 	tr.Embeddings = &EmbeddingMetrics{
-		QueuedTotal: queuedTotal, GeneratedTotal: generatedTotal, DedupHits: dedupHits,
+		ResolvedTotal: resolvedTotal, GeneratedTotal: generatedTotal, DedupHits: dedupHits,
 		FailedTotal: failedTotal, PendingCount: pendingCount, DedupRate: dedupRate,
 		QueueDrained: pendingCount == 0, NoFailures: failedTotal == 0,
 	}

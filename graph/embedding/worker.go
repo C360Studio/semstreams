@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 	"sync"
 
@@ -145,9 +146,15 @@ func NewWorker(
 	}
 }
 
-// WithWorkers sets the number of concurrent workers
+// WithWorkers sets the number of concurrent workers.
+//
+// n is floored at 1: Start spawns exactly n goroutines to drain the KV watcher,
+// so a zero or negative count is not "fewer workers", it is a component that
+// silently consumes nothing while every health signal stays green. No caller
+// ever wants that, so it is corrected here rather than at each call site
+// (gh#620).
 func (w *Worker) WithWorkers(n int) *Worker {
-	w.workers = n
+	w.workers = max(1, n)
 	return w
 }
 
@@ -268,12 +275,6 @@ func (w *Worker) Stop() error {
 
 // processEmbeddings watches for KV changes and processes pending embeddings
 func (w *Worker) processEmbeddings(workerID int) {
-	defer func() {
-		if r := recover(); r != nil {
-			w.logger.Error("Embedding worker panic recovered", "worker_id", workerID, "panic", r)
-		}
-	}()
-
 	w.logger.Debug("Embedding worker goroutine started", "worker_id", workerID)
 
 	for {
@@ -294,10 +295,36 @@ func (w *Worker) processEmbeddings(workerID int) {
 
 			// Process if this is a new pending record or update to existing pending
 			if entry.Operation() == jetstream.KeyValuePut {
-				w.handleKVEntry(entry, workerID)
+				w.handleKVEntrySafe(entry, workerID)
 			}
 		}
 	}
+}
+
+// handleKVEntrySafe processes one entry with panic isolation scoped to that entry.
+//
+// The recovery deliberately lives HERE and not around the for-loop in
+// processEmbeddings. Wrapping the loop meant any panic unwound past it, returned
+// from processEmbeddings, and permanently retired that worker goroutine — nothing
+// respawns it. At the default 5 workers, five poison entries silently reduce the
+// embedding pipeline to zero consumers, observable only as ADR-066 watermark lag
+// well after the fact. Scoped per entry, a panic costs exactly the one entry.
+//
+// The entry is not retried: the panicking record keeps its pending status and the
+// stack is logged for diagnosis. Re-driving an entry that just crashed the
+// decoder would turn one poison record into a hot loop.
+func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) {
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("Embedding worker panic recovered; skipping entry",
+				"worker_id", workerID,
+				"entity_id", entry.Key(),
+				"panic", r,
+				"stack", string(debug.Stack()))
+		}
+	}()
+
+	w.handleKVEntry(entry, workerID)
 }
 
 // handleKVEntry processes a KV entry to check if it needs embedding generation
@@ -368,21 +395,37 @@ func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
 }
 
 // getOrGenerateEmbedding returns an existing embedding via dedup or generates a new one.
+//
+// An empty contentHash means the producer could not derive a content-addressed
+// key for this record and dedup is DISABLED for it (see
+// queueEmbeddingWithStorageRef): generate unconditionally rather than key the
+// durable dedup bucket on something that is not the content.
 func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, contentHash string) ([]float32, error) {
-	// Check deduplication first
-	dedupRecord, err := w.storage.GetByContentHash(w.ctx, contentHash)
-	if err != nil {
-		w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", err))
-		return nil, err
-	}
+	// An embedder that cannot state its vector width takes no part in dedup, read
+	// or write. DedupKey already withholds a key from an unresolved identity, but
+	// that only covers records this process queued: a pending record replayed from
+	// an earlier process carries a non-empty ContentHash which hop-2 reuses
+	// verbatim. Consulting it would compare against a width of 0, and saving would
+	// leave a record stamped 0 that can never match again in a bucket that is
+	// never cleared.
+	dedupEnabled := contentHash != "" && w.embedder.Dimensions() > 0
 
-	if dedupRecord != nil {
-		w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "content_hash", contentHash)
-		if w.metrics != nil {
-			w.metrics.IncDedupHits()
+	// Check deduplication first
+	if dedupEnabled {
+		dedupRecord, err := w.storage.GetByContentHash(w.ctx, contentHash)
+		if err != nil {
+			w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", err)
+			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", err))
+			return nil, err
 		}
-		return dedupRecord.Vector, nil
+
+		if dedupRecord != nil && w.dedupRecordUsable(entityID, contentHash, dedupRecord) {
+			w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "content_hash", contentHash)
+			if w.metrics != nil {
+				w.metrics.IncDedupHits()
+			}
+			return dedupRecord.Vector, nil
+		}
 	}
 
 	// Generate new embedding
@@ -402,13 +445,51 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, contentHash string
 
 	vector := vectors[0]
 
-	// Save to dedup bucket
-	if err := w.storage.SaveDedup(w.ctx, contentHash, vector, entityID); err != nil {
-		w.logger.Warn("Failed to save dedup record", "entity_id", entityID, "error", err)
-		// Continue anyway - not critical
+	// Save to dedup bucket. Skipped when dedup is disabled for this record.
+	if dedupEnabled {
+		if err := w.storage.SaveDedup(
+			w.ctx, contentHash, vector, entityID, w.embedder.Model(), w.embedder.Dimensions(),
+		); err != nil {
+			w.logger.Warn("Failed to save dedup record", "entity_id", entityID, "error", err)
+			// Continue anyway - not critical
+		}
 	}
 
 	return vector, nil
+}
+
+// dedupRecordUsable reports whether a dedup hit belongs to the vector space this
+// worker's embedder produces.
+//
+// The dedup KEY already folds in embedder identity (gh#612), so a mismatch here
+// means state written by an incompatible key layout survived — a real hit on
+// this branch is a bug, not a config change, hence the loud log.
+//
+// A record with no Model is UNUSABLE, not usable. Old-layout keys remain
+// reachable: EMBEDDING_INDEX pending records are durable KV with no TTL, and
+// Worker.Start uses WatchAll, which re-delivers every current value on restart.
+// handleKVEntry skips only non-pending records, so a pending record written by a
+// pre-fix binary replays as pending and hop-2 reuses its stored ContentHash — an
+// old-layout ContentHash(text) key — verbatim. Trusting an identityless record
+// there is precisely the bm25-vector-stamped-with-a-neural-model-name defect
+// gh#612 exists to prevent, on the bm25 -> http upgrade path that motivated it.
+// An identityless record predates the key contract, so it is regenerated: one
+// re-embed per legacy record, once.
+func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord) bool {
+	if r.Model == "" {
+		w.logger.Warn("Dedup record predates the embedder-identity key contract; regenerating",
+			"entity_id", entityID, "content_hash", contentHash)
+		return false
+	}
+	model, dims := w.embedder.Model(), w.embedder.Dimensions()
+	if r.Model == model && r.Dimensions == dims {
+		return true
+	}
+	w.logger.Warn("Dedup record belongs to a different vector space; regenerating",
+		"entity_id", entityID, "content_hash", contentHash,
+		"record_model", r.Model, "record_dimensions", r.Dimensions,
+		"embedder_model", model, "embedder_dimensions", dims)
+	return false
 }
 
 // saveAndNotify saves the generated embedding and notifies callback.
@@ -416,6 +497,17 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
 	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions); err != nil {
+		// The entity was tombstoned (or its pending record removed) while this
+		// vector was being generated. That is a normal race, not a failure: there
+		// is nothing to mark failed, and counting it would inflate the failure
+		// metric across gh#527 bulk deletion. Return before onGenerated — firing it
+		// would push the dropped vector into the query-side cache, resurrecting in
+		// memory exactly what gh#614 removed from KV.
+		if errors.Is(err, ErrRecordGone) {
+			w.logger.Debug("Embedding record removed during generation; dropping vector",
+				"entity_id", entityID)
+			return
+		}
 		w.logger.Error("Failed to save generated embedding", "entity_id", entityID, "error", err)
 		w.markFailed(entityID, fmt.Sprintf("save failed: %v", err))
 		return
@@ -542,7 +634,15 @@ func (w *Worker) markFailed(entityID, errorMsg string) {
 	}
 
 	if err := w.storage.SaveFailed(w.ctx, entityID, errorMsg); err != nil {
-		w.logger.Error("Failed to mark embedding as failed", "entity_id", entityID, "error", err)
+		// A record that is already gone has nothing to annotate. The failure itself
+		// is still real and still counted below — only the "could not mark it" log
+		// is downgraded, so a tombstone race does not read as an operational fault.
+		if errors.Is(err, ErrRecordGone) {
+			w.logger.Debug("Embedding record removed before failure could be recorded",
+				"entity_id", entityID)
+		} else {
+			w.logger.Error("Failed to mark embedding as failed", "entity_id", entityID, "error", err)
+		}
 	}
 	if w.metrics != nil {
 		w.metrics.IncFailed()

@@ -39,27 +39,35 @@ func (s *TieredScenario) detectCommunityVariant(result *Result) string {
 // 1. min_embedding_coverage (50% of entities have embeddings)
 // 2. initial_delay (2s) + detection_interval (30s) to run
 // So we need to wait at least 60 seconds for the first detection cycle.
+//
+// The community fetch happens on EVERY iteration. It used to sit inside an
+// `if clusteringRuns >= 1` branch keyed on semstreams_clustering_runs_total —
+// a metric no production code exports — so the branch was unreachable, the
+// success log below was dead, and every call burned the full 90s before making
+// a single point-in-time fetch with no retry (gh#615). The clustering run count
+// is now read only as diagnostic context attached to the outcome, never as a
+// precondition for looking.
 func (s *TieredScenario) waitForCommunities(ctx context.Context) ([]*clustering.Community, error) {
-	var communities []*clustering.Community
-	var err error
+	const maxWait = 90 * time.Second // initial_delay + detection_interval + processing
+	const pollInterval = 500 * time.Millisecond
 
-	// First, wait for at least one clustering run to complete
-	// This ensures community detection has actually executed
 	startWait := time.Now()
-	maxWait := 90 * time.Second // Allow time for initial_delay + detection_interval + processing
-	pollInterval := 500 * time.Millisecond
+	deadline := startWait.Add(maxWait)
 
-	for time.Since(startWait) < maxWait {
-		// Check if clustering has run
-		clusteringRuns, _ := s.metrics.SumMetricsByName(ctx, "semstreams_clustering_runs_total")
-		if clusteringRuns >= 1 {
-			// Clustering has run, now check for communities
-			communities, err = s.natsClient.GetAllCommunities(ctx)
-			if err == nil && len(communities) > 0 {
-				fmt.Printf("[COMMUNITY WAIT] Found %d communities after %.1fs (clustering_runs=%.0f)\n",
-					len(communities), time.Since(startWait).Seconds(), clusteringRuns)
-				return communities, nil
-			}
+	var lastFetchErr error
+	for {
+		communities, err := s.natsClient.GetAllCommunities(ctx)
+		switch {
+		case err != nil:
+			lastFetchErr = err
+		case len(communities) > 0:
+			fmt.Printf("[COMMUNITY WAIT] Found %d communities after %.1fs (%s)\n",
+				len(communities), time.Since(startWait).Seconds(), s.clusteringRunDiagnostic(ctx))
+			return communities, nil
+		}
+
+		if !time.Now().Before(deadline) {
+			break
 		}
 
 		select {
@@ -69,15 +77,33 @@ func (s *TieredScenario) waitForCommunities(ctx context.Context) ([]*clustering.
 		}
 	}
 
-	// Final attempt after timeout
-	communities, err = s.natsClient.GetAllCommunities(ctx)
-	if len(communities) > 0 {
-		fmt.Printf("[COMMUNITY WAIT] Found %d communities after timeout\n", len(communities))
-		return communities, nil
-	}
+	waited := time.Since(startWait).Seconds()
+	diagnostic := s.clusteringRunDiagnostic(ctx)
+	fmt.Printf("[COMMUNITY WAIT] No communities found after %.1fs (%s)\n", waited, diagnostic)
 
-	fmt.Printf("[COMMUNITY WAIT] No communities found after %.1fs\n", time.Since(startWait).Seconds())
-	return communities, err
+	if lastFetchErr != nil {
+		return nil, fmt.Errorf("no communities after %.1fs (%s); last fetch error: %w",
+			waited, diagnostic, lastFetchErr)
+	}
+	return nil, fmt.Errorf("no communities after %.1fs (%s)", waited, diagnostic)
+}
+
+// clusteringRunDiagnostic renders the completed-detection-run count as a short
+// human-readable phrase for wait logs and timeout errors.
+//
+// It is deliberately non-fatal: this is context on why a wait ended, not a gate.
+// It still reports a broken metric name explicitly instead of printing a
+// plausible 0, so the failure mode that produced gh#615 stays visible here too.
+func (s *TieredScenario) clusteringRunDiagnostic(ctx context.Context) string {
+	reading, err := s.metrics.SumMetricInSubsystem(ctx, clusteringSubsystem, clusteringRunsMetric)
+	switch {
+	case err != nil:
+		return fmt.Sprintf("clustering runs unknown: %v", err)
+	case !reading.SubsystemPresent:
+		return "graph-clustering not deployed or not scraped"
+	default:
+		return fmt.Sprintf("clustering runs=%.0f", reading.Sum)
+	}
 }
 
 // waitForLLMEnhancement waits for LLM enhancement to complete for ML variant
@@ -601,45 +627,69 @@ func (s *TieredScenario) executeValidateVirtualEdges(ctx context.Context, result
 func (s *TieredScenario) validateEmbeddingQueueHealth(ctx context.Context, result *Result) error {
 	fmt.Println("[EMBEDDING QUEUE] Validating embedding queue health...")
 
-	// Fetch embedding queue metrics from Prometheus using SumMetricsByName
-	pending, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_pending")
-	failed, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_errors_total")
-	dedupHits, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_dedup_hits_total")
-	generated, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_embeddings_generated_total")
-	queued, _ := s.metrics.SumMetricsByName(ctx, "semstreams_graph_embedding_queued_total")
+	// Every name here is verified against processor/graph-embedding/metrics.go.
+	// A sixth read, semstreams_graph_embedding_queued_total, was removed: no
+	// production code has ever exported it, so it contributed a hard 0 that then
+	// travelled into operator-facing result JSON as though it were data (gh#615).
+	// Errors are propagated rather than discarded — this validator runs only in
+	// tiers that deploy graph-embedding, so a missing name means the check is
+	// broken, not that the component is idle.
+	readings := map[string]float64{}
+	for _, name := range []string{
+		embeddingSubsystem + "pending",
+		embeddingSubsystem + "errors_total",
+		embeddingSubsystem + "dedup_hits_total",
+		embeddingsGeneratedMetric,
+	} {
+		reading, err := s.metrics.SumMetricInSubsystem(ctx, embeddingSubsystem, name)
+		if err != nil {
+			return fmt.Errorf("embedding queue health is unverifiable: %w", err)
+		}
+		if !reading.SubsystemPresent {
+			return fmt.Errorf(
+				"embedding queue health is unverifiable: no %s series scraped, so graph-embedding is not deployed in a tier that requires it",
+				embeddingSubsystem)
+		}
+		readings[name] = reading.Sum
+	}
 
-	// Record metrics for structured results
-	result.Metrics["embedding_queued_total"] = int64(queued)
+	pending := readings[embeddingSubsystem+"pending"]
+	failed := readings[embeddingSubsystem+"errors_total"]
+	dedupHits := readings[embeddingSubsystem+"dedup_hits_total"]
+	generated := readings[embeddingsGeneratedMetric]
+
+	// Embeddings that were resolved one way or the other. This is the honest
+	// denominator for dedup efficiency now that the fabricated queued_total is
+	// gone: every request either produced a vector or reused one.
+	resolved := generated + dedupHits
+
+	result.Metrics["embedding_resolved_total"] = int64(resolved)
 	result.Metrics["embedding_generated_total"] = int64(generated)
 	result.Metrics["embedding_dedup_hits"] = int64(dedupHits)
 	result.Metrics["embedding_failed_total"] = int64(failed)
 	result.Metrics["embedding_pending_count"] = int64(pending)
 
-	// Log queue stats for observability
 	fmt.Printf("[EMBEDDING QUEUE] Stats: generated=%.0f, dedup_hits=%.0f, failed=%.0f, pending=%.0f\n",
 		generated, dedupHits, failed, pending)
 
-	// Validate queue is drained
 	if pending > 0 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("Embedding queue not fully drained: %.0f pending items", pending))
 	}
-
-	// Validate no failures
 	if failed > 0 {
 		result.Warnings = append(result.Warnings,
 			fmt.Sprintf("Embedding failures detected: %.0f failed", failed))
 	}
 
-	// Calculate and log dedup efficiency
-	if queued > 0 {
-		dedupRate := dedupHits / queued * 100
-		fmt.Printf("[EMBEDDING QUEUE] Dedup efficiency: %.1f%% (%.0f hits / %.0f queued)\n",
-			dedupRate, dedupHits, queued)
+	dedupRate := 0.0
+	if resolved > 0 {
+		dedupRate = dedupHits / resolved * 100
+		fmt.Printf("[EMBEDDING QUEUE] Dedup efficiency: %.1f%% (%.0f hits / %.0f resolved)\n",
+			dedupRate, dedupHits, resolved)
 	}
 
 	result.Details["embedding_queue_health"] = map[string]any{
-		"queued_total":    queued,
+		"resolved_total":  resolved,
 		"generated_total": generated,
 		"dedup_hits":      dedupHits,
 		"failed_total":    failed,
@@ -648,8 +698,19 @@ func (s *TieredScenario) validateEmbeddingQueueHealth(ctx context.Context, resul
 		"no_failures":     failed == 0,
 	}
 
+	// The queue draining to empty is not on its own a healthy pipeline — a
+	// pipeline that never accepted anything also reports drained and zero
+	// failures. This validator used to print "Health check passed" for exactly
+	// that state. Assert that work actually happened.
+	if resolved == 0 {
+		return fmt.Errorf(
+			"embedding pipeline did nothing: 0 generated and 0 dedup hits (pending=%.0f, failed=%.0f)",
+			pending, failed)
+	}
+
 	if pending == 0 && failed == 0 {
-		fmt.Println("[EMBEDDING QUEUE] Health check passed: queue drained, no failures")
+		fmt.Printf("[EMBEDDING QUEUE] Health check passed: %.0f embeddings resolved, queue drained, no failures\n",
+			resolved)
 	}
 
 	return nil
