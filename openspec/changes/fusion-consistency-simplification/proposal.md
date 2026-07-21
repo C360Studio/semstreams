@@ -11,8 +11,11 @@ question an eventually-consistent graph cannot answer: authoritative absence.
 The cost is not theoretical: gh#597 (semsource, filed against .156) shows `Fuse`
 silently dropping the top-ranked entity — "I could not hydrate it" is
 indistinguishable from "it does not exist" all the way to the caller — and the
-#592/#593 read-path saga shows the coverage-shaped gate erroring on ordinary
-lag, which its own doc-comment says is not its job. This is the deletion pass
+#592/#593 read-path saga shows coverage-shaped gating hurting both surfaces:
+fusion returning empty-honest envelopes on every write burst (its top gate),
+and the graph/query client's direct-index gate erroring on ordinary lag (one
+comment frames that gate's job as the cutover window; this change redefines
+the contract to exactly that). This is the deletion pass
 agreed as the ADR-083 follow-up (owner directive, 2026-07-20): fusion gates on
 **health**, reports **staleness**, returns ranked evidence, and **says what it
 failed to hydrate**.
@@ -38,8 +41,13 @@ failed to hydrate**.
 - The four gate modes collapse: `exact` and `degrade-honest` are one evaluation
   (the caller's reaction was never the gate's business), `sticky-bootstrap`
   moves into graph-index as its private bootstrap concern, `bounded-staleness`
-  becomes the single freshness reading. The public gate surface shrinks to
-  health + optional staleness bound.
+  becomes the single freshness parameter. The public gate surface shrinks to
+  health + a declared freshness requirement; view-rate consumers keep
+  unset/0 `max_staleness` = exact catch-up (no silent default inversion).
+- The envelope gains `bootstrap_complete` (additive): the gh#474
+  cutover/bootstrap window becomes wire-observable, which is what makes
+  health-only gating safe for direct-index clients and keeps the
+  authoritatively-empty graph serving.
 - Score observability (gh#597 part 2, minimal slice): the resolve similarity is
   carried through instead of discarded, exposed as an opt-in per-node debug
   field, so a ranking surprise is diagnosable without bypassing the product
@@ -69,10 +77,15 @@ None.
 ## Impact
 
 - **Code**: `pkg/fusion` (engine gate, `Response`, `engine_lens.go` degrade
-  sites), `pkg/fusion/fusionnats` (`Entities` reconciliation),
-  `processor/graph-ingest/query.go` (batch handler not-found reporting),
-  `graph/readiness_gate.go` (mode collapse), `graph/query/client.go` (health
-  regate), `processor/graph-index` (absorbs sticky-bootstrap privately).
+  sites), `pkg/fusion/fusionnats` (`Entities` reconciliation + Status
+  unknown-vs-wiring split), `processor/graph-ingest/query.go` (batch handler
+  missing-reporting), `graph/index_status.go` + producers
+  (`bootstrap_complete`), `graph/readiness_gate.go` (mode collapse),
+  `graph/query/client.go` (health regate),
+  `processor/graph-clustering/component.go` (gate call-site migration,
+  zero-default preserved), `processor/graph-index` (responder unchanged;
+  publishes the bootstrap bit), `processor/research-graph-execute`
+  (second batch consumer, reconciles instead of blessing silent omission).
 - **Consumers (sem\*)**: semsource is the primary consumer (doc_context /
   code_search lenses, MCP gateway, UI) — its `Ready=false → fall back` and
   retry-the-transient paths change meaning and its scorecard gains real
