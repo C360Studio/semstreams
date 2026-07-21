@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -461,4 +462,56 @@ func TestWatcher_StartValidatesWiring(t *testing.T) {
 	if err := NewWatcher(src, "").Start(context.Background()); err == nil {
 		t.Error("Start with an empty key must fail")
 	}
+}
+
+// TestValidateStalenessBound pins the satisfiability floor. It is a framework rule, not
+// a per-consumer preference: the gate judges the envelope's staleness PLUS its arrival
+// age, and arrival age sweeps 0 -> heartbeat between publishes, so a bound at or below
+// one heartbeat cannot hold for part of every cycle no matter how caught-up the index
+// is. You cannot bound a quantity below the interval at which you learn it.
+func TestValidateStalenessBound(t *testing.T) {
+	const heartbeat = 5 * time.Second
+
+	t.Run("exact catch-up is always valid", func(t *testing.T) {
+		// Zero never reaches the staleness comparison at all, so the floor does not
+		// apply to it — rejecting it would break the strict default.
+		for _, bound := range []time.Duration{0, -time.Second} {
+			if err := ValidateStalenessBound(bound, heartbeat); err != nil {
+				t.Errorf("bound %s rejected: %v", bound, err)
+			}
+		}
+	})
+
+	t.Run("at or below the heartbeat is rejected", func(t *testing.T) {
+		for _, bound := range []time.Duration{time.Millisecond, 1500 * time.Millisecond,
+			3 * time.Second, heartbeat} {
+			err := ValidateStalenessBound(bound, heartbeat)
+			if err == nil {
+				t.Errorf("bound %s accepted; it can never be satisfied reliably", bound)
+				continue
+			}
+			if !strings.Contains(err.Error(), "at or below the readiness heartbeat") {
+				t.Errorf("bound %s: error must name the cause, got %v", bound, err)
+			}
+		}
+	})
+
+	t.Run("above the heartbeat is valid", func(t *testing.T) {
+		for _, bound := range []time.Duration{heartbeat + time.Millisecond, 15 * time.Second, time.Hour} {
+			if err := ValidateStalenessBound(bound, heartbeat); err != nil {
+				t.Errorf("bound %s rejected: %v", bound, err)
+			}
+		}
+	})
+
+	t.Run("a zero heartbeat falls back to the default", func(t *testing.T) {
+		// A consumer that never declared a heartbeat still gets the real floor rather
+		// than an accidental zero that would accept everything.
+		if err := ValidateStalenessBound(time.Second, 0); err == nil {
+			t.Error("a 1s bound was accepted against the default 5s heartbeat")
+		}
+		if got := MinBoundedStaleness(0); got != DefaultHeartbeat {
+			t.Errorf("MinBoundedStaleness(0) = %s, want %s", got, DefaultHeartbeat)
+		}
+	})
 }

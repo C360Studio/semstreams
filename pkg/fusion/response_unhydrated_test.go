@@ -35,6 +35,7 @@ func TestResponse_Unhydrated(t *testing.T) {
 		require.Len(t, resp.Unhydrated, 1)
 		assert.Equal(t, lost, resp.Unhydrated[0].Handle)
 		assert.Empty(t, resp.Misses, "an unhydrated seed is not a miss")
+		assert.False(t, resp.Deferred, "a partially hydrated response IS an answer, just an incomplete one")
 	})
 
 	t.Run("all seeds unhydrated synthesizes no miss", func(t *testing.T) {
@@ -54,6 +55,11 @@ func TestResponse_Unhydrated(t *testing.T) {
 		assert.Empty(t, resp.Misses, "no miss may be synthesized when nothing could be read")
 		require.Len(t, resp.Unhydrated, 1)
 		assert.Equal(t, lost, resp.Unhydrated[0].Handle)
+		// And it must SAY it withheld. An empty node list on a healthy index is the
+		// case that most looks like a zero-result answer, so the documented "check
+		// Deferred" rule has to hold here above all.
+		assert.True(t, resp.Deferred, "nothing was read, so this is a withholding not an answer")
+		assert.Equal(t, fusion.DeferReasonAllSeedsUnhydrated, resp.DeferReason)
 	})
 
 	t.Run("a resolve that genuinely found nothing is still a miss", func(t *testing.T) {

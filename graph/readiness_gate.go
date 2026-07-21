@@ -62,7 +62,7 @@ func FreshnessNone() Freshness { return Freshness{unbounded: true} }
 
 // DeferReason is the typed cause of a defer. Its string form is the label value of the
 // defer_total{reason} counter and of the structured defer log field, so the set is
-// CLOSED: five reasons an operator acts on differently — a broken index, an index that
+// CLOSED: six reasons an operator acts on differently — a broken index, an index that
 // has not finished building, an over-stale view, a dead status feed, and an envelope
 // this consumer cannot interpret. The gh#590 investigation cost three comment cycles
 // because the defer line was a bare constant.
@@ -84,6 +84,16 @@ const (
 	// received, or older than the freshness window). It fails closed and is never
 	// mistaken for index state.
 	DeferStatusUnknown DeferReason = "status_unknown"
+	// DeferStalenessUnknown is a bounded consumer facing an envelope whose view age
+	// could not be COMPUTED — the producer reported staleness 0 while not caught up,
+	// meaning its floor covers no delivered revision yet (cold start, or a floor below
+	// every in-flight revision). It is the sibling of DeferUnrecognizedState: both are
+	// "this envelope cannot answer the question", not "the answer is bad".
+	//
+	// Separated because over_staleness is the ONE reason an operator answers by tuning
+	// a tolerance, and no tolerance fixes an uncomputable age — sending them to that
+	// dial wastes the cycle the typed reason exists to save.
+	DeferStalenessUnknown DeferReason = "staleness_unknown"
 	// DeferUnrecognizedState is an envelope whose State is blank or outside
 	// AllIndexStates. It is NOT the same operator problem as a dead feed: the value
 	// arrived and decoded, so the producer is talking — it is saying something this
@@ -182,12 +192,14 @@ func EvaluateReadinessGate(reading StatusReading, want Freshness) (proceed bool,
 	if want.unbounded {
 		return true, DeferNone
 	}
-	if want.bound > 0 &&
+	if want.bound > 0 {
 		// StalenessMs > 0 is the PRESENCE bit, not a lower bound on age: a not-ready
 		// envelope with staleness 0 could not compute its age, and treating that as
 		// "0ms stale" would proceed on an unknown view. Producers clamp any computed
 		// staleness to >= 1ms so this test never rejects a real sub-millisecond value.
-		status.StalenessMs > 0 {
+		if status.StalenessMs == 0 {
+			return false, DeferStalenessUnknown
+		}
 		if age, ok := viewAge(status.StalenessMs, reading.Age); ok && age <= want.bound {
 			return true, DeferNone
 		}

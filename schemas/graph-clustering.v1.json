@@ -311,7 +311,7 @@
     },
     "max_staleness": {
       "type": "string",
-      "description": "Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless). Must exceed this consumer's own worst-case detection cycle — detection time scales with community size",
+      "description": "Max age of the graph-index view under which community detection still runs (duration e.g. 15s; empty or 0 = require exact index catch-up). Must exceed BOTH the readiness heartbeat (5s — the judged age includes envelope arrival age) and this consumer's own worst-case detection cycle (detection time scales with community size); values at or below the heartbeat are rejected. A degraded reset-required unbootstrapped or unrecognized-state index always defers regardless",
       "category": "advanced"
     },
     "min_community_size": {

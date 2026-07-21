@@ -3421,6 +3421,13 @@ func getBatchMissingMetric(registry *metric.MetricsRegistry) *prometheus.Counter
 			Name:      "batch_query_missing_total",
 			Help:      "Requested entity IDs a batch query could not hydrate, by reason — partial hydration made visible (gh#597)",
 		}, []string{"reason"})
+		// Pre-initialize the closed label set: an absent series breaks rate() alerting,
+		// so a reason that has never fired must still be scrapeable at zero. `unknown`
+		// is client-synthesized and never emitted here, so only the two handler-emitted
+		// reasons are seeded.
+		for _, reason := range []graph.MissingReason{graph.MissingNotFound, graph.MissingError} {
+			batchMissingVec.WithLabelValues(string(reason))
+		}
 		if registry != nil {
 			_ = registry.RegisterCounterVec("graph-ingest", "batch_query_missing_total", batchMissingVec)
 		} else {

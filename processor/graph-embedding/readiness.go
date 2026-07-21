@@ -80,7 +80,9 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 	// Gating the early return on buildApplied instead would be a DEADLOCK: the latch
 	// below is only reachable past that return, so the bit could never flip and the
 	// component would report building forever. TestIntegration_EmbeddingReadiness_
-	// DeadlockAvoidance exists for exactly this and caught it.
+	// DeadlockAvoidance caught that regression — incidentally, via its poll for Ready
+	// timing out, since it predates this split and asserts the ADR-066 watermark
+	// property rather than this guard. Treat it as a tripwire, not a specification.
 	//
 	// buildApplied is stamped on EVERY envelope below, hard stops included, so a
 	// consumer can tell "still building" from "built, then broke".
@@ -129,9 +131,11 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		}
 	}
 
-	// Latch the applied build here, where the watermark floor is in hand. Ready also
-	// latches as a sufficient condition (catching up to the live target implies
-	// catching up to any earlier one), which covers the authoritatively-empty case.
+	// Latch the applied build here, where the watermark floor is in hand. Unlike
+	// graph-index's latchBootstrap there is deliberately NO Ready term: this producer
+	// has the enumeration-time target in hand on every call, so the fixed comparison is
+	// always available and a live-target shortcut would only add a way to latch early.
+	// The authoritatively-empty case latches via bootstrapTarget == 0.
 	c.latchBuildApplied(indexed)
 
 	stuck, lastSynced := c.trackEmbeddingProgress(indexed, target)

@@ -138,10 +138,15 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		// graph looked and found nothing, which is exactly the conclusion it cannot
 		// draw. Say what failed to hydrate and leave Misses empty.
 		if len(hydration.Unhydrated) > 0 {
-			return Response{
-				Index: status, Provenance: ProvenanceForMode(mode),
-				Unhydrated: hydration.Unhydrated, ContractVersion: ContractVersion,
-			}, nil
+			// Marked DEFERRED: nothing was read, so this is a withholding, not a
+			// zero-result answer. The contract tells consumers to check Deferred to
+			// answer "did I get an answer?", and leaving it false here would make the
+			// documented rule wrong for the one case that most looks like an answer —
+			// an empty node list on a healthy index.
+			resp := deferredResponse(status, string(DeferReasonAllSeedsUnhydrated))
+			resp.Provenance = ProvenanceForMode(mode)
+			resp.Unhydrated = hydration.Unhydrated
+			return resp, nil
 		}
 		return e.miss(ctx, status, mode, req.Query), nil
 	}
@@ -166,9 +171,11 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	if req.IncludeScores {
 		applyScores(resp.Nodes, ranked, seeds)
 	}
-	if len(resp.Nodes) == 0 {
-		resp.Misses = []Miss{{Query: req.Query}}
-	}
+	// Deliberately no `len(resp.Nodes) == 0 -> synthesize a Miss` here. It was
+	// unreachable (entities non-empty implies ranked non-empty, and the budgeter always
+	// admits the first node), and if it HAD fired it would have manufactured a bare
+	// Miss with no near-matches — an absence claim from a budget accident, which is
+	// exactly what ADR-084 forbids.
 	// Optional facets, computed from the ranked seeds (not the display-budgeted
 	// nodes) so they describe the query's structure, not the page.
 	if wants[WantImpact] {
@@ -239,8 +246,8 @@ func applyScores(nodes []Node, ranked []*Entity, seeds []Seed) {
 		}
 		nodes[i].Rank = sc.rank
 		if sc.hasSimilarity {
-			score := sc.similarity
-			nodes[i].Similarity = &score
+			similarity := sc.similarity
+			nodes[i].Similarity = &similarity
 		}
 	}
 }

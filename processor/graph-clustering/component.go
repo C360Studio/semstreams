@@ -92,7 +92,18 @@ type Config struct {
 	// the topology I clustered" is invariant to both and is what an operator can
 	// actually reason about.
 	//
-	// SET IT ABOVE THIS CONSUMER'S OWN WORST-CASE CYCLE. Detection time scales with
+	// TWO floors, and at small values the FIRST dominates.
+	//
+	// (1) Above the readiness heartbeat (5s). The gate judges the envelope's staleness
+	// plus how long ago that envelope ARRIVED, and arrival age sweeps a full heartbeat
+	// between publishes — so a 3s bound proceeds on roughly half of ticks even against
+	// an essentially caught-up index. You cannot bound a view age below the interval at
+	// which you learn it, and reading the key per decision does not help (KV Get and
+	// Watch are equally stale on a tick-published key). Values at or below the
+	// heartbeat are REJECTED at config validation rather than left to defer
+	// mysteriously.
+	//
+	// (2) SET IT ABOVE THIS CONSUMER'S OWN WORST-CASE CYCLE. Detection time scales with
 	// community SIZE, so as a graph consolidates (many small communities into few large
 	// ones) a run can grow several-fold — a semboids adoption run measured 4.4s climbing
 	// to 23.7s across one 90s window on a 200-entity flock. A long run competes with the
@@ -107,7 +118,7 @@ type Config struct {
 	// staleness_at_detection_ms: duration climbing toward a fixed max_staleness is the
 	// signature, and it is a tuning wrinkle rather than a soundness one (the gate is
 	// reporting a real view age).
-	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless). Must exceed this consumer's own worst-case detection cycle — detection time scales with community size,category:advanced"`
+	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 15s; empty or 0 = require exact index catch-up). Must exceed BOTH the readiness heartbeat (5s — the judged age includes envelope arrival age) and this consumer's own worst-case detection cycle (detection time scales with community size); values at or below the heartbeat are rejected. A degraded reset-required unbootstrapped or unrecognized-state index always defers regardless,category:advanced"`
 
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
@@ -314,6 +325,15 @@ func (c *Config) validateMaxStaleness() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 			fmt.Sprintf("max_staleness %q exceeds the sane maximum %s; a tolerance this large ungates bootstrap/cutover deferral",
 				c.MaxStalenessStr, maxStalenessCeiling))
+	}
+	// The satisfiability floor is a property of the DISTRIBUTION contract, not of this
+	// consumer, so the rule lives on the framework and every bounded consumer inherits
+	// it. Validated against DefaultHeartbeat because that is what a Config can know:
+	// the watcher's heartbeat is not a config field, so production always runs the
+	// default (a test that overrides it also controls the envelopes it injects).
+	if err := readiness.ValidateStalenessBound(d, readiness.DefaultHeartbeat); err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("max_staleness %q: %v", c.MaxStalenessStr, err))
 	}
 	return nil
 }

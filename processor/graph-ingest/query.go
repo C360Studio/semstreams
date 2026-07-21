@@ -133,16 +133,21 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 
 	resp := graph.EntityBatchResponse{Entities: entities}
 	for _, id := range missing {
-		// An empty ID was never looked up, so `not_found` would assert something
-		// unobserved — the exact move this change exists to stop. It is malformed
-		// input, which is a per-ID fault: `error`.
-		reason := graph.MissingNotFound
-		if id == "" {
-			reason = graph.MissingError
-		}
-		resp.Missing = append(resp.Missing, graph.MissingEntity{ID: id, Reason: reason})
+		resp.Missing = append(resp.Missing, graph.MissingEntity{ID: id, Reason: batchMissingReason(id)})
 	}
 	return json.Marshal(resp)
+}
+
+// batchMissingReason classifies one unhydrated requested ID. An empty ID was never
+// looked up, so `not_found` would assert something unobserved — the exact move this
+// change exists to stop. It is malformed input, which is a per-ID fault: `error`.
+//
+// One function so the wire and the counter cannot drift; they did, briefly.
+func batchMissingReason(id string) graph.MissingReason {
+	if id == "" {
+		return graph.MissingError
+	}
+	return graph.MissingNotFound
 }
 
 // reportBatchMissing makes partial hydration observable. It is the gh#597 soak
@@ -158,7 +163,16 @@ func (c *Component) reportBatchMissing(requested, missing []string) {
 		return
 	}
 	if c.batchMissing != nil {
-		c.batchMissing.WithLabelValues(string(graph.MissingNotFound)).Add(float64(len(missing)))
+		// Counted by the SAME reason the wire reports, not a blanket not_found: the
+		// empty-ID case added alongside this counter is reported as `error`, and a
+		// metric that disagrees with the response is worse than no metric.
+		byReason := make(map[graph.MissingReason]int, 2)
+		for _, id := range missing {
+			byReason[batchMissingReason(id)]++
+		}
+		for reason, n := range byReason {
+			c.batchMissing.WithLabelValues(string(reason)).Add(float64(n))
+		}
 	}
 	logged := missing
 	if len(logged) > maxLoggedMissingIDs {

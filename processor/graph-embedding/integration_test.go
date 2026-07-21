@@ -237,6 +237,13 @@ func TestIntegration_EmbeddingReadiness_DeadlockAvoidance(t *testing.T) {
 	}
 	require.True(t, final.Ready, "embedding readiness must catch up — text AND telemetry-only both terminal")
 	assert.Equal(t, graph.IndexStateReady, final.State)
+	// The ADR-084 applied-build bit, asserted on the REAL projection path. Every unit
+	// case reaches only an early return or calls latchBuildApplied directly, so without
+	// this line deleting the stamp in computeEmbeddingStatus leaves the package green —
+	// and that bit gates every remote health read of this index.
+	assert.True(t, final.BootstrapComplete,
+		"a caught-up embedding index must publish bootstrap_complete; a consumer gating on "+
+			"health would defer forever without it")
 	assert.Zero(t, final.Lag, "caught up means zero lag")
 	assert.GreaterOrEqual(t, final.IndexedRevision, uint64(textN+teleN), "indexed reflects every write")
 	assert.Equal(t, final.TargetRevision, final.IndexedRevision, "indexed == target when caught up")

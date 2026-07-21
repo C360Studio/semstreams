@@ -123,6 +123,12 @@ type IndexStatus struct {
 	LastSynced  string `json:"last_synced,omitempty"`
 }
 
+// DeferReasonAllSeedsUnhydrated is the engine-level defer cause for a query whose seeds
+// all resolved but none could be read. It is not a graph.DeferReason — no readiness gate
+// produced it; the index was healthy and the hydration failed — so it is named here
+// alongside the other engine-level causes that reach Response.DeferReason.
+const DeferReasonAllSeedsUnhydrated = "all_seeds_unhydrated"
+
 // ErrReadinessUnknown marks a readiness answer the RetrievalClient cannot vouch for:
 // the producer never published, or its feed went quiet past the freshness window
 // holding a last-known value. It is DISTINCT from a wiring failure (a transport with no

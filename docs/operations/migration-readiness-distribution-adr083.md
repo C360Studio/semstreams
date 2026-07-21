@@ -119,7 +119,7 @@ corresponded to a given staleness depended on the write rate and `coalesce_ms` o
 deployment that set it. Pick the time bound you actually want the view to be within.
 
 `max_staleness` only ever *relaxes* the caught-up requirement. The hard stops —
-`degraded`, `reset_required`, and an empty/pre-enumeration index — defer under every
+`degraded`, `reset_required`, an index whose initial build is incomplete, and an envelope whose `state` is unrecognized — defer under every
 tolerance, unchanged from ADR-082.
 
 ## Break 3 — the fusion graph facet no longer claims coherence
@@ -259,7 +259,7 @@ Two related fixes ride along:
 The clustering defer path is now structured. One log line carries `status_known`,
 `status_age`, `state`, `lag`, `staleness_ms`, `reason`, and the watch/bucket error
 when present, and `defer_total{reason}` counts by
-`hard_stop | over_staleness | status_unknown | bootstrap_incomplete`.
+`hard_stop | over_staleness | status_unknown | bootstrap_incomplete | unrecognized_state`.
 
 ### Sizing `max_staleness`
 

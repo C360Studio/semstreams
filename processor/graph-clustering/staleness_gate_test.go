@@ -32,18 +32,18 @@ func basePorts() *component.PortConfig {
 // the gate actually reads. The absent case must decode to the strict default 0, which
 // is the exact Ready gate.
 func TestConfig_MaxStaleness_JSONRoundTrip(t *testing.T) {
-	original := Config{MaxStalenessStr: "3s"}
+	original := Config{MaxStalenessStr: "15s"}
 	data, err := json.Marshal(original)
 	require.NoError(t, err)
-	assert.Contains(t, string(data), `"max_staleness":"3s"`, "field must serialize under its json tag")
+	assert.Contains(t, string(data), `"max_staleness":"15s"`, "field must serialize under its json tag")
 
 	var decoded Config
 	require.NoError(t, json.Unmarshal(data, &decoded))
-	assert.Equal(t, "3s", decoded.MaxStalenessStr, "tolerance must survive the round trip")
+	assert.Equal(t, "15s", decoded.MaxStalenessStr, "tolerance must survive the round trip")
 
 	// The parsed duration is what the gate reads; the string alone proves nothing.
 	decoded.ApplyDefaults()
-	assert.Equal(t, 3*time.Second, decoded.MaxStaleness(), "ApplyDefaults must parse the duration the gate consumes")
+	assert.Equal(t, 15*time.Second, decoded.MaxStaleness(), "ApplyDefaults must parse the duration the gate consumes")
 
 	// Absent field decodes to the strict, contract-preserving default.
 	var fromEmpty Config
@@ -65,8 +65,15 @@ func TestConfig_Validate_MaxStaleness(t *testing.T) {
 	}{
 		{"absent is valid (exact gate)", "", ""},
 		{"explicit zero is valid", "0s", ""},
-		{"modest tolerance is valid", "3s", ""},
-		{"sub-second tolerance is valid", "1500ms", ""},
+		{"a tolerance above the heartbeat is valid", "15s", ""},
+		{"just above the heartbeat is valid", "5001ms", ""},
+		// A bound at or below the readiness heartbeat cannot be satisfied reliably:
+		// the judged age includes envelope arrival age, which sweeps a full heartbeat.
+		// These were "valid" before the gate accounted for arrival age, and they were
+		// the values that made detection defer ~half the time for no visible reason.
+		{"exactly the heartbeat is rejected", "5s", "at or below the readiness heartbeat"},
+		{"sub-heartbeat tolerance is rejected", "3s", "at or below the readiness heartbeat"},
+		{"sub-second tolerance is rejected", "1500ms", "at or below the readiness heartbeat"},
 		{"exactly the ceiling is valid", maxStalenessCeiling.String(), ""},
 		{"past the ceiling is rejected", (maxStalenessCeiling + time.Second).String(), "exceeds the sane maximum"},
 		{"negative is rejected", "-1s", "negative"},
@@ -118,11 +125,11 @@ func TestCreateGraphClustering_RejectsRemovedIndexLagTolerance(t *testing.T) {
 			"inputs":  [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
 			"outputs": [{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"}]
 		},
-		"max_staleness": "3s"
+		"max_staleness": "15s"
 	}`)
 	comp, err := CreateGraphClustering(migrated, deps)
 	require.NoError(t, err)
-	assert.Equal(t, 3*time.Second, comp.(*Component).config.MaxStaleness(),
+	assert.Equal(t, 15*time.Second, comp.(*Component).config.MaxStaleness(),
 		"the replacement field must reach the gate through the production factory")
 }
 
@@ -141,7 +148,7 @@ func newLoggedComponent(t *testing.T, cfg Config) (*Component, *bytes.Buffer) {
 // Debug-only (#579 lesson): the gauge carries the view age of the last run and an INFO
 // log fires with the value when the run proceeded on bounded-stale topology.
 func TestObserveDetectionRun(t *testing.T) {
-	c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "3s"})
+	c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "15s"})
 
 	// A run under bounded staleness: gauge set to the view age AND an INFO log.
 	c.observeDetectionRun(gateDecision{
@@ -156,7 +163,7 @@ func TestObserveDetectionRun(t *testing.T) {
 	logged := buf.String()
 	assert.Contains(t, logged, `"level":"INFO"`, "clustering-under-staleness must not be confined to debug")
 	assert.Contains(t, logged, `"staleness_ms":1500`, "the log must carry the view age")
-	assert.Contains(t, logged, `"max_staleness":3000000000`, "the log must carry the configured tolerance")
+	assert.Contains(t, logged, `"max_staleness":15000000000`, "the log must carry the configured tolerance")
 
 	// An exactly-caught-up run resets the gauge to 0 and emits no INFO log.
 	buf.Reset()
@@ -231,7 +238,7 @@ func TestRecordDefer_IsEvidence(t *testing.T) {
 				Known: true, Fresh: true,
 				Status: graph.IndexStatusResponse{State: graph.IndexStateBuilding, TargetRevision: 500, Lag: 400, StalenessMs: 12000},
 			},
-			want: []string{`"reason":"over_staleness"`, `"staleness_ms":12000`, `"max_staleness":3000000000`},
+			want: []string{`"reason":"over_staleness"`, `"staleness_ms":12000`, `"max_staleness":15000000000`},
 		},
 		{
 			// The gh#474 cutover window, now wire-observable (ADR-084 D2). It replaces
@@ -253,7 +260,7 @@ func TestRecordDefer_IsEvidence(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "3s"})
+			c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "15s"})
 			before := deferCount(t, c, tt.reason)
 
 			c.recordDefer(gateDecision{reason: tt.reason, reading: tt.reading})
@@ -271,7 +278,7 @@ func TestRecordDefer_IsEvidence(t *testing.T) {
 // log level (the first of a reason, and any change of reason), while a steady defer
 // must not flood one line per tick. defer_total stays the rate signal either way.
 func TestRecordDefer_TransitionsAreVisible(t *testing.T) {
-	c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "3s"})
+	c, buf := newLoggedComponent(t, Config{Ports: basePorts(), MaxStalenessStr: "15s"})
 	unknown := gateDecision{reason: graph.DeferStatusUnknown}
 	hardStop := gateDecision{reason: graph.DeferHardStop}
 

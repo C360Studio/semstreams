@@ -59,6 +59,7 @@ var deferReasons = []graph.DeferReason{
 	graph.DeferStatusUnknown,
 	graph.DeferBootstrapIncomplete,
 	graph.DeferUnrecognizedState,
+	graph.DeferStalenessUnknown,
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors).
@@ -93,7 +94,7 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_clustering",
 				Name:      "defer_total",
-				Help:      "Community detection ticks deferred by the readiness gate, by reason: hard_stop (degraded/reset_required index), over_staleness (view older than max_staleness, including the exact gate's zero tolerance), status_unknown (no fresh readiness envelope — the feed died or graph-index is absent), bootstrap_incomplete (producer has not finished its initial build this process lifetime), unrecognized_state (envelope State is blank or outside the known set — version skew).",
+				Help:      "Community detection ticks deferred by the readiness gate, by reason: hard_stop (degraded/reset_required index), over_staleness (view older than max_staleness, including the exact gate's zero tolerance), status_unknown (no fresh readiness envelope — the feed died or graph-index is absent), bootstrap_incomplete (producer has not finished its initial build this process lifetime), unrecognized_state (envelope State is blank or outside the known set — version skew), staleness_unknown (the producer could not compute a view age, so no tolerance applies).",
 			}, []string{"reason"}),
 		}
 		for _, reason := range deferReasons {

@@ -90,10 +90,14 @@ func TestEvaluateReadinessGate(t *testing.T) {
 			// StalenessMs == 0 on a not-ready envelope is the PRESENCE encoding: the
 			// producer could not compute an age. Reading it as "0ms stale" would
 			// proceed on an unknown view — the inverse of what the bound is for.
+			//
+			// Attributed to staleness_unknown, not over_staleness: no tolerance fixes
+			// an uncomputable age, and over_staleness is the one reason an operator
+			// answers by reaching for the tolerance dial.
 			reading:    StatusReading{Status: healthy(false, 0), Fresh: true},
 			want:       FreshnessWithin(time.Hour),
 			proceed:    false,
-			wantReason: DeferOverStaleness,
+			wantReason: DeferStalenessUnknown,
 		},
 		{
 			name: "an unbootstrapped index defers even under no freshness",

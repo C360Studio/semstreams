@@ -171,7 +171,11 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 	defer cancel()
 
 	fixture := newStatusFixture(ctx, t, nc)
-	h := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "3s"})
+	// Above the readiness heartbeat: a bound at or below it is unsatisfiable (the
+	// judged age includes envelope arrival age, which sweeps a full heartbeat) and is
+	// now rejected at config validation. The rows below are scaled to match — the
+	// property under test is within-bound vs over-bound, which holds at any scale.
+	h := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "15s"})
 
 	tests := []struct {
 		name        string
@@ -181,12 +185,12 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 	}{
 		{
 			name:        "continuous write within the staleness bound clusters",
-			status:      building(450, 500, 1200*time.Millisecond),
+			status:      building(450, 500, 6*time.Second),
 			wantProceed: true,
 		},
 		{
 			name:        "a view older than the bound defers",
-			status:      building(350, 500, 12*time.Second),
+			status:      building(350, 500, 60*time.Second),
 			wantProceed: false,
 			wantReason:  graph.DeferOverStaleness,
 		},
@@ -211,7 +215,7 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 			// Health outranks freshness: a half-built index is not "a bit stale", and
 			// no tolerance may wave it through (ADR-084 D1).
 			name:        "an unbootstrapped index defers under a generous tolerance",
-			status:      preBootstrap(490, 500, 100*time.Millisecond),
+			status:      preBootstrap(490, 500, 2*time.Second),
 			wantProceed: false,
 			wantReason:  graph.DeferBootstrapIncomplete,
 		},
@@ -233,7 +237,7 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 			status: graph.IndexStatusResponse{State: graph.IndexStateBuilding,
 				BootstrapComplete: true, IndexedRevision: 400, TargetRevision: 500, Lag: 100},
 			wantProceed: false,
-			wantReason:  graph.DeferOverStaleness,
+			wantReason:  graph.DeferStalenessUnknown,
 		},
 	}
 
