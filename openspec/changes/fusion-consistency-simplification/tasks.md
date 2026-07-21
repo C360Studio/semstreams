@@ -213,7 +213,16 @@
       known_answer_tests_passed 7/7 (matches #598 exactly), 16 communities.
       Evidence read from the logs, not from exit codes. NOTE: the earlier
       red integration runs were a loaded Docker daemon, not code — they
-      cleared once the sister-project NATS stack was stopped.
+      cleared once the sister-project NATS stack was stopped. RE-RUN after
+      the reviewer's blocking latch fix (the first evidence tested
+      superseded code): statistical + semantic both green again, semantic
+      7/7 known-answer, 0 of 46 steps failed. Two aborted attempts in
+      between were a COMPOSE PROJECT-NAME COLLISION, now fixed in
+      Taskfile.yml: every sem* repo keeps its compose files in
+      `docker/compose/`, so Compose derived the same project name
+      (`compose`) for all of them and our e2e teardown was deleting a
+      sister repo's containers — and a sister stack coming up mid-run
+      churned ours out from under a running scenario.
 - [x] 6.4 `semstreams-reviewer` pre-merge; fold findings. CHANGES REQUESTED;
       all 3 blockers + 7 mediums folded. The sharp one: bootstrap_complete
       latched on catch-up to the LIVE target, which under continuous write is
