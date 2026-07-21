@@ -74,10 +74,34 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 			{Subject: req.ID, Predicate: "dc.terms.title", Object: "Widget"},
 		}})
 	})
-	subscribe(t, ctx, nc, subjectBatch, func(_ []byte) ([]byte, error) {
-		return json.Marshal(map[string]any{"entities": []graph.EntityState{
-			{ID: "a.b.c.d.e.1"}, {ID: "a.b.c.d.e.2"},
-		}})
+	// The batch responder MODELS the real handler rather than echoing a fixed pair:
+	// it answers only for IDs it knows, reports the rest as missing, and — like
+	// graph-ingest — returns them in an order that is NOT the request order. A fake
+	// that ignored the request would let both the reconciliation and the order
+	// restore pass while testing neither.
+	known := map[string]bool{"a.b.c.d.e.1": true, "a.b.c.d.e.2": true}
+	subscribe(t, ctx, nc, subjectBatch, func(data []byte) ([]byte, error) {
+		var req struct {
+			IDs []string `json:"ids"`
+		}
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, err
+		}
+		resp := graph.EntityBatchResponse{}
+		for _, id := range req.IDs {
+			if known[id] {
+				resp.Entities = append(resp.Entities, graph.EntityState{ID: id})
+				continue
+			}
+			resp.Missing = append(resp.Missing, graph.MissingEntity{
+				ID: id, Reason: graph.MissingNotFound,
+			})
+		}
+		// Reverse, standing in for graph-ingest's cache-hits-first ordering.
+		for i, j := 0, len(resp.Entities)-1; i < j; i, j = i+1, j-1 {
+			resp.Entities[i], resp.Entities[j] = resp.Entities[j], resp.Entities[i]
+		}
+		return json.Marshal(resp)
 	})
 	subscribe(t, ctx, nc, subjectRelationships, func(_ []byte) ([]byte, error) {
 		return json.Marshal([]map[string]any{
@@ -120,22 +144,33 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 			"an unpublished readiness key must not read as a status")
 	})
 
+	// The three resolve modes over the real wire, asserted as SEEDS: identity plus
+	// whether the mode reports a score. Symbol and prefix must report none — emitting
+	// a zero would advertise a perfect non-match those wires never claimed — while NL
+	// must carry the similarity the semantic reply actually sent, which this decode
+	// silently dropped before ADR-084 D5.
 	t.Run("Resolve_symbol", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "Widget", Mode: fusion.ResolveModeSymbol, Limit: 10})
+		seeds, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "Widget", Mode: fusion.ResolveModeSymbol, Limit: 10})
 		require.NoError(t, err)
-		require.Equal(t, []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}, ids)
+		require.Equal(t, []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}, fusion.SeedIDs(seeds))
+		for _, s := range seeds {
+			require.False(t, s.HasSimilarity, "the byName wire carries no score")
+		}
 	})
 
 	t.Run("Resolve_prefix", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "a.b.c", Mode: fusion.ResolveModePrefix, Limit: 10})
+		seeds, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "a.b.c", Mode: fusion.ResolveModePrefix, Limit: 10})
 		require.NoError(t, err)
-		require.Equal(t, []string{"a.b.c.d.e.1"}, ids)
+		require.Equal(t, []string{"a.b.c.d.e.1"}, fusion.SeedIDs(seeds))
+		require.False(t, seeds[0].HasSimilarity, "prefix resolve is an enumeration, not a ranking")
 	})
 
 	t.Run("Resolve_nl", func(t *testing.T) {
-		ids, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "find a widget", Mode: fusion.ResolveModeNL, Limit: 10})
+		seeds, err := c.Resolve(ctx, fusion.ResolveQuery{Query: "find a widget", Mode: fusion.ResolveModeNL, Limit: 10})
 		require.NoError(t, err)
-		require.Equal(t, []string{"a.b.c.d.e.9"}, ids)
+		require.Equal(t, []string{"a.b.c.d.e.9"}, fusion.SeedIDs(seeds))
+		require.True(t, seeds[0].HasSimilarity, "the semantic wire reports a score and it must survive the decode")
+		require.InDelta(t, 0.9, seeds[0].Similarity, 1e-9)
 	})
 
 	t.Run("Entity_found", func(t *testing.T) {
@@ -154,7 +189,22 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 	t.Run("Entities", func(t *testing.T) {
 		ents, err := c.Entities(ctx, []string{"a.b.c.d.e.1", "a.b.c.d.e.2"})
 		require.NoError(t, err)
-		require.Len(t, ents, 2)
+		require.Len(t, ents.Entities, 2)
+		require.Empty(t, ents.Unhydrated)
+		// Request order over the real wire — the engine ranks by position, so this is
+		// a relevance contract, not a presentation one.
+		require.Equal(t, []string{"a.b.c.d.e.1", "a.b.c.d.e.2"},
+			[]string{ents.Entities[0].ID, ents.Entities[1].ID})
+	})
+
+	t.Run("Entities_reports_unhydrated", func(t *testing.T) {
+		// gh#597 end to end: an ID the handler cannot hydrate comes back NAMED, not
+		// silently dropped from a shorter list.
+		ents, err := c.Entities(ctx, []string{"a.b.c.d.e.1", "a.b.c.d.e.404"})
+		require.NoError(t, err, "a partial batch is a success, not a fault")
+		require.Len(t, ents.Entities, 1)
+		require.Len(t, ents.Unhydrated, 1)
+		require.Equal(t, "a.b.c.d.e.404", ents.Unhydrated[0].Handle)
 	})
 
 	t.Run("Neighbors", func(t *testing.T) {

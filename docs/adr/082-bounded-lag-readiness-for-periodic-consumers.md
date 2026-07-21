@@ -2,11 +2,30 @@
 
 ## Status
 
-**Staleness unit superseded by ADR-083 — 2026-07-20.** The consumer-class split
-below stands: exact/point-query consumers gate on `Ready`, periodic/approximate ones
-may accept bounded staleness. Only the *quantity* changed — the bound is wall time
-(`max_staleness`), not revisions (`index_lag_tolerance`), because the correct
-revision count shifts with write rate and `coalesce_ms`. `ReadyWithinLag` is removed.
+**Staleness unit superseded by ADR-083 — 2026-07-20.** Only the *quantity* changed —
+the bound is wall time (`max_staleness`), not revisions (`index_lag_tolerance`),
+because the correct revision count shifts with write rate and `coalesce_ms`.
+`ReadyWithinLag` is removed.
+
+**Bounded-lag tolerance retired entirely by ADR-085 — 2026-07-21.** ADR-084
+reparameterized the bound (consumer-declared rather than consumer-class-derived);
+ADR-085 deletes it. `max_staleness` and the `Freshness` type are gone, readiness
+gates on health alone, and community detection — the one consumer this ADR was
+written for — now runs whenever the index is healthy and stamps the view age it ran
+at onto its output. What survives from this ADR is the unconditional
+`failedCount → degraded` honesty fix and the observation that a periodic
+whole-result re-deriver can act on a stale view; what does not survive is the
+inference that such a consumer therefore wants a *tolerance*.
+
+**Consumer-class split superseded by ADR-084 — 2026-07-20.** The split below —
+exact/point-query consumers gate on `Ready`, periodic ones accept bounded staleness —
+was a symptom of the conflation ADR-084 names, not a design: it made freshness a
+property of the CONSUMER CLASS rather than a requirement each consumer declares. There
+are now two orthogonal questions (health, which nobody opts out of; freshness, which
+is a parameter), and the exact/point-query class does not exist. What survives is the
+observation that drove this ADR: a periodic whole-result consumer can act on a
+slightly-stale view, and community detection remains the one consumer for which
+coverage is genuinely a correctness input.
 
 Accepted — 2026-07-20. Decision-recording; build green-lit the same day (owner
 approval; tasks §2 of the `bounded-lag-readiness-for-periodic-consumers` change).

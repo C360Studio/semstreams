@@ -10,14 +10,20 @@ import (
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
-// indexNotReady builds the classified readiness transient a graph read emits
-// while the index is catching up to ENTITY_STATES (graph.ErrorCodeIndexNotReady),
-// mirroring processor/graph-index/query.go and graph/query/client.go. This is the
-// exact error shape the first-catch-up race under load surfaces to Fuse's internal
-// reads after the top Ready gate has already passed.
+// indexNotReady builds the classified readiness transient a graph read emits when the
+// serving index is not SOUND — its watcher is unavailable, it is degraded by an
+// unresolved required write, or its initial build has not completed
+// (graph.ErrorCodeIndexNotReady), mirroring processor/graph-index/query.go and
+// graph/query/client.go.
+//
+// ADR-084 narrowed this: the transient no longer fires on ordinary catch-up lag, so the
+// window in which Fuse's internal reads hit it is now a health window rather than a
+// load window. The DEGRADE behavior under test is unchanged and matters more, not less
+// — the transient is rarer now, which makes handling it inconsistently harder to catch
+// in the wild.
 func indexNotReady() error {
 	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
-		errors.New("index not ready: still catching up to ENTITY_STATES"))
+		errors.New("index not ready: initial build has not completed"))
 }
 
 // TestEngine_ReadinessTransient_Degrades: the semsource shape. The top Ready gate
@@ -147,7 +153,7 @@ func TestEngine_ReadinessTransient_ReSamplesCurrentStatus(t *testing.T) {
 		resolveErr: indexNotReady(),
 		statusFn: func(call int) (fusion.IndexStatus, error) {
 			if call == 1 {
-				return fusion.IndexStatus{Ready: true, State: fusion.StateReady}, nil
+				return readyStatus(), nil
 			}
 			return fusion.IndexStatus{
 				Ready: false, State: fusion.StateBuilding,
@@ -179,7 +185,7 @@ func TestEngine_ReadinessTransient_ReSampleFailure_FallsBack(t *testing.T) {
 		resolveErr: indexNotReady(),
 		statusFn: func(call int) (fusion.IndexStatus, error) {
 			if call == 1 {
-				return fusion.IndexStatus{Ready: true, State: fusion.StateReady}, nil
+				return readyStatus(), nil
 			}
 			return fusion.IndexStatus{}, errors.New("status unreachable")
 		},

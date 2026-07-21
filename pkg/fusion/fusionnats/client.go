@@ -173,10 +173,11 @@ func (c *Client) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher)
 // ADR-083 moved the source from the `graph.index.query.status` request/reply to the
 // shared GRAPH_STATUS watch (graph/readiness). Only the transport moved: every failure
 // to establish readiness still returns an error, exactly as a failed request did, and a
-// received envelope is still handed up verbatim, so Fuse's top gate and its
-// ErrorCodeIndexNotReady degrade paths see the same inputs they saw before. This is
-// `graph.GateExact` at the engine's top gate and `graph.GateDegradeHonest` in Fuse's
-// internal-read recovery — naming, not new behavior.
+// received envelope is handed up verbatim, so Fuse sees the producer's own fields.
+//
+// What the ENGINE does with them changed in ADR-084: the top gate is now the canonical
+// health gate with no freshness requirement, not the exact-coverage check this comment
+// used to describe. `GateExact` and `GateDegradeHonest` no longer exist.
 //
 // Watching rather than reading per call is the point of the change: a per-decision
 // round-trip travels the same connection as the ENTITY_STATES firehose in a
@@ -184,11 +185,19 @@ func (c *Client) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher)
 // interesting (gh#590). The producer now pays one write per heartbeat and this client
 // holds the answer.
 //
-// The unknown set is what the subject already covered — no bucket, no key, a deleted
-// key, a backend fault, an undecodable value, a transport with no KV — plus one case
-// state adds that a request could not have: a feed that has gone quiet past the
-// freshness window, i.e. a producer that died holding a Ready key. All of them are one
-// error, because all of them were one error before.
+// ADR-084 D6 SPLITS the failure set that ADR-083 had collapsed into one error:
+//
+//   - WIRING failures — a transport with no KV capability, a bucket that cannot be
+//     opened — stay loud, unwrapped errors. They are operator bugs that do not heal,
+//     and reporting them as "readiness unknown" would let a permanently misconfigured
+//     deployment serve honest-looking empty envelopes forever.
+//   - UNKNOWN readiness — never published, gone quiet past the freshness window, a
+//     stale key held by a dead producer, an undecodable value — wraps
+//     fusion.ErrReadinessUnknown. The engine maps it to the empty-honest defer
+//     envelope: still fail-closed, but a degrade rather than a crash.
+//
+// Both were one error before because a request/reply could not tell them apart. Held
+// state can, and the two want different operator responses.
 func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 	watch, err := c.statusWatcher(ctx)
 	if err != nil {
@@ -203,9 +212,9 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 		// one — a dead graph-index must not serve its final Ready=true forever, or the
 		// honesty envelope licenses authoritative-absence claims against a frozen index.
 		return fusion.IndexStatus{}, fmt.Errorf(
-			"fusionnats: readiness on %s/%s is unknown (known=%t age=%s): %w",
+			"fusionnats: readiness on %s/%s is unknown (known=%t age=%s): %w: %w",
 			readiness.BucketGraphStatus, readiness.KeyGraphIndex,
-			reading.Known, reading.Age, unknownCause(reading))
+			reading.Known, reading.Age, fusion.ErrReadinessUnknown, unknownCause(reading))
 	}
 	// Decode straight into the target: graph.IndexStatusResponse and
 	// fusion.IndexStatus are field-identical by contract (ADR-066 §5), so a direct
@@ -216,7 +225,10 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 	// envelope: taking the decoded struct would reintroduce exactly that remap.
 	var resp fusion.IndexStatus
 	if err := json.Unmarshal(reading.Raw, &resp); err != nil {
-		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w", err)
+		// An undecodable value is a readiness we cannot vouch for, not broken wiring:
+		// the transport worked and delivered something. Degrade, do not crash.
+		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w: %w",
+			fusion.ErrReadinessUnknown, err)
 	}
 	return resp, nil
 }
@@ -237,7 +249,7 @@ func unknownCause(reading readiness.Reading) error {
 // Resolve maps a query to seed entity IDs by mode, most relevant first. The mode
 // selects the subject; an unknown mode is an error rather than a silent default
 // (ResolveMode is an open string enum).
-func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]string, error) {
+func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]fusion.Seed, error) {
 	switch q.Mode {
 	case fusion.ResolveModeSymbol:
 		return c.resolveByName(ctx, q.Query, q.Limit)
@@ -250,22 +262,24 @@ func (c *Client) Resolve(ctx context.Context, q fusion.ResolveQuery) ([]string, 
 	}
 }
 
-// resolveByName resolves a symbol to ranked entity IDs via graph.query.byName.
-func (c *Client) resolveByName(ctx context.Context, query string, limit int) ([]string, error) {
+// resolveByName resolves a symbol to ranked seeds via graph.query.byName. The byName
+// wire reports rank by ORDER and carries no score, so the seeds carry none — reporting
+// a zero would claim a relevance the wire never asserted.
+func (c *Client) resolveByName(ctx context.Context, query string, limit int) ([]fusion.Seed, error) {
 	matches, err := c.byNameMatches(ctx, query, limit)
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(matches))
+	seeds := make([]fusion.Seed, 0, len(matches))
 	for _, m := range matches {
-		ids = append(ids, m.EntityID)
+		seeds = append(seeds, fusion.Seed{ID: m.EntityID})
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 // resolvePrefix resolves an ID prefix to entity IDs via graph.query.prefix. Only
 // the first page is taken — resolve seeds are bounded by limit, not exhaustive.
-func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]string, error) {
+func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]fusion.Seed, error) {
 	if err := validatePrefix(query); err != nil {
 		return nil, err
 	}
@@ -280,11 +294,13 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate prefix: %w", err)
 	}
-	ids := make([]string, 0, len(resp.Entities))
+	// Prefix resolve is an enumeration, not a ranking: it carries no score, so the
+	// seeds carry none.
+	seeds := make([]fusion.Seed, 0, len(resp.Entities))
 	for i := range resp.Entities {
-		ids = append(ids, resp.Entities[i].ID)
+		seeds = append(seeds, fusion.Seed{ID: resp.Entities[i].ID})
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 // resolveSemantic resolves a natural-language query to embedding-ranked entity
@@ -293,7 +309,7 @@ func (c *Client) resolvePrefix(ctx context.Context, query string, limit int) ([]
 // request body ONLY when non-empty, so an unscoped call is byte-identical to the
 // pre-scope wire shape (every existing caller, and every symbol/prefix path,
 // sends none).
-func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]string, error) {
+func (c *Client) resolveSemantic(ctx context.Context, query string, scope []string, limit int) ([]fusion.Seed, error) {
 	if err := validateScope(scope); err != nil {
 		return nil, err
 	}
@@ -305,22 +321,30 @@ func (c *Client) resolveSemantic(ctx context.Context, query string, scope []stri
 	if err != nil {
 		return nil, err
 	}
+	// Similarity is decoded because the semantic wire has always reported it and this
+	// decode had always dropped it — the engine could rank only by arrival order, so a
+	// caller asking "how good is this match?" had nothing to read.
 	var resp struct {
 		Results []struct {
-			EntityID string `json:"entity_id"`
+			EntityID   string  `json:"entity_id"`
+			Similarity float64 `json:"similarity"`
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("fusionnats: decode semantic: %w", err)
 	}
+	seeds := make([]fusion.Seed, 0, len(resp.Results))
 	ids := make([]string, 0, len(resp.Results))
 	for _, r := range resp.Results {
+		seeds = append(seeds, fusion.Seed{
+			ID: r.EntityID, Similarity: r.Similarity, HasSimilarity: true,
+		})
 		ids = append(ids, r.EntityID)
 	}
 	if err := graph.ValidateDecodedEntityIDs(ids); err != nil {
 		return nil, fmt.Errorf("fusionnats: validate semantic: %w", err)
 	}
-	return ids, nil
+	return seeds, nil
 }
 
 func validatePrefix(prefix string) error {
@@ -365,31 +389,100 @@ func (c *Client) Entity(ctx context.Context, id string) (*fusion.Entity, error) 
 	return &fusion.Entity{ID: es.ID, Triples: es.Triples}, nil
 }
 
-// Entities batch-fetches entities by ID via graph.query.batch. Absent IDs are
-// omitted by the handler (partial success); a non-nil error means a backend
-// failure, which the engine distinguishes from genuine absence.
-func (c *Client) Entities(ctx context.Context, ids []string) ([]*fusion.Entity, error) {
+// Entities batch-fetches entities by ID via graph.query.batch, RECONCILING the reply
+// against the requested set and restoring request order. A non-nil error means a
+// backend failure, which the engine distinguishes from an entity that is simply absent.
+//
+// Both jobs fix real defects that this seam is the only place to fix:
+//
+// RECONCILIATION (gh#597). The handler reports what it could not hydrate, but a client
+// that trusted the reply blindly would still miss an under-reporting handler. Every
+// requested ID is accounted for exactly once: the handler's report is authoritative
+// where it speaks, and an ID in NEITHER list is synthesized as `unknown` rather than as
+// not_found — asserting not-found for something nobody observed is how the original bug
+// class started. Reconciliation is by ID SET, never by count: duplicate requested IDs
+// and a handler that reports an ID in both lists both break counting.
+//
+// ORDER. The handler returns cache hits first and KV fetches after, documented on its
+// side as "callers process as sets". The engine does not: its resolve-rank base is
+// position-derived, so cache residency alone could demote the top resolve seed — a
+// live bug, and a plausible ingredient of gh#597's varying failure mode. Order is
+// restored HERE because this is where request order is still known.
+func (c *Client) Entities(ctx context.Context, ids []string) (fusion.Hydration, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return fusion.Hydration{}, nil
 	}
 	raw, err := c.request(ctx, subjectBatch, map[string]any{"ids": ids})
 	if err != nil {
-		return nil, err
+		return fusion.Hydration{}, err
 	}
-	var resp struct {
-		Entities []graph.EntityState `json:"entities"`
-	}
+	var resp graph.EntityBatchResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("fusionnats: decode batch: %w", err)
+		return fusion.Hydration{}, fmt.Errorf("fusionnats: decode batch: %w", err)
 	}
 	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
-		return nil, fmt.Errorf("fusionnats: validate batch: %w", err)
+		return fusion.Hydration{}, fmt.Errorf("fusionnats: validate batch: %w", err)
 	}
-	out := make([]*fusion.Entity, 0, len(resp.Entities))
+	return reconcileHydration(ids, resp), nil
+}
+
+// unhydratedReason maps a handler-reported reason into fusion's CLOSED set. Both sets
+// are declared closed, so a raw cast would let an out-of-set or empty value from any
+// handler version reach the product surface and break a consumer's exhaustive switch —
+// the reply is untrusted input, and "the enums match today" is not a validation.
+// Anything unrecognized becomes `unknown`, which is the honest reading: something was
+// not hydrated and we cannot say why.
+func unhydratedReason(r graph.MissingReason) fusion.UnhydratedReason {
+	switch r {
+	case graph.MissingNotFound:
+		return fusion.UnhydratedNotFound
+	case graph.MissingError:
+		return fusion.UnhydratedError
+	default:
+		return fusion.UnhydratedUnknown
+	}
+}
+
+// reconcileHydration turns a batch reply into a total accounting of the requested IDs,
+// in request order. Split out from Entities so the set logic is unit-testable without a
+// transport — it is the part with the edge cases (duplicate requests, an ID reported in
+// both lists, an ID reported in neither, an entity nobody asked for).
+func reconcileHydration(requested []string, resp graph.EntityBatchResponse) fusion.Hydration {
+	hydrated := make(map[string]*fusion.Entity, len(resp.Entities))
 	for i := range resp.Entities {
-		out = append(out, &fusion.Entity{ID: resp.Entities[i].ID, Triples: resp.Entities[i].Triples})
+		hydrated[resp.Entities[i].ID] = &fusion.Entity{
+			ID: resp.Entities[i].ID, Triples: resp.Entities[i].Triples,
+		}
 	}
-	return out, nil
+	// The handler's report is authoritative where it speaks. An ID it reported as
+	// missing AND returned an entity for is treated as hydrated: we hold the evidence.
+	reported := make(map[string]fusion.UnhydratedReason, len(resp.Missing))
+	for _, m := range resp.Missing {
+		reported[m.ID] = unhydratedReason(m.Reason)
+	}
+
+	out := fusion.Hydration{Entities: make([]*fusion.Entity, 0, len(resp.Entities))}
+	seen := make(map[string]bool, len(requested))
+	for _, id := range requested {
+		if seen[id] {
+			// A duplicate in the request is one entity, reported once. Counting
+			// instead of set-tracking would double-report it as unhydrated.
+			continue
+		}
+		seen[id] = true
+		if ent, ok := hydrated[id]; ok {
+			out.Entities = append(out.Entities, ent)
+			continue
+		}
+		reason, ok := reported[id]
+		if !ok {
+			// Neither hydrated nor reported: the handler under-reported. Say so
+			// rather than inventing not_found.
+			reason = fusion.UnhydratedUnknown
+		}
+		out.Unhydrated = append(out.Unhydrated, fusion.Unhydrated{Handle: id, Reason: reason})
+	}
+	return out
 }
 
 // Neighbors returns edges from id along the given predicates in a direction via

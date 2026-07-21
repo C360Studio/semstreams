@@ -73,19 +73,46 @@ func (e *Engine) WithSignals(s RankSignals) *Engine {
 	return e
 }
 
-// Fuse resolves req against the graph through lens and returns the fused
-// response. Readiness is load-bearing: a not-ready graph yields an empty
-// envelope (the caller must fall back); ready+absent yields a miss with
-// near-matches — never an ambiguous empty. A backend failure fetching seeds is
-// surfaced as an error, NOT silently turned into a "not found" (that would
-// violate the ready≠not-found contract).
+// Fuse resolves req against the graph through lens and returns the fused response.
+//
+// The honesty rule is that an empty result is never ambiguous. An UNHEALTHY graph
+// yields an empty envelope the caller must fall back on; a healthy graph that found
+// nothing yields a miss with near-matches; seeds that resolved but could not be read
+// yield Unhydrated and NO miss; and a backend failure is surfaced as an error rather
+// than silently becoming a "not found".
+//
+// ADR-084 narrowed the first case from coverage to health: a healthy index that is
+// merely behind now SERVES, reporting its view age on the envelope, because withholding
+// on lag sent callers to fall back on a graph that could have answered.
 func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, error) {
 	status, err := e.graph.Status(ctx)
 	if err != nil {
+		if errors.Is(err, ErrReadinessUnknown) {
+			// A feed we cannot vouch for fails CLOSED as an honest empty envelope
+			// (ADR-084 D6). Deliberately no ungated escape here, asymmetric with
+			// graph/query's allow_ungated_reads: that flag exists for a standalone
+			// deployment reading its own bucket, while fusion is a shared product
+			// surface whose empty answer other people act on.
+			//
+			// The client returns a ZERO IndexStatus alongside this error, so State is
+			// stamped explicitly rather than shipped as "": an empty string is outside
+			// the closed state set every consumer switches on, and would read as a new
+			// unknown phase rather than as "we could not establish readiness".
+			return deferredResponse(unknownReadinessStatus(status),
+				string(graph.DeferStatusUnknown)), nil
+		}
+		// Broken wiring stays LOUD. Masking it as "the graph is busy" would make a
+		// permanent operator bug indistinguishable from transient backpressure, forever.
 		return Response{}, err
 	}
-	if !status.Ready {
-		return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}, nil
+	// Fusion is a read path: it asks the HEALTH question, which is now the only question
+	// the gate asks (ADR-084 D1). Adopting the canonical gate is the point — this was
+	// hand-rolled as `!status.Ready`, the one exact-coverage check fusion never
+	// migrated, so a healthy index under write returned an empty envelope and the
+	// caller fell back to grep on a graph that could have answered.
+	if proceed, reason := graph.EvaluateReadinessGate(
+		graph.StatusReading{Status: status.readinessEnvelope(), Fresh: true}); !proceed {
+		return deferredResponse(status, string(reason)), nil
 	}
 
 	mode := lens.ResolveMode(req.Query)
@@ -96,14 +123,30 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		}
 		return Response{}, err
 	}
-	entities, err := e.graph.Entities(ctx, seeds)
+	hydration, err := e.graph.Entities(ctx, SeedIDs(seeds))
 	if err != nil {
 		if isIndexNotReady(err) {
 			return e.notReadyEnvelope(ctx, status), nil
 		}
 		return Response{}, err
 	}
+	entities := hydration.Entities
 	if len(entities) == 0 {
+		// Nothing hydrated. If the seeds resolved but NONE of them loaded, this is a
+		// hydration failure, not an absence: reporting it as a miss would claim the
+		// graph looked and found nothing, which is exactly the conclusion it cannot
+		// draw. Say what failed to hydrate and leave Misses empty.
+		if len(hydration.Unhydrated) > 0 {
+			// Marked DEFERRED: nothing was read, so this is a withholding, not a
+			// zero-result answer. The contract tells consumers to check Deferred to
+			// answer "did I get an answer?", and leaving it false here would make the
+			// documented rule wrong for the one case that most looks like an answer —
+			// an empty node list on a healthy index.
+			resp := deferredResponse(status, string(DeferReasonAllSeedsUnhydrated))
+			resp.Provenance = ProvenanceForMode(mode)
+			resp.Unhydrated = hydration.Unhydrated
+			return resp, nil
+		}
 		return e.miss(ctx, status, mode, req.Query), nil
 	}
 
@@ -115,6 +158,7 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 
 	wants := wantSet(req.Want)
 	resp := Response{Index: status, Provenance: ProvenanceForMode(mode), ContractVersion: ContractVersion}
+	resp.Unhydrated = hydration.Unhydrated
 	nodes, truncated, err := e.buildNodes(ctx, ranked, lens, wants, newBudget(req.Budget))
 	if err != nil {
 		if isIndexNotReady(err) {
@@ -123,9 +167,14 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		return Response{}, err
 	}
 	resp.Nodes, resp.Truncated = nodes, truncated
-	if len(resp.Nodes) == 0 {
-		resp.Misses = []Miss{{Query: req.Query}}
+	if req.IncludeScores {
+		applyScores(resp.Nodes, ranked, seeds)
 	}
+	// Deliberately no `len(resp.Nodes) == 0 -> synthesize a Miss` here. It was
+	// unreachable (entities non-empty implies ranked non-empty, and the budgeter always
+	// admits the first node), and if it HAD fired it would have manufactured a bare
+	// Miss with no near-matches — an absence claim from a budget accident, which is
+	// exactly what ADR-084 forbids.
 	// Optional facets, computed from the ranked seeds (not the display-budgeted
 	// nodes) so they describe the query's structure, not the page.
 	if wants[WantImpact] {
@@ -140,6 +189,66 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		resp.Graph = e.computeGraph(ctx, ranked, lens, status.IndexedRevision)
 	}
 	return resp, nil
+}
+
+// unknownReadinessStatus is the envelope shipped when readiness could not be
+// established. It keeps whatever the client managed to report and forces the two fields
+// a consumer branches on into an honest, in-set state: not ready, and building rather
+// than empty. Building is the closest existing label for "cannot vouch for this index"
+// — the alternative is inventing a state value, which would break the one-hot metric
+// and every exhaustive switch downstream.
+func unknownReadinessStatus(status IndexStatus) IndexStatus {
+	status.Ready = false
+	if status.State == "" {
+		status.State = StateBuilding
+	}
+	return status
+}
+
+// applyScores attaches each node's RESOLVE rank and resolve similarity (ADR-084 D5),
+// opt-in via the request so the default wire shape is unchanged.
+//
+// Rank is the seed's 1-based position in RESOLVE order — deliberately not the node's
+// position in the response, which the caller can already count off the array and which
+// therefore carries no information. The whole point of the field is that rankEntities
+// REORDERS (lexical affinity, ontology specificity, predicate salience), so the gap
+// between where resolve put an entity and where it came out is the diagnostic signal:
+// "why did this rank third when the index thought it was the best match?" is
+// answerable only from the pair.
+//
+// Both values are joined BY ENTITY ID. Ranking reorders and the budget truncates, so a
+// positional join would silently mislabel — the same class of bug as the cache-order
+// scramble this change already fixed. nodes[i] corresponds to ranked[i] by construction
+// (buildNodes appends in order and stops at the budget), so ranked supplies the join
+// key; the key is what is trusted, not the index.
+func applyScores(nodes []Node, ranked []*Entity, seeds []Seed) {
+	type score struct {
+		rank          int
+		similarity    float64
+		hasSimilarity bool
+	}
+	byID := make(map[string]score, len(seeds))
+	for i, s := range seeds {
+		byID[s.ID] = score{rank: i + 1, similarity: s.Similarity, hasSimilarity: s.HasSimilarity}
+	}
+	for i := range nodes {
+		if i >= len(ranked) {
+			// Defensive: buildNodes cannot produce more nodes than ranked entities.
+			// Bailing beats indexing past the slice that supplies the join key.
+			continue
+		}
+		sc, ok := byID[ranked[i].ID]
+		if !ok {
+			// A node whose entity was never a seed (not reachable today — nodes are
+			// built from ranked seeds). Leaving rank unset beats inventing one.
+			continue
+		}
+		nodes[i].Rank = sc.rank
+		if sc.hasSimilarity {
+			similarity := sc.similarity
+			nodes[i].Similarity = &similarity
+		}
+	}
 }
 
 // isIndexNotReady reports whether err is the classified readiness transient a
@@ -171,7 +280,26 @@ func (e *Engine) notReadyEnvelope(ctx context.Context, status IndexStatus) Respo
 	if status.State == StateReady {
 		status.State = StateBuilding
 	}
-	return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}
+	// Marked deferred EXPLICITLY rather than left for the caller to infer from the
+	// envelope. The transient may have come from graph-ingest or graph-embedding while
+	// graph-index is healthy, in which case the re-sample above returns a HEALTHY
+	// envelope — one that passes the canonical gate — attached to an empty response.
+	// Forcing Ready=false is not enough either: ADR-084 consumers gate on health, and
+	// health does not read Ready.
+	return deferredResponse(status, string(graph.ErrorCodeIndexNotReady))
+}
+
+// deferredResponse builds the empty-honest envelope for every path that WITHHELD.
+// One constructor so a new defer path cannot forget the flag — the failure mode being
+// an empty response that a consumer reads as an answer.
+func deferredResponse(status IndexStatus, reason string) Response {
+	return Response{
+		Index:           status,
+		Provenance:      ProvenanceDeterministic,
+		Deferred:        true,
+		DeferReason:     reason,
+		ContractVersion: ContractVersion,
+	}
 }
 
 // miss builds a ready+absent response with near-matches.

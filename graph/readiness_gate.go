@@ -1,131 +1,171 @@
 package graph
 
-import "time"
+// The canonical readiness gate. Before it, four consumers implemented four gate
+// semantics — sticky-forever, per-tick exact-unless-configured, per-call exact with no
+// knob, and degrade-honest — and a transport failure in one of them was
+// indistinguishable in the logs from a genuine not-ready (gh#590). Semantics live HERE,
+// beside the envelope type they interpret (the two change together).
+//
+// ADR-084 then collapsed those four MODES into two orthogonal questions, because the
+// modes were four dressings of one conflation: readiness had been asked to answer
+// health, freshness, read-your-writes, AND authoritative absence at once, and the
+// fourth is not answerable at all — coverage says nothing about whether a source ever
+// published.
+//
+// This change finished the collapse by deleting the SECOND question too. The freshness
+// parameter (exact | within(d) | none) survived ADR-084 only because coverage-derived
+// gating had been the mechanism behind the retired ADR-066 "empty means not-found only
+// if Ready" absence license; with the license gone, the machinery was serving exactly
+// one call site — periodic community detection, which is the safest possible consumer
+// of a stale view (idempotent, whole-result re-derivation, overwritten next cycle).
+// What remains is ONE question:
+//
+//   - HEALTH — is this index sound to read from? Fresh status, an interpretable state,
+//     no hard stop, initial build complete. Every consumer asks it; no consumer can opt
+//     out; nothing can talk past it.
+//
+// View age is REPORTED, never gating: IndexStatusResponse.StalenessMs rides the answer
+// and consumers stamp it on their output (community detection's
+// staleness_at_detection_ms gauge). "Only 'still building' and 'broken' justify
+// withholding; how far behind belongs on the answer."
+//
+// Read-your-writes, the one legitimately per-entity question, is not a gate concern at
+// all: a caller that knows its own revision compares it against
+// IndexStatusResponse.IndexedRevision directly. Ready does not appear in this gate —
+// it is coverage, and coverage neither licenses nor withholds.
 
-// The canonical readiness gate (ADR-083 D4). Before it, four consumers implemented
-// four gate semantics — sticky-forever, per-tick exact-unless-configured, per-call
-// exact with no knob, and degrade-honest — and a transport failure in one of them
-// was indistinguishable in the logs from a genuine not-ready (gh#590). Semantics now
-// live HERE, beside the envelope type they interpret (the two change together), and
-// a consumer declares a MODE instead of hand-rolling a rule.
-
-// GateMode is a consumer's declared readiness policy. It selects semantics, not
-// severity: how a caller REACTS to a defer (error, skip a tick, serve an honest
-// empty) stays with the caller.
-type GateMode string
-
-// The declared modes. Each names a real adopter; adding a mode means adding a row
-// to the ADR-083 table, not a per-consumer special case.
-const (
-	// GateExact proceeds only on a fresh Ready envelope — the ADR-066
-	// authoritative-absence license, unchanged. Adopters: the graph/query client,
-	// fusion's top gate.
-	GateExact GateMode = "exact"
-	// GateBoundedStaleness proceeds when the view is no older than
-	// GateConfig.MaxStaleness, hard stops excepted. Adopter: community detection,
-	// a periodic whole-result-re-deriving consumer.
-	GateBoundedStaleness GateMode = "bounded-staleness"
-	// GateStickyBootstrap is exact until the first pass completes, then open —
-	// with hard stops still overriding. Adopter: graph-index's own reverse-index
-	// query gate.
-	GateStickyBootstrap GateMode = "sticky-bootstrap"
-	// GateDegradeHonest evaluates identically to GateExact; it exists so a caller
-	// that degrades to an honest-empty result instead of erroring DECLARES that at
-	// the call site. Adopter: fusion Fuse.
-	GateDegradeHonest GateMode = "degrade-honest"
-)
-
-// DeferReason is the typed cause of a defer. Its string form is the label value of
-// the defer_total{reason} counter and of the structured defer log field, so the set
-// is CLOSED: four reasons an operator can act on differently — a broken index, an
-// over-stale view, a dead status feed, and an empty graph. The gh#590 investigation
-// cost three comment cycles because the defer line was a bare constant.
+// DeferReason is the typed cause of a defer. Its string form is the label value of the
+// defer_total{reason} counter and of the structured defer log field, so the set is
+// CLOSED: four reasons an operator acts on differently — a broken index, an index that
+// has not finished building, a dead status feed, and an envelope this consumer cannot
+// interpret. The gh#590 investigation cost three comment cycles because the defer line
+// was a bare constant.
 type DeferReason string
 
 // The closed defer-reason set.
 const (
 	// DeferNone is the reason attached to a proceed.
 	DeferNone DeferReason = ""
-	// DeferHardStop is a degraded or reset_required index: broken, not behind. It
-	// survives every mode and every tolerance.
+	// DeferHardStop is a degraded or reset_required index: broken, not behind.
 	DeferHardStop DeferReason = "hard_stop"
-	// DeferOverStaleness is a view older than the declared tolerance — including
-	// the exact modes, whose tolerance is zero, so "not caught up" lands here.
-	DeferOverStaleness DeferReason = "over_staleness"
 	// DeferStatusUnknown is a status feed the consumer cannot vouch for (never
 	// received, or older than the freshness window). It fails closed and is never
 	// mistaken for index state.
 	DeferStatusUnknown DeferReason = "status_unknown"
-	// DeferEmpty is an empty / pre-enumeration graph (TargetRevision == 0): Lag is
-	// 0 but that does NOT mean caught up.
-	DeferEmpty DeferReason = "empty"
+	// DeferUnrecognizedState is an envelope whose State is blank or outside
+	// AllIndexStates. It is NOT the same operator problem as a dead feed: the value
+	// arrived and decoded, so the producer is talking — it is saying something this
+	// consumer does not understand, which means version skew (a newer producer, a
+	// partially-written envelope, a hand-edited key). Failing closed on it is the
+	// whole posture of ADR-084: State became load-bearing when health replaced
+	// coverage, so an uninterpretable State cannot be waved through as "not degraded".
+	DeferUnrecognizedState DeferReason = "unrecognized_state"
+	// DeferBootstrapIncomplete is a producer that has not finished its initial build
+	// in this process lifetime — the gh#474 cutover window, where the keyset is
+	// half-materialised and a plausible small Lag is actively misleading. It replaces
+	// the former `empty` reason, whose TargetRevision==0 proxy was wrong in both
+	// directions: false during a cutover, and true for the authoritatively empty
+	// graph it then wrongly deferred.
+	DeferBootstrapIncomplete DeferReason = "bootstrap_incomplete"
 )
 
-// GateConfig carries the per-consumer knobs the mode interprets. The zero value is
-// the strictest configuration for every mode.
-type GateConfig struct {
-	// MaxStaleness is the bounded-staleness tolerance in wall time. Zero (the
-	// default) makes the gate exactly equivalent to Ready. Ignored by the other
-	// modes. Wall time rather than a revision count because the correct revision
-	// bound moves 2-4x with coalesce_ms alone and linearly with write rate
-	// (gh#590), while a time bound is invariant to both.
-	MaxStaleness time.Duration
-	// BootstrapDone reports whether the sticky-bootstrap consumer has completed its
-	// first successful pass. Ignored by the other modes.
-	BootstrapDone bool
+// AllDeferReasons is the closed iteration domain for the typed defer reasons a gate can
+// return. It lives next to the const block so it is the single source of truth, exactly
+// as AllIndexStates is for wire states: adding a reason means adding it HERE, once, and
+// every consumer that pre-initializes counter series or validates a label set picks it
+// up automatically.
+//
+// The alternative — each consumer hand-maintaining its own copy — fails SILENTLY in the
+// direction that matters. A counter keyed off a private list drops any reason missing
+// from it (dropping is correct: an unbounded label is a cardinality leak), so a newly
+// added reason would defer in production while incrementing nothing, and the dashboard
+// would read as "no defers" rather than "unknown defers".
+//
+// DeferNone is deliberately absent: it is the reason attached to a PROCEED, not a defer,
+// and pre-initializing a "" series would publish a permanently-zero label.
+var AllDeferReasons = []DeferReason{
+	DeferHardStop,
+	DeferStatusUnknown,
+	DeferUnrecognizedState,
+	DeferBootstrapIncomplete,
 }
 
-// EvaluateReadinessGate is the single home for readiness gate semantics. It
-// evaluates the held status, whether that status is FRESH (consumer-local arrival
-// freshness — see graph/readiness; in-process producers that compute the envelope
-// themselves pass true, having no transport to lose), the consumer's declared mode,
-// and its config, and reports whether to proceed plus the typed defer reason.
+// StatusReading is a consumer's local view of a producer's envelope: the envelope
+// itself plus the one fact only the consumer knows — whether it can still vouch for
+// the feed. It is a struct rather than positional arguments so a new consumer-local
+// fact can be added without breaking every adopter.
+//
+// graph/readiness.Reading maps onto it directly; an IN-PROCESS producer that computes
+// its own envelope passes Fresh: true, having no transport to lose.
+type StatusReading struct {
+	// Status is the last envelope received from the producer.
+	Status IndexStatusResponse
+	// Fresh reports that the reading is recent enough to vouch for. False means
+	// UNKNOWN, which fails closed — not "not ready".
+	Fresh bool
+}
+
+// EvaluateReadinessGate is the single home for readiness gate semantics. It answers the
+// health question and reports whether to proceed plus the typed defer reason. How a
+// caller REACTS to a defer (error, skip a tick, serve an honest empty envelope) stays
+// with the caller.
 //
 // Evaluation order is load-bearing:
 //
-//  1. Unknown status short-circuits BEFORE any tolerance is considered. A dead
-//     status feed is a transport fact; no tolerance, however generous, licenses
-//     proceeding on state the consumer cannot vouch for.
-//  2. Hard stops (degraded, reset_required) defer under EVERY mode and tolerance.
-//  3. Ready proceeds under every mode.
-//  4. Sticky-bootstrap opens after its first pass (hard stops already excluded).
-//  5. An empty / pre-enumeration graph (TargetRevision == 0) never proceeds by
-//     tolerance — Lag == 0 there does not mean caught up (the load-bearing guard
-//     inherited from ReadyWithinLag's 5-lens F1 finding).
-//  6. Bounded staleness proceeds within tolerance; everything else defers as
-//     over_staleness.
+//  1. Unknown status short-circuits BEFORE anything else. A dead status feed is a
+//     transport fact; nothing licenses proceeding on state the consumer cannot vouch
+//     for.
+//  2. An UNRECOGNIZED State defers. The check is an allow-list over AllIndexStates,
+//     not a deny-list for degraded/reset_required: a blank or future state must not
+//     read as "not degraded, therefore healthy".
+//  3. Hard stops (degraded, reset_required) defer.
+//  4. An incomplete initial build defers likewise — this is the wire-observable gh#474
+//     guard, and the reason bootstrap_complete had to leave the producer's process.
+//  5. Everything else proceeds, however far behind the view is. Lag is not a fault; it
+//     is a property of the answer, carried on IndexStatusResponse.StalenessMs for the
+//     consumer to stamp on its output.
 //
-// INVARIANT the exact-mode parity relies on: degraded and reset_required always
-// carry Ready == false (maintained by ComputeIndexStatus and the producers'
-// known-incomplete overrides). Because of it, steps 1-3 collapse to "proceed iff
-// fresh && Ready" for the exact modes — bit-parity with the pre-ADR-083 checks. If a
-// future writer ever set a hard-stop State with Ready == true, that parity would
-// diverge; preserve the projection when editing readiness.
-func EvaluateReadinessGate(status IndexStatusResponse, fresh bool, mode GateMode, cfg GateConfig) (proceed bool, reason DeferReason) {
-	if !fresh {
+// Ready is deliberately absent. It is COVERAGE, and coverage answers no question this
+// gate asks: it cannot license a proceed a health verdict already denied, and it cannot
+// withhold one a health verdict already allowed. A caller with a specific revision in
+// hand compares it against IndexedRevision itself.
+//
+// PRODUCER INVARIANT this ordering still relies on: an envelope with Ready == true must
+// also carry BootstrapComplete == true. Health is answered before coverage is consulted
+// anywhere, so a producer that published a caught-up envelope while reporting an
+// unfinished build would see every consumer defer on it forever — pointing an operator
+// at a cutover that already finished. It survived the ADR-085 collapse: deleting the
+// Ready fast path removed the gate's own READ of the field, not the obligation on
+// producers, because graph-index's sticky responder gate and every consumer's
+// IndexedRevision comparison still assume the two agree. graph-index maintains it in
+// latchBootstrap and on its caged early-boot branch; a new producer must do the same.
+func EvaluateReadinessGate(reading StatusReading) (proceed bool, reason DeferReason) {
+	status := reading.Status
+	if !reading.Fresh {
 		return false, DeferStatusUnknown
+	}
+	if !recognizedState(status.State) {
+		// Allow-list, not deny-list. Checking only for degraded/reset_required would
+		// let a blank or future state proceed as healthy — fail-OPEN on exactly the
+		// field ADR-084 made load-bearing.
+		return false, DeferUnrecognizedState
 	}
 	if status.State == IndexStateDegraded || status.State == IndexStateResetRequired {
 		return false, DeferHardStop
 	}
-	if status.Ready {
-		return true, DeferNone
+	if !status.BootstrapComplete {
+		return false, DeferBootstrapIncomplete
 	}
-	if mode == GateStickyBootstrap && cfg.BootstrapDone {
-		return true, DeferNone
+	return true, DeferNone
+}
+
+// recognizedState reports whether a wire State is one this consumer understands.
+// Sourced from AllIndexStates so adding a state means adding it there, once.
+func recognizedState(state string) bool {
+	for _, known := range AllIndexStates {
+		if state == known {
+			return true
+		}
 	}
-	if status.TargetRevision == 0 {
-		return false, DeferEmpty
-	}
-	if mode == GateBoundedStaleness && cfg.MaxStaleness > 0 &&
-		// StalenessMs > 0 is the PRESENCE bit, not a lower bound on age: a
-		// not-ready envelope with staleness 0 could not compute its age, and
-		// treating that as "0ms stale" would proceed on an unknown view. Producers
-		// clamp any computed staleness to >= 1ms so this test never rejects a real
-		// sub-millisecond value.
-		status.StalenessMs > 0 &&
-		status.StalenessMs <= uint64(cfg.MaxStaleness.Milliseconds()) {
-		return true, DeferNone
-	}
-	return false, DeferOverStaleness
+	return false
 }

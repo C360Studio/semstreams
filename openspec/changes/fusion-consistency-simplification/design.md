@@ -52,21 +52,27 @@ migrations (proposal Non-goals).
 
 ## Decisions
 
-**D1 — Two questions; freshness is a parameter, not a mode.** Health = fresh
-status ∧ no hard stop ∧ `bootstrap_complete`. Freshness = the consumer's
-declared requirement: `exact` | `max_staleness(d)` | none. Lag alone never
-defers an unbounded consumer; coverage (`Ready`) may still *license a
-proceed* (caught-up answers freshness with zero age — this keeps the
-`staleness_ms` presence encoding sound for bounded consumers) but never
-defers a read path. The bound is compared against `staleness_ms` + the
-reading's consumer-local age, closing the heartbeat-window leak. View-rate
-consumers keep `exact` as the unset/zero default (the shipped clustering
-operator contract: "empty or 0 = require exact index catch-up" — no silent
-inversion); read paths (fusion, graph/query client) declare none. Defer
-reason `empty` renames to `bootstrap_incomplete`. *Alternatives rejected*:
-keeping an `exact` mode for absence consumers (license unsound, retired by
-ADR-084); flipping unset-to-unbounded for clustering (silent default
-inversion of the strictest gate, rejected by review consensus).
+**D1 — ~~Two questions; freshness is a parameter, not a mode.~~ SUPERSEDED by
+D8 (ADR-085) — the freshness parameter is DELETED, not reparameterized.**
+
+*Recorded as written, because the reasoning below is why D8 exists.* The
+original decision: Health = fresh status ∧ no hard stop ∧
+`bootstrap_complete`. Freshness = the consumer's declared requirement:
+`exact` | `max_staleness(d)` | none. Lag alone never defers an unbounded
+consumer; coverage (`Ready`) may still *license a proceed* but never defers a
+read path. The bound compared `staleness_ms` + the reading's consumer-local
+age. View-rate consumers kept `exact` as the unset/zero default; read paths
+declared none. Defer reason `empty` renamed to `bootstrap_incomplete`.
+
+**What survives:** the health definition, the `bootstrap_complete` bit, the
+`empty` → `bootstrap_incomplete` rename, and the finding that coverage must
+never defer a read path.
+
+**What does not:** everything about a declared freshness requirement. The
+`Freshness` type, its three constructors, `max_staleness`, the bound
+arithmetic, and the `over_staleness` / `staleness_unknown` defer reasons are
+deleted. `EvaluateReadinessGate` takes a `StatusReading` and nothing else,
+and `Ready` is inert at the gate — it neither licenses nor withholds. See D8.
 
 **D2 — `bootstrap_complete` on the envelope.** Producer-set: true once the
 initial build (enumeration + replay to the enumeration-time target,
@@ -160,6 +166,39 @@ not a snapshot age.
    consumption, scorecard adopts score passthrough), semconnect (conformance
    probe reads health not Ready).
 4. Rollback = revert the framework commit; no data migration exists.
+
+**D8 — Delete the freshness parameter; gate on health alone (ADR-085).**
+Supersedes D1's freshness half. Coverage-derived gating existed only to serve
+the ADR-066 absence license; ADR-084 retired the license but left the
+machinery. What remained was a public type, three constructors, a
+satisfiability floor, two defer reasons and an operator knob serving **one**
+call site — and that consumer (community detection) is the safest possible
+reader of a stale view. Three tells, all verified: `FreshnessWithin` had
+exactly one caller; `max_staleness` / `index_lag_tolerance` had zero adopters
+across ~20 sister repos; and the knob needed a floor derived from the publish
+heartbeat, because you cannot bound a quantity below the interval at which
+you learn it. `max_staleness` also never shipped in a tag, so sister repos go
+from `index_lag_tolerance` to nothing. The gate becomes fresh → recognized
+state → no hard stop → `bootstrap_complete` → proceed. Staleness is reported
+on results (`staleness_at_detection_ms`), never consulted for admission.
+*Alternatives rejected*: a better-derived floor (the floor is the symptom);
+keeping the parameter defaulted to none (preserves a type and two defer
+reasons for a hypothetical consumer that would want stamping, not gating).
+
+**D9 — Ungating a periodic rebuild requires that rebuild to be
+non-destructive.** Removing a gate promotes the gated work's failure modes
+from rare to permanent. Community detection replaced its partition by
+clearing COMMUNITY_INDEX and rebuilding, which was tolerable at a rate of
+approximately never and indefensible every tick. Detection now writes the new
+partition over the prior one in place and prunes only the keys the run did
+not write; a failed prune leaves a correct superset rather than failing the
+run. **Consumer-side caveat, found by review and not waved away:** the
+prune's deletes now arrive after the writes, which broke
+`processor/graph-query/CommunityCache` — it keyed by bare community ID while
+storage keys by `{level}.{id}`, so a late delete rebuilt a level index after
+higher levels had shadowed the map. That cache is fixed to key by
+`(level, ID)` as part of this change (gh#609 item 1); the union-during-
+rebuild guarantee is only true once it is.
 
 ## Open Questions
 

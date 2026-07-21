@@ -298,6 +298,20 @@ type Component struct {
 	// state lag is surfaced via the GRAPH_STATUS readiness envelope.
 	indexBootstrapped atomic.Bool
 
+	// bootstrapTarget is the enumeration-time target: the highest revision DELIVERED at
+	// the moment the initial-sync sentinel fired. The initial build is complete once the
+	// watermark's applied floor reaches it (ADR-084 D2).
+	//
+	// It is a fixed value, deliberately, and that is the whole point. Latching on the
+	// LIVE stream target instead would make the bit unreachable under continuous write —
+	// the target advances as fast as the index does, so "caught up" is a measure-zero
+	// instant (gh#590 F1) — and every ADR-084 health gate would then defer forever on
+	// exactly the busy deployment this contract exists to serve.
+	//
+	// Written BEFORE initialEnumerationComplete so any reader that sees the flag also
+	// sees the target.
+	bootstrapTarget atomic.Uint64
+
 	// initialEnumerationComplete flips when the WatchAll initial-sync sentinel fires: every
 	// entity that existed at watch-start has been delivered. It authorizes ONLY the
 	// authoritative-empty readiness exception (target==0/indexed==0), never the non-empty
@@ -853,7 +867,13 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 				// which the revision-lag check (target>0) can never confirm; it must NOT
 				// flip the sticky bootstrap flag, or a large non-empty cold replay would
 				// serve partial state before its workers complete (gh#474 Codex #1).
-				c.logger.Debug("entity watcher initial sync complete")
+				// Capture the enumeration-time target BEFORE raising the flag: every
+				// pre-existing entity has now been delivered, so observedHigh bounds
+				// their revisions and is the target the initial build must reach
+				// (ADR-084 D2). Empty graph gives 0, which the latch satisfies at once.
+				c.bootstrapTarget.Store(c.watermark.Observed())
+				c.logger.Debug("entity watcher initial sync complete",
+					slog.Uint64("bootstrap_target", c.bootstrapTarget.Load()))
 				c.initialEnumerationComplete.Store(true)
 				continue
 			}

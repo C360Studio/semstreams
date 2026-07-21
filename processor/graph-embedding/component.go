@@ -253,7 +253,23 @@ type Component struct {
 	resetState           atomic.Pointer[graph.StateContractError]
 	watchUnavailable     atomic.Bool
 	bootstrapStarted     atomic.Bool
-	bootstrapComplete    atomic.Bool
+	// bootstrapComplete means the ENTITY_STATES snapshot has been delivered and
+	// validated. It gates queries (ensureBootstrapReady) and is deliberately NOT the
+	// public wire bit: delivery is not application, and embedding generation is async.
+	bootstrapComplete atomic.Bool
+	// bootstrapTarget is the enumeration-time target — the highest revision delivered
+	// when the initial-sync sentinel fired. Written BEFORE bootstrapComplete so any
+	// reader that sees the flag also sees the target.
+	//
+	// It is a FIXED value, which is the point: comparing against the live stream
+	// target would make the applied latch unreachable under continuous write, since
+	// that target advances as fast as the pipeline does (gh#590 F1).
+	bootstrapTarget atomic.Uint64
+	// buildApplied is the public bootstrap_complete bit: the initial snapshot has not
+	// merely been delivered, it has reached a TERMINAL embedding outcome up to the
+	// enumeration-time target. Separate from bootstrapComplete because an unbounded
+	// health consumer that trusted delivery would serve a partially built cold index.
+	buildApplied atomic.Bool
 
 	// Readiness stuck-detector state (ADR-066 §3), guarded by statusMu. Keyed off
 	// COMPLETIONS, not IndexedRevision: a slow single external-LLM call can pin
@@ -943,6 +959,8 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	// watcher has validated its complete bootstrap snapshot.
 	c.watchUnavailable.Store(false)
 	c.bootstrapComplete.Store(false)
+	c.buildApplied.Store(false)
+	c.bootstrapTarget.Store(0)
 	c.bootstrapStarted.Store(true)
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
@@ -1100,8 +1118,16 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 						slog.String("reason", c.graphStateResetReason()))
 					continue
 				}
+				// Capture the enumeration-time target BEFORE raising the flag: every
+				// pre-existing entity has now been delivered, so observedHigh bounds
+				// their revisions. An empty graph gives 0, which the applied check
+				// satisfies immediately.
+				if c.watermark != nil {
+					c.bootstrapTarget.Store(c.watermark.Observed())
+				}
 				c.bootstrapComplete.Store(true)
-				c.logger.Debug("entity watcher initial sync complete")
+				c.logger.Debug("entity watcher initial sync complete",
+					slog.Uint64("bootstrap_target", c.bootstrapTarget.Load()))
 				continue
 			}
 

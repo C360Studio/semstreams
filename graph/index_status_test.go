@@ -183,3 +183,56 @@ func TestIndexStatusResponse_StalenessWireRoundTrip(t *testing.T) {
 		t.Errorf("ready envelope emitted staleness_ms: %s", readyRaw)
 	}
 }
+
+// TestIndexStatusResponse_BootstrapCompleteWireRoundTrip pins the ADR-084 D2 bit on
+// the wire. Unlike staleness_ms, this field is deliberately NOT omitempty: it gates
+// health, so an explicit `false` must be distinguishable in a `nats kv get` dump from
+// a pre-ADR-084 producer that never emits the key at all. Both decode to false — fail
+// closed either way — but only one of them is a bug an operator can fix by upgrading.
+func TestIndexStatusResponse_BootstrapCompleteWireRoundTrip(t *testing.T) {
+	// The shared projection never sets the bit; producers stamp it from their own
+	// latch. Pin that, so a future edit that folds a guess into ComputeIndexStatus
+	// (where no bootstrap fact is in scope) fails here.
+	if ComputeIndexStatus(IndexStatusInputs{Indexed: 100, Target: 100}).BootstrapComplete {
+		t.Error("ComputeIndexStatus invented a bootstrap verdict it has no input for")
+	}
+
+	for _, bootstrapped := range []bool{false, true} {
+		src := ComputeIndexStatus(IndexStatusInputs{Indexed: 40, Target: 100, LastSynced: "ts"})
+		src.BootstrapComplete = bootstrapped
+
+		raw, err := json.Marshal(src)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		var keyed map[string]any
+		if err := json.Unmarshal(raw, &keyed); err != nil {
+			t.Fatalf("unmarshal to map: %v", err)
+		}
+		got, present := keyed["bootstrap_complete"]
+		if !present {
+			t.Fatalf("bootstrap_complete absent from the wire for %v: %s", bootstrapped, raw)
+		}
+		if got != bootstrapped {
+			t.Errorf("wire bootstrap_complete = %v, want %v", got, bootstrapped)
+		}
+
+		var back IndexStatusResponse
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if back != src {
+			t.Errorf("round trip changed the envelope:\n got %+v\nwant %+v", back, src)
+		}
+	}
+
+	// The migration contract: an envelope from a producer that predates the field
+	// decodes to false, so every health gate fails closed until the lockstep upgrade.
+	var legacy IndexStatusResponse
+	if err := json.Unmarshal([]byte(`{"ready":true,"state":"ready"}`), &legacy); err != nil {
+		t.Fatalf("unmarshal legacy: %v", err)
+	}
+	if legacy.BootstrapComplete {
+		t.Error("absent bootstrap_complete decoded true; the health gate would fail OPEN on an old producer")
+	}
+}

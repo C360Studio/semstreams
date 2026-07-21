@@ -2,6 +2,20 @@
 
 ## Status
 
+**D1's freshness parameter and D5's bounded-staleness clause superseded by
+ADR-085 — 2026-07-21.** This ADR retired the absence license that coverage-gating
+existed to serve, but kept the gating machinery as a per-consumer *parameter*
+(`exact` | `max_staleness` | none). ADR-085 finishes the removal: the gate asks
+health alone, staleness is reported on results rather than consulted for
+admission, and `Freshness`/`max_staleness` are deleted. Decisions 2, 3, 4, 6 and 7
+below — `bootstrap_complete`, the retired absence license, the narrowed transient,
+reported omission, and hard-stop propagation — stand unchanged and are load-bearing
+under ADR-085. One further clause of D5 is also superseded: "`sticky-bootstrap`
+returns to graph-index as private bootstrap exactness (*its responder gate is
+retained unchanged*)". The responder gate was NOT retained unchanged — ADR-085
+Alternative 3 records why the exactness there was a bootstrap probe that
+`bootstrap_complete` answers directly.
+
 Accepted — 2026-07-20, after the 5-lens adversarial review (architect /
 breaker / feasibility / code-accuracy / completeness; all blocking findings
 verified against source and folded — see the change's design.md). Decision

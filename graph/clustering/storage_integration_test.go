@@ -266,6 +266,113 @@ func TestIntegration_Clear(t *testing.T) {
 	assert.Len(t, results, 0)
 }
 
+// TestIntegration_Prune pins Prune's key derivation against real NATS KV: the
+// keep set is expressed as communities, and Prune must reconstruct BOTH the
+// community keys ({level}.{id}) and the entity mapping keys
+// (entity.{level}.{entity_id}) they imply. A prune that forgets the mapping keys
+// still answers queries correctly but leaks a key per churned entity forever, so
+// this asserts on the raw key set rather than on query results.
+func TestIntegration_Prune(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	ctx := context.Background()
+
+	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket: CommunityBucket,
+	})
+	require.NoError(t, err)
+
+	defer func() {
+		keys, _ := kv.Keys(ctx)
+		for _, key := range keys {
+			kv.Delete(ctx, key)
+		}
+	}()
+
+	storage := NewNATSCommunityStorage(kv)
+
+	// Prior partition.
+	prior := []*Community{
+		{ID: "A", Level: 0, Members: []string{"e1", "e2"}},
+		{ID: "B", Level: 0, Members: []string{"e3", "e4"}},
+		{ID: "X", Level: 1, Members: []string{"e1", "e2", "e3", "e4"}},
+	}
+	for _, comm := range prior {
+		require.NoError(t, storage.SaveCommunity(ctx, comm))
+	}
+
+	// New partition: B is gone entirely, A keeps only e1, level 1 is unchanged.
+	next := []*Community{
+		{ID: "A", Level: 0, Members: []string{"e1"}},
+		{ID: "X", Level: 1, Members: []string{"e1", "e2", "e3", "e4"}},
+	}
+	for _, comm := range next {
+		require.NoError(t, storage.SaveCommunity(ctx, comm))
+	}
+
+	require.NoError(t, storage.Prune(ctx, next))
+
+	keys, err := kv.Keys(ctx)
+	require.NoError(t, err)
+	keySet := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		keySet[k] = struct{}{}
+	}
+
+	retained := []string{"0.A", "1.X", "entity.0.e1", "entity.1.e1", "entity.1.e4"}
+	for _, k := range retained {
+		assert.Contains(t, keySet, k, "key %s belongs to the new partition and must be retained", k)
+	}
+
+	removed := []string{"0.B", "entity.0.e2", "entity.0.e3", "entity.0.e4"}
+	for _, k := range removed {
+		assert.NotContains(t, keySet, k, "key %s belongs only to the prior partition and must be pruned", k)
+	}
+
+	// Query surfaces agree with the pruned key set.
+	level0, err := storage.GetCommunitiesByLevel(ctx, 0)
+	require.NoError(t, err)
+	require.Len(t, level0, 1)
+	assert.Equal(t, "A", level0[0].ID)
+
+	level1, err := storage.GetCommunitiesByLevel(ctx, 1)
+	require.NoError(t, err)
+	assert.Len(t, level1, 1)
+}
+
+// TestIntegration_PruneEmptyKeepRemovesEverything covers the empty-graph case:
+// no communities means no keys.
+func TestIntegration_PruneEmptyKeepRemovesEverything(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	ctx := context.Background()
+
+	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket: CommunityBucket,
+	})
+	require.NoError(t, err)
+
+	defer func() {
+		keys, _ := kv.Keys(ctx)
+		for _, key := range keys {
+			kv.Delete(ctx, key)
+		}
+	}()
+
+	storage := NewNATSCommunityStorage(kv)
+	require.NoError(t, storage.SaveCommunity(ctx, &Community{
+		ID: "A", Level: 0, Members: []string{"e1", "e2"},
+	}))
+
+	require.NoError(t, storage.Prune(ctx, nil))
+
+	results, err := storage.GetCommunitiesByLevel(ctx, 0)
+	require.NoError(t, err)
+	assert.Empty(t, results)
+
+	mapping, err := storage.GetEntityCommunity(ctx, "e1", 0)
+	require.NoError(t, err)
+	assert.Nil(t, mapping)
+}
+
 // TestIntegration_CommunityIDParsing tests robust ID parsing with edge cases
 func TestIntegration_CommunityIDParsing(t *testing.T) {
 	natsClient := getSharedNATSClient(t)

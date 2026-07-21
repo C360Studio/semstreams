@@ -91,11 +91,27 @@ type CommunityStorage interface {
 	// DeleteCommunity removes a community
 	DeleteCommunity(ctx context.Context, id string) error
 
-	// Clear removes all communities (useful for full recomputation)
+	// Prune removes stored state that does not belong to the supplied partition.
+	//
+	// This is the replacement half of an in-place index rebuild: a detector
+	// overwrites keys with SaveCommunity as it goes and then calls Prune once,
+	// at the end, with the complete new partition. Everything the previous
+	// partition left behind is dropped; everything in keep is retained.
+	//
+	// Detectors MUST NOT Clear() before a rebuild. Detection takes seconds, and
+	// a cleared index publishes an authoritative-looking empty answer for that
+	// whole window. Write-then-prune means readers see old ∪ new instead — a
+	// slightly stale partition, never an empty one (ADR-085).
+	Prune(ctx context.Context, keep []*Community) error
+
+	// Clear removes all communities.
+	//
+	// Only for teardown and explicit operator-driven reset. Not part of the
+	// rebuild path — see Prune.
 	Clear(ctx context.Context) error
 
 	// GetAllCommunities returns all communities across all levels
-	// Used for archiving enhanced communities before Clear()
+	// Used for archiving enhanced communities before a rebuild
 	GetAllCommunities(ctx context.Context) ([]*Community, error)
 }
 

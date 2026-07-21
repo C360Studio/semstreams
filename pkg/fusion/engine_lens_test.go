@@ -26,6 +26,18 @@ type fakeGraph struct {
 
 	lastResolve fusion.ResolveQuery // captures the most recent Resolve args
 
+	// entitiesFn, when set, overrides the hydration result. The default below
+	// returns entities in the requested (resolve) order, which is what the
+	// production RetrievalClient owes the engine — a fake that can ONLY do that
+	// cannot exercise what happens when a transport breaks the promise, and the
+	// engine's ranking is position-based (see the resolve-order pin).
+	entitiesFn func(ids []string) ([]*fusion.Entity, error)
+	// unhydrated, when set, is reported alongside whatever entitiesFn returns.
+	unhydrated []fusion.Unhydrated
+	// seedsFn, when set, overrides seed resolution so a test can attach similarity
+	// scores the way the semantic wire does.
+	seedsFn func(q fusion.ResolveQuery) []fusion.Seed
+
 	// statusFn, when set, overrides status/statusErr per call (1-based call
 	// number) — the graph facet's ViewRevision re-sample needs a fake whose
 	// second Status answer differs from (or fails after) the first.
@@ -40,24 +52,58 @@ func (g *fakeGraph) Status(context.Context) (fusion.IndexStatus, error) {
 	}
 	return g.status, g.statusErr
 }
-func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]string, error) {
+func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]fusion.Seed, error) {
 	g.lastResolve = q
-	return g.seeds[q.Query], g.resolveErr
+	if g.seedsFn != nil {
+		return g.seedsFn(q), g.resolveErr
+	}
+	// Seeds default to unscored, matching the symbol/prefix wires. A test that needs
+	// similarity sets seedsFn — modelling every mode as scored would let a positional
+	// score join pass here while mislabelling in production.
+	out := make([]fusion.Seed, 0, len(g.seeds[q.Query]))
+	for _, id := range g.seeds[q.Query] {
+		out = append(out, fusion.Seed{ID: id})
+	}
+	return out, g.resolveErr
 }
 func (g *fakeGraph) Entity(_ context.Context, id string) (*fusion.Entity, error) {
 	return g.entities[id], nil
 }
-func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity, error) {
+func (g *fakeGraph) Entities(_ context.Context, ids []string) (fusion.Hydration, error) {
 	if g.entErr != nil {
-		return nil, g.entErr
+		return fusion.Hydration{}, g.entErr
 	}
+	if g.entitiesFn != nil {
+		ents, err := g.entitiesFn(ids)
+		return fusion.Hydration{Entities: ents, Unhydrated: g.unhydrated}, err
+	}
+	// Models the production contract: the two lists together account for every
+	// requested ID exactly once. A fake that silently dropped unknown IDs would keep
+	// exercising the shape ADR-084 outlawed, and would let a regression in the
+	// engine's unhydrated handling pass unnoticed.
 	var out []*fusion.Entity
+	unhydrated := g.unhydrated
 	for _, id := range ids {
 		if e, ok := g.entities[id]; ok {
 			out = append(out, e)
+			continue
+		}
+		if !hasUnhydrated(unhydrated, id) {
+			unhydrated = append(unhydrated, fusion.Unhydrated{
+				Handle: id, Reason: fusion.UnhydratedUnknown,
+			})
 		}
 	}
-	return out, nil
+	return fusion.Hydration{Entities: out, Unhydrated: unhydrated}, nil
+}
+
+func hasUnhydrated(list []fusion.Unhydrated, id string) bool {
+	for _, u := range list {
+		if u.Handle == id {
+			return true
+		}
+	}
+	return false
 }
 func (g *fakeGraph) Neighbors(_ context.Context, id string, preds []string, dir fusion.Direction) ([]fusion.Edge, error) {
 	if g.neighborsErr != nil {
@@ -86,8 +132,12 @@ func (g *fakeGraph) Names(_ context.Context, _ string, _ int) ([]string, error) 
 	return g.names, nil
 }
 
+// readyStatus is a HEALTHY producer's envelope. BootstrapComplete is set because every
+// real producer stamps it from its own build latch (ADR-084 D2) — an envelope without
+// it models a pre-ADR-084 producer, not a healthy one, and would silently turn every
+// test using this helper into a bootstrap_incomplete defer.
 func readyStatus() fusion.IndexStatus {
-	return fusion.IndexStatus{Ready: true, State: fusion.StateReady}
+	return fusion.IndexStatus{Ready: true, State: fusion.StateReady, BootstrapComplete: true}
 }
 
 func entity(id, title, path string, extra ...message.Triple) *fusion.Entity {
@@ -231,10 +281,16 @@ func TestEngine_Relations(t *testing.T) {
 // TestEngine_Miss: ready + resolved-to-nothing yields a Miss with did_you_mean —
 // never an ambiguous empty.
 func TestEngine_Miss(t *testing.T) {
+	// A genuine miss is RESOLUTION finding nothing — not resolution finding a seed we
+	// then failed to fetch. ADR-084 split those: the second case reports `unhydrated`
+	// and deliberately synthesizes no Miss, because a failed read cannot support the
+	// claim "the graph was asked and had nothing". This fixture used to be the second
+	// case and passed only because the fake silently dropped unfetchable IDs; that case
+	// now lives in TestResponse_Unhydrated.
 	g := &fakeGraph{
 		status:   readyStatus(),
-		seeds:    map[string][]string{"Ghost": {"acme.ops.code.repo.symbol.Ghost"}}, // resolves an id…
-		entities: map[string]*fusion.Entity{},                                       // …but it doesn't exist
+		seeds:    map[string][]string{}, // "Ghost" resolves to nothing at all
+		entities: map[string]*fusion.Entity{},
 		names:    []string{"OnEvent", "OnError"},
 	}
 	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))

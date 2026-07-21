@@ -25,10 +25,11 @@ const degradedStuckAfter = 30 * time.Second
 func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusResponse {
 	if c.resetState.Load() != nil {
 		return graph.IndexStatusResponse{
-			Ready:  false,
-			State:  graph.IndexStateResetRequired,
-			Code:   graph.ErrorCodeGraphStateResetRequired,
-			Reason: c.graphStateResetReason(),
+			Ready:             false,
+			State:             graph.IndexStateResetRequired,
+			Code:              graph.ErrorCodeGraphStateResetRequired,
+			Reason:            c.graphStateResetReason(),
+			BootstrapComplete: c.indexBootstrapped.Load(),
 		}
 	}
 	// A status call before Start wired the watcher (early boot / unit tests that do
@@ -43,7 +44,16 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		if ready {
 			state = graph.IndexStateReady
 		}
-		return graph.IndexStatusResponse{Ready: ready, State: state}
+		// BootstrapComplete tracks this branch's own verdict rather than the process
+		// latch, preserving the producer invariant every consumer of the collapsed gate
+		// relies on: Ready implies BootstrapComplete. An envelope claiming to be caught
+		// up while reporting an unfinished build is self-contradictory, and the gate —
+		// which asks health before coverage — would defer on it forever.
+		//
+		// It deliberately does NOT set the process latch: this Ready is the retired
+		// sticky NAME_INDEX signal, which fires before the index is populated (gh#431),
+		// so a later honest compute must be free to report an incomplete build.
+		return graph.IndexStatusResponse{Ready: ready, State: state, BootstrapComplete: ready}
 	}
 
 	indexed, indexedAt := c.watermark.IndexedAt()
@@ -63,9 +73,10 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		c.logger.Warn("index status: failed to read ENTITY_STATES LastSeq target",
 			slog.Any("error", err))
 		return graph.IndexStatusResponse{
-			Ready:           false,
-			State:           graph.IndexStateDegraded,
-			IndexedRevision: indexed,
+			Ready:             false,
+			State:             graph.IndexStateDegraded,
+			IndexedRevision:   indexed,
+			BootstrapComplete: c.indexBootstrapped.Load(),
 		}
 	}
 
@@ -81,8 +92,51 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 		// computable" rather than as a fresh view.
 		IndexedAt: indexedAt,
 	})
-	return applyKnownIncompleteOverrides(status, target,
+	status = applyKnownIncompleteOverrides(status, target,
 		c.initialEnumerationComplete.Load(), c.failedCount.Load())
+	return c.latchBootstrap(status)
+}
+
+// latchBootstrap sets the process-lifetime bootstrap latch from a computed envelope and
+// stamps the wire bit (ADR-084 D2).
+//
+// The latch flips when the INITIAL BUILD completes: enumeration delivered every
+// pre-existing entity, and the applied floor has since reached the revision that
+// enumeration ended at. Both halves matter:
+//
+//   - the target is the ENUMERATION-TIME one (bootstrapTarget), not the live stream
+//     LastSeq. Comparing against the live target would make the latch unreachable under
+//     continuous write, because that target advances as fast as the index does and
+//     "caught up" is a measure-zero instant (gh#590 F1). The bit would then read false
+//     forever on a busy graph and every remote health gate would defer — the very
+//     failure ADR-084 set out to end, in a new costume.
+//   - Ready ALSO latches, as a sufficient condition: catching up to the live target
+//     implies catching up to any earlier one. It covers components whose watermark is
+//     wired without the watcher, and it is what keeps the authoritatively-empty 0/0
+//     case (Ready via the empty-graph override) latching.
+//
+// Driving this from the status projection rather than only from an arriving query is
+// what makes the bit honest on the wire: a deployment that never issues a direct
+// reverse-index query would otherwise heartbeat bootstrap_complete=false forever while
+// its index had been built for hours.
+//
+// Latching only — never cleared. A later hard stop (failedCount, stuck watermark, reset)
+// is carried by State, which every gate treats as unconditional; clearing the latch
+// there would conflate "never built" with "built, then broke", and the two want
+// different operator responses.
+func (c *Component) latchBootstrap(status graph.IndexStatusResponse) graph.IndexStatusResponse {
+	if status.Ready || c.initialBuildApplied(status.IndexedRevision) {
+		c.indexBootstrapped.Store(true)
+	}
+	status.BootstrapComplete = c.indexBootstrapped.Load()
+	return status
+}
+
+// initialBuildApplied reports whether enumeration has finished AND the applied floor has
+// reached the revision it ended at. Reading the flag first is what makes the pair safe:
+// bootstrapTarget is stored before the flag is raised.
+func (c *Component) initialBuildApplied(indexed uint64) bool {
+	return c.initialEnumerationComplete.Load() && indexed >= c.bootstrapTarget.Load()
 }
 
 // applyKnownIncompleteOverrides layers the two graph-index-local readiness

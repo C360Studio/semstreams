@@ -151,17 +151,37 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 }
 
 // ensureQueryReady gates the composite-key reverse-index query handlers (incoming,
-// byName) on the index having caught up to ENTITY_STATES at least once after Start
-// (gh#474 Codex P1d). Sticky-fast once caught-up; otherwise it does one revision-lag
-// probe. Returns a transient ErrorCodeIndexNotReady while still building so a caller
-// retries rather than acting on the partial keyset a format cutover / cold replay is
-// still materialising (old aggregate keys are inert, new keys incomplete).
+// byName) on the index having completed its INITIAL BUILD — caught up to ENTITY_STATES
+// at least once after Start (gh#474 Codex P1d). Sticky-fast afterwards; before that it
+// does one revision-lag probe. Returns a transient ErrorCodeIndexNotReady while the
+// first build is incomplete so a caller retries rather than acting on the partial
+// keyset a format cutover / cold replay is still materialising (old aggregate keys are
+// inert, new keys incomplete).
 //
-// This is graph.GateStickyBootstrap (ADR-083 D4), and it is the mode's IN-PROCESS
-// adopter: graph-index computes the envelope it gates on, so there is no transport to
-// lose and freshness is unconditionally true. It reads no KV status key — publishing
-// its own envelope and then reading it back would add a round-trip and a staleness
-// window to a decision it can make from local state.
+// The gate never fires on ORDINARY lag. Once the latch is set this returns immediately;
+// before it is set, the ONE remaining question the gate asks of a locally-computed,
+// unconditionally-fresh envelope is bootstrap_complete — which is exactly the gh#474
+// cutover guard this helper exists for, preserved intact as DeferBootstrapIncomplete.
+//
+// A previous version of this comment claimed the pre-latch envelope "necessarily carries
+// BootstrapComplete=false, so the staleness comparison is unreachable". That reasoning
+// was WRONG, and the correction is the one behavior change here. computeIndexStatus
+// latches indexBootstrapped on the way past, so on the single call where the latch flips
+// the envelope it returns already carries BootstrapComplete: true — while Ready is still
+// false, which under continuous write is the normal case. The old FreshnessExact
+// therefore fell through past every health check to an over_staleness defer, producing
+// one spurious transient IndexNotReady that self-healed on the very next call (the latch
+// short-circuits it). That faithfully reproduced pre-ADR-084 behavior, so it was never a
+// regression — but it was reachable, not unreachable. With freshness gone, that call now
+// proceeds immediately, which is what the caller wanted all along.
+//
+// This is the IN-PROCESS adopter of the canonical gate: graph-index computes the
+// envelope it gates on, so there is no transport to lose and the reading is
+// unconditionally fresh. It reads no KV status key — publishing its own envelope and
+// then reading it back would add a round-trip and a staleness window to a decision it
+// can make from local state. Its pre-bootstrap exactness IS bootstrap_complete
+// evaluated in-process (ADR-084 D3), which is why this responder needs no change when
+// remote read paths regate onto health.
 //
 // Two local overrides stay OUTSIDE the canonical helper because they are facts about
 // this component's own bookkeeping that the envelope does not carry, and both are
@@ -199,16 +219,21 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 	if c.watermark == nil {
 		return nil
 	}
-	// BootstrapDone is false here by construction (the sticky flag short-circuited
-	// above), so the helper evaluates the bootstrap half of the mode: proceed exactly
-	// on Ready, defer on hard stops, an empty/pre-enumeration graph, and lag —
-	// bit-identical to the `computeIndexStatus(ctx).Ready` check it replaces, because
-	// hard stops and empty graphs both carry Ready == false.
+	// The gate is asked the health question, which for this consumer reduces to
+	// bootstrap_complete plus the hard stops. Stickiness is NOT a gate concern: it is
+	// the local latch short-circuited above, so the helper never needs to know this
+	// consumer is sticky. In-process producers pass Fresh: true — they compute the
+	// envelope themselves and have no transport to lose.
+	//
+	// computeIndexStatus latches indexBootstrapped on the way past, so a status that
+	// proceeds here already carries BootstrapComplete: true and the health check below
+	// cannot self-deadlock on its own latch.
 	status := c.computeIndexStatus(ctx)
-	proceed, reason := graph.EvaluateReadinessGate(status, true, graph.GateStickyBootstrap,
-		graph.GateConfig{BootstrapDone: false})
+	proceed, reason := graph.EvaluateReadinessGate(graph.StatusReading{Status: status, Fresh: true})
 	if proceed {
-		c.indexBootstrapped.Store(true)
+		// computeIndexStatus already latched indexBootstrapped (latchBootstrap owns the
+		// flip), so there is no second Store here — one home for the latch keeps the
+		// wire bit and this gate from ever disagreeing.
 		return nil
 	}
 	// The typed reason is evidence, not a new wire contract: the classified code and
@@ -222,7 +247,7 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 		slog.Uint64("target_revision", status.TargetRevision),
 		slog.Uint64("lag", status.Lag))
 	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
-		errors.New("index not ready: still catching up to ENTITY_STATES"))
+		errors.New("index not ready: initial build has not completed"))
 }
 
 // handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply.

@@ -132,30 +132,48 @@ func (h *gateHarness) publishAndAwait(ctx context.Context, status graph.IndexSta
 }
 
 // building is the envelope graph-index publishes while catching up. Built through the
-// production projection so Ready/State/Lag carry the values the real producer emits
-// rather than a hand-assembled shape that could drift from ComputeIndexStatus.
+// production projection so Ready/State/Lag/StalenessMs carry the values the real
+// producer emits rather than a hand-assembled shape that could drift from
+// ComputeIndexStatus — which matters more now than it did under a tolerance, because
+// the staleness these fixtures carry is the value the gate must be proven to IGNORE.
+//
+// building projects a HEALTHY producer's envelope: a real graph-index stamps
+// bootstrap_complete once its initial build finished. The cutover case gets preBootstrap
+// below, so the one remaining health "not yet" stays visibly separate in the fixtures
+// the way it is in the gate.
 func building(indexed, target uint64, staleness time.Duration) graph.IndexStatusResponse {
 	now := time.Now()
-	return graph.ComputeIndexStatus(graph.IndexStatusInputs{
+	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
 		Indexed:   indexed,
 		Target:    target,
 		IndexedAt: now.Add(-staleness),
 		Now:       now,
 	})
+	status.BootstrapComplete = true
+	return status
 }
 
-// TestIntegration_StalenessGate_BoundedStaleness covers the spec scenarios for the
-// bounded-staleness mode over the real wire: a continuously-written graph within the
-// bound clusters, while every hard stop and an over-stale view defer under the same
-// generous tolerance.
-func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
+// preBootstrap projects an index still doing its initial build (the gh#474 cutover
+// window): plausibly small lag, half-materialised keyset, bootstrap_complete false.
+func preBootstrap(indexed, target uint64, staleness time.Duration) graph.IndexStatusResponse {
+	status := building(indexed, target, staleness)
+	status.Ready = false
+	status.State = graph.IndexStateBuilding
+	status.BootstrapComplete = false
+	return status
+}
+
+// TestIntegration_ReadinessGate_HealthOnly covers the spec scenarios over the real
+// wire: a healthy index clusters at ANY view age, while every index-health fault defers
+// with its own attributable reason.
+func TestIntegration_ReadinessGate_HealthOnly(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	fixture := newStatusFixture(ctx, t, nc)
-	h := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "3s"})
+	h := newGateHarness(ctx, t, nc, fixture, Config{})
 
 	tests := []struct {
 		name        string
@@ -164,15 +182,24 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 		wantReason  graph.DeferReason
 	}{
 		{
-			name:        "continuous write within the staleness bound clusters",
-			status:      building(450, 500, 1200*time.Millisecond),
+			name:        "continuous write clusters",
+			status:      building(450, 500, 6*time.Second),
 			wantProceed: true,
 		},
 		{
-			name:        "a view older than the bound defers",
-			status:      building(350, 500, 12*time.Second),
-			wantProceed: false,
-			wantReason:  graph.DeferOverStaleness,
+			// The inverse of the retired "a view older than the bound defers" row.
+			// Nothing about age withholds a run: detection re-derives the whole
+			// partition every cycle, so a minute-old view yields a minute-old partition
+			// that the next cycle overwrites — strictly better than republishing
+			// nothing and leaving an even older one standing.
+			name:        "a minute-old view still clusters",
+			status:      building(350, 500, 60*time.Second),
+			wantProceed: true,
+		},
+		{
+			name:        "a day-old view still clusters",
+			status:      building(350, 500, 24*time.Hour),
+			wantProceed: true,
 		},
 		{
 			name:        "caught up clusters with zero staleness",
@@ -180,30 +207,53 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 			wantProceed: true,
 		},
 		{
-			name:        "degraded is a hard stop at any tolerance",
-			status:      graph.IndexStatusResponse{State: graph.IndexStateDegraded, TargetRevision: 500, Lag: 5, StalenessMs: 100},
+			name:        "degraded is a hard stop",
+			status:      graph.IndexStatusResponse{State: graph.IndexStateDegraded, BootstrapComplete: true, TargetRevision: 500, Lag: 5, StalenessMs: 100},
 			wantProceed: false,
 			wantReason:  graph.DeferHardStop,
 		},
 		{
-			name:        "reset_required is a hard stop at any tolerance",
-			status:      graph.IndexStatusResponse{State: graph.IndexStateResetRequired, TargetRevision: 500, StalenessMs: 100},
+			name:        "reset_required is a hard stop",
+			status:      graph.IndexStatusResponse{State: graph.IndexStateResetRequired, BootstrapComplete: true, TargetRevision: 500, StalenessMs: 100},
 			wantProceed: false,
 			wantReason:  graph.DeferHardStop,
 		},
 		{
-			name:        "an empty graph is never ready by tolerance",
-			status:      building(0, 0, 0),
+			// The gh#474 guard, and the ONLY remaining "not yet". A half-built index is
+			// not "a bit stale": the keyset is partially materialised, so detection
+			// would derive a partition from topology that does not exist yet.
+			name:        "an unbootstrapped index defers",
+			status:      preBootstrap(490, 500, 2*time.Second),
 			wantProceed: false,
-			wantReason:  graph.DeferEmpty,
+			wantReason:  graph.DeferBootstrapIncomplete,
 		},
 		{
-			// A not-ready envelope whose staleness is merely ABSENT (the presence
-			// encoding) must not be read as "0ms stale" and waved through.
-			name:        "a not-ready envelope with no computed staleness defers",
-			status:      graph.IndexStatusResponse{State: graph.IndexStateBuilding, IndexedRevision: 400, TargetRevision: 500, Lag: 100},
+			// Version skew reaches the wire as a state this consumer cannot interpret.
+			// Allow-list, not deny-list: it must not read as "not degraded, therefore
+			// healthy".
+			name: "an uninterpretable state defers",
+			status: graph.IndexStatusResponse{State: "rebuilding", BootstrapComplete: true,
+				TargetRevision: 500, StalenessMs: 100},
 			wantProceed: false,
-			wantReason:  graph.DeferOverStaleness,
+			wantReason:  graph.DeferUnrecognizedState,
+		},
+		{
+			// The counterpart the old TargetRevision==0 rule got wrong: 0/0 after
+			// enumeration is a COMPLETED build, and detection over an empty graph is a
+			// valid (empty) result rather than something to defer forever.
+			name:        "an authoritatively empty graph proceeds",
+			status:      graph.IndexStatusResponse{Ready: true, State: graph.IndexStateReady, BootstrapComplete: true},
+			wantProceed: true,
+		},
+		{
+			// The inverse of the retired "no computed staleness defers" row. The
+			// PRESENCE encoding still holds on the wire (0 means "no age to report",
+			// not "0ms old") — it just no longer blocks anything, because nothing reads
+			// the age to decide. A consumer that SURFACES it still owes the encoding.
+			name: "a not-ready envelope with no computed staleness proceeds",
+			status: graph.IndexStatusResponse{State: graph.IndexStateBuilding,
+				BootstrapComplete: true, IndexedRevision: 400, TargetRevision: 500, Lag: 100},
+			wantProceed: true,
 		},
 	}
 
@@ -221,55 +271,66 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 	}
 }
 
-// TestIntegration_StalenessGate_DefaultIsTheExactGate pins the contract-preserving
-// default: with max_staleness unset the gate proceeds exactly when the envelope's own
-// Ready bit is set, for every state, target, and staleness — bit-for-bit the
-// pre-ADR-083 behavior.
-func TestIntegration_StalenessGate_DefaultIsTheExactGate(t *testing.T) {
+// TestIntegration_ReadinessGate_CoverageIsInert replaces the retired
+// "DefaultIsTheExactGate" pin, and inverts it. That test asserted proceed == Ready for
+// every envelope in a battery — the exact coupling this change deletes. What must hold
+// now is the opposite: Ready is COVERAGE and the gate never consults it, so across the
+// same battery the verdict tracks HEALTH and nothing else.
+func TestIntegration_ReadinessGate_CoverageIsInert(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	fixture := newStatusFixture(ctx, t, nc)
-	h := newGateHarness(ctx, t, nc, fixture, Config{}) // max_staleness absent → 0
-	require.Equal(t, time.Duration(0), h.component.config.MaxStaleness(), "the default must be the exact gate")
+	h := newGateHarness(ctx, t, nc, fixture, Config{})
 
-	battery := []graph.IndexStatusResponse{
-		building(100, 100, 0),                   // caught up  → Ready true
-		building(60, 100, 500*time.Millisecond), // lagging, fresh view → Ready false
-		building(60, 100, 30*time.Second),       // lagging, ancient view → Ready false
-		building(0, 0, 0),                       // empty → Ready false
-		{State: graph.IndexStateDegraded, TargetRevision: 100, Lag: 10, StalenessMs: 50},
-		{State: graph.IndexStateResetRequired},
+	battery := []struct {
+		status      graph.IndexStatusResponse
+		wantProceed bool
+	}{
+		{building(100, 100, 0), true},                   // caught up   → Ready true
+		{building(60, 100, 500*time.Millisecond), true}, // lagging     → Ready false, healthy
+		{building(60, 100, 30*time.Second), true},       // far behind  → Ready false, healthy
+		{preBootstrap(0, 0, 0), false},                  // still building
+		{graph.IndexStatusResponse{State: graph.IndexStateDegraded, BootstrapComplete: true,
+			TargetRevision: 100, Lag: 10, StalenessMs: 50}, false},
+		{graph.IndexStatusResponse{State: graph.IndexStateResetRequired, BootstrapComplete: true}, false},
 	}
-	for i, status := range battery {
-		t.Run(fmt.Sprintf("case_%d_%s", i, status.State), func(t *testing.T) {
-			h.publishAndAwait(ctx, status)
+	for i, tc := range battery {
+		t.Run(fmt.Sprintf("case_%d_%s", i, tc.status.State), func(t *testing.T) {
+			h.publishAndAwait(ctx, tc.status)
 
 			got := h.component.evaluateReadiness()
 
-			assert.Equal(t, status.Ready, got.proceed,
-				"max_staleness 0 must equal exact Ready for %+v", status)
+			assert.Equal(t, tc.wantProceed, got.proceed,
+				"the verdict must follow health, not Ready=%v, for %+v", tc.status.Ready, tc.status)
 		})
 	}
+
+	// The direct statement: two of those envelopes are healthy-but-not-Ready (battery[1]
+	// and battery[2]; battery[0] is building at 100/100, which computes Ready=true) and
+	// both cleared, so coverage licensed nothing and withheld nothing.
+	require.False(t, battery[2].status.Ready, "fixture drifted: case 2 must be a not-Ready envelope")
 }
 
-// TestIntegration_StalenessGate_StatusFeedDies is the gh#590 regression, end to end: a
+// TestIntegration_ReadinessGate_StatusFeedDies is the gh#590 regression, end to end: a
 // consumer holding a last-known READY envelope whose producer goes quiet must flip to
-// UNKNOWN and fail closed, attributed to the transport — NOT to index state, and NOT
-// rescued by a generous tolerance. Before ADR-083 this case was a request timeout
-// wearing not-ready's log line, which is what cost three investigation cycles.
-func TestIntegration_StalenessGate_StatusFeedDies(t *testing.T) {
+// UNKNOWN and fail closed, attributed to the transport — NOT to index state. Before
+// ADR-083 this case was a request timeout wearing not-ready's log line, which is what
+// cost three investigation cycles.
+//
+// This is the ENVELOPE-liveness question, and it is the one "freshness" that survived
+// the view-age deletion. The distinction the test proves: the held envelope's CONTENTS
+// still say Ready, and are ignored, because the consumer can no longer vouch for them.
+func TestIntegration_ReadinessGate_StatusFeedDies(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	fixture := newStatusFixture(ctx, t, nc)
-	// A deliberately GENEROUS tolerance: it must never be evaluated against unknown
-	// state, so it cannot rescue a dead feed.
-	h := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "10m"})
+	h := newGateHarness(ctx, t, nc, fixture, Config{})
 
 	// The producer is alive and the index is caught up: detection runs.
 	h.publishAndAwait(ctx, building(500, 500, 0))
@@ -285,7 +346,7 @@ func TestIntegration_StalenessGate_StatusFeedDies(t *testing.T) {
 	}, 10*time.Second, 10*time.Millisecond, "a quiet status feed must expire and fail closed")
 
 	dead := h.component.evaluateReadiness()
-	assert.False(t, dead.proceed, "an unknown status must fail closed under any tolerance")
+	assert.False(t, dead.proceed, "an unknown status must fail closed")
 	assert.Equal(t, graph.DeferStatusUnknown, dead.reason,
 		"a dead feed must be attributed to the transport, never to index state")
 	assert.False(t, dead.reading.Fresh, "the held envelope must be marked stale")
@@ -303,11 +364,11 @@ func TestIntegration_StalenessGate_StatusFeedDies(t *testing.T) {
 	assert.Equal(t, graph.DeferNone, recovered.reason)
 }
 
-// TestIntegration_StalenessGate_UnknownStatusHonorsUngatedEscape: a standalone
+// TestIntegration_ReadinessGate_UnknownStatusHonorsUngatedEscape: a standalone
 // deployment (clustering with no graph-index, so no bucket key ever appears) keeps the
 // pre-ADR-083 allow_ungated_reads escape, and a run taken that way is marked ungated
 // so it cannot publish a fabricated "verified caught up" staleness.
-func TestIntegration_StalenessGate_UnknownStatusHonorsUngatedEscape(t *testing.T) {
+func TestIntegration_ReadinessGate_UnknownStatusHonorsUngatedEscape(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -317,8 +378,8 @@ func TestIntegration_StalenessGate_UnknownStatusHonorsUngatedEscape(t *testing.T
 	// shape, which must not be a startup failure.
 	fixture := &statusFixture{t: t}
 
-	closed := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "10m"})
-	escaped := newGateHarness(ctx, t, nc, fixture, Config{MaxStalenessStr: "10m", AllowUngatedReads: true})
+	closed := newGateHarness(ctx, t, nc, fixture, Config{})
+	escaped := newGateHarness(ctx, t, nc, fixture, Config{AllowUngatedReads: true})
 
 	require.Eventually(t, func() bool {
 		return closed.component.statusWatcher.Read().Err != nil
@@ -335,11 +396,11 @@ func TestIntegration_StalenessGate_UnknownStatusHonorsUngatedEscape(t *testing.T
 	assert.True(t, ungated.ungated, "the escape must be marked so no staleness is claimed")
 }
 
-// TestIntegration_StalenessGate_WiredByComponentStart closes the helper-direct gap:
+// TestIntegration_ReadinessGate_WiredByComponentStart closes the helper-direct gap:
 // the readiness watcher must be bound by the component's real Start, not only by the
 // harness above. Without this, every test here could pass while production never
 // bound a watcher at all.
-func TestIntegration_StalenessGate_WiredByComponentStart(t *testing.T) {
+func TestIntegration_ReadinessGate_WiredByComponentStart(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
@@ -356,7 +417,6 @@ func TestIntegration_StalenessGate_WiredByComponentStart(t *testing.T) {
 	}
 
 	config := Config{
-		MaxStalenessStr:      "3s",
 		DetectionIntervalStr: "1h", // long: this test is about Start's wiring, not ticks
 		MinCommunitySize:     2,
 		MaxIterations:        10,

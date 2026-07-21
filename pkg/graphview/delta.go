@@ -87,4 +87,11 @@ type Snapshot[T any] struct {
 	Sequence uint64
 	// Revision is the applied-revision watermark at capture.
 	Revision uint64
+	// AppliedAt is the KV server write time of the Revision watermark — how
+	// current this snapshot was when it was captured, taken in the same
+	// critical section as Entries, Sequence, and Revision so it names the same
+	// instant. It is REPORTING ONLY (nothing in this package gates on it) and
+	// is the zero time when currency is not computable; see View.Applied for
+	// the floor, zero-value, and clock-skew contract.
+	AppliedAt time.Time
 }

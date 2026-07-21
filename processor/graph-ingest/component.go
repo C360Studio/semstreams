@@ -49,6 +49,9 @@ var (
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
 
+	batchMissingOnce sync.Once
+	batchMissingVec  *prometheus.CounterVec
+
 	predicateContractRejectionsOnce   sync.Once
 	predicateContractRejectionsVec    *prometheus.CounterVec
 	entityStateContractRejectionsOnce sync.Once
@@ -643,6 +646,7 @@ type Component struct {
 	entitiesUpdated               prometheus.Counter
 	indexingProfileDefault        *prometheus.CounterVec
 	mutationRejections            *prometheus.CounterVec
+	batchMissing                  *prometheus.CounterVec
 	predicateContractRejections   *prometheus.CounterVec
 	entityStateContractRejections *prometheus.CounterVec
 	stubRestamps                  prometheus.Counter
@@ -722,6 +726,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		entitiesUpdated:               getEntitiesUpdatedMetric(deps.MetricsRegistry),
 		indexingProfileDefault:        getIndexingProfileDefaultMetric(deps.MetricsRegistry),
 		mutationRejections:            getMutationRejectionsMetric(deps.MetricsRegistry),
+		batchMissing:                  getBatchMissingMetric(deps.MetricsRegistry),
 		predicateContractRejections:   getPredicateContractRejectionsMetric(deps.MetricsRegistry),
 		entityStateContractRejections: getEntityStateContractRejectionsMetric(deps.MetricsRegistry),
 		stubRestamps:                  getStubRestampsMetric(deps.MetricsRegistry),
@@ -3395,4 +3400,39 @@ func (c *Component) removeSuffixIndex(ctx context.Context, entityID string) {
 			c.suffixCache.Delete(typeInstance) //nolint:errcheck
 		}
 	}
+}
+
+// getBatchMissingMetric returns the process-wide counter for requested entity IDs a
+// batch query could not hydrate, labelled by the closed graph.MissingReason set.
+//
+// It exists because partial hydration used to be invisible: an ID whose KV read came
+// back not-found was dropped from the response, and the symptom surfaced several hops
+// downstream as a missing search result (gh#597). Counting it at the source is what
+// makes "how often, and is it not-found or a fault?" answerable from a dashboard rather
+// than from a bug report.
+//
+// Labelled by reason only. Entity IDs are an unbounded label space and belong on the
+// log line, which carries them bounded.
+func getBatchMissingMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	batchMissingOnce.Do(func() {
+		batchMissingVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "batch_query_missing_total",
+			Help:      "Requested entity IDs a batch query could not hydrate, by reason — partial hydration made visible (gh#597)",
+		}, []string{"reason"})
+		// Pre-initialize the closed label set: an absent series breaks rate() alerting,
+		// so a reason that has never fired must still be scrapeable at zero. `unknown`
+		// is client-synthesized and never emitted here, so only the two handler-emitted
+		// reasons are seeded.
+		for _, reason := range []graph.MissingReason{graph.MissingNotFound, graph.MissingError} {
+			batchMissingVec.WithLabelValues(string(reason))
+		}
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "batch_query_missing_total", batchMissingVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(batchMissingVec)
+		}
+	})
+	return batchMissingVec
 }

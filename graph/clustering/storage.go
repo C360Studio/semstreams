@@ -226,7 +226,7 @@ func (s *NATSCommunityStorage) GetCommunitiesByLevel(ctx context.Context, level 
 }
 
 // GetAllCommunities returns all communities across all levels
-// Used by the LPA detector to archive enhanced communities before Clear()
+// Used by the LPA detector to archive enhanced communities before a rebuild
 func (s *NATSCommunityStorage) GetAllCommunities(ctx context.Context) ([]*Community, error) {
 	// If using test store, return from memory
 	if s.kv == nil && s.testStore != nil {
@@ -346,7 +346,94 @@ func (s *NATSCommunityStorage) DeleteCommunity(ctx context.Context, id string) e
 	return nil
 }
 
+// Prune removes every stored key that does not belong to the supplied partition.
+//
+// The keep set is derived here rather than passed in as raw keys so the KV key
+// format stays private to this file: a caller hands over the communities it just
+// wrote, and this method reconstructs both the community keys ({level}.{id}) and
+// the entity mapping keys (entity.{level}.{entity_id}) they imply.
+//
+// Passing an empty keep set deletes everything, which is the correct end state
+// for a graph that genuinely has no entities.
+//
+// Best-effort with respect to shutdown: context cancellation mid-delete is
+// skipped rather than reported, matching Clear.
+func (s *NATSCommunityStorage) Prune(ctx context.Context, keep []*Community) error {
+	// In-memory test store path (kv == nil).
+	if s.kv == nil {
+		if s.testStore == nil {
+			return nil
+		}
+		keepIDs := make(map[string]struct{}, len(keep))
+		for _, c := range keep {
+			if c != nil {
+				keepIDs[c.ID] = struct{}{}
+			}
+		}
+		for id := range s.testStore {
+			if _, ok := keepIDs[id]; !ok {
+				delete(s.testStore, id)
+			}
+		}
+		return nil
+	}
+
+	// Reconstruct every key the new partition owns.
+	keepKeys := make(map[string]struct{}, len(keep)*2)
+	for _, c := range keep {
+		if c == nil {
+			continue
+		}
+		keepKeys[communityKey(c.Level, c.ID)] = struct{}{}
+		for _, entityID := range c.Members {
+			keepKeys[entityCommunityKey(c.Level, entityID)] = struct{}{}
+		}
+	}
+
+	keys, err := s.kv.Keys(ctx)
+	if err != nil {
+		// Empty bucket returns ErrKeyNotFound or "no keys found" error
+		if stderrors.Is(err, jetstream.ErrKeyNotFound) || strings.Contains(err.Error(), "no keys found") {
+			return nil
+		}
+		// Context cancellation during shutdown is acceptable
+		if stderrors.Is(err, context.Canceled) {
+			return nil
+		}
+		return errs.WrapTransient(err, "NATSCommunityStorage", "Prune", "list keys")
+	}
+
+	var deleteErrs []error
+	for _, key := range keys {
+		if _, ok := keepKeys[key]; ok {
+			continue
+		}
+		if err := s.kv.Delete(ctx, key); err != nil {
+			// Skip context cancellation errors during shutdown
+			if stderrors.Is(err, context.Canceled) {
+				continue
+			}
+			deleteErrs = append(deleteErrs, fmt.Errorf("failed to delete %s: %w", key, err))
+		}
+	}
+
+	if len(deleteErrs) > 0 {
+		return errs.WrapTransient(
+			fmt.Errorf("%d deletion errors: %v", len(deleteErrs), deleteErrs),
+			"NATSCommunityStorage",
+			"Prune",
+			"partial prune failure",
+		)
+	}
+
+	return nil
+}
+
 // Clear removes all communities and entity mappings.
+//
+// This is for teardown and explicit operator-driven reset only. Rebuilds use
+// SaveCommunity + Prune so the index is never transiently empty (see Prune).
+//
 // This is a best-effort operation - context cancellation during cleanup is ignored
 // since partial cleanup is acceptable during shutdown.
 func (s *NATSCommunityStorage) Clear(ctx context.Context) error {

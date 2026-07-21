@@ -231,8 +231,10 @@ func (c *Component) UpdateNameIndex(ctx context.Context, name, entityID, predica
 // sticky flag starts false after a restart). An index does not un-build, so the
 // flag never flips back to false. Any list error — including an empty bucket
 // (ErrNoKeysFound) or a transient backend fault — reports NOT ready, the
-// conservative honest answer (the caller must fall back rather than treat empty
-// as an authoritative not-found). The Keys() check remains valid after
+// conservative honest answer. (It once justified itself as protecting the
+// authoritative-not-found license, which ADR-084 retired; reporting not-ready on a
+// failed read is right regardless — the alternative is claiming a readiness the read
+// never established.) The Keys() check remains valid after
 // composite-key sharding: composite keys still exist and still have len>0.
 func (c *Component) nameIndexIsReady(ctx context.Context) bool {
 	if c.nameIndexReady.Load() {

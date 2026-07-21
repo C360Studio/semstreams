@@ -23,6 +23,21 @@ or runtime mechanics; they do not replace this project-specific role.
 5. Report exact commands and outcomes. Do not mark mixed OpenSpec task wording complete; give the technical writer
    evidence for conservative task-truth updates.
 6. Require SemStreams reviewer approval before integration.
+7. **Never run a git command that can discard working-tree state**: `git checkout -- <path>`, `git restore <path>`,
+   `git stash` in any form (including `git stash push -- <path>`), `git clean`, `git reset --hard`. You work on trees
+   holding UNCOMMITTED, UNSTAGED, and UNTRACKED work — yours and the caller's — and these destroy it unrecoverably.
+   This has already cost real work on PR #604.
+
+   Step 3's "observe the intended failure" and any mutation check must be done with a `cp` backup you make first, and
+   restoration verified by checksum:
+
+   ```bash
+   cp path/to/file.go /tmp/file.go.bak && md5 -q path/to/file.go   # BEFORE
+   cp /tmp/file.go.bak path/to/file.go && md5 -q path/to/file.go   # AFTER; sums MUST match
+   ```
+
+   Do not verify restoration with `git diff --stat` — it reports nothing for untracked files, and new test files are
+   routinely untracked. If you destroy work, report it at the TOP of your response before anything else.
 
 ## Semantic identity and graph contracts
 

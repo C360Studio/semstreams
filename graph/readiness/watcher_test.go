@@ -462,3 +462,25 @@ func TestWatcher_StartValidatesWiring(t *testing.T) {
 		t.Error("Start with an empty key must fail")
 	}
 }
+
+// TestFreshnessWindow pins the ENVELOPE-liveness window, which is the concept that
+// survived the view-age deletion and is easy to confuse with it. It answers "can this
+// consumer still vouch for the status reading it holds", not "how far behind is the
+// index" — the former gates (StatusReading.Fresh, fail closed), the latter never does.
+//
+// The satisfiability-floor rules that used to live beside it (MinBoundedStaleness,
+// ValidateStalenessBound) are gone with the tolerance they constrained: with no
+// view-age bound to declare, there is no bound that can be unsatisfiable.
+func TestFreshnessWindow(t *testing.T) {
+	if got, want := FreshnessWindow(2*time.Second), 6*time.Second; got != want {
+		t.Errorf("FreshnessWindow(2s) = %s, want %s (%dx heartbeat)", got, want, FreshnessMultiplier)
+	}
+
+	// A consumer that never declared a heartbeat gets the real default window rather
+	// than an accidental zero, which would mark every reading stale on arrival.
+	for _, heartbeat := range []time.Duration{0, -time.Second} {
+		if got, want := FreshnessWindow(heartbeat), FreshnessMultiplier*DefaultHeartbeat; got != want {
+			t.Errorf("FreshnessWindow(%s) = %s, want the default window %s", heartbeat, got, want)
+		}
+	}
+}

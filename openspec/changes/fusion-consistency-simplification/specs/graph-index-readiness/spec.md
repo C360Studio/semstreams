@@ -11,9 +11,44 @@ it existed as call-site documentation), and `sticky-bootstrap` is
 graph-index's private bootstrap concern, not a shared policy. The mode
 taxonomy is superseded by the two-question gate below (ADR-084).
 
-**Migration**: consumers call the collapsed gate (health + a declared
-freshness requirement); graph-index keeps bootstrap exactness internally;
-callers that degraded instead of erroring keep doing so at the call site.
+**Migration**: consumers call the collapsed gate (health alone); graph-index
+keeps bootstrap exactness internally; callers that degraded instead of
+erroring keep doing so at the call site.
+
+### Requirement: View-rate readiness interpretation with hard stops
+
+**Reason**: view-rate consumers no longer have a distinct readiness
+interpretation. This requirement existed to give them a tolerance
+(`index_lag_tolerance`, then `max_staleness`) that no other consumer had —
+the last surviving piece of ADR-082's consumer-class split. ADR-085 deletes
+the tolerance outright: the freshness machinery existed only to serve the
+absence license ADR-084 retired, it had exactly one call site, and its
+required satisfiability floor (a bound below the publish heartbeat is
+unsatisfiable — measured at ~52% of ticks at 3s) was the evidence that the
+question it asked cannot be answered at the resolution it was asked. Health
+is now the whole gate for every consumer.
+
+**Migration**: delete `index_lag_tolerance` / `max_staleness` from
+graph-clustering configs; there is no replacement key. Detection runs
+whenever the index is healthy and records the view age it ran at on
+`staleness_at_detection_ms`. A config carrying either key fails startup
+loudly rather than being silently ignored.
+
+### Requirement: Community detection runs under bounded lag
+
+**Reason**: bounded lag no longer exists as a concept. This requirement
+mandated gating each pass "via the canonical `bounded-staleness` mode" with a
+configured tolerance, and its default-preserves-the-exact-gate scenario is the
+behavior ADR-085 deliberately reverses. Replaced by "Community detection runs
+whenever the index is healthy" (ADDED above), which is a rename in substance
+as well as name — the gate condition, the configuration surface, and the
+default behavior all change, so it is recorded as a removal plus an addition
+rather than a modification.
+
+**Migration**: see the ADDED requirement. Operationally: delete the tolerance
+key, expect detection to run on every tick, and read the view age off
+`staleness_at_detection_ms` rather than inferring it from whether a run
+happened.
 
 ## ADDED Requirements
 
@@ -45,63 +80,85 @@ closed); this is an accepted lockstep-upgrade cost.
 - **THEN** `bootstrap_complete` is true and `Ready` is true (the empty-graph
   encoding), so gated reads serve
 
-### Requirement: Consumers gate on health and a declared freshness requirement through the canonical gate
+### Requirement: Consumers gate on health alone through the canonical gate
 
-The canonical readiness gate SHALL evaluate exactly two questions over the
-held status and its consumer-local freshness. *Health*: the status is fresh;
-no hard stop (`degraded`, `reset_required`); and `bootstrap_complete` is
-true. *Freshness*: the consumer's declared requirement — `exact` (proceed
-only when caught up), a `max_staleness` bound, or none. Lag alone SHALL NOT
-defer a consumer that declared no freshness requirement; coverage (`Ready`)
-MAY license a proceed (a caught-up index answers the freshness question with
-zero age) but SHALL NOT be required by the health question. When a bound is
-declared, the gate SHALL compare the view's age including consumer-local
-delivery age (`staleness_ms` plus the reading's age) against the bound, so a
-bound cannot be silently exceeded by the heartbeat window, and SHALL treat a
-not-ready envelope whose staleness is not computable (`staleness_ms` absent)
-as over the bound. Status-unknown SHALL fail closed (`allow_ungated_reads`
-remains the explicit deployment escape, applying to exactly the unknown
-branch). The gate SHALL live in one canonical helper beside the envelope
-type; per-consumer hand-rolled gate logic is prohibited. The typed defer
-reasons remain closed: `hard_stop`, `over_staleness`, `status_unknown`, and
-`bootstrap_incomplete` (renamed from `empty`, which it now precisely means).
+The canonical readiness gate SHALL evaluate exactly one question — is this
+index sound to read from — over four conditions, none of them consumer-
+specific and none of them optional: the status reading is fresh; its `State`
+is recognized (an allow-list over the known states, never a deny-list for the
+hard stops); there is no hard stop (`degraded`, `reset_required`); and
+`bootstrap_complete` is true. Anything else SHALL proceed. The gate SHALL
+accept no freshness, staleness, or tolerance parameter, and coverage (`Ready`)
+SHALL NOT defer any consumer: view age is REPORTED on results, never used as
+admission control (ADR-085). Status-unknown SHALL fail closed
+(`allow_ungated_reads` remains the explicit deployment escape, applying to
+exactly the unknown branch). The gate SHALL live in one canonical helper
+beside the envelope type; per-consumer hand-rolled gate logic is prohibited.
+The typed defer reasons remain closed and number four — `hard_stop`,
+`status_unknown`, `unrecognized_state`, and `bootstrap_incomplete` — each
+naming a distinct operator action, and none answerable by tuning a value.
 
-#### Scenario: Ordinary catch-up lag does not defer an unbounded consumer
+#### Scenario: Ordinary catch-up lag never defers any consumer
 
 - **GIVEN** a healthy, built index catching up under continuous write
   (`Lag > 0`, `bootstrap_complete` true, no hard stop)
-- **WHEN** a consumer with no declared freshness requirement evaluates the gate
+- **WHEN** any consumer evaluates the gate
 - **THEN** it proceeds, and the envelope reports the current `staleness_ms`
+  for the consumer to record on its own output
 
-#### Scenario: A caught-up index passes every freshness requirement
+#### Scenario: An arbitrarily stale but healthy view still serves
 
-- **GIVEN** a healthy, caught-up index (`Ready` true, `staleness_ms` reported
-  as 0-not-computed per the presence encoding)
-- **WHEN** a consumer with a declared `max_staleness` bound evaluates the gate
-- **THEN** it proceeds — caught-up answers the freshness question with zero
-  age and is never deferred as unknown-staleness
+- **GIVEN** a healthy, built index whose view age exceeds any value an
+  operator would previously have configured as a tolerance
+- **WHEN** a view-rate consumer evaluates the gate
+- **THEN** it proceeds — no age defers a healthy index, and the age is
+  recorded on the run rather than used to withhold it
 
 #### Scenario: Hard stops, unknown status, and incomplete bootstrap always defer
 
 - **GIVEN** `State ∈ {degraded, reset_required}`, or a stale/absent status
   feed, or `bootstrap_complete` false
-- **WHEN** the gate is evaluated with any freshness requirement
+- **WHEN** the gate is evaluated
 - **THEN** it defers (fail closed) with the typed reason
 
-#### Scenario: The exact freshness requirement preserves the strict default
+#### Scenario: An unrecognized state fails closed rather than reading as healthy
 
-- **GIVEN** a view-rate consumer whose `max_staleness` is unset or zero (the
-  documented "require exact index catch-up" operator contract)
-- **WHEN** the index is healthy but lagging
-- **THEN** the gate defers with reason `over_staleness` — serving under lag
-  remains an explicit opt-in for view-rate consumers
+- **GIVEN** an envelope whose `State` is blank or outside the known set
+  (version skew — the producer is talking, and saying something this consumer
+  does not understand)
+- **WHEN** the gate is evaluated
+- **THEN** it defers with reason `unrecognized_state`, and SHALL NOT proceed
+  on the grounds that the state is merely "not degraded"
 
-#### Scenario: A declared staleness bound is the only freshness dial
+### Requirement: Community detection runs whenever the index is healthy
 
-- **GIVEN** a view-rate consumer with `max_staleness` configured
-- **WHEN** the view's age (staleness plus delivery age) exceeds the bound
-- **THEN** the gate defers with reason `over_staleness`
-- **AND** no revision-count tolerance exists anywhere on the gate surface
+Community detection SHALL gate each pass through the canonical gate on health
+alone, SHALL defer only on hard stops, incomplete bootstrap, unrecognized
+state, and unknown status, and SHALL surface every defer through the
+structured defer log and `defer_total{reason}` counter. It SHALL expose no
+staleness, lag, or tolerance configuration. Every verified run SHALL record
+the view age it ran at (`staleness_at_detection_ms`), so an operator can
+correlate community churn with view age — the age is stamped on the output,
+never used to withhold one (ADR-085). A configuration carrying a removed
+tolerance key (`index_lag_tolerance`, `max_staleness`) SHALL fail startup
+loudly naming what happened, and SHALL NOT be silently ignored.
+
+#### Scenario: Continuous write no longer defers detection
+
+- **GIVEN** a deployment under continuous write where `Lag > 0` essentially
+  always and the index is otherwise healthy
+- **WHEN** the detection tick fires
+- **THEN** detection runs, and `staleness_at_detection_ms` records the view
+  age — the gh#590 symptom is unreachable because no tolerance exists to
+  misconfigure
+
+#### Scenario: A carried-forward tolerance key fails startup
+
+- **GIVEN** a graph-clustering config still carrying `index_lag_tolerance` or
+  `max_staleness` from a prior release
+- **WHEN** the component starts
+- **THEN** startup fails with an error naming the removed key and stating
+  that readiness now gates on health alone
 
 ## MODIFIED Requirements
 
@@ -110,9 +167,10 @@ reasons remain closed: `hard_stop`, `over_staleness`, `status_unknown`, and
 The readiness envelope's `Ready` bool SHALL be true only when the index has
 applied every committed ENTITY_STATES revision at compute time (`target > 0 &&
 indexed >= target`, or the authoritatively-empty override) AND no required
-index write is unresolved. `Ready` is observability and a caught-up fast
-path: it MAY license a proceed (the freshness question answered with zero
-age), but no read path SHALL defer on `!Ready` alone — with one carve-out:
+index write is unresolved. `Ready` is observability only, and is INERT at the
+gate: it neither licenses a proceed nor withholds one, because coverage
+answers no question the health gate asks. No read path SHALL defer on
+`!Ready` alone — with one carve-out:
 graph-index's private pre-bootstrap exactness gate, which is the
 `bootstrap_complete` condition evaluated in-process. No consumer SHALL treat
 an empty result as an authoritative not-found under any envelope state —
@@ -137,52 +195,36 @@ by a test.
 - **WHEN** a consumer interprets the result
 - **THEN** no correctness argument may treat the emptiness as proof of absence
 
-### Requirement: View-rate readiness interpretation with hard stops
+### Requirement: Clustering under lag is observable
 
-A view-rate consumer SHALL gate through the canonical gate with a declared
-`max_staleness` (a view-rate consumer re-derives its whole result each pass,
-e.g. community detection). Unset or zero `max_staleness` SHALL keep meaning
-"require exact index catch-up" — the strictest reading, preserving the
-shipped operator contract; a duration relaxes only the freshness question.
-Hard stops and incomplete bootstrap defer under every value. The unit is
-wall time; no revision-count tolerance exists.
+When community detection runs with a stale view, the staleness it ran at SHALL
+be operator-visible (metric + info-level or stage/output surface), and every
+**defer** SHALL be attributable: the defer log line carries structured fields
+(`status_known`, `status_age`, `state`, `lag`, `staleness_ms`, `reason`, and
+the watch/bucket error when present) and a `defer_total{reason}` counter
+distinguishes the four surviving reasons — `hard_stop`, `status_unknown`,
+`unrecognized_state`, and `bootstrap_incomplete`. Clustering on a stale view
+can never become silent staleness, and a transport failure can never be
+mistaken for index state from the logs (the gh#590 investigation cost three
+comment cycles because the defer line was a bare constant).
 
-#### Scenario: Zero tolerance requires exact catch-up
+#### Scenario: A stale partition is visible
 
-- **GIVEN** `max_staleness` unset or zero and a healthy index with `Lag > 0`
-- **WHEN** the view-rate consumer evaluates the gate
-- **THEN** it defers until the index is caught up — bit-compatible with the
-  pre-ADR-084 exact default
+- **GIVEN** detection runs on a healthy index at `staleness_ms = 1500`
+- **WHEN** an operator inspects metrics / logs / status after the run
+- **THEN** they can determine the last partition ran at ~1.5s staleness, not
+  only that it "ran", and the signal is not confined to a debug log
 
-#### Scenario: A bounded view runs under bounded lag
+#### Scenario: Defer reasons are countable and grep-able
 
-- **GIVEN** `max_staleness: "3s"` and a healthy, built index whose view age
-  is within the bound
-- **WHEN** the view-rate consumer evaluates the gate
-- **THEN** it proceeds, with the age observable in the defer/proceed telemetry
-
-### Requirement: Community detection runs under bounded lag
-
-Community detection SHALL gate each pass through the canonical gate with its
-configured `max_staleness` (default unset = exact catch-up), SHALL defer on
-hard stops, incomplete bootstrap, and unknown status under every
-configuration, and SHALL surface every defer through the structured defer log
-and `defer_total{reason}` counter. Detection under a relaxed bound SHALL
-remain observable (staleness at detection time exported), so an operator can
-correlate community churn with view age.
-
-#### Scenario: Default preserves the exact gate
-
-- **GIVEN** a deployment that never set `max_staleness`
-- **WHEN** continuous write keeps `Lag > 0`
-- **THEN** detection defers exactly as the pre-ADR-084 default did
-
-#### Scenario: A bounded deployment detects under lag
-
-- **GIVEN** `max_staleness: "3s"` under continuous write with view age within
-  the bound
-- **WHEN** the detection tick fires
-- **THEN** detection runs and `staleness_at_detection` records the age
+- **GIVEN** a deployment where detection is deferring
+- **WHEN** an operator reads `defer_total` by reason and any single defer log
+  line
+- **THEN** they can distinguish a broken index (`hard_stop`), a dead status
+  feed (`status_unknown`), an uninterpretable envelope
+  (`unrecognized_state`), and a producer still building
+  (`bootstrap_incomplete`) without correlating multiple log lines
+- **AND** no `over_staleness` or `staleness_unknown` reason exists to count
 
 ### Requirement: Read consumers retry the readiness transient
 
@@ -218,8 +260,8 @@ the response to plain lag.
 ### Requirement: Fusion degrades consistently on the readiness transient
 
 The fusion engine SHALL gate `Fuse` through the canonical health gate
-(adopting it — the current top gate is a hand-rolled `!Ready` check), with no
-declared freshness requirement: it SHALL proceed under ordinary catch-up lag,
+(adopting it — the current top gate is a hand-rolled `!Ready` check): it
+SHALL proceed under ordinary catch-up lag,
 reporting `staleness_ms` on the envelope, and SHALL return the empty-honest
 envelope (fail closed, carrying the last-known `IndexStatus`) only on health
 defers — status-unknown, hard stops, or incomplete bootstrap. A status

@@ -66,26 +66,55 @@ func (c *Component) handleEmbeddingStatusNATS(ctx context.Context, _ []byte) ([]
 // from the ENTITY_STATES stream LastSeq at query time, and the completions-based stuck
 // detector for the degraded state.
 func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatusResponse {
+	// TWO distinct facts, deliberately not merged (the merge deadlocks — see below):
+	//
+	//   snapshotValidated — the WatchAll sentinel fired: the initial entries were
+	//     DELIVERED and validated. It gates the early return that keeps queries and
+	//     status honest while the first snapshot is still arriving.
+	//   buildApplied — the public ADR-084 D2 bit: that snapshot reached a TERMINAL
+	//     embedding outcome up to the enumeration-time target. Delivery is not
+	//     application, and embedding is asynchronous, so publishing the sentinel as
+	//     bootstrap_complete would let an unbounded health consumer serve a partially
+	//     built cold index — the failure graph-index had, from the other end.
+	//
+	// Gating the early return on buildApplied instead would be a DEADLOCK: the latch
+	// below is only reachable past that return, so the bit could never flip and the
+	// component would report building forever. TestIntegration_EmbeddingReadiness_
+	// DeadlockAvoidance caught that regression — incidentally, via its poll for Ready
+	// timing out, since it predates this split and asserts the ADR-066 watermark
+	// property rather than this guard. Treat it as a tripwire, not a specification.
+	//
+	// buildApplied is stamped on EVERY envelope below, hard stops included, so a
+	// consumer can tell "still building" from "built, then broke".
+	snapshotValidated := c.bootstrapComplete.Load()
+	bootstrapped := c.buildApplied.Load()
 	if c.resetState.Load() != nil {
 		return graph.IndexStatusResponse{
 			Ready: false, State: graph.IndexStateResetRequired,
 			Code: graph.ErrorCodeGraphStateResetRequired, Reason: c.graphStateResetReason(),
+			BootstrapComplete: bootstrapped,
 		}
 	}
 	if c.watchUnavailable.Load() {
 		return graph.IndexStatusResponse{
 			Ready: false, State: graph.IndexStateDegraded,
 			Code: graph.ErrorCodeIndexNotReady, Reason: "entity_state_watcher_unavailable",
+			BootstrapComplete: bootstrapped,
 		}
 	}
-	if c.bootstrapStarted.Load() && !c.bootstrapComplete.Load() {
-		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
+	// Snapshot-validation gate, read from the snapshot above rather than re-Loading:
+	// a second read could see the sentinel fire between the two and fall through to
+	// stamp a stale value onto an envelope ComputeIndexStatus may mark Ready.
+	if c.bootstrapStarted.Load() && !snapshotValidated {
+		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding,
+			BootstrapComplete: false}
 	}
 	// A status call before Start wired the watcher (early boot / unit tests) reports
 	// building rather than panicking. Unreachable in production: setupQueryHandlers
 	// runs after both watermark and entityStatesBucket are set in Start.
 	if c.watermark == nil || c.entityStatesBucket == nil {
-		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding}
+		return graph.IndexStatusResponse{Ready: false, State: graph.IndexStateBuilding,
+			BootstrapComplete: bootstrapped}
 	}
 
 	indexed, indexedAt := c.watermark.IndexedAt()
@@ -95,14 +124,22 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		c.logger.Warn("embedding status: failed to read ENTITY_STATES LastSeq target",
 			slog.Any("error", err))
 		return graph.IndexStatusResponse{
-			Ready:           false,
-			State:           graph.IndexStateDegraded,
-			IndexedRevision: indexed,
+			Ready:             false,
+			State:             graph.IndexStateDegraded,
+			IndexedRevision:   indexed,
+			BootstrapComplete: bootstrapped,
 		}
 	}
 
+	// Latch the applied build here, where the watermark floor is in hand. Unlike
+	// graph-index's latchBootstrap there is deliberately NO Ready term: this producer
+	// has the enumeration-time target in hand on every call, so the fixed comparison is
+	// always available and a live-target shortcut would only add a way to latch early.
+	// The authoritatively-empty case latches via bootstrapTarget == 0.
+	c.latchBuildApplied(indexed)
+
 	stuck, lastSynced := c.trackEmbeddingProgress(indexed, target)
-	return graph.ComputeIndexStatus(graph.IndexStatusInputs{
+	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
 		Indexed:    indexed,
 		Target:     target,
 		Stuck:      stuck,
@@ -111,6 +148,23 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		// embedding outcome — the age-of-view input to staleness_ms (ADR-083).
 		IndexedAt: indexedAt,
 	})
+	// Re-read: latchBuildApplied above may have flipped it on this very call, and an
+	// envelope that reports Ready while denying its build finished is the one shape
+	// the collapsed gate cannot tolerate (health is answered before coverage).
+	status.BootstrapComplete = c.buildApplied.Load()
+	return status
+}
+
+// latchBuildApplied flips the public bootstrap bit once the embedding pipeline has
+// carried the initial snapshot to a terminal outcome — the applied floor reaching the
+// enumeration-time target. Latching only; a later hard stop is carried by State.
+func (c *Component) latchBuildApplied(indexed uint64) {
+	if c.buildApplied.Load() {
+		return
+	}
+	if c.bootstrapComplete.Load() && indexed >= c.bootstrapTarget.Load() {
+		c.buildApplied.Store(true)
+	}
 }
 
 // trackEmbeddingProgress is the COMPLETIONS-based stuck detector (ADR-066 §3). Unlike

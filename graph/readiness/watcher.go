@@ -60,6 +60,13 @@ const (
 	// CONSTANT, not config (owner decision): 3 tolerates a lost write and a slow
 	// delivery without letting a dead feed masquerade as live, and one fewer knob
 	// is one fewer way to configure a fail-open.
+	//
+	// "Freshness" here is about the ENVELOPE, not the view it describes — can this
+	// consumer still vouch for the status reading it is holding, or has the producer
+	// gone quiet? That is a transport-liveness question, and it is what
+	// StatusReading.Fresh answers and what the health gate fails closed on. It is NOT
+	// the retired view-age concept (how far behind ENTITY_STATES the index itself is);
+	// view age is reported on IndexStatusResponse.StalenessMs and gates nothing.
 	FreshnessMultiplier = 3
 	// defaultRebindDelay is how long the watcher waits before re-opening the bucket
 	// or watch after a failure. Well under the freshness window, so a transient

@@ -157,9 +157,15 @@ type View[T any] struct {
 	pending    map[string]pendingOp[T]
 	seq        uint64
 	appliedRev uint64
-	readyCh    chan struct{}
-	subs       map[uint64]*Subscription[T]
-	nextSubID  uint64
+	// appliedAt is appliedRev's server write time (entry.Created()). The two
+	// advance together — same places, same condition — so the pair Applied
+	// returns always names ONE write. Neither has any reset of its own: both
+	// survive bootstrap gating, fail-closed, Restart, and Stop identically
+	// (see Applied).
+	appliedAt time.Time
+	readyCh   chan struct{}
+	subs      map[uint64]*Subscription[T]
+	nextSubID uint64
 }
 
 // New constructs a View over source with the injected validating decode.
@@ -349,10 +355,56 @@ func (v *View[T]) CaughtUp() bool {
 // AppliedRevision returns the applied-revision watermark: the highest KV
 // revision the view has applied. WatchAll delivery is ordered, so the
 // watermark reaching R proves every delivered revision <= R was applied.
+//
+// A caller that also wants the watermark's write time MUST use Applied
+// instead of pairing this with a second read — the two would come from
+// different critical sections and could name different writes.
 func (v *View[T]) AppliedRevision() uint64 {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.appliedRev
+}
+
+// Applied returns the applied-revision watermark together with the KV SERVER
+// WRITE TIME (entry.Created()) of the newest revision the view has applied —
+// the "this view reflects the bucket as of T" pair. It mirrors
+// pkg/revlag.Watermark.IndexedAt, the pair graph-index projects into the
+// ADR-083 staleness_ms field.
+//
+// Both values are read in ONE critical section, so the revision and the
+// timestamp always name the same write; reading them through two accessors
+// could observe a torn pair.
+//
+// REPORTING ONLY — no graphview API gates on the timestamp, and none may grow
+// one. This package's gates stay exactly the two it has: ErrNotReady until the
+// initial replay completes (still building) and fail-closed on watcher loss
+// (broken). Age is neither, so a healthy view that is merely behind serves
+// and the CONSUMER stamps currency on its own output, the way community
+// detection reports staleness_at_detection_ms alongside its answer.
+//
+// It is a FLOOR on currency, not an oracle. Only a DELIVERED write can age
+// it, so a feed that stalls entirely upstream leaves the pair frozen and
+// looks arbitrarily current by this measure alone. Detecting a total stall is
+// the watcher-loss path's job, not this value's;
+// graph.IndexStatusResponse.StalenessMs carries the same caveat for the same
+// reason.
+//
+// appliedAt is the ZERO time until something has been applied, and stays zero
+// rather than being fabricated as time.Now(). A caller computing an age MUST
+// check IsZero and treat it as "currency not computable" — the contract
+// graph.IndexStatusInputs.IndexedAt uses, where the projection deliberately
+// declines to make an uncomputable view look fresh. It is zero for the same
+// reason when the newest applied write carried no server timestamp (real KV
+// entries always do; fakes and synthetic replays need not).
+//
+// Subtracting it from a local time.Now() crosses a NATS server clock against
+// a local one and is off by the skew between them. Accepted, the same trade
+// as ADR-083 D3: the alternative — measuring currency in revisions — is wrong
+// by multiples under a coalescing change alone.
+func (v *View[T]) Applied() (revision uint64, appliedAt time.Time) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.appliedRev, v.appliedAt
 }
 
 // Poisoned returns a copy of the current per-key poison records (G6). It is
@@ -428,10 +480,11 @@ func (v *View[T]) SnapshotAndSubscribe(ctx context.Context) (Snapshot[T], *Subsc
 		return Snapshot[T]{}, nil, err
 	}
 	snap := Snapshot[T]{
-		Entries:  make(map[string]Entry[T], len(v.entries)),
-		Poisoned: make(map[string]*PoisonError, len(v.poisoned)),
-		Sequence: v.seq,
-		Revision: v.appliedRev,
+		Entries:   make(map[string]Entry[T], len(v.entries)),
+		Poisoned:  make(map[string]*PoisonError, len(v.poisoned)),
+		Sequence:  v.seq,
+		Revision:  v.appliedRev,
+		AppliedAt: v.appliedAt,
 	}
 	for k, e := range v.entries {
 		snap.Entries[k] = Entry[T]{Value: e.value, Revision: e.revision}
@@ -590,6 +643,7 @@ func (v *View[T]) apply(d Delta[T], p *PoisonError, seen map[string]struct{}) {
 	v.seq++
 	if d.Revision > v.appliedRev {
 		v.appliedRev = d.Revision
+		v.appliedAt = d.Created
 	}
 	switch d.Op {
 	case DeltaUpsert:
@@ -628,6 +682,7 @@ func (v *View[T]) applySkip(key string, rev uint64, created time.Time) {
 	v.seq++
 	if rev > v.appliedRev {
 		v.appliedRev = rev
+		v.appliedAt = created
 	}
 	_, hadEntry := v.entries[key]
 	_, hadPoison := v.poisoned[key]

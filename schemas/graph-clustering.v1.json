@@ -309,11 +309,6 @@
       "description": "Maximum iterations for LPA algorithm",
       "category": "advanced"
     },
-    "max_staleness": {
-      "type": "string",
-      "description": "Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless)",
-      "category": "advanced"
-    },
     "min_community_size": {
       "type": "integer",
       "description": "Minimum number of entities to form a community",

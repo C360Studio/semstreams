@@ -7,6 +7,21 @@ version: "3"
 # in the keys you need.
 dotenv: ['.env']
 
+# Namespace every docker-compose stack this repo drives.
+#
+# Without this, Compose derives the project name from the compose file's PARENT
+# DIRECTORY — which is `docker/compose/` here and in the sibling sem* repos, so they
+# all resolve to the project name `compose` and Docker treats them as ONE project.
+# The consequences are silent and cross-repo: `task e2e:*` teardown (`docker compose
+# -f docker/compose/tiered.yml down -v`) removes a sister repo's containers, and a
+# sister stack coming up mid-run can churn ours out from under a running scenario —
+# observed as an e2e step failing with "not connected to NATS" partway through.
+#
+# Container names are unaffected (the compose files set container_name explicitly);
+# this only prefixes networks and volumes, which nothing references by literal name.
+env:
+  COMPOSE_PROJECT_NAME: semstreams
+
 includes:
   build:
     taskfile: ./taskfiles/build.yml

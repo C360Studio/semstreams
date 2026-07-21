@@ -167,6 +167,21 @@ func (w *Watermark) Indexed() uint64 {
 	return w.indexedLocked()
 }
 
+// Observed returns the highest revision ever DELIVERED, regardless of whether it has
+// been applied. It is the enumeration-time target a bootstrap latch needs: when the
+// initial-sync sentinel fires, every pre-existing entity has been delivered, so their
+// revisions are all <= this value, and the initial build is complete once Indexed()
+// reaches it.
+//
+// Distinct from Indexed(), which is the low-water floor of what is APPLIED. Comparing
+// against a freshly-read stream LastSeq instead would make a bootstrap latch unreachable
+// under continuous write, because that target advances as fast as the index does.
+func (w *Watermark) Observed() uint64 {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.observedHigh
+}
+
 // IndexedAt returns the Indexed() floor together with the COMMIT time of the newest
 // observed revision that floor covers — the "the view reflects the world as of T"
 // input to the ADR-083 staleness_ms field.

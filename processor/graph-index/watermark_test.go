@@ -1,6 +1,7 @@
 package graphindex
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -59,6 +60,13 @@ func TestIndexReadiness(t *testing.T) {
 // unconditional projection is the blocking fix — a known-incomplete index with a
 // small lag must read degraded, not building, or a bounded-lag consumer would run
 // clustering on partial topology.
+//
+// Propagation latency is part of the contract, not a defect (ADR-084 D7): the override
+// lands in-process immediately, but an ENVELOPE consumer learns about it only on the
+// next GRAPH_STATUS heartbeat, so a hard stop binds remote gates up to one heartbeat
+// late. In-process gates (the reverse-index responder's own failedCount check) are
+// stronger and are checked per query. Both are deliberate; the accepted window is
+// recorded here so a future reader does not "fix" it by shortening the heartbeat.
 func TestApplyKnownIncompleteOverrides(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -144,4 +152,176 @@ func TestTrackReadinessProgress_StuckDetector(t *testing.T) {
 	if stuck, _ := c.trackReadinessProgress(100, 100); stuck {
 		t.Fatal("caught-up index must never be degraded")
 	}
+}
+
+// TestLatchBootstrap pins the ADR-084 D2 latch: it flips on the first caught-up
+// envelope, never clears, and stamps every envelope thereafter. The predicate is
+// deliberately the same Ready the reverse-index query gate reduces to, so the wire bit
+// and that gate can never disagree.
+func TestLatchBootstrap(t *testing.T) {
+	t.Run("building does not latch", func(t *testing.T) {
+		c := &Component{}
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 40, Target: 100}))
+		if got.BootstrapComplete {
+			t.Error("an index still catching up reported bootstrap_complete")
+		}
+	})
+
+	t.Run("caught up latches", func(t *testing.T) {
+		c := &Component{}
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 100, Target: 100}))
+		if !got.BootstrapComplete || !c.indexBootstrapped.Load() {
+			t.Errorf("caught-up envelope did not latch: wire=%v latch=%v",
+				got.BootstrapComplete, c.indexBootstrapped.Load())
+		}
+	})
+
+	t.Run("authoritatively empty graph latches", func(t *testing.T) {
+		// The 0/0 outcome is a COMPLETED build, not a missing one (gh#474 Codex #5).
+		// It reaches the latch as Ready only through the empty-graph override, so this
+		// row is what keeps a fresh empty deployment from fail-closing forever.
+		c := &Component{}
+		base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 0, Target: 0})
+		got := c.latchBootstrap(applyKnownIncompleteOverrides(base, 0, true, 0))
+		if !got.BootstrapComplete {
+			t.Error("authoritatively empty graph never reports bootstrap_complete; health gates would defer forever")
+		}
+	})
+
+	t.Run("latch survives a later hard stop", func(t *testing.T) {
+		// "Built, then broke" must stay distinguishable from "never built": State
+		// carries the hard stop, the latch carries the history. Clearing it here would
+		// conflate two states that want different operator responses.
+		c := &Component{}
+		c.latchBootstrap(graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 100, Target: 100}))
+		base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 100, Target: 100})
+		degraded := c.latchBootstrap(applyKnownIncompleteOverrides(base, 100, true, 1))
+		if degraded.State != graph.IndexStateDegraded {
+			t.Fatalf("precondition: State = %q, want degraded", degraded.State)
+		}
+		if !degraded.BootstrapComplete {
+			t.Error("a degraded-after-bootstrap index reported bootstrap_complete=false")
+		}
+	})
+}
+
+// TestComputeIndexStatus_ReadyImpliesBootstrapComplete pins the producer invariant the
+// collapsed gate depends on. The gate asks health BEFORE coverage, so an envelope that
+// claims Ready while reporting an unfinished build is not merely odd — it defers
+// forever, and it does so with a reason (bootstrap_incomplete) that sends an operator
+// looking for a cutover that already finished.
+//
+// Every return path of computeIndexStatus is exercised, including the caged early-boot
+// fallback, which is exactly where the invariant broke once: it reported the retired
+// sticky NAME_INDEX Ready while stamping the process latch, which was still false.
+func TestComputeIndexStatus_ReadyImpliesBootstrapComplete(t *testing.T) {
+	assertInvariant := func(t *testing.T, name string, status graph.IndexStatusResponse) {
+		t.Helper()
+		if status.Ready && !status.BootstrapComplete {
+			t.Errorf("%s: Ready with BootstrapComplete=false — the health gate would defer on a caught-up index", name)
+		}
+	}
+
+	t.Run("caged early-boot fallback", func(t *testing.T) {
+		// watermark wired but no entity bucket: the fallback path. Whatever the legacy
+		// signal answers, the two bits must agree.
+		c := createTestComponentWithMockKV(t)
+		c.entityStatesBucket = nil
+		assertInvariant(t, "fallback", c.computeIndexStatus(context.Background()))
+	})
+
+	t.Run("projected envelopes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name                     string
+			indexed, target          uint64
+			enumComplete, hasFailure bool
+		}{
+			{name: "caught up", indexed: 100, target: 100},
+			{name: "building", indexed: 40, target: 100},
+			{name: "empty pre-enumeration", indexed: 0, target: 0},
+			{name: "empty after enumeration", indexed: 0, target: 0, enumComplete: true},
+			{name: "caught up with failures", indexed: 100, target: 100, hasFailure: true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				c := &Component{}
+				var failed int64
+				if tc.hasFailure {
+					failed = 1
+				}
+				base := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: tc.indexed, Target: tc.target})
+				status := c.latchBootstrap(applyKnownIncompleteOverrides(base, tc.target, tc.enumComplete, failed))
+				assertInvariant(t, tc.name, status)
+			})
+		}
+	})
+}
+
+// TestLatchBootstrap_ContinuousWrite is the regression for the review's blocking
+// finding. The latch originally flipped only on Ready — caught up to the LIVE stream
+// target — which under continuous write is a measure-zero instant (gh#590 F1). On a
+// firehose deployment the bit would therefore read false forever, and because every
+// ADR-084 health gate defers on it, fusion and the graph/query client would withhold
+// permanently. That is the exact failure this change exists to end, reappearing with a
+// different defer reason.
+//
+// The latch is against the ENUMERATION-TIME target instead, which is fixed and
+// therefore reachable no matter how fast writes arrive.
+func TestLatchBootstrap_ContinuousWrite(t *testing.T) {
+	// Enumeration ended at revision 500. Writes never stop, so the live target runs
+	// ahead of the applied floor on every single tick — Ready is never true.
+	newComponent := func() *Component {
+		c := &Component{}
+		c.bootstrapTarget.Store(500)
+		c.initialEnumerationComplete.Store(true)
+		return c
+	}
+
+	t.Run("does not latch before the initial build is applied", func(t *testing.T) {
+		c := newComponent()
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 499, Target: 900}))
+		if got.BootstrapComplete {
+			t.Error("latched before the enumeration-time target was applied")
+		}
+	})
+
+	t.Run("latches once the enumeration-time target is applied, still under write", func(t *testing.T) {
+		c := newComponent()
+		// Applied floor reached 500; the live target is far ahead and Ready is false.
+		status := graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 500, Target: 900})
+		if status.Ready {
+			t.Fatal("fixture no longer models continuous write; Ready must be false here")
+		}
+		got := c.latchBootstrap(status)
+		if !got.BootstrapComplete {
+			t.Error("a built index under continuous write never reports bootstrap_complete; " +
+				"every remote health gate would defer forever")
+		}
+	})
+
+	t.Run("stays latched as the live target keeps advancing", func(t *testing.T) {
+		c := newComponent()
+		c.latchBootstrap(graph.ComputeIndexStatus(graph.IndexStatusInputs{Indexed: 500, Target: 900}))
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 600, Target: 5000}))
+		if !got.BootstrapComplete {
+			t.Error("the latch cleared while writes continued")
+		}
+	})
+
+	t.Run("enumeration flag without an applied floor does not latch", func(t *testing.T) {
+		// Guards the ordering contract: bootstrapTarget is stored BEFORE the flag, so a
+		// reader seeing the flag sees a real target. A zero target here would latch on
+		// the first tick and hand out a bootstrap claim the build never earned.
+		c := &Component{}
+		c.bootstrapTarget.Store(500)
+		c.initialEnumerationComplete.Store(true)
+		got := c.latchBootstrap(graph.ComputeIndexStatus(
+			graph.IndexStatusInputs{Indexed: 0, Target: 900}))
+		if got.BootstrapComplete {
+			t.Error("latched with nothing applied")
+		}
+	})
 }

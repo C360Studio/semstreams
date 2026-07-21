@@ -38,12 +38,30 @@ failed to hydrate**.
   distinction at the handler), `fusionnats.Entities` reconciles the response
   against the requested set, and the fusion `Response` carries what failed to
   hydrate so a dropped seed is visible, never inferable-as-absent.
-- The four gate modes collapse: `exact` and `degrade-honest` are one evaluation
-  (the caller's reaction was never the gate's business), `sticky-bootstrap`
-  moves into graph-index as its private bootstrap concern, `bounded-staleness`
-  becomes the single freshness parameter. The public gate surface shrinks to
-  health + a declared freshness requirement; view-rate consumers keep
-  unset/0 `max_staleness` = exact catch-up (no silent default inversion).
+- The four gate modes collapse, and then the collapse goes one step further
+  than first scoped. `exact` and `degrade-honest` were one evaluation (the
+  caller's reaction was never the gate's business) and `sticky-bootstrap` moves
+  into graph-index as its private bootstrap concern; `bounded-staleness` was
+  initially reparameterized as a declared freshness requirement, and is now
+  **deleted outright** (ADR-085, owner-agreed 2026-07-21). The gate takes a
+  status reading and nothing else.
+- **BREAKING** — `max_staleness` and the `Freshness` type are removed with no
+  replacement, along with the `over_staleness` and `staleness_unknown` defer
+  reasons. Freshness gating only ever existed to serve the absence license this
+  change retires; with the license gone it had exactly one call site, and that
+  consumer (community detection) is the safest possible reader of a stale view.
+  The knob's own satisfiability floor — a bound at or below the publish
+  heartbeat is unsatisfiable, measured at ~52% of ticks at 3s — was the tell.
+  Community detection now runs whenever the index is healthy and records the
+  view age it ran at. **`max_staleness` never shipped in a tag**, so sister
+  repos migrate `index_lag_tolerance` → nothing and never meet the intermediate
+  field.
+- `pkg/graphview` gains the reporting half of the same principle: it already
+  gated correctly (bootstrap and fail-closed only, never age) but exposed no
+  time dimension at all. It now reports the applied revision's KV write time as
+  an atomic pair, carried on snapshots. Gating there is untouched. This retires
+  the parked ADR-082 G5 follow-up as a reporting task rather than the gating
+  task it was originally framed as.
 - The envelope gains `bootstrap_complete` (additive): the gh#474
   cutover/bootstrap window becomes wire-observable, which is what makes
   health-only gating safe for direct-index clients and keeps the
@@ -52,8 +70,11 @@ failed to hydrate**.
   carried through instead of discarded, exposed as an opt-in per-node debug
   field, so a ranking surprise is diagnosable without bypassing the product
   surface over raw NATS.
-- New ADR (084) records the decision: readiness licenses health, never absence;
-  the ADR-066 "authoritative not-found" license is retired.
+- Two ADRs record the decisions. **ADR-084**: readiness licenses health, never
+  absence; the ADR-066 "authoritative not-found" license is retired.
+  **ADR-085**: gate on health, report freshness — the freshness parameter
+  ADR-084 kept is deleted, because retiring the license removed its only
+  justification while leaving its machinery standing.
 
 ## Capabilities
 
@@ -67,9 +88,13 @@ None.
   reporting on the Response, opt-in score observability, degrade taxonomy
   shrinks with the gate-mode collapse.
 - `graph-index-readiness`: the canonical-gate requirement collapses from four
-  declared modes to health + optional staleness bound; the "empty =
-  authoritative not-found" license language is removed; the read-path
-  transient's trigger narrows to health failures.
+  declared modes to health alone; the "empty = authoritative not-found" license
+  language is removed; the view-rate consumer's distinct readiness
+  interpretation is removed with its tolerance; the read-path transient's
+  trigger narrows to health failures.
+- `graph-view-subscription`: adds a currency-reporting surface (applied
+  revision paired with its KV write time, carried on snapshots) that no API
+  gates on. Existing gates unchanged.
 - `graph-query`: batch entity reads must report unreturned IDs (not-found vs
   fault) instead of silently omitting them; reverse-index read gating narrows
   to health.

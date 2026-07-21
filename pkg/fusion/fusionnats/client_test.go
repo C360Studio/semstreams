@@ -155,6 +155,14 @@ func publishing(t *testing.T, st graph.IndexStatusResponse) *fakeRequester {
 	return &fakeRequester{statusValue: mustJSON(t, st)}
 }
 
+// publishingRaw is publishing for a wire value that no current producer can emit —
+// notably an envelope from a producer predating a field, which a typed literal cannot
+// express because the Go struct always marshals the field.
+func publishingRaw(t *testing.T, value []byte) *fakeRequester {
+	t.Helper()
+	return &fakeRequester{statusValue: value}
+}
+
 // newStatusClient builds a client and stops its readiness watch when the test ends, so
 // no watch goroutine outlives the case that started it.
 func newStatusClient(t *testing.T, transport requester, timeout time.Duration) *Client {
@@ -389,8 +397,8 @@ func TestResolve_Symbol(t *testing.T) {
 	if req["name"] != "Widget" {
 		t.Errorf("request name = %v, want Widget", req["name"])
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 
@@ -407,8 +415,8 @@ func TestResolve_Prefix(t *testing.T) {
 	if fake.lastSubject != subjectPrefix {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectPrefix)
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 
@@ -454,8 +462,8 @@ func TestResolve_Semantic(t *testing.T) {
 	if fake.lastSubject != subjectSemantic {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectSemantic)
 	}
-	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(ids, want) {
-		t.Errorf("ids = %v, want %v", ids, want)
+	if want := []string{"a.b.c.d.e.1", "a.b.c.d.e.2"}; !equalStrings(fusion.SeedIDs(ids), want) {
+		t.Errorf("ids = %v, want %v", fusion.SeedIDs(ids), want)
 	}
 }
 
@@ -608,8 +616,11 @@ func TestEntities_BatchDecodes(t *testing.T) {
 	if fake.lastSubject != subjectBatch {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectBatch)
 	}
-	if len(ents) != 2 {
-		t.Fatalf("got %d entities, want 2", len(ents))
+	if len(ents.Entities) != 2 {
+		t.Fatalf("got %d entities, want 2", len(ents.Entities))
+	}
+	if len(ents.Unhydrated) != 0 {
+		t.Errorf("a complete batch must report nothing unhydrated, got %+v", ents.Unhydrated)
 	}
 }
 
@@ -621,8 +632,8 @@ func TestEntities_EmptyShortCircuits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Entities(nil): %v", err)
 	}
-	if ents != nil {
-		t.Errorf("entities = %v, want nil", ents)
+	if len(ents.Entities) != 0 || len(ents.Unhydrated) != 0 {
+		t.Errorf("hydration = %+v, want empty", ents)
 	}
 	if fake.lastSubject != "" {
 		t.Error("empty IDs must not hit the wire")
@@ -696,7 +707,7 @@ func TestAuthoritativeRepliesRejectPoisonBeforeProjection(t *testing.T) {
 			got, err := tt.call(client)
 			require.Error(t, err)
 			assert.True(t, graph.IsStateContractError(err))
-			assert.Nil(t, got, "no partial projection may escape")
+			assertNoProjection(t, got)
 			var classified *errs.ClassifiedError
 			require.ErrorAs(t, err, &classified)
 			assert.Equal(t, errs.ErrorFatal, classified.Class)
@@ -814,4 +825,106 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=636 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+// entity-id-audit:classify intentional-malformed "bad" line=647 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+
+// TestStatus_BootstrapCompleteSurvivesProductionDecode is the lockstep guard for the
+// ADR-084 D2 bit: graph.IndexStatusResponse and fusion.IndexStatus change together, and
+// the proof runs through the PRODUCTION decoder rather than a hand-rolled unmarshal.
+// A dropped bit here reads as bootstrap_complete=false downstream, which fails closed —
+// silently deferring every health-gated read against a perfectly healthy index.
+func TestStatus_BootstrapCompleteSurvivesProductionDecode(t *testing.T) {
+	for _, bootstrapped := range []bool{true, false} {
+		envelope := graph.IndexStatusResponse{
+			Ready: false, State: graph.IndexStateBuilding,
+			IndexedRevision: 40, TargetRevision: 100, Lag: 60,
+			BootstrapComplete: bootstrapped,
+		}
+		c := newStatusClient(t, publishing(t, envelope), time.Second)
+		got, err := c.Status(context.Background())
+		if err != nil {
+			t.Fatalf("Status: %v", err)
+		}
+		if got.BootstrapComplete != bootstrapped {
+			t.Errorf("BootstrapComplete = %v, want %v (dropped on the wire or in the decode)",
+				got.BootstrapComplete, bootstrapped)
+		}
+	}
+
+	// A producer that predates the field decodes to false — the fail-closed migration
+	// contract, asserted through the real decoder because that is where a default
+	// would sneak in.
+	legacy := newStatusClient(t, publishingRaw(t, []byte(`{"ready":true,"state":"ready"}`)), time.Second)
+	got, err := legacy.Status(context.Background())
+	if err != nil {
+		t.Fatalf("Status (legacy): %v", err)
+	}
+	if got.BootstrapComplete {
+		t.Error("legacy envelope decoded bootstrap_complete=true; health gates would fail OPEN")
+	}
+}
+
+// TestStatus_UnknownIsTypedButWiringIsNot pins the ADR-084 D6 split. ADR-083 collapsed
+// every readiness failure into one error because a request/reply could not tell them
+// apart; held state can, and the two want different responses:
+//
+//   - a feed we cannot vouch for is a DEGRADE — the engine turns it into an honest
+//     empty envelope, which is the correct answer to "is the graph ready" when nobody
+//     is answering;
+//   - broken wiring is an operator BUG that does not heal, and must not spend the rest
+//     of the deployment's life masquerading as "the graph is busy".
+func TestStatus_UnknownIsTypedButWiringIsNot(t *testing.T) {
+	t.Run("never published is typed unknown", func(t *testing.T) {
+		c := newStatusClient(t, &fakeRequester{}, statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown,
+			"a producer that never published must degrade, not crash the caller")
+	})
+
+	t.Run("a quiet feed past the freshness window is typed unknown", func(t *testing.T) {
+		stale := publishing(t, graph.IndexStatusResponse{
+			Ready: true, State: graph.IndexStateReady, BootstrapComplete: true,
+		})
+		stale.statusCreated = time.Now().
+			Add(-readiness.FreshnessWindow(readiness.DefaultHeartbeat) - time.Second)
+		c := newStatusClient(t, stale, statusWaitTest)
+
+		_, err := c.Status(context.Background())
+		require.Error(t, err, "a dead producer's last Ready key must not be served forever")
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown)
+	})
+
+	t.Run("an undecodable value is typed unknown", func(t *testing.T) {
+		// The transport worked and delivered something — that is a readiness we cannot
+		// vouch for, not a wiring failure.
+		c := newStatusClient(t, publishingRaw(t, []byte("{not json")), statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown)
+	})
+
+	t.Run("a transport without the KV capability is NOT typed unknown", func(t *testing.T) {
+		c := newStatusClient(t, subjectOnlyTransport{}, statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, fusion.ErrReadinessUnknown,
+			"broken wiring must stay loud — degrading it would let a misconfigured "+
+				"deployment serve honest-looking empty envelopes forever")
+	})
+}
+
+// assertNoProjection checks that a rejected authoritative reply yielded nothing
+// usable. It is not a plain nil check because the batch call returns a STRUCT
+// (fusion.Hydration) whose zero value is the empty result — asserting nil there would
+// fail on a correct implementation while telling us nothing about whether data escaped.
+// What matters is that no entity and no unhydrated claim reached the caller.
+func assertNoProjection(t *testing.T, got any) {
+	t.Helper()
+	if h, ok := got.(fusion.Hydration); ok {
+		assert.Empty(t, h.Entities, "no partial projection may escape")
+		assert.Empty(t, h.Unhydrated,
+			"a rejected reply must not assert anything about what it could not hydrate")
+		return
+	}
+	assert.Nil(t, got, "no partial projection may escape")
+}
