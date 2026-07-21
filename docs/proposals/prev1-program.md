@@ -9,13 +9,15 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Decide the −6% search-quality question, then land Track 0 as one PR.** All
-> eight fixes are implemented, reviewed (5 review findings fixed), and gated: full
-> local suite green, all three e2e tiers green, and 4 statistical runs per side
-> against a HEAD baseline. Of the two alarms that held this up, `known_answer` was
-> noise and the community drop came with a ground-truth *improvement*. One real
-> finding remains — a consistent, non-overlapping 6.0% search-quality drop — and it
-> needs an owner call, not more measurement. See "Track 0 open questions".
+> **Land this docs+CI branch, then start Epic A increment 1 (#623 + #602 +
+> #614 part 2).** Track 0 is **merged** — PR #624, squashed to `5e80f676` on main,
+> 2026-07-21. This branch (`chore/prev1-audit-program-and-sister-gate`) now carries
+> only the audit docs, this baton, and `sister-validation.yml`; landing it gives
+> **Epic D its first real CI run** (that workflow has still never executed —
+> `gh run list --workflow=sister-validation.yml` returns 404 until this merges).
+> Then Epic A: derive the dedup key at content resolution, bundling #602 and the
+> #614 revision-CAS remainder — one change against `graph/embedding/storage.go` +
+> `worker.go`. See "Epics".
 
 ---
 
@@ -58,10 +60,12 @@ is wasted budget. Cite and move on.
 
 ---
 
-## Track 0 — fix now, no design needed
+## Track 0 — MERGED (PR #624 → `5e80f676`, 2026-07-21)
 
 One PR. No OpenSpec change; ceremony on mechanical fixes is how they reach 90% and
-stop.
+stop. Eight fixes shipped; three reviews (two internal + Codex) folded in; the
+`!`-marked BREAKING change had all three e2e tiers green before merge. Follow-ups
+filed instead of scope-creeping the PR: **#623** (Epic A) and **#625** (Epic C).
 
 | # | Fix | Issue | Done when |
 |---|---|---|---|
@@ -171,7 +175,7 @@ two files three times. Start Epic A here.
 
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | #600 #601 #602 #612 **#623** #613 #614 #616 #619 #599 | not started |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | #600 #601 #602 #612 **#623** #613 #614 #616 #619 #599 | **NEXT — start at increment 1** |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard | #622 #527 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
@@ -190,11 +194,13 @@ PR, semsource + semboids + `e2e:core` nightly, all against **this checkout** via
 
 **Two things still open on D:**
 
-- The workflow is **unproven in CI**. It was validated locally (the replace-and-build
+- The workflow is **unproven in CI** — because it lives only on this branch and has
+  never been on the default branch. It was validated locally (the replace-and-build
   mechanic works and immediately caught real drift — semsource at beta.156 does not
   compile against main: `fusion.RetrievalClient.Resolve` now returns `[]fusion.Seed`,
-  `Entities` returns `fusion.Hydration`). It has not yet run on a GitHub runner.
-  `gh run list --workflow=sister-validation.yml` — empty means it has never fired.
+  `Entities` returns `fusion.Hydration`). `gh run list --workflow=sister-validation.yml`
+  returns **404, not empty** — it does not exist on GitHub yet. **Landing this branch
+  is what fires it for the first time.**
 - **Main has no required checks**, so this gate is advisory until made required.
   A green check that cannot block a merge is a notification, not a gate.
 
@@ -276,3 +282,16 @@ Append one line per session. Newest last.
   the audit's quoted 43% dedup figure as the baseline and looked like a large
   regression; building an actual HEAD baseline in a clean worktree is what
   reframed it. Quoted numbers from a prior run are not a baseline.
+- **2026-07-21 (session 3)** — Track 0 committed, pushed as PR #624 (off `main`,
+  not stacked), and **merged** (squash `5e80f676`). Codex reviewed and found 7
+  issues beyond the two internal reviewers; 6 real (1 refuted), all fixed in the
+  PR. Highlights: the rule startup knobs were a self-inflicted phantom (accepted,
+  validated, schema-published, silently dropped by the factory overlay); the KV
+  circuit-breaker exemption was missing (mirrors `GetStream` gh#248); and
+  `resolved_total` double-counted dedup hits, which had made me report embedding
+  volume as "unchanged" when real fresh work went 68→191 (2.81x) — the callback
+  that increments `embeddings_generated_total` fires on the dedup-hit path too.
+  Follow-ups #623 (Epic A) + #625 (Epic C repair loop). Branch hygiene: the
+  duplicate Track 0 code commit was dropped from this branch via
+  `rebase --onto`, leaving only docs + `sister-validation.yml`. Next: land this
+  branch (first CI run of the sister gate), then Epic A increment 1.
