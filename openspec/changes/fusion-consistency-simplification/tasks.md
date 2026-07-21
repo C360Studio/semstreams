@@ -197,8 +197,14 @@
       `task schema:generate` no-drift · contract tests ·
       `go vet -tags=integration` AND `-tags=live_llm` ·
       `openspec validate --strict`.
-- [ ] 6.2 Branch integration sweep (`go test -race -tags=integration ./...`)
-      — framework-package change (graph/, pkg/fusion).
+- [x] 6.2 Branch integration sweep (`go test -race -tags=integration ./...`)
+      — framework-package change (graph/, pkg/fusion). DONE: 134 packages,
+      0 FAIL, verified from the log not the pipeline exit code. Found TWO
+      real defects the tagged `go vet` could only prove compiled: the
+      fusionnats real-wire assertions and one clustering fixture row. The
+      remaining red was substrate — a loaded Docker daemon timing out
+      container inspects at 180s (rotating tests, never an assertion);
+      it cleared once the sister-project NATS stack was stopped.
 - [ ] 6.3 BREAKING ⇒ e2e: `task e2e:statistical` AND `task e2e:semantic`
       green, with log-level evidence (not exit codes through a pipe).
 - [ ] 6.4 `semstreams-reviewer` pre-merge; fold findings.
