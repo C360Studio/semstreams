@@ -76,9 +76,12 @@ if !reading.Fresh {
     // reading.Err and reading.Age say why, for the log line.
 }
 proceed, reason := graph.EvaluateReadinessGate(
-    graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh, Age: reading.Age},
-    graph.FreshnessNone()) // read path; see Break 5 for the freshness options
+    graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh})
 ```
+
+The gate takes the reading and nothing else — there is no mode, tolerance, or
+freshness argument to pass. `reading.Age` is still yours for the log line; it just
+is not a gate input.
 
 Do not hand-roll a `Get` loop. `Get` and `Watch` are equally stale on a
 tick-published key, and `Get` adds a round-trip on the very connection whose
@@ -98,29 +101,36 @@ A consumer deployed without its producer has no key and is permanently unknown. 
 is correct and unchanged; the existing `allow_ungated_reads` escape covers it, exactly
 as it covered the unreachable-subject case before.
 
-## Break 2 — `index_lag_tolerance` becomes `max_staleness`
+## Break 2 — `index_lag_tolerance` is removed, with no replacement
 
-graph-clustering's revision-count tolerance (ADR-082, shipped in .156) is replaced by
-a duration.
+graph-clustering's revision-count tolerance (ADR-082, shipped in .156) is **deleted**.
+Delete the key; there is nothing to set in its place.
 
 ```jsonc
 // Before — revisions
 { "index_lag_tolerance": 500 }
 
-// After — wall time. Empty or "0" means exact catch-up, identical to the old default.
-{ "max_staleness": "3s" }
+// After — no tolerance key at all
+{ }
 ```
 
 **Symptom if unmigrated:** the component fails to start with a loud decode error
-naming the replacement field. It does not silently ignore the removed key.
+naming what happened. It does not silently ignore the removed key.
 
-There is no automatic translation, because none is correct: the revision count that
-corresponded to a given staleness depended on the write rate and `coalesce_ms` of the
-deployment that set it. Pick the time bound you actually want the view to be within.
+**If you tracked this work in flight, note the collapse.** An intermediate design
+renamed this field to a duration-valued `max_staleness`, and earlier drafts of this
+document described that rename. `max_staleness` was never tagged — it existed only on
+`main` between releases — and ADR-085 deleted it before it shipped. Sister repos
+upgrading from .156 go straight from `index_lag_tolerance` to nothing and never need to
+learn the intermediate field. A config carrying *either* key fails startup loudly.
 
-`max_staleness` only ever *relaxes* the caught-up requirement. The hard stops —
-`degraded`, `reset_required`, an index whose initial build is incomplete, and an envelope whose `state` is unrecognized — defer under every
-tolerance, unchanged from ADR-082.
+**What replaces it: nothing, because there is nothing to tune.** Community detection
+now runs whenever the index is healthy, at whatever age the view happens to be, and
+reports that age on `semstreams_graph_clustering_staleness_at_detection_ms` for every
+run. Readiness gates on health alone — `degraded`, `reset_required`, an incomplete
+initial build, an unrecognized `state`, or a dead status feed still defer, exactly as
+before, and none of those was ever answerable by a tolerance. See ADR-085 for why the
+tolerance's own satisfiability floor was the evidence it should not exist.
 
 ## Break 3 — the fusion graph facet no longer claims coherence
 
@@ -195,13 +205,14 @@ if !status.Ready {
 meant:
 
 ```go
-// "Is this index sound to read from?" — the health question.
+// "Is this index sound to read from?" — the health question, and the only
+// question the gate answers.
 proceed, reason := graph.EvaluateReadinessGate(
-    graph.StatusReading{Status: st, Fresh: fresh, Age: age}, graph.FreshnessNone())
+    graph.StatusReading{Status: st, Fresh: fresh})
 if !proceed { return fallbackToGrep() }   // reason says WHY
 
-// "Is the view fresh enough for me?" — only if you are a view-rate consumer.
-graph.FreshnessWithin(5 * time.Second)
+// "How current is what I just read?" — REPORT it, never gate on it.
+myResult.StalenessMs = st.StalenessMs
 
 // "Is MY write visible?" — the one sound per-entity check.
 if status.IndexedRevision >= myRevision { /* my write is indexed */ }
@@ -210,26 +221,33 @@ if status.IndexedRevision >= myRevision { /* my write is indexed */ }
 `bootstrap_complete` is a NEW envelope field. An envelope without it reads `false` and
 therefore fails closed — which is why producers and consumers must move together.
 
-## Break 5 — gate modes collapse into health + a freshness parameter
+## Break 5 — gate modes collapse into health alone
 
 `GateMode`, `GateConfig`, and the four `Gate*` constants are gone. They were four
-dressings of one conflation. Replace a mode with a freshness declaration:
+dressings of one conflation. So is the freshness parameter that briefly replaced them:
 
 | Before | Now |
 |---|---|
-| `GateExact` | `graph.FreshnessExact()` |
-| `GateBoundedStaleness` + `GateConfig{MaxStaleness: d}` | `graph.FreshnessWithin(d)` |
-| `GateDegradeHonest` | `graph.FreshnessNone()` — it always evaluated as exact; degrading is a caller choice |
+| `GateExact` | nothing — pass the reading; a healthy index serves however far behind |
+| `GateBoundedStaleness` + `GateConfig{MaxStaleness: d}` | nothing — report `staleness_ms` on your result instead |
+| `GateDegradeHonest` | nothing — it always evaluated as exact; degrading is a caller choice |
 | `GateStickyBootstrap` | nothing — stickiness is a consumer-local latch, not a gate concern |
 
-The gate now takes a `graph.StatusReading{Status, Fresh, Age}` instead of loose
-arguments; passing `Age` is what closes the heartbeat window (a 2.5s-stale envelope
-received 2s ago describes a ~4.5s-old view). `FreshnessWithin(0)` and the zero value
-both mean EXACT — the strictest setting — so an unset config field cannot silently
-loosen a gate.
+The gate takes a `graph.StatusReading{Status, Fresh}` and returns a verdict. There is
+no second argument.
+
+**If you tracked this in flight**, an intermediate design replaced the modes with a
+`graph.Freshness` declaration (`FreshnessExact` / `FreshnessWithin(d)` /
+`FreshnessNone`) and a `StatusReading.Age` field, and earlier drafts of this document
+showed that API. None of it tagged. ADR-085 deleted it: freshness gating existed only
+to serve the absence license ADR-084 retired, it had one call site, and a bound at or
+below the publish heartbeat turned out to be unsatisfiable. Consumers go straight from
+`Gate*` constants to no argument at all.
 
 Defer reason `empty` is now `bootstrap_incomplete`. If you alert on
-`defer_total{reason="empty"}`, retarget it.
+`defer_total{reason="empty"}`, retarget it. Drop any `over_staleness` or
+`staleness_unknown` alert — neither reason exists; the surviving set is `hard_stop`,
+`status_unknown`, `unrecognized_state`, `bootstrap_incomplete`.
 
 ## Break 6 — partial hydration is reported
 
@@ -259,22 +277,27 @@ Two related fixes ride along:
 The clustering defer path is now structured. One log line carries `status_known`,
 `status_age`, `state`, `lag`, `staleness_ms`, `reason`, and the watch/bucket error
 when present, and `defer_total{reason}` counts by
-`hard_stop | over_staleness | status_unknown | bootstrap_incomplete | unrecognized_state`.
+`hard_stop | status_unknown | bootstrap_incomplete | unrecognized_state`. Every one of
+the four names a distinct operator action, and none is answered by tuning a number.
 
-### Sizing `max_staleness`
+### Reading the staleness metrics
 
-The bound must exceed **the consumer's own worst-case cycle**, not just how fresh it
-wants its input. Community detection's run time scales with community SIZE, so as a
-graph consolidates a run can grow several-fold (a semboids adoption run measured 4.4s
-climbing to 23.7s over one 90s window). A long run competes with the indexer for the
-same box, so the view is staler at the next tick — and a tolerance that was ample while
-the graph was fragmented starts tripping `over_staleness` for a reason unrelated to
-index health.
+`staleness_at_detection_ms` now records on **every** detection run rather than only the
+runs a tolerance admitted, so it is a continuous view-age signal rather than a
+near-threshold one. Alert on it if your product has a genuine currency requirement —
+but alert knowing it is a **floor**: an undelivered revision cannot age it, so a
+totally stalled feed looks arbitrarily current by this measure alone. Total stalls
+surface as `state=degraded` via the stuck-watermark detector, not here.
 
-Watch `semstreams_graph_clustering_detection_duration_seconds` against
-`staleness_at_detection_ms`: duration climbing toward a fixed `max_staleness` is the
-signature. The gate is not wrong when this happens — it is reporting a real view age —
-so the fix is the tolerance, not the gate.
+`detection_duration_seconds` is still worth watching alongside it. Community detection's
+run time scales with community SIZE, so as a graph consolidates a run can grow
+several-fold (a semboids adoption run measured 4.4s climbing to 23.7s over one 90s
+window), and a long run competes with the indexer for the same box, so the view is
+staler at the next tick. Under ADR-082/083 that interaction could push a fixed
+tolerance into deferring for reasons unrelated to index health — the tuning-dynamics
+problem filed as gh#605. With the tolerance gone the interaction is still real but no
+longer *gates* anything: both numbers rise, detection keeps running, and you are
+looking at a throughput signal rather than a misconfigured knob.
 
 `bootstrap_incomplete` means the producer has not finished its initial build in its
 current process lifetime — a cold start or a gh#474 format cutover. It replaced
@@ -295,15 +318,18 @@ logged.
 1. Upgrade SemStreams; confirm `nats kv get GRAPH_STATUS graph-index` returns an
    envelope that updates on the heartbeat.
 2. Migrate consumers off the removed subject onto `graph/readiness`.
-3. Swap `index_lag_tolerance` for `max_staleness` in every graph-clustering config.
+3. Delete `index_lag_tolerance` from every graph-clustering config; there is no
+   replacement key.
 4. Retarget any monitoring or conformance probe that requested the status subject.
 5. Drop `view_revision.coherent` from fusion graph-facet decoders; move any
    delete-absent-items reconciliation onto `pkg/graphview` or remove it.
 6. **Audit every `!Ready → fall back` branch** (Break 4). This is the step that does
    not announce itself: nothing fails to compile, and the symptom is a fallback path
    that stopped firing — or one that keeps firing on a healthy graph.
-7. Replace `GateMode`/`GateConfig` call sites with a `Freshness` declaration
-   (Break 5); retarget `defer_total{reason="empty"}` alerts to
-   `bootstrap_incomplete`.
+7. Drop `GateMode`/`GateConfig` call sites — `EvaluateReadinessGate` takes a status
+   reading and nothing else (Break 5; the intermediate `Freshness` declaration these
+   were first migrated to was deleted by ADR-085 before it tagged). Retarget
+   `defer_total{reason="empty"}` alerts to `bootstrap_incomplete`, and drop any
+   `over_staleness` or `staleness_unknown` alert — neither reason exists.
 8. Optionally consume `missing` / `unhydrated` (Break 6) — additive, and the only way
    to tell a short result from a partial one.

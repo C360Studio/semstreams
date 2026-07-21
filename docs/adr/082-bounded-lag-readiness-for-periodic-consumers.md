@@ -7,6 +7,16 @@ the bound is wall time (`max_staleness`), not revisions (`index_lag_tolerance`),
 because the correct revision count shifts with write rate and `coalesce_ms`.
 `ReadyWithinLag` is removed.
 
+**Bounded-lag tolerance retired entirely by ADR-085 — 2026-07-21.** ADR-084
+reparameterized the bound (consumer-declared rather than consumer-class-derived);
+ADR-085 deletes it. `max_staleness` and the `Freshness` type are gone, readiness
+gates on health alone, and community detection — the one consumer this ADR was
+written for — now runs whenever the index is healthy and stamps the view age it ran
+at onto its output. What survives from this ADR is the unconditional
+`failedCount → degraded` honesty fix and the observation that a periodic
+whole-result re-deriver can act on a stale view; what does not survive is the
+inference that such a consumer therefore wants a *tolerance*.
+
 **Consumer-class split superseded by ADR-084 — 2026-07-20.** The split below —
 exact/point-query consumers gate on `Ready`, periodic ones accept bounded staleness —
 was a symptom of the conflation ADR-084 names, not a design: it made freshness a

@@ -277,16 +277,262 @@ Rounds, in order:
       left the package passing, while the same mutation on graph-index fails.
       Both verified independently before fixing.
 
-## 7. Close-out
+## 7. Delete the freshness knob (ADR-085)
 
-- [ ] 7.1 PR + owner merge; tag TOGETHER with #598's breaks (owner
+Owner-agreed 2026-07-21, folded in BEFORE the tag: shipping a knob we intend to
+delete makes it a sister-repo migration instead of an edit. Round 3's finding —
+a `max_staleness` at or below the heartbeat is unsatisfiable, so the knob needed a
+floor derived from the transport's tick rate — was the evidence the knob itself is
+wrong, not just its documentation.
+
+Survey completed before deleting (the memo's three open verification questions):
+
+- [x] 7.0a Genuine freshness dependencies, in-repo and across sister repos.
+      `FreshnessWithin` has **one** call site (graph-clustering); everything else
+      declares `FreshnessNone` or a `FreshnessExact` that is a bootstrap probe in
+      disguise. `max_staleness` / `index_lag_tolerance` have **zero** adopters
+      across all ~20 local `sem*` repos.
+- [x] 7.0b Re-read ADR-082's argument rather than assuming it away. It holds and
+      is preserved: a periodic whole-result re-deriver CAN act on a stale view.
+      What does not follow is that it therefore wants a tolerance — the observation
+      argues for not gating, which is what ADR-085 does.
+- [x] 7.0c Stamping staleness on the output is sufficient; no consumer needs to
+      BLOCK on "this partition was computed stale". Community detection overwrites
+      its partition next cycle.
+- [x] 7.0d **`max_staleness` never shipped in a tag** (`git grep` against
+      `v1.0.0-beta.156` confirms `index_lag_tolerance` is the released key). Sister
+      repos migrate `index_lag_tolerance` → nothing and never learn the
+      intermediate field; the ADR-083 migration doc's Break 2 collapses.
+
+- [x] 7.1 Delete `graph.Freshness` + `FreshnessExact`/`Within`/`None`; collapse
+      `EvaluateReadinessGate` to a single `StatusReading` argument (health only:
+      fresh → recognized state → hard stop → bootstrap complete). Delete the
+      `over_staleness` and `staleness_unknown` defer reasons and the bound
+      arithmetic (`viewAge`, `maxStalenessMs`).
+- [x] 7.2 Delete `readiness.MinBoundedStaleness` and `ValidateStalenessBound`.
+      **KEEP `FreshnessMultiplier`** — it answers "can I still vouch for this
+      reading" (transport liveness), a health question, not a view-age one.
+- [x] 7.3 Delete graph-clustering's `max_staleness` config surface
+      (`MaxStalenessStr`, `MaxStaleness()`, `validateMaxStaleness`,
+      `maxStalenessCeiling`); add a `max_staleness` entry to the removed-key
+      rejection map so a carried-forward config fails startup loudly rather than
+      being silently ignored.
+- [x] 7.4 Keep and re-scope the reporting: `staleness_at_detection_ms` records on
+      EVERY run, not only admitted ones (Help text updated);
+      `detection_duration_seconds` unchanged. This is the "stamp the age on the
+      output instead of refusing to produce one" half.
+- [x] 7.5 Drop the freshness argument at all four call sites. At
+      `graph-index/query.go` this is a real behavior change, not a no-op: the
+      comment claiming the staleness comparison is unreachable there is WRONG —
+      `computeIndexStatus` latches on the way past, so the call where the latch
+      flips while `Ready` is still false produced one spurious transient
+      `IndexNotReady`. Correct the comment; confirm the gh#474 cutover guard is
+      preserved via `bootstrap_incomplete`.
+- [x] 7.6 `pkg/graphview` gains the reporting half it was missing (owner
+      approved folding it in — same intent). Track the KV server write time of the
+      newest applied revision beside the applied-revision watermark, expose as one
+      atomic pair, carry it on snapshots. Gating is NOT touched: its bootstrap and
+      fail-closed gates already are what ADR-085 prescribes. Retires the parked
+      §3.3 / ADR-082 G5 follow-up as a REPORTING task, not the gating task it was
+      originally framed as.
+- [x] 7.7 Rework (never delete) the gate test suites that encode retired
+      semantics: `graph/readiness_gate_test.go`,
+      `processor/graph-clustering/staleness_gate{,_integration}_test.go`. Pin:
+      healthy-but-arbitrarily-stale PROCEEDS and stamps a non-zero staleness;
+      each surviving defer reason fires on its own condition; a config carrying
+      `max_staleness` fails startup; `bootstrap_complete=false` still defers.
+- [x] 7.8 ADR-085 written. Supersedes ADR-084 D1's freshness parameter + D5's
+      bounded-staleness clause; completes ADR-082's retirement. Narrow pointer
+      notes added to ADR-082 and ADR-084 (no retrofits). ADR-085 also records the
+      precise `bootstrap_complete` definition, since it is now the only
+      coverage-shaped condition left in the gate.
+- [x] 7.9 ADR-083 migration doc: Break 2 rewritten to "removed, no replacement"
+      with the never-tagged collapse called out; "Sizing `max_staleness`" replaced
+      by "Reading the staleness metrics" (floor caveat + gh#605 dissolution);
+      upgrade steps 3 and 7 corrected.
+- [x] 7.10 Spec deltas for the collapsed gate + graphview currency reporting;
+      `openspec validate --strict`.
+- [ ] 7.11 Reference configs: no `max_staleness` value to choose — the open owner
+      question dissolves (owner confirmed: drop it). Verify `configs/` carries
+      neither key.
+- [ ] 7.12 Close gh#605 as dissolved (the tuning-dynamics problem cannot exist
+      without a tolerance to tune).
+- [x] 7.13 Export `graph.AllDeferReasons` (mirroring `AllIndexStates`) and drive
+      graph-clustering's `deferReasons` and both coverage tests from it. The
+      hand-maintained second copy failed SILENTLY in the direction that matters:
+      `countDefer` drops any label outside its list, so a reason added to the gate
+      but not mirrored would defer in production while incrementing nothing.
+      Mutation-verified in both directions (gate emits an unlisted reason → fails;
+      list declares an unreachable reason → fails). Known limit recorded in the
+      test: it cannot catch a reason on a branch no reading provokes, so the
+      reading table is load-bearing.
+- [x] 7.14 **Review round 4 HIGH** — `graph/clustering/lpa.go:164` cleared
+      COMMUNITY_INDEX before rebuilding. Ungating detection turns a rarely-reached
+      window into a near-permanent one (runs up to 23.7s inside a 30s interval),
+      and `processor/graph-query/community_cache.go` latches `ready` once, so it
+      would serve a ready-but-empty community set most of the time — an
+      authoritative-looking empty answer, the class ADR-084 retires. Fix:
+      write-then-prune (snapshot keys, save over them, delete only unwritten
+      keys). Recorded as ADR-085 decision 7; the falsified "overwritten next
+      cycle" claim is corrected in place rather than quietly edited out.
+- [x] 7.15 Gates re-run at HEAD after 7.14, evidence read from output not exit
+      codes. `go test -race ./...` **0 `^FAIL`** · `-p 1 -race -tags=integration`
+      **0 `^FAIL`** · `task lint` clean · `go vet -tags=integration` and
+      `-tags=live_llm` both exit 0 · `go test ./test/contract/...` ok ·
+      `task schema:generate` diff still **exactly 5 lines** (`max_staleness`
+      leaving `schemas/graph-clustering.v1.json`), no new drift ·
+      `openspec validate --strict` valid.
+
+      **`task e2e:statistical` GREEN** (`statistical-20260721-083951`,
+      1m35s): `validation_errors: 0`, `data_loss_percent: 0`,
+      `known_answer_tests_passed: 7/7`. The assertions this change could have
+      moved were compared directly against the pre-change baseline run
+      (`statistical-20260720-213452`) and are **bit-identical**:
+      `total_communities` 15=15, `non_singleton_count` 15=15, `largest_size`
+      55=55, `average_size` 25=25, `with_keywords` 15=15.
+
+      That equality is the real result for the STORE: detection went from
+      effectively never running under the old exact gate to running every tick,
+      and the rebuild changed from clear-then-write to write-then-prune — and the
+      partition it produces is unchanged. (The harness has write lulls, so
+      detection DID run under the old gate here; this tier could not have
+      exercised the continuous-write path that motivated the change, and does not
+      claim to.)
+
+      **CORRECTION (round 5): this evidence says nothing about the graph-query
+      CACHE, and I originally cited it as though it did.** The `communities`
+      block comes from `test/e2e/client/nats.go:483`, which reads
+      COMMUNITY_INDEX **directly over NATS**, bypassing `CommunityCache`
+      entirely. The one stage that does exercise the cache queries `level: 1` and
+      treats a low count as a **warning, not a failure**
+      (`test/e2e/scenarios/tiered_statistical.go:353-355`) — the
+      warn-not-fail-masks-drift trap. Neither result JSON carries a
+      `graphrag_global` block. So the bit-identical comparison could not have
+      detected the cache truncation found in 7.16, and citing it as broad
+      reassurance was wrong. **Coverage gap worth filing: no e2e assertion
+      exercises GlobalSearch through the cache as a hard failure.** Filed on
+      gh#609 (issuecomment-5035466331) with a concrete suggestion: a hard-failing
+      GlobalSearch stage run after TWO detection cycles, since the truncation only
+      appears once a prune has deleted keys from a prior partition.
+
+      **Re-run at HEAD after the 7.16 fix** (`statistical-20260721-100128`):
+      green, community block still bit-identical (15/15/55/25/15). Unit -race 0
+      FAIL, integration -race 0 FAIL, lint clean, both tagged vets, contract ok,
+      schema diff still exactly the 5 `max_staleness` lines, openspec strict
+      valid.
+- [x] 7.16 **Review round 5 HIGH** — the write-then-prune ordering broke
+      `processor/graph-query/CommunityCache`, which keyed by bare community ID
+      while storage keys by `{level}.{id}`. `handleDelete` rebuilt a level index
+      using the level of the STORED occupant after higher-level writes had
+      shadowed the bare-ID map, collapsing `byLevel[0]` — which
+      `globalSearchTextBased` reads with **no NATS fallback**. Reproduced
+      directly: 2 level-0 communities, a level-1 put with a colliding ID, then a
+      late delete → `byLevel[0]` = 0, truth 1. Under delete-first ordering the
+      rebuild preceded the shadowing, so the defect was latent; this change makes
+      it live for most of each cycle and, in the short-detection regime, WORSE
+      than the empty window it replaced. My filed blast-radius bound on gh#609
+      ("one cycle, level>0, GlobalSearch unaffected") was wrong on three of four
+      counts. Fix: key the cache by `(level, ID)`; apply deletions using the
+      level from the deleted key. Recorded as ADR-085 decision 7's second
+      generalization and as a new `graph-clustering` spec requirement.
+- [x] 7.17 Round-5 MEDIUMs: keep-set assembly in `lpa.go:233-236` is
+      MUTATION-GREEN (replacing the all-levels loop with `result[0]` makes Prune
+      delete every level-1/2 community every run and the whole `graph/clustering`
+      suite still passes) — add detector-side coverage; `design.md` D1
+      superseded by new D8/D9 (it still specified the deleted knob and
+      contradicted every other artifact); ADR-085 decision 7's mechanism
+      corrected ("snapshots the prior key set" was not what `Prune` does — it
+      lists the CURRENT key set at the end of the run) and its union guarantee
+      qualified; `graph-clustering` spec delta ADDED (the capability had none
+      despite this change altering its durable rebuild contract).
+
+- [x] 7.18 **Review round 6** — one HIGH, fixed + mutation-verified.
+      `enrichCommunitySummaries` keyed rep-entities by BARE community ID three
+      lines after `GetCommunity` became level-qualified, so two same-ID summaries
+      at different levels both got the LAST level's rep entities while each kept
+      its own MemberCount — a digest stitched from two different communities,
+      returned to agents on `community_summaries[].entities[]` and fed into the
+      answer prompt. Reachable exactly BECAUSE the 7.16 fix stopped collapsing
+      levels; an incomplete fix, not new damage. Fixed by indexing rep-entities by
+      summary POSITION rather than ID (both loops walk the same slice in the same
+      order, so the collision is unrepresentable rather than guarded) —
+      `TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities`,
+      mutation-verified: restoring the ID-keyed map reproduces the symptom exactly.
+- [x] 7.19 Round-6 MEDIUMs closed — both were coverage gaps on correct code.
+      (a) The `Level`-population invariant was MUTATION-GREEN at all three sites,
+      because nothing exercised `Level >= 1` through a production handler and a
+      dropped stamp resolves silently to level 0 — indistinguishable in any
+      level-0-only test, since 0 is the Go zero value (the existing
+      `Level == 0` assertion was VACUOUS). Now covered at both sites that feed a
+      lookup: `globalSearchTextBased` via a `Level: 1` GlobalSearch through the
+      real handler in `TestIntegration_CommunityCacheCrossLevelCollision`
+      (MemberCount 2-at-L0 vs 3-at-L1 is the discriminator), and
+      `findCommunitiesForEntities` via a unit test. Both mutation-verified to
+      fail on the exact drop the review found green. `handleLocalSearch:302`
+      remains uncovered — nothing reads that Level yet.
+      (b) `GetAllCommunities`'s `(level, ID)` tie-break is now asserted; it is
+      load-bearing because the consumer re-sorts with an UNSTABLE `sort.Slice` on
+      Relevance alone and then truncates to MaxCommunities, so without it WHICH
+      same-ID record survives truncation flips between identical queries.
+      Mutation-verified.
+- [x] 7.20 **INCIDENT: round-6 reviewer destroyed uncommitted work.** It ran
+      `git checkout -- graph/clustering/storage.go` to undo a mutation; that file
+      held 89 uncommitted lines (the whole `Prune` method), unrecoverable from git
+      (never staged). Restored in full from the `git diff` captured earlier in
+      session context — NOT from the agent's own recovery file, which was
+      incomplete (missing the `if s.kv == nil` testStore branch, which would have
+      nil-derefed the in-memory path, and it declared the doc comment
+      unrecoverable). Restoration verified three ways: `git diff --stat` back to
+      89 lines matching the pre-destruction stat, build + tagged vet clean, and
+      all nine Prune/Clear/Rebuild tests green on a CLEARED test cache including
+      the real-NATS integration ones. Guard added to
+      `.agents/contracts/semstreams-reviewer.md` rule 7: no `git checkout`/
+      `restore`/bare `stash`; mutate via `cp` backup; verify `git diff --stat`
+      after each round; report destruction at the TOP of the report.
+      See [[feedback_verify_fails_without_via_stash_not_checkout]] — the memory
+      existed and was not binding on subagents, which is why it is now in the
+      contract.
+
+- [x] 7.21 **Review round 7: APPROVE, safe to merge.** No blocking or high
+      findings. The reconstructed `Prune`/`Clear` were reviewed as NEW code (no
+      original survives to diff against) and are correct on their merits — the
+      reviewer specifically hunted the two failure modes that would make
+      transcript-reconstruction dangerous and closed both: keep-set key
+      reconstruction matches `SaveCommunity` exactly (including the
+      `community = summarized` pointer swap at `lpa.go:346`, which cannot drift
+      keys because all three summarizers mutate in place and never touch
+      ID/Level/Members), and the `s.kv == nil` testStore branch is correct AND
+      has no test — omitting it, as the rejected recovery file did, would have
+      nil-panicked with nothing catching it. The position-indexing fix holds
+      under attack (nothing between the two loops can reorder/resize
+      `summaries`; the only real reorder completes inside
+      `findCommunitiesForEntities` before enrich is called) and was
+      independently mutation-verified. New tests judged targeted, not
+      tautological.
+- [x] 7.22 **Round 7's two MEDIUMs were against MY OWN contract rule 7** — both
+      verified and fixed. (a) The rule prohibited bare `git stash` but thereby
+      SANCTIONED `git stash push -- <path>`, which on an UNTRACKED path is a
+      silent no-op whose paired `pop` grabs the top of the stack — here, one of
+      two unrelated codex stashes, dumped over the tree under review. (b) It
+      prescribed `git diff --stat` for restoration verification, which reports
+      NOTHING for untracked files — and 7 in-scope paths are untracked,
+      including two of the new test files under review, so an unrestored
+      mutation would pass silently. Rule 7 now prohibits `git stash` in every
+      form and mandates checksum verification plus a `git status --porcelain`
+      entry count. **The same guard was added to
+      `.agents/contracts/semstreams-developer.md` as rule 7** — developer agents
+      run the same mutation checks and had no guard at all.
+
+## 8. Close-out
+
+- [ ] 8.1 PR + owner merge; tag TOGETHER with #598's breaks (owner
       sequencing: no semsource tag before this change).
-- [ ] 7.2 gh#597 comment: part 1 shipped (drop path closed + resolve-order
+- [ ] 8.2 gh#597 comment: part 1 shipped (drop path closed + resolve-order
       ranking fix), part-2 minimal slice shipped; REMAINS OPEN: the
       cross-store consistency gap (semantic index ranking an ID whose
       ENTITY_STATES read returns not-found) — now visible via the 4.2
       counter; file separately if the soak confirms it.
-- [ ] 7.3 gh#592 comment: close-out superseded deliberately for read paths
+- [ ] 8.3 gh#592 comment: close-out superseded deliberately for read paths
       (ADR-084); reopen trigger retired.
-- [ ] 7.4 Archive change + update memory; sister lockstep PRs remain
+- [ ] 8.4 Archive change + update memory; sister lockstep PRs remain
       owner-managed (with #598's wave).

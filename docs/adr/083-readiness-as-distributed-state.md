@@ -7,6 +7,18 @@ modes collapse into health + a freshness parameter; `GateMode`/`GateConfig` are
 removed. The distribution decision (KV state, heartbeat, freshness judged
 consumer-locally) and the staleness unit are unchanged and still current.
 
+**The `max_staleness` tolerance introduced here was deleted by ADR-085 before it
+tagged — 2026-07-21.** D4's replacement of `index_lag_tolerance` with a
+duration-valued `max_staleness` was correct about the *unit* and wrong about the
+existence of the knob: a bound at or below the publish heartbeat this ADR
+establishes is unsatisfiable, which is the general form *you cannot bound a
+quantity below the interval at which you learn it*. Readiness now gates on health
+alone and staleness is reported on results. **This ADR's central decisions are
+untouched and are what make that possible** — readiness as watched KV state, and
+staleness measured in TIME from commit timestamps (D3), which is precisely the
+number consumers now stamp on their output. Migrating consumers go from
+`index_lag_tolerance` to nothing; `max_staleness` never appeared in a release.
+
 Accepted — 2026-07-20. Decision-recording for the
 `readiness-distribution-and-staleness-contract` change. Addresses the post-close
 evidence on #590 (semboids coalescer table + observer discrepancy). Builds on
