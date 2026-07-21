@@ -492,13 +492,18 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Write two communities with LLM summaries and RepEntities
+	// Write two communities with LLM summaries and RepEntities.
+	// Keys use the production format {level}.{community_id} written by
+	// clustering.NATSCommunityStorage.SaveCommunity — the cache derives the level
+	// from the key, so a bare-ID fixture would not exercise the real wire.
 	communities := []struct {
-		id   string
-		data map[string]any
+		id    string
+		level int
+		data  map[string]any
 	}{
 		{
-			id: "comm-0-abc",
+			id:    "comm-0-abc",
+			level: 0,
 			data: map[string]any{
 				"id":                  "comm-0-abc",
 				"level":               0,
@@ -511,7 +516,8 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 			},
 		},
 		{
-			id: "comm-0-def",
+			id:    "comm-0-def",
+			level: 0,
 			data: map[string]any{
 				"id":                  "comm-0-def",
 				"level":               0,
@@ -528,7 +534,7 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	for _, c := range communities {
 		data, err := json.Marshal(c.data)
 		require.NoError(t, err)
-		_, err = communityBucket.Put(ctx, c.id, data)
+		_, err = communityBucket.Put(ctx, communityKVKey(c.level, c.id), data)
 		require.NoError(t, err)
 	}
 
@@ -634,7 +640,7 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 		"rep_entities":   []string{"acme.ops.robotics.gcs.drone.001"},
 		"summary_status": "llm-enhanced",
 	})
-	_, err = communityBucket.Put(ctx, "comm-0-test", commData)
+	_, err = communityBucket.Put(ctx, communityKVKey(0, "comm-0-test"), commData)
 	require.NoError(t, err)
 
 	// Set up a mock responder for graph.ingest.query.entities
@@ -743,4 +749,151 @@ func TestIntegration_StaticRouting(t *testing.T) {
 	// Verify unknown query types return empty string
 	subject = graphQuery.router.Route("unknown")
 	assert.Equal(t, "", subject, "should return empty string for unknown query type")
+}
+
+// TestIntegration_CommunityCacheCrossLevelCollision replays a real detection cycle
+// against real NATS KV and asserts through the production GlobalSearch handler.
+//
+// graph-clustering writes every level, then prunes the previous partition's
+// leftovers LAST (write-then-prune, ADR-085). Community IDs are seed entity IDs
+// re-drawn from the same pool at every level, so the same ID lands at level 0 and
+// level 1 of one run. A cache keyed by bare community ID collapsed its level-0
+// index on that trailing delete, and globalSearchTextBased has no NATS fallback —
+// the empty index reads as an authoritative "no communities in this graph".
+func TestIntegration_CommunityCacheCrossLevelCollision(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	ctx := context.Background()
+	natsClient, cleanup := setupTestNATS(t)
+	defer cleanup()
+
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+
+	communityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: "COMMUNITY_INDEX",
+	})
+	require.NoError(t, err)
+
+	// loadEntities must resolve or globalSearchTextBased errors before it can
+	// report on the communities it selected.
+	_, err = natsClient.SubscribeForRequests(ctx, "graph.ingest.query.batch",
+		func(_ context.Context, _ []byte) ([]byte, error) {
+			return json.Marshal(map[string]any{
+				"entities": []map[string]any{
+					{
+						"id": entDrone1,
+						"triples": []map[string]any{
+							{"subject": entDrone1, "predicate": "dc.terms.title", "object": "Alpha Drone"},
+						},
+					},
+				},
+			})
+		})
+	require.NoError(t, err)
+
+	config := DefaultConfig()
+	config.StartupAttempts = 3
+	config.StartupInterval = 50 * time.Millisecond
+	config.RecheckInterval = 100 * time.Millisecond
+	configJSON, _ := json.Marshal(config)
+
+	comp, err := CreateGraphQuery(configJSON, component.Dependencies{NATSClient: natsClient})
+	require.NoError(t, err)
+
+	graphQuery := comp.(*Component)
+	require.NoError(t, graphQuery.Initialize())
+	require.NoError(t, graphQuery.Start(ctx))
+	defer graphQuery.Stop(5 * time.Second)
+
+	require.Eventually(t, func() bool { return graphQuery.communityCache.IsReady() },
+		5*time.Second, 50*time.Millisecond, "community cache must complete initial sync")
+
+	putCommunity := func(level int, id string, members []string) {
+		t.Helper()
+		data, err := json.Marshal(map[string]any{
+			"id":                  id,
+			"level":               level,
+			"members":             members,
+			"statistical_summary": "Cluster of drone entities in the GCS system.",
+			"keywords":            []string{"drone", "autonomous"},
+			"rep_entities":        []string{members[0]},
+		})
+		require.NoError(t, err)
+		_, err = communityBucket.Put(ctx, communityKVKey(level, id), data)
+		require.NoError(t, err)
+	}
+
+	// Level-0 pass.
+	putCommunity(0, entDrone1, []string{entDrone1, entDrone2})
+	putCommunity(0, entDrone3, []string{entDrone3})
+	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(0)) == 2 },
+		5*time.Second, 25*time.Millisecond, "both level-0 communities must reach the cache")
+
+	// Level-1 pass re-uses entDrone1 as a community ID.
+	putCommunity(1, entDrone1, []string{entDrone1, entDrone2, entDrone3})
+	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(1)) == 1 },
+		5*time.Second, 25*time.Millisecond, "the level-1 community must reach the cache")
+
+	// Prune of the previous partition lands last.
+	require.NoError(t, communityBucket.Delete(ctx, communityKVKey(0, entDrone3)))
+	require.Eventually(t, func() bool { return len(graphQuery.communityCache.GetCommunitiesByLevel(0)) == 1 },
+		5*time.Second, 25*time.Millisecond,
+		"level-0 index must settle at exactly the surviving community, not collapse to empty")
+
+	// The production surface: GlobalSearch at level 0 must still find it.
+	includeSummaries := true
+	reqData, err := json.Marshal(GlobalSearchRequest{
+		Query:            "drone",
+		Level:            0,
+		MaxCommunities:   5,
+		IncludeSummaries: &includeSummaries,
+	})
+	require.NoError(t, err)
+
+	respData, err := graphQuery.handleGlobalSearch(ctx, reqData)
+	require.NoError(t, err)
+
+	var resp GlobalSearchResponse
+	require.NoError(t, json.Unmarshal(respData, &resp))
+	require.Len(t, resp.CommunitySummaries, 1,
+		"GlobalSearch(level=0) must report the surviving level-0 community")
+	assert.Equal(t, entDrone1, resp.CommunitySummaries[0].CommunityID)
+	assert.Equal(t, 0, resp.CommunitySummaries[0].Level)
+	assert.Equal(t, 2, resp.CommunitySummaries[0].MemberCount,
+		"MemberCount must come from the level-0 record, not the 3-member level-1 record")
+
+	// The SAME query at level 1 must resolve the OTHER community sharing this ID.
+	//
+	// This half is what makes the assertions above non-vacuous. Every summary-building
+	// site stamps Level off the cache record, and enrichCommunitySummaries then re-reads
+	// the community with GetCommunity(summary.Level, summary.CommunityID). A dropped or
+	// zero-valued Level therefore resolves silently to level 0 — i.e. exactly the
+	// pre-fix behavior — and a level-0-only test cannot tell the difference, because
+	// Level 0 is also the Go zero value. MemberCount is the discriminator: 2 members at
+	// level 0, 3 at level 1.
+	reqL1, err := json.Marshal(GlobalSearchRequest{
+		Query:            "drone",
+		Level:            1,
+		MaxCommunities:   5,
+		IncludeSummaries: &includeSummaries,
+	})
+	require.NoError(t, err)
+
+	respL1Data, err := graphQuery.handleGlobalSearch(ctx, reqL1)
+	require.NoError(t, err)
+
+	var respL1 GlobalSearchResponse
+	require.NoError(t, json.Unmarshal(respL1Data, &respL1))
+	require.Len(t, respL1.CommunitySummaries, 1,
+		"GlobalSearch(level=1) must report the level-1 community")
+	assert.Equal(t, entDrone1, respL1.CommunitySummaries[0].CommunityID)
+	assert.Equal(t, 1, respL1.CommunitySummaries[0].Level,
+		"the summary must carry the level it was built from; a zero here means the "+
+			"Level stamp was lost and every downstream lookup silently used level 0")
+	assert.Equal(t, 3, respL1.CommunitySummaries[0].MemberCount,
+		"MemberCount must come from the 3-member level-1 record, not the 2-member "+
+			"level-0 record sharing this community ID")
 }

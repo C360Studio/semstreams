@@ -293,10 +293,13 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 	}
 
 	// Synthesize answer from community context
+	// Level is carried alongside CommunityID: an ID identifies a community only
+	// within its level, so a summary that drops the level is not re-resolvable.
 	cs := []CommunitySummary{{
 		CommunityID: community.ID,
 		Summary:     commSummary,
 		Keywords:    community.Keywords,
+		Level:       community.Level,
 		MemberCount: len(community.Members),
 	}}
 	synth := c.synthesizeQueryAnswer(ctx, req.Query, cs, len(matchedEntities))
@@ -1546,14 +1549,22 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 	// Collect all RepEntity IDs across matched communities (deduplicated)
 	seen := make(map[string]bool)
 	var repEntityIDs []string
-	commRepEntities := make(map[string][]string) // communityID → repEntity IDs
+	// Indexed by summary POSITION, not community ID. A community ID is unique
+	// only within a level, and summaries can span levels (findCommunitiesForEntities
+	// walks every level), so an ID-keyed map silently gave two same-ID summaries the
+	// last level's rep entities while each kept its own MemberCount — a digest
+	// stitched from two different communities. Position is unique by construction,
+	// so the collision is unrepresentable rather than guarded.
+	repsBySummary := make([][]string, len(summaries))
 	for i := range summaries {
-		comm := c.communityCache.GetCommunity(summaries[i].CommunityID)
+		// Level-qualified: community IDs are only unique within a level, and
+		// Level here came off the same cache record as CommunityID.
+		comm := c.communityCache.GetCommunity(summaries[i].Level, summaries[i].CommunityID)
 		if comm == nil {
 			continue
 		}
 		summaries[i].MemberCount = len(comm.Members)
-		commRepEntities[summaries[i].CommunityID] = comm.RepEntities
+		repsBySummary[i] = comm.RepEntities
 		for _, id := range comm.RepEntities {
 			if !seen[id] {
 				seen[id] = true
@@ -1570,7 +1581,7 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 
 	// Populate Entities on each summary
 	for i := range summaries {
-		reps := commRepEntities[summaries[i].CommunityID]
+		reps := repsBySummary[i]
 		if len(reps) == 0 {
 			continue
 		}
@@ -1981,7 +1992,7 @@ func (c *Component) buildSources(entities []*gtypes.EntityState, semanticHits []
 		// We don't have member lists in CommunitySummary, so skip community mapping
 		// unless we can access it from cache
 		if c.communityCache != nil {
-			community := c.communityCache.GetCommunity(cs.CommunityID)
+			community := c.communityCache.GetCommunity(cs.Level, cs.CommunityID)
 			if community != nil {
 				for _, member := range community.Members {
 					entityToCommunity[member] = cs.CommunityID

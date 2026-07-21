@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -18,14 +20,19 @@ import (
 type CommunityCache struct {
 	mu sync.RWMutex
 
-	// communities maps community ID → Community
-	communities map[string]*clustering.Community
+	// communities maps level → community ID → Community.
+	//
+	// Keyed by (level, ID) because that is the storage identity: COMMUNITY_INDEX
+	// keys are "{level}.{community_id}" (graph/clustering/storage.go). Cross-level
+	// ID collisions are structural, not incidental — an LPA community ID IS its
+	// seed entity ID, and detectHierarchicalLevel re-runs LPA over the same entity
+	// set at every level, so levels 0/1/2 draw IDs from one pool. A bare-ID map
+	// lets a level-1 write shadow the level-0 record and lets a level-0 delete
+	// evict a level-1 one.
+	communities map[int]map[string]*clustering.Community
 
 	// entityCommunity maps entityID → level → communityID for fast LocalSearch lookups
 	entityCommunity map[string]map[int]string
-
-	// byLevel maps level → communities for GlobalSearch
-	byLevel map[int][]*clustering.Community
 
 	// Lifecycle
 	logger  *slog.Logger
@@ -36,9 +43,8 @@ type CommunityCache struct {
 // NewCommunityCache creates a new community cache.
 func NewCommunityCache(logger *slog.Logger) *CommunityCache {
 	return &CommunityCache{
-		communities:     make(map[string]*clustering.Community),
+		communities:     make(map[int]map[string]*clustering.Community),
 		entityCommunity: make(map[string]map[int]string),
-		byLevel:         make(map[int][]*clustering.Community),
 		logger:          logger,
 	}
 }
@@ -66,9 +72,10 @@ func (c *CommunityCache) WatchAndSync(ctx context.Context, bucket jetstream.KeyV
 				// nil entry indicates initial state enumeration complete
 				c.mu.Lock()
 				c.ready = true
+				total := c.totalCommunitiesLocked()
 				c.mu.Unlock()
 				c.logger.Info("community cache initial sync complete",
-					"communities", len(c.communities))
+					"communities", total)
 				continue
 			}
 
@@ -84,9 +91,13 @@ func (c *CommunityCache) WatchAndSync(ctx context.Context, bucket jetstream.KeyV
 
 // handleUpdate processes a community create/update from KV watch.
 func (c *CommunityCache) handleUpdate(key string, data []byte) {
-	// Skip entity mapping keys (format: entity.{level}.{entityID})
-	// These contain plain string community IDs, not JSON Community objects
-	if strings.HasPrefix(key, "entity.") {
+	// The KV key is the authority for level, on both the update and the delete
+	// path — handleDelete only ever has the key, so keying updates off the payload
+	// instead would make the two paths disagree and leak entries.
+	level, communityID, ok := parseCommunityKey(key)
+	if !ok {
+		// Entity mapping keys (entity.{level}.{entityID}) carry a bare community
+		// ID string, not a Community; anything else is not ours to index.
 		return
 	}
 
@@ -98,87 +109,101 @@ func (c *CommunityCache) handleUpdate(key string, data []byte) {
 		return
 	}
 
+	if community.ID != communityID || community.Level != level {
+		// Normalize to the key. The record is reachable only under its key, so the
+		// key must win or a later delete for that key would miss this entry.
+		c.logger.Warn("community payload disagrees with its KV key — normalizing to the key",
+			"key", key,
+			"payload_id", community.ID,
+			"payload_level", community.Level)
+		community.ID = communityID
+		community.Level = level
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Remove old membership mappings if this community existed
-	// Use community.ID for consistent lookup (not KV key)
-	if old, exists := c.communities[community.ID]; exists {
-		c.removeMembershipMappings(old)
+	// Remove old membership mappings if this (level, ID) existed.
+	if old, exists := c.communities[level][communityID]; exists {
+		c.removeMembershipMappings(level, old)
 	}
 
-	// Store the community using community.ID as key (not KV key)
-	// This ensures consistent lookups via GetEntityCommunity
-	c.communities[community.ID] = &community
+	if c.communities[level] == nil {
+		c.communities[level] = make(map[string]*clustering.Community)
+	}
+	c.communities[level][communityID] = &community
 
 	// Update entity→community mappings
 	for _, entityID := range community.Members {
 		if c.entityCommunity[entityID] == nil {
 			c.entityCommunity[entityID] = make(map[int]string)
 		}
-		c.entityCommunity[entityID][community.Level] = community.ID
+		c.entityCommunity[entityID][level] = communityID
 	}
 
-	// Rebuild byLevel index for this level
-	c.rebuildLevelIndex(community.Level)
-
 	c.logger.Debug("community cache updated",
-		"id", community.ID,
-		"level", community.Level,
+		"id", communityID,
+		"level", level,
 		"members", len(community.Members))
 }
 
 // handleDelete processes a community deletion from KV watch.
 func (c *CommunityCache) handleDelete(key string) {
-	// Extract community ID from KV key (format: {level}.{communityID})
-	communityID := extractCommunityIDFromKey(key)
-	if communityID == "" {
+	level, communityID, ok := parseCommunityKey(key)
+	if !ok {
 		return // Not a community key (e.g., entity mapping key)
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	community, exists := c.communities[communityID]
+	byID, exists := c.communities[level]
+	if !exists {
+		return
+	}
+	community, exists := byID[communityID]
 	if !exists {
 		return
 	}
 
-	// Remove membership mappings
-	c.removeMembershipMappings(community)
+	// Scoped to the level named by the DELETED KEY, never the level of whatever
+	// record a bare-ID lookup happened to find.
+	c.removeMembershipMappings(level, community)
 
-	// Remove from communities map
-	delete(c.communities, communityID)
+	delete(byID, communityID)
+	if len(byID) == 0 {
+		delete(c.communities, level)
+	}
 
-	// Rebuild byLevel index for this level
-	c.rebuildLevelIndex(community.Level)
-
-	c.logger.Debug("community cache deleted", "id", communityID)
+	c.logger.Debug("community cache deleted", "id", communityID, "level", level)
 }
 
-// extractCommunityIDFromKey extracts the community ID from a KV key.
-// Key format: {level}.{communityID}
-// Returns empty string if not a valid community key.
-func extractCommunityIDFromKey(key string) string {
-	// Skip entity mapping keys (format: entity.{level}.{entityID})
-	if strings.HasPrefix(key, "entity.") {
-		return ""
-	}
-	// Key format is {level}.{communityID}
-	// Find first dot to skip level number
+// parseCommunityKey splits a COMMUNITY_INDEX key into its level and community ID.
+//
+// Key format: {level}.{communityID} — see clustering.communityKey. Community IDs
+// are entity IDs and contain dots, so only the first segment is the level.
+// Returns ok=false for entity mapping keys (entity.{level}.{entityID}) and for
+// anything whose first segment is not a level number.
+func parseCommunityKey(key string) (level int, communityID string, ok bool) {
 	dotIdx := strings.Index(key, ".")
-	if dotIdx == -1 {
-		return ""
+	if dotIdx <= 0 || dotIdx == len(key)-1 {
+		return 0, "", false
 	}
-	return key[dotIdx+1:]
+	level, err := strconv.Atoi(key[:dotIdx])
+	if err != nil {
+		return 0, "", false
+	}
+	return level, key[dotIdx+1:], true
 }
 
-// removeMembershipMappings removes entity→community mappings for a community.
+// removeMembershipMappings removes entity→community mappings for a community at a level.
+// The level is passed explicitly rather than read off the community so callers cannot
+// silently strip the wrong level's mappings.
 // Must be called with mu held.
-func (c *CommunityCache) removeMembershipMappings(community *clustering.Community) {
+func (c *CommunityCache) removeMembershipMappings(level int, community *clustering.Community) {
 	for _, entityID := range community.Members {
 		if levels, exists := c.entityCommunity[entityID]; exists {
-			delete(levels, community.Level)
+			delete(levels, level)
 			if len(levels) == 0 {
 				delete(c.entityCommunity, entityID)
 			}
@@ -186,24 +211,26 @@ func (c *CommunityCache) removeMembershipMappings(community *clustering.Communit
 	}
 }
 
-// rebuildLevelIndex rebuilds the byLevel index for a specific level.
+// totalCommunitiesLocked counts communities across all levels.
 // Must be called with mu held.
-func (c *CommunityCache) rebuildLevelIndex(level int) {
-	communities := make([]*clustering.Community, 0)
-	for _, comm := range c.communities {
-		if comm.Level == level {
-			communities = append(communities, comm)
-		}
+func (c *CommunityCache) totalCommunitiesLocked() int {
+	total := 0
+	for _, byID := range c.communities {
+		total += len(byID)
 	}
-	c.byLevel[level] = communities
+	return total
 }
 
-// GetCommunity retrieves a community by ID.
+// GetCommunity retrieves a community by level and ID.
+//
+// The level is required: community IDs are only unique WITHIN a level, so an
+// ID-only lookup would return an arbitrary level's record. Callers hold the level
+// on CommunitySummary.Level, which is populated from the same record.
 // Returns nil if not found.
-func (c *CommunityCache) GetCommunity(id string) *clustering.Community {
+func (c *CommunityCache) GetCommunity(level int, id string) *clustering.Community {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return c.communities[id]
+	return c.communities[level][id]
 }
 
 // GetEntityCommunity retrieves the community containing an entity at a specific level.
@@ -222,36 +249,52 @@ func (c *CommunityCache) GetEntityCommunity(entityID string, level int) *cluster
 		return nil
 	}
 
-	return c.communities[communityID]
+	// Resolve within the same level — an entity mapping is level-scoped.
+	return c.communities[level][communityID]
 }
 
-// GetCommunitiesByLevel retrieves all communities at a specific level.
+// GetCommunitiesByLevel retrieves all communities at a specific level, ordered by
+// community ID.
+//
+// Built from the authoritative map rather than a maintained byLevel index: the
+// derived index is what went stale when a delete rebuilt it from an already-shadowed
+// map. The order is sorted because downstream ranking (scoreCommunitySummaries) uses
+// an unstable sort with no tie-break, so an unordered input reorders equal-scoring
+// communities between identical queries.
 // Returns empty slice if no communities exist at that level.
 func (c *CommunityCache) GetCommunitiesByLevel(level int) []*clustering.Community {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	communities := c.byLevel[level]
-	if communities == nil {
-		return []*clustering.Community{}
+	byID := c.communities[level]
+	result := make([]*clustering.Community, 0, len(byID))
+	for _, comm := range byID {
+		result = append(result, comm)
 	}
-
-	// Return a copy to avoid race conditions
-	result := make([]*clustering.Community, len(communities))
-	copy(result, communities)
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
 	return result
 }
 
-// GetAllCommunities retrieves all communities regardless of level.
+// GetAllCommunities retrieves all communities across every level, ordered by
+// (level, community ID). A community ID that exists at more than one level yields
+// one entry per level.
 // Returns empty slice if no communities exist.
 func (c *CommunityCache) GetAllCommunities() []*clustering.Community {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	result := make([]*clustering.Community, 0, len(c.communities))
-	for _, comm := range c.communities {
-		result = append(result, comm)
+	result := make([]*clustering.Community, 0, c.totalCommunitiesLocked())
+	for _, byID := range c.communities {
+		for _, comm := range byID {
+			result = append(result, comm)
+		}
 	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Level != result[j].Level {
+			return result[i].Level < result[j].Level
+		}
+		return result[i].ID < result[j].ID
+	})
 	return result
 }
 
@@ -267,13 +310,13 @@ func (c *CommunityCache) Stats() CommunityStats {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	levelCounts := make(map[int]int)
-	for level, communities := range c.byLevel {
-		levelCounts[level] = len(communities)
+	levelCounts := make(map[int]int, len(c.communities))
+	for level, byID := range c.communities {
+		levelCounts[level] = len(byID)
 	}
 
 	return CommunityStats{
-		TotalCommunities: len(c.communities),
+		TotalCommunities: c.totalCommunitiesLocked(),
 		TotalEntities:    len(c.entityCommunity),
 		ByLevel:          levelCounts,
 		Ready:            c.ready,
