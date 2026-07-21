@@ -184,11 +184,19 @@ func (c *Client) awaitFirstStatus(ctx context.Context, watch *readiness.Watcher)
 // interesting (gh#590). The producer now pays one write per heartbeat and this client
 // holds the answer.
 //
-// The unknown set is what the subject already covered — no bucket, no key, a deleted
-// key, a backend fault, an undecodable value, a transport with no KV — plus one case
-// state adds that a request could not have: a feed that has gone quiet past the
-// freshness window, i.e. a producer that died holding a Ready key. All of them are one
-// error, because all of them were one error before.
+// ADR-084 D6 SPLITS the failure set that ADR-083 had collapsed into one error:
+//
+//   - WIRING failures — a transport with no KV capability, a bucket that cannot be
+//     opened — stay loud, unwrapped errors. They are operator bugs that do not heal,
+//     and reporting them as "readiness unknown" would let a permanently misconfigured
+//     deployment serve honest-looking empty envelopes forever.
+//   - UNKNOWN readiness — never published, gone quiet past the freshness window, a
+//     stale key held by a dead producer, an undecodable value — wraps
+//     fusion.ErrReadinessUnknown. The engine maps it to the empty-honest defer
+//     envelope: still fail-closed, but a degrade rather than a crash.
+//
+// Both were one error before because a request/reply could not tell them apart. Held
+// state can, and the two want different operator responses.
 func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 	watch, err := c.statusWatcher(ctx)
 	if err != nil {
@@ -203,9 +211,9 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 		// one — a dead graph-index must not serve its final Ready=true forever, or the
 		// honesty envelope licenses authoritative-absence claims against a frozen index.
 		return fusion.IndexStatus{}, fmt.Errorf(
-			"fusionnats: readiness on %s/%s is unknown (known=%t age=%s): %w",
+			"fusionnats: readiness on %s/%s is unknown (known=%t age=%s): %w: %w",
 			readiness.BucketGraphStatus, readiness.KeyGraphIndex,
-			reading.Known, reading.Age, unknownCause(reading))
+			reading.Known, reading.Age, fusion.ErrReadinessUnknown, unknownCause(reading))
 	}
 	// Decode straight into the target: graph.IndexStatusResponse and
 	// fusion.IndexStatus are field-identical by contract (ADR-066 §5), so a direct
@@ -216,7 +224,10 @@ func (c *Client) Status(ctx context.Context) (fusion.IndexStatus, error) {
 	// envelope: taking the decoded struct would reintroduce exactly that remap.
 	var resp fusion.IndexStatus
 	if err := json.Unmarshal(reading.Raw, &resp); err != nil {
-		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w", err)
+		// An undecodable value is a readiness we cannot vouch for, not broken wiring:
+		// the transport worked and delivered something. Degrade, do not crash.
+		return fusion.IndexStatus{}, fmt.Errorf("fusionnats: decode status: %w: %w",
+			fusion.ErrReadinessUnknown, err)
 	}
 	return resp, nil
 }

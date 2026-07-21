@@ -96,8 +96,12 @@ func (g *fakeGraph) Names(_ context.Context, _ string, _ int) ([]string, error) 
 	return g.names, nil
 }
 
+// readyStatus is a HEALTHY producer's envelope. BootstrapComplete is set because every
+// real producer stamps it from its own build latch (ADR-084 D2) — an envelope without
+// it models a pre-ADR-084 producer, not a healthy one, and would silently turn every
+// test using this helper into a bootstrap_incomplete defer.
 func readyStatus() fusion.IndexStatus {
-	return fusion.IndexStatus{Ready: true, State: fusion.StateReady}
+	return fusion.IndexStatus{Ready: true, State: fusion.StateReady, BootstrapComplete: true}
 }
 
 func entity(id, title, path string, extra ...message.Triple) *fusion.Entity {

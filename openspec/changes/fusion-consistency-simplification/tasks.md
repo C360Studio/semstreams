@@ -64,10 +64,15 @@
       unknown shape still fails closed, the escape still never applies to a
       received status, code/class unmoved. A `preBootstrap` fixture pins the
       gh#474 cutover still deferring.
-- [ ] 3.2 graph-index responder: verify-only (near-no-op per review — the
+- [x] 3.2 graph-index responder: verify-only (near-no-op per review — the
       responder never lag-gates post-bootstrap today). Confirm with tests;
       no narrowing applied to `ensureQueryReady` beyond 2.2's constraint.
-- [ ] 3.3 Sweep every `ErrorCodeIndexNotReady` emitter/consumer — full list
+      CONFIRMED: verified by construction, not assumption — past the sticky
+      short-circuit the latch is false, so every envelope reaching the gate
+      carries BootstrapComplete=false and short-circuits there; the staleness
+      comparison is unreachable. The declared FreshnessExact is about the
+      pre-bootstrap probe, now stated in the doc.
+- [x] 3.3 Sweep every `ErrorCodeIndexNotReady` emitter/consumer — full list
       from the review: graph/query client.go:321 (watch-lost latch —
       process-lifetime, never rebinds: audit and document restart-required
       or add rebind), graph-index (failedCount/bootstrap — stays),
@@ -76,16 +81,35 @@
       temporal (813,817,333), rule entity_watcher.go:45,61, lifecycle
       manager_query.go:228,342,351,419, fusion isIndexNotReady consumers.
       Verify each site's meaning survives the narrowing (all are
-      responder-up/watcher-health shaped — confirm, don't assume).
+      responder-up/watcher-health shaped — confirm, don't assume). DONE:
+      19 emission + 4 consumer sites swept. ALL emissions outside
+      graph/query survive (watcher-health / bootstrap-incomplete shaped);
+      the one real residue was fusion's hand-rolled top gate, fixed in 4.1.
+      OWNER DECISION on client.go:321: the watch-lost latch is PERMANENT
+      (verified: no clearing writer, and the sole WatchAll bind is
+      unreachable once `initialized`) — documented as restart-required with
+      a test pinning the permanence and an actionable message; class stays
+      transient (sister repos match on it), supervised rebind filed
+      separately. Sites the task list MISSED, now fixed:
+      `graph/mutation_responses.go` ErrorCodeIndexNotReady docstring (was
+      still telling operators to probe the `ready` bit — the definition
+      site, highest leverage), graph-index's "still catching up" message +
+      doc, graph-embedding component.go:424, and the
+      engine_lens_readiness_test fixture doc.
 
 ## 4. Fusion regate + unhydrated reporting + scores
 
-- [ ] 4.1 `Fuse` ADOPTS the canonical gate (today hand-rolled `!Ready`,
+- [x] 4.1 `Fuse` ADOPTS the canonical gate (today hand-rolled `!Ready`,
       engine_lens.go:87) with freshness=none: proceed under lag reporting
       `staleness_ms`; empty-honest envelope only on health defers. Status
       surface split (D6): fusionnats returns a typed readiness-unknown for
       quiet/stale feeds (engine → defer envelope) while wiring failures
-      stay loud errors; no ungated escape.
+      stay loud errors; no ungated escape. DONE: `fusion.ErrReadinessUnknown`
+      sentinel wraps quiet/stale/undecodable; wiring failures (no KV
+      capability, watch-start failure) stay unwrapped and loud. The
+      IndexStatus->gate-input projection has a JSON-equality test so a field
+      added to both structs but forgotten in the converter fails loudly —
+      a drop there silently changes whether fusion serves at all.
 - [x] 4.2 `graph.query.batch` handler (graph-ingest/query.go): `missing:
       [{id, reason}]`, closed enum, first-error contract preserved (`error`
       reserved); fix the stale "never a silent omission" comment; structured

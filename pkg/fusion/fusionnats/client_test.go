@@ -859,3 +859,53 @@ func TestStatus_BootstrapCompleteSurvivesProductionDecode(t *testing.T) {
 		t.Error("legacy envelope decoded bootstrap_complete=true; health gates would fail OPEN")
 	}
 }
+
+// TestStatus_UnknownIsTypedButWiringIsNot pins the ADR-084 D6 split. ADR-083 collapsed
+// every readiness failure into one error because a request/reply could not tell them
+// apart; held state can, and the two want different responses:
+//
+//   - a feed we cannot vouch for is a DEGRADE — the engine turns it into an honest
+//     empty envelope, which is the correct answer to "is the graph ready" when nobody
+//     is answering;
+//   - broken wiring is an operator BUG that does not heal, and must not spend the rest
+//     of the deployment's life masquerading as "the graph is busy".
+func TestStatus_UnknownIsTypedButWiringIsNot(t *testing.T) {
+	t.Run("never published is typed unknown", func(t *testing.T) {
+		c := newStatusClient(t, &fakeRequester{}, statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown,
+			"a producer that never published must degrade, not crash the caller")
+	})
+
+	t.Run("a quiet feed past the freshness window is typed unknown", func(t *testing.T) {
+		stale := publishing(t, graph.IndexStatusResponse{
+			Ready: true, State: graph.IndexStateReady, BootstrapComplete: true,
+		})
+		stale.statusCreated = time.Now().
+			Add(-readiness.FreshnessWindow(readiness.DefaultHeartbeat) - time.Second)
+		c := newStatusClient(t, stale, statusWaitTest)
+
+		_, err := c.Status(context.Background())
+		require.Error(t, err, "a dead producer's last Ready key must not be served forever")
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown)
+	})
+
+	t.Run("an undecodable value is typed unknown", func(t *testing.T) {
+		// The transport worked and delivered something — that is a readiness we cannot
+		// vouch for, not a wiring failure.
+		c := newStatusClient(t, publishingRaw(t, []byte("{not json")), statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.ErrorIs(t, err, fusion.ErrReadinessUnknown)
+	})
+
+	t.Run("a transport without the KV capability is NOT typed unknown", func(t *testing.T) {
+		c := newStatusClient(t, subjectOnlyTransport{}, statusWaitTest)
+		_, err := c.Status(context.Background())
+		require.Error(t, err)
+		assert.NotErrorIs(t, err, fusion.ErrReadinessUnknown,
+			"broken wiring must stay loud — degrading it would let a misconfigured "+
+				"deployment serve honest-looking empty envelopes forever")
+	})
+}

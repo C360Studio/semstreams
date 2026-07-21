@@ -151,11 +151,18 @@ func (c *Component) handleQueryOutgoingNATS(ctx context.Context, data []byte) ([
 }
 
 // ensureQueryReady gates the composite-key reverse-index query handlers (incoming,
-// byName) on the index having caught up to ENTITY_STATES at least once after Start
-// (gh#474 Codex P1d). Sticky-fast once caught-up; otherwise it does one revision-lag
-// probe. Returns a transient ErrorCodeIndexNotReady while still building so a caller
-// retries rather than acting on the partial keyset a format cutover / cold replay is
-// still materialising (old aggregate keys are inert, new keys incomplete).
+// byName) on the index having completed its INITIAL BUILD — caught up to ENTITY_STATES
+// at least once after Start (gh#474 Codex P1d). Sticky-fast afterwards; before that it
+// does one revision-lag probe. Returns a transient ErrorCodeIndexNotReady while the
+// first build is incomplete so a caller retries rather than acting on the partial
+// keyset a format cutover / cold replay is still materialising (old aggregate keys are
+// inert, new keys incomplete).
+//
+// Note the gate never fires on ORDINARY lag: once the latch is set this returns
+// immediately, and before it is set the envelope necessarily carries
+// BootstrapComplete=false, so the helper short-circuits on that fact and the staleness
+// comparison is unreachable here. The declared FreshnessExact below is therefore about
+// the pre-bootstrap probe, not a per-query catch-up requirement.
 //
 // This is the IN-PROCESS adopter of the canonical gate: graph-index computes the
 // envelope it gates on, so there is no transport to lose and the reading is
@@ -233,7 +240,7 @@ func (c *Component) ensureQueryReady(ctx context.Context) error {
 		slog.Uint64("target_revision", status.TargetRevision),
 		slog.Uint64("lag", status.Lag))
 	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
-		errors.New("index not ready: still catching up to ENTITY_STATES"))
+		errors.New("index not ready: initial build has not completed"))
 }
 
 // handleQueryIncomingNATS handles incoming relationship query requests via NATS request/reply.

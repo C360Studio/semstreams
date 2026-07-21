@@ -317,9 +317,22 @@ func (qc *natsClient) entityStateContractError(operation string) error {
 		return errs.WrapFatal(contractErr, "graph.query", operation,
 			"authoritative ENTITY_STATES requires reset and canonical reingest")
 	}
+	// PERMANENT FOR THIS CLIENT'S LIFETIME (audited under ADR-084 §3.3, deliberately
+	// left as-is). Nothing clears entityWatchLost: the only writers are the two
+	// Store(true) in observeEntityStates, and the goroutine returns immediately after
+	// either. Rebinding is unreachable too — the sole WatchAll call site sits in
+	// ensureBuckets behind `if qc.initialized { return nil }`, and initialized is never
+	// reset. So a caller that sees this must construct a NEW client; retrying THIS one
+	// can never succeed, despite the transient class.
+	//
+	// The class stays transient because sister repos already match on it, and changing
+	// it is a wire-contract break that belongs in its own change rather than riding a
+	// readiness-semantics one. A supervised rebind is the honest fix and carries its own
+	// design (cache coherence across the gap, bounded attempts, Stop coordination); it is
+	// filed separately rather than smuggled in here.
 	if qc.entityWatchLost.Load() {
 		return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady,
-			errors.New("authoritative ENTITY_STATES watcher is unavailable"))
+			errors.New("authoritative ENTITY_STATES watcher is unavailable; this client cannot recover — construct a new one"))
 	}
 	return nil
 }

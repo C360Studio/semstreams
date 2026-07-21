@@ -382,3 +382,37 @@ func (s *countingSource) GetKeyValueBucket(context.Context, string) (jetstream.K
 	s.onOpen()
 	return s.bucket, nil
 }
+
+// TestEntityWatchLost_IsPermanentForTheClient pins the audited (ADR-084 §3.3) fact that
+// the ENTITY_STATES watch-lost latch never clears, so the doc comment cannot quietly
+// diverge from the mechanism.
+//
+// The property matters because the emitted error is classified TRANSIENT, which tells a
+// caller to retry — and on this client a retry can never succeed. Documenting that is
+// the deliberate resolution; a supervised rebind is filed separately. If someone later
+// adds the rebind, this test SHOULD fail, and its failure is the signal to update the
+// doc comment and the class together rather than leaving prose behind.
+func TestEntityWatchLost_IsPermanentForTheClient(t *testing.T) {
+	qc := &natsClient{}
+
+	require.NoError(t, qc.entityStateContractError("read"),
+		"a healthy client must not report a lost watch")
+
+	// The state observeEntityStates leaves behind when its watcher context is cancelled
+	// or its Updates channel closes.
+	qc.entityWatchLost.Store(true)
+
+	for i := 0; i < 3; i++ {
+		err := qc.entityStateContractError("read")
+		require.Error(t, err, "retry %d: the latch must still be set — nothing clears it", i)
+		var ce *errs.ClassifiedError
+		require.True(t, errors.As(err, &ce))
+		assert.Equal(t, gtypes.ErrorCodeIndexNotReady, ce.Code,
+			"the classified code is the consumer contract and must not move")
+		assert.Equal(t, errs.ErrorTransient, ce.Class,
+			"the class stays transient deliberately: sister repos match on it, and "+
+				"changing it is a wire break that belongs in its own change")
+	}
+	assert.Contains(t, qc.entityStateContractError("read").Error(), "construct a new one",
+		"the message must tell the caller the one action that actually recovers")
+}

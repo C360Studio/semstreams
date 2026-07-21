@@ -112,15 +112,25 @@ const (
 	// query rather than retry unchanged; the full hot-key NAME redesign is gh#381.
 	ErrorCodeResourceExhausted = "resource_exhausted"
 
-	// ErrorCodeIndexNotReady indicates a reverse-index query (incoming, byName)
-	// arrived before the index caught up to ENTITY_STATES — e.g. during the breaking
-	// composite-key format cutover on an in-place upgrade (gh#474 Codex P1d), when old
-	// aggregate keys are inert and the new keyset is still replaying. Serving the
-	// partial-to-empty new keyset would advertise a smaller graph than exists; the
-	// handler returns this transient code instead so a caller retries once the index
-	// reports caught-up (the GRAPH_STATUS readiness envelope's Ready bit — probe it
-	// with `nats kv get GRAPH_STATUS graph-index`), rather than acting on a
-	// silently-incomplete result.
+	// ErrorCodeIndexNotReady indicates a query arrived while the serving index was not
+	// SOUND to read from — the responder or its watcher is unavailable, the index is
+	// degraded by an unresolved required write, or it has not finished its initial
+	// build. The motivating case is the breaking composite-key format cutover on an
+	// in-place upgrade (gh#474 Codex P1d), where old aggregate keys are inert and the
+	// new keyset is still materialising: serving it would advertise a smaller graph
+	// than exists.
+	//
+	// NOT emitted for ordinary revision lag (narrowed by ADR-084). A healthy index that
+	// is merely behind SERVES, reporting its view age as staleness_ms on the readiness
+	// envelope, because coverage was never evidence of soundness and gating on it made
+	// every write burst look like a fault (#592). Probe health with
+	// `nats kv get GRAPH_STATUS graph-index` and read `state` + `bootstrap_complete` —
+	// NOT the `ready` bit, which answers coverage and is false on any busy index.
+	//
+	// Callers retrying it should retry with backoff against the health question, and a
+	// caller that needs "is MY write visible?" should not use this code at all: compare
+	// the kv_revision its mutation returned against the envelope's indexed_revision,
+	// which is the one sound per-entity check (ADR-084).
 	ErrorCodeIndexNotReady = "index_not_ready"
 )
 

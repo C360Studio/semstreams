@@ -1,5 +1,11 @@
 package fusion
 
+import (
+	"errors"
+
+	"github.com/c360studio/semstreams/graph"
+)
+
 // The fused response contract (ADR-062 lens-driven entry). Lifted from
 // semsource's validated source/fusion contract.go — the response shape an agent
 // acts on: verbatim body + the structure around it, keyed by what a human reads
@@ -100,6 +106,38 @@ type IndexStatus struct {
 	Phase       string `json:"phase,omitempty"`
 	Revision    string `json:"revision,omitempty"`
 	LastSynced  string `json:"last_synced,omitempty"`
+}
+
+// ErrReadinessUnknown marks a readiness answer the RetrievalClient cannot vouch for:
+// the producer never published, or its feed went quiet past the freshness window
+// holding a last-known value. It is DISTINCT from a wiring failure (a transport with no
+// KV capability, a bucket that cannot be opened) because the two want different
+// responses — an unknown feed is a fail-closed degrade the caller sees as an honest
+// empty envelope, while broken wiring is an operator's bug that must stay loud rather
+// than masquerading as "the graph is busy" forever (ADR-084 D6).
+//
+// Wrap it with %w; callers match with errors.Is.
+var ErrReadinessUnknown = errors.New("fusion: graph readiness is unknown")
+
+// readinessEnvelope projects this status into the shared gate input. The two structs
+// are field-identical by contract (ADR-066 §5) — see the round-trip test that proves
+// every field survives this copy, which is what keeps a newly added field from silently
+// changing gate behavior by being dropped here.
+func (s IndexStatus) readinessEnvelope() graph.IndexStatusResponse {
+	return graph.IndexStatusResponse{
+		Ready:             s.Ready,
+		State:             string(s.State),
+		Code:              s.Code,
+		Reason:            s.Reason,
+		BootstrapComplete: s.BootstrapComplete,
+		IndexedRevision:   s.IndexedRevision,
+		TargetRevision:    s.TargetRevision,
+		Lag:               s.Lag,
+		StalenessMs:       s.StalenessMs,
+		Phase:             s.Phase,
+		Revision:          s.Revision,
+		LastSynced:        s.LastSynced,
+	}
 }
 
 // Ref points to a node by what a human reads — never the entity ID.

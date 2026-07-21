@@ -358,7 +358,8 @@ func TestGraph_ViewRevision(t *testing.T) {
 		return &fusion.Entity{ID: "S", Triples: []message.Triple{{Predicate: "acme.note.text", Object: "x"}}}
 	}
 	statusAt := func(rev uint64) fusion.IndexStatus {
-		return fusion.IndexStatus{Ready: true, State: fusion.StateReady, IndexedRevision: rev}
+		return fusion.IndexStatus{Ready: true, State: fusion.StateReady,
+			BootstrapComplete: true, IndexedRevision: rev}
 	}
 
 	t.Run("stable bounds when the revision holds", func(t *testing.T) {
@@ -580,7 +581,7 @@ func TestGraph_TypedFactsAndMultiValuedPredicates(t *testing.T) {
 func TestGraphProjection_ResponseJSONRoundTrip(t *testing.T) {
 	conf := 0.85
 	resp := fusion.Response{
-		Index:      fusion.IndexStatus{Ready: true, State: fusion.StateReady, IndexedRevision: 41},
+		Index:      fusion.IndexStatus{Ready: true, State: fusion.StateReady, BootstrapComplete: true, IndexedRevision: 41},
 		Provenance: fusion.ProvenanceDeterministic,
 		Nodes:      []fusion.Node{{Name: "OnEvent", Handle: "acme.ops.code.repo.symbol.OnEvent"}},
 		Graph: &fusion.GraphProjection{

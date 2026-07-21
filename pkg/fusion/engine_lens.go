@@ -82,9 +82,26 @@ func (e *Engine) WithSignals(s RankSignals) *Engine {
 func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, error) {
 	status, err := e.graph.Status(ctx)
 	if err != nil {
+		if errors.Is(err, ErrReadinessUnknown) {
+			// A feed we cannot vouch for fails CLOSED as an honest empty envelope
+			// (ADR-084 D6). Deliberately no ungated escape here, asymmetric with
+			// graph/query's allow_ungated_reads: that flag exists for a standalone
+			// deployment reading its own bucket, while fusion is a shared product
+			// surface whose empty answer other people act on.
+			return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}, nil
+		}
+		// Broken wiring stays LOUD. Masking it as "the graph is busy" would make a
+		// permanent operator bug indistinguishable from transient backpressure, forever.
 		return Response{}, err
 	}
-	if !status.Ready {
+	// Fusion is a read path: it asks the HEALTH question and declares no freshness
+	// requirement (ADR-084 D1). Adopting the canonical gate is the point — this was
+	// hand-rolled as `!status.Ready`, the one exact-coverage check fusion never
+	// migrated, so a healthy index under write returned an empty envelope and the
+	// caller fell back to grep on a graph that could have answered.
+	if proceed, _ := graph.EvaluateReadinessGate(
+		graph.StatusReading{Status: status.readinessEnvelope(), Fresh: true},
+		graph.FreshnessNone()); !proceed {
 		return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}, nil
 	}
 
