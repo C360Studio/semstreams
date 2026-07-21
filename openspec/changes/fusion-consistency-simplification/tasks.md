@@ -112,7 +112,7 @@
       batch consumer, found by review): reconcile `EntityState` against the
       requested set (or consume `missing`), and fix its comment blessing
       silent omission.
-- [ ] 4.7 Pin `kv_revision` (mutation responses) and the envelope's
+- [x] 4.7 Pin `kv_revision` (mutation responses) and the envelope's
       `IndexedRevision` as the same revision space with a test — ADR-084
       promotes read-your-writes to the one sound per-entity check and
       nothing exercises the comparison today.
