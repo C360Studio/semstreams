@@ -390,7 +390,9 @@ func TestIntegration_StalenessGate_WiredByComponentStart(t *testing.T) {
 	}
 
 	config := Config{
-		MaxStalenessStr:      "3s",
+		// Above the readiness heartbeat — a sub-heartbeat bound is unsatisfiable and
+		// is rejected at config validation.
+		MaxStalenessStr:      "15s",
 		DetectionIntervalStr: "1h", // long: this test is about Start's wiring, not ticks
 		MinCommunitySize:     2,
 		MaxIterations:        10,
