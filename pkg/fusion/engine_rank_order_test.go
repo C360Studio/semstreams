@@ -19,10 +19,12 @@ import (
 // seed. Every fusion test until now used a fake that returns requested order, which
 // models the FIXED contract and therefore proves nothing about the broken one.
 //
-// Task 4.3 makes fusionnats.Entities restore resolve order before returning; this test
-// is the reason that fix is required rather than optional, and it must keep passing
-// after it — the engine's dependence on order is deliberate, the transport's failure
-// to honor it was the bug.
+// fusionnats.Entities now restores resolve order before returning (see
+// reconcileHydration's "restores request order" case, which pins the transport half).
+// This test is the reason that fix is required rather than optional, and it keeps
+// passing after it — the engine's dependence on order is deliberate; the transport's
+// failure to honor it was the bug. The RetrievalClient contract now states the
+// requirement explicitly so a future implementation cannot reintroduce it by accident.
 func TestEngine_RankingFollowsHydrationOrder(t *testing.T) {
 	// Three entities whose titles share no lexical affinity with the query, so
 	// position is the only ranking signal in play and the assertion is unambiguous.

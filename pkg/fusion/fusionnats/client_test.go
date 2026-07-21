@@ -616,8 +616,11 @@ func TestEntities_BatchDecodes(t *testing.T) {
 	if fake.lastSubject != subjectBatch {
 		t.Errorf("subject = %q, want %q", fake.lastSubject, subjectBatch)
 	}
-	if len(ents) != 2 {
-		t.Fatalf("got %d entities, want 2", len(ents))
+	if len(ents.Entities) != 2 {
+		t.Fatalf("got %d entities, want 2", len(ents.Entities))
+	}
+	if len(ents.Unhydrated) != 0 {
+		t.Errorf("a complete batch must report nothing unhydrated, got %+v", ents.Unhydrated)
 	}
 }
 
@@ -629,8 +632,8 @@ func TestEntities_EmptyShortCircuits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Entities(nil): %v", err)
 	}
-	if ents != nil {
-		t.Errorf("entities = %v, want nil", ents)
+	if len(ents.Entities) != 0 || len(ents.Unhydrated) != 0 {
+		t.Errorf("hydration = %+v, want empty", ents)
 	}
 	if fake.lastSubject != "" {
 		t.Error("empty IDs must not hit the wire")
@@ -704,7 +707,7 @@ func TestAuthoritativeRepliesRejectPoisonBeforeProjection(t *testing.T) {
 			got, err := tt.call(client)
 			require.Error(t, err)
 			assert.True(t, graph.IsStateContractError(err))
-			assert.Nil(t, got, "no partial projection may escape")
+			assertNoProjection(t, got)
 			var classified *errs.ClassifiedError
 			require.ErrorAs(t, err, &classified)
 			assert.Equal(t, errs.ErrorFatal, classified.Class)
@@ -822,7 +825,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=644 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+// entity-id-audit:classify intentional-malformed "bad" line=647 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
 
 // TestStatus_BootstrapCompleteSurvivesProductionDecode is the lockstep guard for the
 // ADR-084 D2 bit: graph.IndexStatusResponse and fusion.IndexStatus change together, and
@@ -908,4 +911,20 @@ func TestStatus_UnknownIsTypedButWiringIsNot(t *testing.T) {
 			"broken wiring must stay loud — degrading it would let a misconfigured "+
 				"deployment serve honest-looking empty envelopes forever")
 	})
+}
+
+// assertNoProjection checks that a rejected authoritative reply yielded nothing
+// usable. It is not a plain nil check because the batch call returns a STRUCT
+// (fusion.Hydration) whose zero value is the empty result — asserting nil there would
+// fail on a correct implementation while telling us nothing about whether data escaped.
+// What matters is that no entity and no unhydrated claim reached the caller.
+func assertNoProjection(t *testing.T, got any) {
+	t.Helper()
+	if h, ok := got.(fusion.Hydration); ok {
+		assert.Empty(t, h.Entities, "no partial projection may escape")
+		assert.Empty(t, h.Unhydrated,
+			"a rejected reply must not assert anything about what it could not hydrate")
+		return
+	}
+	assert.Nil(t, got, "no partial projection may escape")
 }

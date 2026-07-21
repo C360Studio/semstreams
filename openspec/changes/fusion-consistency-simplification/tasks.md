@@ -123,13 +123,13 @@
       + a bounded-ID Warn; prefix caller deliberately ignores missing (its
       IDs came from a live key scan). Integration test pins reconcilability
       AND that a complete batch's raw bytes are unchanged.
-- [ ] 4.3 `fusionnats.Entities`: ID-set reconciliation (handler report
+- [x] 4.3 `fusionnats.Entities`: ID-set reconciliation (handler report
       authoritative; synthesize `unknown` for IDs in neither list; one entry
       per ID) + restore resolve order before returning (fixes the live
       cache-order ranking scramble); production-decoder round-trip for the
       new fields; wire pins live in package tests (test/contract does not
       cover fusion — review-verified).
-- [ ] 4.4 fusion `Response.unhydrated` (distinct from `Misses`;
+- [x] 4.4 fusion `Response.unhydrated` (distinct from `Misses`;
       all-seeds-unhydrated synthesizes no Miss) + Miss de-license + doc
       sweep: contract.go:65 ("Only Ready permits a not-found conclusion"),
       contract.go:127-128 ("Miss only appears when Ready is true"),
@@ -140,10 +140,13 @@
       similarity where the resolve mode provides one (semantic decode
       struct gains the field), joined by entity ID; opt-in request bool
       with JSON round-trip test; omitempty wire fields.
-- [ ] 4.6 `processor/research-graph-execute/adapters.go` (second in-repo
+- [x] 4.6 `processor/research-graph-execute/adapters.go` (second in-repo
       batch consumer, found by review): reconcile `EntityState` against the
       requested set (or consume `missing`), and fix its comment blessing
-      silent omission.
+      silent omission. DONE: consumes `missing`, logs it bounded, and emits NO
+      Evidence for an unread ID (evidence is a claim about something we read).
+      Test pins that a REJECTED batch reports no missing either — an
+      unvalidated reply's missing list is not evidence.
 - [x] 4.7 Pin `kv_revision` (mutation responses) and the envelope's
       `IndexedRevision` as the same revision space with a test — ADR-084
       promotes read-your-writes to the one sound per-entity check and

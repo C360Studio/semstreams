@@ -376,31 +376,83 @@ func (c *Client) Entity(ctx context.Context, id string) (*fusion.Entity, error) 
 	return &fusion.Entity{ID: es.ID, Triples: es.Triples}, nil
 }
 
-// Entities batch-fetches entities by ID via graph.query.batch. Absent IDs are
-// omitted by the handler (partial success); a non-nil error means a backend
-// failure, which the engine distinguishes from genuine absence.
-func (c *Client) Entities(ctx context.Context, ids []string) ([]*fusion.Entity, error) {
+// Entities batch-fetches entities by ID via graph.query.batch, RECONCILING the reply
+// against the requested set and restoring request order. A non-nil error means a
+// backend failure, which the engine distinguishes from an entity that is simply absent.
+//
+// Both jobs fix real defects that this seam is the only place to fix:
+//
+// RECONCILIATION (gh#597). The handler reports what it could not hydrate, but a client
+// that trusted the reply blindly would still miss an under-reporting handler. Every
+// requested ID is accounted for exactly once: the handler's report is authoritative
+// where it speaks, and an ID in NEITHER list is synthesized as `unknown` rather than as
+// not_found — asserting not-found for something nobody observed is how the original bug
+// class started. Reconciliation is by ID SET, never by count: duplicate requested IDs
+// and a handler that reports an ID in both lists both break counting.
+//
+// ORDER. The handler returns cache hits first and KV fetches after, documented on its
+// side as "callers process as sets". The engine does not: its resolve-rank base is
+// position-derived, so cache residency alone could demote the top resolve seed — a
+// live bug, and a plausible ingredient of gh#597's varying failure mode. Order is
+// restored HERE because this is where request order is still known.
+func (c *Client) Entities(ctx context.Context, ids []string) (fusion.Hydration, error) {
 	if len(ids) == 0 {
-		return nil, nil
+		return fusion.Hydration{}, nil
 	}
 	raw, err := c.request(ctx, subjectBatch, map[string]any{"ids": ids})
 	if err != nil {
-		return nil, err
+		return fusion.Hydration{}, err
 	}
-	var resp struct {
-		Entities []graph.EntityState `json:"entities"`
-	}
+	var resp graph.EntityBatchResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("fusionnats: decode batch: %w", err)
+		return fusion.Hydration{}, fmt.Errorf("fusionnats: decode batch: %w", err)
 	}
 	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
-		return nil, fmt.Errorf("fusionnats: validate batch: %w", err)
+		return fusion.Hydration{}, fmt.Errorf("fusionnats: validate batch: %w", err)
 	}
-	out := make([]*fusion.Entity, 0, len(resp.Entities))
+	return reconcileHydration(ids, resp), nil
+}
+
+// reconcileHydration turns a batch reply into a total accounting of the requested IDs,
+// in request order. Split out from Entities so the set logic is unit-testable without a
+// transport — it is the part with the edge cases (duplicate requests, an ID reported in
+// both lists, an ID reported in neither, an entity nobody asked for).
+func reconcileHydration(requested []string, resp graph.EntityBatchResponse) fusion.Hydration {
+	hydrated := make(map[string]*fusion.Entity, len(resp.Entities))
 	for i := range resp.Entities {
-		out = append(out, &fusion.Entity{ID: resp.Entities[i].ID, Triples: resp.Entities[i].Triples})
+		hydrated[resp.Entities[i].ID] = &fusion.Entity{
+			ID: resp.Entities[i].ID, Triples: resp.Entities[i].Triples,
+		}
 	}
-	return out, nil
+	// The handler's report is authoritative where it speaks. An ID it reported as
+	// missing AND returned an entity for is treated as hydrated: we hold the evidence.
+	reported := make(map[string]fusion.UnhydratedReason, len(resp.Missing))
+	for _, m := range resp.Missing {
+		reported[m.ID] = fusion.UnhydratedReason(m.Reason)
+	}
+
+	out := fusion.Hydration{Entities: make([]*fusion.Entity, 0, len(resp.Entities))}
+	seen := make(map[string]bool, len(requested))
+	for _, id := range requested {
+		if seen[id] {
+			// A duplicate in the request is one entity, reported once. Counting
+			// instead of set-tracking would double-report it as unhydrated.
+			continue
+		}
+		seen[id] = true
+		if ent, ok := hydrated[id]; ok {
+			out.Entities = append(out.Entities, ent)
+			continue
+		}
+		reason, ok := reported[id]
+		if !ok {
+			// Neither hydrated nor reported: the handler under-reported. Say so
+			// rather than inventing not_found.
+			reason = fusion.UnhydratedUnknown
+		}
+		out.Unhydrated = append(out.Unhydrated, fusion.Unhydrated{ID: id, Reason: reason})
+	}
+	return out
 }
 
 // Neighbors returns edges from id along the given predicates in a direction via

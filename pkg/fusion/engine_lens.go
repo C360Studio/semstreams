@@ -73,12 +73,17 @@ func (e *Engine) WithSignals(s RankSignals) *Engine {
 	return e
 }
 
-// Fuse resolves req against the graph through lens and returns the fused
-// response. Readiness is load-bearing: a not-ready graph yields an empty
-// envelope (the caller must fall back); ready+absent yields a miss with
-// near-matches — never an ambiguous empty. A backend failure fetching seeds is
-// surfaced as an error, NOT silently turned into a "not found" (that would
-// violate the ready≠not-found contract).
+// Fuse resolves req against the graph through lens and returns the fused response.
+//
+// The honesty rule is that an empty result is never ambiguous. An UNHEALTHY graph
+// yields an empty envelope the caller must fall back on; a healthy graph that found
+// nothing yields a miss with near-matches; seeds that resolved but could not be read
+// yield Unhydrated and NO miss; and a backend failure is surfaced as an error rather
+// than silently becoming a "not found".
+//
+// ADR-084 narrowed the first case from coverage to health: a healthy index that is
+// merely behind now SERVES, reporting its view age on the envelope, because withholding
+// on lag sent callers to fall back on a graph that could have answered.
 func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, error) {
 	status, err := e.graph.Status(ctx)
 	if err != nil {
@@ -113,14 +118,25 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 		}
 		return Response{}, err
 	}
-	entities, err := e.graph.Entities(ctx, seeds)
+	hydration, err := e.graph.Entities(ctx, seeds)
 	if err != nil {
 		if isIndexNotReady(err) {
 			return e.notReadyEnvelope(ctx, status), nil
 		}
 		return Response{}, err
 	}
+	entities := hydration.Entities
 	if len(entities) == 0 {
+		// Nothing hydrated. If the seeds resolved but NONE of them loaded, this is a
+		// hydration failure, not an absence: reporting it as a miss would claim the
+		// graph looked and found nothing, which is exactly the conclusion it cannot
+		// draw. Say what failed to hydrate and leave Misses empty.
+		if len(hydration.Unhydrated) > 0 {
+			return Response{
+				Index: status, Provenance: ProvenanceForMode(mode),
+				Unhydrated: hydration.Unhydrated, ContractVersion: ContractVersion,
+			}, nil
+		}
 		return e.miss(ctx, status, mode, req.Query), nil
 	}
 
@@ -132,6 +148,7 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 
 	wants := wantSet(req.Want)
 	resp := Response{Index: status, Provenance: ProvenanceForMode(mode), ContractVersion: ContractVersion}
+	resp.Unhydrated = hydration.Unhydrated
 	nodes, truncated, err := e.buildNodes(ctx, ranked, lens, wants, newBudget(req.Budget))
 	if err != nil {
 		if isIndexNotReady(err) {

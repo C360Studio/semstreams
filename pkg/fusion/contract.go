@@ -68,7 +68,10 @@ const (
 // IndexState mirrors the graph readiness phase.
 type IndexState string
 
-// The readiness phases. Only Ready permits a not-found conclusion.
+// The readiness phases. NOTE: none of them licenses a not-found conclusion — see
+// IndexStatus.Ready. Ready reports COVERAGE (the index applied every committed revision
+// up to its target); it says nothing about whether a source ever published the thing you
+// were looking for, which is the question an absence claim actually turns on (ADR-084).
 const (
 	StateBuilding      IndexState = "building"
 	StateReady         IndexState = "ready"
@@ -76,11 +79,19 @@ const (
 	StateResetRequired IndexState = "reset_required"
 )
 
-// IndexStatus is attached to every response. Ready is load-bearing: when false
-// the caller must fall back (e.g. to grep) rather than treat empty as not-found.
-// Ready now means the index is CAUGHT UP (revision-lag), not merely started
-// (ADR-066). Field-identical to graph.IndexStatusResponse — the RetrievalClient
-// decodes the producer's envelope directly into this; the two change together.
+// IndexStatus is attached to every response: the honesty envelope a caller uses to
+// calibrate trust.
+//
+// Ready means the index is CAUGHT UP (revision-lag, ADR-066), not merely started. It
+// does NOT license an authoritative not-found, and a response is no longer withheld
+// merely because it is false — ADR-084 retired that license and regated reads on
+// HEALTH (State + BootstrapComplete). Coverage cannot answer absence: an index caught
+// up to every revision ever committed still knows nothing about a source that never
+// published. Callers wanting "is my write visible?" compare their own revision against
+// IndexedRevision; callers wanting "is this data fresh enough?" read StalenessMs.
+//
+// Field-identical to graph.IndexStatusResponse — the RetrievalClient decodes the
+// producer's envelope directly into this; the two change together.
 type IndexStatus struct {
 	Ready  bool       `json:"ready"`
 	State  IndexState `json:"state"`
@@ -168,8 +179,13 @@ type Node struct {
 	Handle string `json:"handle,omitempty"`
 }
 
-// Miss reports a query that resolved to nothing while the graph was ready, with
-// near-matches. A Miss only appears when Ready is true.
+// Miss reports a query that resolved to nothing, with near-matches.
+//
+// A Miss is NOT an absence proof and is no longer tied to Ready (ADR-084): it is
+// reachable under ordinary lag now that healthy-but-behind indexes serve, and it was
+// never evidence the entity does not exist — only that this lookup found nothing.
+// Callers that must distinguish "found nothing" from "could not read" want Unhydrated,
+// which is a statement about the read.
 type Miss struct {
 	Query      string   `json:"query"`
 	DidYouMean []string `json:"did_you_mean,omitempty"`
@@ -190,10 +206,19 @@ type Response struct {
 	// graph-facet truncation NEVER sets the top-level Truncated bit, and a
 	// request without the graph want omits the field entirely (the v1 wire
 	// shape is unchanged for non-requesting callers).
-	Graph           *GraphProjection `json:"graph,omitempty"`
-	Misses          []Miss           `json:"misses,omitempty"`
-	Truncated       bool             `json:"truncated"`
-	ContractVersion string           `json:"contract_version"`
+	Graph  *GraphProjection `json:"graph,omitempty"`
+	Misses []Miss           `json:"misses,omitempty"`
+	// Unhydrated names requested seeds that did not load — DISTINCT from Misses. A
+	// Miss says "the graph was asked and had nothing"; an Unhydrated entry says "we
+	// could not read this one", a statement about the read rather than about the
+	// world. Neither licenses an absence conclusion (ADR-084), and the
+	// all-seeds-unhydrated case deliberately synthesizes NO Miss: claiming a miss
+	// there would assert exactly the thing the failed read left unknown.
+	//
+	// Omitted when everything hydrated, so a complete response is byte-unchanged.
+	Unhydrated      []Unhydrated `json:"unhydrated,omitempty"`
+	Truncated       bool         `json:"truncated"`
+	ContractVersion string       `json:"contract_version"`
 }
 
 const (

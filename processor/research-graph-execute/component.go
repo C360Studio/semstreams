@@ -115,7 +115,7 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 	if c.gq == nil {
-		c.gq = newGraphQueryAdapter(c.deps.NATSClient, c.config.ExecuteTimeout)
+		c.gq = newGraphQueryAdapter(c.deps.NATSClient, c.config.ExecuteTimeout, c.logger)
 	}
 	if err := c.subscribeInputs(ctx); err != nil {
 		return err

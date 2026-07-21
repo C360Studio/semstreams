@@ -180,9 +180,13 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 //
 // The internal graph.ingest.query.batch handler this forwards to
 // already does bounded concurrency (default 10 parallel KV gets),
-// cache-aware reads, and partial-success (skips missing IDs without
-// failing the whole batch). This passthrough simply lifts that
-// internal subject to the public graph.query.* surface.
+// cache-aware reads, and partial success. Partial success now REPORTS
+// itself: the reply carries `missing: [{id, reason}]` naming every
+// requested ID that did not hydrate, so a consumer can reconcile the
+// two lists against what it asked for instead of inferring from a
+// shorter list (ADR-084 D4 / gh#597). A fully-hydrated batch omits the
+// field, so this passthrough is byte-unchanged for existing consumers.
+// This lifts that internal subject to the public graph.query.* surface.
 //
 // Chunking guidance: batches above ~100 IDs with substantial triple
 // sets risk exceeding NATS's default 1MB max_payload on the reply.

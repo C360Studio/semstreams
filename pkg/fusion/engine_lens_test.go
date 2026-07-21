@@ -32,6 +32,8 @@ type fakeGraph struct {
 	// cannot exercise what happens when a transport breaks the promise, and the
 	// engine's ranking is position-based (see the resolve-order pin).
 	entitiesFn func(ids []string) ([]*fusion.Entity, error)
+	// unhydrated, when set, is reported alongside whatever entitiesFn returns.
+	unhydrated []fusion.Unhydrated
 
 	// statusFn, when set, overrides status/statusErr per call (1-based call
 	// number) — the graph facet's ViewRevision re-sample needs a fake whose
@@ -54,12 +56,13 @@ func (g *fakeGraph) Resolve(_ context.Context, q fusion.ResolveQuery) ([]string,
 func (g *fakeGraph) Entity(_ context.Context, id string) (*fusion.Entity, error) {
 	return g.entities[id], nil
 }
-func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity, error) {
+func (g *fakeGraph) Entities(_ context.Context, ids []string) (fusion.Hydration, error) {
 	if g.entErr != nil {
-		return nil, g.entErr
+		return fusion.Hydration{}, g.entErr
 	}
 	if g.entitiesFn != nil {
-		return g.entitiesFn(ids)
+		ents, err := g.entitiesFn(ids)
+		return fusion.Hydration{Entities: ents, Unhydrated: g.unhydrated}, err
 	}
 	var out []*fusion.Entity
 	for _, id := range ids {
@@ -67,7 +70,7 @@ func (g *fakeGraph) Entities(_ context.Context, ids []string) ([]*fusion.Entity,
 			out = append(out, e)
 		}
 	}
-	return out, nil
+	return fusion.Hydration{Entities: out, Unhydrated: g.unhydrated}, nil
 }
 func (g *fakeGraph) Neighbors(_ context.Context, id string, preds []string, dir fusion.Direction) ([]fusion.Edge, error) {
 	if g.neighborsErr != nil {

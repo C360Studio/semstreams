@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -39,21 +40,34 @@ const (
 type graphQueryAdapter struct {
 	client  *natsclient.Client
 	timeout time.Duration
+	// logger reports partial hydration. Nil-safe: tests that construct the adapter
+	// directly get a silent one rather than a panic.
+	logger *slog.Logger
 }
 
-func newGraphQueryAdapter(client *natsclient.Client, timeout time.Duration) *graphQueryAdapter {
+func newGraphQueryAdapter(client *natsclient.Client, timeout time.Duration, logger *slog.Logger) *graphQueryAdapter {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &graphQueryAdapter{client: client, timeout: timeout}
+	return &graphQueryAdapter{client: client, timeout: timeout, logger: logger}
 }
 
 // EntityState implements fusion.GraphQueryClient via graph.query.batch
 // (passthrough to graph-ingest's handleQueryBatchNATS). Returns one
-// Evidence per requested entity ID that resolves; missing IDs are
-// silently omitted by the upstream handler. Verified shapes:
-// request `{ids: [...]}`, response `{entities: [<EntityState>...]}`
-// where each entity uses the `id` field (graph/types.go EntityState).
+// Evidence per requested entity ID that resolves.
+//
+// Unhydrated IDs are no longer silently omitted upstream: the handler
+// reports them as `missing: [{id, reason}]` (ADR-084 D4 / gh#597), and
+// this adapter LOGS them. It does not fail the call and does not emit
+// Evidence for them — evidence is a claim about something we read, and
+// an ID we could not read supports no claim. Logging is the right
+// weight here because a research walk over a broad seed set legitimately
+// includes IDs that no longer exist; what was missing before was any way
+// to notice when that stopped being legitimate.
+//
+// Verified shapes: request `{ids: [...]}`, response
+// `{entities: [<EntityState>...], missing: [{id, reason}]}` where each
+// entity uses the `id` field (graph/types.go EntityState).
 func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArgs, tier, source string, limit int) ([]fusion.Evidence, error) {
 	if a == nil || a.client == nil {
 		return nil, errors.New("nats client not configured")
@@ -68,10 +82,11 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	if err != nil {
 		return nil, fmt.Errorf("entity_state via %s: %w", subjectGraphQueryBatch, err)
 	}
-	entities, err := decodeEntityStateResponse(respData)
+	entities, missing, err := decodeEntityStateResponse(respData)
 	if err != nil {
 		return nil, err
 	}
+	a.logMissing(args.EntityIDs, missing)
 	out := make([]fusion.Evidence, 0, len(entities))
 	for i, entity := range entities {
 		if limit > 0 && i >= limit {
@@ -86,20 +101,48 @@ func (a *graphQueryAdapter) EntityState(ctx context.Context, args EntityStateArg
 	return out, nil
 }
 
-func decodeEntityStateResponse(data []byte) ([]graph.EntityState, error) {
+func decodeEntityStateResponse(data []byte) ([]graph.EntityState, []graph.MissingEntity, error) {
 	// Decode the complete EntityState candidates even though this adapter only
 	// projects IDs. A partial {id} shape would let poisoned subjects/references
 	// cross an authoritative batch boundary unseen.
-	var resp struct {
-		Entities []graph.EntityState `json:"entities"`
-	}
+	var resp graph.EntityBatchResponse
 	if err := json.Unmarshal(data, &resp); err != nil {
-		return nil, fmt.Errorf("decode entity_state response: %w", err)
+		return nil, nil, fmt.Errorf("decode entity_state response: %w", err)
 	}
 	if err := graph.ValidateDecodedEntityStates(resp.Entities); err != nil {
-		return nil, fmt.Errorf("validate entity_state response: %w", err)
+		return nil, nil, fmt.Errorf("validate entity_state response: %w", err)
 	}
-	return resp.Entities, nil
+	return resp.Entities, resp.Missing, nil
+}
+
+// logMissing reports IDs the batch could not hydrate, reconciling against the requested
+// set so an under-reporting handler is still visible. A research walk that quietly
+// evidences 3 of 40 seeds and one that evidences 3 because 37 do not exist look
+// identical in the trajectory otherwise.
+func (a *graphQueryAdapter) logMissing(requested []string, missing []graph.MissingEntity) {
+	if a.logger == nil {
+		return
+	}
+	if len(missing) == 0 {
+		return
+	}
+	a.logger.Warn("entity_state batch did not hydrate every requested ID",
+		slog.Int("requested", len(requested)),
+		slog.Int("missing", len(missing)),
+		slog.Any("missing_ids", missingIDs(missing)))
+}
+
+// missingIDs projects the reported entries to a bounded ID list for the log.
+func missingIDs(missing []graph.MissingEntity) []string {
+	const maxLogged = 20
+	if len(missing) > maxLogged {
+		missing = missing[:maxLogged]
+	}
+	out := make([]string, 0, len(missing))
+	for _, m := range missing {
+		out = append(out, m.ID+"("+string(m.Reason)+")")
+	}
+	return out
 }
 
 // PredicateWalk implements fusion.GraphQueryClient via
