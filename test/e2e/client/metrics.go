@@ -450,6 +450,31 @@ func (c *MetricsClient) SumMetricInSubsystem(
 		return SubsystemMetric{}, fmt.Errorf("fetching metrics snapshot: %w", err)
 	}
 
+	return SumMetricInSnapshot(snapshot, subsystem, metricName)
+}
+
+// SumMetricInSnapshot is SumMetricInSubsystem against an already-fetched
+// snapshot, for callers that must read several counters as of the SAME scrape.
+//
+// Counters that are arithmetically related to one another (dedup_hits_total and
+// embeddings_generated_total, where the former is a subset of the latter) cannot
+// be read from independent scrapes without admitting skew: the pipeline can
+// increment between the two HTTP calls and produce a difference that is negative
+// or otherwise impossible. Deriving one from the other is only sound within a
+// single snapshot.
+func SumMetricInSnapshot(
+	snapshot *MetricsSnapshot,
+	subsystem, metricName string,
+) (SubsystemMetric, error) {
+	if snapshot == nil {
+		return SubsystemMetric{}, fmt.Errorf("nil metrics snapshot for %q", metricName)
+	}
+	if !strings.HasPrefix(metricName, subsystem) {
+		return SubsystemMetric{}, fmt.Errorf(
+			"metric %q does not belong to subsystem %q: the caller's prefix and name disagree",
+			metricName, subsystem)
+	}
+
 	out := SubsystemMetric{Name: metricName, Subsystem: subsystem}
 	for _, metric := range snapshot.Metrics {
 		if strings.HasPrefix(metric.Name, subsystem) {

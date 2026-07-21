@@ -76,6 +76,68 @@ func (s *TieredScenario) executeValidateZeroClusters(ctx context.Context, result
 	}, result)
 }
 
+// confirmComponentAbsent returns nil only when the running service's component
+// inventory agrees that factoryName is not deployed.
+//
+// This is the authoritative deployment signal, and it is deliberately separate
+// from the metrics endpoint: /components/list is built from the ComponentManager's
+// own map of managed components, so it reports what was configured and started
+// regardless of whether that component ever registered a Prometheus series.
+//
+// Every non-agreeing outcome is an error, including the ones that look like
+// infrastructure noise:
+//
+//   - inventory unreachable / no client: the absence claim has no second source.
+//     Unverifiable, which is a failure, not a pass.
+//   - component IS in the inventory but exports no series: the strictly worst
+//     case. Something is deployed that this tier forbids AND its metrics are not
+//     observable, so the constraint cannot be evaluated at all. Passing here
+//     would be gh#615 with a different root cause — a broken registry reading as
+//     compliance.
+//
+// A component present but disabled is not deployed: ComponentManager keeps
+// disabled entries in the map, and a disabled component runs nothing and can
+// perform no work.
+func (s *TieredScenario) confirmComponentAbsent(ctx context.Context, factoryName string) error {
+	if s.client == nil {
+		return fmt.Errorf(
+			"no observability client, so %q cannot be confirmed absent from the component inventory; "+
+				"an empty or broken metrics registry is indistinguishable from a component that was never deployed",
+			factoryName)
+	}
+
+	components, err := s.client.GetComponents(ctx)
+	if err != nil {
+		return fmt.Errorf("fetching component inventory to confirm %q is not deployed: %w", factoryName, err)
+	}
+
+	for _, comp := range components {
+		if comp.Component != factoryName || !comp.Enabled {
+			continue
+		}
+		return fmt.Errorf(
+			"%q is deployed (instance %q, state %q) but exports no %s series: "+
+				"the component's metrics are missing, so its work cannot be measured — "+
+				"this is an unverifiable constraint, not a satisfied one",
+			factoryName, comp.Name, comp.State, metricsSubsystemFor(factoryName))
+	}
+
+	return nil
+}
+
+// metricsSubsystemFor renders the Prometheus prefix a component owns, for error
+// messages. Unknown components fall back to their factory name.
+func metricsSubsystemFor(factoryName string) string {
+	switch factoryName {
+	case "graph-embedding":
+		return embeddingSubsystem
+	case "graph-clustering":
+		return clusteringSubsystem
+	default:
+		return factoryName
+	}
+}
+
 // zeroConstraint describes a "this tier must not perform work X" check.
 type zeroConstraint struct {
 	subsystem  string // Prometheus prefix owned by the component
@@ -123,7 +185,25 @@ func (s *TieredScenario) validateTierMustNotRun(
 
 	var message string
 	if !reading.SubsystemPresent {
-		message = fmt.Sprintf("%s is not deployed in this tier: no %s series scraped, so %s are provably 0 (expected max %d)",
+		// Absence of the subsystem is the tier passing ONLY if the component is
+		// genuinely not deployed. On the metrics endpoint's word alone, "the
+		// component was never configured" and "the custom registry is empty or
+		// broken" are the same reading, and this branch would call the second one
+		// proof. Cross-check the service's own component inventory, which is
+		// served by the same process that serves /metrics (see
+		// service/component_manager_http.go handleComponentsList), before
+		// accepting absence as evidence.
+		if err := s.confirmComponentAbsent(ctx, c.component); err != nil {
+			result.Details[c.detailsKey] = map[string]any{
+				"constraint_met": false,
+				"verifiable":     false,
+				"metric":         c.metric,
+				"message": fmt.Sprintf("Cannot accept absence of %s as proof that %s did not run: %v",
+					c.subsystem, c.noun, err),
+			}
+			return fmt.Errorf("structural tier constraint for %s is unverifiable: %w", c.component, err)
+		}
+		message = fmt.Sprintf("%s is not deployed in this tier: absent from the component inventory and no %s series scraped, so %s are provably 0 (expected max %d)",
 			c.component, c.subsystem, c.noun, c.limit)
 	} else {
 		message = fmt.Sprintf("%s: %d (expected max %d for structural tier)", c.noun, count, c.limit)

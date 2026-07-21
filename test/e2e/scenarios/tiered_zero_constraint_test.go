@@ -3,13 +3,16 @@ package scenarios
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/test/e2e/client"
 )
 
@@ -42,9 +45,41 @@ var clusteringHistogramOpts = prometheus.HistogramOpts{
 	Buckets:   []float64{0.5, 1, 2, 5, 10, 20, 30, 60, 120},
 }
 
+// componentsFixture serves a /components/list inventory, the authoritative
+// deployment signal the zero-work gates cross-check absence against.
+func componentsFixture(t *testing.T, comps []client.ComponentInfo) *client.ObservabilityClient {
+	t.Helper()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/components/list", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		require.NoError(t, json.NewEncoder(w).Encode(comps))
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	return client.NewObservabilityClient(srv.URL)
+}
+
 // metricsFixture spins a real /metrics endpoint over the supplied registry and
 // returns a scenario wired to scrape it.
+//
+// The component inventory it serves mirrors the real structural tier: a udp
+// input and nothing else, so neither graph-embedding nor graph-clustering is
+// deployed and absence of their subsystems is genuinely proof they did not run.
 func metricsFixture(t *testing.T, reg *prometheus.Registry) *TieredScenario {
+	t.Helper()
+	return metricsFixtureWithComponents(t, reg, []client.ComponentInfo{
+		{Name: "udp-sensor", Component: "udp", Type: "input", Enabled: true, State: "running", Healthy: true},
+	})
+}
+
+// metricsFixtureWithComponents is metricsFixture with an explicit inventory.
+func metricsFixtureWithComponents(
+	t *testing.T,
+	reg *prometheus.Registry,
+	comps []client.ComponentInfo,
+) *TieredScenario {
 	t.Helper()
 
 	mux := httptest.NewServer(promhttp.HandlerFor(reg, promhttp.HandlerOpts{}))
@@ -52,6 +87,7 @@ func metricsFixture(t *testing.T, reg *prometheus.Registry) *TieredScenario {
 
 	return &TieredScenario{
 		metrics: client.NewMetricsClient(mux.URL),
+		client:  componentsFixture(t, comps),
 		config:  &TieredConfig{ExpectedClusters: 0, ExpectedEmbeddings: 0},
 	}
 }
@@ -299,16 +335,11 @@ func TestValidateEmbeddingQueueHealth_FailsWhenPipelineDidNothing(t *testing.T) 
 	require.Contains(t, err.Error(), "embedding pipeline did nothing")
 }
 
-// TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal confirms the phantom
-// queued_total no longer reaches operator-facing results.
-func TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal(t *testing.T) {
+// embeddingRegistry builds a graph_embedding subsystem with the four series
+// validateEmbeddingQueueHealth reads.
+func embeddingRegistry(t *testing.T, values map[string]float64) *prometheus.Registry {
+	t.Helper()
 	reg := prometheus.NewRegistry()
-	values := map[string]float64{
-		"pending":                    0,
-		"errors_total":               0,
-		"dedup_hits_total":           4,
-		"embeddings_generated_total": 12,
-	}
 	for name, v := range values {
 		g := prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "semstreams",
@@ -319,6 +350,25 @@ func TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal(t *testing.T) {
 		g.Set(v)
 		require.NoError(t, reg.Register(g))
 	}
+	return reg
+}
+
+// TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal confirms the phantom
+// queued_total no longer reaches operator-facing results, and pins the corrected
+// resolution arithmetic.
+//
+// embeddings_generated_total increments on the dedup-hit path too
+// (graph/embedding/worker.go:394 calls saveAndNotify for both branches of
+// getOrGenerateEmbedding), so with 12 resolutions of which 4 were cache hits,
+// only 8 vectors were actually computed. The former `generated + dedupHits`
+// reported 16 resolutions, inventing 4 units of work that never happened.
+func TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal(t *testing.T) {
+	reg := embeddingRegistry(t, map[string]float64{
+		"pending":                    0,
+		"errors_total":               0,
+		"dedup_hits_total":           4,
+		"embeddings_generated_total": 12,
+	})
 
 	s := metricsFixture(t, reg)
 	result := newResult()
@@ -327,28 +377,380 @@ func TestValidateEmbeddingQueueHealth_NoFabricatedQueuedTotal(t *testing.T) {
 
 	_, present := result.Metrics["embedding_queued_total"]
 	require.False(t, present, "queued_total was never a real metric and must not reappear")
-	require.Equal(t, int64(16), result.Metrics["embedding_resolved_total"], "12 generated + 4 dedup hits")
+	require.Equal(t, int64(12), result.Metrics["embedding_resolved_total"],
+		"embeddings_generated_total IS the resolution count; adding dedup hits double-counts reuse")
+	require.Equal(t, int64(8), result.Metrics["embedding_fresh_generated_total"],
+		"12 resolutions - 4 cache hits = 8 vectors actually computed")
 
 	details, ok := result.Details["embedding_queue_health"].(map[string]any)
 	require.True(t, ok)
 	_, hasQueued := details["queued_total"]
 	require.False(t, hasQueued)
+	require.InDelta(t, 8.0, details["fresh_generated_total"], 0.001)
 
 	// The results schema must carry no queued_total field either.
 	tr := &TieredResults{}
 	buildEmbeddingMetrics(tr, result)
 	require.NotNil(t, tr.Embeddings)
-	require.Equal(t, int64(16), tr.Embeddings.ResolvedTotal)
-	require.InDelta(t, 0.25, tr.Embeddings.DedupRate, 0.001, "4 dedup hits / 16 resolved")
+	require.Equal(t, int64(12), tr.Embeddings.ResolvedTotal)
+	require.Equal(t, int64(8), tr.Embeddings.FreshGeneratedTotal)
+	require.InDelta(t, 1.0/3.0, tr.Embeddings.DedupRate, 0.001,
+		"dedup rate is the share of resolutions served from cache: 4/12")
+}
+
+// TestValidateEmbeddingQueueHealth_FreshGenerationsTrackEmbeddingCost is the
+// regression that the double-count actually hid.
+//
+// Two runs resolve the same number of embeddings but with a very different
+// fresh/reused split. Under `resolved = generated + dedupHits` the reported
+// totals moved in the WRONG direction — the run doing less real work reported a
+// bigger number — so a 2.8x change in remote embedder calls read as "unchanged".
+// fresh_generated_total must separate them.
+func TestValidateEmbeddingQueueHealth_FreshGenerationsTrackEmbeddingCost(t *testing.T) {
+	readFresh := func(t *testing.T, generated, dedup float64) int64 {
+		t.Helper()
+		reg := embeddingRegistry(t, map[string]float64{
+			"pending":                    0,
+			"errors_total":               0,
+			"dedup_hits_total":           dedup,
+			"embeddings_generated_total": generated,
+		})
+		s := metricsFixture(t, reg)
+		result := newResult()
+		require.NoError(t, s.validateEmbeddingQueueHealth(context.Background(), result))
+		return result.Metrics["embedding_fresh_generated_total"].(int64)
+	}
+
+	// Mostly cache hits: 250 resolutions, 182 of them reused.
+	cheap := readFresh(t, 250, 182)
+	// Same resolution count, far less reuse.
+	expensive := readFresh(t, 250, 59)
+
+	require.Equal(t, int64(68), cheap)
+	require.Equal(t, int64(191), expensive)
+	require.Greater(t, expensive, cheap,
+		"fresh generations must expose the change in real embedding work that a resolution total hides")
+}
+
+// TestValidateEmbeddingQueueHealth_ReportsImpossibleDedupRatio guards the
+// documented invariant itself. Dedup hits are a subset of resolutions, so within
+// one scrape dedup_hits > embeddings_generated_total means the worker's metric
+// wiring changed and every derived number here is wrong.
+func TestValidateEmbeddingQueueHealth_ReportsImpossibleDedupRatio(t *testing.T) {
+	reg := embeddingRegistry(t, map[string]float64{
+		"pending":                    0,
+		"errors_total":               0,
+		"dedup_hits_total":           9,
+		"embeddings_generated_total": 5,
+	})
+
+	s := metricsFixture(t, reg)
+	result := newResult()
+
+	err := s.validateEmbeddingQueueHealth(context.Background(), result)
+	require.Error(t, err, "an impossible subset relation must not be silently clamped away")
+	require.Contains(t, err.Error(), "exceeds")
+	require.Equal(t, int64(0), result.Metrics["embedding_fresh_generated_total"])
+}
+
+// TestValidateEmbeddingQueueHealth_FailsOnUndrainedQueue is a Finding-3
+// regression: pending > 0 recorded a warning and returned nil, so
+// validate-embedding-queue-health completed successfully with work still queued.
+func TestValidateEmbeddingQueueHealth_FailsOnUndrainedQueue(t *testing.T) {
+	reg := embeddingRegistry(t, map[string]float64{
+		"pending":                    7,
+		"errors_total":               0,
+		"dedup_hits_total":           2,
+		"embeddings_generated_total": 40,
+	})
+
+	s := metricsFixture(t, reg)
+	result := newResult()
+
+	err := s.validateEmbeddingQueueHealth(context.Background(), result)
+
+	require.Error(t, err, "7 items still queued is the condition this stage exists to detect")
+	require.Contains(t, err.Error(), "embedding queue is unhealthy")
+	require.Contains(t, err.Error(), "not drained: 7 pending")
+	require.NotEmpty(t, result.Warnings, "the operator report keeps the warning too")
+
+	details, ok := result.Details["embedding_queue_health"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, details["queue_drained"])
+}
+
+// TestValidateEmbeddingQueueHealth_FailsOnEmbeddingFailures is the other half of
+// Finding 3: failed embeddings also returned nil.
+func TestValidateEmbeddingQueueHealth_FailsOnEmbeddingFailures(t *testing.T) {
+	reg := embeddingRegistry(t, map[string]float64{
+		"pending":                    0,
+		"errors_total":               3,
+		"dedup_hits_total":           2,
+		"embeddings_generated_total": 40,
+	})
+
+	s := metricsFixture(t, reg)
+	result := newResult()
+
+	err := s.validateEmbeddingQueueHealth(context.Background(), result)
+
+	require.Error(t, err, "a drained queue with failed embeddings is not a healthy pipeline")
+	require.Contains(t, err.Error(), "embedding queue is unhealthy")
+	require.Contains(t, err.Error(), "failures detected: 3 failed")
+
+	details, ok := result.Details["embedding_queue_health"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, details["no_failures"])
+}
+
+// TestValidateEmbeddingQueueHealth_PassesWhenDrainedAndClean pins the positive
+// case, so the Finding-3 fix cannot be satisfied by a gate that always fails.
+func TestValidateEmbeddingQueueHealth_PassesWhenDrainedAndClean(t *testing.T) {
+	reg := embeddingRegistry(t, map[string]float64{
+		"pending":                    0,
+		"errors_total":               0,
+		"dedup_hits_total":           2,
+		"embeddings_generated_total": 40,
+	})
+
+	s := metricsFixture(t, reg)
+	result := newResult()
+
+	require.NoError(t, s.validateEmbeddingQueueHealth(context.Background(), result))
+	require.Empty(t, result.Warnings)
+	require.Equal(t, int64(38), result.Metrics["embedding_fresh_generated_total"])
 }
 
 // TestEmbeddingResultsJSONHasNoQueuedTotal asserts on the serialized operator
 // surface, not just the struct.
 func TestEmbeddingResultsJSONHasNoQueuedTotal(t *testing.T) {
-	em := EmbeddingMetrics{ResolvedTotal: 16, GeneratedTotal: 12, DedupHits: 4}
+	em := EmbeddingMetrics{ResolvedTotal: 12, FreshGeneratedTotal: 8, DedupHits: 4}
 	blob, err := json.Marshal(em)
 	require.NoError(t, err)
 	require.NotContains(t, string(blob), "queued_total",
 		"result JSON must not report a metric that production code never exports")
 	require.Contains(t, string(blob), "resolved_total")
+	require.Contains(t, string(blob), "fresh_generated_total",
+		"embedding cost must be reported, not left to be re-derived")
+}
+
+// --- Finding 7: absence must be corroborated by the component inventory ------
+//
+// The zero-work gates treat a missing Prometheus subsystem as proof the
+// component did not run. That inference is sound for the real structural tier —
+// configs/e2e-structural.json deploys neither graph-embedding nor
+// graph-clustering, and demanding the metric be present would fail that tier
+// permanently. What was missing is corroboration: on the metrics endpoint's word
+// alone, "never deployed" and "the custom registry is empty or broken" produce
+// the identical reading, and the gate called the second one a pass.
+
+// TestValidateTierMustNotRun_FailsWhenDeployedButSubsystemMissing is THE
+// Finding-7 regression: the component IS in the service's inventory, but its
+// metrics subsystem is entirely absent from a 200 scrape. Before the fix this
+// was SubsystemPresent=false, verifiable=true, constraint met.
+func TestValidateTierMustNotRun_FailsWhenDeployedButSubsystemMissing(t *testing.T) {
+	// A healthy scrape that simply carries nothing from graph-clustering — the
+	// shape a broken or empty custom registry produces.
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+
+	s := metricsFixtureWithComponents(t, reg, []client.ComponentInfo{
+		{Name: "udp-sensor", Component: "udp", Type: "input", Enabled: true, State: "running", Healthy: true},
+		{Name: "graph-clustering", Component: "graph-clustering", Type: "processor",
+			Enabled: true, State: "running", Healthy: true},
+	})
+	result := newResult()
+
+	err := s.executeValidateZeroClusters(context.Background(), result)
+
+	require.Error(t, err, "a deployed component whose metrics are missing makes the constraint unverifiable, not satisfied")
+	require.Contains(t, err.Error(), "unverifiable")
+	require.Contains(t, err.Error(), "graph-clustering")
+
+	details, ok := result.Details["zero_clusters_validation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, details["verifiable"],
+		"an unobservable deployed component must never be recorded as verified")
+	require.Equal(t, false, details["constraint_met"])
+}
+
+// TestValidateTierMustNotRun_EmptyScrapeWithDeployedComponentFails is the
+// explicitly requested regression for the degenerate scrape: 200 OK, zero
+// series. Nothing at all is exported, yet the component is deployed.
+func TestValidateTierMustNotRun_EmptyScrapeWithDeployedComponentFails(t *testing.T) {
+	reg := prometheus.NewRegistry() // completely empty custom registry
+
+	s := metricsFixtureWithComponents(t, reg, []client.ComponentInfo{
+		{Name: "graph-embedding", Component: "graph-embedding", Type: "processor",
+			Enabled: true, State: "running", Healthy: true},
+	})
+	result := newResult()
+
+	err := s.executeValidateZeroEmbeddings(context.Background(), result)
+
+	require.Error(t, err, "an empty registry is not evidence that graph-embedding is absent")
+	require.Contains(t, err.Error(), "unverifiable")
+
+	details, ok := result.Details["zero_embeddings_validation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, details["verifiable"])
+}
+
+// TestValidateTierMustNotRun_PassesWhenInventoryConfirmsAbsence is the real
+// structural tier and must keep passing: the component is in neither the scrape
+// nor the inventory.
+func TestValidateTierMustNotRun_PassesWhenInventoryConfirmsAbsence(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+
+	s := metricsFixtureWithComponents(t, reg, []client.ComponentInfo{
+		{Name: "udp-sensor", Component: "udp", Type: "input", Enabled: true, State: "running", Healthy: true},
+		{Name: "graph-processor", Component: "graph", Type: "processor", Enabled: true, State: "running", Healthy: true},
+	})
+	result := newResult()
+
+	require.NoError(t, s.executeValidateZeroClusters(context.Background(), result))
+
+	details, ok := result.Details["zero_clusters_validation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, details["constraint_met"])
+	require.Equal(t, true, details["verifiable"])
+	require.Contains(t, details["message"], "absent from the component inventory")
+}
+
+// TestValidateTierMustNotRun_DisabledComponentCountsAsAbsent covers the entry
+// ComponentManager keeps in its map with enabled=false. It runs nothing, so it
+// can perform no forbidden work and exports no series.
+func TestValidateTierMustNotRun_DisabledComponentCountsAsAbsent(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+
+	s := metricsFixtureWithComponents(t, reg, []client.ComponentInfo{
+		{Name: "graph-clustering", Component: "graph-clustering", Type: "processor",
+			Enabled: false, State: "stopped", Healthy: true},
+	})
+	result := newResult()
+
+	require.NoError(t, s.executeValidateZeroClusters(context.Background(), result))
+}
+
+// TestValidateTierMustNotRun_FailsWhenInventoryUnreachable pins the remaining
+// hole: if the second source cannot be consulted, the absence claim has no
+// corroboration and the gate must not pass on the metrics endpoint alone.
+func TestValidateTierMustNotRun_FailsWhenInventoryUnreachable(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+
+	s := metricsFixture(t, reg)
+	s.client = client.NewObservabilityClient("http://127.0.0.1:1") // nothing listening
+	result := newResult()
+
+	err := s.executeValidateZeroClusters(context.Background(), result)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "unverifiable")
+
+	details, ok := result.Details["zero_clusters_validation"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, false, details["verifiable"])
+}
+
+// --- Finding 8: community waits must prove a CURRENT detection cycle ---------
+
+// fakeCommunitySource stands in for NATSValidationClient. onFetch lets a test
+// simulate graph-clustering completing a cycle while the wait is in progress.
+type fakeCommunitySource struct {
+	communities []*clustering.Community
+	onFetch     func()
+}
+
+func (f *fakeCommunitySource) GetAllCommunities(context.Context) ([]*clustering.Community, error) {
+	if f.onFetch != nil {
+		f.onFetch()
+	}
+	return f.communities, nil
+}
+
+func staleCommunities() []*clustering.Community {
+	return []*clustering.Community{
+		{ID: "c-1", Level: 0, Members: []string{"a", "b"}, StatisticalSummary: "from a previous run"},
+		{ID: "c-2", Level: 0, Members: []string{"c"}, StatisticalSummary: "also from a previous run"},
+	}
+}
+
+// TestWaitForCommunities_RejectsPreseededStaleCommunities is THE Finding-8
+// regression. COMMUNITY_INDEX is durable NATS state; if the JetStream volume
+// survives an earlier run, the first poll returns that run's communities. The
+// rewritten wait returned them immediately, so every downstream quality check
+// validated stale output. graph-clustering here is deployed and idle: its run
+// counter is scrapeable at 0 and never advances.
+func TestWaitForCommunities_RejectsPreseededStaleCommunities(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+	require.NoError(t, reg.Register(prometheus.NewHistogram(clusteringHistogramOpts)))
+
+	s := metricsFixture(t, reg)
+	source := &fakeCommunitySource{communities: staleCommunities()}
+
+	communities, err := s.waitForCommunitiesFrom(context.Background(), source, 200*time.Millisecond)
+
+	require.Error(t, err, "communities with no detection run behind them are a previous run's output")
+	require.Nil(t, communities)
+	require.Contains(t, err.Error(), "no community-detection run completed")
+	require.Contains(t, err.Error(), "stale")
+}
+
+// TestWaitForCommunities_AcceptsCommunitiesFromCurrentCycle is the positive
+// case: a detection cycle completes during the wait, so the communities are
+// this run's. Without it the Finding-8 fix could be a gate that never passes.
+func TestWaitForCommunities_AcceptsCommunitiesFromCurrentCycle(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+	h := prometheus.NewHistogram(clusteringHistogramOpts)
+	require.NoError(t, reg.Register(h))
+
+	s := metricsFixture(t, reg)
+	// graph-clustering completes a cycle while the wait is polling.
+	source := &fakeCommunitySource{
+		communities: staleCommunities(),
+		onFetch:     func() { h.Observe(3.2) },
+	}
+
+	communities, err := s.waitForCommunitiesFrom(context.Background(), source, 5*time.Second)
+
+	require.NoError(t, err)
+	require.Len(t, communities, 2)
+}
+
+// TestWaitForCommunities_FailsWithoutARunBaseline covers the case where the run
+// counter cannot be read at all. Freshness is then undecidable, and undecidable
+// is a failure — falling back to "nonempty is good enough" would restore exactly
+// the behavior this fix removes.
+func TestWaitForCommunities_FailsWithoutARunBaseline(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg) // no graph_clustering subsystem at all
+
+	s := metricsFixture(t, reg)
+	source := &fakeCommunitySource{communities: staleCommunities()}
+
+	_, err := s.waitForCommunitiesFrom(context.Background(), source, 200*time.Millisecond)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "community freshness is unverifiable")
+}
+
+// TestWaitForCommunities_StillFailsOnEmptyIndex keeps the original behavior:
+// no communities at all is a distinct, differently worded failure.
+func TestWaitForCommunities_StillFailsOnEmptyIndex(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	registerUnrelated(t, reg)
+	require.NoError(t, reg.Register(prometheus.NewHistogram(clusteringHistogramOpts)))
+
+	s := metricsFixture(t, reg)
+	source := &fakeCommunitySource{}
+
+	_, err := s.waitForCommunitiesFrom(context.Background(), source, 200*time.Millisecond)
+
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "no communities after")
 }

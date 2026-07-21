@@ -1262,7 +1262,18 @@ func (m *Client) GetKeyValueBucket(ctx context.Context, name string) (jetstream.
 
 	bucket, err := js.KeyValue(ctx, name)
 	if err != nil {
-		m.recordFailure()
+		// ErrBucketNotFound is a successful probe result (the bucket is absent),
+		// not a transport or availability failure — the same reasoning as
+		// GetStream above, which has exempted ErrStreamNotFound since gh#248.
+		// Counting it would trip the shared circuit breaker on legitimate
+		// existence probes, and several callers poll for a legitimately absent
+		// bucket: graph-query's resource.Watcher on COMMUNITY_INDEX rechecks
+		// every 60s on any deployment without community detection, the readiness
+		// watcher rebinds on every retry, and WaitForBucket polls at 500ms by
+		// design. At a threshold of 15 those reach it on their own.
+		if !stderrors.Is(err, jetstream.ErrBucketNotFound) {
+			m.recordFailure()
+		}
 		return nil, err
 	}
 

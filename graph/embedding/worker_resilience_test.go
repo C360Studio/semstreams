@@ -38,7 +38,8 @@ func (r *panicLogRecorder) panics() []string {
 }
 
 // TestWorkerPanicCostsOneEntryNotTheGoroutine pins the second half of the gh#614
-// fallout: where the panic recovery sits.
+// fallout: where the panic recovery sits, and what a recovered panic is allowed to
+// report.
 //
 // The recover() used to guard the whole processEmbeddings for-loop, so ANY panic
 // returned from the loop and that worker goroutine was gone for the process
@@ -47,9 +48,26 @@ func (r *panicLogRecorder) panics() []string {
 // as an eventual signal. gh#527 bulk retention deletion is precisely the workload
 // that produces concurrent tombstones at volume.
 //
+// Moving the recovery per-entry fixed that but exposed a second defect, which this
+// test also pins: the terminal completion used to be a defer INSIDE handleKVEntry,
+// and Go runs deferred functions during panic unwinding — so it fired BEFORE the
+// recover() above it, draining the hop-1 readiness watermark for a record that
+// stays durably pending (no markFailed, no SaveGenerated on the panic path). With
+// the goroutine now surviving, that would silently advance the watermark on every
+// panic instead of stalling it, i.e. report caught up over stranded work.
+//
+// Hence three properties, asserted together because the fix for either one alone
+// re-breaks the other:
+//
+//  1. the worker goroutine survives (the healthy sibling still completes);
+//  2. the poison record is still pending;
+//  3. onTerminal never fired for it, so the watermark did not advance past it.
+//
 // Exactly one worker is configured so the poison entry and the healthy entry are
-// guaranteed to land on the SAME goroutine. With more than one, a surviving
-// sibling would process the healthy entry and the test would pass even unfixed.
+// guaranteed to land on the SAME goroutine — that also makes the poison entry's
+// recovery strictly happen-before the healthy entry's terminal signal, which is
+// what orders assertions 2 and 3. With more than one worker, a surviving sibling
+// would process the healthy entry and property 1 would pass even unfixed.
 func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 	t.Parallel()
 
@@ -76,9 +94,19 @@ func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 	recorder := &panicLogRecorder{}
 	done := make(chan string, 8)
 
+	// Every terminal completion is recorded, not just awaited: the watermark
+	// assertion is about an entity that must NEVER appear here.
+	var terminalMu sync.Mutex
+	var terminals []string
+
 	w := NewWorker(s, embedder, index, slog.New(recorder)).
 		WithWorkers(1).
-		WithOnTerminal(func(entityID string, _ uint64) { done <- entityID })
+		WithOnTerminal(func(entityID string, _ uint64) {
+			terminalMu.Lock()
+			terminals = append(terminals, entityID)
+			terminalMu.Unlock()
+			done <- entityID
+		})
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -94,14 +122,15 @@ func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 		t.Fatalf("SavePending(healthy): %v", err)
 	}
 
-	// The healthy entity must still reach a terminal outcome. Unfixed, the worker
-	// goroutine died on the poison entry and this times out.
+	// Property 1. The healthy entity must still reach a terminal outcome. With the
+	// recovery back around the loop, the worker goroutine died on the poison entry
+	// and this times out.
 	waitForTerminal(t, done, healthyID)
 
-	// Stop before asserting on logs. onTerminal fires from a defer inside
-	// handleKVEntry, which during a panic runs BEFORE the recovery above it logs —
-	// so the terminal signal alone does not order the log write. Stop cancels and
-	// joins the worker goroutines, which does.
+	// Stop cancels and joins the worker goroutines before the state assertions, so
+	// no in-flight entry can still be writing storage or logs underneath them. The
+	// single worker already orders the poison entry ahead of the healthy one; this
+	// closes the remaining "still inside Stop's own drain" window.
 	if err := w.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}
@@ -116,6 +145,31 @@ func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 
 	if got := recorder.panics(); len(got) != 1 {
 		t.Fatalf("recovered panic log records = %d (%v), want exactly 1 (the poison entry)", len(got), got)
+	}
+
+	// Property 2. Nothing on the panic path marks the record failed or saves a
+	// vector, so the durable truth is "still pending".
+	poisonRec, err := s.GetEmbedding(ctx, poisonID)
+	if err != nil {
+		t.Fatalf("GetEmbedding(poison): %v", err)
+	}
+	if poisonRec == nil || poisonRec.Status != StatusPending {
+		t.Fatalf("poison record status = %+v, want a record still in %q: a recovered panic completes nothing",
+			poisonRec, StatusPending)
+	}
+
+	// Property 3, the readiness half. Completing the ADR-066 watermark for a record
+	// that property 2 just showed is still pending would report the pipeline caught
+	// up over stranded work — and, unlike the pre-recovery behavior that stalled the
+	// watermark loudly, it would do so silently and on every panic.
+	terminalMu.Lock()
+	defer terminalMu.Unlock()
+	for _, got := range terminals {
+		if got == poisonID {
+			t.Fatalf("onTerminal fired for %q after a recovered panic (terminals=%v); "+
+				"the record is still pending, so the readiness watermark must not advance past its revision",
+				poisonID, terminals)
+		}
 	}
 }
 
@@ -179,10 +233,11 @@ func TestWorkerTombstoneDuringGenerationIsNotAPanic(t *testing.T) {
 
 	waitForTerminal(t, done, entityID)
 
-	// Stop before asserting on logs: onTerminal runs from a defer that fires during
-	// panic unwinding, i.e. BEFORE the recovery frame above it logs. Joining the
-	// worker goroutines is what orders the log write against this assertion —
-	// without it, an unfixed build races and can look clean.
+	// Stop before asserting on logs: joining the worker goroutines is what orders
+	// the recovery frame's log write against this assertion. (onTerminal now fires
+	// only on a normal return, so a crashing build would time out in
+	// waitForTerminal above rather than reach here — but the join keeps the
+	// assertion independent of which failure mode a regression takes.)
 	if err := w.Stop(); err != nil {
 		t.Fatalf("Stop: %v", err)
 	}

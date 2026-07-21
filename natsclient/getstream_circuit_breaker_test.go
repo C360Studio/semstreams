@@ -28,6 +28,7 @@ import (
 // Only Stream() is meaningful; all other methods panic if called.
 type fakeJetStream struct {
 	streamErr error // returned by Stream()
+	kvErr     error // returned by KeyValue()
 }
 
 // Stream is the only method exercised by GetStream.
@@ -161,8 +162,9 @@ func (f *fakeJetStream) PushConsumer(_ context.Context, _ string, _ string) (jet
 
 // --- KeyValueManager ---
 
+// KeyValue is the only method exercised by GetKeyValueBucket.
 func (f *fakeJetStream) KeyValue(_ context.Context, _ string) (jetstream.KeyValue, error) {
-	panic("fakeJetStream: KeyValue not implemented")
+	return nil, f.kvErr
 }
 
 func (f *fakeJetStream) CreateKeyValue(_ context.Context, _ jetstream.KeyValueConfig) (jetstream.KeyValue, error) {

@@ -301,7 +301,8 @@ func (w *Worker) processEmbeddings(workerID int) {
 	}
 }
 
-// handleKVEntrySafe processes one entry with panic isolation scoped to that entry.
+// handleKVEntrySafe processes one entry with panic isolation scoped to that entry,
+// and is the SINGLE site that fires the terminal callback.
 //
 // The recovery deliberately lives HERE and not around the for-loop in
 // processEmbeddings. Wrapping the loop meant any panic unwound past it, returned
@@ -310,13 +311,30 @@ func (w *Worker) processEmbeddings(workerID int) {
 // embedding pipeline to zero consumers, observable only as ADR-066 watermark lag
 // well after the fact. Scoped per entry, a panic costs exactly the one entry.
 //
+// The completion fires only on a NORMAL return from handleKVEntry, and that is why
+// it cannot be a defer INSIDE handleKVEntry: Go runs deferred functions during
+// panic unwinding, so such a defer executes BEFORE the recover() here and drains
+// the ADR-066 watermark for a record that is still durably pending — nothing on the
+// panic path calls markFailed or SaveGenerated. The watermark would then report
+// caught up over stranded work.
+//
+// That completion defer predates the per-entry recovery, but the recovery changed
+// its character: a panic used to kill the worker goroutine, so the watermark
+// stalled and readiness degraded — loud, and capped at 5 occurrences. With the
+// goroutine surviving, every panic would instead advance the watermark silently and
+// without limit. Skipping completion keeps the record and the watermark telling the
+// same story: the entry stays pending, the low-water floor stays behind it, and the
+// stuck detector degrades truthfully.
+//
 // The entry is not retried: the panicking record keeps its pending status and the
 // stack is logged for diagnosis. Re-driving an entry that just crashed the
-// decoder would turn one poison record into a hot loop.
+// decoder would turn one poison record into a hot loop. A record that panics on
+// every delivery therefore pins the watermark until an operator removes it —
+// intended, per ADR-084: readiness licenses health, not absence.
 func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) {
 	defer func() {
 		if r := recover(); r != nil {
-			w.logger.Error("Embedding worker panic recovered; skipping entry",
+			w.logger.Error("Embedding worker panic recovered; entry stays pending and its readiness watermark is NOT advanced",
 				"worker_id", workerID,
 				"entity_id", entry.Key(),
 				"panic", r,
@@ -324,11 +342,22 @@ func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) 
 		}
 	}()
 
-	w.handleKVEntry(entry, workerID)
+	entityID, sourceRevision, terminal := w.handleKVEntry(entry, workerID)
+	if terminal && w.onTerminal != nil {
+		w.onTerminal(entityID, sourceRevision)
+	}
 }
 
-// handleKVEntry processes a KV entry to check if it needs embedding generation
-func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
+// handleKVEntry processes a KV entry to check if it needs embedding generation.
+//
+// It completes nothing itself; it REPORTS the outcome. terminal==true means this
+// call carried the record to an outcome that must drain the hop-1 readiness
+// watermark (ADR-066 §3) for entityID at sourceRevision. handleKVEntrySafe fires
+// the one callback, and only on a normal return — see its doc comment for why a
+// defer here would complete panicking (still-pending) work.
+func (w *Worker) handleKVEntry(
+	entry jetstream.KeyValueEntry, workerID int,
+) (entityID string, sourceRevision uint64, terminal bool) {
 	// Parse the record to check status
 	var record Record
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
@@ -339,31 +368,24 @@ func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
 		// permanent degraded (ADR-066 §3 D3); loud, because it is not expected.
 		w.logger.Warn("Failed to unmarshal embedding record; draining readiness watermark for key",
 			"key", entry.Key(), "error", err)
-		if w.onTerminal != nil {
-			w.onTerminal(entry.Key(), ^uint64(0))
-		}
-		return
+		return entry.Key(), ^uint64(0), true
 	}
 
 	// Only process pending records. A re-delivered generated/failed record (from our
 	// own hop-2 writes) lands here and must NOT fire the terminal callback — it was
-	// already completed when it first transitioned. So the defer below is registered
+	// already completed when it first transitioned. So the results below are set
 	// AFTER this skip, never before it (ADR-066 §3).
 	if record.Status != StatusPending {
-		return
+		return "", 0, false
 	}
-
-	entityID := entry.Key()
 
 	// Every path past this point is genuinely terminal — the pipeline never retries;
 	// every error is a hard SaveFailed, no-text is a delete, success is SaveGenerated.
-	// One deferred completion covers them all uniformly, closing the "missed a
-	// terminal site" risk. sourceRevision==0 (legacy record) makes it a no-op.
-	defer func() {
-		if w.onTerminal != nil {
-			w.onTerminal(entityID, record.SourceRevision)
-		}
-	}()
+	// Setting the named results ONCE here means every `return` below reports the same
+	// completion, closing the "missed a terminal site" risk that the old defer closed
+	// — without also completing on the panic path. sourceRevision==0 (a legacy
+	// record) makes the completion a no-op.
+	entityID, sourceRevision, terminal = entry.Key(), record.SourceRevision, true
 
 	w.logger.Debug("Processing pending embedding", "worker_id", workerID, "entity_id", entityID)
 
@@ -392,6 +414,7 @@ func (w *Worker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
 
 	// Save and notify
 	w.saveAndNotify(entityID, vector)
+	return
 }
 
 // getOrGenerateEmbedding returns an existing embedding via dedup or generates a new one.
