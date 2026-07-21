@@ -113,9 +113,18 @@ const (
 	UnhydratedUnknown UnhydratedReason = "unknown"
 )
 
-// Unhydrated names one requested ID that did not load.
+// Unhydrated names one seed that did not load.
+//
+// The field is Handle, not ID, deliberately: fusion's contract keys everything a
+// consumer touches by what a human reads or by an opaque token, never by a parseable
+// entity ID (see Node.Handle). The value is the same string the batch wire calls `id` —
+// the layer boundary is the point. Naming it `id` on the product surface would invite
+// consumers to parse and construct entity IDs, which is exactly what the handle
+// convention exists to prevent.
 type Unhydrated struct {
-	ID     string           `json:"id"`
+	// Handle is the opaque token for the seed that did not load. Never parse or
+	// construct it.
+	Handle string           `json:"handle"`
 	Reason UnhydratedReason `json:"reason"`
 }
 

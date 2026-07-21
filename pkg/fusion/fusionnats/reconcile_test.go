@@ -37,7 +37,7 @@ func TestReconcileHydration(t *testing.T) {
 		})
 		require.Len(t, got.Entities, 1)
 		require.Len(t, got.Unhydrated, 1)
-		assert.Equal(t, fusion.Unhydrated{ID: b, Reason: fusion.UnhydratedNotFound}, got.Unhydrated[0])
+		assert.Equal(t, fusion.Unhydrated{Handle: b, Reason: fusion.UnhydratedNotFound}, got.Unhydrated[0])
 	})
 
 	t.Run("an ID in neither list is unknown, not not_found", func(t *testing.T) {
@@ -48,7 +48,7 @@ func TestReconcileHydration(t *testing.T) {
 		})
 		require.Len(t, got.Unhydrated, 1)
 		assert.Equal(t, fusion.UnhydratedUnknown, got.Unhydrated[0].Reason)
-		assert.Equal(t, b, got.Unhydrated[0].ID)
+		assert.Equal(t, b, got.Unhydrated[0].Handle)
 	})
 
 	t.Run("every requested ID is accounted for exactly once", func(t *testing.T) {
@@ -61,7 +61,7 @@ func TestReconcileHydration(t *testing.T) {
 			seen[e.ID]++
 		}
 		for _, u := range got.Unhydrated {
-			seen[u.ID]++
+			seen[u.Handle]++
 		}
 		assert.Equal(t, map[string]int{a: 1, b: 1, c: 1}, seen)
 	})

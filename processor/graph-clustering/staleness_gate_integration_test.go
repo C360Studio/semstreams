@@ -226,8 +226,12 @@ func TestIntegration_StalenessGate_BoundedStaleness(t *testing.T) {
 		{
 			// A not-ready envelope whose staleness is merely ABSENT (the presence
 			// encoding) must not be read as "0ms stale" and waved through.
-			name:        "a not-ready envelope with no computed staleness defers",
-			status:      graph.IndexStatusResponse{State: graph.IndexStateBuilding, IndexedRevision: 400, TargetRevision: 500, Lag: 100},
+			name: "a not-ready envelope with no computed staleness defers",
+			// Healthy and bootstrapped — this row is about the PRESENCE encoding, so
+			// it must reach the staleness comparison rather than short-circuiting on
+			// a health check.
+			status: graph.IndexStatusResponse{State: graph.IndexStateBuilding,
+				BootstrapComplete: true, IndexedRevision: 400, TargetRevision: 500, Lag: 100},
 			wantProceed: false,
 			wantReason:  graph.DeferOverStaleness,
 		},

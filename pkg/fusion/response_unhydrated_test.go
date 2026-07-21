@@ -26,14 +26,14 @@ func TestResponse_Unhydrated(t *testing.T) {
 			status:     readyStatus(),
 			seeds:      map[string][]string{"q": {found.ID, lost}},
 			entities:   map[string]*fusion.Entity{found.ID: found},
-			unhydrated: []fusion.Unhydrated{{ID: lost, Reason: fusion.UnhydratedNotFound}},
+			unhydrated: []fusion.Unhydrated{{Handle: lost, Reason: fusion.UnhydratedNotFound}},
 		}
 		resp, err := newEngine(g).Fuse(context.Background(), fusion.Request{Query: "q"}, refLens{})
 		require.NoError(t, err)
 
 		assert.Len(t, resp.Nodes, 1, "what hydrated must still be returned")
 		require.Len(t, resp.Unhydrated, 1)
-		assert.Equal(t, lost, resp.Unhydrated[0].ID)
+		assert.Equal(t, lost, resp.Unhydrated[0].Handle)
 		assert.Empty(t, resp.Misses, "an unhydrated seed is not a miss")
 	})
 
@@ -45,7 +45,7 @@ func TestResponse_Unhydrated(t *testing.T) {
 			status:     readyStatus(),
 			seeds:      map[string][]string{"q": {lost}},
 			entities:   map[string]*fusion.Entity{},
-			unhydrated: []fusion.Unhydrated{{ID: lost, Reason: fusion.UnhydratedNotFound}},
+			unhydrated: []fusion.Unhydrated{{Handle: lost, Reason: fusion.UnhydratedNotFound}},
 		}
 		resp, err := newEngine(g).Fuse(context.Background(), fusion.Request{Query: "q"}, refLens{})
 		require.NoError(t, err)
@@ -53,7 +53,7 @@ func TestResponse_Unhydrated(t *testing.T) {
 		assert.Empty(t, resp.Nodes)
 		assert.Empty(t, resp.Misses, "no miss may be synthesized when nothing could be read")
 		require.Len(t, resp.Unhydrated, 1)
-		assert.Equal(t, lost, resp.Unhydrated[0].ID)
+		assert.Equal(t, lost, resp.Unhydrated[0].Handle)
 	})
 
 	t.Run("a resolve that genuinely found nothing is still a miss", func(t *testing.T) {
@@ -86,13 +86,13 @@ func TestResponse_Unhydrated(t *testing.T) {
 
 	t.Run("the reported entry round-trips", func(t *testing.T) {
 		raw, err := json.Marshal(fusion.Response{
-			Unhydrated: []fusion.Unhydrated{{ID: lost, Reason: fusion.UnhydratedUnknown}},
+			Unhydrated: []fusion.Unhydrated{{Handle: lost, Reason: fusion.UnhydratedUnknown}},
 		})
 		require.NoError(t, err)
-		assert.Contains(t, string(raw), `"unhydrated":[{"id":"`+lost+`","reason":"unknown"}]`)
+		assert.Contains(t, string(raw), `"unhydrated":[{"handle":"`+lost+`","reason":"unknown"}]`)
 
 		var back fusion.Response
 		require.NoError(t, json.Unmarshal(raw, &back))
-		assert.Equal(t, fusion.Unhydrated{ID: lost, Reason: fusion.UnhydratedUnknown}, back.Unhydrated[0])
+		assert.Equal(t, fusion.Unhydrated{Handle: lost, Reason: fusion.UnhydratedUnknown}, back.Unhydrated[0])
 	})
 }

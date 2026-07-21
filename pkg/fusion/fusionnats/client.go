@@ -462,7 +462,7 @@ func reconcileHydration(requested []string, resp graph.EntityBatchResponse) fusi
 			// rather than inventing not_found.
 			reason = fusion.UnhydratedUnknown
 		}
-		out.Unhydrated = append(out.Unhydrated, fusion.Unhydrated{ID: id, Reason: reason})
+		out.Unhydrated = append(out.Unhydrated, fusion.Unhydrated{Handle: id, Reason: reason})
 	}
 	return out
 }
