@@ -190,12 +190,15 @@ type Node struct {
 	// signal — it is what makes "why did this come out third?" answerable.
 	Rank int `json:"rank,omitempty"`
 	// Similarity is the resolve mode's own relevance score, present only when
-	// IncludeScores was set AND the mode reports one (semantic does; symbol and
-	// prefix do not). Joined to this node by entity ID, never by position.
-	Similarity float64 `json:"similarity,omitempty"`
-	// HasSimilarity distinguishes "scored 0" from "this mode does not score", which
-	// omitempty alone cannot express on a float.
-	HasSimilarity bool `json:"has_similarity,omitempty"`
+	// IncludeScores was set AND the mode reports one (semantic does; symbol and prefix
+	// do not). Joined to this node by entity ID, never by position.
+	//
+	// A POINTER so the wire is self-describing: absent means the mode does not score,
+	// present means this is the score — including a genuine 0.0, which a bare
+	// `float64,omitempty` would erase into indistinguishability from "unavailable".
+	// A separate has_similarity bool round-trips correctly in Go but forces every
+	// non-Go consumer to learn that an absent key means zero rather than nothing.
+	Similarity *float64 `json:"similarity,omitempty"`
 }
 
 // Miss reports a query that resolved to nothing, with near-matches.
@@ -235,9 +238,26 @@ type Response struct {
 	// there would assert exactly the thing the failed read left unknown.
 	//
 	// Omitted when everything hydrated, so a complete response is byte-unchanged.
-	Unhydrated      []Unhydrated `json:"unhydrated,omitempty"`
-	Truncated       bool         `json:"truncated"`
-	ContractVersion string       `json:"contract_version"`
+	Unhydrated []Unhydrated `json:"unhydrated,omitempty"`
+	// Deferred reports that the engine WITHHELD rather than answered: the empty
+	// result is a refusal to look, not a finding.
+	//
+	// It is an explicit field because the honesty envelope cannot carry the fact.
+	// Index describes the GRAPH-INDEX producer, and a defer can be caused by
+	// something else entirely — an internal read against graph-ingest or
+	// graph-embedding returning the readiness transient while graph-index is
+	// perfectly healthy. Re-sampling graph-index then yields a HEALTHY envelope
+	// attached to an empty response, so a consumer applying the canonical gate to
+	// Index would conclude "healthy, and it found nothing" — precisely the
+	// misreading ADR-084 exists to prevent, arrived at from the other side.
+	//
+	// Check this, not Index, to answer "did I get an answer?".
+	Deferred bool `json:"deferred,omitempty"`
+	// DeferReason is why, from graph.DeferReason's closed set plus the engine-level
+	// causes (an internal dependency's readiness transient). Empty when not deferred.
+	DeferReason     string `json:"defer_reason,omitempty"`
+	Truncated       bool   `json:"truncated"`
+	ContractVersion string `json:"contract_version"`
 }
 
 const (

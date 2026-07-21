@@ -91,7 +91,23 @@ type Config struct {
 	// with write rate, so no fixed count is right at two different loads; "how old is
 	// the topology I clustered" is invariant to both and is what an operator can
 	// actually reason about.
-	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless),category:advanced"`
+	//
+	// SET IT ABOVE THIS CONSUMER'S OWN WORST-CASE CYCLE. Detection time scales with
+	// community SIZE, so as a graph consolidates (many small communities into few large
+	// ones) a run can grow several-fold — a semboids adoption run measured 4.4s climbing
+	// to 23.7s across one 90s window on a 200-entity flock. A long run competes with the
+	// indexer for the same box, so the view is staler at the next tick; a tolerance that
+	// was ample while the graph was fragmented then starts tripping over_staleness for a
+	// reason that has nothing to do with index health, and clustering stops exactly when
+	// the graph got interesting.
+	//
+	// The value is therefore not purely "how fresh do I need my input" — for a consumer
+	// whose run time scales with its own output it is also a bet on that run time. Watch
+	// semstreams_graph_clustering_detection_duration_seconds against
+	// staleness_at_detection_ms: duration climbing toward a fixed max_staleness is the
+	// signature, and it is a tuning wrinkle rather than a soundness one (the gate is
+	// reporting a real view age).
+	MaxStalenessStr string `json:"max_staleness" schema:"type:string,description:Max age of the graph-index view under which community detection still runs (duration e.g. 3s; empty or 0 = require exact index catch-up; a degraded/reset/empty index or an unknown status always defers regardless). Must exceed this consumer's own worst-case detection cycle — detection time scales with community size,category:advanced"`
 
 	// Structural analysis (optional, enables anomaly detection)
 	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
@@ -1451,10 +1467,14 @@ func (c *Component) runCommunityDetection(ctx context.Context) {
 	atomic.AddInt64(&c.messagesProcessed, int64(totalCommunities))
 	c.lastActivity.Store(time.Now())
 
+	detectionTook := time.Since(start)
+	if c.metrics != nil {
+		c.metrics.observeDetectionDuration(detectionTook)
+	}
 	c.logger.Debug("community detection complete",
 		slog.Int("communities_found", totalCommunities),
 		slog.Int("levels", len(communities)),
-		slog.Duration("duration", time.Since(start)))
+		slog.Duration("duration", detectionTook))
 
 	if !c.runStructuralAndAnomalyDetection(ctx) {
 		return

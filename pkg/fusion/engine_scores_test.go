@@ -58,11 +58,12 @@ func TestFuse_IncludeScores(t *testing.T) {
 		for _, n := range resp.Nodes {
 			byName[n.Name] = n
 		}
-		assert.InDelta(t, 0.20, byName["Alpha"].Similarity, 1e-9,
+		require.NotNil(t, byName["Alpha"].Similarity)
+		require.NotNil(t, byName["Bravo"].Similarity)
+		assert.InDelta(t, 0.20, *byName["Alpha"].Similarity, 1e-9,
 			"Alpha's score followed a slice position instead of its entity ID")
-		assert.InDelta(t, 0.90, byName["Bravo"].Similarity, 1e-9,
+		assert.InDelta(t, 0.90, *byName["Bravo"].Similarity, 1e-9,
 			"Bravo's score followed a slice position instead of its entity ID")
-		assert.True(t, byName["Alpha"].HasSimilarity)
 	})
 
 	t.Run("rank is the RESOLVE rank, not the response position", func(t *testing.T) {
@@ -88,8 +89,7 @@ func TestFuse_IncludeScores(t *testing.T) {
 		resp := fuse(t, g, fusion.Request{Query: query, IncludeScores: true})
 		require.NotEmpty(t, resp.Nodes)
 		for _, n := range resp.Nodes {
-			assert.False(t, n.HasSimilarity, "an unscored mode must not claim a similarity")
-			assert.Zero(t, n.Similarity)
+			assert.Nil(t, n.Similarity, "an unscored mode must not claim a similarity")
 			assert.NotZero(t, n.Rank, "rank is always available — every mode resolves in some order")
 		}
 	})
@@ -123,4 +123,38 @@ func TestRequest_IncludeScoresRoundTrips(t *testing.T) {
 	raw, err = json.Marshal(fusion.Request{Query: "q"})
 	require.NoError(t, err)
 	assert.NotContains(t, string(raw), "include_scores")
+}
+
+// TestFuse_ZeroSimilarityIsDistinguishableFromAbsent pins the review's medium finding.
+// A semantic resolve can legitimately score a seed 0.0 — an orthogonal embedding is a
+// real answer, not a missing one. With `float64,omitempty` that value vanished from the
+// wire, leaving a non-Go consumer unable to tell "scored zero" from "this mode does not
+// score". The pointer makes presence the encoding.
+func TestFuse_ZeroSimilarityIsDistinguishableFromAbsent(t *testing.T) {
+	ent := entity("acme.ops.code.repo.symbol.Orthogonal", "Orthogonal", "o.go")
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"q": {ent.ID}},
+		entities: map[string]*fusion.Entity{ent.ID: ent},
+		seedsFn: func(fusion.ResolveQuery) []fusion.Seed {
+			return []fusion.Seed{{ID: ent.ID, Similarity: 0, HasSimilarity: true}}
+		},
+	}
+	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "q", IncludeScores: true}, refLens{})
+	require.NoError(t, err)
+	require.Len(t, resp.Nodes, 1)
+
+	require.NotNil(t, resp.Nodes[0].Similarity, "an available score of 0 was erased")
+	assert.Equal(t, 0.0, *resp.Nodes[0].Similarity)
+
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.Contains(t, string(raw), `"similarity":0`,
+		"a genuine zero must reach the wire: %s", raw)
+
+	var back fusion.Response
+	require.NoError(t, json.Unmarshal(raw, &back))
+	require.NotNil(t, back.Nodes[0].Similarity)
+	assert.Equal(t, 0.0, *back.Nodes[0].Similarity)
 }

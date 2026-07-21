@@ -101,3 +101,37 @@ func TestIntegration_BatchQuery_ReportsMissingIDs(t *testing.T) {
 			"an all-missing batch must report every ID rather than looking like an empty graph")
 	})
 }
+
+// TestIntegration_BatchQuery_EmptyIDIsAccountedFor pins the totality contract against
+// its most likely accidental input. An empty requested ID used to be skipped outright,
+// so it appeared in NEITHER entities nor missing — the response claimed to account for
+// every requested ID while quietly dropping one.
+//
+// It is reported as `error`, not `not_found`: the key was never looked up, and calling
+// it not-found would assert something unobserved, which is the exact move this change
+// exists to stop.
+func TestIntegration_BatchQuery_EmptyIDIsAccountedFor(t *testing.T) {
+	ctx, c := startBatchTestComponent(t)
+
+	present := "c360.test.batchempty.system.drone.001"
+	require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
+		ID: present,
+		Triples: []message.Triple{{
+			Subject: present, Predicate: "core.identity.type", Object: "drone", Confidence: 1.0,
+		}},
+	}))
+
+	body, err := json.Marshal(map[string]any{"ids": []string{present, ""}})
+	require.NoError(t, err)
+	raw, err := c.handleQueryBatchNATS(ctx, body)
+	require.NoError(t, err, "a malformed ID must not fail the whole batch")
+
+	var resp graph.EntityBatchResponse
+	require.NoError(t, json.Unmarshal(raw, &resp))
+
+	assert.Len(t, resp.Entities, 1)
+	require.Len(t, resp.Missing, 1, "the empty ID must appear in the accounting, not vanish")
+	assert.Equal(t, "", resp.Missing[0].ID)
+	assert.Equal(t, graph.MissingError, resp.Missing[0].Reason,
+		"an ID that was never looked up cannot be reported as not_found")
+}

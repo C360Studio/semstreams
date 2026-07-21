@@ -133,9 +133,14 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 
 	resp := graph.EntityBatchResponse{Entities: entities}
 	for _, id := range missing {
-		resp.Missing = append(resp.Missing, graph.MissingEntity{
-			ID: id, Reason: graph.MissingNotFound,
-		})
+		// An empty ID was never looked up, so `not_found` would assert something
+		// unobserved — the exact move this change exists to stop. It is malformed
+		// input, which is a per-ID fault: `error`.
+		reason := graph.MissingNotFound
+		if id == "" {
+			reason = graph.MissingError
+		}
+		resp.Missing = append(resp.Missing, graph.MissingEntity{ID: id, Reason: reason})
 	}
 	return json.Marshal(resp)
 }
@@ -554,8 +559,14 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 	// Phase 1: Check cache for all IDs, collect misses
 	var cached []graph.EntityState
 	var missIDs []string
+	var invalid []string
 	for _, id := range ids {
 		if id == "" {
+			// Reported, not skipped. The response contract is that every requested ID
+			// appears exactly once across entities+missing; silently dropping the empty
+			// string put it in neither and made the accounting a lie for the one input
+			// a caller is most likely to send by accident.
+			invalid = append(invalid, id)
 			continue
 		}
 		if c.entityCache != nil {
@@ -569,7 +580,7 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 
 	// Phase 2: Fetch cache misses with bounded concurrency
 	if len(missIDs) == 0 {
-		return cached, nil, nil
+		return cached, invalid, nil
 	}
 
 	type fetchResult struct {
@@ -674,7 +685,7 @@ func (c *Component) fetchEntitiesConcurrent(ctx context.Context, ids []string, m
 	// and REPORTED. Partiality was never the bug — invisibility was.
 	var poisoned []*graph.StateContractError
 	var firstOtherErr error
-	var missing []string
+	missing := invalid
 	entities := make([]graph.EntityState, 0, len(cached)+len(missIDs))
 	entities = append(entities, cached...)
 	for i, r := range results {

@@ -8,8 +8,10 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/fusion"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestFuse_GatesOnHealthNotCoverage pins the ADR-084 D1 reversal at fusion's top gate.
@@ -126,6 +128,13 @@ func TestFuse_StatusUnknownDefersButWiringFails(t *testing.T) {
 
 func assertEmptyHonest(t *testing.T, resp fusion.Response) {
 	t.Helper()
+	// The load-bearing assertion: a withheld response must SAY it withheld. Checking
+	// only !Ready and State!=ready was the gap — a defer caused by an internal
+	// dependency leaves graph-index's envelope healthy, so the response advertised
+	// "healthy, found nothing" while actually meaning "I did not look".
+	assert.True(t, resp.Deferred,
+		"a withheld response must be marked deferred; envelope=%+v", resp.Index)
+	assert.NotEmpty(t, resp.DeferReason, "a defer must name its cause")
 	// The envelope must stay inside the closed state set. An empty State reads
 	// downstream as an unrecognized phase rather than as a defer, and it would render
 	// as all-zeros in the one-hot readiness metric — a silent "no data" where an
@@ -205,4 +214,81 @@ func marshalForCompare(t *testing.T, v any) string {
 		t.Fatalf("marshal: %v", err)
 	}
 	return string(b)
+}
+
+// TestFuse_DeferredResponseNeverReadsHealthy is the review's blocking finding, stated
+// as the property it violates: EVERY response the engine withholds must be
+// distinguishable from an answered one, even when the readiness envelope it carries is
+// healthy.
+//
+// The gap was internal-dependency defers. graph-ingest or graph-embedding returns the
+// readiness transient while graph-index is fine; notReadyEnvelope re-samples
+// graph-index, gets a HEALTHY envelope, and forces only Ready=false. But ADR-084
+// consumers gate on HEALTH, and health does not read Ready — so
+// {State:building, BootstrapComplete:true, Ready:false} passes the canonical gate. The
+// consumer sees a healthy graph that returned nothing.
+func TestFuse_DeferredResponseNeverReadsHealthy(t *testing.T) {
+	ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "on_event.go")
+	transient := errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
+		errors.New("index not ready: initial build has not completed"))
+
+	// graph-index stays HEALTHY throughout — the point of the fixture. Only the
+	// internal read fails.
+	healthyIndex := readyStatus()
+
+	cases := map[string]*fakeGraph{
+		"resolve hits the transient": {
+			status: healthyIndex, resolveErr: transient,
+		},
+		"hydration hits the transient": {
+			status: healthyIndex,
+			seeds:  map[string][]string{"OnEvent": {ent.ID}},
+			entErr: transient,
+		},
+	}
+
+	for name, g := range cases {
+		t.Run(name, func(t *testing.T) {
+			eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))
+			resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent"}, refLens{})
+			require.NoError(t, err)
+			require.Empty(t, resp.Nodes, "precondition: this is a withheld response")
+
+			// The envelope alone is NOT enough — assert that directly, so the test
+			// documents why the explicit flag has to exist.
+			proceed, _ := graph.EvaluateReadinessGate(
+				graph.StatusReading{Status: fusion.ExportReadinessEnvelope(resp.Index), Fresh: true},
+				graph.FreshnessNone())
+			if proceed {
+				require.True(t, resp.Deferred,
+					"the carried envelope passes the canonical health gate, so ONLY the "+
+						"explicit Deferred flag distinguishes this from a healthy empty answer")
+			}
+			assert.True(t, resp.Deferred, "a withheld response must be marked deferred")
+			assert.NotEmpty(t, resp.DeferReason)
+		})
+	}
+}
+
+// TestFuse_AnsweredResponseIsNotMarkedDeferred is the other half: the flag must not
+// become decorative by being set everywhere.
+func TestFuse_AnsweredResponseIsNotMarkedDeferred(t *testing.T) {
+	ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "on_event.go")
+	g := &fakeGraph{
+		status:   readyStatus(),
+		seeds:    map[string][]string{"OnEvent": {ent.ID}},
+		entities: map[string]*fusion.Entity{ent.ID: ent},
+	}
+	eng := fusion.NewEngine(g, fusion.NewBodyResolver(fusion.MapStoreResolver{}))
+	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent"}, refLens{})
+	require.NoError(t, err)
+
+	require.NotEmpty(t, resp.Nodes)
+	assert.False(t, resp.Deferred, "an answered response must not claim it deferred")
+	assert.Empty(t, resp.DeferReason)
+
+	raw, err := json.Marshal(resp)
+	require.NoError(t, err)
+	assert.NotContains(t, string(raw), "deferred",
+		"the default wire shape must be unchanged for answered responses: %s", raw)
 }

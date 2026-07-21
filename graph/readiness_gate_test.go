@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"math"
 	"testing"
 	"time"
 )
@@ -265,4 +266,101 @@ func TestFreshness_ZeroValueIsStrictest(t *testing.T) {
 	if proceed, _ := EvaluateReadinessGate(behind, FreshnessNone()); !proceed {
 		t.Error("FreshnessNone deferred on a healthy lagging index; none must mean no freshness requirement")
 	}
+}
+
+// TestEvaluateReadinessGate_UnrecognizedStateFailsClosed pins the allow-list. The gate
+// used to check only for degraded/reset_required, so a blank or future State read as
+// "not a hard stop, therefore healthy" and proceeded — a fail-OPEN on exactly the field
+// ADR-084 made load-bearing when health replaced coverage.
+//
+// A blank State is reachable without any malice: an empty envelope, a partially written
+// key, or a consumer built against a newer producer that added a state.
+func TestEvaluateReadinessGate_UnrecognizedStateFailsClosed(t *testing.T) {
+	for _, state := range []string{"", "ready_ish", "REBUILDING", "unknown", "Ready"} {
+		status := IndexStatusResponse{
+			State: state, BootstrapComplete: true, TargetRevision: 100, StalenessMs: 1,
+		}
+		for _, want := range []Freshness{FreshnessExact(), FreshnessWithin(time.Hour), FreshnessNone()} {
+			proceed, reason := EvaluateReadinessGate(
+				StatusReading{Status: status, Fresh: true}, want)
+			if proceed {
+				t.Errorf("State %q proceeded; an uninterpretable state must fail closed", state)
+			}
+			if reason != DeferUnrecognizedState {
+				t.Errorf("State %q gave reason %q, want %q — the operator action is a version "+
+					"check, not a tolerance tweak", state, reason, DeferUnrecognizedState)
+			}
+		}
+	}
+
+	// Every state the producer can actually emit stays interpretable, so the allow-list
+	// cannot silently reject the healthy path.
+	for _, state := range AllIndexStates {
+		_, reason := EvaluateReadinessGate(StatusReading{
+			Status: IndexStatusResponse{State: state, BootstrapComplete: true, Ready: true},
+			Fresh:  true,
+		}, FreshnessNone())
+		if reason == DeferUnrecognizedState {
+			t.Errorf("declared state %q was rejected as unrecognized", state)
+		}
+	}
+}
+
+// TestEvaluateReadinessGate_StalenessArithmeticCannotFailOpen pins the overflow guards.
+// StalenessMs is a uint64 off the wire and time.Duration is int64 NANOseconds, so a
+// large value wraps NEGATIVE and sails under any positive bound — MaxUint64 converts to
+// -1ms. A backwards local clock does the same thing from the other side, subtracting
+// from the age. Both directions are fail-open, which is the one direction this gate is
+// not allowed to fail in.
+func TestEvaluateReadinessGate_StalenessArithmeticCannotFailOpen(t *testing.T) {
+	bound := FreshnessWithin(3 * time.Second)
+
+	t.Run("an out-of-range staleness defers", func(t *testing.T) {
+		for _, ms := range []uint64{math.MaxUint64, math.MaxUint64 - 1, math.MaxInt64} {
+			proceed, reason := EvaluateReadinessGate(StatusReading{
+				Status: healthy(false, ms), Fresh: true,
+			}, bound)
+			if proceed {
+				t.Errorf("StalenessMs=%d proceeded under a 3s bound — the conversion wrapped negative", ms)
+			}
+			if reason != DeferOverStaleness {
+				t.Errorf("StalenessMs=%d gave %q, want over_staleness", ms, reason)
+			}
+		}
+	})
+
+	t.Run("a backwards local clock cannot credit freshness", func(t *testing.T) {
+		// The envelope says the view is 10s old; the local clock claims the reading
+		// arrived "in the future". Crediting that would make a 10s-old view pass a 3s
+		// bound.
+		proceed, _ := EvaluateReadinessGate(StatusReading{
+			Status: healthy(false, 10_000), Fresh: true, Age: -30 * time.Second,
+		}, bound)
+		if proceed {
+			t.Error("a negative reading age subtracted from the view age and passed the bound")
+		}
+	})
+
+	t.Run("a negative age does not reject an otherwise fresh view", func(t *testing.T) {
+		// Dropping the local contribution is the conservative reading, not a blanket
+		// defer: the envelope's own staleness still decides.
+		proceed, _ := EvaluateReadinessGate(StatusReading{
+			Status: healthy(false, 500), Fresh: true, Age: -time.Second,
+		}, bound)
+		if !proceed {
+			t.Error("a 500ms-stale view was rejected because the local clock stepped back")
+		}
+	})
+
+	t.Run("the largest safe staleness still evaluates", func(t *testing.T) {
+		// Just under the conversion ceiling: enormous, so it must defer on the BOUND
+		// rather than on the range guard — proving the guard is not swallowing the
+		// normal path.
+		proceed, reason := EvaluateReadinessGate(StatusReading{
+			Status: healthy(false, maxStalenessMs), Fresh: true,
+		}, bound)
+		if proceed || reason != DeferOverStaleness {
+			t.Errorf("proceed=%v reason=%q, want a plain over_staleness defer", proceed, reason)
+		}
+	})
 }

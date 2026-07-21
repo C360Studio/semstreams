@@ -23,13 +23,14 @@ type MissingReason string
 
 // The closed missing-reason set.
 const (
-	// MissingNotFound is a KV read that returned not-found for the key. The
-	// overwhelmingly common case, and the only one the handler emits today.
+	// MissingNotFound is a KV read that returned not-found for the key — the
+	// overwhelmingly common case.
 	MissingNotFound MissingReason = "not_found"
-	// MissingError is a per-ID read fault that did not fail the whole call. It is
-	// RESERVED: while the first-error contract stands, any non-not-found fault fails
-	// the batch, so the handler cannot currently emit this. It is declared here so
-	// consumers write their switch once — adding it later must not be a wire change.
+	// MissingError is a per-ID fault that did not fail the whole call. The first-error
+	// contract still stands for READ faults — a non-not-found backend error fails the
+	// batch — so the only current emitter is a malformed requested ID (the empty
+	// string), which is never looked up at all and therefore cannot honestly be called
+	// not_found.
 	MissingError MissingReason = "error"
 	// MissingUnknown is synthesized CLIENT-side for a requested ID that appears in
 	// neither the entities nor the missing list. A handler never emits it; it exists

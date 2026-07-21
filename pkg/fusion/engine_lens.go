@@ -98,11 +98,8 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 			// stamped explicitly rather than shipped as "": an empty string is outside
 			// the closed state set every consumer switches on, and would read as a new
 			// unknown phase rather than as "we could not establish readiness".
-			return Response{
-				Index:           unknownReadinessStatus(status),
-				Provenance:      ProvenanceDeterministic,
-				ContractVersion: ContractVersion,
-			}, nil
+			return deferredResponse(unknownReadinessStatus(status),
+				string(graph.DeferStatusUnknown)), nil
 		}
 		// Broken wiring stays LOUD. Masking it as "the graph is busy" would make a
 		// permanent operator bug indistinguishable from transient backpressure, forever.
@@ -113,10 +110,10 @@ func (e *Engine) Fuse(ctx context.Context, req Request, lens Lens) (Response, er
 	// hand-rolled as `!status.Ready`, the one exact-coverage check fusion never
 	// migrated, so a healthy index under write returned an empty envelope and the
 	// caller fell back to grep on a graph that could have answered.
-	if proceed, _ := graph.EvaluateReadinessGate(
+	if proceed, reason := graph.EvaluateReadinessGate(
 		graph.StatusReading{Status: status.readinessEnvelope(), Fresh: true},
 		graph.FreshnessNone()); !proceed {
-		return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}, nil
+		return deferredResponse(status, string(reason)), nil
 	}
 
 	mode := lens.ResolveMode(req.Query)
@@ -242,8 +239,8 @@ func applyScores(nodes []Node, ranked []*Entity, seeds []Seed) {
 		}
 		nodes[i].Rank = sc.rank
 		if sc.hasSimilarity {
-			nodes[i].Similarity = sc.similarity
-			nodes[i].HasSimilarity = true
+			score := sc.similarity
+			nodes[i].Similarity = &score
 		}
 	}
 }
@@ -277,7 +274,26 @@ func (e *Engine) notReadyEnvelope(ctx context.Context, status IndexStatus) Respo
 	if status.State == StateReady {
 		status.State = StateBuilding
 	}
-	return Response{Index: status, Provenance: ProvenanceDeterministic, ContractVersion: ContractVersion}
+	// Marked deferred EXPLICITLY rather than left for the caller to infer from the
+	// envelope. The transient may have come from graph-ingest or graph-embedding while
+	// graph-index is healthy, in which case the re-sample above returns a HEALTHY
+	// envelope — one that passes the canonical gate — attached to an empty response.
+	// Forcing Ready=false is not enough either: ADR-084 consumers gate on health, and
+	// health does not read Ready.
+	return deferredResponse(status, string(graph.ErrorCodeIndexNotReady))
+}
+
+// deferredResponse builds the empty-honest envelope for every path that WITHHELD.
+// One constructor so a new defer path cannot forget the flag — the failure mode being
+// an empty response that a consumer reads as an answer.
+func deferredResponse(status IndexStatus, reason string) Response {
+	return Response{
+		Index:           status,
+		Provenance:      ProvenanceDeterministic,
+		Deferred:        true,
+		DeferReason:     reason,
+		ContractVersion: ContractVersion,
+	}
 }
 
 // miss builds a ready+absent response with near-matches.

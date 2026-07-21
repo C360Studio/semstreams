@@ -261,6 +261,21 @@ The clustering defer path is now structured. One log line carries `status_known`
 when present, and `defer_total{reason}` counts by
 `hard_stop | over_staleness | status_unknown | bootstrap_incomplete`.
 
+### Sizing `max_staleness`
+
+The bound must exceed **the consumer's own worst-case cycle**, not just how fresh it
+wants its input. Community detection's run time scales with community SIZE, so as a
+graph consolidates a run can grow several-fold (a semboids adoption run measured 4.4s
+climbing to 23.7s over one 90s window). A long run competes with the indexer for the
+same box, so the view is staler at the next tick — and a tolerance that was ample while
+the graph was fragmented starts tripping `over_staleness` for a reason unrelated to
+index health.
+
+Watch `semstreams_graph_clustering_detection_duration_seconds` against
+`staleness_at_detection_ms`: duration climbing toward a fixed `max_staleness` is the
+signature. The gate is not wrong when this happens — it is reporting a real view age —
+so the fix is the tolerance, not the gate.
+
 `bootstrap_incomplete` means the producer has not finished its initial build in its
 current process lifetime — a cold start or a gh#474 format cutover. It replaced
 `empty`, whose `TargetRevision == 0` proxy was wrong in both directions: false during a
