@@ -9,15 +9,22 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Land this docs+CI branch, then start Epic A increment 1 (#623 + #602 +
-> #614 part 2).** Track 0 is **merged** — PR #624, squashed to `5e80f676` on main,
-> 2026-07-21. This branch (`chore/prev1-audit-program-and-sister-gate`) now carries
-> only the audit docs, this baton, and `sister-validation.yml`; landing it gives
-> **Epic D its first real CI run** (that workflow has still never executed —
-> `gh run list --workflow=sister-validation.yml` returns 404 until this merges).
-> Then Epic A: derive the dedup key at content resolution, bundling #602 and the
-> #614 revision-CAS remainder — one change against `graph/embedding/storage.go` +
-> `worker.go`. See "Epics".
+> **Start Epic A increment 2: `#600 + #616` (the literal "evidence silently
+> expires" case).** CONTENT ObjectStore bodies carry a hard-coded 24h TTL and
+> vanish (#600); fusion swallows the resulting body-hydration failure (#616, the
+> consumer-visible half). They pair on the hydration path. Adjacent cousins to
+> weigh into the same increment or the next: **#601** (offloaded entities never
+> embed their title; `text_suffixes` inert for them — sits on the offloaded lane
+> increment 1 just reworked) and **#613** (readiness attests "we stopped trying,"
+> not "vectors exist" — a readiness-semantics decision in the ADR-084 frame, needs
+> an owner call). **#619** (BM25 tier redesign) and **#599** (e2e coverage gap for
+> fusion Fuse/batch/unhydrated) remain in Epic A but are owner-decision / test-debt,
+> not the next mechanical increment.
+>
+> Increment 1 (#623 + #602 + #614 part 2) is **MERGED** — PR #628, `a6ea9979`,
+> 2026-07-22; OpenSpec change archived, `graph-embedding` spec now carries the 3
+> new requirements. Start increment 2 with `/opsx:new` (design-bearing: TTL removal
+> touches the ObjectStore lifecycle contract, ADR-068 territory).
 
 ---
 
@@ -175,7 +182,7 @@ two files three times. Start Epic A here.
 
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | #600 #601 #602 #612 **#623** #613 #614 #616 #619 #599 | **NEXT — start at increment 1** |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · **#600 #616** (inc.2 NEXT) · #601 #613 #619 #599 | **inc.1 MERGED; inc.2 next** |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard | #622 #527 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
@@ -309,3 +316,21 @@ Append one line per session. Newest last.
   duplicate Track 0 code commit was dropped from this branch via
   `rebase --onto`, leaving only docs + `sister-validation.yml`. Next: land this
   branch (first CI run of the sister gate), then Epic A increment 1.
+- **2026-07-22 (session 4)** — Track 0 docs+CI branch merged (#626); sister-gate
+  fired its first-ever run and **disproved the baton's own prediction** —
+  semsource@main compiles/runs fine against main (28k entities ingested); the one
+  red is a product-domain `chunk`/`doc` main-vs-main drift, semsource-owned. Then
+  **Epic A increment 1 shipped end-to-end**: spec-driven (`/opsx:new` →
+  proposal/design/specs/tasks), implemented, two review rounds (semstreams-reviewer
+  + PR review), **MERGED as #628 (`a6ea9979`)**, OpenSpec archived. Offloaded-lane
+  dedup restored (fresh embedding work 191→68 vs Track 0). Three lessons worth the
+  ink: (1) the **superseded-drop-skips-onGenerated** fix regressed the e2e metric
+  invariant (`dedup_hits` counted eagerly at lookup, but a dropped hit skips
+  `generated_total`) — the semantic tier's invariant gate caught `dedup_hits 166 >
+  generated 69`; **the statistical *smoke* had too little same-entity churn to trip
+  it, so re-run the tier that exercises the path, not the fastest one.** (2) A
+  **security alert on the reviewer agent** was benign fails-without-fix methodology
+  the scanner couldn't distinguish from sabotage — verified the guard intact by
+  neutralizing it myself. (3) `#623`'s ContentHash producer→consumer move
+  *simplified* `#614 part 2` (removed the read-to-copy). Follow-ups filed: #627,
+  #629, #630. Next: Epic A increment 2 (#600 + #616).
