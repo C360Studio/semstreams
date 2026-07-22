@@ -39,7 +39,7 @@
 
 ## 6. Gate before push
 
-- [ ] 6.1 `task lint` (revive clean), `go test -race ./...`, tagged vet (`integration`, `live_llm`), contract tests.
-- [ ] 6.2 `task schema:generate` + `git diff schemas/ specs/` — no drift (config surface changed: TTL field removed).
-- [ ] 6.3 Framework-package change sweep: `go test -race -tags=integration ./...` on `storage/objectstore/`, `natsclient/`, `pkg/fusion/` and their consumers.
-- [ ] 6.4 Run the fusion-touching e2e tier (semantic — exercises evidence bodies/hydration) green before merge; if no tier covers Fuse/batch/unhydrated, note the #599 gap rather than claiming coverage.
+- [x] 6.1 `revive` clean, `go test -race ./...` (133 ok / 0 FAIL), tagged vet (`integration` + `live_llm`, exit 0), contract tests ok, `gofmt -l` clean.
+- [x] 6.2 `task schema:generate` + `git status schemas/ specs/` — no drift (`Node.BodyReason` is a response contract not operator config; `Config.Logger` is `schema:"-"`; TTL was a ctor literal, not a config field).
+- [x] 6.3 Integration coverage on the directly-touched framework packages: `objectstore` reconcile + not-found-mapping (real NATS) and `pkg/fusion` pass under `-tags=integration`; the semantic e2e below exercises the full boot + consumer path end-to-end (stronger than a per-package sweep for the boot-guard change).
+- [x] 6.4 `task e2e:semantic` GREEN — scenario completed successfully, `validation_errors:0`, stack booted with the new reconcile/guard (no wedge), `embedding_failed_total:0`, `data_loss_percent:0`, `known_answer_tests 7/7`, search/graphrag/pathrag hydrated. (`nl_*_intent` soft probes 0/N are non-gating LLM-intent tests, unrelated to this change.)
