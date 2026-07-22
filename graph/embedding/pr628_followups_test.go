@@ -31,7 +31,7 @@ func TestFetchTextFromStorage_PathologicalCapDoesNotReturnEmpty(t *testing.T) {
 		}},
 	}
 
-	got, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	got, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}

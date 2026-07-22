@@ -15,7 +15,9 @@ because identity is placed first, truncation trims the body and the identity alw
 survives. The deduplication key is derived over the combined, truncated bytes (the
 exact text embedded), so a change to either the identity or the body regenerates the
 vector. An offloaded entity that carries no inline identity text embeds its body
-alone, unchanged.
+alone, unchanged; symmetrically, an offloaded entity whose resolved body is empty
+embeds its identity text alone (no trailing separator), so it deduplicates against
+an inline entity carrying the same text.
 
 #### Scenario: an offloaded entity embeds identity text ahead of its body
 
@@ -47,6 +49,13 @@ alone, unchanged.
 - **GIVEN** an offloaded entity carrying no inline text-suffix triples
 - **WHEN** its embedding text is produced
 - **THEN** the embedded text is the resolved body alone
+
+#### Scenario: an offloaded entity with an empty body embeds its identity alone
+
+- **GIVEN** an offloaded entity whose resolved body is empty and which carries inline identity text
+- **WHEN** its embedding text is produced
+- **THEN** the embedded text is the identity text alone, with no trailing separator
+- **AND** it deduplicates against an inline entity whose text is that same identity
 
 #### Scenario: identity inclusion on the offloaded lane is observable
 

@@ -113,6 +113,7 @@
 // can fetch content dynamically using StorageRef:
 //
 //	storage.SavePendingWithStorageRef(ctx, entityID, contentHash,
+//	    identityText, // inline title/.signature text, embedded ahead of the body (or "")
 //	    &embedding.StorageRef{
 //	        StorageInstance: "main",
 //	        Key:             "content/papers/doc123",

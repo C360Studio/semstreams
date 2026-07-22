@@ -25,6 +25,16 @@ import (
 // for very large stored content.
 const defaultMaxSourceTextLen = 8000
 
+// identityBodySeparator joins an offloaded entity's inline identity text (title/
+// .signature/.comment) to its resolved body, identity-first, in getSourceText (D1).
+//
+// It is FROZEN. The separator is part of the bytes actually embedded, and the hop-2
+// dedup key (DedupKey over getSourceText's output) is derived over exactly those
+// bytes — so changing this constant re-keys EVERY offloaded entity that carries
+// identity text and forces a full re-embed of that lane. Do not alter it without
+// treating it as a breaking, re-embed-inducing change.
+const identityBodySeparator = "\n\n"
+
 // MaxSourceTextLenCeiling is the hard upper bound on the source-text cap, in runes.
 // Config.Validate rejects a larger max_text_len, and fetchTextFromStorage clamps to
 // it before deriving its byte read budget so a pathological value can never overflow
@@ -78,6 +88,19 @@ type WorkerMetrics interface {
 	// IncTruncated counts one source-text truncation at the configured cap, so the
 	// bytes actually embedded are discoverable rather than silently dropped (#602).
 	IncTruncated()
+	// IncOffloadedIdentityIncluded counts one offloaded (StorageRef) entity that
+	// embedded inline identity text (title/.signature/.comment, per text_suffixes)
+	// AHEAD of its body. Paired with IncOffloadedIdentityAbsent, it makes the
+	// text-suffix effect on the offloaded lane observable — a producer tuning
+	// text_suffixes can confirm it took effect from /metrics rather than infer it
+	// from silence (D5/#601).
+	IncOffloadedIdentityIncluded()
+	// IncOffloadedIdentityAbsent counts one offloaded (StorageRef) entity processed
+	// WITHOUT inline identity text — only its body, if any, is embedded; when it also
+	// has no body the entity is skipped without embedding. The symmetric half of
+	// IncOffloadedIdentityIncluded, so a producer can tell a config-effect from silence
+	// (D5/#601).
+	IncOffloadedIdentityAbsent()
 	// IncFailed increments the failed embeddings counter
 	IncFailed()
 	// SetPending sets the current pending embeddings gauge
@@ -657,30 +680,78 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash st
 	return true
 }
 
-// getSourceText extracts text from the record.
-// For legacy records, uses SourceText directly.
-// For ContentStorable records (with StorageRef), fetches from ObjectStore.
+// getSourceText produces the exact bytes hop 2 embeds (and keys the dedup bucket over).
+//
+// It is re-branched on StorageRef PRIMARY (D1). The discriminator for "this body is
+// offloaded" is StorageRef != nil, NOT SourceText: on an offloaded record SourceText
+// now means the INLINE identity prefix (title/.signature/.comment), not the whole
+// text. Were the old SourceText-primary `else if` kept, an offloaded record carrying
+// identity text would take the first branch and embed identity-ONLY, silently dropping
+// the body. So:
+//
+//   - Offloaded (StorageRef != nil): fetch the body, then embed the inline identity
+//     text AHEAD of it (identity-first, one vector) when present, so text_suffixes
+//     takes effect on offloaded entities exactly as it does inline (D1/D2). Identity
+//     first means the cap below trims the body tail and the identity always survives.
+//   - Inline (StorageRef == nil): SourceText is the whole text (unchanged).
 func (w *Worker) getSourceText(record *Record) (string, error) {
-	var text string
-
-	// Legacy path: use SourceText if available
-	if record.SourceText != "" {
-		text = record.SourceText
-	} else if record.StorageRef != nil {
-		// Streaming path: read raw content from store
-		var err error
-		text, err = w.fetchTextFromStorage(record.StorageRef)
+	if record.StorageRef != nil {
+		// Streaming path: read raw content from store. fetchTextFromStorage rune-clamps
+		// the body to the cap for memory safety, reports whether IT truncated (bodyTruncated),
+		// and counts that body truncation once (#602).
+		body, bodyTruncated, err := w.fetchTextFromStorage(record.StorageRef)
 		if err != nil {
 			return "", err
 		}
+
+		// Identity-first (D1/D2/FIX 2). Join with the separator ONLY when both an identity
+		// and a body are present: an identity with an empty body embeds the identity ALONE
+		// (no trailing separator), so it dedup-collapses against an inline entity whose text
+		// is that same identity, and carries no cosmetic separator noise.
+		text := body
+		switch {
+		case record.SourceText != "" && body != "":
+			text = record.SourceText + identityBodySeparator + body
+		case record.SourceText != "":
+			text = record.SourceText // empty body: identity alone
+		}
+		if record.SourceText != "" {
+			if w.metrics != nil {
+				w.metrics.IncOffloadedIdentityIncluded()
+			}
+		} else if w.metrics != nil {
+			w.metrics.IncOffloadedIdentityAbsent()
+		}
+
+		// Re-apply the cap to the COMBINED text (D3): identity-first ordering means the body
+		// tail trims and the identity always survives. The hop-2 dedup key (DedupKey over
+		// this returned text) therefore covers the combined, truncated bytes automatically —
+		// no separate key derivation (D4).
+		//
+		// Count the truncation EXACTLY ONCE across the two clamps (#602). fetchTextFromStorage
+		// already counted iff the BODY exceeded the cap (bodyTruncated). Here we count only
+		// the ADDITIONAL case it could not see: the body fit the cap but prepending the
+		// identity pushes the COMBINED over it (!bodyTruncated && the combined shortened).
+		// So body-over-cap counts once at fetch; identity-tips-over counts once here; neither
+		// double-counts.
+		if w.maxSourceTextLen > 0 {
+			truncated := truncateAtWord(text, w.maxSourceTextLen)
+			if !bodyTruncated && len(truncated) < len(text) {
+				if w.metrics != nil {
+					w.metrics.IncTruncated()
+				}
+			}
+			text = truncated
+		}
+		return text, nil
 	}
 
-	// Truncate if configured, through the SAME rune-safe routine the offloaded lane
-	// uses, so identical content embeds byte-identical text (and derives the same hop-2
-	// dedup key) regardless of lane. Emit a signal only when it actually shortens the
-	// text so the bytes embedded stay discoverable (#602). The offloaded lane's
-	// fetchTextFromStorage has already truncated+counted, so re-applying here is an
-	// idempotent no-op that neither re-shortens nor double-counts.
+	// Inline lane: SourceText is the whole text. Truncate at the cap through the SAME
+	// rune-safe routine the offloaded lane uses, so identical content embeds byte-identical
+	// text (and derives the same hop-2 dedup key) regardless of lane. This is the inline
+	// lane's single truncation-detection site — emit a signal only when it actually
+	// shortens the text so the bytes embedded stay discoverable (#602).
+	text := record.SourceText
 	if w.maxSourceTextLen > 0 {
 		truncated := truncateAtWord(text, w.maxSourceTextLen)
 		if len(truncated) < len(text) {
@@ -761,10 +832,16 @@ func (w *Worker) resolveStore(instance string) storage.StreamableStore {
 // fetchTextFromStorage streams raw content from the store, reading only up to
 // maxSourceTextLen bytes. ObjectStore holds raw bytes (plain text, not JSON-wrapped).
 // Triples carry metadata (mime type, hash); the store is format-agnostic.
-func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
+//
+// The second return value reports whether the BODY itself was truncated at the cap.
+// getSourceText needs it to count truncation exactly once across the two clamps: the
+// body truncation is counted HERE (#602), and getSourceText counts only the additional
+// case this cannot see — the body fit but the prepended identity tips the combined text
+// over the cap.
+func (w *Worker) fetchTextFromStorage(ref *StorageRef) (text string, bodyTruncated bool, err error) {
 	store := w.resolveStore(ref.StorageInstance)
 	if store == nil {
-		return "", fmt.Errorf("content store not configured")
+		return "", false, fmt.Errorf("content store not configured")
 	}
 
 	reader, err := store.Open(w.ctx, ref.Key)
@@ -774,7 +851,7 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 		if w.metrics != nil {
 			w.metrics.IncContentResolveError()
 		}
-		return "", fmt.Errorf("failed to open content from instance %q: %w", ref.StorageInstance, err)
+		return "", false, fmt.Errorf("failed to open content from instance %q: %w", ref.StorageInstance, err)
 	}
 	defer reader.Close()
 
@@ -805,7 +882,7 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 		if w.metrics != nil {
 			w.metrics.IncContentResolveError()
 		}
-		return "", fmt.Errorf("failed to read content from instance %q: %w", ref.StorageInstance, err)
+		return "", false, fmt.Errorf("failed to read content from instance %q: %w", ref.StorageInstance, err)
 	}
 
 	// Detect likely JSON-wrapped content (StoredContent envelope) on the raw bytes.
@@ -818,14 +895,14 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 	}
 
 	// Truncate with the SAME rune-safe routine the inline lane uses, so both lanes embed
-	// byte-identical text for identical content. Count the truncation HERE (the
-	// offloaded lane's detection site, #602); getSourceText's re-application is an
-	// idempotent no-op that does not double-count. `len(truncated) < len(raw)` holds iff
-	// the body exceeded the cap (in runes), whether the read hit the store's end or the
-	// byte budget.
+	// byte-identical text for identical content. Count the BODY truncation HERE (the
+	// offloaded lane's body-detection site, #602). `bodyTruncated` holds iff the body
+	// exceeded the cap (in runes), whether the read hit the store's end or the byte budget;
+	// it is returned so getSourceText can count the combined truncation exactly once.
 	raw := string(data)
 	truncated := truncateAtWord(raw, limit)
-	if len(truncated) < len(raw) {
+	bodyTruncated = len(truncated) < len(raw)
+	if bodyTruncated {
 		if w.metrics != nil {
 			w.metrics.IncTruncated()
 		}
@@ -837,7 +914,7 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 		w.metrics.IncContentResolved()
 	}
 
-	return truncated, nil
+	return truncated, bodyTruncated, nil
 }
 
 // markFailed marks an embedding as failed. sourceRevision is the revision this

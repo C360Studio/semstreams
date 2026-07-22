@@ -39,6 +39,7 @@ func (s readerStore) Open(context.Context, string) (io.ReadCloser, error) {
 
 type countingMetrics struct {
 	dedup, failed, resolveErr, resolved, truncated, dedupSkipped int
+	identityIncluded, identityAbsent                             int
 }
 
 func (m *countingMetrics) IncDedupHits()           { m.dedup++ }
@@ -48,6 +49,9 @@ func (m *countingMetrics) IncFailed()              { m.failed++ }
 func (m *countingMetrics) SetPending(float64)      {}
 func (m *countingMetrics) IncContentResolveError() { m.resolveErr++ }
 func (m *countingMetrics) IncContentResolved()     { m.resolved++ }
+
+func (m *countingMetrics) IncOffloadedIdentityIncluded() { m.identityIncluded++ }
+func (m *countingMetrics) IncOffloadedIdentityAbsent()   { m.identityAbsent++ }
 
 // --- tests ---------------------------------------------------------------
 
@@ -62,7 +66,7 @@ func TestFetchText_RegistryResolvesByInstance(t *testing.T) {
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{"objectstore": readerStore{data: "FROM-REGISTRY"}}},
 	}
 
-	got, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	got, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -86,7 +90,7 @@ func TestFetchText_FallsBackToOwnedStoreWhenInstanceAbsent(t *testing.T) {
 		storeResolver: fakeResolver{stores: map[string]storage.StreamableStore{"other": readerStore{data: "X"}}},
 	}
 
-	got, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	got, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err != nil {
 		t.Fatalf("fetch: %v", err)
 	}
@@ -97,7 +101,7 @@ func TestFetchText_FallsBackToOwnedStoreWhenInstanceAbsent(t *testing.T) {
 
 func TestFetchText_NoStoreConfigured(t *testing.T) {
 	w := &Worker{ctx: context.Background(), maxSourceTextLen: 100}
-	_, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err == nil {
 		t.Fatal("expected error when neither registry nor fallback can serve the ref")
 	}
@@ -114,7 +118,7 @@ func TestFetchText_ResolveErrorMetricOnReadFailure(t *testing.T) {
 		}},
 	}
 
-	_, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
 	if err == nil {
 		t.Fatal("expected error when a resolved store fails to open")
 	}

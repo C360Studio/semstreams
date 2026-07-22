@@ -174,7 +174,7 @@ func TestFetchTextFromStorage_StreamsLimitedBytes(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	text, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/safety-001"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/safety-001"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -215,7 +215,7 @@ func TestFetchTextFromStorage_ShortContent(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	text, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/short"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/short"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestFetchTextFromStorage_NilStore(t *testing.T) {
 		maxSourceTextLen: 4000,
 	}
 
-	_, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/any"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/any"})
 	if err == nil {
 		t.Error("expected error when content store is nil")
 	}
@@ -251,7 +251,7 @@ func TestFetchTextFromStorage_KeyNotFound(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	_, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/missing"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/missing"})
 	if err == nil {
 		t.Error("expected error for missing key")
 	}
@@ -290,7 +290,14 @@ func TestGetSourceText_StorageRef_UsesStreaming(t *testing.T) {
 	}
 }
 
-func TestGetSourceText_SourceText_TakesPrecedence(t *testing.T) {
+// TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst pins the D1
+// re-branch (#601): an offloaded record (StorageRef != nil) that ALSO carries inline
+// identity text must embed the identity AHEAD of the fetched body, in one vector, and
+// MUST still fetch the body — it does not treat SourceText as the whole text and drop
+// the body. This is the exact behavior the pre-fix mutually-exclusive
+// `if SourceText / else if StorageRef` got wrong (identity-only, body silently
+// dropped); on an offloaded record SourceText now means the identity PREFIX.
+func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testing.T) {
 	store := &mockStreamableStore{
 		data: map[string][]byte{
 			"doc/safety": []byte("store content"),
@@ -316,10 +323,11 @@ func TestGetSourceText_SourceText_TakesPrecedence(t *testing.T) {
 		t.Fatalf("getSourceText error: %v", err)
 	}
 
-	if text != "triple-based text" {
-		t.Errorf("SourceText should take precedence, got %q", text)
+	want := "triple-based text" + identityBodySeparator + "store content"
+	if text != want {
+		t.Errorf("offloaded record with identity must embed identity-first combined text; got %q, want %q", text, want)
 	}
-	if store.openCalls != 0 {
-		t.Errorf("should NOT call Open when SourceText is present, got %d calls", store.openCalls)
+	if store.openCalls != 1 {
+		t.Errorf("the offloaded body MUST still be fetched (identity does not replace it), got %d Open calls", store.openCalls)
 	}
 }

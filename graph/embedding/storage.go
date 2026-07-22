@@ -71,7 +71,12 @@ type Record struct {
 	EntityID    string    `json:"entity_id"`
 	Vector      []float32 `json:"vector,omitempty"`
 	ContentHash string    `json:"content_hash"`
-	SourceText  string    `json:"source_text,omitempty"` // Stored for pending records (legacy)
+	// SourceText carries the pending record's inline text. Its meaning is lane-dependent:
+	// on the inline lane it is the WHOLE embedding text; on the offloaded (StorageRef)
+	// lane it is the inline identity PREFIX (title/.signature/.comment) that hop 2 embeds
+	// ahead of the fetched body (D1/D2, #601). Empty on an offloaded record means no inline
+	// identity text (body-only).
+	SourceText  string    `json:"source_text,omitempty"`
 	Model       string    `json:"model,omitempty"`
 	Dimensions  int       `json:"dimensions,omitempty"`
 	GeneratedAt time.Time `json:"generated_at,omitempty"`
@@ -188,9 +193,16 @@ func (s *Storage) SavePending(ctx context.Context, entityID, contentHash, source
 // SavePendingWithStorageRef saves a pending embedding request with storage reference.
 // This enables the ContentStorable pattern where text is fetched from ObjectStore.
 // The contentHash is still used for deduplication if provided.
+//
+// sourceText is the entity's INLINE identity text (title/.signature/.comment, selected
+// by the configured text suffixes at hop 1). Unlike the inline lane — where SourceText
+// is the whole text — here it is a PREFIX: hop 2 fetches the offloaded body and embeds
+// this identity ahead of it, identity-first, in one vector so the text-suffix config
+// takes effect on offloaded entities too (D1/D2). Pass "" for an offloaded entity with
+// no inline text, and hop 2 embeds the body alone (unchanged).
 func (s *Storage) SavePendingWithStorageRef(
 	ctx context.Context,
-	entityID, contentHash string,
+	entityID, contentHash, sourceText string,
 	storageRef *StorageRef,
 	contentFields map[string]string,
 	sourceRevision uint64,
@@ -205,6 +217,7 @@ func (s *Storage) SavePendingWithStorageRef(
 	record := &Record{
 		EntityID:       entityID,
 		ContentHash:    contentHash,
+		SourceText:     sourceText,
 		StorageRef:     storageRef,
 		ContentFields:  contentFields,
 		Status:         StatusPending,
