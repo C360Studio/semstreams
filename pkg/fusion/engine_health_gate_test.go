@@ -174,7 +174,10 @@ func TestIndexStatus_GateProjectionCarriesEveryField(t *testing.T) {
 		Code: "some_code", Reason: "some_reason",
 		BootstrapComplete: true,
 		IndexedRevision:   11, TargetRevision: 22, Lag: 33, StalenessMs: 44,
-		Phase: "indexing", Revision: "11", LastSynced: "2026-07-20T12:00:00Z",
+		FailedCount:    5,
+		FailedReasons:  map[string]uint64{"connection_refused": 4, "content_error": 1},
+		FirstFailureAt: "2026-07-22T10:00:00Z",
+		Phase:          "indexing", Revision: "11", LastSynced: "2026-07-20T12:00:00Z",
 	}
 
 	projected := fusion.ExportReadinessEnvelope(src)
@@ -207,6 +210,34 @@ func TestIndexStatus_GateProjectionCarriesEveryField(t *testing.T) {
 		graph.StatusReading{Status: projected, Fresh: true}); reason != graph.DeferHardStop {
 		t.Errorf("gate reason = %q, want hard_stop for a degraded projection", reason)
 	}
+}
+
+// TestIndexStatus_RelaysProducerFailureDetail proves the production relay (#613): the
+// RetrievalClient decodes a producer's GRAPH_STATUS envelope directly into
+// fusion.IndexStatus, so a degraded producer's bounded failure detail (failed_count,
+// the reason histogram, first_failure_at) survives that decode and reaches the operator
+// through the response envelope fusion attaches — no new endpoint. The producer wire IS
+// graph.IndexStatusResponse, so this marshals the producer shape and decodes the
+// consumer shape, exactly as fusionnats.Client.Status does over the raw bytes.
+func TestIndexStatus_RelaysProducerFailureDetail(t *testing.T) {
+	producer := graph.IndexStatusResponse{
+		Ready: true, State: graph.IndexStateDegraded,
+		IndexedRevision: 100, TargetRevision: 100,
+		FailedCount:    3,
+		FailedReasons:  map[string]uint64{"connection_refused": 2, "content_error": 1},
+		FirstFailureAt: "2026-07-22T09:00:00Z",
+	}
+	raw, err := json.Marshal(producer)
+	require.NoError(t, err)
+
+	var relayed fusion.IndexStatus
+	require.NoError(t, json.Unmarshal(raw, &relayed))
+
+	assert.Equal(t, uint64(3), relayed.FailedCount, "failed_count must relay through the direct decode")
+	assert.Equal(t, uint64(2), relayed.FailedReasons["connection_refused"])
+	assert.Equal(t, uint64(1), relayed.FailedReasons["content_error"])
+	assert.Equal(t, "2026-07-22T09:00:00Z", relayed.FirstFailureAt)
+	assert.Equal(t, fusion.StateDegraded, relayed.State, "the degraded verdict must relay so the gate defers")
 }
 
 // marshalForCompare renders a value as JSON for field-level comparison between the two

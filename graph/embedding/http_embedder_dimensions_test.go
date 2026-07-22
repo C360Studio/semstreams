@@ -218,7 +218,7 @@ func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 		t.Fatalf("an unresolved embedder must yield an empty dedup key, got %q", key)
 	}
 
-	vector, _, err := w.getOrGenerateEmbedding("acme.ops.a.b.c.2", "text", key, 1)
+	vector, _, _, _, _, err := w.getOrGenerateEmbedding("acme.ops.a.b.c.2", "text", key, 1)
 	if err != nil {
 		t.Fatalf("getOrGenerateEmbedding: %v", err)
 	}

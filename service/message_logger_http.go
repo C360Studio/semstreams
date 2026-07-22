@@ -172,6 +172,13 @@ func messageLoggerOpenAPISpec() *OpenAPISpec {
 							Required:    false,
 							Schema:      Schema{Type: "integer"},
 						},
+						{
+							Name:        "status",
+							In:          "query",
+							Description: "Opt-in filter: keep only records whose top-level JSON 'status' equals this (e.g. 'failed' over EMBEDDING_INDEX for per-entity failure forensics). Empty (default) returns all records.",
+							Required:    false,
+							Schema:      Schema{Type: "string"},
+						},
 					},
 					Responses: map[string]ResponseSpec{
 						"200": {
@@ -421,8 +428,16 @@ func (ml *MessageLogger) handleKVQueryWith(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	// Opt-in status filter (#613): when set, keep only records whose top-level JSON
+	// "status" field equals it — e.g. ?status=failed over EMBEDDING_INDEX enumerates the
+	// durable failed embeddings for per-entity forensics. Empty (the default) is a no-op,
+	// so the endpoint is byte-unchanged for every existing caller. This is the DEBUG tier
+	// (message-logger is off by default); production failure observability is the L1
+	// metrics + L2 GRAPH_STATUS envelope + the fusion/graph-query relay, complete without it.
+	statusFilter := query.Get("status")
+
 	// Query KV bucket
-	result, err := ml.queryKVBucket(ctx, provider, bucket, pattern, limit)
+	result, err := ml.queryKVBucket(ctx, provider, bucket, pattern, limit, statusFilter)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			http.Error(w, fmt.Sprintf("Bucket not found: %s", bucket), http.StatusNotFound)
@@ -441,12 +456,14 @@ func (ml *MessageLogger) handleKVQueryWith(w http.ResponseWriter, r *http.Reques
 	}
 }
 
-// queryKVBucket queries a NATS KV bucket
+// queryKVBucket queries a NATS KV bucket. statusFilter, when non-empty, keeps only
+// records whose top-level JSON "status" field equals it (#613, opt-in).
 func (ml *MessageLogger) queryKVBucket(
 	ctx context.Context,
 	provider kvBucketProvider,
 	bucket, pattern string,
 	limit int,
+	statusFilter string,
 ) (map[string]any, error) {
 	// Look up the bucket; never create it. The bucket name here is
 	// caller-supplied and unvalidated beyond path-traversal characters, so
@@ -516,6 +533,12 @@ func (ml *MessageLogger) queryKVBucket(
 			value = string(entry.Value())
 		}
 
+		// Opt-in status filter (#613): skip records whose top-level "status" does not
+		// match. A non-JSON or non-object value never matches a status filter.
+		if !recordMatchesStatus(value, statusFilter) {
+			continue
+		}
+
 		entries = append(entries, map[string]any{
 			"key":      key,
 			"value":    value,
@@ -531,6 +554,24 @@ func (ml *MessageLogger) queryKVBucket(
 		"count":   len(entries),
 		"entries": entries,
 	}, nil
+}
+
+// recordMatchesStatus reports whether a decoded KV value passes the opt-in status
+// filter (#613). An EMPTY filter matches everything (the filter is off, so the endpoint
+// is unchanged). A non-empty filter matches only a JSON object whose top-level "status"
+// string equals it; a non-object value (raw string, array, number) never matches, so a
+// bucket without status-shaped records returns nothing under a filter rather than leaking
+// unfiltered rows.
+func recordMatchesStatus(value any, statusFilter string) bool {
+	if statusFilter == "" {
+		return true
+	}
+	obj, ok := value.(map[string]any)
+	if !ok {
+		return false
+	}
+	s, _ := obj["status"].(string)
+	return s == statusFilter
 }
 
 // matchesPattern checks if a string matches a simple glob pattern

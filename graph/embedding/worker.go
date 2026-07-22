@@ -10,11 +10,13 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"unicode"
 	"unicode/utf8"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/storage"
@@ -65,14 +67,41 @@ func isExpectedShutdownError(err error) bool {
 // The callback receives the entity ID and the generated embedding vector.
 type GeneratedCallback func(entityID string, embedding []float32)
 
+// TerminalOutcome classifies HOW a pending embedding reached its terminal state, so
+// the readiness component can route its current-failed map (#613): OutcomeFailed adds
+// the entity (with its bounded reason), every other outcome removes it. It does NOT
+// change the watermark, which advances on ALL terminal outcomes regardless — that
+// deadlock-avoidance property (a permanently-failing or no-text entity never pins the
+// watermark) is deliberately untouched.
+type TerminalOutcome int
+
+const (
+	// OutcomeGenerated means a usable vector was stored.
+	OutcomeGenerated TerminalOutcome = iota
+	// OutcomeFailed means a durable StatusFailed record was written for this entity — the
+	// only outcome that ADDS to the current-failed map.
+	OutcomeFailed
+	// OutcomeSkipped means nothing to embed (no text), a corrupt-record drain, or a
+	// failure attempt that did NOT persist a durable failed record (superseded /
+	// record-gone / context-cancelled). None is a current failure, so all REMOVE the
+	// entity from the current-failed map.
+	OutcomeSkipped
+	// OutcomeDeleted means the record was tombstoned or superseded by a newer revision
+	// mid-generation; like Skipped it is not a current failure and removes the entity
+	// from the current-failed map.
+	OutcomeDeleted
+)
+
 // TerminalCallback is called when a pending embedding reaches ANY terminal outcome
-// — generated, failed, or deliberately skipped (no text) — carrying the entity ID
-// and the ENTITY_STATES SourceRevision that produced the record. It exists so the
-// hop-1 readiness watermark can be completed at the true end of the two-hop pipeline
-// (ADR-066 §3). sourceRevision==0 means "unknown" (a legacy record) and the
-// completion is a no-op; ^uint64(0) is the max-rev drain used for an unreadable
-// (corrupt) record whose revision cannot be recovered.
-type TerminalCallback func(entityID string, sourceRevision uint64)
+// — generated, failed, or deliberately skipped (no text) — carrying the entity ID,
+// the ENTITY_STATES SourceRevision that produced the record, the TerminalOutcome, and
+// (for OutcomeFailed) the bounded failure reason. It exists so the hop-1 readiness
+// watermark can be completed at the true end of the two-hop pipeline (ADR-066 §3) and
+// the current-failed map routed by outcome (#613). sourceRevision==0 means "unknown"
+// (a legacy record) and the completion is a no-op; ^uint64(0) is the max-rev drain
+// used for an unreadable (corrupt) record whose revision cannot be recovered. reason
+// is non-empty only for OutcomeFailed.
+type TerminalCallback func(entityID string, sourceRevision uint64, outcome TerminalOutcome, reason string)
 
 // WorkerMetrics provides metrics callbacks for embedding worker operations.
 // This allows the worker to report metrics without direct dependency on prometheus.
@@ -105,6 +134,12 @@ type WorkerMetrics interface {
 	IncOffloadedIdentityAbsent()
 	// IncFailed increments the failed embeddings counter
 	IncFailed()
+	// IncFailedReason increments the reason-labelled failures counter (#613). reason is
+	// a value from the BOUNDED failure enum (see the failReason* constants) — never the
+	// raw error message, which is unbounded and would blow up label cardinality. It
+	// fires on the SAME terminal path as IncFailed so it stays a strict partition of the
+	// total (mirrors fusion body_hydration_failures_total{reason}, inc 2).
+	IncFailedReason(reason string)
 	// SetPending sets the current pending embeddings gauge
 	SetPending(count float64)
 	// IncContentResolveError counts a body fetch that FAILED after a store was
@@ -139,6 +174,22 @@ type Worker struct {
 	// KV watching
 	indexBucket jetstream.KeyValue
 	watcher     jetstream.KeyWatcher
+	// snapshotComplete latches true when the EMBEDDING_INDEX WatchAll initial snapshot
+	// has been fully replayed (the nil sentinel). It gates FAILED-record re-processing
+	// (#613/D4) to the restart snapshot ONLY: the worker watches the same bucket
+	// SaveFailed writes to, so re-processing a LIVE failed write would re-embed → fail →
+	// re-write in a hot loop whenever the dependency is down. A restart re-delivers the
+	// last failed record once (DeliverLastPerSubject); any re-write during recovery is a
+	// live update delivered AFTER this sentinel, so it is skipped and the loop cannot
+	// form. New-revision recovery still flows through hop-1's SavePending (a live PENDING
+	// write, always processed).
+	snapshotComplete atomic.Bool
+	// generateGroup collapses concurrent byte-identical embedder calls: K workers holding
+	// the same content under the same embedder identity make ONE Generate call and share
+	// the vector, then each performs its own SaveGenerated (#630). Process-local only —
+	// the dedup key already collapses SEQUENTIAL cross-process dupes; the distributed
+	// KV-reservation variant is deferred.
+	generateGroup singleflight.Group
 
 	// Content store for fetching body text from ObjectStore via streaming.
 	// This is the OWNED fallback (built from a store-read port, closed by the
@@ -353,12 +404,28 @@ func (w *Worker) processEmbeddings(workerID int) {
 			}
 
 			if entry == nil {
+				// The WatchAll initial-snapshot sentinel: every last-per-subject value has
+				// been replayed. Latch it so FAILED records are re-processed only from the
+				// restart snapshot, not from live self-writes (see snapshotComplete / D4).
+				w.snapshotComplete.Store(true)
 				continue
 			}
 
-			// Process if this is a new pending record or update to existing pending
+			// Process if this is a new pending record or update to existing pending.
 			if entry.Operation() == jetstream.KeyValuePut {
-				w.handleKVEntrySafe(entry, workerID)
+				// Capture the snapshot-vs-live phase HERE, at the single point of dequeue,
+				// and carry it into processing as an immutable job property (#613 F3). The
+				// flag must NOT be re-read deep inside handleKVEntry: this pool shares one
+				// WatchAll channel, so between the moment a worker dequeues a snapshot record
+				// and the moment it would re-read the flag, a sibling worker can consume the
+				// nil sentinel and flip it — reading it later would then misclassify a
+				// snapshot record as live and skip its restart reprocessing. Reading it once,
+				// immediately at dequeue, fixes the phase to the value in force when the entry
+				// was taken. (The residual sub-instruction window between the channel receive
+				// and this load is closed for CORRECTNESS by the hop-1 re-SavePending backstop
+				// — see handleKVEntry's reprocessFailed comment.)
+				duringSnapshot := !w.snapshotComplete.Load()
+				w.handleKVEntrySafe(entry, duringSnapshot, workerID)
 			}
 		}
 	}
@@ -394,7 +461,7 @@ func (w *Worker) processEmbeddings(workerID int) {
 // decoder would turn one poison record into a hot loop. A record that panics on
 // every delivery therefore pins the watermark until an operator removes it —
 // intended, per ADR-084: readiness licenses health, not absence.
-func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) {
+func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, duringSnapshot bool, workerID int) {
 	defer func() {
 		if r := recover(); r != nil {
 			w.logger.Error("Embedding worker panic recovered; entry stays pending and its readiness watermark is NOT advanced",
@@ -405,9 +472,9 @@ func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) 
 		}
 	}()
 
-	entityID, sourceRevision, terminal := w.handleKVEntry(entry, workerID)
+	entityID, sourceRevision, terminal, outcome, reason := w.handleKVEntry(entry, duringSnapshot, workerID)
 	if terminal && w.onTerminal != nil {
-		w.onTerminal(entityID, sourceRevision)
+		w.onTerminal(entityID, sourceRevision, outcome, reason)
 	}
 }
 
@@ -419,8 +486,8 @@ func (w *Worker) handleKVEntrySafe(entry jetstream.KeyValueEntry, workerID int) 
 // the one callback, and only on a normal return — see its doc comment for why a
 // defer here would complete panicking (still-pending) work.
 func (w *Worker) handleKVEntry(
-	entry jetstream.KeyValueEntry, workerID int,
-) (entityID string, sourceRevision uint64, terminal bool) {
+	entry jetstream.KeyValueEntry, duringSnapshot bool, workerID int,
+) (entityID string, sourceRevision uint64, terminal bool, outcome TerminalOutcome, reason string) {
 	// Parse the record to check status
 	var record Record
 	if err := json.Unmarshal(entry.Value(), &record); err != nil {
@@ -428,18 +495,35 @@ func (w *Worker) handleKVEntry(
 		// entry can never be completed with an exact revision — and unlike a
 		// deleted entity, no re-observation is guaranteed. Max-rev-drain the key so
 		// one poison record cannot wedge the whole embedding.ready signal into
-		// permanent degraded (ADR-066 §3 D3); loud, because it is not expected.
+		// permanent degraded (ADR-066 §3 D3); loud, because it is not expected. A
+		// corrupt record is not a current embedding failure (no bounded reason, no
+		// durable failed record), so it is OutcomeSkipped for the current-failed map.
 		w.logger.Warn("Failed to unmarshal embedding record; draining readiness watermark for key",
 			"key", entry.Key(), "error", err)
-		return entry.Key(), ^uint64(0), true
+		return entry.Key(), ^uint64(0), true, OutcomeSkipped, ""
 	}
 
-	// Only process pending records. A re-delivered generated/failed record (from our
-	// own hop-2 writes) lands here and must NOT fire the terminal callback — it was
-	// already completed when it first transitioned. So the results below are set
-	// AFTER this skip, never before it (ADR-066 §3).
-	if record.Status != StatusPending {
-		return "", 0, false
+	// Process PENDING records always (fresh work from hop-1). Also re-process a FAILED
+	// record delivered in the RESTART SNAPSHOT (D4/#613): a restart re-delivers the last
+	// failed record (DeliverLastPerSubject), so a transient dependency outage recovers
+	// without operator action once the dependency returns. A GENERATED record is already
+	// done, and a FAILED record delivered LIVE (past the snapshot sentinel) is this
+	// worker's own SaveFailed write — re-processing either would fire a spurious callback
+	// or spin a hot re-embed loop, so both are skipped (results below are set AFTER this
+	// skip, never before — ADR-066 §3).
+	//
+	// duringSnapshot is the phase captured at dequeue (#613 F3), NOT a re-read of the
+	// shared flag: reading the flag here would race a sibling worker consuming the nil
+	// sentinel. If that capture ever misclassifies a snapshot failed record as live (the
+	// sub-instruction window between the channel receive and the flag load), the record is
+	// merely skipped here — it is NOT lost: hop-1 re-delivers the same entity from
+	// ENTITY_STATES on restart and re-writes a fresh StatusPending record (a LIVE pending
+	// write, always processed above), which regenerates it. So the phase gate is a
+	// hot-loop guard whose worst misfire falls back on the always-processed pending lane,
+	// never on stranded work.
+	reprocessFailed := record.Status == StatusFailed && duringSnapshot
+	if record.Status != StatusPending && !reprocessFailed {
+		return "", 0, false, OutcomeGenerated, ""
 	}
 
 	// Every path past this point is genuinely terminal — the pipeline never retries;
@@ -447,8 +531,9 @@ func (w *Worker) handleKVEntry(
 	// Setting the named results ONCE here means every `return` below reports the same
 	// completion, closing the "missed a terminal site" risk that the old defer closed
 	// — without also completing on the panic path. sourceRevision==0 (a legacy
-	// record) makes the completion a no-op.
-	entityID, sourceRevision, terminal = entry.Key(), record.SourceRevision, true
+	// record) makes the completion a no-op. The default outcome is OutcomeGenerated;
+	// each terminal path overwrites it with the outcome the current-failed map needs.
+	entityID, sourceRevision, terminal, outcome = entry.Key(), record.SourceRevision, true, OutcomeGenerated
 
 	w.logger.Debug("Processing pending embedding", "worker_id", workerID, "entity_id", entityID)
 
@@ -456,7 +541,7 @@ func (w *Worker) handleKVEntry(
 	sourceText, err := w.getSourceText(&record)
 	if err != nil {
 		w.logger.Error("Failed to get source text", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("text extraction failed: %v", err), sourceRevision)
+		outcome, reason, terminal = w.markFailed(entityID, fmt.Sprintf("text extraction failed: %v", err), failReasonContentError, sourceRevision)
 		return
 	}
 
@@ -466,6 +551,7 @@ func (w *Worker) handleKVEntry(
 		if err := w.storage.DeleteEmbedding(w.ctx, entityID); err != nil {
 			w.logger.Debug("Failed to delete pending record for entity with no text", "entity_id", entityID, "error", err)
 		}
+		outcome = OutcomeSkipped
 		return
 	}
 
@@ -478,9 +564,14 @@ func (w *Worker) handleKVEntry(
 	dedupKey := DedupKey(w.embedderIdentity(), sourceText)
 
 	// Get or generate embedding vector
-	vector, wasDedupHit, err := w.getOrGenerateEmbedding(entityID, sourceText, dedupKey, sourceRevision)
+	vector, wasDedupHit, genOutcome, genReason, genTerminal, err := w.getOrGenerateEmbedding(entityID, sourceText, dedupKey, sourceRevision)
 	if err != nil {
-		return // Error already logged and marked as failed
+		// failure already logged, marked, classified. genTerminal is false when the failure
+		// could not be durably recorded (persistence miss) — then the record stays pending
+		// and must NOT advance the watermark or clear the failed map; it retries on
+		// re-delivery (#613 F2).
+		outcome, reason, terminal = genOutcome, genReason, genTerminal
+		return
 	}
 
 	// Save and notify. saveAndNotify reports whether the outcome is terminal: a
@@ -490,7 +581,7 @@ func (w *Worker) handleKVEntry(
 	// identity pair are counted there, on the success path only, so they stay a subset
 	// of resolutions (the record is passed so saveAndNotify can derive the offloaded
 	// identity state at the successful-persistence site).
-	terminal = w.saveAndNotify(entityID, &record, vector, dedupKey, sourceRevision, wasDedupHit)
+	terminal, outcome, reason = w.saveAndNotify(entityID, &record, vector, dedupKey, sourceRevision, wasDedupHit)
 	return
 }
 
@@ -528,7 +619,7 @@ func (w *Worker) embedderIdentity() EmbedderIdentity {
 // does not fire onGenerated, so counting the hit eagerly here would let dedup_hits
 // exceed embeddings_generated_total — the exact invariant the e2e queue-health gate
 // enforces (dedup hits are a subset of resolutions).
-func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, sourceRevision uint64) (vec []float32, wasDedupHit bool, err error) {
+func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, sourceRevision uint64) (vec []float32, wasDedupHit bool, outcome TerminalOutcome, reason string, terminal bool, err error) {
 	dedupEnabled := key != ""
 
 	// Check deduplication first
@@ -536,34 +627,36 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, source
 		dedupRecord, derr := w.storage.GetByContentHash(w.ctx, key)
 		if derr != nil {
 			w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", derr)
-			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", derr), sourceRevision)
-			return nil, false, derr
+			outcome, reason, terminal = w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", derr), failReasonInternal, sourceRevision)
+			return nil, false, outcome, reason, terminal, derr
 		}
 
 		if dedupRecord != nil && w.dedupRecordUsable(entityID, key, dedupRecord) {
 			w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "dedup_key", key)
-			return dedupRecord.Vector, true, nil
+			return dedupRecord.Vector, true, OutcomeGenerated, "", true, nil
 		}
 	} else if w.metrics != nil {
 		w.metrics.IncDedupSkipped(dedupSkipReasonIdentityUnresolved)
 	}
 
-	// Generate new embedding
+	// Generate new embedding. Collapse concurrent byte-identical generations to ONE
+	// embedder call (#630): keyed by the content so K workers holding identical content
+	// share the vector, then each performs its own SaveGenerated below. generateShared
+	// derives a stable in-process key even when the durable dedup key is withheld
+	// (unresolved embedder width), so a cold-start burst also collapses to one call.
 	w.logger.Debug("Generating new embedding", "entity_id", entityID)
-	vectors, gerr := w.embedder.Generate(w.ctx, []string{sourceText})
+	vector, gerr := w.generateShared(key, sourceText)
 	if gerr != nil {
+		if errors.Is(gerr, errNoEmbeddingReturned) {
+			w.logger.Error("No embedding generated", "entity_id", entityID)
+			outcome, reason, terminal = w.markFailed(entityID, "no embedding returned", failReasonEmbedderError, sourceRevision)
+			return nil, false, outcome, reason, terminal, gerr
+		}
 		w.logger.Error("Failed to generate embedding", "entity_id", entityID, "error", gerr)
-		w.markFailed(entityID, fmt.Sprintf("generation failed: %v", gerr), sourceRevision)
-		return nil, false, gerr
+		genReason := classifyEmbedErr(gerr)
+		outcome, reason, terminal = w.markFailed(entityID, fmt.Sprintf("generation failed: %v", gerr), genReason, sourceRevision)
+		return nil, false, outcome, reason, terminal, gerr
 	}
-
-	if len(vectors) == 0 {
-		w.logger.Error("No embedding generated", "entity_id", entityID)
-		w.markFailed(entityID, "no embedding returned", sourceRevision)
-		return nil, false, fmt.Errorf("no embedding returned")
-	}
-
-	vector := vectors[0]
 
 	// Save to dedup bucket. Skipped when no key could be derived for this record.
 	if dedupEnabled {
@@ -575,7 +668,51 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, source
 		}
 	}
 
-	return vector, false, nil
+	return vector, false, OutcomeGenerated, "", true, nil
+}
+
+// errNoEmbeddingReturned marks the "the embedder returned zero vectors" case so the
+// caller can classify it (embedder_error) distinctly from a transport error. It is an
+// internal sentinel, never surfaced.
+var errNoEmbeddingReturned = errors.New("no embedding returned")
+
+// generateShared makes exactly one embedder Generate call for concurrent byte-identical
+// content (#630, process-local). Peers holding the same content wait and share the first
+// caller's vector; the shared error (semembed down) also reaches every peer, so each
+// fails and marks its own entity.
+//
+// key is the durable dedup key. When it is non-empty (resolved embedder width) it doubles
+// as the singleflight key — unchanged behavior. When it is EMPTY (cold start: the width is
+// unresolved so DedupKey withheld a durable key), a stable content-derived in-process key
+// is used instead of bypassing the singleflight, so a cold-start burst of identical
+// content still collapses to one paid call rather than one per worker (#630 cold-start).
+// The durable dedup CACHE stays correctly withheld for the empty-key case — only the
+// in-flight call is collapsed, never a stored vector.
+func (w *Worker) generateShared(key, sourceText string) ([]float32, error) {
+	sfKey := key
+	if sfKey == "" {
+		sfKey = InProcessDedupKey(w.embedderIdentity(), sourceText)
+	}
+	v, err, _ := w.generateGroup.Do(sfKey, func() (any, error) {
+		return w.generateOne(sourceText)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]float32), nil
+}
+
+// generateOne is the single embedder call, normalizing an empty result set to
+// errNoEmbeddingReturned so both the direct and singleflight paths classify it alike.
+func (w *Worker) generateOne(sourceText string) ([]float32, error) {
+	vectors, err := w.embedder.Generate(w.ctx, []string{sourceText})
+	if err != nil {
+		return nil, err
+	}
+	if len(vectors) == 0 {
+		return nil, errNoEmbeddingReturned
+	}
+	return vectors[0], nil
 }
 
 // dedupRecordUsable reports whether a dedup hit belongs to the vector space this
@@ -617,19 +754,22 @@ func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord)
 // generation completes; both are stored on the record so its ContentHash+Vector
 // stay consistent and a late older-revision write is dropped (#614 part 2).
 //
-// It returns terminal==false ONLY for a re-drivable transient (ErrCASExhausted): the
-// record stays pending and the ENTITY_STATES watcher will re-deliver the entity on its
-// next write, so handleKVEntry must NOT advance the readiness watermark past this
-// revision (that would report the pipeline caught up over still-pending work). Every
-// other outcome — success, a superseded/record-gone drop, or a real save failure —
-// is terminal.
+// It returns terminal==false for a re-drivable transient that left the record durably
+// PENDING: the SaveGenerated CAS did not converge (ErrCASExhausted), OR a real save
+// failure whose subsequent markFailed could not persist a durable StatusFailed record
+// either (a double persistence miss). In both cases the record stays pending and the
+// ENTITY_STATES watcher will re-deliver the entity on its next write, so handleKVEntry
+// must NOT advance the readiness watermark past this revision or clear the failed map
+// (that would report the pipeline caught up over still-pending work — #613 F2). Every
+// other outcome — success, a superseded/record-gone drop, or a save failure that DID
+// durably record as failed — is terminal.
 //
 // record is the pending record being completed; it is read ONLY to derive the offloaded-
 // identity observability pair on the success path (StorageRef set => offloaded;
 // IdentityText set => identity was embedded). Those counters fire at the SAME
 // successful-persistence point as IncDedupHits so they count STORED vectors, not
 // attempts (#635 retro F3).
-func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool) {
+func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool, outcome TerminalOutcome, reason string) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
 	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision); err != nil {
@@ -639,21 +779,22 @@ func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32
 		// metric across gh#527 bulk deletion. Return before onGenerated — firing it
 		// would push the dropped vector into the query-side cache, resurrecting in
 		// memory exactly what gh#614 removed from KV. Terminal: the entity is
-		// deliberately without an embedding now.
+		// deliberately without an embedding now — OutcomeDeleted removes it from the
+		// current-failed map.
 		if errors.Is(err, ErrRecordGone) {
 			w.logger.Debug("Embedding record removed during generation; dropping vector",
 				"entity_id", entityID)
-			return true
+			return true, OutcomeDeleted, ""
 		}
 		// A newer source revision's vector already landed. The vector THIS call holds
 		// is the older one; firing onGenerated would push it into a WithOnGenerated
 		// consumer's cache, exactly the stale-vector hazard ErrRecordGone guards
 		// against. Skip the callback; the newer write is authoritative. Terminal: the
-		// newer outcome already completed this entity.
+		// newer outcome already completed this entity (OutcomeDeleted for the map).
 		if errors.Is(err, ErrSupersededRevision) {
 			w.logger.Debug("Embedding superseded by a newer revision; dropping vector",
 				"entity_id", entityID)
-			return true
+			return true, OutcomeDeleted, ""
 		}
 		// The revision CAS loop did not converge. This is a documented TRANSIENT,
 		// re-drivable condition (effectively unreachable under the SourceRevision
@@ -666,11 +807,11 @@ func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32
 		if errors.Is(err, ErrCASExhausted) {
 			w.logger.Warn("Embedding save did not converge under revision CAS; leaving record pending for re-drive",
 				"entity_id", entityID)
-			return false
+			return false, OutcomeGenerated, ""
 		}
 		w.logger.Error("Failed to save generated embedding", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("save failed: %v", err), sourceRevision)
-		return true
+		markOutcome, markReason, markTerminal := w.markFailed(entityID, fmt.Sprintf("save failed: %v", err), failReasonInternal, sourceRevision)
+		return markTerminal, markOutcome, markReason
 	}
 
 	w.logger.Debug("Embedding generated successfully", "entity_id", entityID, "dimensions", dimensions)
@@ -702,7 +843,7 @@ func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32
 	if w.onGenerated != nil {
 		w.onGenerated(entityID, vector)
 	}
-	return true
+	return true, OutcomeGenerated, ""
 }
 
 // getSourceText produces the exact bytes hop 2 embeds (and keys the dedup bucket over).
@@ -939,37 +1080,120 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (text string, bodyTruncat
 	return truncated, bodyTruncated, nil
 }
 
-// markFailed marks an embedding as failed. sourceRevision is the revision this
-// failure completes, so a stale older-revision failure cannot clobber a newer
-// success under the storage ordering guard (#614 part 2).
-func (w *Worker) markFailed(entityID, errorMsg string, sourceRevision uint64) {
-	// Don't count context cancellation (shutdown) as a failure
+// Bounded failure-reason enum (#613). These are the ONLY values that ever reach the
+// failures_total{reason} metric label — the raw ErrorMsg is unbounded and must never be
+// a label. Keep the set small and closed; classifyEmbedErr maps embedder error shapes
+// into the network/timeout/dimension buckets, defaulting to embedder_error.
+const (
+	failReasonContentError      = "content_error"      // source-text extraction failed
+	failReasonInternal          = "internal"           // dedup-check / save write fault
+	failReasonConnectionRefused = "connection_refused" // embedder endpoint unreachable
+	failReasonTimeout           = "timeout"            // embedder call timed out
+	failReasonDimensionMismatch = "dimension_mismatch" // embedder returned an off-width vector
+	failReasonEmbedderError     = "embedder_error"     // any other embedder-side failure
+)
+
+// classifyEmbedErr maps a generation error into the bounded reason enum. It matches on
+// the error shape (context deadline) and message substrings rather than concrete error
+// types because the embedder call crosses an HTTP/SDK boundary that flattens most causes
+// into strings. An unrecognized shape defaults to embedder_error — bounded either way.
+func classifyEmbedErr(err error) string {
+	if err == nil {
+		return failReasonEmbedderError
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return failReasonTimeout
+	}
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "connection refused"):
+		return failReasonConnectionRefused
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "context deadline"):
+		return failReasonTimeout
+	case strings.Contains(msg, "dimension"):
+		return failReasonDimensionMismatch
+	default:
+		return failReasonEmbedderError
+	}
+}
+
+// markFailed records an embedding failure and reports (outcome, reportReason, terminal)
+// for the caller to propagate. sourceRevision is the revision this failure completes, so
+// a stale older-revision failure cannot clobber a newer success under the storage
+// ordering guard (#614 part 2). reason is the BOUNDED classification (see failReason*),
+// persisted next to the raw errorMsg and used as the failures_total{reason} label.
+//
+// The three returns encode a two-axis outcome:
+//
+//   - outcome + reportReason drive the component's current-failed map. OutcomeFailed (with
+//     its reason) is returned ONLY when a DURABLE StatusFailed record was actually written,
+//     so the map mirrors durable state; every other path returns OutcomeSkipped with an
+//     empty reason (not a current failure).
+//   - terminal drives the readiness watermark. It is true when the record reached a
+//     DURABLE terminal state (failed, or superseded/record-gone — the entity is resolved
+//     one way or another) and on shutdown. It is FALSE only for a PERSISTENCE MISS: the
+//     SaveFailed write itself failed transiently (CAS did not converge, KV write error),
+//     so the durable record is still PENDING. Advancing the watermark or clearing the map
+//     there would report the pipeline caught up over an un-recorded, still-pending entity;
+//     instead it stays non-terminal and re-drives on the next ENTITY_STATES delivery
+//     (#613 F2), mirroring saveAndNotify's ErrCASExhausted handling.
+//
+// The failures counters fire on the SAME events as before — every real failure event
+// including a record-gone or persistence-miss one, but NOT a superseded or shutdown one —
+// so failures_total{reason} stays a strict partition of errors_total (#613).
+func (w *Worker) markFailed(entityID, errorMsg, reason string, sourceRevision uint64) (outcome TerminalOutcome, reportReason string, terminal bool) {
+	// Don't count context cancellation (shutdown) as a failure. Terminal: the worker is
+	// stopping and the in-memory watermark is discarded on restart, so there is no
+	// stranded-work hazard to guard against here.
 	if strings.Contains(errorMsg, "context canceled") {
 		w.logger.Debug("Skipping failure metric for context cancellation", "entity_id", entityID)
-		return
+		return OutcomeSkipped, "", true
 	}
 
-	if err := w.storage.SaveFailed(w.ctx, entityID, errorMsg, sourceRevision); err != nil {
+	err := w.storage.SaveFailed(w.ctx, entityID, errorMsg, reason, sourceRevision)
+	switch {
+	case err == nil:
+		// Durable StatusFailed written: a current failure, terminal, counted.
+		w.incFailure(reason)
+		return OutcomeFailed, reason, true
+
+	case errors.Is(err, ErrSupersededRevision):
 		// A newer source revision already resolved this entity; this older failure is
-		// moot. Do NOT count it — the entity is not in a failed state — and return
-		// before IncFailed so a superseded older revision cannot inflate the failure
-		// gauge.
-		if errors.Is(err, ErrSupersededRevision) {
-			w.logger.Debug("Embedding failure superseded by a newer revision; not counting",
-				"entity_id", entityID)
-			return
-		}
-		// A record that is already gone has nothing to annotate. The failure itself
-		// is still real and still counted below — only the "could not mark it" log
-		// is downgraded, so a tombstone race does not read as an operational fault.
-		if errors.Is(err, ErrRecordGone) {
-			w.logger.Debug("Embedding record removed before failure could be recorded",
-				"entity_id", entityID)
-		} else {
-			w.logger.Error("Failed to mark embedding as failed", "entity_id", entityID, "error", err)
-		}
+		// moot. Do NOT count it (the entity is not in a failed state) — terminal because
+		// the newer outcome already resolved the entity.
+		w.logger.Debug("Embedding failure superseded by a newer revision; not counting",
+			"entity_id", entityID)
+		return OutcomeSkipped, "", true
+
+	case errors.Is(err, ErrRecordGone):
+		// The record is already gone (tombstoned / no-text delete). The failure event is
+		// still real and counted, but there is no durable failed record, so it does not
+		// enter the current-failed map. Terminal: the entity is deliberately without an
+		// embedding now.
+		w.logger.Debug("Embedding record removed before failure could be recorded",
+			"entity_id", entityID)
+		w.incFailure(reason)
+		return OutcomeSkipped, "", true
+
+	default:
+		// PERSISTENCE MISS: SaveFailed itself failed (CAS did not converge, or a transient
+		// KV write error), so the durable record did NOT transition — it is still pending.
+		// Count the failure event for errors_total, but return terminal==false so the
+		// watermark does not advance and the failed map is not cleared; the entity re-drives
+		// on the next ENTITY_STATES delivery (#613 F2).
+		w.incFailure(reason)
+		w.logger.Error("Failed to mark embedding as failed; leaving record pending for re-drive",
+			"entity_id", entityID, "error", err)
+		return OutcomeSkipped, "", false
 	}
+}
+
+// incFailure fires the failure counters (total + reason-labelled). reason is a value from
+// the bounded failReason* enum, never the raw error message.
+func (w *Worker) incFailure(reason string) {
 	if w.metrics != nil {
 		w.metrics.IncFailed()
+		w.metrics.IncFailedReason(reason)
 	}
 }

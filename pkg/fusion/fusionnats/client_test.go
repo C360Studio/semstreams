@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -222,7 +223,7 @@ func TestStatus_MapsResponse(t *testing.T) {
 		IndexedRevision: 100, TargetRevision: 100, Lag: 0, Phase: "ready",
 		Revision: "100", LastSynced: "now",
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("status = %+v, want %+v", got, want)
 	}
 }
@@ -348,7 +349,7 @@ func TestStatus_UnknownReadinessIsAnError(t *testing.T) {
 			if err == nil {
 				t.Fatalf("want an error so Fuse propagates it; got status %+v", got)
 			}
-			if got != (fusion.IndexStatus{}) {
+			if !reflect.DeepEqual(got, fusion.IndexStatus{}) {
 				t.Errorf("an unestablished readiness must return the zero status, got %+v", got)
 			}
 		})
@@ -825,7 +826,7 @@ func equalStrings(a, b []string) bool {
 	return true
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=647 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
+// entity-id-audit:classify intentional-malformed "bad" line=648 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity authoritative reply poison fixtures
 
 // TestStatus_BootstrapCompleteSurvivesProductionDecode is the lockstep guard for the
 // ADR-084 D2 bit: graph.IndexStatusResponse and fusion.IndexStatus change together, and

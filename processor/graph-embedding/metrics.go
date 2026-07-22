@@ -2,6 +2,8 @@
 package graphembedding
 
 import (
+	"errors"
+	"log/slog"
 	"sync"
 
 	"github.com/c360studio/semstreams/graph"
@@ -261,6 +263,89 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 	return metrics
 }
 
+// The current-failed metrics (#613) are resolved PER-REGISTRY (register-or-get), not
+// through the process-global getMetrics singleton, mirroring inc 2's fusion
+// body_hydration_failures_total{reason}. The singleton returns the FIRST registry's
+// collectors to every component; two components with different registries would then
+// share one registry's series and leave the other's invisible. Register-or-get gives
+// each registry its own series and reuses the existing one when two components share a
+// registry.
+
+// newEmbeddingFailedGauge builds the current-failed gauge
+// (semstreams_graph_embedding_failed): the number of entities CURRENTLY in a failed
+// embedding state. It drives State=degraded while >0 and drops to 0 as failures resolve
+// on re-delivery (#613).
+func newEmbeddingFailedGauge() prometheus.Gauge {
+	return prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "semstreams",
+		Subsystem: "graph_embedding",
+		Name:      "failed",
+		Help:      "Entities currently in a failed embedding state (#613): drives State=degraded while >0, drops to 0 as failures resolve on re-delivery. NOT cumulative — this is the live count, not total failures ever.",
+	})
+}
+
+// newEmbeddingFailuresVec builds the reason-labelled failures counter
+// (semstreams_graph_embedding_failures_total{reason}). The label is the BOUNDED reason
+// enum — never the raw error message (unbounded → cardinality blowup) (#613).
+func newEmbeddingFailuresVec() *prometheus.CounterVec {
+	return prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "semstreams",
+		Subsystem: "graph_embedding",
+		Name:      "failures_total",
+		Help:      "Cumulative embedding failures by BOUNDED reason (#613): connection_refused | timeout | dimension_mismatch | embedder_error | content_error | internal. The raw error message is never a label.",
+	}, []string{"reason"})
+}
+
+// resolveEmbeddingFailedGauge resolves the current-failed gauge against a SPECIFIC
+// registry (nil → the default registerer), register-or-get-existing. See
+// pkg/fusion.resolveBodyHydrationFailureVec for the rationale — a direct Register on the
+// underlying Registerer (not metric.MetricsRegistry.RegisterGauge, which reports success
+// without handing back the existing collector).
+func resolveEmbeddingFailedGauge(registry *metric.MetricsRegistry) prometheus.Gauge {
+	g := newEmbeddingFailedGauge()
+	reg := registererFor(registry)
+	if err := reg.Register(g); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if existing, ok := already.ExistingCollector.(prometheus.Gauge); ok {
+				return existing
+			}
+		}
+		slog.Default().Error(
+			"graph-embedding failed gauge registration failed; it will still update but is NOT scraped",
+			slog.String("metric", "semstreams_graph_embedding_failed"), slog.Any("error", err))
+	}
+	return g
+}
+
+// resolveEmbeddingFailuresVec resolves the reason-labelled failures counter against a
+// SPECIFIC registry, register-or-get-existing (see resolveEmbeddingFailedGauge).
+func resolveEmbeddingFailuresVec(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	vec := newEmbeddingFailuresVec()
+	reg := registererFor(registry)
+	if err := reg.Register(vec); err != nil {
+		var already prometheus.AlreadyRegisteredError
+		if errors.As(err, &already) {
+			if existing, ok := already.ExistingCollector.(*prometheus.CounterVec); ok {
+				return existing
+			}
+		}
+		slog.Default().Error(
+			"graph-embedding failures counter registration failed; it will still increment but is NOT scraped",
+			slog.String("metric", "semstreams_graph_embedding_failures_total"), slog.Any("error", err))
+	}
+	return vec
+}
+
+// registererFor returns the prometheus.Registerer backing a MetricsRegistry, or the
+// default registerer when none is wired (the test path).
+func registererFor(registry *metric.MetricsRegistry) prometheus.Registerer {
+	if registry != nil {
+		return registry.PrometheusRegistry()
+	}
+	return prometheus.DefaultRegisterer
+}
+
 // setReadinessGauges publishes the ADR-066 readiness envelope as Prometheus gauges.
 // It is pure over resp (no compute, no NATS) so it is unit-testable and cheap to call
 // on a tick. The state gauge is one-hot: the current state is set to 1 and every other
@@ -374,8 +459,14 @@ func (m *embeddingMetrics) setPending(count float64) {
 
 // workerMetricsAdapter adapts embeddingMetrics to the embedding.WorkerMetrics interface.
 // This allows the Worker to report metrics without direct dependency on prometheus.
+//
+// failuresVec is the PER-REGISTRY reason-labelled failures counter (#613), threaded in
+// separately from the process-global embeddingMetrics singleton so it resolves against
+// the component's own registry (register-or-get). It is the ONE metric the worker reports
+// that must not go through the singleton.
 type workerMetricsAdapter struct {
-	metrics *embeddingMetrics
+	metrics     *embeddingMetrics
+	failuresVec *prometheus.CounterVec
 }
 
 // IncDedupHits implements embedding.WorkerMetrics.
@@ -389,6 +480,15 @@ func (a *workerMetricsAdapter) IncDedupHits() {
 func (a *workerMetricsAdapter) IncFailed() {
 	if a.metrics != nil {
 		a.metrics.recordEmbeddingError()
+	}
+}
+
+// IncFailedReason implements embedding.WorkerMetrics: it increments the per-registry
+// failures_total{reason} counter (#613). reason is a value from the bounded enum; the
+// worker guarantees the raw error message never reaches here.
+func (a *workerMetricsAdapter) IncFailedReason(reason string) {
+	if a.failuresVec != nil {
+		a.failuresVec.WithLabelValues(reason).Inc()
 	}
 }
 
@@ -442,6 +542,7 @@ func (a *workerMetricsAdapter) IncOffloadedIdentityAbsent() {
 }
 
 // newWorkerMetricsAdapter creates an adapter for the embedding.WorkerMetrics interface.
-func newWorkerMetricsAdapter(m *embeddingMetrics) *workerMetricsAdapter {
-	return &workerMetricsAdapter{metrics: m}
+// failuresVec is the per-registry failures_total{reason} counter (#613).
+func newWorkerMetricsAdapter(m *embeddingMetrics, failuresVec *prometheus.CounterVec) *workerMetricsAdapter {
+	return &workerMetricsAdapter{metrics: m, failuresVec: failuresVec}
 }

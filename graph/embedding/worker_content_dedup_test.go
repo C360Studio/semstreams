@@ -26,11 +26,17 @@ type recordingWorkerMetrics struct {
 	identityIncluded int
 	identityAbsent   int
 	skipReasons      []string
+	failedReasons    []string
 }
 
-func (m *recordingWorkerMetrics) IncDedupHits()           { m.inc(&m.dedupHits) }
-func (m *recordingWorkerMetrics) IncFailed()              { m.inc(&m.failed) }
-func (m *recordingWorkerMetrics) SetPending(float64)      {}
+func (m *recordingWorkerMetrics) IncDedupHits()      { m.inc(&m.dedupHits) }
+func (m *recordingWorkerMetrics) IncFailed()         { m.inc(&m.failed) }
+func (m *recordingWorkerMetrics) SetPending(float64) {}
+func (m *recordingWorkerMetrics) IncFailedReason(reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failedReasons = append(m.failedReasons, reason)
+}
 func (m *recordingWorkerMetrics) IncContentResolveError() { m.inc(&m.resolveErr) }
 func (m *recordingWorkerMetrics) IncContentResolved()     { m.inc(&m.resolved) }
 func (m *recordingWorkerMetrics) IncTruncated()           { m.inc(&m.truncated) }
@@ -64,6 +70,7 @@ type metricsSnapshot struct {
 	identityIncluded int
 	identityAbsent   int
 	skipReasons      []string
+	failedReasons    []string
 }
 
 func (m *recordingWorkerMetrics) snapshot() metricsSnapshot {
@@ -79,6 +86,7 @@ func (m *recordingWorkerMetrics) snapshot() metricsSnapshot {
 		identityIncluded: m.identityIncluded,
 		identityAbsent:   m.identityAbsent,
 		skipReasons:      append([]string(nil), m.skipReasons...),
+		failedReasons:    append([]string(nil), m.failedReasons...),
 	}
 }
 
@@ -170,7 +178,7 @@ func TestOffloadedLaneDedupsOnIdenticalBytes(t *testing.T) {
 		WithWorkers(1).
 		WithMaxSourceTextLen(4000).
 		WithStoreResolver(resolver).
-		WithOnTerminal(func(id string, _ uint64) { done <- id })
+		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -230,7 +238,7 @@ func TestOverwritingStableStorageKeyRegenerates(t *testing.T) {
 		WithWorkers(1).
 		WithMaxSourceTextLen(4000).
 		WithStoreResolver(resolver).
-		WithOnTerminal(func(id string, _ uint64) { done <- id })
+		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -308,7 +316,7 @@ func TestDedupKeyIsOverTruncatedEmbeddedBytes(t *testing.T) {
 	w := NewWorker(s, embedder, index, discardLogger()).
 		WithWorkers(1).
 		WithMaxSourceTextLen(capLen).
-		WithOnTerminal(func(id string, _ uint64) { done <- id })
+		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -384,7 +392,7 @@ func TestDedupSkippedIsCounted(t *testing.T) {
 	w := NewWorker(s, embedder, index, discardLogger()).
 		WithWorkers(1).
 		WithMetrics(m).
-		WithOnTerminal(func(id string, _ uint64) { done <- id })
+		WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 	if err := w.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)

@@ -40,15 +40,17 @@ func (s readerStore) Open(context.Context, string) (io.ReadCloser, error) {
 type countingMetrics struct {
 	dedup, failed, resolveErr, resolved, truncated, dedupSkipped int
 	identityIncluded, identityAbsent                             int
+	failedReasons                                                []string
 }
 
-func (m *countingMetrics) IncDedupHits()           { m.dedup++ }
-func (m *countingMetrics) IncDedupSkipped(string)  { m.dedupSkipped++ }
-func (m *countingMetrics) IncTruncated()           { m.truncated++ }
-func (m *countingMetrics) IncFailed()              { m.failed++ }
-func (m *countingMetrics) SetPending(float64)      {}
-func (m *countingMetrics) IncContentResolveError() { m.resolveErr++ }
-func (m *countingMetrics) IncContentResolved()     { m.resolved++ }
+func (m *countingMetrics) IncDedupHits()            { m.dedup++ }
+func (m *countingMetrics) IncDedupSkipped(string)   { m.dedupSkipped++ }
+func (m *countingMetrics) IncTruncated()            { m.truncated++ }
+func (m *countingMetrics) IncFailed()               { m.failed++ }
+func (m *countingMetrics) IncFailedReason(r string) { m.failedReasons = append(m.failedReasons, r) }
+func (m *countingMetrics) SetPending(float64)       {}
+func (m *countingMetrics) IncContentResolveError()  { m.resolveErr++ }
+func (m *countingMetrics) IncContentResolved()      { m.resolved++ }
 
 func (m *countingMetrics) IncOffloadedIdentityIncluded() { m.identityIncluded++ }
 func (m *countingMetrics) IncOffloadedIdentityAbsent()   { m.identityAbsent++ }

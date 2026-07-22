@@ -113,6 +113,18 @@ type IndexStatus struct {
 	IndexedRevision uint64 `json:"indexed_revision,omitempty"`
 	TargetRevision  uint64 `json:"target_revision,omitempty"`
 	Lag             uint64 `json:"lag,omitempty"`
+	// FailedCount / FailedReasons / FirstFailureAt relay a producer's BOUNDED failure
+	// detail (#613): a degraded producer's outage-vs-poison-entities breakdown reaches
+	// the operator through the response envelope fusion already attaches, decoded
+	// field-identically from the producer's GRAPH_STATUS envelope (no new endpoint).
+	// All additive/omitempty — a producer without failures (e.g. graph-index) carries
+	// none, so the wire is unchanged. See graph.IndexStatusResponse for the full
+	// contract; fusion mirrors the fields verbatim so the direct decode keeps working.
+	// Field ORDER matches graph.IndexStatusResponse (between Lag and StalenessMs) so the
+	// gate-projection round-trip stays byte-identical.
+	FailedCount    uint64            `json:"failed_count,omitempty"`
+	FailedReasons  map[string]uint64 `json:"failed_reasons,omitempty"`
+	FirstFailureAt string            `json:"first_failure_at,omitempty"`
 	// StalenessMs is the age of the view in milliseconds (ADR-083). 0 carries no
 	// information (Ready, or not computable); any computed staleness is >= 1ms.
 	// See graph.IndexStatusResponse.StalenessMs for the full presence encoding —
@@ -154,6 +166,9 @@ func (s IndexStatus) readinessEnvelope() graph.IndexStatusResponse {
 		IndexedRevision:   s.IndexedRevision,
 		TargetRevision:    s.TargetRevision,
 		Lag:               s.Lag,
+		FailedCount:       s.FailedCount,
+		FailedReasons:     s.FailedReasons,
+		FirstFailureAt:    s.FirstFailureAt,
 		StalenessMs:       s.StalenessMs,
 		Phase:             s.Phase,
 		Revision:          s.Revision,

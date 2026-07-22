@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -247,6 +251,143 @@ func TestIntegration_EmbeddingReadiness_DeadlockAvoidance(t *testing.T) {
 	assert.Zero(t, final.Lag, "caught up means zero lag")
 	assert.GreaterOrEqual(t, final.IndexedRevision, uint64(textN+teleN), "indexed reflects every write")
 	assert.Equal(t, final.TargetRevision, final.IndexedRevision, "indexed == target when caught up")
+}
+
+// TestIntegration_EmbeddingReadiness_DependencyDownDegradesThenRecovers is the #613
+// end-to-end statement over real NATS and the production status handler: with the
+// embedding dependency DOWN at cold start every entity's embedding reaches a FAILED
+// terminal, so readiness reports State=degraded with FailedCount>0 (never ready over
+// unusable coverage) and the envelope carries the bounded reason breakdown +
+// first_failure_at; once the dependency recovers and the entities are re-delivered (a
+// new revision), they re-embed to generated, FailedCount drops to 0, and State returns
+// to ready. It drives the real worker → markFailed → onTerminal → current-failed map →
+// computeEmbeddingStatus path against a controllable HTTP embedding backend.
+func TestIntegration_EmbeddingReadiness_DependencyDownDegradesThenRecovers(t *testing.T) {
+	var healthy atomic.Bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !healthy.Load() {
+			http.Error(w, "embedding backend down", http.StatusServiceUnavailable)
+			return
+		}
+		var req struct {
+			Input []string `json:"input"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		n := len(req.Input)
+		if n == 0 {
+			n = 1
+		}
+		data := make([]map[string]any, n)
+		for i := range data {
+			data[i] = map[string]any{"object": "embedding", "index": i, "embedding": []float32{0.1, 0.2, 0.3}}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"object": "list", "model": "test-embed", "data": data,
+			"usage": map[string]any{"prompt_tokens": 1, "total_tokens": 1},
+		})
+	}))
+	defer srv.Close()
+
+	reg := &model.Registry{
+		Endpoints: map[string]*model.EndpointConfig{
+			"embed": {Provider: "openai", URL: srv.URL, Model: "test-embed"},
+		},
+		Capabilities: map[string]*model.CapabilityConfig{
+			model.CapabilityEmbedding: {Preferred: []string{"embed"}},
+		},
+		Defaults: model.DefaultsConfig{Model: "embed"},
+	}
+
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+
+	config := DefaultConfig()
+	config.EmbedderType = "http"
+	configJSON, err := json.Marshal(config)
+	require.NoError(t, err)
+
+	comp, err := CreateGraphEmbedding(configJSON, component.Dependencies{NATSClient: nc, ModelRegistry: reg})
+	require.NoError(t, err)
+	embeddingComp := comp.(*Component)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	require.NoError(t, embeddingComp.Initialize())
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketEntityStates, Description: "Test entity states",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, embeddingComp.Start(ctx))
+	defer embeddingComp.Stop(5 * time.Second)
+
+	conn := nc.GetConnection()
+	statusNow := func() graph.IndexStatusResponse {
+		msg, reqErr := conn.Request("graph.embedding.query.status", []byte(`{}`), 2*time.Second)
+		require.NoError(t, reqErr)
+		var st graph.IndexStatusResponse
+		require.NoError(t, json.Unmarshal(msg.Data, &st))
+		return st
+	}
+
+	writeEntity := func(id string, rev int) {
+		state := graph.EntityState{
+			ID: id,
+			Triples: []message.Triple{
+				{Subject: id, Predicate: "dc.terms.title", Object: fmt.Sprintf("Drone %s rev %d", id, rev), Source: "test", Timestamp: time.Now().UTC()},
+			},
+			MessageType: message.Type{Domain: "test", Category: "entity", Version: "v1"},
+			Version:     uint64(rev), UpdatedAt: time.Now().UTC(),
+		}
+		data, mErr := json.Marshal(state)
+		require.NoError(t, mErr)
+		_, pErr := entityBucket.Put(ctx, id, data)
+		require.NoError(t, pErr)
+	}
+
+	const n = 4
+	ids := make([]string, n)
+	for i := 0; i < n; i++ {
+		ids[i] = fmt.Sprintf("c360.p.d.s.drone.%03d", i)
+		writeEntity(ids[i], 1)
+	}
+
+	// Dependency DOWN → every entity fails → degraded with FailedCount>0, never ready.
+	var degraded graph.IndexStatusResponse
+	require.Eventually(t, func() bool {
+		degraded = statusNow()
+		return degraded.State == graph.IndexStateDegraded && degraded.FailedCount >= uint64(n)
+	}, 30*time.Second, 200*time.Millisecond,
+		"embedding must report degraded with FailedCount>0 while the dependency is down (#613)")
+
+	assert.NotEqual(t, graph.IndexStateReady, degraded.State, "must never report ready over failures (#613)")
+	require.NotEmpty(t, degraded.FailedReasons, "the degraded envelope must carry the bounded reason breakdown")
+	var total uint64
+	for _, cnt := range degraded.FailedReasons {
+		total += cnt
+	}
+	assert.Equal(t, degraded.FailedCount, total, "the reason histogram must sum to failed_count")
+	assert.NotEmpty(t, degraded.FirstFailureAt, "the degraded envelope must carry first_failure_at")
+
+	// Dependency RECOVERS; re-deliver each entity (a new revision) → re-embed → generated.
+	healthy.Store(true)
+	for i := 0; i < n; i++ {
+		writeEntity(ids[i], 2)
+	}
+
+	var recovered graph.IndexStatusResponse
+	require.Eventually(t, func() bool {
+		recovered = statusNow()
+		return recovered.FailedCount == 0 && recovered.State == graph.IndexStateReady
+	}, 30*time.Second, 200*time.Millisecond,
+		"FailedCount must drop to 0 and State return to ready once the dependency recovers (#613)")
+	assert.Zero(t, recovered.FailedCount)
+	assert.Empty(t, recovered.FailedReasons, "the recovered envelope omits the reason breakdown")
+	assert.Empty(t, recovered.FirstFailureAt, "the recovered envelope omits first_failure_at")
 }
 
 // TestIntegration_EmbeddingDeduplication verifies deduplication works

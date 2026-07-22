@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -24,13 +25,18 @@ import (
 // pinning Indexed while other workers finish is correctly NOT degraded.
 const embeddingDegradedAfter = 120 * time.Second
 
-// completeEmbedding drains the readiness watermark for a terminal outcome and counts
-// the completion (feeds the stuck detector). Called from every hop-1 immediate
-// terminal AND the hop-2 onTerminal callback. sourceRevision==0 (a legacy record with
-// no revision) makes Complete a no-op — hop-1's own bootstrap re-observe carries the
-// real revision, so there is nothing to strand; ^uint64(0) is the max-rev drain for
-// an unrecoverable (corrupt) record.
-func (c *Component) completeEmbedding(entityID string, sourceRevision uint64) {
+// completeEmbedding drains the readiness watermark for a terminal outcome, counts the
+// completion (feeds the stuck detector), and routes the current-failed map by outcome
+// (#613). Called from every hop-1 immediate terminal AND the hop-2 onTerminal callback.
+// sourceRevision==0 (a legacy record with no revision) makes Complete a no-op — hop-1's
+// own bootstrap re-observe carries the real revision, so there is nothing to strand;
+// ^uint64(0) is the max-rev drain for an unrecoverable (corrupt) record.
+//
+// The map update runs UNCONDITIONALLY, even on the nil-watermark early-boot / unit-test
+// path, so a Failed/Skipped outcome is never silently dropped. The watermark advance is
+// deliberately unchanged: it drains on ALL outcomes (deadlock avoidance).
+func (c *Component) completeEmbedding(entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
+	c.applyTerminalOutcome(entityID, sourceRevision, outcome, reason)
 	if c.watermark == nil {
 		return
 	}
@@ -138,6 +144,12 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 	// The authoritatively-empty case latches via bootstrapTarget == 0.
 	c.latchBuildApplied(indexed)
 
+	// Current-failed detail (#613): FailedCount drives State=degraded in the shared
+	// projection BEFORE "ready wins" (a producer caught up over failures is degraded, not
+	// ready), and the bounded reason histogram + first-failure time ride the envelope so
+	// an operator can tell an outage from a few poison entities. Read once, before the
+	// projection, so the count that sets the state and the detail on the wire agree.
+	failedCount, failedReasons, firstFailureAt := c.failedSnapshot()
 	stuck, lastSynced := c.trackEmbeddingProgress(indexed, target)
 	status := graph.ComputeIndexStatus(graph.IndexStatusInputs{
 		Indexed:    indexed,
@@ -146,8 +158,18 @@ func (c *Component) computeEmbeddingStatus(ctx context.Context) graph.IndexStatu
 		LastSynced: lastSynced,
 		// Commit time of the newest ENTITY_STATES revision that reached a terminal
 		// embedding outcome — the age-of-view input to staleness_ms (ADR-083).
-		IndexedAt: indexedAt,
+		IndexedAt:   indexedAt,
+		FailedCount: failedCount,
 	})
+	// ComputeIndexStatus already echoed FailedCount and set State=degraded; attach the
+	// bounded breakdown here (never a per-entity list on the watched key). Omitted when
+	// there are no failures, so a healthy envelope is wire-unchanged.
+	if failedCount > 0 {
+		status.FailedReasons = failedReasons
+		if !firstFailureAt.IsZero() {
+			status.FirstFailureAt = firstFailureAt.UTC().Format(time.RFC3339)
+		}
+	}
 	// Re-read: latchBuildApplied above may have flipped it on this very call, and an
 	// envelope that reports Ready while denying its build finished is the one shape
 	// the collapsed gate cannot tolerate (health is answered before coverage).

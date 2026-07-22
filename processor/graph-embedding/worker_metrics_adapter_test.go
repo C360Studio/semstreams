@@ -14,7 +14,15 @@ import (
 // asserted separately in graph/embedding; this closes the prometheus half (#623/#602).
 func TestWorkerMetricsAdapter_NewSignalsHaveRealConsumers(t *testing.T) {
 	m := getMetrics(nil)
-	adapter := newWorkerMetricsAdapter(m)
+	failuresVec := resolveEmbeddingFailuresVec(nil)
+	adapter := newWorkerMetricsAdapter(m, failuresVec)
+
+	// failures_total{reason} moves through the per-registry counter (#613).
+	const failReason = "connection_refused"
+	fbefore := testutil.ToFloat64(failuresVec.WithLabelValues(failReason))
+	adapter.IncFailedReason(failReason)
+	require.Equal(t, fbefore+1, testutil.ToFloat64(failuresVec.WithLabelValues(failReason)),
+		"IncFailedReason must increment the per-registry failures_total counter")
 
 	// dedup_skipped_total{reason}
 	const reason = "identity_unresolved"

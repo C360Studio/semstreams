@@ -169,7 +169,7 @@ func TestSaveAndNotify_StoredDedupHitCounts(t *testing.T) {
 	}
 
 	// A dedup hit at the current revision stores successfully.
-	if terminal := w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "hash-3", 3, true); !terminal {
+	if terminal, _, _ := w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "hash-3", 3, true); !terminal {
 		t.Error("saveAndNotify returned non-terminal for a successful store")
 	}
 	if got := m.snapshot().dedupHits; got != 1 {

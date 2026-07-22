@@ -55,7 +55,7 @@ func TestSaveFailed_NoIndexRecord_DoesNotPanicOrResurrect(t *testing.T) {
 
 	const entityID = "acme.ops.robotics.gcs.drone.002"
 
-	err := s.SaveFailed(ctx, entityID, "generation failed: connection refused", 1)
+	err := s.SaveFailed(ctx, entityID, "generation failed: connection refused", "connection_refused", 1)
 	if !errors.Is(err, ErrRecordGone) {
 		t.Fatalf("SaveFailed on a missing key = %v, want ErrRecordGone", err)
 	}
