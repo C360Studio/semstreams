@@ -28,4 +28,16 @@ func TestWorkerMetricsAdapter_NewSignalsHaveRealConsumers(t *testing.T) {
 	adapter.IncTruncated()
 	require.Equal(t, tbefore+1, testutil.ToFloat64(m.textTruncated),
 		"IncTruncated must increment the registered text_truncated_total counter")
+
+	// offloaded_identity_included_total (#601)
+	ibefore := testutil.ToFloat64(m.offloadedIdentityIncluded)
+	adapter.IncOffloadedIdentityIncluded()
+	require.Equal(t, ibefore+1, testutil.ToFloat64(m.offloadedIdentityIncluded),
+		"IncOffloadedIdentityIncluded must increment the registered offloaded_identity_included_total counter")
+
+	// offloaded_identity_absent_total (#601)
+	abefore := testutil.ToFloat64(m.offloadedIdentityAbsent)
+	adapter.IncOffloadedIdentityAbsent()
+	require.Equal(t, abefore+1, testutil.ToFloat64(m.offloadedIdentityAbsent),
+		"IncOffloadedIdentityAbsent must increment the registered offloaded_identity_absent_total counter")
 }

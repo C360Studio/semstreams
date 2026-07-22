@@ -16,14 +16,16 @@ import (
 // pre-existing counters, so a test can assert the worker actually CONSUMES the new
 // metric methods rather than leaving them as phantom registrations (#623 / #602).
 type recordingWorkerMetrics struct {
-	mu           sync.Mutex
-	dedupHits    int
-	failed       int
-	resolveErr   int
-	resolved     int
-	truncated    int
-	dedupSkipped int
-	skipReasons  []string
+	mu               sync.Mutex
+	dedupHits        int
+	failed           int
+	resolveErr       int
+	resolved         int
+	truncated        int
+	dedupSkipped     int
+	identityIncluded int
+	identityAbsent   int
+	skipReasons      []string
 }
 
 func (m *recordingWorkerMetrics) IncDedupHits()           { m.inc(&m.dedupHits) }
@@ -32,6 +34,9 @@ func (m *recordingWorkerMetrics) SetPending(float64)      {}
 func (m *recordingWorkerMetrics) IncContentResolveError() { m.inc(&m.resolveErr) }
 func (m *recordingWorkerMetrics) IncContentResolved()     { m.inc(&m.resolved) }
 func (m *recordingWorkerMetrics) IncTruncated()           { m.inc(&m.truncated) }
+
+func (m *recordingWorkerMetrics) IncOffloadedIdentityIncluded() { m.inc(&m.identityIncluded) }
+func (m *recordingWorkerMetrics) IncOffloadedIdentityAbsent()   { m.inc(&m.identityAbsent) }
 
 func (m *recordingWorkerMetrics) IncDedupSkipped(reason string) {
 	m.mu.Lock()
@@ -50,13 +55,15 @@ func (m *recordingWorkerMetrics) snapshot() recordingWorkerMetrics {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return recordingWorkerMetrics{
-		dedupHits:    m.dedupHits,
-		failed:       m.failed,
-		resolveErr:   m.resolveErr,
-		resolved:     m.resolved,
-		truncated:    m.truncated,
-		dedupSkipped: m.dedupSkipped,
-		skipReasons:  append([]string(nil), m.skipReasons...),
+		dedupHits:        m.dedupHits,
+		failed:           m.failed,
+		resolveErr:       m.resolveErr,
+		resolved:         m.resolved,
+		truncated:        m.truncated,
+		dedupSkipped:     m.dedupSkipped,
+		identityIncluded: m.identityIncluded,
+		identityAbsent:   m.identityAbsent,
+		skipReasons:      append([]string(nil), m.skipReasons...),
 	}
 }
 
@@ -159,7 +166,9 @@ func TestOffloadedLaneDedupsOnIdenticalBytes(t *testing.T) {
 	const inlineID = "acme.ops.robotics.gcs.drone.inline"
 
 	// Offloaded first, then inline — one worker, so seed order is process order.
-	if err := s.SavePendingWithStorageRef(ctx, offloadedID, "",
+	// Empty identity text: this offloaded record embeds body-only, so it stays
+	// byte-identical to the inline entity's text and the two dedup on one key.
+	if err := s.SavePendingWithStorageRef(ctx, offloadedID, "", "",
 		&StorageRef{StorageInstance: "objectstore", Key: "k"}, nil, 1); err != nil {
 		t.Fatalf("SavePendingWithStorageRef: %v", err)
 	}
@@ -215,14 +224,14 @@ func TestOverwritingStableStorageKeyRegenerates(t *testing.T) {
 
 	ref := func() *StorageRef { return &StorageRef{StorageInstance: "objectstore", Key: "stable/key"} }
 
-	// A: first sight of body one.
-	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.1", "", ref(), nil, 1); err != nil {
+	// A: first sight of body one. Empty identity text keeps these records body-only.
+	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.1", "", "", ref(), nil, 1); err != nil {
 		t.Fatalf("SavePending A: %v", err)
 	}
 	waitForTerminal(t, done, "acme.ops.a.b.c.1")
 
 	// B: same key, same body — must dedup.
-	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.2", "", ref(), nil, 2); err != nil {
+	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.2", "", "", ref(), nil, 2); err != nil {
 		t.Fatalf("SavePending B: %v", err)
 	}
 	waitForTerminal(t, done, "acme.ops.a.b.c.2")
@@ -231,7 +240,7 @@ func TestOverwritingStableStorageKeyRegenerates(t *testing.T) {
 	store.set("beta beta beta body two")
 
 	// C: same key, new body — must regenerate, never serve body one's vector.
-	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.3", "", ref(), nil, 3); err != nil {
+	if err := s.SavePendingWithStorageRef(ctx, "acme.ops.a.b.c.3", "", "", ref(), nil, 3); err != nil {
 		t.Fatalf("SavePending C: %v", err)
 	}
 	waitForTerminal(t, done, "acme.ops.a.b.c.3")

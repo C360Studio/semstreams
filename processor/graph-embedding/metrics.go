@@ -57,6 +57,16 @@ type embeddingMetrics struct {
 	// embedding. The cap is part of what the vector depends on, so truncation is
 	// reported rather than silent, making the bytes actually embedded discoverable (#602).
 	textTruncated prometheus.Counter
+	// offloadedIdentityIncluded / offloadedIdentityAbsent are the paired observable for
+	// the offloaded (StorageRef) lane's identity embedding (D5/#601). included rises
+	// each time an offloaded entity embedded its inline identity text (title/.signature/
+	// .comment, per text_suffixes) alongside its body; absent rises when an offloaded
+	// entity was processed without inline identity text (only the body, if any, is
+	// embedded). A producer tuning text_suffixes on offloaded entities reads the effect
+	// from these rather than inferring it from silence — the Epic A "make the
+	// config-effect observable" discipline.
+	offloadedIdentityIncluded prometheus.Counter
+	offloadedIdentityAbsent   prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -187,6 +197,20 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Name:      "text_truncated_total",
 				Help:      "Source texts truncated at the effective cap before embedding; the cap is part of the vector's identity, so truncation is reported, not silent (#602)",
 			}),
+
+			offloadedIdentityIncluded: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "offloaded_identity_included_total",
+				Help:      "Offloaded (StorageRef) entities that embedded inline identity text (title/.signature, per text_suffixes) ahead of their body; a rising value confirms text_suffixes took effect on the offloaded lane (#601)",
+			}),
+
+			offloadedIdentityAbsent: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "offloaded_identity_absent_total",
+				Help:      "Offloaded (StorageRef) entities processed without inline identity text (only the body, if any, is embedded); the symmetric half of offloaded_identity_included so a config-effect is observable, not inferred from silence (#601)",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -208,6 +232,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterCounter("graph-embedding", "status_publish_failures_total", metrics.statusPublishFailures)
 			_ = registry.RegisterCounterVec("graph-embedding", "dedup_skipped_total", metrics.dedupSkipped)
 			_ = registry.RegisterCounter("graph-embedding", "text_truncated_total", metrics.textTruncated)
+			_ = registry.RegisterCounter("graph-embedding", "offloaded_identity_included_total", metrics.offloadedIdentityIncluded)
+			_ = registry.RegisterCounter("graph-embedding", "offloaded_identity_absent_total", metrics.offloadedIdentityAbsent)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.embedderType)
@@ -227,6 +253,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.dedupSkipped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.textTruncated)
+			_ = prometheus.DefaultRegisterer.Register(metrics.offloadedIdentityIncluded)
+			_ = prometheus.DefaultRegisterer.Register(metrics.offloadedIdentityAbsent)
 		}
 	})
 	return metrics
@@ -324,6 +352,18 @@ func (m *embeddingMetrics) recordTextTruncated() {
 	m.textTruncated.Inc()
 }
 
+// recordOffloadedIdentityIncluded counts one offloaded entity that embedded inline
+// identity text ahead of its body (#601).
+func (m *embeddingMetrics) recordOffloadedIdentityIncluded() {
+	m.offloadedIdentityIncluded.Inc()
+}
+
+// recordOffloadedIdentityAbsent counts one offloaded entity embedded body-only
+// because it carried no inline identity text (#601).
+func (m *embeddingMetrics) recordOffloadedIdentityAbsent() {
+	m.offloadedIdentityAbsent.Inc()
+}
+
 // setPending sets the pending embeddings gauge.
 func (m *embeddingMetrics) setPending(count float64) {
 	m.embeddingPending.Set(count)
@@ -381,6 +421,20 @@ func (a *workerMetricsAdapter) IncDedupSkipped(reason string) {
 func (a *workerMetricsAdapter) IncTruncated() {
 	if a.metrics != nil {
 		a.metrics.recordTextTruncated()
+	}
+}
+
+// IncOffloadedIdentityIncluded implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncOffloadedIdentityIncluded() {
+	if a.metrics != nil {
+		a.metrics.recordOffloadedIdentityIncluded()
+	}
+}
+
+// IncOffloadedIdentityAbsent implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncOffloadedIdentityAbsent() {
+	if a.metrics != nil {
+		a.metrics.recordOffloadedIdentityAbsent()
 	}
 }
 

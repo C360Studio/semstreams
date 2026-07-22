@@ -1502,10 +1502,19 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 	// again without ever hashing an address.
 	const contentHash = ""
 
+	// Extract the entity's INLINE identity text with the SAME extractor the inline lane
+	// uses (title/.signature/.comment, per Config.TextSuffixes). For an offloaded entity
+	// the body is NOT an inline triple, so this returns exactly the inline identity
+	// triples and never the body. Thread it to hop 2, which embeds it AHEAD of the
+	// fetched body (identity-first, one vector) so text_suffixes takes effect on
+	// offloaded entities too (D1/D2). Empty when the entity has no inline text →
+	// hop 2 embeds body-only, unchanged.
+	identityText := c.extractTextForEmbedding(state)
+
 	// Queue for embedding generation with storage reference. On failure, complete the
 	// watermark (network Put can fail transiently mid-run — same D1 strand as the
 	// legacy path; ADR-066 §3).
-	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, storageRef, nil, sourceRevision); err != nil {
+	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, identityText, storageRef, nil, sourceRevision); err != nil {
 		c.logger.Error("failed to queue embedding with storage ref",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
