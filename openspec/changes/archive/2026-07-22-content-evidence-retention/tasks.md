@@ -28,14 +28,14 @@
 
 ## 4. Optional observability (non-blocking)
 
-- [ ] 4.1 Emit a CONTENT store size/object-count gauge so unbounded growth is observed — the trigger for the deferred orphan-GC increment. Non-blocking; drop if it expands scope.
+- [~] 4.1 (DEFERRED to the orphan-GC increment) Emit a CONTENT store size/object-count gauge so unbounded growth is observed — the trigger for the deferred orphan-GC increment. Non-blocking; belongs with ADR-068 increment 6, not this change.
 
 ## 5. Docs, deltas, coordination
 
 - [x] 5.1 Correct the "ADR-0008" citation to **ADR-068** in `proposal.md` (3 refs); also fixed the substance — the orphaned-blob GC is ADR-068 **increment 6**, not "open item #5 / per-source retention".
-- [ ] 5.2 Update the `graph-retention` spec Purpose (at sync/archive) to note it now also covers content ObjectStores, and confirm the ADR-068 capability text stays consistent.
-- [ ] 5.3 File the orphan-GC follow-up (reference-aware refcount/mark-and-sweep, ADR-scale) as its own issue/increment; note it here as out-of-scope for this change.
-- [ ] 5.4 Draft a `semstreams-asks` note: content-store retention removed + boot-guarded (inherited via the ctor, no sister code change); fusion `Node` gains an additive body-reason field (wire-compatible, opt-in to read).
+- [x] 5.2 Updated the synced `graph-retention` spec Purpose to cover content ObjectStores (not just KV buckets) and reference #633 for orphaned-blob reclamation.
+- [x] 5.3 Filed orphan-GC follow-up as **#633** (reference-aware refcount/mark-sweep, ADR-068 increment 6; folds in the deferred 4.1 size gauge as its trigger).
+- [x] 5.4 Adopter heads-up written: `docs/operations/content-store-retention-change.md` (retention removed + boot-guarded, inherited via ctor, no sister code change; `Node.BodyReason` additive/wire-compatible; points to #633).
 
 ## 6. Gate before push
 
