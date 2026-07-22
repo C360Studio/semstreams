@@ -37,7 +37,8 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > Shipped + archived: inc 1 (#628 `a6ea9979`), inc 2 (#632 `d6addd5b`, #600+#616), inc 3
 > (#635 `fe329a5e`, #601), **inc 4 (#639 `fa1041a8`, #613+#630)**. Retrospective rounds: #636
-> (`ea7a51b4`) + #638 (`08d7c5c2`). **Main tip `fa1041a8`, clean.**
+> (`ea7a51b4`) + #638 (`08d7c5c2`). **Main tip `d6d3e57e`; RELEASED as tag
+> `v1.0.0-beta.158` (2026-07-22) — sisters conform against it. Clean.**
 
 ---
 
@@ -377,5 +378,11 @@ Append one line per session. Newest last.
   input to the shared projection. (b) #627 was already fixed by inc 1 — verified before
   building; closed as verify-only, no phantom follow-up. (c) the owner ran no bespoke
   degraded-e2e because integration coverage is genuine — no follow-up filed (anti-proliferation).
+  Then **TAGGED + PUSHED `v1.0.0-beta.158`** (`d6d3e57e`) — owner-decided to release the
+  4-BREAKING wave now (owns the sisters; wants a tight cadence so migration stays small; sister
+  tests are the signal). Pre-tag gates: build-tag sweep (integration+live_llm) clean +
+  `e2e:semantic` GREEN at HEAD on the FINAL code incl the 5 Codex fixes (the earlier e2e ran on
+  pre-fix `037af8f3` — re-ran at HEAD to close the beta.18-style gap). Annotated house-format
+  tag names each breaking change + migration doc; sisters not touched (owner manages them).
   **Next: OWNER DECISION on the next unit — Epic B, Epic C (now carrying #625/#629), or the
   deferred Epic A owner-decisions/test-debt (see Next Action).**
