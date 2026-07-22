@@ -604,10 +604,40 @@ func (s *Storage) ListGeneratedEntityIDs(ctx context.Context) ([]string, error) 
 }
 
 // FailedEntry is one entity currently in a failed embedding terminal state, as read
-// by the current-failed bootstrap scan (#613): the entity ID and its bounded reason.
+// by the current-failed bootstrap scan (#613): the entity ID, its bounded reason, and
+// the source revision the failure was recorded at.
+//
+// Reason is ALWAYS a member of the bounded failure enum (or reasonUnknown) — ScanFailed
+// normalizes it, so a record written by a future or rolled-back worker can never inject
+// an arbitrary string into the readiness envelope's reason histogram (#613 F5).
+//
+// SourceRevision is the durable record's revision, seeded into the in-memory failed map
+// so the component's revision-CAS (a superseded older completion must NOT clear a newer
+// failure) starts from the correct baseline after a restart (#613 F1), rather than from
+// an unknown-revision floor a stale older completion could then clear.
 type FailedEntry struct {
-	EntityID string
-	Reason   string
+	EntityID       string
+	Reason         string
+	SourceRevision uint64
+}
+
+// reasonUnknown is the fallback bucket for a stored failure reason that is empty or not a
+// member of the bounded failure enum. It keeps the readiness envelope's reason histogram
+// (and any label derived from it) bounded even when a record was written by a worker that
+// knows a reason value this build does not (#613 F5).
+const reasonUnknown = "unknown"
+
+// normalizeFailureReason collapses any stored reason to the closed failure enum, mapping
+// an empty or unrecognized value to reasonUnknown. Called at the scan boundary so an
+// arbitrary Record.Reason never reaches a published readiness/metric label.
+func normalizeFailureReason(reason string) string {
+	switch reason {
+	case failReasonContentError, failReasonInternal, failReasonConnectionRefused,
+		failReasonTimeout, failReasonDimensionMismatch, failReasonEmbedderError:
+		return reason
+	default:
+		return reasonUnknown
+	}
 }
 
 // ScanFailed enumerates EMBEDDING_INDEX via its WatchAll initial snapshot and returns
@@ -653,7 +683,16 @@ func (s *Storage) ScanFailed(ctx context.Context) ([]FailedEntry, error) {
 				continue
 			}
 			if rec.Status == StatusFailed {
-				failed = append(failed, FailedEntry{EntityID: entry.Key(), Reason: rec.Reason})
+				// Normalize the stored reason to the bounded enum here, at the scan
+				// boundary, so a record carrying a future/unknown reason (rolling upgrade,
+				// rollback) cannot inject an unbounded label into readiness (#613 F5). Seed
+				// the source revision too, so the component's revision-CAS baseline is exact
+				// after restart (#613 F1).
+				failed = append(failed, FailedEntry{
+					EntityID:       entry.Key(),
+					Reason:         normalizeFailureReason(rec.Reason),
+					SourceRevision: rec.SourceRevision,
+				})
 			}
 		}
 	}

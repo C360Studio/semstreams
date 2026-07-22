@@ -31,13 +31,21 @@ import (
 )
 
 // failureInfo is the per-entity value of the current-failed map (#613): the bounded
-// reason of the entity's current failed embedding and the time it was first observed
-// failed in this process lifetime. reason feeds the envelope's failed_reasons histogram;
-// at feeds first_failure_at (the minimum across the map). On a re-failure the reason is
-// updated but at is preserved, so first_failure_at stays the earliest.
+// reason of the entity's current failed embedding, the time it was first observed failed
+// in this process lifetime, and the source revision the failure was recorded at. reason
+// feeds the envelope's failed_reasons histogram; at feeds first_failure_at (the minimum
+// across the map). On a re-failure the reason is updated but at is preserved, so
+// first_failure_at stays the earliest.
+//
+// rev is the ENTITY_STATES source revision of the current failure. It makes the map
+// revision-aware so a SUPERSEDED older terminal cannot mutate a newer failure (#613 F1):
+// the durable EMBEDDING_INDEX record is ordered by the same revision (storage's revision
+// CAS), so an older completion arriving after a newer failure — which storage correctly
+// drops as superseded — must be a no-op here too, not an unconditional map clear.
 type failureInfo struct {
 	reason string
 	at     time.Time
+	rev    uint64
 }
 
 // Ensure Component implements required interfaces
@@ -1016,7 +1024,11 @@ func (c *Component) seedFailedMap(ctx context.Context) {
 		c.failed = make(map[string]failureInfo, len(entries))
 	}
 	for _, e := range entries {
-		c.failed[e.EntityID] = failureInfo{reason: e.Reason, at: now}
+		// e.Reason is already normalized to the bounded enum by ScanFailed (#613 F5), and
+		// e.SourceRevision seeds the revision-CAS baseline so a stale older completion after
+		// restart cannot clear this failure (#613 F1). `at` is a lower bound (this process
+		// cannot know the original failure time).
+		c.failed[e.EntityID] = failureInfo{reason: e.Reason, at: now, rev: e.SourceRevision}
 	}
 	n := len(c.failed)
 	c.failedMu.Unlock()
@@ -1025,32 +1037,51 @@ func (c *Component) seedFailedMap(ctx context.Context) {
 		slog.Int("failed_count", n))
 }
 
-// applyTerminalOutcome routes a terminal outcome into the current-failed map (#613): a
-// Failed outcome adds the entity (preserving the earliest first-failure time on a
-// re-failure, updating the reason), and every other outcome removes it. It updates the
-// per-registry gauge to len(failed) under the same critical section. Nil-map safe for
-// the pre-Start / unit-test path.
-func (c *Component) applyTerminalOutcome(entityID string, outcome embedding.TerminalOutcome, reason string) {
+// applyTerminalOutcome routes a terminal outcome into the current-failed map (#613),
+// REVISION-AWARE so a superseded older terminal never overrides a newer state (#613 F1).
+// sourceRevision is the ENTITY_STATES revision this terminal completes:
+//
+//   - Failed: record the failure only when sourceRevision >= the held failure's revision.
+//     A first failure (absent entry, held rev 0) is always recorded; a re-failure at the
+//     same-or-newer revision updates the reason and rev but preserves the earliest at; an
+//     OLDER failure arriving after a newer one is a no-op.
+//   - Non-failed (Generated/Skipped/Deleted): clear the failure only when sourceRevision
+//     >= the held failure's revision. A SUPERSEDED older completion (its revision below the
+//     current failure's) is a NO-OP — the durable EMBEDDING_INDEX record is still failed at
+//     the newer revision (storage's revision CAS dropped the older write), so readiness must
+//     keep counting it. This mirrors the storage-side revision CAS exactly.
+//
+// The gauge is set to len(failed) under the same critical section (Set is a non-blocking
+// atomic store, so holding the lock across it adds no meaningful contention, and it keeps
+// gauge ordering consistent with the map mutation order). Nil-map safe for the pre-Start /
+// unit-test path.
+func (c *Component) applyTerminalOutcome(entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
 	c.failedMu.Lock()
+	defer c.failedMu.Unlock()
 	if c.failed == nil {
 		c.failed = make(map[string]failureInfo)
 	}
+	held, present := c.failed[entityID]
 	if outcome == embedding.OutcomeFailed {
-		info := c.failed[entityID] // zero value if absent
-		info.reason = reason
-		if info.at.IsZero() {
-			info.at = time.Now()
+		// Do not let an OLDER failure override a newer one already held.
+		if present && sourceRevision < held.rev {
+			return
 		}
-		c.failed[entityID] = info
+		held.reason = reason
+		held.rev = sourceRevision
+		if held.at.IsZero() {
+			held.at = time.Now()
+		}
+		c.failed[entityID] = held
 	} else {
+		// A superseded older completion must NOT clear a newer failure; the durable record
+		// is still failed at held.rev.
+		if present && sourceRevision < held.rev {
+			return
+		}
 		delete(c.failed, entityID)
 	}
-	// Set the gauge INSIDE the critical section so its ordering matches the map
-	// mutation order — otherwise two concurrent transitions can Set out of order and
-	// leave the gauge transiently stale. Set is a non-blocking atomic store, so holding
-	// the lock across it adds no meaningful contention.
 	c.setFailedGauge(len(c.failed))
-	c.failedMu.Unlock()
 }
 
 // setFailedGauge sets the per-registry failed gauge to n. Nil-safe for the unit-test
@@ -1580,6 +1611,21 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	text := c.extractTextForEmbedding(&entityState)
 	if text == "" {
 		c.logger.Debug("no text content found, skipping embedding", slog.String("entity", entityID))
+		// Remove any DURABLE record before clearing readiness (#613 F2): an entity that
+		// previously FAILED and now has no text still holds a StatusFailed record in
+		// EMBEDDING_INDEX. Clearing the in-memory failed map (via the Skipped completion
+		// below) without deleting that record leaves durable and in-memory state divergent —
+		// a restart's seed scan would re-add it as failed. Deleting it makes the no-text
+		// terminal consistent with the worker's own no-text path, which also deletes. A
+		// delete failure is logged, never fatal, and never skips the completion below (a
+		// stranded delete must not pin the watermark — ADR-066 §3); the residual durable
+		// record self-corrects on the next restart's seed scan.
+		if c.storage != nil {
+			if err := c.storage.DeleteEmbedding(ctx, entityID); err != nil {
+				c.logger.Debug("failed to delete stale embedding for no-text entity",
+					slog.String("entity", entityID), slog.Any("error", err))
+			}
+		}
 		// Terminal: telemetry-only / no-text entities never reach hop 2. Completing
 		// here is what makes Target=LastSeq reachable (else embedding.ready deadlocks
 		// on every text-less entity — ADR-066 §3). OutcomeSkipped: no-text is not a
@@ -1593,18 +1639,19 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// lanes identically and folds in the effective cap for free. The pending record is
 	// a reference, not a key, so its ContentHash is written empty.
 	//
-	// Queue for embedding generation. On failure this is a network KV Put that can
-	// fail transiently WHILE the component runs — complete the watermark or the
-	// revision strands forever (permanent not-ready on the bulk-ingest path this ADR
-	// targets — ADR-066 §3 D1). Fails toward covered; the entity re-embeds on its
-	// next write.
+	// Queue for embedding generation. A transient SavePending failure wrote NO durable
+	// record — the entity is neither generated nor durably failed, just un-queued at this
+	// revision. Do NOT complete the watermark or touch the current-failed map here (#613
+	// F2): completing would report this revision done (and clear any older durable failed
+	// record for the entity) over work that never persisted. Leave the revision
+	// uncompleted; the ENTITY_STATES watcher re-delivers the entity on its next write, and
+	// a sustained KV outage degrades honestly via the completions-based stuck detector
+	// rather than reporting a false-ready. This is the SAME non-terminal treatment hop 2
+	// gives a SaveFailed/CAS persistence miss.
 	if err := c.storage.SavePending(ctx, entityID, "", text, sourceRevision); err != nil {
-		c.logger.Error("failed to queue embedding",
+		c.logger.Error("failed to queue embedding; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		// OutcomeSkipped: a transient SavePending failure is a watermark drain, not an
-		// embedding failure — it must not enter the current-failed map.
-		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 
@@ -1687,16 +1734,15 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 	// hop 2 embeds body-only, unchanged.
 	identityText := c.extractTextForEmbedding(state)
 
-	// Queue for embedding generation with storage reference. On failure, complete the
-	// watermark (network Put can fail transiently mid-run — same D1 strand as the
-	// legacy path; ADR-066 §3).
+	// Queue for embedding generation with storage reference. A transient SavePending
+	// failure wrote NO durable record, so leave the revision uncompleted and untouched in
+	// the current-failed map — the ENTITY_STATES watcher re-delivers on the next write
+	// (#613 F2, same non-terminal treatment as the inline path and hop 2's persistence
+	// miss). Completing here would report the revision done over work that never persisted.
 	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, identityText, storageRef, nil, sourceRevision); err != nil {
-		c.logger.Error("failed to queue embedding with storage ref",
+		c.logger.Error("failed to queue embedding with storage ref; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		// OutcomeSkipped: a transient SavePending failure is a watermark drain, not an
-		// embedding failure — it must not enter the current-failed map.
-		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 

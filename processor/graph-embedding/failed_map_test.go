@@ -20,9 +20,9 @@ func TestCurrentFailedMap_TracksReasonsAndGauge(t *testing.T) {
 		failedGauge: newEmbeddingFailedGauge(),
 	}
 
-	c.applyTerminalOutcome("e1", embedding.OutcomeFailed, "connection_refused")
-	c.applyTerminalOutcome("e2", embedding.OutcomeFailed, "content_error")
-	c.applyTerminalOutcome("e3", embedding.OutcomeFailed, "connection_refused")
+	c.applyTerminalOutcome("e1", 1, embedding.OutcomeFailed, "connection_refused")
+	c.applyTerminalOutcome("e2", 1, embedding.OutcomeFailed, "content_error")
+	c.applyTerminalOutcome("e3", 1, embedding.OutcomeFailed, "connection_refused")
 
 	count, reasons, firstAt := c.failedSnapshot()
 	require.Equal(t, uint64(3), count)
@@ -31,8 +31,8 @@ func TestCurrentFailedMap_TracksReasonsAndGauge(t *testing.T) {
 	require.False(t, firstAt.IsZero(), "first_failure_at must be set while failures exist")
 	require.Equal(t, 3.0, testutil.ToFloat64(c.failedGauge), "gauge must reflect len(map)")
 
-	// A generated outcome clears one; the gauge drops and the histogram updates.
-	c.applyTerminalOutcome("e1", embedding.OutcomeGenerated, "")
+	// A generated outcome at the same-or-newer revision clears one; gauge drops, histogram updates.
+	c.applyTerminalOutcome("e1", 1, embedding.OutcomeGenerated, "")
 	count, reasons, _ = c.failedSnapshot()
 	require.Equal(t, uint64(2), count)
 	require.Equal(t, uint64(1), reasons["connection_refused"])
@@ -40,8 +40,8 @@ func TestCurrentFailedMap_TracksReasonsAndGauge(t *testing.T) {
 
 	// Skipped (no-text) and Deleted (tombstone) also clear; back to zero → empty snapshot
 	// (the envelope omits the fields entirely).
-	c.applyTerminalOutcome("e2", embedding.OutcomeSkipped, "")
-	c.applyTerminalOutcome("e3", embedding.OutcomeDeleted, "")
+	c.applyTerminalOutcome("e2", 1, embedding.OutcomeSkipped, "")
+	c.applyTerminalOutcome("e3", 1, embedding.OutcomeDeleted, "")
 	count, reasons, firstAt = c.failedSnapshot()
 	require.Equal(t, uint64(0), count)
 	require.Nil(t, reasons, "an empty map yields a nil histogram so the envelope omits failed_reasons")
@@ -57,9 +57,9 @@ func TestCurrentFailedMap_ReFailurePreservesFirstFailureTime(t *testing.T) {
 
 	// Seed a known earliest time directly (single-goroutine test — no lock needed).
 	earliest := time.Now().Add(-time.Hour)
-	c.failed["ent"] = failureInfo{reason: "timeout", at: earliest}
+	c.failed["ent"] = failureInfo{reason: "timeout", at: earliest, rev: 1}
 
-	c.applyTerminalOutcome("ent", embedding.OutcomeFailed, "connection_refused")
+	c.applyTerminalOutcome("ent", 2, embedding.OutcomeFailed, "connection_refused")
 
 	require.Equal(t, earliest, c.failed["ent"].at, "re-failure must preserve the earliest first-failure time")
 	require.Equal(t, "connection_refused", c.failed["ent"].reason, "re-failure must update the reason to the latest")

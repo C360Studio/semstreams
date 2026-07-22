@@ -53,8 +53,8 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 		m := &countingMetrics{}
 		w := &Worker{storage: s, metrics: m, ctx: ctx, logger: discardLogger()}
 
-		if got := w.markFailed(entityID, "generation failed: connection refused", failReasonConnectionRefused, 1); got != OutcomeFailed {
-			t.Fatalf("markFailed outcome = %v, want OutcomeFailed", got)
+		if got, gotReason, terminal := w.markFailed(entityID, "generation failed: connection refused", failReasonConnectionRefused, 1); got != OutcomeFailed || gotReason != failReasonConnectionRefused || !terminal {
+			t.Fatalf("markFailed = (%v, %q, %v), want (OutcomeFailed, connection_refused, true)", got, gotReason, terminal)
 		}
 		rec, err := s.GetEmbedding(ctx, entityID)
 		if err != nil || rec == nil {
@@ -83,9 +83,10 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 		m := &countingMetrics{}
 		w := &Worker{storage: s, metrics: m, ctx: ctx, logger: discardLogger()}
 
-		// An older-revision (3) failure is superseded.
-		if got := w.markFailed(entityID, "generation failed", failReasonEmbedderError, 3); got != OutcomeSkipped {
-			t.Fatalf("markFailed outcome = %v, want OutcomeSkipped for a superseded failure", got)
+		// An older-revision (3) failure is superseded: OutcomeSkipped, no reason, terminal
+		// (the newer outcome already resolved the entity).
+		if got, gotReason, terminal := w.markFailed(entityID, "generation failed", failReasonEmbedderError, 3); got != OutcomeSkipped || gotReason != "" || !terminal {
+			t.Fatalf("markFailed = (%v, %q, %v), want (OutcomeSkipped, \"\", true) for a superseded failure", got, gotReason, terminal)
 		}
 		if m.failed != 0 || len(m.failedReasons) != 0 {
 			t.Fatalf("a superseded failure must not count: failed=%d reasons=%v", m.failed, m.failedReasons)

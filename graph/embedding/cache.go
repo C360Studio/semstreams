@@ -76,6 +76,11 @@ func ContentHash(text string) string {
 // bumping the version, rather than silently colliding with them.
 const dedupKeySchema = "semstreams/embedding/dedup/v1"
 
+// inProcessKeySchema domain-separates the process-local singleflight key (see
+// InProcessDedupKey) from the durable DedupKey, so the two hashings can never
+// collide even over identical field tuples.
+const inProcessKeySchema = "semstreams/embedding/singleflight/v1"
+
 // EmbedderIdentity captures everything a stored vector depends on BESIDES the
 // input text. Two embedders that disagree on any of these fields produce
 // vectors in different, incomparable vector spaces.
@@ -136,6 +141,40 @@ func DedupKey(id EmbedderIdentity, text string) string {
 	writeField(id.Type)
 	writeField(id.Model)
 	writeField(strconv.Itoa(id.Dimensions))
+	writeField(strconv.Itoa(id.MaxTextLen))
+	writeField(text)
+
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// InProcessDedupKey derives a STABLE process-local key for collapsing concurrent
+// byte-identical embedder calls (#630), EXCLUDING the learned Dimensions.
+//
+// Unlike DedupKey it ALWAYS returns a key — even before the embedder has resolved
+// its vector width (HTTPEmbedder reports Dimensions()==0 until its first response).
+// That is deliberate: at cold start DedupKey withholds a key, so a burst of K
+// workers holding identical content would otherwise each issue its own paid
+// Generate call. Keying the in-process singleflight on this width-independent value
+// collapses them to one call, while the DURABLE dedup cache stays correctly
+// withheld (a vector must not be stored under a wrong-dimensions key).
+//
+// Excluding Dimensions is safe here precisely because this key never leaves the
+// process: the embedder — and therefore the width it will eventually resolve — is
+// the SAME instance across every worker goroutine, so two workers with identical
+// content are guaranteed to be producing vectors in the same space regardless of
+// whether the width is known yet.
+func InProcessDedupKey(id EmbedderIdentity, text string) string {
+	h := sha256.New()
+	writeField := func(s string) {
+		var lenBuf [8]byte
+		binary.BigEndian.PutUint64(lenBuf[:], uint64(len(s)))
+		_, _ = h.Write(lenBuf[:])
+		_, _ = h.Write([]byte(s))
+	}
+
+	writeField(inProcessKeySchema)
+	writeField(id.Type)
+	writeField(id.Model)
 	writeField(strconv.Itoa(id.MaxTextLen))
 	writeField(text)
 

@@ -36,7 +36,7 @@ const embeddingDegradedAfter = 120 * time.Second
 // path, so a Failed/Skipped outcome is never silently dropped. The watermark advance is
 // deliberately unchanged: it drains on ALL outcomes (deadlock avoidance).
 func (c *Component) completeEmbedding(entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
-	c.applyTerminalOutcome(entityID, outcome, reason)
+	c.applyTerminalOutcome(entityID, sourceRevision, outcome, reason)
 	if c.watermark == nil {
 		return
 	}
