@@ -924,7 +924,13 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 	// Wire the OWNED fallback content store (single store-read bucket) for
 	// deployments without a registry entry for the ref's instance. Reads bucket
 	// name from the store-read port config; owned by Component, closed in Stop().
-	c.contentStore = c.createContentStore(ctx)
+	// A fatal retention error here (#600/#616) must abort Start closed — Start
+	// returns this error before starting the entity watcher or query handlers.
+	contentStore, err := c.createContentStore(ctx)
+	if err != nil {
+		return err
+	}
+	c.contentStore = contentStore
 	if c.contentStore != nil {
 		c.worker = c.worker.WithContentStore(c.contentStore)
 	}
@@ -950,8 +956,13 @@ func (c *Component) maxSourceTextLen() int {
 }
 
 // createContentStore creates an ObjectStore handle from the store-read port config.
-// Returns nil if no store-read port is configured or if the bucket doesn't exist yet.
-func (c *Component) createContentStore(ctx context.Context) *objectstore.Store {
+// Returns (nil, nil) if no store-read port is configured or if the store is merely
+// unavailable (unconfigured / not reachable) — the content store is legitimately
+// OPTIONAL and ContentStorable degrades gracefully without it. It returns a FATAL
+// error only when the D2 retention guard (#600/#616) refuses a backing stream that
+// keeps lifecycle eviction it cannot strip; that must fail Start closed rather than
+// silently disable content, so the caller must propagate it.
+func (c *Component) createContentStore(ctx context.Context) (*objectstore.Store, error) {
 	// Find store-read port bucket name
 	bucket := ""
 	for _, port := range c.config.Ports.Inputs {
@@ -964,22 +975,48 @@ func (c *Component) createContentStore(ctx context.Context) *objectstore.Store {
 		}
 	}
 	if bucket == "" {
-		return nil
+		return nil, nil
 	}
 
 	store, err := objectstore.NewStoreWithConfig(ctx, c.natsClient, objectstore.Config{
 		BucketName: bucket,
 	})
-	if err != nil {
+	resolved, resErr := contentStoreOutcome(store, err, bucket)
+	switch {
+	case resErr != nil:
+		// Fatal retention violation (#600/#616): fail Start closed.
+		return nil, resErr
+	case resolved == nil:
+		// Non-fatal / unavailable: the content store is OPTIONAL, so disable it and
+		// continue (BM25 / no-store tiers boot without it).
 		c.logger.Debug("content store not available, ContentStorable disabled",
 			slog.String("bucket", bucket),
 			slog.Any("error", err))
-		return nil
+		return nil, nil
+	default:
+		c.logger.Info("content store wired for embedding text extraction",
+			slog.String("bucket", bucket))
+		return resolved, nil
 	}
+}
 
-	c.logger.Info("content store wired for embedding text extraction",
-		slog.String("bucket", bucket))
-	return store
+// contentStoreOutcome maps a content-store constructor result to createContentStore's
+// return, PRESERVING the D2 retention guard's fail-closed semantics (#600/#616). The
+// content store is legitimately OPTIONAL, so a non-fatal "unavailable" error resolves
+// to a disabled store (nil, nil) and the component degrades gracefully; a FATAL
+// retention violation returns (nil, WrapFatal) so Start fails CLOSED. The IsFatal
+// branch is load-bearing — folding a fatal into the graceful nil path re-introduces
+// the #632 swallowed-fatal defect. Extracted so the decision is directly testable.
+func contentStoreOutcome(store *objectstore.Store, err error, bucket string) (*objectstore.Store, error) {
+	switch {
+	case err == nil:
+		return store, nil
+	case errs.IsFatal(err):
+		return nil, errs.WrapFatal(err, "Component", "createContentStore",
+			fmt.Sprintf("content store %q retention", bucket))
+	default:
+		return nil, nil // non-fatal: content store optional, disable and continue
+	}
 }
 
 // waitForDependenciesAndStartWatcher waits for ENTITY_STATES bucket and starts the entity watcher.

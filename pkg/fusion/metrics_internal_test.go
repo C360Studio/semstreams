@@ -1,8 +1,11 @@
 package fusion
 
 import (
+	"bytes"
+	"log/slog"
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -74,6 +77,49 @@ func TestResolveBodyHydrationFailureVec_PerRegistry(t *testing.T) {
 		assert.Equal(t, float64(0), testutil.ToFloat64(b.bodyFailures.WithLabelValues("error")),
 			"the second registry's counter is independent and untouched")
 	})
+}
+
+// TestResolveBodyHydrationFailureVec_LoudOnRegistrationFailure pins FINDING-4:
+// a registration error that is NOT AlreadyRegisteredError (a same-name /
+// different-descriptor collision — impossible in practice, but the only path that
+// returns an UNREGISTERED, never-scraped vec) must emit a LOUD operational signal
+// rather than silently counting into an invisible collector. It must NOT panic and
+// must still return a usable (counting) vec.
+//
+// NOTE: no t.Parallel — this test swaps the process-global slog default.
+func TestResolveBodyHydrationFailureVec_LoudOnRegistrationFailure(t *testing.T) {
+	reg := metric.NewMetricsRegistry()
+
+	// Pre-register a DIFFERENT collector under the SAME fully-qualified name
+	// (semstreams_fusion_body_hydration_failures_total) but a different descriptor
+	// (different label set). Prometheus rejects the subsequent Register with a plain
+	// "inconsistent descriptor" error — NOT AlreadyRegisteredError — which is the
+	// exact branch under test.
+	conflicting := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "semstreams",
+		Subsystem: "fusion",
+		Name:      "body_hydration_failures_total",
+		Help:      "conflicting collector with a different descriptor",
+	}, []string{"different_label"})
+	require.NoError(t, reg.PrometheusRegistry().Register(conflicting))
+
+	// Capture the loud signal off the process-global slog default.
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelError})))
+	defer slog.SetDefault(prev)
+
+	var vec *prometheus.CounterVec
+	require.NotPanics(t, func() { vec = resolveBodyHydrationFailureVec(reg) })
+	require.NotNil(t, vec, "must still return a usable vec on the failure path")
+
+	// The vec still counts (unregistered, but safe) rather than panicking.
+	require.NotPanics(t, func() { vec.WithLabelValues("error").Inc() })
+
+	logged := buf.String()
+	assert.Contains(t, logged, "level=ERROR", "the failure must be logged at ERROR")
+	assert.Contains(t, logged, "semstreams_fusion_body_hydration_failures_total",
+		"the log must name the metric that failed to register")
 }
 
 // TestBodyFailureCounter_NilRegistryFallsBackToDefault proves an engine built

@@ -627,13 +627,45 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	contentStore, err := objectstore.NewStoreWithConfig(ctx, c.natsClient, objectstore.Config{
 		BucketName: contentBucket,
 	})
-	if err != nil {
+	if fatal := contentStoreInitOutcome(err); fatal != nil {
+		// Fail Start CLOSED on a fatal D2 retention violation (#600/#616). Close the
+		// trajectory cache created above first: the flow service retries Start
+		// (retry.Quick, up to 10 attempts) with the SAME parent context, which it does
+		// NOT cancel between attempts (service/component_manager.go), so each attempt
+		// would otherwise strand the cache's cleanup goroutine until component Stop.
+		// ttlCache.Close deterministically joins that goroutine.
+		if c.trajectoryCache != nil {
+			if cerr := c.trajectoryCache.Close(); cerr != nil {
+				c.logger.Debug("trajectory cache close on fatal boot", "error", cerr)
+			}
+			c.trajectoryCache = nil
+		}
+		return fatal
+	}
+	switch {
+	case err != nil:
+		// Genuine unavailability (unconfigured / unreachable): disable content storage
+		// and continue. Non-fatal only — the content store is OPTIONAL.
 		c.logger.Warn("Failed to create content store for trajectory steps, content storage disabled",
 			"bucket", contentBucket, "error", err)
-	} else if c.graphWriter != nil {
+	case c.graphWriter != nil:
 		c.graphWriter.contentStore = contentStore
 	}
 
+	return nil
+}
+
+// contentStoreInitOutcome classifies the trajectory content-store constructor error
+// for initializeKVBuckets. The content store is legitimately OPTIONAL, so a non-fatal
+// error (or none) returns nil and the caller disables content storage gracefully; a
+// FATAL D2 retention violation (#600/#616) returns the wrapped fatal so Start fails
+// CLOSED and subscriptions/workers never start. The IsFatal branch is load-bearing —
+// routing a fatal into the graceful path re-introduces the #632 swallowed-fatal
+// defect. Extracted so the fail-closed decision is directly testable.
+func contentStoreInitOutcome(err error) error {
+	if errs.IsFatal(err) {
+		return errs.WrapFatal(err, "agentic-loop", "initializeKVBuckets", "create content store")
+	}
 	return nil
 }
 

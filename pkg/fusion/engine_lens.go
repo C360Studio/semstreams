@@ -385,7 +385,13 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 		Class:    classOf(ent),
 		Handle:   ent.ID,
 	}
-	if wants[WantBody] && e.body != nil {
+	if wants[WantBody] {
+		// Gate on the WANT alone, then always ask the lens for a handle. A nil
+		// BodyResolver (NewEngine(graph, nil)) is documented-valid, but it must not
+		// SHORT-CIRCUIT the WantBody path — a node whose lens yields a real handle it
+		// cannot resolve is a reportable config gap, exactly the silent failure #632
+		// set out to kill (gh#616, #600). The ref==nil case below still keeps genuinely
+		// body-less tiers silent, so no resolver never spams BodyError for them.
 		ref, err := lens.Hydrate(ctx, ent)
 		switch {
 		case err != nil:
@@ -396,6 +402,16 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 			// is a normal condition, not a failure: leave Body empty, stamp no
 			// reason, and increment no counter. Silent, matching the pre-report
 			// body-less semantics.
+		case e.body == nil:
+			// The lens produced a REAL storage handle but no BodyResolver is wired to
+			// dereference it. That is a configuration gap, NOT a body-less tier: the
+			// node has a body it simply cannot load, so report it rather than ship an
+			// unexplained empty body (gh#616, #600).
+			// TODO(when lens Engine is wired): distinct not_configured reason to
+			// separate "no resolver wired" from "read faulted" (deferred — the Engine
+			// has no production caller yet, so expanding the closed BodyReason
+			// vocabulary for an unwired path is premature).
+			e.reportBodyFailure(&node, BodyError)
 		default:
 			body, derr := e.body.ResolveBody(ctx, ref)
 			switch {
