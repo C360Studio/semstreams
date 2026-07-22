@@ -9,61 +9,35 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Epic A increment 4 — change `embedding-readiness-and-dedup-efficiency`. All four
-> OpenSpec artifacts DONE (validates `--strict`); IMPLEMENTATION IN PROGRESS** on branch
-> `epic-a-inc4-embedding-readiness-dedup` (semstreams-developer against `tasks.md`).
-> Authoritative detail lives in the change's `proposal.md` + `design.md` (10 decisions,
-> code-grounded); this is the digest. Code work is **#613 (readiness truth + 3 observability
-> layers) + #630 (singleflight)**; **#627 is CLOSED** (verify-only). Remaining after impl:
-> semstreams-reviewer → e2e tier (BREAKING gate) + adopter note (10.2) → PR under the
-> Codex-review merge gate → archive. One e2e tier (statistical/semantic embedding) covers it.
+> **Epic A's mechanical increments are COMPLETE (inc 1–4 shipped + archived).** Inc 4
+> (`embedding-readiness-and-dedup-efficiency`) merged as **#639 (`fa1041a8`, 2026-07-22)**:
+> readiness reports `degraded` under embedding failures via a `FailedCount` input to the
+> shared `ComputeIndexStatus` (`FailedCount>0 → degraded` before "ready wins"; watermark
+> still advances on failed — deadlock avoidance), three observability layers (L1 gauge +
+> `{reason}` counter, L2 GRAPH_STATUS `{reason:count}` breakdown, L3 fusion/graph-query relay
+> + opt-in message-logger debug), process-local singleflight (#630), #627 closed, **+ 5
+> Codex-review fixes** (revision-aware failure map, persistence-miss non-terminal, phase-at-
+> dequeue, cold-start `InProcessDedupKey`, reason normalization). OpenSpec change archived;
+> `graph-embedding` + `graph-index-readiness` live specs carry the requirements; adopter note
+> `docs/operations/embedding-readiness-degraded-change.md`.
 >
-> - **#613** — readiness truth **+ legible degraded**. Settled: (a) failed must not be
->   reported as `ready`, BUT the watermark KEEPS advancing on failed (deadlock avoidance,
->   `readiness.go:64`) — the fix adds a **`FailedCount` input** to the shared
->   `ComputeIndexStatus` and projects `FailedCount>0 → degraded` **before "ready wins"**,
->   making the shared projection finally enforce the `graph-index-readiness` rule that
->   today only graph-index's watermark-hole enforces (embedding is the first producer
->   whose watermark reaches target WITH failures). **NB: my earlier "must not advance the
->   watermark / ComputeIndexStatus untouched" framing was WRONG — corrected here.**
->   (b) **NOT configurable** — `FailedCount>0` is true and simple, no knob. Deliverable =
->   make `degraded` legible (the durable `Status:failed`+`ErrorMsg` detail has NO reader
->   today — `feedback_grep_for_the_consumer` inverted): **L1** `failed` gauge + bounded
->   `{reason}` counter (classified at `markFailed`, reuse inc 2 fusion pattern); **L2** the
->   degraded GRAPH_STATUS envelope carries `failedCount` + the full bounded `{reason:count}`
->   breakdown + first-failure time (failedCount↓ = recovery signal, since hop-2 re-processes
->   `StatusFailed` on re-delivery); **L3** per-entity drill-down — production escape hatch via
->   fusion/graph-query (they already watch GRAPH_STATUS, no new endpoint) + opt-in
->   `Status==failed` filter on **message-logger (debug, OFF by default** — production
->   observability must not depend on it; [[message-logger-is-debug-only]]).
-> - **#627** — CLOSED (already fixed by inc 1's rune-safe `truncateAtWord`; verified
->   `worker.go:793,884`). Inc 4 adds a cross-lane dedup-key-identity regression test only;
->   Option-2 (digest-key fetch-skip) deferred → deferred list below.
-> - **#630** — **process-local** `singleflight.Group` around the embedder (burst of
->   byte-identical content → 1 remote call). Distributed KV-reservation deferred (file if
->   cross-process stampede measured).
+> **NEXT = an OWNER DECISION on the next unit** (Epic A mechanical work is done; epics are
+> sequential, WIP=1). Candidates:
+> - **Epic B** — one community truth (level-0-only; disable LLM enhancement until the
+>   ownership split; readiness gate). #606 #607 #608 #609 #617 #618. Not started.
+> - **Epic C** — derived-state ownership + the cross-bucket repair/ordering pair
+>   **#625 + #629** re-homed here from Epic A (#629 dormant). #622 #527 #625 #629. Not started.
+> - **Deferred Epic A owner-decisions**: **#619** (BM25 redesign — query-pollution interim
+>   shipped in Track 0, so bleeding stopped; only the ADR-scale restart-fork redesign remains),
+>   **#633** (orphan-blob GC, ADR-068 inc 6 — owner-accepted growth), **#627 Option-2**
+>   (offloaded digest-key fetch-skip).
+> - **Epic A test-debt**: **#599** (fusion Fuse/batch/unhydrated e2e) + reconcile **#597**
+>   (fusion top-entity drop — likely already fixed by ADR-084's `Entities` reconciliation;
+>   #599 would prove it and close it).
 >
-> **The rest of the remaining Epic A surface was re-homed in the same rack-and-stack:**
-> - **#625** (durable repair loop) + **#629** (coalescer resurrection via the pending
->   lane — dormant: only reachable with `coalesce_ms>0`, which no shipped config sets;
->   needs a cross-bucket ordering protocol) → **Epic C** (derived-state ownership;
->   both issues name C themselves).
-> - **#619** (BM25 redesign) → deferred owner-decision. Its query-pollution interim
->   already shipped in Track 0 (`GenerateQuery` is now read-only — verified in code),
->   so the bleeding is stopped; only the restart-fork redesign (lexical index vs
->   stateless hashed TF) remains, and it is ADR-scale.
-> - **#633** (orphan-blob GC, ADR-068 inc 6) → deferred; owner-accepted disk growth.
-> - **#627 Option-2** (key the offloaded lane on a `StorageReference` content digest to
->   skip the body fetch on a dedup hit) → deferred optimization; file if the offloaded
->   fetch cost is measured to matter.
-> - **#599** (fusion Fuse/batch/unhydrated e2e coverage) → test-debt, paired with
->   reconciling **#597** (fusion top-entity drop — likely already fixed by ADR-084's
->   `Entities` reconciliation; #599 would prove it and close it).
->
-> Shipped and archived: inc 1 (#628 `a6ea9979`), inc 2 (#632 `d6addd5b`, #600+#616),
-> inc 3 (#635 `fe329a5e`, #601). Two retrospective rounds merged: #636 (`ea7a51b4`,
-> #632 fail-closed at the consumers) and #638 (`08d7c5c2`, #635 version-safe identity
-> field). Main tip `08d7c5c2`, clean.
+> Shipped + archived: inc 1 (#628 `a6ea9979`), inc 2 (#632 `d6addd5b`, #600+#616), inc 3
+> (#635 `fe329a5e`, #601), **inc 4 (#639 `fa1041a8`, #613+#630)**. Retrospective rounds: #636
+> (`ea7a51b4`) + #638 (`08d7c5c2`). **Main tip `fa1041a8`, clean.**
 
 ---
 
@@ -221,7 +195,7 @@ two files three times. Start Epic A here.
 
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · **#613 #627 #630** (inc.4 NEXT) · #619 #599 (deferred/test-debt) | **inc.1–3 MERGED; inc.4 scoped** |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · #619 #633 (deferred) · #599 #597 (test-debt) | **MECHANICAL COMPLETE (inc.1–4 merged); only deferred owner-decisions + test-debt remain** |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
@@ -387,3 +361,21 @@ Append one line per session. Newest last.
   (4) **#599 + #597** → test-debt/reconcile. Also: **new merge-gate** owner directive
   recorded — a code PR merges only after Codex has posted a review, it's addressed, and
   CI is green (in that order). Next: `/opsx:new` for inc 4.
+- **2026-07-22 (session 6)** — **Epic A inc 4 SHIPPED end-to-end and archived** — change
+  `embedding-readiness-and-dedup-efficiency`, spec-driven (proposal/design/2 spec deltas/
+  tasks, validates `--strict`). Implemented by semstreams-developer, APPROVED by
+  semstreams-reviewer (mutation-tested), `task e2e:semantic` GREEN (breaking gate) with the
+  degraded path integration-covered, merged as **PR #639 (`fa1041a8`)**. The Codex gate did
+  its job: it found **2 P1 correctness bugs the reviewer missed** — (1) the failure map was
+  not revision-aware (an older completion could clear a newer failure), (2) a persistence
+  miss (SaveFailed/SavePending error) was mis-classified as terminal-skipped, clearing the map
+  + advancing readiness — plus 3 P2s (snapshot/live race, cold-start singleflight bypass,
+  unbounded scanned reason labels). All 5 fixed with failing-first tests + a second reviewer
+  pass (`b7a29f58`) verifying finding 2 does NOT reintroduce the watermark deadlock. #613 +
+  #630 closed. Lessons: (a) my initial #613 framing ("must not advance the watermark") was
+  WRONG — the watermark advances by design (deadlock avoidance); the fix is a `FailedCount`
+  input to the shared projection. (b) #627 was already fixed by inc 1 — verified before
+  building; closed as verify-only, no phantom follow-up. (c) the owner ran no bespoke
+  degraded-e2e because integration coverage is genuine — no follow-up filed (anti-proliferation).
+  **Next: OWNER DECISION on the next unit — Epic B, Epic C (now carrying #625/#629), or the
+  deferred Epic A owner-decisions/test-debt (see Next Action).**
