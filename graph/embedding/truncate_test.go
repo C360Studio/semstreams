@@ -292,11 +292,12 @@ func TestGetSourceText_StorageRef_UsesStreaming(t *testing.T) {
 
 // TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst pins the D1
 // re-branch (#601): an offloaded record (StorageRef != nil) that ALSO carries inline
-// identity text must embed the identity AHEAD of the fetched body, in one vector, and
-// MUST still fetch the body — it does not treat SourceText as the whole text and drop
-// the body. This is the exact behavior the pre-fix mutually-exclusive
-// `if SourceText / else if StorageRef` got wrong (identity-only, body silently
-// dropped); on an offloaded record SourceText now means the identity PREFIX.
+// identity text (in IdentityText) must embed the identity AHEAD of the fetched body, in
+// one vector, and MUST still fetch the body — it does not treat the identity as the whole
+// text and drop the body. This is the exact behavior the pre-fix mutually-exclusive
+// `if SourceText / else if StorageRef` got wrong (identity-only, body silently dropped).
+// On an offloaded record the identity travels in IdentityText, a field DISTINCT from
+// SourceText, so a pre-#635 worker stays body-safe (#635 retro F1).
 func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testing.T) {
 	store := &mockStreamableStore{
 		data: map[string][]byte{
@@ -314,8 +315,8 @@ func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testin
 	}
 
 	record := &Record{
-		SourceText: "triple-based text",
-		StorageRef: &StorageRef{Key: "doc/safety"},
+		IdentityText: "triple-based text",
+		StorageRef:   &StorageRef{Key: "doc/safety"},
 	}
 
 	text, err := w.getSourceText(record)
