@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
 
@@ -397,23 +398,68 @@ func TestEngine_IncomingRelations(t *testing.T) {
 	}
 }
 
-// TestEngine_NilBodyResolver: a nil BodyResolver omits bodies without panicking
-// (the e.body != nil guard) — a deployment with no verbatim-body store still works.
+// TestEngine_NilBodyResolver: a nil BodyResolver (NewEngine(graph, nil), a
+// documented-valid deployment with no verbatim-body store) omits bodies without
+// panicking — but it must NOT silently drop a real handle. #632's whole point is
+// that a node whose lens yields a resolvable handle it cannot deref is a REPORTED
+// config gap (BodyError + counter), while a genuinely body-less tier stays silent.
 func TestEngine_NilBodyResolver(t *testing.T) {
-	ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "h/on_event.go",
-		message.Triple{Predicate: refStorageInstancePr, Object: "objectstore"},
-		message.Triple{Predicate: refStorageKeyPr, Object: "k"},
-	)
-	g := &fakeGraph{status: readyStatus(), seeds: map[string][]string{"OnEvent": {ent.ID}}, entities: map[string]*fusion.Entity{ent.ID: ent}}
-	eng := fusion.NewEngine(g, nil) // no body resolver
+	newGraph := func(ent *fusion.Entity) *fakeGraph {
+		return &fakeGraph{
+			status:   readyStatus(),
+			seeds:    map[string][]string{"OnEvent": {ent.ID}},
+			entities: map[string]*fusion.Entity{ent.ID: ent},
+		}
+	}
+	req := fusion.Request{Query: "OnEvent", Want: []fusion.Want{fusion.WantBody}}
 
-	resp, err := eng.Fuse(context.Background(), fusion.Request{Query: "OnEvent", Want: []fusion.Want{fusion.WantBody}}, refLens{})
-	if err != nil {
-		t.Fatalf("Fuse with nil BodyResolver must not error, got %v", err)
-	}
-	if len(resp.Nodes) != 1 || resp.Nodes[0].Body != "" {
-		t.Errorf("expected one node with empty body, got %+v", resp.Nodes)
-	}
+	t.Run("lens yields a handle but no resolver → BodyError + counter", func(t *testing.T) {
+		// Storage triples present → refLens.Hydrate returns a non-nil handle. With no
+		// BodyResolver wired, that body cannot be loaded: a config gap, not silence.
+		ent := entity("acme.ops.code.repo.symbol.OnEvent", "OnEvent", "h/on_event.go",
+			message.Triple{Predicate: refStorageInstancePr, Object: "objectstore"},
+			message.Triple{Predicate: refStorageKeyPr, Object: "k"},
+		)
+		reg := metric.NewMetricsRegistry()
+		eng := fusion.NewEngine(newGraph(ent), nil).WithMetrics(reg) // no body resolver
+
+		resp, err := eng.Fuse(context.Background(), req, refLens{})
+		if err != nil {
+			t.Fatalf("Fuse with nil BodyResolver must not error, got %v", err)
+		}
+		if len(resp.Nodes) != 1 || resp.Nodes[0].Body != "" {
+			t.Fatalf("expected one node with empty body, got %+v", resp.Nodes)
+		}
+		if resp.Nodes[0].BodyReason != fusion.BodyError {
+			t.Errorf("a real handle with no resolver must report BodyError, got %q", resp.Nodes[0].BodyReason)
+		}
+		if got := bodyFailureCount(t, reg, "error"); got != 1 {
+			t.Errorf("expected the error counter to fire once, got %v", got)
+		}
+	})
+
+	t.Run("body-less entity stays silent even with no resolver", func(t *testing.T) {
+		// No storage triples → refLens.Hydrate returns (nil, nil): the entity
+		// legitimately has NO verbatim body. The nil-resolver path must NOT spam
+		// BodyError for it — this is the body-less-tier safety the fix preserves.
+		ent := entity("acme.ops.code.repo.symbol.Bodyless", "Bodyless", "h/bodyless.go")
+		reg := metric.NewMetricsRegistry()
+		eng := fusion.NewEngine(newGraph(ent), nil).WithMetrics(reg)
+
+		resp, err := eng.Fuse(context.Background(), req, refLens{})
+		if err != nil {
+			t.Fatalf("Fuse with nil BodyResolver must not error, got %v", err)
+		}
+		if len(resp.Nodes) != 1 || resp.Nodes[0].Body != "" {
+			t.Fatalf("expected one node with empty body, got %+v", resp.Nodes)
+		}
+		if resp.Nodes[0].BodyReason != "" {
+			t.Errorf("a body-less node must carry NO reason, got %q", resp.Nodes[0].BodyReason)
+		}
+		if got := bodyFailureCount(t, reg, "error"); got != 0 {
+			t.Errorf("a body-less node must not increment the failure counter, got %v", got)
+		}
+	})
 }
 
 // fakeSignals is an in-memory RankSignals for ranking tests.

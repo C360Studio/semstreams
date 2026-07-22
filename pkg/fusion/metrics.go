@@ -2,6 +2,7 @@ package fusion
 
 import (
 	"errors"
+	"log/slog"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -50,9 +51,16 @@ func resolveBodyHydrationFailureVec(registry *metric.MetricsRegistry) *prometheu
 			}
 		}
 		// Any other registration error (should not happen for a well-formed,
-		// uniquely-named vec): return the unregistered vec. A CounterVec still
+		// uniquely-named vec — it takes a same-name/different-descriptor collision):
+		// emit a LOUD operational signal so the invisible-counter outcome is not
+		// itself silent, then fall back to the unregistered vec. A CounterVec still
 		// counts when unregistered — the samples simply aren't scraped — so
-		// increments stay safe rather than panicking.
+		// increments stay safe rather than panicking (gh#616, #600).
+		slog.Default().Error(
+			"fusion body-hydration-failure metric registration failed; "+
+				"the counter will still increment but is NOT scraped",
+			slog.String("metric", "semstreams_fusion_body_hydration_failures_total"),
+			slog.Any("error", err))
 	}
 	return vec
 }

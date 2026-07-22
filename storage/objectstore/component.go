@@ -161,6 +161,24 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}, nil
 }
 
+// startStoreError classifies a store-constructor error for Component.Start,
+// PRESERVING its class. The D2 retention guard (reconcileNoLifecycleRetention,
+// #600/#616) returns a FATAL ErrGraphBucketRetention when a content store's backing
+// stream keeps lifecycle eviction it cannot strip — that must fail Start CLOSED. Every
+// other constructor error stays transient (retryable). errs.IsFatal inspects the
+// OUTERMOST classification, so an unconditional WrapTransient here would silently
+// downgrade the fatal (the #632 defect); the IsFatal branch is load-bearing. Returns
+// nil for a nil error. Extracted so Start's fail-closed decision is directly testable.
+func startStoreError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errs.IsFatal(err) {
+		return errs.WrapFatal(err, "Component", "Start", "create object store")
+	}
+	return errs.WrapTransient(err, "Component", "Start", "create object store")
+}
+
 // Start initializes the ObjectStore and sets up NATS handlers
 func (c *Component) Start(ctx context.Context) error {
 	c.mu.Lock()
@@ -204,7 +222,7 @@ func (c *Component) Start(ctx context.Context) error {
 			"error",
 			err,
 		)
-		return errs.WrapTransient(err, "Component", "Start", "create object store")
+		return startStoreError(err)
 	}
 	c.store = store
 

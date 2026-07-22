@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -158,5 +159,56 @@ func TestReconcileNoLifecycleRetention(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, natsclient.ErrGraphBucketRetention,
 			"an un-strippable retention config must fail boot closed")
+	})
+}
+
+// TestStartStoreError_PreservesClass drives FINDING-3 through the PRODUCTION
+// decision seam: Component.Start funnels its store-constructor error through
+// startStoreError, which must fail CLOSED for a fatal retention violation and stay
+// transient (retryable) for anything else. errs.IsFatal inspects the OUTERMOST
+// classification, so the pre-fix unconditional WrapTransient silently downgraded the
+// fatal — the guard "failed closed" but the consumer reopened it (#632). This test
+// invokes the real seam (not a reconstructed wrap chain) so a mutation restoring the
+// unconditional WrapTransient turns it red.
+//
+// The fatal input is the REAL guard error: reconcileNoLifecycleRetention with a
+// denied strip returns the exact WrapFatal(ErrGraphBucketRetention) the store
+// constructor hands to Start. A true denied-UpdateStream is not deterministically
+// reachable against cooperative real NATS (the strip always takes), so the graceful
+// (strippable) path is exercised end-to-end through the real Component.Start in the
+// integration tier.
+func TestStartStoreError_PreservesClass(t *testing.T) {
+	t.Parallel()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	t.Run("a REAL fatal retention error fails closed and stays fatal", func(t *testing.T) {
+		t.Parallel()
+		js := newFakeJS("CONTENT", 24*time.Hour, -1)
+		js.updateErr = errors.New("update denied") // strip denied → guard fails closed
+		ctorErr := reconcileNoLifecycleRetention(context.Background(), js, "CONTENT", logger)
+		require.Error(t, ctorErr)
+		require.True(t, errs.IsFatal(ctorErr), "precondition: the guard error is fatal")
+
+		got := startStoreError(ctorErr)
+		require.Error(t, got, "the seam must not swallow the fatal to nil")
+		assert.True(t, errs.IsFatal(got), "Start's seam must keep the retention violation fatal")
+		assert.ErrorIs(t, got, natsclient.ErrGraphBucketRetention,
+			"the retention sentinel must survive the seam's wrap")
+	})
+
+	t.Run("a transient constructor error stays transient (retryable)", func(t *testing.T) {
+		t.Parallel()
+		transient := errs.WrapTransient(errors.New("nats unavailable"),
+			"Store", "NewStoreWithConfigAndMetrics", "get JetStream context")
+		require.True(t, errs.IsTransient(transient))
+
+		got := startStoreError(transient)
+		assert.False(t, errs.IsFatal(got), "a non-retention error must not be promoted to fatal")
+		assert.True(t, errs.IsTransient(got), "a transient constructor error stays retryable")
+	})
+
+	t.Run("nil is nil", func(t *testing.T) {
+		t.Parallel()
+		assert.NoError(t, startStoreError(nil))
 	})
 }
