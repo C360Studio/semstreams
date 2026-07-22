@@ -333,6 +333,12 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// (see semspec Meshtastic report). Probes deterministic single-word
 		// terms and HARD-FAILs when the response is empty or unrelated.
 		{"validate-globalsearch-known-answer", s.executeValidateGlobalSearchKnownAnswer, []string{"semantic"}},
+		// gh#599/#597: graph batch/semantic read-path reconciliation over the real
+		// NATS wire (gh#604 contracts) + batch_query_missing_total soak signal. Runs
+		// after entity stabilization + embedding readiness so present IDs are
+		// queryable and the semantic index ranks. The fusion.Fuse envelope third is
+		// re-homed to gh#391 (unreachable — no fusion route in configs/semantic.json).
+		{"validate-batch-read-reconciliation", s.executeValidateBatchReadReconciliation, []string{"semantic"}},
 		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		{"validate-anomaly-detection", s.executeValidateAnomalyDetection, []string{"statistical", "semantic"}},
 		{"validate-virtual-edges", s.executeValidateVirtualEdges, []string{"semantic"}},
