@@ -185,6 +185,10 @@ func (c *Component) Start(ctx context.Context) error {
 	// disagree, leaving a resolver unable to resolve one of them.
 	c.config.InstanceName = c.instanceName
 
+	// Thread this component's logger so the D2 retention-reconcile guard (#600)
+	// attributes its boot WARN to this store rather than the process default.
+	c.config.Logger = c.logger
+
 	// Create the underlying ObjectStore with metrics support
 	store, err := NewStoreWithConfigAndMetrics(ctx, c.natsClient, c.config, c.metricsRegistry)
 	if store != nil {

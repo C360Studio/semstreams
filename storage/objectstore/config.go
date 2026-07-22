@@ -3,6 +3,7 @@
 package objectstore
 
 import (
+	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
@@ -47,6 +48,13 @@ type Config struct {
 	// This allows SemStreams to add semantic metadata (entity IDs, triples)
 	// while keeping StreamKit generic.
 	MetadataExtractor storage.MetadataExtractor `json:"-" schema:"-"`
+
+	// Logger, when set, receives the boot-time retention-reconcile WARN emitted by
+	// the D2 content-store guard (ADR-068; #600) when it strips a binding MaxAge/
+	// MaxBytes from the backing stream. Internal wiring — components thread their
+	// own logger; standalone callers leave it nil and the guard falls back to
+	// slog.Default(). Schema-excluded like the other injected dependencies.
+	Logger *slog.Logger `json:"-" schema:"-"`
 }
 
 // Validate checks if the configuration is valid.

@@ -3,8 +3,17 @@ package storage
 
 import (
 	"context"
+	"errors"
 	"io"
 )
+
+// ErrObjectNotFound is the backend-agnostic sentinel a Store.Get returns (wrapped
+// with %w) when the key resolved to NO stored object — as opposed to a transient
+// backend fault. Callers match it with errors.Is to distinguish "the object is
+// absent" (e.g. content-addressed evidence that was reclaimed, #600) from "the
+// read faulted", which is a genuine error worth retrying/alerting. A not-found is
+// deliberately NOT classified as transient: retrying will not conjure the object.
+var ErrObjectNotFound = errors.New("object not found")
 
 // Store is the pluggable backend interface for storage operations.
 //

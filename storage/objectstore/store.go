@@ -6,8 +6,10 @@ package objectstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -108,10 +110,17 @@ func NewStoreWithConfigAndMetrics(
 		return nil, errs.WrapTransient(err, "Store", "NewStoreWithConfigAndMetrics", "get JetStream context")
 	}
 
+	// No TTL: content ObjectStores hold ref-addressed ContentStorable payloads
+	// pointed at by live-graph entities that outlive them. NATS TTL (MaxAge) is a
+	// reference-blind lifecycle eviction on the backing stream and would strand an
+	// entity on content that silently expired (ADR-068; #600). The safe state is the
+	// only state — there is no zero-valued retention knob left on the surface. The
+	// D2 boot guard below (reconcileNoLifecycleRetention) strips any binding
+	// retention a legacy or out-of-band config left on the backing stream and then
+	// asserts fail-closed.
 	storeConfig := jetstream.ObjectStoreConfig{
 		Bucket:      bucketName,
 		Description: "Immutable message storage",
-		TTL:         24 * time.Hour, // Optional retention
 	}
 
 	// Use caller's context for ObjectStore operations
@@ -122,6 +131,21 @@ func NewStoreWithConfigAndMetrics(
 		if err != nil {
 			return nil, errs.WrapTransient(err, "Store", "NewStoreWithConfigAndMetrics", "create/get object store")
 		}
+	}
+
+	// D2 boot guard (ADR-068 applied to content-addressed ObjectStores; #600/#616).
+	// The create-or-get path above GETS an already-created store without reconciling
+	// its config, so removing the TTL constant is inert on any persistent bucket that
+	// still carries the legacy 24h MaxAge. Reconcile-then-assert on the backing
+	// stream (OBJ_<bucket>): strip a binding MaxAge/MaxBytes in place (self-heal,
+	// deletes no object) then re-assert fail-closed. Placed here so all three
+	// construction sites inherit it from the one shared constructor.
+	guardLogger := cfg.Logger
+	if guardLogger == nil {
+		guardLogger = slog.Default()
+	}
+	if err := reconcileNoLifecycleRetention(ctx, js, bucketName, guardLogger); err != nil {
+		return nil, err
 	}
 
 	// Create cache based on configuration with metrics
@@ -268,6 +292,13 @@ func (s *Store) Get(ctx context.Context, key string) ([]byte, error) {
 	data, err := s.store.GetBytes(ctx, key)
 	if err != nil {
 		s.metrics.recordError("get")
+		// Map an absent object to the backend-agnostic not-found sentinel so
+		// callers (fusion body hydration, #600) can tell "the object is gone" from
+		// "the read faulted". A not-found is NOT transient — it will not fix on
+		// retry — so it deliberately bypasses WrapTransient.
+		if errors.Is(err, jetstream.ErrObjectNotFound) {
+			return nil, fmt.Errorf("Store.Get %q: %w", key, storage.ErrObjectNotFound)
+		}
 		return nil, errs.WrapTransient(err, "Store", "Get", "get message")
 	}
 
