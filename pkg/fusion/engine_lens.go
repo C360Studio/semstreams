@@ -5,9 +5,14 @@ import (
 	"errors"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/storage"
 )
 
 // The lens-driven engine entry (ADR-062). Resolves a query against the graph
@@ -55,7 +60,16 @@ const ontologyClassPredicate = "entity.ontology.class"
 type Engine struct {
 	graph   RetrievalClient
 	body    *BodyResolver
-	signals RankSignals // optional; nil → resolve-order + lexical ranking only
+	signals RankSignals             // optional; nil → resolve-order + lexical ranking only
+	metrics *metric.MetricsRegistry // optional; nil → body-hydration counter falls back to the default registerer
+
+	// bodyFailures is this engine's body-hydration-failure counter, resolved
+	// against e.metrics (or the default registerer when nil) and memoized PER
+	// ENGINE — no process-global state, so two engines with different registries
+	// keep independent series. bodyFailuresOnce guards the lazy default-registerer
+	// resolution for an engine built without WithMetrics.
+	bodyFailures     *prometheus.CounterVec
+	bodyFailuresOnce sync.Once
 }
 
 // NewEngine builds a lens-driven engine. body may be nil — node bodies are then
@@ -70,6 +84,28 @@ func NewEngine(graph RetrievalClient, body *BodyResolver) *Engine {
 // default) keeps ranking at resolve-order + lexical.
 func (e *Engine) WithSignals(s RankSignals) *Engine {
 	e.signals = s
+	return e
+}
+
+// WithMetrics wires the app MetricsRegistry so this engine's body-hydration-
+// failure counter (fusion_body_hydration_failures_total, gh#616) registers into
+// the /metrics-scraped registry. Returns the engine for chaining. Deliberately a
+// builder rather than a NewEngine parameter so the constructor signature stays
+// stable for the library's callers.
+//
+// The counter is resolved PER ENGINE against the given registry: two engines
+// sharing one registry increment the SAME series (register-or-get-existing), two
+// engines with different registries each get their own, and a nil registry (or an
+// engine built without WithMetrics) counts against the default registerer. There
+// is no process-global state pinning the counter to whichever registry was seen
+// first.
+func (e *Engine) WithMetrics(registry *metric.MetricsRegistry) *Engine {
+	e.metrics = registry
+	// Resolve eagerly so the vec lands in THIS registry now (construction time),
+	// and mark the lazy path done so a later failure does not re-resolve.
+	e.bodyFailuresOnce.Do(func() {
+		e.bodyFailures = resolveBodyHydrationFailureVec(registry)
+	})
 	return e
 }
 
@@ -333,8 +369,11 @@ func (e *Engine) buildNodes(ctx context.Context, ranked []*Entity, lens Lens, wa
 
 // nodeFor builds one Node, including only the requested facets. The body is
 // hydrated by dereferencing the lens's Hydrate HANDLE through the BodyResolver
-// (ADR-062 increment 4). Hydration is best-effort: a Hydrate or deref error omits
-// the body and does not fail the node (degrade-don't-fail).
+// (ADR-062 increment 4). Hydration is best-effort and degrades-don't-fail: a
+// Hydrate or deref failure omits the body and does NOT fail the node — but it is
+// no longer SILENT (gh#616, #600). The node ships with a bounded BodyReason and a
+// failure counter fires, so an empty body is a reported partial result rather than
+// an unexplained absence.
 func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[Want]bool) (Node, error) {
 	loc := lens.Location(ent)
 	node := Node{
@@ -347,9 +386,29 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 		Handle:   ent.ID,
 	}
 	if wants[WantBody] && e.body != nil {
-		if ref, err := lens.Hydrate(ctx, ent); err == nil && ref != nil {
-			if body, derr := e.body.ResolveBody(ctx, ref); derr == nil {
+		ref, err := lens.Hydrate(ctx, ent)
+		switch {
+		case err != nil:
+			// A genuine retrieval fault producing the handle.
+			e.reportBodyFailure(&node, BodyError)
+		case ref == nil:
+			// The entity legitimately has NO verbatim body (lens.go:171,177). This
+			// is a normal condition, not a failure: leave Body empty, stamp no
+			// reason, and increment no counter. Silent, matching the pre-report
+			// body-less semantics.
+		default:
+			body, derr := e.body.ResolveBody(ctx, ref)
+			switch {
+			case derr == nil:
 				node.Body = string(body)
+			case errors.Is(derr, storage.ErrObjectNotFound):
+				// The ref is present on the entity but resolves to no stored object
+				// — the #600 case: content-addressed evidence was reclaimed while the
+				// entity still points at it.
+				e.reportBodyFailure(&node, BodyNotFound)
+			default:
+				// The reference resolved to a store but the read faulted.
+				e.reportBodyFailure(&node, BodyError)
 			}
 		}
 	}
@@ -361,6 +420,27 @@ func (e *Engine) nodeFor(ctx context.Context, ent *Entity, lens Lens, wants map[
 		node.Relations = rels
 	}
 	return node, nil
+}
+
+// reportBodyFailure stamps a body-hydration failure onto the node (bounded
+// reason, empty body left as-is) and increments this engine's failure counter by
+// reason. It never defers the response or synthesizes a Miss — the node is a
+// partial result that still ships (gh#616, #600).
+func (e *Engine) reportBodyFailure(node *Node, reason BodyReason) {
+	node.BodyReason = reason
+	e.bodyFailureCounter().WithLabelValues(string(reason)).Inc()
+}
+
+// bodyFailureCounter returns this engine's body-hydration-failure counter,
+// resolving it lazily against the default registerer for an engine built without
+// WithMetrics (memoized per engine via bodyFailuresOnce). WithMetrics resolves it
+// eagerly against the wired registry, so this only fires the default-registerer
+// path.
+func (e *Engine) bodyFailureCounter() *prometheus.CounterVec {
+	e.bodyFailuresOnce.Do(func() {
+		e.bodyFailures = resolveBodyHydrationFailureVec(e.metrics)
+	})
+	return e.bodyFailures
 }
 
 // relations expands a node's forward and reverse edges into role → refs. It

@@ -12,7 +12,7 @@ invisible: it discards both the `Hydrate` and `ResolveBody` errors and ships an
 empty `Body` with no signal at any layer (`engine_lens.go:349-355`, #616).
 
 This is Epic A's literal case — evidence that *silently* expires — and it directly
-contradicts the substrate's own position: ADR-0008 rejects reference-blind NATS
+contradicts the substrate's own position: ADR-068 rejects reference-blind NATS
 retention on the live graph, and `ENTITY_STATES` is boot-defended by
 `AssertNoLifecycleRetention`. `CONTENT` gets no such guard.
 
@@ -41,8 +41,8 @@ story converts the blob store into genuinely unbounded growth.** #600 is explici
 "both halves belong to one retention design; please do not fix half of it."
 
 This is the design phase's central question, and it may be ADR-scale (a
-content-addressed blob GC / refcount / per-source retention-depth design; ADR-0008
-open item #5 already sketches per-source retention). The design must resolve
+content-addressed blob GC / refcount / per-source retention-depth design; ADR-068
+increment 6 already sketches orphaned-blob collection). The design must resolve
 whether increment 2:
   (a) ships all of it (TTL-off + boot guard + fusion reporting + orphan GC), or
   (b) ships the **loud-not-silent** half now (boot guard + fusion reporting +
@@ -85,7 +85,8 @@ from gating the observability fix. The owner/architect decides.
   exists today) and is the increment's scope-defining decision.
 - **Related:** #599 (no e2e tier exercises fusion Fuse / batch reconciliation /
   unhydrated reporting — the coverage gap that let this hide), #601 (offloaded
-  title/`text_suffixes`, adjacent on the offloaded lane), ADR-0008 open item #5.
+  title/`text_suffixes`, adjacent on the offloaded lane), ADR-068 increment 6
+  (orphaned-blob collection).
 
 ## Non-goals
 

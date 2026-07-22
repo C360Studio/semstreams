@@ -10,10 +10,17 @@ reason rides on the node itself. This is DISTINCT from `Unhydrated`, which repor
 that produced no node at all — a body-hydration failure concerns a node that is present.
 
 The reason set is closed and mirrors the seed-hydration vocabulary: `not_found` when the
-body reference or its stored object does not resolve, and `error` when the read faults.
-The reason field is omitted entirely when the body hydrates, so a fully-hydrated response
-is wire-unchanged. A failed body hydration MUST NOT cause the engine to defer or to
+body reference resolves to no stored object (the object is absent — e.g. expired or
+not-yet-written), and `error` for a genuine hydration fault (the body handle could not be
+produced, or the stored-object read faulted for a reason other than absence). The reason
+field is omitted entirely when the body hydrates, so a fully-hydrated response is
+wire-unchanged. A failed body hydration MUST NOT cause the engine to defer or to
 synthesize a `Miss`.
+
+An entity that simply has no verbatim body is NOT a failure: it produces no body
+reference, and its node MUST ship with an empty body, no reason, and no counter
+increment. Only a body that was referenced-or-attempted but could not be loaded is
+reported.
 
 #### Scenario: a resolve failure reports a reason on the node
 
@@ -40,6 +47,14 @@ synthesize a `Miss`.
 - **GIVEN** a request with `WantBody` and a node whose body loads successfully
 - **WHEN** the node is projected
 - **THEN** the node carries its body and the body reason field is omitted from the wire
+
+#### Scenario: an entity with no verbatim body reports nothing
+
+- **GIVEN** a request with `WantBody` and a node for an entity that has no verbatim body
+  (its lens produces no body reference)
+- **WHEN** the node is projected
+- **THEN** the node is returned with an empty body and no body reason
+- **AND** no body-hydration-failure counter is incremented
 
 #### Scenario: body hydration failures are observable
 

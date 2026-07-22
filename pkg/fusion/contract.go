@@ -179,9 +179,20 @@ type Node struct {
 	Fragment string `json:"fragment,omitempty"`
 	// Lines is [start,end] for code, nil for line-less domains (docs) — a slice
 	// so omitempty actually omits it rather than emitting a spurious [0,0].
-	Lines     []int            `json:"lines,omitempty"`
-	Body      string           `json:"body,omitempty"`
-	Relations map[string][]Ref `json:"relations,omitempty"`
+	Lines []int  `json:"lines,omitempty"`
+	Body  string `json:"body,omitempty"`
+	// BodyReason names why Body is absent when a body was requested (WantBody) but
+	// could not be loaded — a bounded, closed reason (not_found / error) so a
+	// missing body is a partial-result SIGNAL, never a silent empty string
+	// (gh#616, #600). It is DISTINCT from Response.Unhydrated: a missing body is a
+	// node that exists and ranks, so the reason rides on the node itself rather
+	// than the top-level list. A failed body hydration never defers the response
+	// or synthesizes a Miss — the node still ships.
+	//
+	// Omitted from the wire when the body hydrates, so a fully-hydrated response is
+	// byte-unchanged for existing consumers.
+	BodyReason BodyReason       `json:"body_reason,omitempty"`
+	Relations  map[string][]Ref `json:"relations,omitempty"`
 	// Class is the BFO/CCO class IRI (provenance/debug; the agent ignores it).
 	Class string `json:"class,omitempty"`
 	// Handle is an opaque continuation token (internally the entity ID). Not an

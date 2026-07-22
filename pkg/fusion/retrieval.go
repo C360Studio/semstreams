@@ -113,6 +113,29 @@ const (
 	UnhydratedUnknown UnhydratedReason = "unknown"
 )
 
+// BodyReason is why a node's requested verbatim body (WantBody) could not be
+// loaded. It is a DISTINCT type from UnhydratedReason — a body-hydration failure
+// and a seed-hydration failure are different surfaces: an Unhydrated seed produced
+// NO node at all, whereas a BodyReason rides on a node that exists and ranks; only
+// its Body is absent (gh#616, #600). The set is CLOSED and shares
+// UnhydratedReason's vocabulary value-for-value so the two failure surfaces read
+// the same on the wire.
+type BodyReason string
+
+// The closed body-hydration-reason set. Kept in lockstep with the
+// UnhydratedReason vocabulary (pinned by a test).
+const (
+	// BodyNotFound is a body whose reference did not resolve to a stored object:
+	// the lens produced no hydrate handle for the entity, or the handle could not
+	// be resolved. It does NOT license "the entity has no body" as a fact — only
+	// that this lookup produced none.
+	BodyNotFound BodyReason = "not_found"
+	// BodyError is a genuine fault reading the stored body — the deref returned an
+	// error. Distinct from BodyNotFound so a caller can tell a missing object from
+	// a backend fault.
+	BodyError BodyReason = "error"
+)
+
 // Unhydrated names one seed that did not load.
 //
 // The field is Handle, not ID, deliberately: fusion's contract keys everything a
