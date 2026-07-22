@@ -10,6 +10,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -22,6 +24,16 @@ import (
 // maxSourceTextLen is 0 (unconfigured). Prevents unbounded memory allocation
 // for very large stored content.
 const defaultMaxSourceTextLen = 8000
+
+// MaxSourceTextLenCeiling is the hard upper bound on the source-text cap, in runes.
+// Config.Validate rejects a larger max_text_len, and fetchTextFromStorage clamps to
+// it before deriving its byte read budget so a pathological value can never overflow
+// utf8.UTFMax*limit+1 into a negative io.LimitReader bound (which reads an empty body
+// that hop 2 would then treat as "no source text" and DELETE the pending embedding —
+// #628 FIX 2). 1_000_000 characters is far past any real embedding input (neural
+// context caps are ~8k) while keeping the worst-case offloaded read bounded at
+// utf8.UTFMax MB.
+const MaxSourceTextLenCeiling = 1_000_000
 
 // isExpectedShutdownError returns true if the error is expected during component shutdown.
 // These include subscription cleanup errors and consumer not found errors which occur
@@ -441,13 +453,17 @@ func (w *Worker) handleKVEntry(
 	dedupKey := DedupKey(w.embedderIdentity(), sourceText)
 
 	// Get or generate embedding vector
-	vector, err := w.getOrGenerateEmbedding(entityID, sourceText, dedupKey, sourceRevision)
+	vector, wasDedupHit, err := w.getOrGenerateEmbedding(entityID, sourceText, dedupKey, sourceRevision)
 	if err != nil {
 		return // Error already logged and marked as failed
 	}
 
-	// Save and notify
-	w.saveAndNotify(entityID, vector, dedupKey, sourceRevision)
+	// Save and notify. saveAndNotify reports whether the outcome is terminal: a
+	// non-converging revision CAS (ErrCASExhausted) leaves the record pending and
+	// re-drivable, so it must NOT drain the readiness watermark (ADR-066 §3). Every
+	// other outcome is terminal (already set above). wasDedupHit is counted there,
+	// on the success path only, so dedup_hits stays a subset of resolutions.
+	terminal = w.saveAndNotify(entityID, vector, dedupKey, sourceRevision, wasDedupHit)
 	return
 }
 
@@ -478,24 +494,28 @@ func (w *Worker) embedderIdentity() EmbedderIdentity {
 // the skip is COUNTED (IncDedupSkipped) so the avoided reuse is visible, not inferred
 // (#623). Both hops now derive the key here, so a replayed pending record's stale
 // hop-1 ContentHash is never consulted.
-func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, sourceRevision uint64) ([]float32, error) {
+//
+// The returned bool reports whether the vector came from a dedup HIT. The caller
+// counts IncDedupHits only once the resolution actually STORES (in saveAndNotify's
+// success path), never here: a hit whose save is then dropped as superseded/gone
+// does not fire onGenerated, so counting the hit eagerly here would let dedup_hits
+// exceed embeddings_generated_total — the exact invariant the e2e queue-health gate
+// enforces (dedup hits are a subset of resolutions).
+func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, sourceRevision uint64) (vec []float32, wasDedupHit bool, err error) {
 	dedupEnabled := key != ""
 
 	// Check deduplication first
 	if dedupEnabled {
-		dedupRecord, err := w.storage.GetByContentHash(w.ctx, key)
-		if err != nil {
-			w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", err)
-			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", err), sourceRevision)
-			return nil, err
+		dedupRecord, derr := w.storage.GetByContentHash(w.ctx, key)
+		if derr != nil {
+			w.logger.Error("Failed to check dedup", "entity_id", entityID, "error", derr)
+			w.markFailed(entityID, fmt.Sprintf("dedup check failed: %v", derr), sourceRevision)
+			return nil, false, derr
 		}
 
 		if dedupRecord != nil && w.dedupRecordUsable(entityID, key, dedupRecord) {
 			w.logger.Debug("Deduplicating embedding", "entity_id", entityID, "dedup_key", key)
-			if w.metrics != nil {
-				w.metrics.IncDedupHits()
-			}
-			return dedupRecord.Vector, nil
+			return dedupRecord.Vector, true, nil
 		}
 	} else if w.metrics != nil {
 		w.metrics.IncDedupSkipped(dedupSkipReasonIdentityUnresolved)
@@ -503,32 +523,32 @@ func (w *Worker) getOrGenerateEmbedding(entityID, sourceText, key string, source
 
 	// Generate new embedding
 	w.logger.Debug("Generating new embedding", "entity_id", entityID)
-	vectors, err := w.embedder.Generate(w.ctx, []string{sourceText})
-	if err != nil {
-		w.logger.Error("Failed to generate embedding", "entity_id", entityID, "error", err)
-		w.markFailed(entityID, fmt.Sprintf("generation failed: %v", err), sourceRevision)
-		return nil, err
+	vectors, gerr := w.embedder.Generate(w.ctx, []string{sourceText})
+	if gerr != nil {
+		w.logger.Error("Failed to generate embedding", "entity_id", entityID, "error", gerr)
+		w.markFailed(entityID, fmt.Sprintf("generation failed: %v", gerr), sourceRevision)
+		return nil, false, gerr
 	}
 
 	if len(vectors) == 0 {
 		w.logger.Error("No embedding generated", "entity_id", entityID)
 		w.markFailed(entityID, "no embedding returned", sourceRevision)
-		return nil, fmt.Errorf("no embedding returned")
+		return nil, false, fmt.Errorf("no embedding returned")
 	}
 
 	vector := vectors[0]
 
 	// Save to dedup bucket. Skipped when no key could be derived for this record.
 	if dedupEnabled {
-		if err := w.storage.SaveDedup(
+		if serr := w.storage.SaveDedup(
 			w.ctx, key, vector, entityID, w.embedder.Model(), w.embedder.Dimensions(),
-		); err != nil {
-			w.logger.Warn("Failed to save dedup record", "entity_id", entityID, "error", err)
+		); serr != nil {
+			w.logger.Warn("Failed to save dedup record", "entity_id", entityID, "error", serr)
 			// Continue anyway - not critical
 		}
 	}
 
-	return vector, nil
+	return vector, false, nil
 }
 
 // dedupRecordUsable reports whether a dedup hit belongs to the vector space this
@@ -569,7 +589,14 @@ func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord)
 // the hop-2 dedup key of the embedded bytes and sourceRevision is the revision this
 // generation completes; both are stored on the record so its ContentHash+Vector
 // stay consistent and a late older-revision write is dropped (#614 part 2).
-func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash string, sourceRevision uint64) {
+//
+// It returns terminal==false ONLY for a re-drivable transient (ErrCASExhausted): the
+// record stays pending and the ENTITY_STATES watcher will re-deliver the entity on its
+// next write, so handleKVEntry must NOT advance the readiness watermark past this
+// revision (that would report the pipeline caught up over still-pending work). Every
+// other outcome — success, a superseded/record-gone drop, or a real save failure —
+// is terminal.
+func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
 	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision); err != nil {
@@ -578,31 +605,56 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash st
 		// is nothing to mark failed, and counting it would inflate the failure
 		// metric across gh#527 bulk deletion. Return before onGenerated — firing it
 		// would push the dropped vector into the query-side cache, resurrecting in
-		// memory exactly what gh#614 removed from KV.
+		// memory exactly what gh#614 removed from KV. Terminal: the entity is
+		// deliberately without an embedding now.
 		if errors.Is(err, ErrRecordGone) {
 			w.logger.Debug("Embedding record removed during generation; dropping vector",
 				"entity_id", entityID)
-			return
+			return true
 		}
 		// A newer source revision's vector already landed. The vector THIS call holds
 		// is the older one; firing onGenerated would push it into a WithOnGenerated
 		// consumer's cache, exactly the stale-vector hazard ErrRecordGone guards
-		// against. Skip the callback; the newer write is authoritative.
+		// against. Skip the callback; the newer write is authoritative. Terminal: the
+		// newer outcome already completed this entity.
 		if errors.Is(err, ErrSupersededRevision) {
 			w.logger.Debug("Embedding superseded by a newer revision; dropping vector",
 				"entity_id", entityID)
-			return
+			return true
+		}
+		// The revision CAS loop did not converge. This is a documented TRANSIENT,
+		// re-drivable condition (effectively unreachable under the SourceRevision
+		// ordering guard) — NOT a generation failure. Do NOT SaveFailed and do NOT
+		// count IncFailed: a failure write here can later land at the SAME revision and
+		// flip a good vector to StatusFailed, and advancing the watermark would report
+		// this entity done over a record that is still durably pending. Leave it
+		// pending and let the ENTITY_STATES watcher re-deliver it (the natural
+		// re-drive); return terminal==false so readiness does not advance past it.
+		if errors.Is(err, ErrCASExhausted) {
+			w.logger.Warn("Embedding save did not converge under revision CAS; leaving record pending for re-drive",
+				"entity_id", entityID)
+			return false
 		}
 		w.logger.Error("Failed to save generated embedding", "entity_id", entityID, "error", err)
 		w.markFailed(entityID, fmt.Sprintf("save failed: %v", err), sourceRevision)
-		return
+		return true
 	}
 
 	w.logger.Debug("Embedding generated successfully", "entity_id", entityID, "dimensions", dimensions)
 
+	// The resolution STORED. Count the dedup hit here (not at lookup time) so a hit
+	// whose save was dropped as superseded/gone/CAS-exhausted — which skips
+	// onGenerated — never inflates dedup_hits above embeddings_generated_total. Both
+	// counters fire together on success, keeping dedup_hits a strict subset of
+	// resolutions (the e2e queue-health invariant).
+	if wasDedupHit && w.metrics != nil {
+		w.metrics.IncDedupHits()
+	}
+
 	if w.onGenerated != nil {
 		w.onGenerated(entityID, vector)
 	}
+	return true
 }
 
 // getSourceText extracts text from the record.
@@ -623,29 +675,71 @@ func (w *Worker) getSourceText(record *Record) (string, error) {
 		}
 	}
 
-	// Truncate if configured. Emit a signal so the bytes actually embedded are
-	// discoverable rather than silently dropped (#602) — the cap is part of what the
-	// vector depends on, so silent truncation hides that dependence.
-	if w.maxSourceTextLen > 0 && len(text) > w.maxSourceTextLen {
-		text = truncateAtWord(text, w.maxSourceTextLen)
-		if w.metrics != nil {
-			w.metrics.IncTruncated()
+	// Truncate if configured, through the SAME rune-safe routine the offloaded lane
+	// uses, so identical content embeds byte-identical text (and derives the same hop-2
+	// dedup key) regardless of lane. Emit a signal only when it actually shortens the
+	// text so the bytes embedded stay discoverable (#602). The offloaded lane's
+	// fetchTextFromStorage has already truncated+counted, so re-applying here is an
+	// idempotent no-op that neither re-shortens nor double-counts.
+	if w.maxSourceTextLen > 0 {
+		truncated := truncateAtWord(text, w.maxSourceTextLen)
+		if len(truncated) < len(text) {
+			if w.metrics != nil {
+				w.metrics.IncTruncated()
+			}
 		}
+		text = truncated
 	}
 
 	return text, nil
 }
 
-// truncateAtWord truncates text at the last word boundary before maxLen.
+// truncateAtWord truncates text to at most maxLen RUNES (characters), preferring the
+// last Unicode-whitespace boundary in the back half of the cap.
+//
+// It is the single truncation routine for BOTH the inline and the offloaded
+// (ContentStorable) lane, so identical over-cap content yields a byte-identical result
+// — and therefore the same hop-2 dedup key — no matter which lane delivered it. That
+// lane-independence is what makes gh#627 (cross-lane dedup miss) moot for content that
+// fits after truncation.
+//
+// It is rune-safe in the two senses the previous byte-slicing version was not:
+//   - it counts and cuts on RUNES, matching Config.MaxTextLen's documented unit
+//     ("characters") and the operator mental model, and
+//   - it never splits a multibyte rune, so the result is always valid UTF-8 and the
+//     bytes DedupKey hashes are exactly the bytes the embedder receives.
+//
+// The word boundary uses unicode.IsSpace (any Unicode whitespace), not a literal ASCII
+// space, so non-breaking and ideographic spaces are honored too.
 func truncateAtWord(text string, maxLen int) string {
-	if len(text) <= maxLen {
+	if maxLen <= 0 {
 		return text
 	}
-	// Find last space before maxLen
-	truncated := text[:maxLen]
-	lastSpace := strings.LastIndex(truncated, " ")
-	if lastSpace > maxLen/2 { // Only use word boundary if it's not too far back
-		return truncated[:lastSpace]
+
+	// Find the byte offset just past the maxLen-th rune. Ranging a string yields the
+	// START byte index of each rune, so cut is always on a rune boundary.
+	runeCount := 0
+	cut := len(text)
+	for i := range text {
+		if runeCount == maxLen {
+			cut = i
+			break
+		}
+		runeCount++
+	}
+	if cut == len(text) {
+		return text // fewer than or exactly maxLen runes present: nothing to truncate
+	}
+	truncated := text[:cut] // cut is a rune boundary → valid UTF-8
+
+	// Prefer the last whitespace boundary, but only when it is not too far back (past
+	// the halfway point measured in RUNES, consistent with the rune cap), mirroring the
+	// prior heuristic. LastIndexFunc returns the byte offset of the matched rune's
+	// start, so slicing there drops the space and leaves a rune boundary.
+	if sp := strings.LastIndexFunc(truncated, unicode.IsSpace); sp > 0 {
+		if utf8.RuneCountInString(truncated[:sp]) > maxLen/2 {
+			return truncated[:sp]
+		}
 	}
 	return truncated
 }
@@ -684,31 +778,37 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 	}
 	defer reader.Close()
 
-	// Read only what we need — no full memory load. Read one byte PAST the cap so a
-	// body that exceeds the cap is detectable: len(data) > limit means the store had
-	// more and this fetch truncated it. The offloaded lane truncates here (byte-cut
-	// via LimitReader), NOT at getSourceText's word-cut branch, so this is the only
-	// place offloaded truncation can be observed — without it, truncation of the
-	// primary (ContentStorable) lane is silent, which the #602 spec forbids.
+	// Bound the read — no full memory load. The cap is in RUNES, but a UTF-8 rune is up
+	// to utf8.UTFMax bytes, so read up to utf8.UTFMax*limit (+1 sentinel) bytes: enough
+	// to always contain at least `limit` full runes when the body has them, so the
+	// shared rune-safe truncation below yields the SAME bytes the inline lane would.
+	// Byte-cutting the stream here (the old data[:limit]) then handing the fragment to
+	// getSourceText is exactly what split the two lanes' embedded bytes and dedup keys
+	// (gh#627) and could sever a multibyte rune; the truncation is now rune-safe and
+	// lane-independent.
+	//
+	// `limit` is clamped to MaxSourceTextLenCeiling FIRST so a pathological cap
+	// (Config.Validate now rejects one, but a directly-constructed worker could still
+	// hold it) cannot overflow utf8.UTFMax*limit+1 into a negative LimitReader bound —
+	// the old int64(limit)+1 overflowed to an empty body that hop 2 read as "no source
+	// text" and DELETED the pending embedding (#628 FIX 2).
 	limit := w.maxSourceTextLen
 	if limit <= 0 {
 		limit = defaultMaxSourceTextLen
 	}
-	data, err := io.ReadAll(io.LimitReader(reader, int64(limit)+1))
+	if limit > MaxSourceTextLenCeiling {
+		limit = MaxSourceTextLenCeiling
+	}
+	readCap := int64(limit)*utf8.UTFMax + 1
+	data, err := io.ReadAll(io.LimitReader(reader, readCap))
 	if err != nil {
 		if w.metrics != nil {
 			w.metrics.IncContentResolveError()
 		}
 		return "", fmt.Errorf("failed to read content from instance %q: %w", ref.StorageInstance, err)
 	}
-	if len(data) > limit {
-		data = data[:limit]
-		if w.metrics != nil {
-			w.metrics.IncTruncated()
-		}
-	}
 
-	// Detect likely JSON-wrapped content (StoredContent envelope).
+	// Detect likely JSON-wrapped content (StoredContent envelope) on the raw bytes.
 	// Raw text is expected — if it starts with '{', someone probably used
 	// StoreContent() instead of Put(). Embeddings will include JSON noise.
 	if len(data) > 0 && data[0] == '{' {
@@ -717,13 +817,27 @@ func (w *Worker) fetchTextFromStorage(ref *StorageRef) (string, error) {
 			slog.String("hint", "use Put() for raw body text, not StoreContent()"))
 	}
 
+	// Truncate with the SAME rune-safe routine the inline lane uses, so both lanes embed
+	// byte-identical text for identical content. Count the truncation HERE (the
+	// offloaded lane's detection site, #602); getSourceText's re-application is an
+	// idempotent no-op that does not double-count. `len(truncated) < len(raw)` holds iff
+	// the body exceeded the cap (in runes), whether the read hit the store's end or the
+	// byte budget.
+	raw := string(data)
+	truncated := truncateAtWord(raw, limit)
+	if len(truncated) < len(raw) {
+		if w.metrics != nil {
+			w.metrics.IncTruncated()
+		}
+	}
+
 	// Positive observable for the ADR-063 H2 inclusion: an offloaded body was
 	// resolved and fetched (previously excluded where no store-read was wired).
 	if w.metrics != nil {
 		w.metrics.IncContentResolved()
 	}
 
-	return string(data), nil
+	return truncated, nil
 }
 
 // markFailed marks an embedding as failed. sourceRevision is the revision this

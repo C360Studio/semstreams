@@ -336,6 +336,16 @@ func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string, sou
 			return ErrSupersededRevision
 		}
 
+		// Equal-revision terminal precedence: a GENERATED outcome wins over a failure at
+		// the SAME revision. Without this, a duplicate/racing SaveFailed(R) after
+		// SaveGenerated(R) already produced a StatusGenerated record would flip that good
+		// vector to StatusFailed — the strict `>` guard above does not fire at equal R.
+		// Treat it as already-resolved (the same non-failure sentinel markFailed does not
+		// count), so a generated vector at R is immutable to a same-revision failure.
+		if existing.Status == StatusGenerated && existing.SourceRevision == sourceRevision {
+			return ErrSupersededRevision
+		}
+
 		existing.Status = StatusFailed
 		existing.ErrorMsg = errorMsg
 		existing.SourceRevision = sourceRevision

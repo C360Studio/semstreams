@@ -62,7 +62,7 @@ surface; 6 is the gate.
       dropping it); build the record's `ContentHash`+`Vector` from the passed data,
       not from `existing`.
 - [x] 4.7 Implement the CAS loop: read `(existing, rev)`; `nil`→`ErrRecordGone`;
-      `existing.SourceRevision > sourceRevision`→drop (return nil); else
+      `existing.SourceRevision > sourceRevision`→drop (return `ErrSupersededRevision`); else
       `Update(key, rec, rev)`; on `ErrRevisionMismatch` re-read and re-evaluate
       (bounded retries). Apply the same treatment to `SaveFailed`.
 - [x] 4.8 Update the hop-2 call sites (`saveAndNotify`, `markFailed`) to pass the
@@ -89,3 +89,32 @@ surface; 6 is the gate.
       **81**, dedup_hits **168**, known-answer **7/7**. Search quality recovered to
       0.242 (statistical, one run, back in HEAD's 0.240–0.244 range).
 - [ ] 6.4 `openspec validate --strict`, then `/opsx:archive` on completion.
+
+## 7. Review rounds (semstreams-reviewer + PR #628 review)
+
+Round 1 (semstreams-reviewer): offloaded truncation counted; superseded-drop
+sentinel added; "age out" wording; MaxTextLen negative reject; stale comments.
+
+Round 2 (PR #628 review) — in-scope fixes:
+- [ ] 7.1 Rune-safe, Unicode-whitespace truncation unified across both lanes
+      (fixes byte-vs-char UTF-8 splitting and cross-lane key divergence; subsumes
+      #627).
+- [ ] 7.2 `max_text_len` upper bound (schema min/max + runtime) and overflow guard
+      on the `+1` LimitReader read.
+- [ ] 7.3 `ErrCASExhausted` re-drives (watcher re-delivery), never records a
+      generation failure or advances readiness as terminal.
+- [ ] 7.4 Equal-revision terminal precedence: `SaveFailed(R)` does not downgrade a
+      `StatusGenerated(R)` record.
+- [ ] 7.5 Metric-invariant fix (caught by the semantic e2e re-measure): count
+      `IncDedupHits` on the successful-store path in `saveAndNotify`, not eagerly at
+      lookup in `getOrGenerateEmbedding`. The round-2 superseded-drop skip made a
+      dropped dedup hit skip `generated_total` while still counting `dedup_hits`,
+      inverting the e2e invariant (`dedup_hits 166 > generated 69`, semantic red).
+      Both counters now fire together on store, so `dedup_hits ⊆ resolutions`.
+
+Round 2 — deferred with filed follow-ups (pre-existing or new scope):
+- #629 pending-lane (`SavePending`) resurrection under coalescing (pre-existing,
+  `coalesce_ms` off by default, needs a deleted-marker protocol).
+- #630 worker singleflight for same-content bursts (#623 key property proven by
+  e2e; burst-stampede is a separate concurrency optimization).
+- ADR-066 addendum documenting the persisted-`SourceRevision` + CAS invariant.

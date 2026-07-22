@@ -97,7 +97,7 @@ func TestSaveAndNotify_SupersededDropSkipsOnGenerated(t *testing.T) {
 	}
 
 	// An older revision (5) completes last — its SaveGenerated drops as superseded.
-	w.saveAndNotify(entityID, []float32{5, 5, 5}, "hash-5", 5)
+	w.saveAndNotify(entityID, []float32{5, 5, 5}, "hash-5", 5, false)
 
 	if onGeneratedFired {
 		t.Error("onGenerated fired for a superseded (older-revision) write; a stale vector would be pushed to caches")
@@ -108,5 +108,70 @@ func TestSaveAndNotify_SupersededDropSkipsOnGenerated(t *testing.T) {
 	}
 	if rec == nil || rec.SourceRevision != 10 || rec.Vector[0] != 9 {
 		t.Fatalf("index holds %v, want the newer rev-10 vector intact", rec)
+	}
+}
+
+// TestSaveAndNotify_SupersededDedupHitDoesNotCount pins the invariant the e2e
+// queue-health gate enforces: dedup_hits is a strict subset of
+// embeddings_generated_total. A dedup HIT whose save is then dropped as superseded
+// must NOT increment dedup_hits, because the drop skips onGenerated (so it does not
+// increment generated_total). Counting the hit eagerly at lookup time — as an
+// earlier revision did — let dedup_hits exceed generated_total under same-entity
+// churn and turned the semantic e2e tier red (dedup_hits 166 > generated 69).
+func TestSaveAndNotify_SupersededDedupHitDoesNotCount(t *testing.T) {
+	ctx := context.Background()
+	s := NewStorage(newMemKV(), newMemKV())
+
+	const entityID = "acme.ops.robotics.gcs.drone.008"
+	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
+		t.Fatalf("SavePending: %v", err)
+	}
+	if err := s.SaveGenerated(ctx, entityID, []float32{9, 9, 9}, "m", 3, "hash-10", 10); err != nil {
+		t.Fatalf("SaveGenerated(rev 10): %v", err)
+	}
+
+	m := &recordingWorkerMetrics{}
+	w := &Worker{
+		storage:  s,
+		embedder: &stubEmbedder{model: "m", dimensions: 3},
+		metrics:  m,
+		logger:   slog.Default(),
+		ctx:      ctx,
+	}
+
+	// A dedup HIT for an older revision (5) — its save is superseded by rev 10.
+	w.saveAndNotify(entityID, []float32{5, 5, 5}, "hash-5", 5, true)
+
+	if got := m.snapshot().dedupHits; got != 0 {
+		t.Errorf("dedupHits = %d, want 0: a superseded dedup hit must not count (it skips generated_total)", got)
+	}
+}
+
+// TestSaveAndNotify_StoredDedupHitCounts is the positive half: a dedup hit that
+// actually stores DOES count, so real reuse is still measured.
+func TestSaveAndNotify_StoredDedupHitCounts(t *testing.T) {
+	ctx := context.Background()
+	s := NewStorage(newMemKV(), newMemKV())
+
+	const entityID = "acme.ops.robotics.gcs.drone.009"
+	if err := s.SavePending(ctx, entityID, "", "text", 3); err != nil {
+		t.Fatalf("SavePending: %v", err)
+	}
+
+	m := &recordingWorkerMetrics{}
+	w := &Worker{
+		storage:  s,
+		embedder: &stubEmbedder{model: "m", dimensions: 3},
+		metrics:  m,
+		logger:   slog.Default(),
+		ctx:      ctx,
+	}
+
+	// A dedup hit at the current revision stores successfully.
+	if terminal := w.saveAndNotify(entityID, []float32{1, 2, 3}, "hash-3", 3, true); !terminal {
+		t.Error("saveAndNotify returned non-terminal for a successful store")
+	}
+	if got := m.snapshot().dedupHits; got != 1 {
+		t.Errorf("dedupHits = %d, want 1: a stored dedup hit is real reuse and must count", got)
 	}
 }

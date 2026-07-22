@@ -56,7 +56,7 @@ type Config struct {
 	// rather than silently dropped. The cap is part of what the vector depends on, so
 	// it participates in the dedup key (#602): changing it re-embeds affected
 	// entities. 0 selects a per-embedder-type default (4000 bm25 / 8000 neural).
-	MaxTextLen int `json:"max_text_len,omitempty" schema:"type:int,description:Max characters of source text embedded per entity; text beyond is truncated at a word boundary. 0 uses a per-embedder default (4000 bm25 / 8000 neural),category:advanced"`
+	MaxTextLen int `json:"max_text_len,omitempty" schema:"type:int,description:Max characters of source text embedded per entity; text beyond is truncated at a word boundary. 0 uses a per-embedder default (4000 bm25 / 8000 neural),min:0,max:1000000,category:advanced"`
 
 	// TextSuffixes controls which triple predicates are extracted for embedding.
 	// Predicates ending with any of these suffixes will have their text values embedded.
@@ -120,6 +120,18 @@ func (c *Config) Validate() error {
 	// default"; a negative would otherwise silently fall through to it.
 	if c.MaxTextLen < 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "max_text_len cannot be negative")
+	}
+
+	// Upper-bound the cap. An unbounded value overflows the offloaded lane's byte
+	// budget (utf8.UTFMax*limit+1) into a negative io.LimitReader bound — an empty body
+	// that hop 2 reads as "no source text" and DELETES the pending embedding — and a
+	// merely huge value permits a correspondingly huge io.ReadAll allocation.
+	// MaxSourceTextLenCeiling (1_000_000 characters) is far past any real embedding
+	// input (neural context caps are ~8k) while keeping the worst-case offloaded read
+	// bounded (#628 FIX 2).
+	if c.MaxTextLen > embedding.MaxSourceTextLenCeiling {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("max_text_len exceeds the maximum of %d characters", embedding.MaxSourceTextLenCeiling))
 	}
 
 	// Validate cache TTL (parsed duration must be positive)

@@ -94,10 +94,18 @@ is on `SourceRevision`, made atomic with CAS:
 1. read `(existing, kvRevision)` via a revision-aware get.
 2. `existing == nil` → `ErrRecordGone` (Track 0 drop-not-resurrect, unchanged).
 3. `existing.SourceRevision > sourceRevision` → a newer vector already landed;
-   **drop, return nil** (correct ordering, not a failure).
+   **drop and return `ErrSupersededRevision`** — a distinguishable non-failure
+   sentinel, not bare `nil`, so `saveAndNotify` can tell a superseded drop from a
+   real write and skip the generated callback (firing it would push THIS call's
+   older vector into a `WithOnGenerated` consumer's cache).
 4. else `Update(entityID, newRecord, kvRevision)` — CAS. On `ErrRevisionMismatch`,
    re-read and re-evaluate from step 1 (bounded retries; a loser drops at step 3,
-   so this converges).
+   so this converges). `ErrCASExhausted` is transient/re-drivable — callers must
+   re-drive (the watcher re-delivers), NOT record a generation failure.
+
+`SaveFailed` takes the same shape, plus equal-revision terminal precedence: a
+`StatusGenerated` record at the same source revision is NOT downgraded to failed
+(a success outranks a same-revision failure).
 
 The record now **persists `SourceRevision`** (stop dropping it) so step 3 has
 something to compare. `ContentHash` and `Vector` are set together from the

@@ -41,13 +41,24 @@ because #623's fix (derive the key where the truncated body is in hand) *subsume
 - **Order concurrent writes by revision.** `SaveGenerated`/`SaveFailed` use the KV
   store's revision CAS (`Update` with the read revision, retry on conflict) so a
   late older-revision write cannot overwrite a newer vector, and `ContentHash`
-  cannot desync from `Vector`.
-- **BREAKING (state, not API):** `EMBEDDING_DEDUP` keys change shape again (the cap
-  and, for the offloaded lane, real content now participate). Existing entries stop
-  matching; the first pass re-embeds. `EMBEDDING_DEDUP` is untimed by design (it is
-  not the live index, so it correctly carries no TTL), so old-shape keys never
-  match *and* never expire — they must be **wiped and reseeded**, not left to age
-  out. This is a pre-v1 state wipe consistent with Track 0's dedup-key break.
+  cannot desync from `Vector`. A superseded write returns a distinguishable
+  `ErrSupersededRevision` sentinel (not bare `nil`), so the caller can suppress the
+  generated callback rather than push a stale vector into a `WithOnGenerated`
+  consumer's cache.
+- **BREAKING — Go API (`graph/embedding` package):** `Storage.SaveGenerated` gains
+  `contentHash` and `sourceRevision` parameters (5→7 args) and `Storage.SaveFailed`
+  gains `sourceRevision` (3→4 args); both may now return `ErrSupersededRevision`.
+  These are exported methods, so a direct module consumer must update call sites —
+  migration: thread the hop-2 dedup key and the pending record's source revision
+  through, and treat `ErrSupersededRevision`/`ErrRecordGone` as non-failure drops.
+  No in-repo external caller exists (all callers live inside `graph/embedding/`),
+  and this is pre-v1, so the signatures change rather than carry a compat shim.
+- **BREAKING — state:** `EMBEDDING_DEDUP` keys change shape again (the cap and, for
+  the offloaded lane, real content now participate). Existing entries stop matching;
+  the first pass re-embeds. `EMBEDDING_DEDUP` is untimed by design (it is not the
+  live index, so it correctly carries no TTL), so old-shape keys never match *and*
+  never expire — they must be **wiped and reseeded**, not left to age out. A pre-v1
+  state wipe consistent with Track 0's dedup-key break.
 
 ## Capabilities
 
