@@ -9,22 +9,28 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Start Epic A increment 3: `#601` (offloaded entities never embed their title;
-> `text_suffixes` inert for them).** It sits on the offloaded lane increment 1
-> reworked — the next mechanical increment. Still open in Epic A but NOT
-> next-mechanical: **#613** (readiness attests "we stopped trying," not "vectors
-> exist" — an ADR-084-frame owner call), **#619** (BM25 tier redesign — owner
-> decision), **#599** (e2e coverage gap for fusion Fuse/batch/unhydrated —
-> test-debt). **#633** (reference-aware orphaned-blob GC, ADR-068 increment 6) is
-> the deferred follow-up from increment 2 — its own ADR-scale increment.
+> **Epic A's mechanical increments (1–3) are DONE. Next is an OWNER DECISION, not
+> a mechanical increment.** The remaining Epic A items are all owner-call or
+> test-debt: **#613** (readiness attests "we stopped trying," not "vectors exist" —
+> an ADR-084-frame owner call), **#619** (BM25 tier redesign — owner decision),
+> **#599** (fusion Fuse/batch/unhydrated e2e coverage gap — test-debt), and
+> **#633** (reference-aware orphaned-blob GC, ADR-068 increment 6 — the deferred
+> ADR-scale follow-up from increment 2). Pick one, or declare Epic A's mechanical
+> work complete and move to the next epic.
 >
-> Increment 2 (#600 + #616, the literal "evidence silently expires" case) is
-> **MERGED** — PR #632, `d6addd5b`, 2026-07-22; OpenSpec change archived,
-> `graph-retention` + `fusion` specs now carry the new requirements (content-store
-> retention has no lifecycle eviction, boot-guarded; fusion reports body-hydration
-> failure per node). The CONTENT 24h TTL is removed and boot-guarded; orphan-blob
-> GC deferred to #633. Increment 1 (#623 + #602 + #614 part 2) MERGED — PR #628,
-> `a6ea9979`, 2026-07-22; `graph-embedding` spec carries its 3 requirements.
+> In flight: **#636** (retrospective fixes to #632 — the fail-closed retention
+> guard was correct in the constructor but swallowed/downgraded by every consumer;
+> now propagates `IsFatal`, plus nil-BodyResolver reporting and a loud metric-
+> registration signal). A follow-up, not an increment.
+>
+> Increment 3 (#601, offloaded entities never embed their title) is **MERGED** — PR
+> #635, `fe329a5e`, 2026-07-22; OpenSpec change archived, `graph-embedding` spec
+> carries the offloaded-identity requirement (`text_suffixes` now takes effect on
+> offloaded entities via identity-first concatenation; embed-both deferred as a
+> measured follow-up). Increment 2 (#600 + #616) MERGED — PR #632, `d6addd5b`;
+> `graph-retention` + `fusion` specs carry the retention + body-hydration
+> requirements. Increment 1 (#623 + #602 + #614 part 2) MERGED — PR #628,
+> `a6ea9979`.
 
 ---
 
