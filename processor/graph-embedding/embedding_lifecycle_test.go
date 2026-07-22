@@ -72,14 +72,14 @@ func TestEntityTombstoneDeletesEmbedding(t *testing.T) {
 	// asserting that here keeps this test from re-encoding the bug as expected
 	// behaviour. See graph/embedding.ErrRecordGone and the tombstone-race coverage
 	// in graph/embedding/storage_record_gone_test.go.
-	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384); !errors.Is(err, embedding.ErrRecordGone) {
+	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41); !errors.Is(err, embedding.ErrRecordGone) {
 		t.Fatalf("SaveGenerated with no pending record = %v, want ErrRecordGone (it must not panic or resurrect)", err)
 	}
 
 	if err := c.storage.SavePending(ctx, entityID, "hash-1", "some text", 41); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
-	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384); err != nil {
+	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41); err != nil {
 		t.Fatalf("seed embedding: %v", err)
 	}
 	if rec, err := c.storage.GetEmbedding(ctx, entityID); err != nil || rec == nil {
@@ -126,81 +126,51 @@ func TestEntityTombstoneCompletesWatermarkWhenDeleteFails(t *testing.T) {
 	}
 }
 
-// TestQueueEntityForEmbedding_DedupKeyCarriesEmbedderIdentity guards gh#612 at
-// the production call site: the pending record's content hash must change when
-// the embedder identity changes, even for byte-identical text.
+// TestQueueEntityForEmbedding_WritesEmptyContentHash pins the hop-2 key move (#623)
+// at the production call site: hop 1 writes a pending record with an EMPTY
+// ContentHash — a reference, not a key — because hop 2 now derives the dedup key
+// over the resolved and truncated bytes it embeds.
 //
-// Without it, an operator moving from configs/statistical.json (bm25) to
-// configs/semantic.json (http) against the same NATS state got every
-// already-embedded entity's BM25 vector back from EMBEDDING_DEDUP, stored in
-// EMBEDDING_INDEX under the neural model's name.
-func TestQueueEntityForEmbedding_DedupKeyCarriesEmbedderIdentity(t *testing.T) {
+// The embedder-identity distinction that gh#612 requires (a bm25 -> http switch must
+// not serve a stale vector) is now enforced by DedupKey, which hop 2 applies over the
+// embedded text; it is covered in graph/embedding/dedup_key_test.go. Hop 1 no longer
+// carries it, so asserting a non-empty identity-bearing key here would re-encode the
+// split-across-hops design that #623 removed.
+func TestQueueEntityForEmbedding_WritesEmptyContentHash(t *testing.T) {
 	t.Parallel()
 
 	const entityID = "acme.ops.robotics.gcs.drone.003"
 	entity := []byte(`{"id":"` + entityID + `","triples":[{"subject":"` + entityID +
 		`","predicate":"drone.mission.description","object":"survey the north field at low altitude"}]}`)
 
-	hashFor := func(t *testing.T, embedderType string, embedder embedding.Embedder) string {
-		t.Helper()
-		index := newMockKVBucket()
-		c := &Component{
-			logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-			lifecycleReporter: component.NewNoOpLifecycleReporter(),
-			storage:           embedding.NewStorage(index, newMockKVBucket()),
-			watermark:         revlag.New(),
-			embedder:          embedder,
-			config:            Config{EmbedderType: embedderType},
-		}
-
-		c.queueEntityForEmbedding(context.Background(), entityID, 1, entity)
-
-		entry, err := index.Get(context.Background(), entityID)
-		if err != nil {
-			t.Fatalf("no pending record written for %s: %v", entityID, err)
-		}
-		var rec embedding.Record
-		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
-			t.Fatalf("decode pending record: %v", err)
-		}
-		if rec.ContentHash == "" {
-			t.Fatal("inline lane wrote an empty dedup key; dedup would be disabled")
-		}
-		return rec.ContentHash
+	index := newMockKVBucket()
+	c := &Component{
+		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		lifecycleReporter: component.NewNoOpLifecycleReporter(),
+		storage:           embedding.NewStorage(index, newMockKVBucket()),
+		watermark:         revlag.New(),
+		embedder:          embedding.NewBM25Embedder(embedding.BM25Config{Dimensions: 384, K1: 1.5, B: 0.75}),
+		config:            Config{EmbedderType: "bm25"},
 	}
 
-	bm25 := embedding.NewBM25Embedder(embedding.BM25Config{Dimensions: 384, K1: 1.5, B: 0.75})
-	bm25Hash := hashFor(t, "bm25", bm25)
+	c.queueEntityForEmbedding(context.Background(), entityID, 1, entity)
 
-	// Same 384 dimensions as the BM25 default — the case where a stale hit
-	// produces a real-looking cosine score across unrelated vector spaces.
-	neuralHash := hashFor(t, "http", stubEmbedder{model: "all-MiniLM-L6-v2", dims: 384})
-
-	if bm25Hash == neuralHash {
-		t.Fatalf("dedup key is identical (%s) across bm25 and http embedders; "+
-			"an embedder_type switch would serve stale vectors", bm25Hash)
+	entry, err := index.Get(context.Background(), entityID)
+	if err != nil {
+		t.Fatalf("no pending record written for %s: %v", entityID, err)
+	}
+	var rec embedding.Record
+	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+		t.Fatalf("decode pending record: %v", err)
 	}
 
-	// Same identity twice must be stable, or dedup stops working entirely.
-	if again := hashFor(t, "bm25", bm25); again != bm25Hash {
-		t.Fatalf("dedup key unstable under identical identity: %s then %s", bm25Hash, again)
+	if rec.ContentHash != "" {
+		t.Fatalf("hop-1 wrote ContentHash %q, want empty: hop-2 derives the dedup key over the embedded bytes now (#623)", rec.ContentHash)
+	}
+	if rec.SourceText == "" {
+		t.Fatal("hop-1 must still carry the source text for hop-2 to embed")
+	}
+	if rec.SourceRevision != 1 {
+		t.Fatalf("SourceRevision = %d, want 1 (threaded for the ADR-066 readiness watermark)", rec.SourceRevision)
 	}
 }
-
-// stubEmbedder stands in for the HTTP embedder, which cannot be constructed
-// without an endpoint. Only Model and Dimensions are consulted by the dedup key.
-type stubEmbedder struct {
-	model string
-	dims  int
-}
-
-func (s stubEmbedder) Generate(context.Context, []string) ([][]float32, error) {
-	return nil, errors.New("stubEmbedder: Generate not implemented")
-}
-
-func (s stubEmbedder) GenerateQuery(context.Context, []string) ([][]float32, error) {
-	return nil, errors.New("stubEmbedder: GenerateQuery not implemented")
-}
-func (s stubEmbedder) Dimensions() int { return s.dims }
-func (s stubEmbedder) Model() string   { return s.model }
-func (s stubEmbedder) Close() error    { return nil }

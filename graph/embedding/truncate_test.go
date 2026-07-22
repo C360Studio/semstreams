@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestTruncateAtWord(t *testing.T) {
@@ -178,11 +179,20 @@ func TestFetchTextFromStorage_StreamsLimitedBytes(t *testing.T) {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
 
-	if len(text) > 100 {
-		t.Errorf("expected max 100 bytes, got %d", len(text))
+	// The offloaded lane now truncates through the shared rune-safe routine, so it
+	// honors the word boundary (the old byte-cut returned exactly 100). The cap is in
+	// CHARACTERS, so at most 100 runes, and never more than the cap.
+	if got := utf8.RuneCountInString(text); got > 100 {
+		t.Errorf("expected at most 100 runes, got %d", got)
 	}
-	if len(text) != 100 {
-		t.Errorf("expected exactly 100 bytes (content is longer), got %d", len(text))
+	// It must not have loaded the whole 10000-char body into memory.
+	if len(text) >= 10000 {
+		t.Errorf("read the entire body (%d bytes); the read must be bounded", len(text))
+	}
+	// This ASCII body repeats "safety content here " (20 chars), so the 100-rune cut
+	// lands on the trailing space at index 99 and the word boundary drops it → 99 chars.
+	if want := strings.TrimRight(strings.Repeat("safety content here ", 5), " "); text != want {
+		t.Errorf("expected word-boundary truncation %q, got %q", want, text)
 	}
 	if store.openCalls != 1 {
 		t.Errorf("expected 1 Open() call, got %d", store.openCalls)

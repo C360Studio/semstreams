@@ -47,6 +47,16 @@ type embeddingMetrics struct {
 	// without a store-read port now embed bodies they previously excluded). Rising
 	// value = the inclusion happening, not merely content_unresolved falling.
 	contentResolved prometheus.Counter
+	// dedupSkipped counts embeddings generated on a condition where the durable dedup
+	// bucket was NOT consulted (currently: an embedder whose vector width is
+	// unresolved, so no content-addressed key exists). Labelled by reason so the
+	// avoided-reuse cost is visible rather than inferred (#623) — the offloaded-lane
+	// re-embed cost Track 0 measured, and, post-fix, its recovery toward zero.
+	dedupSkipped *prometheus.CounterVec
+	// textTruncated counts source-text truncations at the effective cap before
+	// embedding. The cap is part of what the vector depends on, so truncation is
+	// reported rather than silent, making the bytes actually embedded discoverable (#602).
+	textTruncated prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -163,6 +173,20 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Name:      "status_publish_failures_total",
 				Help:      "Readiness heartbeat writes to the GRAPH_STATUS KV key that failed (ADR-083): consumers go status_unknown and fail closed while this rises",
 			}),
+
+			dedupSkipped: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "dedup_skipped_total",
+				Help:      "Embeddings generated without consulting the dedup bucket (e.g. embedder vector width unresolved), by reason; makes the avoided-reuse cost visible rather than inferred (#623)",
+			}, []string{"reason"}),
+
+			textTruncated: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_embedding",
+				Name:      "text_truncated_total",
+				Help:      "Source texts truncated at the effective cap before embedding; the cap is part of the vector's identity, so truncation is reported, not silent (#602)",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -182,6 +206,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterGauge("graph-embedding", "target_revision", metrics.targetRevision)
 			_ = registry.RegisterGaugeVec("graph-embedding", "readiness_state", metrics.readinessState)
 			_ = registry.RegisterCounter("graph-embedding", "status_publish_failures_total", metrics.statusPublishFailures)
+			_ = registry.RegisterCounterVec("graph-embedding", "dedup_skipped_total", metrics.dedupSkipped)
+			_ = registry.RegisterCounter("graph-embedding", "text_truncated_total", metrics.textTruncated)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.embedderType)
@@ -199,6 +225,8 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.targetRevision)
 			_ = prometheus.DefaultRegisterer.Register(metrics.readinessState)
 			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
+			_ = prometheus.DefaultRegisterer.Register(metrics.dedupSkipped)
+			_ = prometheus.DefaultRegisterer.Register(metrics.textTruncated)
 		}
 	})
 	return metrics
@@ -285,6 +313,17 @@ func (m *embeddingMetrics) recordContentResolved() {
 	m.contentResolved.Inc()
 }
 
+// recordDedupSkipped counts one embedding generated without consulting the dedup
+// bucket, tagged with the reason (#623).
+func (m *embeddingMetrics) recordDedupSkipped(reason string) {
+	m.dedupSkipped.WithLabelValues(reason).Inc()
+}
+
+// recordTextTruncated counts one source-text truncation at the effective cap (#602).
+func (m *embeddingMetrics) recordTextTruncated() {
+	m.textTruncated.Inc()
+}
+
 // setPending sets the pending embeddings gauge.
 func (m *embeddingMetrics) setPending(count float64) {
 	m.embeddingPending.Set(count)
@@ -328,6 +367,20 @@ func (a *workerMetricsAdapter) IncContentResolveError() {
 func (a *workerMetricsAdapter) IncContentResolved() {
 	if a.metrics != nil {
 		a.metrics.recordContentResolved()
+	}
+}
+
+// IncDedupSkipped implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncDedupSkipped(reason string) {
+	if a.metrics != nil {
+		a.metrics.recordDedupSkipped(reason)
+	}
+}
+
+// IncTruncated implements embedding.WorkerMetrics.
+func (a *workerMetricsAdapter) IncTruncated() {
+	if a.metrics != nil {
+		a.metrics.recordTextTruncated()
 	}
 }
 

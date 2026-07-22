@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,7 +20,18 @@ const (
 
 	// EmbeddingDedupBucket stores content-addressed embeddings for deduplication
 	EmbeddingDedupBucket = "EMBEDDING_DEDUP"
+
+	// maxCASRetries bounds the revision compare-and-set loop on the two save lanes.
+	// The SourceRevision ordering guard guarantees a losing writer DROPS at the guard
+	// rather than spinning, so the loop converges quickly under same-entity churn; a
+	// small ceiling is only insurance against pathological contention, never a stall.
+	maxCASRetries = 3
 )
+
+// ErrCASExhausted reports that the revision compare-and-set loop on a save lane did
+// not converge within maxCASRetries. It is transient (a caller may re-drive), and
+// under the SourceRevision ordering guard it should be effectively unreachable.
+var ErrCASExhausted = errors.New("embedding index write did not converge under revision CAS")
 
 // ErrRecordGone reports that the EMBEDDING_INDEX record a save was meant to
 // UPDATE no longer exists, so the save was dropped without writing.
@@ -31,6 +43,16 @@ const (
 // in particular they must not report it as a generation failure or fire the
 // generated callback, which would push a vector for a dead entity into caches.
 var ErrRecordGone = errors.New("embedding index record no longer exists")
+
+// ErrSupersededRevision reports that the save was dropped because a newer source
+// revision's outcome already landed for this entity (the ordering guard, #614
+// part 2). Like ErrRecordGone it is a normal, non-failure outcome: the caller must
+// NOT fire the generated callback, because the vector it holds is the OLDER
+// revision's and firing would push a stale vector into any WithOnGenerated
+// consumer's cache — the same hazard ErrRecordGone guards against, for the same
+// reason. Callers must not report it as a failure either; the newer outcome is
+// authoritative.
+var ErrSupersededRevision = errors.New("embedding index write superseded by a newer source revision")
 
 // Status represents the processing status of an embedding
 type Status string
@@ -56,12 +78,14 @@ type Record struct {
 	Status      Status    `json:"status"`
 	ErrorMsg    string    `json:"error_msg,omitempty"` // If status=failed
 
-	// SourceRevision is the ENTITY_STATES stream revision that produced this pending
-	// record. It is threaded from the hop-1 watcher so hop-2 can complete the
-	// embedding readiness watermark at the terminal transition (ADR-066 §3). Only
-	// meaningful on pending records; SaveGenerated/SaveFailed rebuild the record and
-	// drop it (those records only ever hit hop-2's not-pending skip). 0 means
-	// "unknown" (a legacy record written before this field existed) — the watermark
+	// SourceRevision is the ENTITY_STATES stream revision that produced this record.
+	// It is threaded from the hop-1 watcher so hop-2 can complete the embedding
+	// readiness watermark at the terminal transition (ADR-066 §3), and it is now
+	// PERSISTED onto generated/failed records so SaveGenerated/SaveFailed can order
+	// concurrent writes by it: a record already carrying a higher SourceRevision has
+	// a newer vector, so a late older-revision write is dropped (#614 part 2). 0
+	// means "unknown" (a legacy record written before this field existed) — treated
+	// as oldest, so any real revision wins the ordering guard, and the watermark
 	// completion treats 0 as a no-op.
 	SourceRevision uint64 `json:"source_revision,omitempty"`
 
@@ -199,93 +223,162 @@ func (s *Storage) SavePendingWithStorageRef(
 	return nil
 }
 
-// SaveGenerated saves a generated embedding with metadata
-func (s *Storage) SaveGenerated(ctx context.Context, entityID string, vector []float32, model string, dimensions int) error {
+// SaveGenerated persists a generated embedding under revision compare-and-set,
+// ordered by source revision.
+//
+// contentHash is the hop-2 dedup key of the exact bytes embedded (#623); it is
+// STORED as the record's content hash rather than copied from the pending record,
+// which since the hop-2 key move carries an empty hash. sourceRevision is the
+// ENTITY_STATES revision this generation is completing. ContentHash and Vector are
+// both taken from the passed arguments — never from `existing` — so they can never
+// desync across revisions (#614 part 2).
+//
+// The read of `existing` no longer exists to copy a field forward; it exists ONLY
+// for the CAS revision and the ordering guard.
+func (s *Storage) SaveGenerated(
+	ctx context.Context,
+	entityID string,
+	vector []float32,
+	model string,
+	dimensions int,
+	contentHash string,
+	sourceRevision uint64,
+) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveGenerated", "entity_id is empty")
 	}
 
-	// Get existing record to preserve content_hash
-	existing, err := s.GetEmbedding(ctx, entityID)
-	if err != nil {
-		return errs.WrapTransient(err, "Storage", "SaveGenerated", "get existing record")
-	}
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		existing, revision, err := s.getEmbeddingWithRevision(ctx, entityID)
+		if err != nil {
+			return errs.WrapTransient(err, "Storage", "SaveGenerated", "get existing record")
+		}
 
-	// The record vanished while the vector was being generated. DROP the write;
-	// do not resurrect the key.
-	//
-	// SaveGenerated is an UPDATE lane — it exists to carry the pending record's
-	// ContentHash forward — and both ways the key can disappear mean "this entity
-	// must not have a vector right now": the entity was tombstoned in ENTITY_STATES
-	// (hop-1 DeleteEmbedding, gh#614), or the no-source-text path deleted its
-	// pending record. Writing here would re-create exactly the dangling vector
-	// gh#614 removes: semantic search keeps returning an entity ID that graph-query
-	// can no longer resolve, and nothing deletes it a second time because the
-	// tombstone has already fired.
-	//
-	// Dropping fails in the recoverable direction instead. If the entity returns,
-	// hop-1 writes a fresh pending record and hop-2 regenerates from it; the only
-	// cost is one re-embed. A resurrected vector has no such self-correction.
-	if existing == nil {
-		return ErrRecordGone
-	}
+		// The record vanished while the vector was being generated. DROP the write;
+		// do not resurrect the key.
+		//
+		// Both ways the key can disappear mean "this entity must not have a vector
+		// right now": the entity was tombstoned in ENTITY_STATES (hop-1
+		// DeleteEmbedding, gh#614), or the no-source-text path deleted its pending
+		// record. Writing here would re-create exactly the dangling vector gh#614
+		// removes: semantic search keeps returning an entity ID that graph-query can
+		// no longer resolve, and nothing deletes it a second time because the tombstone
+		// has already fired. Dropping fails in the recoverable direction — if the
+		// entity returns, hop-1 writes a fresh pending record and hop-2 regenerates.
+		if existing == nil {
+			return ErrRecordGone
+		}
 
-	record := &Record{
-		EntityID:    entityID,
-		Vector:      vector,
-		ContentHash: existing.ContentHash, // Preserve from pending record
-		Model:       model,
-		Dimensions:  dimensions,
-		GeneratedAt: time.Now(),
-		Status:      StatusGenerated,
-	}
+		// A newer source revision's vector already landed. This is SEMANTIC ORDERING,
+		// not lost-update: plain revision CAS would let a stale write win the race if
+		// it merely read first, so the guard is on SourceRevision. Drop — the correct
+		// outcome, not a failure — but return ErrSupersededRevision, not bare nil, so
+		// saveAndNotify can tell a superseded drop from a real write and skip the
+		// generated callback (firing it would cache THIS call's older vector).
+		// (Legacy records carry SourceRevision 0, treated as oldest, so any real
+		// revision wins.)
+		if existing.SourceRevision > sourceRevision {
+			return ErrSupersededRevision
+		}
 
-	data, err := json.Marshal(record)
-	if err != nil {
-		return errs.WrapInvalid(err, "Storage", "SaveGenerated", "marshal embedding record")
-	}
+		record := &Record{
+			EntityID:       entityID,
+			Vector:         vector,
+			ContentHash:    contentHash,
+			Model:          model,
+			Dimensions:     dimensions,
+			GeneratedAt:    time.Now(),
+			Status:         StatusGenerated,
+			SourceRevision: sourceRevision,
+		}
+		data, err := json.Marshal(record)
+		if err != nil {
+			return errs.WrapInvalid(err, "Storage", "SaveGenerated", "marshal embedding record")
+		}
 
-	if _, err := s.indexBucket.Put(ctx, entityID, data); err != nil {
-		return errs.WrapTransient(err, "Storage", "SaveGenerated", "put generated embedding")
+		if _, err := s.indexBucket.Update(ctx, entityID, data, revision); err != nil {
+			if isRevisionMismatch(err) {
+				continue // a concurrent writer moved the key; re-read and re-evaluate
+			}
+			return errs.WrapTransient(err, "Storage", "SaveGenerated", "update generated embedding")
+		}
+		return nil
 	}
-
-	return nil
+	return errs.WrapTransient(ErrCASExhausted, "Storage", "SaveGenerated", "revision CAS did not converge")
 }
 
-// SaveFailed marks an embedding as failed with error message
-func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string) error {
+// SaveFailed marks an embedding as failed under the same revision CAS and ordering
+// guard as SaveGenerated, so a stale failure cannot clobber a newer success and the
+// failed record persists its own source revision for later ordering.
+func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string, sourceRevision uint64) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveFailed", "entity_id is empty")
 	}
 
-	// Get existing record to preserve metadata
-	existing, err := s.GetEmbedding(ctx, entityID)
-	if err != nil {
-		return errs.WrapTransient(err, "Storage", "SaveFailed", "get existing record")
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		existing, revision, err := s.getEmbeddingWithRevision(ctx, entityID)
+		if err != nil {
+			return errs.WrapTransient(err, "Storage", "SaveFailed", "get existing record")
+		}
+
+		// Nothing to mark: the record is already gone. A missing key means the entity
+		// was tombstoned (or its pending record deleted) while generation was in
+		// flight. Creating a failed record here would leave a permanent
+		// EMBEDDING_INDEX entry for an entity that no longer exists.
+		if existing == nil {
+			return ErrRecordGone
+		}
+
+		// A newer outcome already landed for this entity; do not overwrite it with an
+		// older revision's failure. Return ErrSupersededRevision (not nil) so markFailed
+		// does not count a failure for a revision the newer outcome already resolved.
+		if existing.SourceRevision > sourceRevision {
+			return ErrSupersededRevision
+		}
+
+		// Equal-revision terminal precedence: a GENERATED outcome wins over a failure at
+		// the SAME revision. Without this, a duplicate/racing SaveFailed(R) after
+		// SaveGenerated(R) already produced a StatusGenerated record would flip that good
+		// vector to StatusFailed — the strict `>` guard above does not fire at equal R.
+		// Treat it as already-resolved (the same non-failure sentinel markFailed does not
+		// count), so a generated vector at R is immutable to a same-revision failure.
+		if existing.Status == StatusGenerated && existing.SourceRevision == sourceRevision {
+			return ErrSupersededRevision
+		}
+
+		existing.Status = StatusFailed
+		existing.ErrorMsg = errorMsg
+		existing.SourceRevision = sourceRevision
+
+		data, err := json.Marshal(existing)
+		if err != nil {
+			return errs.WrapInvalid(err, "Storage", "SaveFailed", "marshal embedding record")
+		}
+
+		if _, err := s.indexBucket.Update(ctx, entityID, data, revision); err != nil {
+			if isRevisionMismatch(err) {
+				continue
+			}
+			return errs.WrapTransient(err, "Storage", "SaveFailed", "update failed embedding")
+		}
+		return nil
 	}
+	return errs.WrapTransient(ErrCASExhausted, "Storage", "SaveFailed", "revision CAS did not converge")
+}
 
-	// Nothing to mark: the record is already gone. SaveFailed only ever annotates an
-	// existing record, so a missing key means the entity was tombstoned (or its
-	// pending record deleted) while generation was in flight. Creating a failed
-	// record here would leave a permanent EMBEDDING_INDEX entry for an entity that
-	// no longer exists — the tombstone that would have cleaned it up already ran.
-	if existing == nil {
-		return ErrRecordGone
+// isRevisionMismatch reports whether a KV Update error is a compare-and-set
+// conflict (the key's last sequence moved since it was read). NATS returns the
+// wrong-last-sequence API error (code 10071, surfaced as jetstream.ErrKeyExists);
+// the string fallbacks cover wrappers that carry only the message.
+func isRevisionMismatch(err error) bool {
+	if err == nil {
+		return false
 	}
-
-	existing.Status = StatusFailed
-	existing.ErrorMsg = errorMsg
-
-	data, err := json.Marshal(existing)
-	if err != nil {
-		return errs.WrapInvalid(err, "Storage", "SaveFailed", "marshal embedding record")
+	if errors.Is(err, jetstream.ErrKeyExists) {
+		return true
 	}
-
-	if _, err := s.indexBucket.Put(ctx, entityID, data); err != nil {
-		return errs.WrapTransient(err, "Storage", "SaveFailed", "put failed embedding")
-	}
-
-	return nil
+	msg := err.Error()
+	return strings.Contains(msg, "wrong last sequence") || strings.Contains(msg, "10071")
 }
 
 // GetEmbedding retrieves an embedding by entity ID
@@ -308,6 +401,31 @@ func (s *Storage) GetEmbedding(ctx context.Context, entityID string) (*Record, e
 	}
 
 	return &record, nil
+}
+
+// getEmbeddingWithRevision is the revision-aware sibling of GetEmbedding: it returns
+// the record AND the KV revision it was read at, so the two save lanes can Update
+// under compare-and-set. A missing key is (nil, 0, nil) — not found is not an error,
+// and the caller treats nil as ErrRecordGone.
+func (s *Storage) getEmbeddingWithRevision(ctx context.Context, entityID string) (*Record, uint64, error) {
+	if entityID == "" {
+		return nil, 0, errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "getEmbeddingWithRevision", "entity_id is empty")
+	}
+
+	entry, err := s.indexBucket.Get(ctx, entityID)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrKeyNotFound) {
+			return nil, 0, nil
+		}
+		return nil, 0, errs.WrapTransient(err, "Storage", "getEmbeddingWithRevision", "get embedding")
+	}
+
+	var record Record
+	if err := json.Unmarshal(entry.Value(), &record); err != nil {
+		return nil, 0, errs.WrapInvalid(err, "Storage", "getEmbeddingWithRevision", "unmarshal embedding record")
+	}
+
+	return &record, entry.Revision(), nil
 }
 
 // GetByContentHash retrieves an embedding by content hash (for deduplication)

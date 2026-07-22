@@ -19,11 +19,12 @@ var errNotImplemented = errors.New("memKV: not implemented")
 type memKV struct {
 	mu   sync.Mutex
 	data map[string][]byte
+	revs map[string]uint64 // per-key last-write revision, for CAS via Update
 	rev  uint64
 }
 
 func newMemKV() *memKV {
-	return &memKV{data: make(map[string][]byte)}
+	return &memKV{data: make(map[string][]byte), revs: make(map[string]uint64)}
 }
 
 type memKVEntry struct {
@@ -48,6 +49,7 @@ func (m *memKV) Put(_ context.Context, key string, value []byte) (uint64, error)
 	stored := make([]byte, len(value))
 	copy(stored, value)
 	m.data[key] = stored
+	m.revs[key] = m.rev
 	return m.rev, nil
 }
 
@@ -58,13 +60,16 @@ func (m *memKV) Get(_ context.Context, key string) (jetstream.KeyValueEntry, err
 	if !ok {
 		return nil, jetstream.ErrKeyNotFound
 	}
-	return &memKVEntry{key: key, value: v, rev: m.rev, op: jetstream.KeyValuePut}, nil
+	// Return the PER-KEY revision, mirroring a real jetstream KV where entry
+	// revisions are the key's last-write sequence — the value CAS compares against.
+	return &memKVEntry{key: key, value: v, rev: m.revs[key], op: jetstream.KeyValuePut}, nil
 }
 
 func (m *memKV) Delete(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.data, key)
+	delete(m.revs, key)
 	m.rev++
 	return nil
 }
@@ -95,8 +100,23 @@ func (m *memKV) Create(_ context.Context, _ string, _ []byte, _ ...jetstream.KVC
 	return 0, errNotImplemented
 }
 
-func (m *memKV) Update(_ context.Context, _ string, _ []byte, _ uint64) (uint64, error) {
-	return 0, errNotImplemented
+// Update implements revision compare-and-set: it succeeds only if the key's current
+// per-key revision matches the caller's expected revision, mirroring a real
+// jetstream KV. A missing key or a moved revision returns jetstream.ErrKeyExists
+// (the wrong-last-sequence sentinel, code 10071), which isRevisionMismatch matches.
+func (m *memKV) Update(_ context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	cur, ok := m.revs[key]
+	if !ok || cur != revision {
+		return 0, jetstream.ErrKeyExists
+	}
+	m.rev++
+	stored := make([]byte, len(value))
+	copy(stored, value)
+	m.data[key] = stored
+	m.revs[key] = m.rev
+	return m.rev, nil
 }
 
 func (m *memKV) Watch(_ context.Context, _ string, _ ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {

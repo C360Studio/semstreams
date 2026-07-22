@@ -14,6 +14,30 @@ now gate on HEALTH and serve under ordinary lag. What survives unchanged is the
 false-negative guard's motivation and the envelope's numeric fields, which are now the
 load-bearing part. Read the `graph-index-readiness` spec for current behavior.
 
+**Two mechanism statements below are now stale — 2026-07-21 (embedding-evidence-integrity, #628).**
+The readiness *contract* is unchanged; two implementation details this ADR narrates are not:
+
+1. **`SaveGenerated`/`SaveFailed` now PERSIST `Record.SourceRevision`, they do not drop
+   it.** The body below says generated records "drop `SourceRevision` — fine, those
+   records only ever hit the not-pending skip." #614 part 2 made the revision
+   load-bearing: hop-2 writes are ordered by `SourceRevision` under KV revision CAS
+   (`Update` with the read revision, retry on mismatch), and a superseded write returns
+   `ErrSupersededRevision`. So a late older-revision generation can no longer overwrite a
+   newer vector, and `ContentHash` cannot desync from `Vector`.
+
+2. **The terminal callback is no longer an inner `defer` that fires during panic
+   unwinding.** Track 0's worker-resilience fix moved `recover()` inside the per-entry
+   loop and fires the terminal callback only on a normal return, so a panicking record
+   stays honestly pending rather than falsely advancing the watermark.
+
+On the **same-key-churn + ordered-consumer-reset stranding hazard** the body records:
+its premise was that a `generated` record drops the superseded pending's revision.
+Persisting the revision plus CAS ordering means an out-of-order write can no longer win,
+but the *delivery-loss* half (a newer pending's delivery lost to a reset) is orthogonal
+to write-ordering and is **not** claimed closed by #628 — it still self-heals on the
+key's next write (`Complete(K, newRev)` drains it as `≤`), exactly as noted. The
+completions-based stuck detector and the gh#431 bulk path are unaffected.
+
 **Accepted** (2026-07-03, GH #431). Cross-repo (semstreams owns the
 index/embedding signals, semsource owns the `graph.query.status` aggregate).
 Implementation follows the Migration path below on
