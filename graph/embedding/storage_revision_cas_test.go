@@ -187,7 +187,7 @@ func TestSaveFailed_DoesNotClobberNewerSuccess(t *testing.T) {
 		t.Fatalf("SaveGenerated(rev 6): %v", err)
 	}
 	// Older revision (5) fails and completes late; it must be dropped.
-	if err := s.SaveFailed(ctx, entityID, "generation failed for old revision", 5); !errors.Is(err, ErrSupersededRevision) {
+	if err := s.SaveFailed(ctx, entityID, "generation failed for old revision", "embedder_error", 5); !errors.Is(err, ErrSupersededRevision) {
 		t.Fatalf("SaveFailed(rev 5) = %v, want ErrSupersededRevision (older failure dropped as superseded)", err)
 	}
 
@@ -217,7 +217,7 @@ func TestSaveGenerated_VanishedRecordStillErrRecordGone(t *testing.T) {
 	if index.has(entityID) {
 		t.Fatal("SaveGenerated resurrected a vanished record under CAS")
 	}
-	if err := s.SaveFailed(ctx, entityID, "boom", 1); !errors.Is(err, ErrRecordGone) {
+	if err := s.SaveFailed(ctx, entityID, "boom", "internal", 1); !errors.Is(err, ErrRecordGone) {
 		t.Fatalf("SaveFailed on a vanished record = %v, want ErrRecordGone", err)
 	}
 	if index.has(entityID) {

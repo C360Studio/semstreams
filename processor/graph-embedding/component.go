@@ -27,7 +27,18 @@ import (
 	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+// failureInfo is the per-entity value of the current-failed map (#613): the bounded
+// reason of the entity's current failed embedding and the time it was first observed
+// failed in this process lifetime. reason feeds the envelope's failed_reasons histogram;
+// at feeds first_failure_at (the minimum across the map). On a re-failure the reason is
+// updated but at is preserved, so first_failure_at stays the earliest.
+type failureInfo struct {
+	reason string
+	at     time.Time
+}
 
 // Ensure Component implements required interfaces
 var (
@@ -295,6 +306,19 @@ type Component struct {
 	// Prometheus metrics
 	metrics *embeddingMetrics
 
+	// Current-failed tracking (#613). failed maps entityID → the reason and first-seen
+	// time of its CURRENT failed embedding; FailedCount = len(failed). A terminal Failed
+	// outcome adds; every other terminal outcome removes. It is seeded at Start from the
+	// durable EMBEDDING_INDEX and mutated on every terminal via completeEmbedding, so it
+	// mirrors durable failed records net of regeneration/deletion. failedGauge and
+	// failuresVec are PER-REGISTRY (register-or-get, no process-global singleton): the
+	// gauge tracks len(failed); failuresVec is the reason-labelled cumulative counter the
+	// worker increments through its metrics adapter.
+	failedMu    sync.Mutex
+	failed      map[string]failureInfo
+	failedGauge prometheus.Gauge
+	failuresVec *prometheus.CounterVec
+
 	// Lifecycle reporting
 	lifecycleReporter component.LifecycleReporter
 
@@ -384,6 +408,11 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 		modelRegistry: deps.ModelRegistry,
 		metrics:       getMetrics(deps.MetricsRegistry),
 		storeRegistry: deps.StoreRegistry, // ADR-063 shared resolver (may be nil)
+		// Current-failed metrics resolved PER-REGISTRY (register-or-get), not through the
+		// process-global getMetrics singleton (#613).
+		failed:      make(map[string]failureInfo),
+		failedGauge: resolveEmbeddingFailedGauge(deps.MetricsRegistry),
+		failuresVec: resolveEmbeddingFailuresVec(deps.MetricsRegistry),
 	}
 
 	// Initialize last activity
@@ -888,6 +917,12 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedupBucket jetstream.KeyValue) error {
 	c.storage = embedding.NewStorage(indexBucket, dedupBucket)
 
+	// Seed the current-failed map from the durable EMBEDDING_INDEX BEFORE the worker
+	// starts, so FailedCount (and the degraded verdict) is accurate immediately rather
+	// than depending on re-delivery timing (#613). Best-effort: a scan error leaves the
+	// map empty and is corrected by live terminals, so it must not fail Start.
+	c.seedFailedMap(ctx)
+
 	// Start the in-memory vector cache before the worker so it is warm as
 	// quickly as possible. Errors here are non-fatal: similarity queries
 	// fall back to the KV scan path until the watcher is ready.
@@ -900,17 +935,18 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 		WithWorkers(c.config.Workers).
 		WithMaxSourceTextLen(c.maxSourceTextLen()).
 		WithEmbedderType(c.config.EmbedderType).
-		WithMetrics(newWorkerMetricsAdapter(c.metrics)).
+		WithMetrics(newWorkerMetricsAdapter(c.metrics, c.failuresVec)).
 		WithOnGenerated(func(entityID string, _ []float32) {
 			if c.metrics != nil {
 				c.metrics.recordEmbeddingGenerated()
 			}
 			c.logger.Debug("embedding generated", "entity_id", entityID)
 		}).
-		WithOnTerminal(func(entityID string, sourceRevision uint64) {
-			// hop-2 reached a terminal (generated / failed / no-text skip). Complete
-			// the hop-1 readiness watermark for this entity (ADR-066 §3).
-			c.completeEmbedding(entityID, sourceRevision)
+		WithOnTerminal(func(entityID string, sourceRevision uint64, outcome embedding.TerminalOutcome, reason string) {
+			// hop-2 reached a terminal (generated / failed / no-text skip). Complete the
+			// hop-1 readiness watermark for this entity (ADR-066 §3) and route the
+			// current-failed map by outcome (#613).
+			c.completeEmbedding(entityID, sourceRevision, outcome, reason)
 		})
 
 	// Wire the shared store resolver (ADR-063) as the PRIMARY content-fetch path:
@@ -953,6 +989,101 @@ func (c *Component) maxSourceTextLen() int {
 		return maxSourceTextLenBM25
 	}
 	return maxSourceTextLenNeural
+}
+
+// seedFailedMap populates the current-failed map from the durable EMBEDDING_INDEX at
+// Start (#613), so FailedCount is accurate immediately after bootstrap. Best-effort: a
+// scan error is logged and leaves the map as-is (live terminals will populate it), never
+// failing Start. `at` is set to now for every seeded entry — this process cannot know
+// the original failure time, so first_failure_at reports "at least since this restart",
+// an honest lower bound.
+func (c *Component) seedFailedMap(ctx context.Context) {
+	if c.storage == nil {
+		return
+	}
+	entries, err := c.storage.ScanFailed(ctx)
+	if err != nil {
+		c.logger.Warn("current-failed seed scan failed; FailedCount will populate from live terminals",
+			slog.Any("error", err))
+		return
+	}
+	if len(entries) == 0 {
+		return
+	}
+	now := time.Now()
+	c.failedMu.Lock()
+	if c.failed == nil {
+		c.failed = make(map[string]failureInfo, len(entries))
+	}
+	for _, e := range entries {
+		c.failed[e.EntityID] = failureInfo{reason: e.Reason, at: now}
+	}
+	n := len(c.failed)
+	c.failedMu.Unlock()
+	c.setFailedGauge(n)
+	c.logger.Info("seeded current-failed map from durable EMBEDDING_INDEX",
+		slog.Int("failed_count", n))
+}
+
+// applyTerminalOutcome routes a terminal outcome into the current-failed map (#613): a
+// Failed outcome adds the entity (preserving the earliest first-failure time on a
+// re-failure, updating the reason), and every other outcome removes it. It updates the
+// per-registry gauge to len(failed) under the same critical section. Nil-map safe for
+// the pre-Start / unit-test path.
+func (c *Component) applyTerminalOutcome(entityID string, outcome embedding.TerminalOutcome, reason string) {
+	c.failedMu.Lock()
+	if c.failed == nil {
+		c.failed = make(map[string]failureInfo)
+	}
+	if outcome == embedding.OutcomeFailed {
+		info := c.failed[entityID] // zero value if absent
+		info.reason = reason
+		if info.at.IsZero() {
+			info.at = time.Now()
+		}
+		c.failed[entityID] = info
+	} else {
+		delete(c.failed, entityID)
+	}
+	// Set the gauge INSIDE the critical section so its ordering matches the map
+	// mutation order — otherwise two concurrent transitions can Set out of order and
+	// leave the gauge transiently stale. Set is a non-blocking atomic store, so holding
+	// the lock across it adds no meaningful contention.
+	c.setFailedGauge(len(c.failed))
+	c.failedMu.Unlock()
+}
+
+// setFailedGauge sets the per-registry failed gauge to n. Nil-safe for the unit-test
+// path where no registry (and hence no gauge) is wired.
+func (c *Component) setFailedGauge(n int) {
+	if c.failedGauge != nil {
+		c.failedGauge.Set(float64(n))
+	}
+}
+
+// failedSnapshot returns the bounded failure detail for the readiness envelope (#613):
+// the current failed count, a reason→count histogram (bounded by the reason enum), and
+// the earliest first-failure time across the map (zero when there are no failures). It
+// takes one lock and copies out, so the compute path never holds the lock across I/O.
+func (c *Component) failedSnapshot() (count uint64, reasons map[string]uint64, firstAt time.Time) {
+	c.failedMu.Lock()
+	defer c.failedMu.Unlock()
+	count = uint64(len(c.failed))
+	if count == 0 {
+		return 0, nil, time.Time{}
+	}
+	reasons = make(map[string]uint64, len(c.failed))
+	for _, info := range c.failed {
+		reason := info.reason
+		if reason == "" {
+			reason = "unknown" // a seeded pre-#613 record with no stored reason
+		}
+		reasons[reason]++
+		if firstAt.IsZero() || info.at.Before(firstAt) {
+			firstAt = info.at
+		}
+	}
+	return count, reasons, firstAt
 }
 
 // createContentStore creates an ObjectStore handle from the store-read port config.
@@ -1291,7 +1422,10 @@ func (c *Component) applyEntityWatchEntry(ctx context.Context, entry jetstream.K
 					slog.Any("error", err))
 			}
 		}
-		c.completeEmbedding(entry.Key(), entry.Revision())
+		// OutcomeDeleted: a tombstoned entity is not a current failure — clear it from the
+		// current-failed map so a previously-failed entity that is deleted stops holding
+		// the producer degraded (#613).
+		c.completeEmbedding(entry.Key(), entry.Revision(), embedding.OutcomeDeleted, "")
 		return
 	}
 
@@ -1348,7 +1482,8 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 			// revision to complete. Max-rev-drain the key rather than strand it:
 			// a transient Get failure would otherwise pin the watermark forever
 			// (ADR-066 §3). Fails toward caught-up; the next update re-observes it.
-			c.completeEmbedding(entityID, ^uint64(0))
+			// OutcomeSkipped: a drain is not a failure.
+			c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeSkipped, "")
 			continue
 		}
 
@@ -1413,7 +1548,8 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// preconditions. indexingEligible always returns true here, so this is a
 	// provable no-op (zero behavior change); it is the seam Phase 3 turns live.
 	if !c.indexingEligible(&entityState) {
-		c.completeEmbedding(entityID, sourceRevision) // terminal: deliberately skipped
+		// terminal: deliberately skipped (OutcomeSkipped — not a failure).
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 
@@ -1446,8 +1582,9 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Debug("no text content found, skipping embedding", slog.String("entity", entityID))
 		// Terminal: telemetry-only / no-text entities never reach hop 2. Completing
 		// here is what makes Target=LastSeq reachable (else embedding.ready deadlocks
-		// on every text-less entity — ADR-066 §3).
-		c.completeEmbedding(entityID, sourceRevision)
+		// on every text-less entity — ADR-066 §3). OutcomeSkipped: no-text is not a
+		// failure, and it clears any prior failed-map entry for this entity.
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 
@@ -1465,7 +1602,9 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Error("failed to queue embedding",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		c.completeEmbedding(entityID, sourceRevision)
+		// OutcomeSkipped: a transient SavePending failure is a watermark drain, not an
+		// embedding failure — it must not enter the current-failed map.
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 
@@ -1555,7 +1694,9 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 		c.logger.Error("failed to queue embedding with storage ref",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		c.completeEmbedding(entityID, sourceRevision)
+		// OutcomeSkipped: a transient SavePending failure is a watermark drain, not an
+		// embedding failure — it must not enter the current-failed map.
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
 		return
 	}
 

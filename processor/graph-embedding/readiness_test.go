@@ -3,7 +3,41 @@ package graphembedding
 import (
 	"testing"
 	"time"
+
+	"github.com/c360studio/semstreams/graph/embedding"
+	"github.com/c360studio/semstreams/pkg/revlag"
 )
+
+// TestCompleteEmbedding_TerminalOutcomesAdvanceWatermark is the deadlock-avoidance
+// regression guard (#613, task 2.3): a FAILED terminal (and a no-text SKIPPED terminal)
+// still advances the low-water watermark, so a permanently-failing or telemetry-only
+// entity never pins readiness. The #613 fix routes health into State, NOT into a
+// watermark hole — this test locks that the watermark behaviour is untouched.
+func TestCompleteEmbedding_TerminalOutcomesAdvanceWatermark(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome embedding.TerminalOutcome
+		reason  string
+	}{
+		{"failed still advances", embedding.OutcomeFailed, "connection_refused"},
+		{"no-text skip still advances", embedding.OutcomeSkipped, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Component{
+				failed:      make(map[string]failureInfo),
+				watermark:   revlag.New(),
+				failedGauge: newEmbeddingFailedGauge(),
+			}
+			// Observe a delivered revision (pending), then reach its terminal outcome.
+			c.watermark.Observe(5, "ent", time.Now())
+			c.completeEmbedding("ent", 5, tc.outcome, tc.reason)
+
+			if got := c.watermark.Indexed(); got < 5 {
+				t.Fatalf("%s: watermark must advance past a terminal outcome (deadlock avoidance), Indexed=%d want >=5", tc.name, got)
+			}
+		})
+	}
+}
 
 // TestTrackEmbeddingProgress_CompletionsBasedStuckDetector pins the key difference
 // from graph-index's detector (ADR-066 §3): stuck is keyed off terminal COMPLETIONS,
@@ -38,11 +72,27 @@ func TestTrackEmbeddingProgress_CompletionsBasedStuckDetector(t *testing.T) {
 	}
 }
 
-// TestCompleteEmbedding_NilWatermarkSafe guards the pre-Start / test path.
+// TestCompleteEmbedding_NilWatermarkSafe guards the pre-Start / test path: the watermark
+// advance is a no-op, but the current-failed map update still runs (a Failed outcome must
+// never be silently dropped because the watermark was not wired yet).
 func TestCompleteEmbedding_NilWatermarkSafe(t *testing.T) {
 	c := &Component{} // no watermark wired
-	c.completeEmbedding("entity", 5)
+	c.completeEmbedding("entity", 5, embedding.OutcomeSkipped, "")
 	if got := c.embeddingCompletions.Load(); got != 0 {
-		t.Fatalf("nil-watermark completion must be a no-op, counter = %d, want 0", got)
+		t.Fatalf("nil-watermark completion must be a no-op for the watermark, counter = %d, want 0", got)
+	}
+
+	// The map update still runs on the nil-watermark path.
+	c.completeEmbedding("failing-entity", 6, embedding.OutcomeFailed, failReasonFor(t))
+	if count, _, _ := c.failedSnapshot(); count != 1 {
+		t.Fatalf("Failed outcome must enter the current-failed map even with a nil watermark, count = %d, want 1", count)
+	}
+	c.completeEmbedding("failing-entity", 7, embedding.OutcomeGenerated, "")
+	if count, _, _ := c.failedSnapshot(); count != 0 {
+		t.Fatalf("a subsequent Generated outcome must clear the entity, count = %d, want 0", count)
 	}
 }
+
+// failReasonFor returns a stable bounded reason for the test without importing the
+// embedding package's unexported constants; "connection_refused" is a member of the enum.
+func failReasonFor(*testing.T) string { return "connection_refused" }

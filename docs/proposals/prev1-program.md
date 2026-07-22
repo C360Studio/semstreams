@@ -9,28 +9,61 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Epic A's mechanical increments (1–3) are DONE. Next is an OWNER DECISION, not
-> a mechanical increment.** The remaining Epic A items are all owner-call or
-> test-debt: **#613** (readiness attests "we stopped trying," not "vectors exist" —
-> an ADR-084-frame owner call), **#619** (BM25 tier redesign — owner decision),
-> **#599** (fusion Fuse/batch/unhydrated e2e coverage gap — test-debt), and
-> **#633** (reference-aware orphaned-blob GC, ADR-068 increment 6 — the deferred
-> ADR-scale follow-up from increment 2). Pick one, or declare Epic A's mechanical
-> work complete and move to the next epic.
+> **Epic A increment 4 — change `embedding-readiness-and-dedup-efficiency`. All four
+> OpenSpec artifacts DONE (validates `--strict`); IMPLEMENTATION IN PROGRESS** on branch
+> `epic-a-inc4-embedding-readiness-dedup` (semstreams-developer against `tasks.md`).
+> Authoritative detail lives in the change's `proposal.md` + `design.md` (10 decisions,
+> code-grounded); this is the digest. Code work is **#613 (readiness truth + 3 observability
+> layers) + #630 (singleflight)**; **#627 is CLOSED** (verify-only). Remaining after impl:
+> semstreams-reviewer → e2e tier (BREAKING gate) + adopter note (10.2) → PR under the
+> Codex-review merge gate → archive. One e2e tier (statistical/semantic embedding) covers it.
 >
-> In flight: **#636** (retrospective fixes to #632 — the fail-closed retention
-> guard was correct in the constructor but swallowed/downgraded by every consumer;
-> now propagates `IsFatal`, plus nil-BodyResolver reporting and a loud metric-
-> registration signal). A follow-up, not an increment.
+> - **#613** — readiness truth **+ legible degraded**. Settled: (a) failed must not be
+>   reported as `ready`, BUT the watermark KEEPS advancing on failed (deadlock avoidance,
+>   `readiness.go:64`) — the fix adds a **`FailedCount` input** to the shared
+>   `ComputeIndexStatus` and projects `FailedCount>0 → degraded` **before "ready wins"**,
+>   making the shared projection finally enforce the `graph-index-readiness` rule that
+>   today only graph-index's watermark-hole enforces (embedding is the first producer
+>   whose watermark reaches target WITH failures). **NB: my earlier "must not advance the
+>   watermark / ComputeIndexStatus untouched" framing was WRONG — corrected here.**
+>   (b) **NOT configurable** — `FailedCount>0` is true and simple, no knob. Deliverable =
+>   make `degraded` legible (the durable `Status:failed`+`ErrorMsg` detail has NO reader
+>   today — `feedback_grep_for_the_consumer` inverted): **L1** `failed` gauge + bounded
+>   `{reason}` counter (classified at `markFailed`, reuse inc 2 fusion pattern); **L2** the
+>   degraded GRAPH_STATUS envelope carries `failedCount` + the full bounded `{reason:count}`
+>   breakdown + first-failure time (failedCount↓ = recovery signal, since hop-2 re-processes
+>   `StatusFailed` on re-delivery); **L3** per-entity drill-down — production escape hatch via
+>   fusion/graph-query (they already watch GRAPH_STATUS, no new endpoint) + opt-in
+>   `Status==failed` filter on **message-logger (debug, OFF by default** — production
+>   observability must not depend on it; [[message-logger-is-debug-only]]).
+> - **#627** — CLOSED (already fixed by inc 1's rune-safe `truncateAtWord`; verified
+>   `worker.go:793,884`). Inc 4 adds a cross-lane dedup-key-identity regression test only;
+>   Option-2 (digest-key fetch-skip) deferred → deferred list below.
+> - **#630** — **process-local** `singleflight.Group` around the embedder (burst of
+>   byte-identical content → 1 remote call). Distributed KV-reservation deferred (file if
+>   cross-process stampede measured).
 >
-> Increment 3 (#601, offloaded entities never embed their title) is **MERGED** — PR
-> #635, `fe329a5e`, 2026-07-22; OpenSpec change archived, `graph-embedding` spec
-> carries the offloaded-identity requirement (`text_suffixes` now takes effect on
-> offloaded entities via identity-first concatenation; embed-both deferred as a
-> measured follow-up). Increment 2 (#600 + #616) MERGED — PR #632, `d6addd5b`;
-> `graph-retention` + `fusion` specs carry the retention + body-hydration
-> requirements. Increment 1 (#623 + #602 + #614 part 2) MERGED — PR #628,
-> `a6ea9979`.
+> **The rest of the remaining Epic A surface was re-homed in the same rack-and-stack:**
+> - **#625** (durable repair loop) + **#629** (coalescer resurrection via the pending
+>   lane — dormant: only reachable with `coalesce_ms>0`, which no shipped config sets;
+>   needs a cross-bucket ordering protocol) → **Epic C** (derived-state ownership;
+>   both issues name C themselves).
+> - **#619** (BM25 redesign) → deferred owner-decision. Its query-pollution interim
+>   already shipped in Track 0 (`GenerateQuery` is now read-only — verified in code),
+>   so the bleeding is stopped; only the restart-fork redesign (lexical index vs
+>   stateless hashed TF) remains, and it is ADR-scale.
+> - **#633** (orphan-blob GC, ADR-068 inc 6) → deferred; owner-accepted disk growth.
+> - **#627 Option-2** (key the offloaded lane on a `StorageReference` content digest to
+>   skip the body fetch on a dedup hit) → deferred optimization; file if the offloaded
+>   fetch cost is measured to matter.
+> - **#599** (fusion Fuse/batch/unhydrated e2e coverage) → test-debt, paired with
+>   reconciling **#597** (fusion top-entity drop — likely already fixed by ADR-084's
+>   `Entities` reconciliation; #599 would prove it and close it).
+>
+> Shipped and archived: inc 1 (#628 `a6ea9979`), inc 2 (#632 `d6addd5b`, #600+#616),
+> inc 3 (#635 `fe329a5e`, #601). Two retrospective rounds merged: #636 (`ea7a51b4`,
+> #632 fail-closed at the consumers) and #638 (`08d7c5c2`, #635 version-safe identity
+> field). Main tip `08d7c5c2`, clean.
 
 ---
 
@@ -188,9 +221,9 @@ two files three times. Start Epic A here.
 
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · **#600 #616** (inc.2 NEXT) · #601 #613 #619 #599 | **inc.1 MERGED; inc.2 next** |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · **#613 #627 #630** (inc.4 NEXT) · #619 #599 (deferred/test-debt) | **inc.1–3 MERGED; inc.4 scoped** |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
-| **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard | #622 #527 | not started |
+| **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
 
@@ -340,3 +373,17 @@ Append one line per session. Newest last.
   neutralizing it myself. (3) `#623`'s ContentHash producer→consumer move
   *simplified* `#614 part 2` (removed the read-to-copy). Follow-ups filed: #627,
   #629, #630. Next: Epic A increment 2 (#600 + #616).
+- **2026-07-22 (session 5)** — Inc 2 (#632), inc 3 (#635), and both retrospective
+  rounds (#636, #638) all shipped since session 4; main tip `08d7c5c2`. **Racked and
+  stacked the remaining Epic A surface** and found the baton's "4 remaining"
+  (#613/#619/#599/#633) undercounted it: increments 1–3 spun off **four more issues on
+  the same embedding seam** (#625/#627/#629/#630) that were never folded back into the
+  epic. Real remaining surface = 8, plus #597 to reconcile. Owner decisions:
+  (1) **inc 4 = #613 + #627 + #630** — one worker.go hop-2 seam, one e2e tier; #613's
+  owner-call settled ("terminal" excludes "failed"; track a `failed` gauge; a
+  *configurable* failure-ratio drives `degraded`). (2) **#625 + #629 → Epic C** (both
+  cross-bucket/ownership-shaped; #629 dormant). (3) **#619** (interim shipped, bleeding
+  stopped) and **#633** (owner-accepted growth) → deferred owner-decisions.
+  (4) **#599 + #597** → test-debt/reconcile. Also: **new merge-gate** owner directive
+  recorded — a code PR merges only after Codex has posted a review, it's addressed, and
+  CI is green (in that order). Next: `/opsx:new` for inc 4.

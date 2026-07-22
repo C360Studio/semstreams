@@ -99,6 +99,14 @@ type Record struct {
 	GeneratedAt  time.Time `json:"generated_at,omitempty"`
 	Status       Status    `json:"status"`
 	ErrorMsg     string    `json:"error_msg,omitempty"` // If status=failed
+	// Reason is a BOUNDED classification of a failure (status=failed), stored next to
+	// the raw ErrorMsg (#613). It is the value the failures metric is labelled by — the
+	// raw ErrorMsg is unbounded and must NEVER be a metric label (cardinality blowup).
+	// Additive/omitempty: a record written by a pre-#613 worker carries no reason, and a
+	// rolled-back worker ignores the field, so it is wire-compatible in both directions.
+	// It is also what the current-failed bootstrap scan reads to seed the reason
+	// breakdown after a restart.
+	Reason string `json:"reason,omitempty"` // Bounded reason enum when status=failed
 
 	// SourceRevision is the ENTITY_STATES stream revision that produced this record.
 	// It is threaded from the hop-1 watcher so hop-2 can complete the embedding
@@ -343,7 +351,11 @@ func (s *Storage) SaveGenerated(
 // SaveFailed marks an embedding as failed under the same revision CAS and ordering
 // guard as SaveGenerated, so a stale failure cannot clobber a newer success and the
 // failed record persists its own source revision for later ordering.
-func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string, sourceRevision uint64) error {
+//
+// reason is the BOUNDED classification stored alongside the raw errorMsg (#613); it is
+// what the failures metric is labelled by and what the current-failed bootstrap scan
+// reads. Pass "" only for a failure that has no classified reason.
+func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg, reason string, sourceRevision uint64) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveFailed", "entity_id is empty")
 	}
@@ -381,6 +393,7 @@ func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg string, sou
 
 		existing.Status = StatusFailed
 		existing.ErrorMsg = errorMsg
+		existing.Reason = reason
 		existing.SourceRevision = sourceRevision
 
 		data, err := json.Marshal(existing)
@@ -586,6 +599,62 @@ func (s *Storage) ListGeneratedEntityIDs(ctx context.Context) ([]string, error) 
 				return entityIDs, nil
 			}
 			entityIDs = append(entityIDs, key)
+		}
+	}
+}
+
+// FailedEntry is one entity currently in a failed embedding terminal state, as read
+// by the current-failed bootstrap scan (#613): the entity ID and its bounded reason.
+type FailedEntry struct {
+	EntityID string
+	Reason   string
+}
+
+// ScanFailed enumerates EMBEDDING_INDEX via its WatchAll initial snapshot and returns
+// every record currently in the StatusFailed terminal state, with its bounded reason.
+// It seeds the component's in-memory current-failed map at Start so FailedCount (and
+// therefore the degraded verdict) is accurate immediately after bootstrap, independent
+// of re-delivery timing (#613). It uses the same last-per-subject snapshot pass as
+// StartVectorCache (precedent storage.go:665) — one streamed read of the current values,
+// not a Get per key — and returns at the nil initial-sync sentinel. A record that will
+// not decode is skipped (best-effort seed); aborting would leave FailedCount at 0
+// (false-not-degraded), which is worse than a partial seed corrected by re-delivery.
+func (s *Storage) ScanFailed(ctx context.Context) ([]FailedEntry, error) {
+	watcher, err := s.indexBucket.WatchAll(ctx)
+	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, nil
+		}
+		return nil, errs.WrapTransient(err, "Storage", "ScanFailed", "watch index bucket")
+	}
+	defer func() { _ = watcher.Stop() }()
+
+	var failed []FailedEntry
+	for {
+		select {
+		case <-ctx.Done():
+			// Return the partial seed rather than nothing: a best-effort seed is corrected
+			// by later re-delivery, and dropping it would report false-not-degraded.
+			return failed, nil
+		case entry, ok := <-watcher.Updates():
+			if !ok {
+				return failed, nil
+			}
+			// nil is the initial-sync sentinel: the current snapshot has been fully
+			// replayed, which is all the seed needs — stop before following live updates.
+			if entry == nil {
+				return failed, nil
+			}
+			if entry.Operation() != jetstream.KeyValuePut {
+				continue
+			}
+			var rec Record
+			if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+				continue
+			}
+			if rec.Status == StatusFailed {
+				failed = append(failed, FailedEntry{EntityID: entry.Key(), Reason: rec.Reason})
+			}
 		}
 	}
 }

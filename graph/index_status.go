@@ -67,6 +67,21 @@ type IndexStatusResponse struct {
 	TargetRevision uint64 `json:"target_revision,omitempty"`
 	// Lag is TargetRevision - IndexedRevision; 0 means caught up.
 	Lag uint64 `json:"lag,omitempty"`
+	// FailedCount / FailedReasons / FirstFailureAt are the bounded failure detail a
+	// producer that tracks per-entity failures carries on a DEGRADED envelope so an
+	// operator can tell a whole-dependency outage from a few persistently-failing
+	// entities WITHOUT any unbounded per-entity list on the watched key (#613).
+	//
+	// All three are additive and omitempty: a producer with no failures — including
+	// graph-index, which enforces the same rule caller-side via its watermark hole —
+	// emits none, so the wire is byte-unchanged. FailedReasons is bounded to a fixed
+	// reason enum (a handful of keys), keeping the watched key compact on the hot KV
+	// path. FirstFailureAt is RFC3339. FailedCount is echoed from the projection input
+	// (it also drives State=degraded, see ComputeIndexStatus); the other two are set by
+	// the producer after the projection.
+	FailedCount    uint64            `json:"failed_count,omitempty"`
+	FailedReasons  map[string]uint64 `json:"failed_reasons,omitempty"`
+	FirstFailureAt string            `json:"first_failure_at,omitempty"`
 	// StalenessMs is the AGE OF THE VIEW in milliseconds (ADR-083): now minus the
 	// KV commit time of the newest ENTITY_STATES revision the index has fully
 	// covered. It is the view-rate consumer's tolerance unit because it is
@@ -142,6 +157,17 @@ type IndexStatusInputs struct {
 	// keep the staleness projection deterministic instead of asserting on the wall
 	// clock.
 	Now time.Time
+	// FailedCount is the number of index entries the producer CURRENTLY holds in a
+	// failed terminal state. When > 0 it projects to State=degraded BEFORE the "ready
+	// wins" branch, UNCONDITIONALLY (not gated on Ready): a producer whose watermark
+	// has reached its target while holding failures is COVERED (Ready stays accurate)
+	// but NOT healthy (a failed record is not a usable index entry). This makes the
+	// shared projection finally enforce the graph-index-readiness `FailedCount > 0 →
+	// degraded` rule for a producer (graph-embedding) whose watermark advances past
+	// failures. graph-index leaves this 0 — it enforces the same rule caller-side via
+	// its watermark hole + applyKnownIncompleteOverrides — so its projection output is
+	// byte-unchanged (ADR-085, #613).
+	FailedCount uint64
 }
 
 // ComputeIndexStatus builds the honest revision-lag readiness envelope (ADR-066,
@@ -154,7 +180,12 @@ type IndexStatusInputs struct {
 //
 //   - Ready = target > 0 && indexed >= target (no max(0,…) clamp — indexed <= target
 //     is structural in the watermark, so Lag cannot underflow).
-//   - State = ready ? "ready" : (stuck ? "degraded" : "building"); ready wins.
+//   - State = failedCount>0 ? "degraded" : (ready ? "ready" : (stuck ? "degraded" :
+//     "building")). The failure check is FIRST and unconditional, so a producer
+//     caught up over failures reports degraded, not ready — Ready still reports the
+//     (accurate) coverage, but health lives in State (#613, ADR-085). With
+//     failedCount==0 the switch is identical to the prior "ready wins" behavior, so
+//     graph-index (which passes 0) is byte-unchanged.
 //   - StalenessMs = 0 when Ready or when IndexedAt is unknown, else now-IndexedAt
 //     clamped to a 1ms minimum (see the presence encoding on the field).
 //
@@ -171,6 +202,11 @@ func ComputeIndexStatus(in IndexStatusInputs) IndexStatusResponse {
 	}
 	state := IndexStateBuilding
 	switch {
+	case in.FailedCount > 0:
+		// Unconditional, BEFORE "ready wins": a known-incomplete index (a producer
+		// holding failed entries) defers on HEALTH regardless of coverage. Ready stays
+		// coverage-accurate below; the health verdict is here (#613, ADR-085).
+		state = IndexStateDegraded
 	case ready:
 		state = IndexStateReady
 	case in.Stuck:
@@ -184,6 +220,7 @@ func ComputeIndexStatus(in IndexStatusInputs) IndexStatusResponse {
 		Lag:             lag,
 		LastSynced:      in.LastSynced,
 		StalenessMs:     stalenessMs(ready, in.IndexedAt, in.Now),
+		FailedCount:     in.FailedCount,
 	}
 	if in.Indexed > 0 {
 		resp.Revision = strconv.FormatUint(in.Indexed, 10)

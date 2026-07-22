@@ -134,7 +134,7 @@ func TestSaveFailed_EqualRevisionDoesNotDowngradeSuccess(t *testing.T) {
 
 	// A duplicate failure at the SAME revision must resolve as already-resolved, not
 	// clobber the success.
-	if err := s.SaveFailed(ctx, entityID, "late duplicate failure", rev); !errors.Is(err, ErrSupersededRevision) {
+	if err := s.SaveFailed(ctx, entityID, "late duplicate failure", "internal", rev); !errors.Is(err, ErrSupersededRevision) {
 		t.Fatalf("SaveFailed(R) after SaveGenerated(R) = %v, want ErrSupersededRevision: generated wins at equal revision (#628 FIX 4)", err)
 	}
 
@@ -164,7 +164,7 @@ func TestSaveGenerated_EqualRevisionWinsOverPriorFailure(t *testing.T) {
 	}
 
 	// Failure lands first at revision R.
-	if err := s.SaveFailed(ctx, entityID, "boom", rev); err != nil {
+	if err := s.SaveFailed(ctx, entityID, "boom", "internal", rev); err != nil {
 		t.Fatalf("SaveFailed(R): %v", err)
 	}
 	// A generation at the SAME revision then completes; it wins.

@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -139,7 +140,7 @@ func TestIntegration_RetrievalClient_RealWire(t *testing.T) {
 
 		require.Eventually(t, func() bool {
 			st, statusErr := c.Status(ctx)
-			return statusErr != nil && st == fusion.IndexStatus{}
+			return statusErr != nil && reflect.DeepEqual(st, fusion.IndexStatus{})
 		}, 10*time.Second, 20*time.Millisecond,
 			"an unpublished readiness key must not read as a status")
 	})

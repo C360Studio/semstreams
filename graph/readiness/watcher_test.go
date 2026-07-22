@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -332,7 +333,7 @@ func TestWatcher_MissingBucketIsUnknown(t *testing.T) {
 	if r.Known || r.Fresh {
 		t.Fatalf("read with an absent bucket = %+v, want unknown", r)
 	}
-	if r.Status != (graph.IndexStatusResponse{}) {
+	if !reflect.DeepEqual(r.Status, graph.IndexStatusResponse{}) {
 		t.Errorf("held envelope = %+v, want the zero value (nothing fabricated)", r.Status)
 	}
 	if !errors.Is(r.Err, bucketErr) {

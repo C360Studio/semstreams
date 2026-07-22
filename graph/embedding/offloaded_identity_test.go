@@ -242,7 +242,7 @@ func TestOffloadedIdentityMetric_CountsStoredVectorsOnly(t *testing.T) {
 			WithMaxSourceTextLen(4000).
 			WithStoreResolver(resolver).
 			WithMetrics(m).
-			WithOnTerminal(func(id string, _ uint64) { done <- id })
+			WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 
 		if err := w.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
@@ -346,7 +346,7 @@ func TestOffloadedIdentityMetric_DedupServedPathCountsBoth(t *testing.T) {
 			WithMaxSourceTextLen(4000).
 			WithStoreResolver(resolver).
 			WithMetrics(m).
-			WithOnTerminal(func(id string, _ uint64) { done <- id })
+			WithOnTerminal(func(id string, _ uint64, _ TerminalOutcome, _ string) { done <- id })
 		if err := w.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}

@@ -2,6 +2,7 @@ package graph
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -136,6 +137,96 @@ func TestComputeIndexStatus_PreExistingFieldsUnchanged(t *testing.T) {
 	}
 }
 
+// TestComputeIndexStatus_FailedCountDegrades is the #613 statement: FailedCount>0
+// projects to State=degraded BEFORE "ready wins", so a producer caught up over
+// failures (Indexed>=Target) reports degraded while Ready stays coverage-accurate.
+// It also pins graph-index parity: FailedCount==0 is byte-identical to the prior
+// projection.
+func TestComputeIndexStatus_FailedCountDegrades(t *testing.T) {
+	t.Run("caught up with failures is degraded, Ready still true", func(t *testing.T) {
+		got := ComputeIndexStatus(IndexStatusInputs{Indexed: 100, Target: 100, FailedCount: 3})
+		if got.State != IndexStateDegraded {
+			t.Errorf("State = %q, want %q: FailedCount>0 must win over the ready branch (#613)", got.State, IndexStateDegraded)
+		}
+		if !got.Ready {
+			t.Error("Ready = false, want true: coverage is complete, only health is degraded (#613)")
+		}
+		if got.FailedCount != 3 {
+			t.Errorf("FailedCount = %d, want 3: the input must echo to the envelope", got.FailedCount)
+		}
+	})
+
+	t.Run("failed with small lag is degraded, not building", func(t *testing.T) {
+		got := ComputeIndexStatus(IndexStatusInputs{Indexed: 99, Target: 100, FailedCount: 1})
+		if got.State != IndexStateDegraded {
+			t.Errorf("State = %q, want %q: a failed entry defers regardless of lag", got.State, IndexStateDegraded)
+		}
+		if got.Ready {
+			t.Error("Ready = true, want false: not caught up")
+		}
+	})
+
+	t.Run("FailedCount==0 is byte-identical to today (graph-index parity)", func(t *testing.T) {
+		// Every pre-existing input shape, computed with the field left at its zero value,
+		// must marshal identically to a run that never knew the field existed.
+		for _, in := range []IndexStatusInputs{
+			{Indexed: 0, Target: 0},
+			{Indexed: 100, Target: 100},
+			{Indexed: 40, Target: 100},
+			{Indexed: 40, Target: 100, Stuck: true},
+			{Indexed: 100, Target: 100, Stuck: true},
+		} {
+			got := ComputeIndexStatus(in)
+			raw, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			// failed_count must be OMITTED (not emitted as 0) when there are no failures,
+			// so an envelope from a producer that never fails is wire-unchanged.
+			var decoded map[string]any
+			if err := json.Unmarshal(raw, &decoded); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+			if _, present := decoded["failed_count"]; present {
+				t.Errorf("failed_count present in %s: it must be omitted when zero (graph-index parity)", raw)
+			}
+			if _, present := decoded["failed_reasons"]; present {
+				t.Errorf("failed_reasons present in %s: it must be omitted when empty", raw)
+			}
+			if _, present := decoded["first_failure_at"]; present {
+				t.Errorf("first_failure_at present in %s: it must be omitted when empty", raw)
+			}
+		}
+	})
+}
+
+// TestIndexStatusResponse_FailedDetailWireRoundTrip proves the three additive
+// failure-detail fields survive the production JSON encode/decode under the exact
+// keys consumers read, and are omitted when zero (wire compatibility). The
+// graph-status KV value IS this JSON, so this is the production codec.
+func TestIndexStatusResponse_FailedDetailWireRoundTrip(t *testing.T) {
+	src := IndexStatusResponse{
+		Ready: true, State: IndexStateDegraded,
+		FailedCount:    5,
+		FailedReasons:  map[string]uint64{"connection_refused": 4, "content_error": 1},
+		FirstFailureAt: "2026-07-22T10:00:00Z",
+	}
+	raw, err := json.Marshal(src)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got IndexStatusResponse
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.FailedCount != 5 || got.FirstFailureAt != "2026-07-22T10:00:00Z" {
+		t.Errorf("failure detail lost: FailedCount=%d FirstFailureAt=%q", got.FailedCount, got.FirstFailureAt)
+	}
+	if got.FailedReasons["connection_refused"] != 4 || got.FailedReasons["content_error"] != 1 {
+		t.Errorf("FailedReasons lost: %v", got.FailedReasons)
+	}
+}
+
 // TestIndexStatusResponse_StalenessWireRoundTrip proves the additive field survives
 // the wire under the exact key consumers decode (`staleness_ms`), and that it is
 // omitted — not emitted as 0 — when absent. The graph-status KV value IS this JSON,
@@ -165,7 +256,7 @@ func TestIndexStatusResponse_StalenessWireRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(raw, &back); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if back != src {
+	if !reflect.DeepEqual(back, src) {
 		t.Errorf("round trip changed the envelope:\n got %+v\nwant %+v", back, src)
 	}
 
@@ -221,7 +312,7 @@ func TestIndexStatusResponse_BootstrapCompleteWireRoundTrip(t *testing.T) {
 		if err := json.Unmarshal(raw, &back); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
-		if back != src {
+		if !reflect.DeepEqual(back, src) {
 			t.Errorf("round trip changed the envelope:\n got %+v\nwant %+v", back, src)
 		}
 	}

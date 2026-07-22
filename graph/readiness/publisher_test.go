@@ -170,7 +170,7 @@ func TestPublisher_ValueIsPlainEnvelopeJSON(t *testing.T) {
 			if !got.Known {
 				t.Fatal("watcher did not accept the published value")
 			}
-			if got.Status != tt.status {
+			if !reflect.DeepEqual(got.Status, tt.status) {
 				t.Errorf("round-trip mismatch:\n got %+v\nwant %+v", got.Status, tt.status)
 			}
 		})

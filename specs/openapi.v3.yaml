@@ -466,6 +466,11 @@ paths:
                   description: 'Maximum number of entries to return (default: 100, max: 1000)'
                   schema:
                     type: integer
+                - name: status
+                  in: query
+                  description: 'Opt-in filter: keep only records whose top-level JSON ''status'' equals this (e.g. ''failed'' over EMBEDDING_INDEX for per-entity failure forensics). Empty (default) returns all records.'
+                  schema:
+                    type: string
             responses:
                 "200":
                     description: KV bucket entries
