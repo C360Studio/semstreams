@@ -97,7 +97,8 @@ func TestSaveAndNotify_SupersededDropSkipsOnGenerated(t *testing.T) {
 	}
 
 	// An older revision (5) completes last — its SaveGenerated drops as superseded.
-	w.saveAndNotify(entityID, []float32{5, 5, 5}, "hash-5", 5, false)
+	// Inline record (no StorageRef): the offloaded-identity counting block is not exercised.
+	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{5, 5, 5}, "hash-5", 5, false)
 
 	if onGeneratedFired {
 		t.Error("onGenerated fired for a superseded (older-revision) write; a stale vector would be pushed to caches")
@@ -140,7 +141,7 @@ func TestSaveAndNotify_SupersededDedupHitDoesNotCount(t *testing.T) {
 	}
 
 	// A dedup HIT for an older revision (5) — its save is superseded by rev 10.
-	w.saveAndNotify(entityID, []float32{5, 5, 5}, "hash-5", 5, true)
+	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{5, 5, 5}, "hash-5", 5, true)
 
 	if got := m.snapshot().dedupHits; got != 0 {
 		t.Errorf("dedupHits = %d, want 0: a superseded dedup hit must not count (it skips generated_total)", got)
@@ -168,7 +169,7 @@ func TestSaveAndNotify_StoredDedupHitCounts(t *testing.T) {
 	}
 
 	// A dedup hit at the current revision stores successfully.
-	if terminal := w.saveAndNotify(entityID, []float32{1, 2, 3}, "hash-3", 3, true); !terminal {
+	if terminal := w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "hash-3", 3, true); !terminal {
 		t.Error("saveAndNotify returned non-terminal for a successful store")
 	}
 	if got := m.snapshot().dedupHits; got != 1 {

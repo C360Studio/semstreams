@@ -86,8 +86,9 @@ func TestSaveAndNotify_CASExhaustedIsNotAFailure(t *testing.T) {
 	}
 
 	// Every Update conflicts → SaveGenerated returns ErrCASExhausted. The terminal
-	// return is ignored on purpose so this test compiles against the pre-fix signature.
-	w.saveAndNotify(entityID, []float32{1, 2, 3}, "dedup-key", rev, false)
+	// return is ignored on purpose. An inline record (no StorageRef) is passed for the
+	// offloaded-identity derivation; CAS exhaustion returns before that success-path block.
+	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "dedup-key", rev, false)
 
 	// The generation-failure metric is the discriminator: pre-fix counts 1, fixed 0.
 	if got := m.snapshot().failed; got != 0 {

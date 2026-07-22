@@ -71,17 +71,34 @@ type Record struct {
 	EntityID    string    `json:"entity_id"`
 	Vector      []float32 `json:"vector,omitempty"`
 	ContentHash string    `json:"content_hash"`
-	// SourceText carries the pending record's inline text. Its meaning is lane-dependent:
-	// on the inline lane it is the WHOLE embedding text; on the offloaded (StorageRef)
-	// lane it is the inline identity PREFIX (title/.signature/.comment) that hop 2 embeds
-	// ahead of the fetched body (D1/D2, #601). Empty on an offloaded record means no inline
-	// identity text (body-only).
-	SourceText  string    `json:"source_text,omitempty"`
-	Model       string    `json:"model,omitempty"`
-	Dimensions  int       `json:"dimensions,omitempty"`
-	GeneratedAt time.Time `json:"generated_at,omitempty"`
-	Status      Status    `json:"status"`
-	ErrorMsg    string    `json:"error_msg,omitempty"` // If status=failed
+	// SourceText is the INLINE lane's WHOLE embedding text (the identity triples
+	// extracted at hop 1). It is meaningful ONLY on the inline lane (StorageRef == nil);
+	// on the offloaded lane it is left EMPTY and the identity prefix travels in
+	// IdentityText instead. Keeping the offloaded identity OUT of SourceText is a
+	// deliberate cross-version contract: a pre-#635 worker's getSourceText is
+	// SourceText-primary, so an offloaded identity stored here would make such a worker
+	// embed identity-only and silently drop the body (see IdentityText, #635 retro F1).
+	SourceText string `json:"source_text,omitempty"`
+	// IdentityText is the inline identity PREFIX (title/.signature/.comment, per the
+	// configured text suffixes) for the OFFLOADED (StorageRef) lane ONLY: hop 2 embeds it
+	// AHEAD of the fetched body, identity-first, in one vector so text_suffixes takes
+	// effect on offloaded entities too (D1/D2, #601). Empty on the inline lane, and empty
+	// on an offloaded record with no inline identity text (body-only).
+	//
+	// It is a field DISTINCT from SourceText on purpose (#635 retro F1). Pending records
+	// are durable and re-delivered via WatchAll, so a PRE-#635 worker can consume a record
+	// this (post-#635) writer produced during a rolling upgrade or after a rollback. That
+	// old worker does not know this field, ignores it, sees SourceText == "" with
+	// StorageRef set, and falls back to fetching the body — the safe pre-#635 behavior. Had
+	// the identity been overloaded onto SourceText (as #635 originally did), the old worker
+	// would have taken its SourceText branch and embedded identity-only, silently losing the
+	// body.
+	IdentityText string    `json:"identity_text,omitempty"`
+	Model        string    `json:"model,omitempty"`
+	Dimensions   int       `json:"dimensions,omitempty"`
+	GeneratedAt  time.Time `json:"generated_at,omitempty"`
+	Status       Status    `json:"status"`
+	ErrorMsg     string    `json:"error_msg,omitempty"` // If status=failed
 
 	// SourceRevision is the ENTITY_STATES stream revision that produced this record.
 	// It is threaded from the hop-1 watcher so hop-2 can complete the embedding
@@ -194,15 +211,18 @@ func (s *Storage) SavePending(ctx context.Context, entityID, contentHash, source
 // This enables the ContentStorable pattern where text is fetched from ObjectStore.
 // The contentHash is still used for deduplication if provided.
 //
-// sourceText is the entity's INLINE identity text (title/.signature/.comment, selected
-// by the configured text suffixes at hop 1). Unlike the inline lane — where SourceText
-// is the whole text — here it is a PREFIX: hop 2 fetches the offloaded body and embeds
-// this identity ahead of it, identity-first, in one vector so the text-suffix config
-// takes effect on offloaded entities too (D1/D2). Pass "" for an offloaded entity with
-// no inline text, and hop 2 embeds the body alone (unchanged).
+// identityText is the entity's INLINE identity text (title/.signature/.comment, selected
+// by the configured text suffixes at hop 1). It is stored in Record.IdentityText — a
+// field DISTINCT from SourceText — and hop 2 embeds it AHEAD of the fetched body,
+// identity-first, in one vector so the text-suffix config takes effect on offloaded
+// entities too (D1/D2). Pass "" for an offloaded entity with no inline text, and hop 2
+// embeds the body alone. SourceText is left EMPTY on this offloaded record so a pre-#635
+// worker consuming it (rolling upgrade / rollback) falls back to fetching the body rather
+// than embedding identity-only and dropping the body (see Record.IdentityText, #635 retro
+// F1).
 func (s *Storage) SavePendingWithStorageRef(
 	ctx context.Context,
-	entityID, contentHash, sourceText string,
+	entityID, contentHash, identityText string,
 	storageRef *StorageRef,
 	contentFields map[string]string,
 	sourceRevision uint64,
@@ -217,7 +237,7 @@ func (s *Storage) SavePendingWithStorageRef(
 	record := &Record{
 		EntityID:       entityID,
 		ContentHash:    contentHash,
-		SourceText:     sourceText,
+		IdentityText:   identityText,
 		StorageRef:     storageRef,
 		ContentFields:  contentFields,
 		Status:         StatusPending,

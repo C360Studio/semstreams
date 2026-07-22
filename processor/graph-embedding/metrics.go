@@ -58,13 +58,14 @@ type embeddingMetrics struct {
 	// reported rather than silent, making the bytes actually embedded discoverable (#602).
 	textTruncated prometheus.Counter
 	// offloadedIdentityIncluded / offloadedIdentityAbsent are the paired observable for
-	// the offloaded (StorageRef) lane's identity embedding (D5/#601). included rises
-	// each time an offloaded entity embedded its inline identity text (title/.signature/
-	// .comment, per text_suffixes) alongside its body; absent rises when an offloaded
-	// entity was processed without inline identity text (only the body, if any, is
-	// embedded). A producer tuning text_suffixes on offloaded entities reads the effect
-	// from these rather than inferring it from silence — the Epic A "make the
-	// config-effect observable" discipline.
+	// the offloaded (StorageRef) lane's identity embedding (D5/#601). Both count STORED
+	// vectors, not attempts: they fire on the successful-persistence path, so a dropped
+	// save (superseded/tombstoned/failed embed) counts neither (#635 retro F3). included
+	// rises each time an offloaded entity's STORED vector embedded its inline identity text
+	// (title/.signature/.comment, per text_suffixes) ahead of its body; absent rises when a
+	// STORED vector came from the body alone. A producer tuning text_suffixes on offloaded
+	// entities reads the effect from these rather than inferring it from silence — the
+	// Epic A "make the config-effect observable" discipline.
 	offloadedIdentityIncluded prometheus.Counter
 	offloadedIdentityAbsent   prometheus.Counter
 }
@@ -202,14 +203,14 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "offloaded_identity_included_total",
-				Help:      "Offloaded (StorageRef) entities that embedded inline identity text (title/.signature, per text_suffixes) ahead of their body; a rising value confirms text_suffixes took effect on the offloaded lane (#601)",
+				Help:      "Offloaded (StorageRef) entities whose STORED vector included inline identity text (title/.signature, per text_suffixes) ahead of the body; counted on successful persistence, so a dropped save does not count. A rising value confirms text_suffixes took effect on the offloaded lane (#601)",
 			}),
 
 			offloadedIdentityAbsent: prometheus.NewCounter(prometheus.CounterOpts{
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "offloaded_identity_absent_total",
-				Help:      "Offloaded (StorageRef) entities processed without inline identity text (only the body, if any, is embedded); the symmetric half of offloaded_identity_included so a config-effect is observable, not inferred from silence (#601)",
+				Help:      "Offloaded (StorageRef) entities whose STORED vector came from the body alone (no inline identity text); counted on successful persistence. The symmetric half of offloaded_identity_included so a config-effect is observable, not inferred from silence (#601)",
 			}),
 		}
 
@@ -352,14 +353,16 @@ func (m *embeddingMetrics) recordTextTruncated() {
 	m.textTruncated.Inc()
 }
 
-// recordOffloadedIdentityIncluded counts one offloaded entity that embedded inline
-// identity text ahead of its body (#601).
+// recordOffloadedIdentityIncluded counts one offloaded entity whose STORED vector
+// embedded inline identity text ahead of its body (#601; counted on successful
+// persistence, #635 retro F3).
 func (m *embeddingMetrics) recordOffloadedIdentityIncluded() {
 	m.offloadedIdentityIncluded.Inc()
 }
 
-// recordOffloadedIdentityAbsent counts one offloaded entity embedded body-only
-// because it carried no inline identity text (#601).
+// recordOffloadedIdentityAbsent counts one offloaded entity whose STORED vector came
+// from the body alone because it carried no inline identity text (#601; counted on
+// successful persistence, #635 retro F3).
 func (m *embeddingMetrics) recordOffloadedIdentityAbsent() {
 	m.offloadedIdentityAbsent.Inc()
 }

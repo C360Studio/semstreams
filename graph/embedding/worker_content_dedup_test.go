@@ -51,10 +51,25 @@ func (m *recordingWorkerMetrics) inc(p *int) {
 	*p++
 }
 
-func (m *recordingWorkerMetrics) snapshot() recordingWorkerMetrics {
+// metricsSnapshot is a lock-free copy of recordingWorkerMetrics' counters for
+// assertions. recordingWorkerMetrics holds a sync.Mutex, so it must never be copied
+// by value (go vet copylocks); snapshot() returns this instead.
+type metricsSnapshot struct {
+	dedupHits        int
+	failed           int
+	resolveErr       int
+	resolved         int
+	truncated        int
+	dedupSkipped     int
+	identityIncluded int
+	identityAbsent   int
+	skipReasons      []string
+}
+
+func (m *recordingWorkerMetrics) snapshot() metricsSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return recordingWorkerMetrics{
+	return metricsSnapshot{
 		dedupHits:        m.dedupHits,
 		failed:           m.failed,
 		resolveErr:       m.resolveErr,

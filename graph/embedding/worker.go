@@ -88,17 +88,19 @@ type WorkerMetrics interface {
 	// IncTruncated counts one source-text truncation at the configured cap, so the
 	// bytes actually embedded are discoverable rather than silently dropped (#602).
 	IncTruncated()
-	// IncOffloadedIdentityIncluded counts one offloaded (StorageRef) entity that
-	// embedded inline identity text (title/.signature/.comment, per text_suffixes)
-	// AHEAD of its body. Paired with IncOffloadedIdentityAbsent, it makes the
-	// text-suffix effect on the offloaded lane observable — a producer tuning
-	// text_suffixes can confirm it took effect from /metrics rather than infer it
-	// from silence (D5/#601).
+	// IncOffloadedIdentityIncluded counts one offloaded (StorageRef) entity for which a
+	// vector was STORED that included its inline identity text (title/.signature/.comment,
+	// per text_suffixes) AHEAD of the body. It fires on the successful-persistence path
+	// (with IncDedupHits), not at text production — a dropped save does not count (#635
+	// retro F3). Paired with IncOffloadedIdentityAbsent, it makes the text-suffix effect on
+	// the offloaded lane observable: a producer tuning text_suffixes confirms it took effect
+	// from /metrics rather than inferring it from silence (D5/#601).
 	IncOffloadedIdentityIncluded()
-	// IncOffloadedIdentityAbsent counts one offloaded (StorageRef) entity processed
-	// WITHOUT inline identity text — only its body, if any, is embedded; when it also
-	// has no body the entity is skipped without embedding. The symmetric half of
-	// IncOffloadedIdentityIncluded, so a producer can tell a config-effect from silence
+	// IncOffloadedIdentityAbsent counts one offloaded (StorageRef) entity for which a
+	// vector was STORED from its body ALONE — no inline identity text was present. Like its
+	// symmetric half it fires only on the successful-persistence path (#635 retro F3): an
+	// offloaded entity whose embed failed, or one with neither identity nor body (deleted
+	// before generation), counts neither. Lets a producer tell a config-effect from silence
 	// (D5/#601).
 	IncOffloadedIdentityAbsent()
 	// IncFailed increments the failed embeddings counter
@@ -484,9 +486,11 @@ func (w *Worker) handleKVEntry(
 	// Save and notify. saveAndNotify reports whether the outcome is terminal: a
 	// non-converging revision CAS (ErrCASExhausted) leaves the record pending and
 	// re-drivable, so it must NOT drain the readiness watermark (ADR-066 §3). Every
-	// other outcome is terminal (already set above). wasDedupHit is counted there,
-	// on the success path only, so dedup_hits stays a subset of resolutions.
-	terminal = w.saveAndNotify(entityID, vector, dedupKey, sourceRevision, wasDedupHit)
+	// other outcome is terminal (already set above). wasDedupHit and the offloaded-
+	// identity pair are counted there, on the success path only, so they stay a subset
+	// of resolutions (the record is passed so saveAndNotify can derive the offloaded
+	// identity state at the successful-persistence site).
+	terminal = w.saveAndNotify(entityID, &record, vector, dedupKey, sourceRevision, wasDedupHit)
 	return
 }
 
@@ -619,7 +623,13 @@ func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord)
 // revision (that would report the pipeline caught up over still-pending work). Every
 // other outcome — success, a superseded/record-gone drop, or a real save failure —
 // is terminal.
-func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool) {
+//
+// record is the pending record being completed; it is read ONLY to derive the offloaded-
+// identity observability pair on the success path (StorageRef set => offloaded;
+// IdentityText set => identity was embedded). Those counters fire at the SAME
+// successful-persistence point as IncDedupHits so they count STORED vectors, not
+// attempts (#635 retro F3).
+func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
 	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision); err != nil {
@@ -674,6 +684,21 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash st
 		w.metrics.IncDedupHits()
 	}
 
+	// Count the offloaded-identity observability pair HERE too, on the same
+	// successful-persistence path (#635 retro F3), never at text-production time in
+	// getSourceText: a later dedup/embedder/CAS/tombstone drop must not confirm a STORED
+	// vector that never landed. Offloaded-only (StorageRef set). A body-less/no-text
+	// offloaded entity never reaches this site — handleKVEntry deletes its pending record
+	// before generation — so it counts neither, and a failed embed returns above without
+	// counting either.
+	if record != nil && record.StorageRef != nil && w.metrics != nil {
+		if record.IdentityText != "" {
+			w.metrics.IncOffloadedIdentityIncluded()
+		} else {
+			w.metrics.IncOffloadedIdentityAbsent()
+		}
+	}
+
 	if w.onGenerated != nil {
 		w.onGenerated(entityID, vector)
 	}
@@ -683,17 +708,21 @@ func (w *Worker) saveAndNotify(entityID string, vector []float32, contentHash st
 // getSourceText produces the exact bytes hop 2 embeds (and keys the dedup bucket over).
 //
 // It is re-branched on StorageRef PRIMARY (D1). The discriminator for "this body is
-// offloaded" is StorageRef != nil, NOT SourceText: on an offloaded record SourceText
-// now means the INLINE identity prefix (title/.signature/.comment), not the whole
-// text. Were the old SourceText-primary `else if` kept, an offloaded record carrying
-// identity text would take the first branch and embed identity-ONLY, silently dropping
-// the body. So:
+// offloaded" is StorageRef != nil, NOT SourceText: on an offloaded record the inline
+// identity prefix (title/.signature/.comment) travels in IdentityText, and SourceText is
+// empty. Reading IdentityText (not SourceText) here is what keeps a PRE-#635 worker safe
+// — it never sees the identity in SourceText, so it cannot embed identity-only and drop
+// the body (#635 retro F1). So:
 //
-//   - Offloaded (StorageRef != nil): fetch the body, then embed the inline identity
-//     text AHEAD of it (identity-first, one vector) when present, so text_suffixes
-//     takes effect on offloaded entities exactly as it does inline (D1/D2). Identity
-//     first means the cap below trims the body tail and the identity always survives.
+//   - Offloaded (StorageRef != nil): fetch the body, then embed the inline IdentityText
+//     AHEAD of it (identity-first, one vector) when present, so text_suffixes takes
+//     effect on offloaded entities exactly as it does inline (D1/D2). Identity first
+//     means the cap below trims the body tail and the identity always survives.
 //   - Inline (StorageRef == nil): SourceText is the whole text (unchanged).
+//
+// It does NOT count the offloaded-identity observability pair here: text production is
+// not proof a vector was stored. saveAndNotify counts included/absent on the successful
+// persistence path instead (#635 retro F3), matching the IncDedupHits pattern.
 func (w *Worker) getSourceText(record *Record) (string, error) {
 	if record.StorageRef != nil {
 		// Streaming path: read raw content from store. fetchTextFromStorage rune-clamps
@@ -710,17 +739,10 @@ func (w *Worker) getSourceText(record *Record) (string, error) {
 		// is that same identity, and carries no cosmetic separator noise.
 		text := body
 		switch {
-		case record.SourceText != "" && body != "":
-			text = record.SourceText + identityBodySeparator + body
-		case record.SourceText != "":
-			text = record.SourceText // empty body: identity alone
-		}
-		if record.SourceText != "" {
-			if w.metrics != nil {
-				w.metrics.IncOffloadedIdentityIncluded()
-			}
-		} else if w.metrics != nil {
-			w.metrics.IncOffloadedIdentityAbsent()
+		case record.IdentityText != "" && body != "":
+			text = record.IdentityText + identityBodySeparator + body
+		case record.IdentityText != "":
+			text = record.IdentityText // empty body: identity alone
 		}
 
 		// Re-apply the cap to the COMBINED text (D3): identity-first ordering means the body
