@@ -9,36 +9,62 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Epic A is COMPLETE — mechanical increments (inc 1–4, shipped + archived + released as
-> `v1.0.0-beta.158`) AND its test-debt.** The test-debt unit (`#599 + #597`) shipped this
-> session as PR **#642 (`db64d2c6`, 2026-07-23)**: a `validate-batch-read-reconciliation`
-> e2e:semantic stage driving `graph.query.batch` + the production `fusionnats.Client.Entities`
-> over the live wire — asserts the gh#604 missing→unhydrated reconciliation + exactly-once on
-> every reply, with a **load-bearing** `batch_query_missing_total` gate (lower-bound, since the
-> counter is process-global). The Codex gate found **5 real coverage holes (3 P1)** two reviewers
-> missed; all addressed (production-client absent reconciliation; counter load-bearing;
-> exactly-once everywhere) + 2 **honestly downscoped** — the gh#604 reorder-under-cache-miss and
-> a real gh#597 cache-residency soak need a cache-control seam (**#643**, filed), the `fusion.Fuse`
-> envelope → **#391** (re-home note posted). **#599 + #597 CLOSED** by owner decision — #597 is
-> *guarded + countable*, NOT proven closed (re-file from a real workload if the counter climbs).
-> Merged CLEAN (CI + sister-gate green); second Codex pass waived by owner.
+> **NEXT = fix #645 (classifier type-filter zeroing) — the MEASURED lever — then re-measure on the
+> 8B harness for the first clean community-quality read.** Epic B (re-scoped to *"make communities
+> deliver trustworthy NL→thematic answers via GraphRAG"*) is in progress; **B0 SHIPPED** (thematic
+> instrument + repeatable 8B harness, PR **#650 `e588e2dd`**). Also landed this session: **#646**
+> natsclient configurable handler timeout (8B synthesis needs >30s; the hardcoded 30s was
+> truncating it), **#647** CI redesign (our own `e2e:statistical` ladder per-PR; **sister-validation
+> OFF until v1/RC** — sisters conform at tag boundaries, cross-repo breaks caught by tag-lockstep +
+> the pre-tag e2e HARD RULE), **#649** graphview flake fix. **Main tip `e588e2dd`; tag baseline
+> `v1.0.0-beta.158`; clean.** (Epic A COMPLETE + released as beta.158 — see log.)
 >
-> Tracker hygiene this session: **7 issues whose PRs had merged but were never closed
-> (#600 #601 #602 #611 #612 #614 #616) are now closed** — the "status words lie" rule (below) in
-> action; `gh issue list` now reflects reality.
+> **THE FINDING that reframes Epic B (measure-before-building paid off — hard).** The 8B measurement
+> (`task e2e:semantic:8b`) showed the DOMINANT thematic-answer defect is a **RETRIEVAL bug, NOT
+> partition coherence** (which the audit predicted): the intent classifier's guessed entity-type
+> filters hard-zero the semantic result set — `filterEntityIDsByType` (`processor/graph-query/
+> graphrag.go:1339`) exact-matches invented type names ("Procedure", "Equipment Repair") against the
+> corpus's real types (`maintenance.work.*`, `document`, …) with **no zero-fallback** → 4 of 5
+> thematic queries returned `count=0` → empty answer (also non-deterministic per ask). Filed **#645**.
+> Two confirmations: (a) **8B synthesis is necessary and WORKS** — the one query that retrieved
+> entities gave a grounded corpus answer ("Forklift Hydraulic System Repair"), escaping the 1.7b
+> metadata-template degeneration (Microsoft/seminstruct: community summarization below ~7B is noise →
+> the valid read NEEDS the 8B; default `task e2e:semantic` stays on 1.7b as the fast CI gate). (b)
+> **Partition determinism is already 1.0** on the ~74-entity corpus → B1's determinism piece is
+> low-leverage (re-check on a larger/dynamic corpus before de-scoping).
 >
-> **NEXT = the SAME owner decision on the next unit** (Epic A now fully done; epics sequential,
-> WIP=1). Candidates:
-> - **Epic B** — one community truth (level-0-only; disable LLM enhancement until the ownership
->   split; readiness gate). #606 #607 #608 #609 #617 #618. Starts with the community-scope owner
->   decision. Not started.
-> - **Epic C** — derived-state ownership + the cross-bucket repair/ordering pair (#622 #527 #625
->   #629; #629 dormant). Starts with accepting one retention ADR. Not started.
-> - **Deferred Epic A owner-decisions**: **#619** (BM25 ADR-scale restart-fork redesign — interim
->   shipped, bleeding stopped), **#633** (orphan-blob GC, owner-accepted growth), and the new
->   **#643** (cache-control seam — deterministic e2e reorder + a real #597 cache-residency soak).
+> **The RE-ORDERED sequence (the finding moved the target upstream):**
+> 1. **Fix #645** (small, the lever): don't zero a non-empty semantic result set — fall back to
+>    unfiltered / treat classifier types as soft preference / gate on the corpus type vocab; add a
+>    "would-have-zeroed → fell back" metric. **At commit, fold in the #650 reviewer NIT:**
+>    `validate_thematic_eval.go:451` should reuse the `clusteringRunsMetric` constant, not the
+>    hardcoded literal.
+> 2. **Re-measure** via `task e2e:semantic:8b` → the FIRST clean thematic read (all 5 questions reach
+>    synthesis) → **THEN decide whether B2 (semantic partition) is even needed**, against real numbers.
+> 3. The rest of the original plan (below) AS NEEDED, scoped by that re-measure.
 >
-> Main tip `db64d2c6`; tag baseline still `v1.0.0-beta.158` (#642 is test-only — no new tag). Clean.
+> **Original B0–B3 plan (stands, but now GATED by the #645 re-measure):**
+> - **B1** — `WithLevels(1)`, `EnableLLM=false` (interim, re-enabled B3), deterministic partition,
+>   fix dead `GetEdgeWeight`, cold-start detection, ready-latch + phantom-`IsAvailable` fix,
+>   non-empty degraded floor. #607 #608 #609 #617.
+> - **B2 (may be unnecessary — the re-measure decides)** — re-add ADR-061 semantic-kNN edges +
+>   #618 readiness gate. Engine checkpoint weighted-LPA vs Leiden. #606 #618.
+> - **B3** — ownership split: `COMMUNITY_INDEX`=partition (detector-exclusive) + new
+>   `COMMUNITY_SUMMARIES` keyed `{level}.{membership_hash}`; re-enable `EnableLLM`→seminstruct. #607/#617.
+> - **B0 converts to gates:** the instrument RECORDS today; B1/B2/B3 each convert their dimension
+>   (stability/floor→B1, grounding/theme-recall→B2, Tier-2→B3) to a HARD gate — report-only past its
+>   increment is the drift.
+> - **Deferred (not built):** B0 Layer-2 (semsource scorecard `thematic` band + `global_search` MCP
+>   proxy); **ADR-08x** (semantic partition + split store + readiness; promote ADR-061) — write when B2 scoped.
+>
+> **Run the valid measurement:** `task e2e:semantic:8b` (HEAVY local: ~20GiB Docker RAM, two qwen3-8b
+> for answer_synthesis + community_summary; ~10min). Instrument: `test/e2e/scenarios/validate_thematic_eval.go`.
+>
+> **TENET (owner, hold throughout):** semstreams is TIERED with GRACEFUL FALLBACK — structural
+> partition + statistical summaries are the correct Tier-0/1 output; semantic edges + LLM narratives
+> are additive Tier-1/2; never fail/empty, degrade + report. Graded by B0.
+>
+> (Epic C / deferred Epic A #619 #633 #643 remain queued behind Epic B.)
 
 ---
 
@@ -197,7 +223,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 | **IN PROGRESS — plan approved, B0 starting** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -247,13 +273,17 @@ workflow that looks like coverage and has never executed.
 
 These need an owner, not an implementer:
 
-- **Community scope at v1.** Evidence favors shrinking: non-deterministic
-  membership, uniformly unweighted edges, three redundant runs, 0–1 of 3 ground
-  truth, level 2 has no consumer and level 1 has one e2e probe — and ADR-061
-  already established community is post-hoc decoration on the primary search path.
-  Recommended: level-0-only now, **disable LLM enhancement** until the ownership
-  split, defer the split itself (ADR-scale: ~500 production LOC, storage-key
-  contract change, pre-v1 state wipe).
+- **Community scope at v1. — DECIDED, REVERSED (owner, 2026-07-23).** The audit's
+  shrink recommendation (level-0-only + disable LLM + defer the split) was
+  **rejected** once the intent was examined: communities are the GraphRAG thematic
+  layer, semstreams exists for PathRAG+GraphRAG, semsource (lead v1 product) wires
+  community + `global_search` + Tier-2 (seminstruct), and "NL→thematic answer" is a
+  v1 expectation. The audit's "low quality" metrics are a *garbage-in* symptom of an
+  unweighted, semantic-blind, non-deterministic partition — not a reason to shrink.
+  **Resolution: INVEST** (Epic B B0–B3, see Next Action). Level-0-only survives but
+  for the honest reason (today's 3 "levels" are 3 identical LPA runs, `ParentID`
+  always nil — fake hierarchy); LLM is disabled only as a B1 *interim*, re-enabled
+  via the B3 ownership split; the split is **in scope**, not deferred.
 - **Embedding readiness semantics.** "Terminal includes failed" is a decision, not
   a patch. Fits the ADR-084 health-gates frame.
 - **BM25 tier contract.** Lexical index over an immutable snapshot, or stateless
@@ -406,3 +436,42 @@ Append one line per session. Newest last.
   CLOSED (owner: #597 guarded + countable, NOT proven closed). Also reconciled the tracker — **7
   merged-but-open issues (#600 #601 #602 #611 #612 #614 #616) closed**. Merged CLEAN, second Codex
   pass waived. **Next: the SAME owner decision — Epic B / Epic C / deferred Epic A (#619 #633 #643).**
+- **2026-07-23 (session 8)** — **Epic B opened and RE-SCOPED.** Started to scope Epic B as the
+  audit's "shrink communities" (drafted an OpenSpec `community-single-truth` proposal to go
+  level-0-only + disable LLM). **The owner stepped back to intent** — why does community exist, who
+  consumes it — which flipped the epic: communities are the GraphRAG thematic layer, semstreams is
+  a PathRAG+GraphRAG edge SKG, semsource (LEAD v1 product) wires `global_search`+Tier-2 via
+  seminstruct, and NL→thematic answers is a v1 bar. **Retired the shrink proposal.** Grabbed a
+  baseline (thematic quality is UNMEASURED; the thematic *layer* is broken while retrieval works;
+  explicit-edge LPA is weakest exactly on the doc corpus). Architect designed the INVEST plan
+  (B0 instrument → B1 stabilize → B2 semantic coherence → B3 ownership-split Tier-2 + one ADR-08x,
+  promote ADR-061). Owner approved + added the **tiered-graceful-fallback tenet** (structural+
+  statistical = correct Tier-0/1 floor; semantic/LLM additive; never empty). Lessons: (1) **ask
+  "what job does this do" before "how do we fix the tech"** — the shrink was technically clean and
+  practically wrong; the owner's intent question saved a wrong build. (2) **the audit's "low
+  quality → shrink" was garbage-in**: the fix is partition quality (semantic edges — never built),
+  not deletion. (3) verify consumers in the SISTER repo (semsource wires it intentionally), not
+  just the framework. **Next: build B0 (the instrument) + record the broken-state baseline; then
+  the ADR + B1.**
+- **2026-07-23 (session 9)** — **Epic B B0 SHIPPED (#650) + the plan RE-ORDERED by measurement.** Built
+  the B0 thematic instrument (`validate_thematic_eval.go`, 5 deterministic dims) + a repeatable 8B
+  harness (`task e2e:semantic:8b`). Measured at 1.7b (noise — `answer_synthesis` timed out at the 15s
+  default → metadata-template floor), then on the owner's steer (Microsoft: <~7B community summarization
+  is noise; seminstruct has a `qwen3-8b`) re-measured at **8B** — which forced a natsclient fix (**#646**:
+  the hardcoded 30s handler timeout truncated 8B synthesis below its budget). **KEY FINDING: the dominant
+  thematic defect is a RETRIEVAL bug — the classifier type-filter hard-zeroes good semantic results
+  (#645) — NOT partition coherence as the audit predicted.** 4/5 thematic queries → count=0; 8B synthesis
+  WORKS when entities are retrieved; partition determinism already 1.0. So the plan re-ordered: fix #645
+  first → re-measure on the 8B harness → THEN decide if B2 (partition) is even needed. Also owner-directed:
+  **CI redesign (#647)** — replaced per-PR sister validation with our own `e2e:statistical` ladder (Epic D
+  "automate a tier first"), sister OFF until v1/RC; **graphview flake fixed (#648/#649)** (a real
+  observation race — verified 5/5-local-PASS = flake); the #650 golden-pack-id test caught a real
+  config-dup bug (fixed). Lessons: (1) **"what job does this do" (s8) then MEASURE before building (s9)**
+  killed the wrong build TWICE (shrink→invest; rebuild-partition→fix-retrieval). (2) **measure with an
+  ADEQUATE model** — a sub-threshold model reads as "communities are bad" when the MODEL is the problem;
+  seminstruct `qwen3-8b` is the recommended summary tier, `1.7b` is an "expect degradation" fallback.
+  (3) **investigate every red before calling flake** — 5/5-local-FAIL is deterministic (golden test caught
+  a real dup), 5/5-local-PASS is the flake (graphview). (4) **the Codex gate is out-of-band** — no GitHub
+  bot; owner runs it + relays under their account; agent can't trigger it (owner waived it for the
+  low-risk PRs this session). **Next: fix #645 (+ the #650 NIT), re-measure on `task e2e:semantic:8b`,
+  scope B2 against real numbers.**
