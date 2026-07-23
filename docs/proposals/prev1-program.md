@@ -9,36 +9,36 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **Epic A's mechanical increments are COMPLETE (inc 1–4 shipped + archived).** Inc 4
-> (`embedding-readiness-and-dedup-efficiency`) merged as **#639 (`fa1041a8`, 2026-07-22)**:
-> readiness reports `degraded` under embedding failures via a `FailedCount` input to the
-> shared `ComputeIndexStatus` (`FailedCount>0 → degraded` before "ready wins"; watermark
-> still advances on failed — deadlock avoidance), three observability layers (L1 gauge +
-> `{reason}` counter, L2 GRAPH_STATUS `{reason:count}` breakdown, L3 fusion/graph-query relay
-> + opt-in message-logger debug), process-local singleflight (#630), #627 closed, **+ 5
-> Codex-review fixes** (revision-aware failure map, persistence-miss non-terminal, phase-at-
-> dequeue, cold-start `InProcessDedupKey`, reason normalization). OpenSpec change archived;
-> `graph-embedding` + `graph-index-readiness` live specs carry the requirements; adopter note
-> `docs/operations/embedding-readiness-degraded-change.md`.
+> **Epic A is COMPLETE — mechanical increments (inc 1–4, shipped + archived + released as
+> `v1.0.0-beta.158`) AND its test-debt.** The test-debt unit (`#599 + #597`) shipped this
+> session as PR **#642 (`db64d2c6`, 2026-07-23)**: a `validate-batch-read-reconciliation`
+> e2e:semantic stage driving `graph.query.batch` + the production `fusionnats.Client.Entities`
+> over the live wire — asserts the gh#604 missing→unhydrated reconciliation + exactly-once on
+> every reply, with a **load-bearing** `batch_query_missing_total` gate (lower-bound, since the
+> counter is process-global). The Codex gate found **5 real coverage holes (3 P1)** two reviewers
+> missed; all addressed (production-client absent reconciliation; counter load-bearing;
+> exactly-once everywhere) + 2 **honestly downscoped** — the gh#604 reorder-under-cache-miss and
+> a real gh#597 cache-residency soak need a cache-control seam (**#643**, filed), the `fusion.Fuse`
+> envelope → **#391** (re-home note posted). **#599 + #597 CLOSED** by owner decision — #597 is
+> *guarded + countable*, NOT proven closed (re-file from a real workload if the counter climbs).
+> Merged CLEAN (CI + sister-gate green); second Codex pass waived by owner.
 >
-> **NEXT = an OWNER DECISION on the next unit** (Epic A mechanical work is done; epics are
-> sequential, WIP=1). Candidates:
-> - **Epic B** — one community truth (level-0-only; disable LLM enhancement until the
->   ownership split; readiness gate). #606 #607 #608 #609 #617 #618. Not started.
-> - **Epic C** — derived-state ownership + the cross-bucket repair/ordering pair
->   **#625 + #629** re-homed here from Epic A (#629 dormant). #622 #527 #625 #629. Not started.
-> - **Deferred Epic A owner-decisions**: **#619** (BM25 redesign — query-pollution interim
->   shipped in Track 0, so bleeding stopped; only the ADR-scale restart-fork redesign remains),
->   **#633** (orphan-blob GC, ADR-068 inc 6 — owner-accepted growth), **#627 Option-2**
->   (offloaded digest-key fetch-skip).
-> - **Epic A test-debt**: **#599** (fusion Fuse/batch/unhydrated e2e) + reconcile **#597**
->   (fusion top-entity drop — likely already fixed by ADR-084's `Entities` reconciliation;
->   #599 would prove it and close it).
+> Tracker hygiene this session: **7 issues whose PRs had merged but were never closed
+> (#600 #601 #602 #611 #612 #614 #616) are now closed** — the "status words lie" rule (below) in
+> action; `gh issue list` now reflects reality.
 >
-> Shipped + archived: inc 1 (#628 `a6ea9979`), inc 2 (#632 `d6addd5b`, #600+#616), inc 3
-> (#635 `fe329a5e`, #601), **inc 4 (#639 `fa1041a8`, #613+#630)**. Retrospective rounds: #636
-> (`ea7a51b4`) + #638 (`08d7c5c2`). **Main tip `d6d3e57e`; RELEASED as tag
-> `v1.0.0-beta.158` (2026-07-22) — sisters conform against it. Clean.**
+> **NEXT = the SAME owner decision on the next unit** (Epic A now fully done; epics sequential,
+> WIP=1). Candidates:
+> - **Epic B** — one community truth (level-0-only; disable LLM enhancement until the ownership
+>   split; readiness gate). #606 #607 #608 #609 #617 #618. Starts with the community-scope owner
+>   decision. Not started.
+> - **Epic C** — derived-state ownership + the cross-bucket repair/ordering pair (#622 #527 #625
+>   #629; #629 dormant). Starts with accepting one retention ADR. Not started.
+> - **Deferred Epic A owner-decisions**: **#619** (BM25 ADR-scale restart-fork redesign — interim
+>   shipped, bleeding stopped), **#633** (orphan-blob GC, owner-accepted growth), and the new
+>   **#643** (cache-control seam — deterministic e2e reorder + a real #597 cache-residency soak).
+>
+> Main tip `db64d2c6`; tag baseline still `v1.0.0-beta.158` (#642 is test-only — no new tag). Clean.
 
 ---
 
@@ -196,7 +196,7 @@ two files three times. Start Epic A here.
 
 | Epic | Scope | Issues | State |
 |---|---|---|---|
-| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · #619 #633 (deferred) · #599 #597 (test-debt) | **MECHANICAL COMPLETE (inc.1–4 merged); only deferred owner-decisions + test-debt remain** |
+| **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
 | **B** — one community truth | level-0-only; disable LLM enhancement until ownership split; readiness gate | #606 #607 #608 #609 #617 #618 | not started |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
@@ -386,3 +386,23 @@ Append one line per session. Newest last.
   tag names each breaking change + migration doc; sisters not touched (owner manages them).
   **Next: OWNER DECISION on the next unit — Epic B, Epic C (now carrying #625/#629), or the
   deferred Epic A owner-decisions/test-debt (see Next Action).**
+- **2026-07-23 (session 7)** — **Epic A test-debt (`#599 + #597`) SHIPPED + CLOSED; Epic A now
+  fully complete.** New `validate-batch-read-reconciliation` e2e:semantic stage (test-only, PR
+  **#642 `db64d2c6`**) drives `graph.query.batch` + the production `fusionnats.Client.Entities`
+  over the live wire — gh#604 missing→unhydrated reconciliation + exactly-once per reply +
+  load-bearing `batch_query_missing_total`. Pipeline: semstreams-developer → semstreams-reviewer
+  (1 HIGH: verdict overclaimed "resolved" — fixed) → Codex gate (**5 real holes, 3 P1, two
+  reviewers missed**: production-client reconciliation untested, counter presence-only,
+  count-only `assertAllHydrate`, pre-warmed reorder, non-evicting soak) → all addressed. Lessons:
+  (1) **my own over-tightening** — I directed an exact `==` counter invariant; the counter is
+  process-global, so exact/upper-bound would flake red on unrelated traffic. Changed to a
+  **lower-bound** gate (proves increment / catches silent-stop + reset); present-gap detection
+  stays where it's deterministic + attributed (the hydration guards). (2) **Honest downscope beats
+  a faked signal** — the gh#604 reorder-under-cache-miss and a real gh#597 cache-residency soak
+  are unreachable (entity cache hard-coded 5000/30s over ~74 entities never evicts); filed **#643**
+  (cache-control seam) rather than pre-warm an all-hit request into a false pass. Fuse envelope →
+  **#391** (re-home note posted). (3) **The out-of-band Codex flow**: no GitHub-integrated bot —
+  the owner runs it and relays findings under their account; I cannot trigger it. #599 + #597
+  CLOSED (owner: #597 guarded + countable, NOT proven closed). Also reconciled the tracker — **7
+  merged-but-open issues (#600 #601 #602 #611 #612 #614 #616) closed**. Merged CLEAN, second Codex
+  pass waived. **Next: the SAME owner decision — Epic B / Epic C / deferred Epic A (#619 #633 #643).**
