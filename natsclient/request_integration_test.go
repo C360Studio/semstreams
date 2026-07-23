@@ -4,6 +4,7 @@ package natsclient
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -242,6 +243,50 @@ func TestIntegration_SubscribeForRequests(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("Handler was not called")
 	}
+}
+
+// TestIntegration_SubscribeForRequests_HandlerTimeoutConfigurable proves the
+// per-message handler context carries the CONFIGURED deadline, not the hardcoded
+// 30s. The handler reports the remaining budget on its ctx; with a 5s configured
+// timeout the deadline must be ~5s (well under the old 30s default), which is what
+// lets a slow-by-design handler (8B answer synthesis) get a >30s budget when the
+// deployment raises it.
+func TestIntegration_SubscribeForRequests_HandlerTimeoutConfigurable(t *testing.T) {
+	ctx := context.Background()
+
+	natsContainer, natsURL := startNATSContainer(ctx, t)
+	defer natsContainer.Terminate(ctx)
+
+	const configured = 5 * time.Second
+	client, err := NewClient(natsURL, WithRequestHandlerTimeout(configured))
+	require.NoError(t, err)
+	err = client.Connect(ctx)
+	require.NoError(t, err)
+	defer client.Close(ctx)
+
+	subject := "test.handler.timeout"
+	_, err = client.SubscribeForRequests(ctx, subject, func(hctx context.Context, _ []byte) ([]byte, error) {
+		dl, ok := hctx.Deadline()
+		if !ok {
+			return []byte("no-deadline"), nil
+		}
+		// Report remaining budget in milliseconds so the test can assert it
+		// tracks `configured`, not the old hardcoded 30s.
+		return []byte(strconv.FormatInt(int64(time.Until(dl)/time.Millisecond), 10)), nil
+	})
+	require.NoError(t, err)
+
+	time.Sleep(50 * time.Millisecond)
+
+	resp, err := client.Request(ctx, subject, []byte("x"), 5*time.Second)
+	require.NoError(t, err)
+
+	remainingMs, err := strconv.ParseInt(string(resp), 10, 64)
+	require.NoError(t, err, "handler must report a deadline, got %q", string(resp))
+	// Budget must reflect the 5s config (allow generous slack for delivery),
+	// and must be far below the old 30s default.
+	assert.Greater(t, remainingMs, int64(3000), "handler budget should be ~5s, got %dms", remainingMs)
+	assert.Less(t, remainingMs, int64(5200), "handler budget must reflect the 5s config, not the old 30s default, got %dms", remainingMs)
 }
 
 // TestIntegration_SubscribeForRequests_Error tests error handling in request handler

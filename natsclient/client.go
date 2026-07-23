@@ -94,6 +94,13 @@ type Client struct {
 	timeout       time.Duration
 	drainTimeout  time.Duration
 
+	// requestHandlerTimeout bounds a single SubscribeForRequests handler
+	// invocation. Defaults to DefaultRequestHandlerTimeout (30s); raised per
+	// deployment via WithRequestHandlerTimeout or the
+	// SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT env var for slow-by-design
+	// handlers (e.g. LLM answer synthesis on the globalSearch path).
+	requestHandlerTimeout time.Duration
+
 	// Authentication - sensitive fields cleared on close
 	username string
 	password string // WARNING: Consider using JWT/NKey authentication instead
@@ -158,6 +165,10 @@ func NewClient(urls string, opts ...ClientOption) (*Client, error) {
 		timeout:          5 * time.Second,
 		drainTimeout:     30 * time.Second,
 		metricsInterval:  30 * time.Second, // Poll JetStream stats every 30s
+		// Env-resolved default (30s unless SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT
+		// overrides). Applied here so an explicit WithRequestHandlerTimeout option
+		// below still wins (option > env > framework default).
+		requestHandlerTimeout: resolveRequestHandlerTimeoutFromEnv(),
 	}
 
 	// Apply options
