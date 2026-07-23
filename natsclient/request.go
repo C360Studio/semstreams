@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"time"
 
 	"github.com/nats-io/nats.go"
@@ -12,6 +14,43 @@ import (
 
 // DefaultRequestTimeout is the default timeout for request/reply operations.
 const DefaultRequestTimeout = 5 * time.Second
+
+// DefaultRequestHandlerTimeout bounds a single inbound request-handler
+// invocation (SubscribeForRequests). It caps how long a handler may run
+// before its context is cancelled, so a wedged or pathologically slow
+// handler cannot pin a NATS delivery goroutine indefinitely. This is the
+// CI/default value and MUST NOT change without weighing every request
+// handler in the tree; slow-by-design handlers (e.g. an LLM answer-synthesis
+// path that legitimately needs >30s) raise it per deployment via
+// WithRequestHandlerTimeout or the SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT
+// environment variable rather than editing this constant.
+const DefaultRequestHandlerTimeout = 30 * time.Second
+
+// requestHandlerTimeoutEnv is the deployment-level override for the
+// per-message request-handler timeout. Parsed as a Go duration (e.g.
+// "150s"); an unset or unparseable value leaves DefaultRequestHandlerTimeout
+// in force.
+const requestHandlerTimeoutEnv = "SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT"
+
+// resolveRequestHandlerTimeoutFromEnv returns the request-handler timeout
+// implied by requestHandlerTimeoutEnv, or DefaultRequestHandlerTimeout when
+// the variable is unset or malformed. A malformed value is logged and
+// ignored (fail-safe to the default) rather than failing construction.
+func resolveRequestHandlerTimeoutFromEnv() time.Duration {
+	raw := os.Getenv(requestHandlerTimeoutEnv)
+	if raw == "" {
+		return DefaultRequestHandlerTimeout
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		slog.Default().Warn("natsclient: ignoring invalid request-handler timeout override",
+			slog.String("env", requestHandlerTimeoutEnv),
+			slog.String("value", raw),
+			slog.Duration("using", DefaultRequestHandlerTimeout))
+		return DefaultRequestHandlerTimeout
+	}
+	return d
+}
 
 // Readiness-gated read defaults (ADR-060 sibling doctrine, third bucket — see
 // docs/operations/07-nats-request-retry.md). A readiness-gated read tolerates a
@@ -319,8 +358,11 @@ func (c *Client) SubscribeForRequests(
 			msgCtx = ContextWithTrace(ctx, tc)
 		}
 
-		// Create per-message context with timeout
-		msgCtx, cancel := context.WithTimeout(msgCtx, 30*time.Second)
+		// Create per-message context with timeout. Configurable (default
+		// DefaultRequestHandlerTimeout=30s) so slow-by-design handlers such as
+		// the LLM answer-synthesis path can raise it per deployment without
+		// changing the framework default. See resolveRequestHandlerTimeoutFromEnv.
+		msgCtx, cancel := context.WithTimeout(msgCtx, c.requestHandlerTimeout)
 		defer cancel()
 
 		// Call the handler

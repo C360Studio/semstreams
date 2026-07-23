@@ -34,6 +34,21 @@ func WithPingInterval(d time.Duration) ClientOption {
 	}
 }
 
+// WithRequestHandlerTimeout sets the per-message timeout applied to a
+// SubscribeForRequests handler invocation. Zero or negative leaves the
+// current value (env-resolved default, DefaultRequestHandlerTimeout=30s)
+// untouched. An explicit option wins over the
+// SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT env var. Raise it only for
+// deployments running slow-by-design handlers (e.g. LLM answer synthesis).
+func WithRequestHandlerTimeout(d time.Duration) ClientOption {
+	return func(c *Client) error {
+		if d > 0 {
+			c.requestHandlerTimeout = d
+		}
+		return nil
+	}
+}
+
 // WithHealthInterval sets the interval for health monitoring
 func WithHealthInterval(d time.Duration) ClientOption {
 	return func(c *Client) error {
