@@ -282,6 +282,27 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// not write-time. Structural-only — creates its own observation-stamped entity.
 		{"test-temporal-observed-time", s.executeTestTemporalObservedTime, []string{"structural"}},
 		{"test-zone-relationships", s.executeTestZoneRelationships, nil},
+		// LLM community enhancement wait runs HERE, before B0 and before any
+		// answer-model stage. It only reads/polls community KV for enhancement
+		// status (it does NOT drive answer synthesis), so it gives the separate
+		// community_summary model time to populate Tier-2 summaries without
+		// clogging the answer model — exactly what B0 needs to synthesize over real
+		// summaries. On a heavy qwen3-8b run summaries keep generating on that
+		// separate instance throughout B0's own run as well.
+		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
+		// Epic B increment B0 — the GraphRAG thematic-answer eval — runs HERE, before
+		// ANY stage that drives LLM answer synthesis (the NL-intent, graphrag, and
+		// known-answer stages below). On a heavy qwen3-8b run those stages leave
+		// abandoned-but-still-executing synthesis requests on the answer model — the
+		// client gives up long before the raised NATS handler deadline, so the request
+		// keeps running and the retry layer piles on — which starves a late-positioned
+		// recorder until its own client deadline (observed: run stalled >300s on the
+		// first B0 question). Positioned here it gets a clean answer model: the stages
+		// above are pure graph traversal / index reads (no answer-model synthesis), and
+		// communities + embeddings + community summaries are already populated.
+		// Semantic-only; RECORDER, not a hard gate (see validate_thematic_eval.go
+		// header). Only an unreachable transport fails.
+		{"validate-thematic-answer-eval", s.executeValidateThematicAnswerEval, []string{"semantic"}},
 		// NL intent routing tests (validates classifier → strategy routing through globalSearch)
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
 		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical", "semantic"}},
@@ -339,7 +360,6 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// queryable and the semantic index ranks. The fusion.Fuse envelope third is
 		// re-homed to gh#391 (unreachable — no fusion route in configs/semantic.json).
 		{"validate-batch-read-reconciliation", s.executeValidateBatchReadReconciliation, []string{"semantic"}},
-		{"validate-llm-enhancement", s.executeValidateLLMEnhancement, []string{"semantic"}},
 		{"validate-anomaly-detection", s.executeValidateAnomalyDetection, []string{"statistical", "semantic"}},
 		{"validate-virtual-edges", s.executeValidateVirtualEdges, []string{"semantic"}},
 

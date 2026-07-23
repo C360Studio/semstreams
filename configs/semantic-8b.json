@@ -1,0 +1,838 @@
+{
+  "version": "1.4.0",
+  "platform": {
+    "org": "c360",
+    "id": "semstreams-kitchen-sink-ml",
+    "type": "comprehensive-semantic",
+    "region": "local",
+    "instance_id": "semantic-999-ml",
+    "environment": "test"
+  },
+  "nats": {
+    "urls": [
+      "nats://localhost:4222"
+    ]
+  },
+  "model_registry": {
+    "endpoints": {
+      "seminstruct-fast": {
+        "provider": "openai",
+        "url": "http://seminstruct-fast:8083/v1",
+        "model": "qwen3-0.6b",
+        "max_tokens": 4096
+      },
+      "seminstruct-mid-answer": {
+        "provider": "openai",
+        "url": "http://seminstruct-mid-answer:8083/v1",
+        "model": "qwen3-8b",
+        "max_tokens": 4096
+      },
+      "seminstruct-mid-summary": {
+        "provider": "openai",
+        "url": "http://seminstruct-mid-summary:8083/v1",
+        "model": "qwen3-8b",
+        "max_tokens": 4096
+      },
+      "semembed": {
+        "provider": "openai",
+        "url": "http://semembed:8081/v1",
+        "model": "all-MiniLM-L6-v2",
+        "max_tokens": 0
+      }
+    },
+    "capabilities": {
+      "intent_classification": {
+        "preferred": [
+          "seminstruct-fast"
+        ]
+      },
+      "answer_synthesis": {
+        "preferred": [
+          "seminstruct-mid-answer"
+        ],
+        "timeout": "240s"
+      },
+      "community_summary": {
+        "preferred": [
+          "seminstruct-mid-summary"
+        ],
+        "timeout": "240s"
+      },
+      "anomaly_review": {
+        "preferred": [
+          "seminstruct-mid-summary"
+        ],
+        "timeout": "240s"
+      },
+      "embedding": {
+        "preferred": [
+          "semembed"
+        ]
+      }
+    },
+    "defaults": {
+      "model": "seminstruct-mid-answer"
+    }
+  },
+  "services": {
+    "service-manager": {
+      "name": "service-manager",
+      "enabled": true,
+      "config": {
+        "http_port": 8080,
+        "swagger_ui": true,
+        "server_info": {
+          "title": "SemStreams Kitchen Sink ML API",
+          "description": "Comprehensive semantic processing with HTTP embeddings",
+          "version": "0.7.0"
+        }
+      }
+    },
+    "component-manager": {
+      "name": "component-manager",
+      "enabled": true,
+      "config": {}
+    },
+    "metrics": {
+      "name": "metrics",
+      "enabled": true,
+      "config": {
+        "port": 9090,
+        "path": "/metrics",
+        "include_go_metrics": true
+      }
+    },
+    "message-logger": {
+      "name": "message-logger",
+      "enabled": true,
+      "config": {
+        "buffer_size": 10000,
+        "monitor_subjects": [
+          "*"
+        ],
+        "enable_kv_query": true,
+        "log_level": "INFO"
+      }
+    },
+    "log-forwarder": {
+      "name": "log-forwarder",
+      "enabled": true,
+      "config": {
+        "min_level": "DEBUG",
+        "exclude_sources": [
+          "flow-service.websocket"
+        ]
+      }
+    },
+    "metrics-forwarder": {
+      "name": "metrics-forwarder",
+      "enabled": true,
+      "config": {
+        "push_interval": "5s",
+        "include_go_metrics": false,
+        "include_proc_metrics": false
+      }
+    }
+  },
+  "components": {
+    "udp": {
+      "type": "input",
+      "name": "udp",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "udp_out",
+              "subject": "raw.sensor.udp",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "bind": "0.0.0.0",
+        "port": 14550,
+        "buffer_size": 65536
+      }
+    },
+    "file_documents": {
+      "type": "input",
+      "name": "file_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "file_out",
+              "subject": "raw.document.corpus",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "path": "/data/testdata/semantic/documents.jsonl",
+        "format": "jsonl",
+        "interval": "10ms",
+        "loop": false
+      }
+    },
+    "file_maintenance": {
+      "type": "input",
+      "name": "file_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "file_out",
+              "subject": "raw.document.corpus",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "path": "/data/testdata/semantic/maintenance.jsonl",
+        "format": "jsonl",
+        "interval": "10ms",
+        "loop": false
+      }
+    },
+    "file_observations": {
+      "type": "input",
+      "name": "file_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "file_out",
+              "subject": "raw.document.corpus",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "path": "/data/testdata/semantic/observations.jsonl",
+        "format": "jsonl",
+        "interval": "10ms",
+        "loop": false
+      }
+    },
+    "file_sensor_docs": {
+      "type": "input",
+      "name": "file_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "file_out",
+              "subject": "raw.document.corpus",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "path": "/data/testdata/semantic/sensor_docs.jsonl",
+        "format": "jsonl",
+        "interval": "10ms",
+        "loop": false
+      }
+    },
+    "file_sensors": {
+      "type": "input",
+      "name": "file_input",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "file_out",
+              "subject": "raw.sensor.file",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "path": "/data/testdata/semantic/sensors.jsonl",
+        "format": "jsonl",
+        "interval": "10ms",
+        "loop": false
+      }
+    },
+    "document_processor": {
+      "type": "processor",
+      "name": "document_processor",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "doc_in",
+              "subject": "raw.document.corpus",
+              "type": "jetstream"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "doc_out",
+              "subject": "document.processed.entity",
+              "type": "jetstream",
+              "interface": "content.document.v1"
+            }
+          ]
+        },
+        "org_id": "c360",
+        "platform": "logistics"
+      }
+    },
+    "iot_sensor": {
+      "type": "processor",
+      "name": "iot_sensor",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "sensor_in",
+              "subject": "raw.sensor.>",
+              "type": "jetstream"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "sensor_out",
+              "subject": "sensor.processed.entity",
+              "type": "jetstream",
+              "interface": "iot.sensor.v1"
+            }
+          ]
+        },
+        "org_id": "c360",
+        "platform": "logistics"
+      }
+    },
+    "rule": {
+      "type": "processor",
+      "name": "rule-processor",
+      "enabled": true,
+      "config": {
+        "pack_id": "semantic-rules",
+        "entity_watch_buckets": {
+          "ENTITY_STATES": [
+            "c360.*.*.*.*.*"
+          ]
+        },
+        "ports": {
+          "inputs": [
+            {
+              "name": "rule_entity_in",
+              "subject": "objectstore.stored.entity",
+              "type": "jetstream",
+              "description": "Stored document entity events"
+            },
+            {
+              "name": "rule_sensor_in",
+              "subject": "sensor.processed.entity",
+              "type": "jetstream",
+              "description": "Sensor entity events (bypass ObjectStore)"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "rule_out",
+              "subject": "rule.triggered.alert",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "enable_graph_integration": true,
+        "graph_event_subject_prefix": "objectstore.stored",
+        "inline_rules": [
+          {
+            "id": "cold-storage-temp-alert",
+            "type": "expression",
+            "name": "Cold Storage Temperature Alert",
+            "description": "Fires when cold storage temperature exceeds safe threshold (40F). OnEnter creates alert triple, OnExit removes it.",
+            "enabled": true,
+            "entity": {
+              "pattern": "*.*.*.*.*.*"
+            },
+            "conditions": [
+              {
+                "field": "sensor.measurement.fahrenheit",
+                "operator": "gte",
+                "value": 40.0,
+                "required": true
+              },
+              {
+                "field": "geo.location.zone",
+                "operator": "contains",
+                "value": "cold-storage",
+                "required": true
+              }
+            ],
+            "logic": "and",
+            "cooldown": "5s",
+            "on_enter": [
+              {
+                "type": "add_triple",
+                "predicate": "alert.state.active",
+                "object": "cold-storage-violation"
+              },
+              {
+                "type": "publish",
+                "subject": "alerts.cold-storage"
+              }
+            ],
+            "on_exit": [
+              {
+                "type": "remove_triple",
+                "predicate": "alert.state.active",
+                "object": "cold-storage-violation"
+              },
+              {
+                "type": "publish",
+                "subject": "alerts.cold-storage.cleared"
+              }
+            ],
+            "metadata": {
+              "severity": "critical",
+              "category": "food_safety",
+              "tier": 0
+            }
+          },
+          {
+            "id": "high-humidity-alert",
+            "type": "expression",
+            "name": "High Humidity Alert",
+            "description": "Fires when humidity exceeds 50% threshold. Demonstrates stateful rule transitions.",
+            "enabled": true,
+            "entity": {
+              "pattern": "*.*.*.*.*.*"
+            },
+            "conditions": [
+              {
+                "field": "sensor.measurement.percent",
+                "operator": "gte",
+                "value": 50.0,
+                "required": true
+              },
+              {
+                "field": "sensor.classification.type",
+                "operator": "eq",
+                "value": "humidity",
+                "required": true
+              }
+            ],
+            "logic": "and",
+            "cooldown": "5s",
+            "on_enter": [
+              {
+                "type": "add_triple",
+                "predicate": "alert.state.active",
+                "object": "high-humidity-warning"
+              },
+              {
+                "type": "publish",
+                "subject": "alerts.humidity"
+              }
+            ],
+            "on_exit": [
+              {
+                "type": "remove_triple",
+                "predicate": "alert.state.active",
+                "object": "high-humidity-warning"
+              }
+            ],
+            "metadata": {
+              "severity": "warning",
+              "category": "environment",
+              "tier": 0
+            }
+          },
+          {
+            "id": "low-pressure-alert",
+            "type": "expression",
+            "name": "Low Air Pressure Alert",
+            "description": "Fires when compressed air pressure drops below 100 PSI. OnEnter/OnExit demonstrate dynamic graph state.",
+            "enabled": true,
+            "entity": {
+              "pattern": "*.*.*.*.*.*"
+            },
+            "conditions": [
+              {
+                "field": "sensor.measurement.psi",
+                "operator": "lt",
+                "value": 100.0,
+                "required": true
+              },
+              {
+                "field": "sensor.classification.type",
+                "operator": "eq",
+                "value": "pressure",
+                "required": true
+              }
+            ],
+            "logic": "and",
+            "cooldown": "5s",
+            "on_enter": [
+              {
+                "type": "add_triple",
+                "predicate": "alert.state.active",
+                "object": "low-pressure-warning"
+              },
+              {
+                "type": "publish",
+                "subject": "alerts.pressure"
+              }
+            ],
+            "on_exit": [
+              {
+                "type": "remove_triple",
+                "predicate": "alert.state.active",
+                "object": "low-pressure-warning"
+              }
+            ],
+            "metadata": {
+              "severity": "warning",
+              "category": "equipment",
+              "tier": 0
+            }
+          }
+        ]
+      }
+    },
+    "graph-ingest": {
+      "type": "processor",
+      "name": "graph-ingest",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "objectstore_in",
+              "subject": "objectstore.stored.entity",
+              "type": "jetstream",
+              "interface": "storage.stored.v1",
+              "description": "Stored document entity events from ObjectStore"
+            },
+            {
+              "name": "sensor_in",
+              "subject": "sensor.processed.entity",
+              "type": "jetstream",
+              "interface": "iot.sensor.v1",
+              "description": "Sensor entity events from IoT processor"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "entity_states",
+              "subject": "ENTITY_STATES",
+              "type": "kv",
+              "description": "Entity state KV bucket"
+            }
+          ]
+        },
+        "enable_hierarchy": true
+      }
+    },
+    "graph-index": {
+      "type": "processor",
+      "name": "graph-index",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_watch",
+              "subject": "ENTITY_STATES",
+              "type": "kv-watch",
+              "description": "Watch entity state changes"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "outgoing_index",
+              "subject": "OUTGOING_INDEX",
+              "type": "kv",
+              "description": "Outgoing relationship index"
+            },
+            {
+              "name": "incoming_index",
+              "subject": "INCOMING_INDEX",
+              "type": "kv",
+              "description": "Incoming relationship index"
+            },
+            {
+              "name": "alias_index",
+              "subject": "ALIAS_INDEX",
+              "type": "kv",
+              "description": "Entity alias index"
+            },
+            {
+              "name": "predicate_index",
+              "subject": "PREDICATE_INDEX",
+              "type": "kv",
+              "description": "Predicate index"
+            }
+          ]
+        },
+        "workers": 4,
+        "batch_size": 50
+      }
+    },
+    "graph-embedding": {
+      "type": "processor",
+      "name": "graph-embedding",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_watch",
+              "subject": "ENTITY_STATES",
+              "type": "kv-watch",
+              "description": "Watch entity state changes"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "embeddings",
+              "subject": "EMBEDDINGS_CACHE",
+              "type": "kv",
+              "description": "Entity embeddings cache"
+            }
+          ]
+        },
+        "embedder_type": "http",
+        "batch_size": 50,
+        "cache_ttl": "1h"
+      }
+    },
+    "graph-clustering": {
+      "type": "processor",
+      "name": "graph-clustering",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_watch",
+              "subject": "ENTITY_STATES",
+              "type": "kv-watch",
+              "description": "Watch entity state changes for batch trigger"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "communities",
+              "subject": "COMMUNITY_INDEX",
+              "type": "kv",
+              "description": "Community detection results"
+            }
+          ]
+        },
+        "detection_interval": "30s",
+        "batch_size": 100,
+        "enable_llm": true,
+        "min_community_size": 2,
+        "max_iterations": 100,
+        "enable_structural": true,
+        "pivot_count": 16,
+        "max_hop_distance": 10,
+        "enable_anomaly_detection": false,
+        "anomaly_config": {
+          "enabled": true,
+          "max_anomalies_per_run": 100,
+          "core_anomaly": {
+            "enabled": true,
+            "min_core_for_hub_analysis": 2
+          },
+          "semantic_gap": {
+            "enabled": true,
+            "min_semantic_similarity": 0.7,
+            "min_structural_distance": 3
+          },
+          "virtual_edges": {
+            "auto_apply": {
+              "enabled": false,
+              "min_confidence": 0.95,
+              "predicate_template": "inferred.semantic.{band}"
+            },
+            "review_queue": {
+              "enabled": true,
+              "min_confidence": 0.7,
+              "max_confidence": 0.95,
+              "require_llm_classification": false
+            }
+          }
+        }
+      }
+    },
+    "graph-index-spatial": {
+      "type": "processor",
+      "name": "graph-index-spatial",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_watch",
+              "subject": "ENTITY_STATES",
+              "type": "kv-watch",
+              "description": "Watch entity state changes"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "spatial_index",
+              "subject": "SPATIAL_INDEX",
+              "type": "kv",
+              "description": "Spatial index"
+            }
+          ]
+        },
+        "geohash_precision": 6,
+        "workers": 4,
+        "batch_size": 100
+      }
+    },
+    "graph-index-temporal": {
+      "type": "processor",
+      "name": "graph-index-temporal",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "entity_watch",
+              "subject": "ENTITY_STATES",
+              "type": "kv-watch",
+              "description": "Watch entity state changes"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "temporal_index",
+              "subject": "TEMPORAL_INDEX",
+              "type": "kv",
+              "description": "Temporal index"
+            }
+          ]
+        },
+        "time_resolution": "hour",
+        "workers": 4,
+        "batch_size": 100
+      }
+    },
+    "graph-query": {
+      "type": "processor",
+      "name": "graph-query",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "query_requests",
+              "subject": "graph.query.>",
+              "type": "nats-request",
+              "description": "Query requests from gateway"
+            }
+          ],
+          "outputs": []
+        },
+        "request_timeout": "30s",
+        "max_traversal_depth": 5,
+        "max_traversal_nodes": 100
+      }
+    },
+    "graph-gateway": {
+      "type": "gateway",
+      "name": "graph-gateway",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "http",
+              "subject": ":8084",
+              "type": "http",
+              "description": "HTTP server for GraphQL and MCP"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "queries",
+              "subject": "graph.query.*",
+              "type": "nats-request"
+            },
+            {
+              "name": "mutations",
+              "subject": "graph.mutation.*",
+              "type": "nats-request",
+              "description": "Graph mutation requests"
+            }
+          ]
+        },
+        "graphql_path": "/graphql",
+        "mcp_path": "/mcp",
+        "enable_playground": true,
+        "query_timeout": 300000000000
+      }
+    },
+    "file": {
+      "type": "output",
+      "name": "file",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "file_in",
+              "subject": "objectstore.stored.entity",
+              "type": "jetstream",
+              "interface": "content.document.v1"
+            }
+          ],
+          "outputs": []
+        },
+        "directory": "/tmp",
+        "file_prefix": "semstreams-kitchen-sink-ml",
+        "format": "jsonl"
+      }
+    },
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "ports": {
+          "inputs": [
+            {
+              "name": "write",
+              "subject": "document.processed.entity",
+              "type": "jetstream",
+              "stream_name": "DOCUMENT"
+            }
+          ],
+          "outputs": [
+            {
+              "name": "stored",
+              "subject": "objectstore.stored.entity",
+              "type": "jetstream"
+            }
+          ]
+        },
+        "bucket_name": "semstreams_kitchen_sink_store",
+        "data_cache": {
+          "enabled": true,
+          "strategy": "hybrid",
+          "max_size": 5000,
+          "ttl": "1h",
+          "cleanup_interval": "5m"
+        }
+      }
+    }
+  }
+}

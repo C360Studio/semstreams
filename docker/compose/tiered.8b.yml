@@ -1,0 +1,96 @@
+# 8B GraphRAG measurement overlay for the semantic tier — HEAVY LOCAL/DEV RUN ONLY.
+#
+# ⚠️  DO NOT use this for CI. The default `task e2e:semantic` stays on qwen3-1.7b
+#     as the fast gate. This overlay swaps the two mid-tier seminstruct instances
+#     (answer_synthesis + community_summary) to qwen3-8b so the GraphRAG thematic
+#     baseline (B0 eval) is measured against an *adequate* summary/synthesis model
+#     — Microsoft's GraphRAG finding is that community summarization below ~7B adds
+#     noise not signal, and seminstruct's own docs call qwen3-8b the "recommended
+#     summary tier" and qwen3-1.7b a "fallback — expect degradation." qwen3-1.7b +
+#     the 15s answer-synthesis default was timing out on every answer and falling
+#     to the statistical template, so the recorded baseline read model-too-small
+#     noise, not community quality.
+#
+# Compose with the base tiered.yml (base first, this second so it wins the merge):
+#   docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.8b.yml \
+#     --profile semantic up -d --wait --build
+# The `task e2e:semantic:8b` target wires this + configs/semantic-8b.json for you.
+#
+# Resource budget (measured host: Docker VM = 23.19 GiB, 12 CPUs):
+#   two 8B @ ~8 GiB real (10G limit) + fast 0.6b (2G) + semembed + nats + ml
+#   ≈ 21 GiB peak, ~2 GiB headroom. MODEL_CONTEXT=8192 keeps prompts+KV bounded;
+#   MODEL_PARALLEL=2 gives each instance two slots — SINGLE-slot (PARALLEL=1) caused
+#   head-of-line blocking in the first 8B run: an answer request that a client had
+#   already abandoned kept the one slot busy, so the next globalSearch queued behind
+#   it and its answer-synthesis sub-timeout counted the queue wait and tripped. Two
+#   slots decouple concurrent globalSearch calls. THREADS=6 each (2×6=12=CPU count)
+#   roughly halves 8B latency vs the 4-thread first run.
+#
+# Model load: an 8B Q4_K_M is ~5 GiB of weights to mmap + warm; healthcheck
+# start_period is raised to 300s so the container is not reaped before it is ready.
+# `--wait` will therefore block for several minutes on first boot — expected.
+
+services:
+  # answer_synthesis tier → qwen3-8b (the model whose output the B0 eval grades).
+  seminstruct-mid-answer:
+    image: ghcr.io/c360studio/seminstruct:qwen3-8b
+    environment:
+      - MODEL_ALIAS=qwen3-8b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=8192
+      - MODEL_THREADS=6
+      - MODEL_PARALLEL=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          cpus: "6"
+          memory: 10G
+        reservations:
+          memory: 6G
+
+  # community_summary (+ anomaly_review) tier → qwen3-8b. Feeds the Tier-2 community
+  # summaries that the answer-synthesis prompt is built from, so it must be an
+  # adequate model too or the answer has nothing legible to ground on.
+  seminstruct-mid-summary:
+    image: ghcr.io/c360studio/seminstruct:qwen3-8b
+    environment:
+      - MODEL_ALIAS=qwen3-8b
+      - MODEL_REASONING=off
+      - MODEL_CONTEXT=8192
+      - MODEL_THREADS=6
+      - MODEL_PARALLEL=2
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8083/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 300s
+    deploy:
+      resources:
+        limits:
+          cpus: "6"
+          memory: 10G
+        reservations:
+          memory: 6G
+
+  # Point the ML app at the 8B config variant (qwen3-8b endpoints + 240s
+  # answer_synthesis/community_summary capability timeouts). The 30s hardcoded
+  # NATS request-handler ceiling (natsclient/request.go) is the other deadline on
+  # the globalSearch path that caps far below the 8B synthesis budget;
+  # SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT raises it to 300s for this run only
+  # (default stays 30s for CI). sleep 30 preserves the base file's ordering guard.
+  semstreams-ml:
+    command:
+      ["sleep 30 && /app/semstreams --config /app/configs/semantic-8b.json"]
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+      - SEMSTREAMS_DEBUG_PORT=6060
+      - SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT=300s

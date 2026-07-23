@@ -191,8 +191,13 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	fmt.Printf("[LLM WAIT] Waiting for LLM enhancement to complete (ML variant, %d communities)...\n", communityCount)
 
 	enhanceStart := time.Now()
+	// Default 2m is sized for the fast qwen3-1.7b summary tier. The heavy
+	// qwen3-8b run generates summaries far slower; SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT
+	// raises the ceiling so B0 (which runs next) synthesizes over fully-populated
+	// Tier-2 summaries. WaitForCommunityEnhancement returns as soon as enhancement
+	// completes, so a larger ceiling never over-waits on the fast tier.
 	enhanced, failed, pending, waitErr := s.natsClient.WaitForCommunityEnhancement(
-		ctx, 2*time.Minute, 2*time.Second,
+		ctx, llmEnhancementWait(2*time.Minute), 2*time.Second,
 	)
 	waitResult := llmWaitResult{
 		durationMs:   time.Since(enhanceStart).Milliseconds(),
