@@ -215,6 +215,7 @@ func TestReferenceRuleProcessorsDeclareStableUniquePackIDs(t *testing.T) {
 		"lifecycle-flow.json":                   "lifecycle-flow-rules",
 		"research-graph-e2e.json":               "research-graph-e2e-rules",
 		"semantic.json":                         "semantic-rules",
+		"semantic-8b.json":                      "semantic-8b-rules",
 		"statistical.json":                      "statistical-rules",
 		"structural.json":                       "structural-rules",
 		"flows/crud-tools-test.json":            "crud-tools-test-rules",

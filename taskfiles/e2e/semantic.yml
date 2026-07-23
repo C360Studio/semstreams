@@ -17,6 +17,27 @@ tasks:
       # ML app runs on port 38180 (HTTP), 39190 (metrics), 34650 (UDP) to avoid conflict
       - cd cmd/e2e && ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
 
+  8b:
+    desc: "HEAVY LOCAL: semantic tier with qwen3-8b answer+summary (valid GraphRAG/B0 baseline, NOT CI). ~10min, needs ~20GiB Docker RAM."
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[SEMANTIC-8B] Standing up the semantic tier on qwen3-8b (answer_synthesis + community_summary)."
+      - echo "[SEMANTIC-8B] This is the on-demand HEAVY measurement — two 8B instances load ~5GiB weights each; --wait blocks several minutes. The default 'task e2e:semantic' stays on qwen3-1.7b as the fast CI gate."
+      - defer: docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.8b.yml --profile semantic down -v --timeout 15
+      # Both overlays; --build rebuilds semstreams from source so the raised NATS
+      # request-handler timeout (SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT) is compiled in.
+      # --wait-timeout 600 bounds the slow 8B model load instead of hanging forever.
+      - docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.8b.yml --profile semantic up -d --wait --wait-timeout 600 --build
+      - echo "[OK] 8B ML services healthy (semembed + seminstruct-fast/0.6b + two seminstruct-mid/8b)"
+      - echo "[SEMANTIC-8B] Running semantic tier scenario (includes the B0 thematic eval)..."
+      # SEMSTREAMS_E2E_GLOBALSEARCH_TIMEOUT raises host-side client patience for the
+      # B0 eval + known-answer gate so slow 8B synthesis completes instead of tripping
+      # the 60s default. SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT lets the summary-wait span
+      # slow 8B community summarization so B0 synthesizes over full Tier-2 summaries.
+      # Both unset elsewhere = unchanged CI behavior.
+      - cd cmd/e2e && SEMSTREAMS_E2E_GLOBALSEARCH_TIMEOUT=300s SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT=10m ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
+
   debug:
     desc: Start semantic tier for debugging (leaves containers running)
     silent: false

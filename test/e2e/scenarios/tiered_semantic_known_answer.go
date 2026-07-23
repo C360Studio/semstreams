@@ -310,8 +310,12 @@ func (s *TieredScenario) sendGlobalSearchAtLevel(ctx context.Context, gatewayURL
 	// answer synthesis on local llama.cpp models (qwen3-0.6b throughput
 	// ~25 tok/s warm). The existing test-graphrag-global stage uses 10s
 	// and silently times out on every probe — don't replicate that. If the
-	// real query path is slow enough to need >60s, that itself is a bug.
-	httpClient := &http.Client{Timeout: 60 * time.Second}
+	// real query path is slow enough to need >60s, that itself is a bug —
+	// EXCEPT the deliberate qwen3-8b heavy-measurement run, where an 8B
+	// answer-synthesis round-trip legitimately takes tens of seconds;
+	// SEMSTREAMS_E2E_GLOBALSEARCH_TIMEOUT raises the budget for that run only
+	// (unset = 60s default, unchanged for CI/1.7b).
+	httpClient := &http.Client{Timeout: globalSearchClientTimeout(60 * time.Second)}
 	start := time.Now()
 	resp, err := httpClient.Do(req)
 	latency := time.Since(start)
