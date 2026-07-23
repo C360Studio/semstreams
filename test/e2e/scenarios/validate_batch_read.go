@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/fusion"
 	"github.com/c360studio/semstreams/pkg/fusion/fusionnats"
 )
 
@@ -17,14 +18,39 @@ import (
 // This stage is the e2e:semantic coverage the unit/integration suites cannot
 // exercise: the reconciliation contracts shipped in gh#604 (ADR-084) driven over
 // the REAL NATS wire against the running Docker stack, plus the gh#597 soak signal
-// batch_query_missing_total{reason}.
+// batch_query_missing_total{reason}. gh#599's named contracts are delivered over
+// BOTH surfaces: the RAW graph.query.batch wire (assertion 1) AND the production
+// reconciliation client fusionnats.Client.Entities → reconcileHydration (assertion
+// 2, which asserts the missing→unhydrated mapping the client owns).
 //
 // Every deterministic assertion here HARD-FAILS (returns an error, which
-// executeStages turns into result.Success=false) — the warn-not-fail e2e pattern
-// is exactly what this pre-v1 program exists to retire. Only the gh#597 counter
-// DELTA is reported rather than gated, because it is a soak datum; the underlying
-// "a known-present entity came back not_found" defect is still hard-failed
-// deterministically per response, so the report and the gate never disagree.
+// executeStages turns into result.Success=false) — the warn-not-fail e2e pattern is
+// exactly what this pre-v1 program exists to retire. The gh#597 counter is
+// LOAD-BEARING, not merely reported: the deliberately-absent IDs it requests must
+// each increment reason=not_found, so assertBatchMissingVerdict HARD-FAILS unless the
+// observed not_found delta is >= that expected-absent count (a LOWER BOUND — an
+// undercount means reportBatchMissing stopped incrementing, a silent-stop a presence
+// check would miss). The counter is process-global, so an EXCESS is unrelated traffic
+// and is recorded, not failed; a gh#597 cross-store gap (a known-present entity
+// coming back not_found) is caught deterministically, with entity-ID attribution, by
+// the hydration guards (assertion 1/2 + assertAllHydrate).
+//
+// SCOPE HONESTY — two axes are NOT exercised in this profile and are NOT faked:
+//
+//   - The gh#604 REORDER-under-cache-miss. The graph-ingest entity cache is a
+//     hard-coded 5000-entry / 30s hybrid (processor/graph-ingest/component.go) and
+//     the semantic dataset is ~74 entities, so every read here is an all-cache-hit;
+//     fetchEntitiesConcurrent already returns all-cache-hits in requested order, so
+//     reconcileHydration's reorder is a no-op and breaking it would leave this
+//     green. The reorder is covered by its unit fixture (pkg/fusion/fusionnats
+//     reconcile_test.go); a LIVE reorder exercise needs a cache-control seam and is
+//     deferred to gh#643 (the cache-seam follow-up).
+//   - A real #597 cache-RESIDENCY / real-KV-read soak. With that same cache the
+//     repeated reads never evict, so the reconciliation regression guard below
+//     (runReconciliationRegressionGuard) is a GUARD, not an eviction soak — it
+//     re-reads the present + ranked sets and hard-fails on any present entity
+//     surfacing in `missing`. A true cache-residency soak also needs the
+//     cache-control seam (gh#643).
 //
 // WHERE THIS STOPS — re-homed to gh#391, NOT attempted here. The fusion.Fuse
 // engine envelope (ADR-084's top health-gate reversal: a healthy index under write
@@ -90,24 +116,24 @@ func (s *TieredScenario) executeValidateBatchReadReconciliation(ctx context.Cont
 		return fmt.Errorf("batch-read reconciliation needs at least %d present source entities, ENTITY_STATES has %d", minPresent, len(presentIDs))
 	}
 
-	// expectedAbsent tracks the deliberately-absent IDs this stage requests, so the
-	// gh#597 verdict can ACCOUNT for their legitimate not_found increments and treat
-	// only the excess as a cross-store gap on a known-present entity.
+	// expectedAbsent tracks the deliberately-absent IDs this stage requests (one on the
+	// raw wire in assertion 1, one through the production client in assertion 2), so the
+	// gh#597 verdict can gate the not_found delta as a LOWER BOUND against them.
 	expectedAbsent := 0
 
 	// Baseline the counter BEFORE any request in this stage so the whole window
-	// (assertion 1's absent ID included) is captured.
+	// (both absent IDs included) is captured.
 	before, err := s.scrapeBatchMissingByReason(ctx)
 	if err != nil {
 		return err
 	}
 
-	// Assertion 1: batch reconciliation / unhydrated reporting.
+	// Assertion 1: batch reconciliation / unhydrated reporting on the RAW wire.
 	if err := s.assertBatchReconciliation(ctx, presentIDs, &expectedAbsent, result); err != nil {
 		return err
 	}
-	// Assertion 2: requested-order preservation (via the production fusion client).
-	if err := s.assertBatchRequestOrder(ctx, presentIDs, result); err != nil {
+	// Assertion 2: the PRODUCTION reconciliation client's missing→unhydrated mapping.
+	if err := s.assertBatchReconciliationClient(ctx, presentIDs, &expectedAbsent, result); err != nil {
 		return err
 	}
 	// Assertion 3: score/rank observability on the raw semantic wire.
@@ -115,18 +141,17 @@ func (s *TieredScenario) executeValidateBatchReadReconciliation(ctx context.Cont
 	if err != nil {
 		return err
 	}
-	// gh#597 soak phase: churn the cache, then read entities the index actually ranks.
-	if err := s.runBatchMissingSoak(ctx, presentIDs, rankedIDs, result); err != nil {
+	// Reconciliation regression guard: repeated reconciled reads of present + ranked.
+	if err := s.runReconciliationRegressionGuard(ctx, presentIDs, rankedIDs, result); err != nil {
 		return err
 	}
 
-	// Assertion 4: report per-reason deltas + the gh#597 verdict.
+	// Assertion 4: gate the gh#597 counter delta and record the datum.
 	after, err := s.scrapeBatchMissingByReason(ctx)
 	if err != nil {
 		return err
 	}
-	s.recordBatchMissingVerdict(before, after, expectedAbsent, result)
-	return nil
+	return s.assertBatchMissingVerdict(before, after, expectedAbsent, result)
 }
 
 // presentSourceEntityIDs returns non-container entity IDs from ENTITY_STATES,
@@ -170,9 +195,71 @@ func (s *TieredScenario) batchQuery(ctx context.Context, ids []string) (graph.En
 	return resp, nil
 }
 
+// assertReconciledExactlyOnce is the shared exactly-once guard (Finding 5): every
+// requested ID must appear EXACTLY ONCE across the hydrated set ∪ the unhydrated
+// set — no drop, no duplicate, no invented ID. It is the antidote to count-only
+// accounting that this program exists to retire: a reply [A,A] for requested [A,B]
+// fails here even though both lengths look plausible. Callers pass a UNIQUE
+// requested slice (present is a sorted KV key scan; ranked IDs are deduped first).
+func assertReconciledExactlyOnce(requested, hydratedIDs, unhydratedIDs []string) error {
+	requestedSet := make(map[string]bool, len(requested))
+	for _, id := range requested {
+		requestedSet[id] = true
+	}
+	seen := make(map[string]int, len(requested))
+	for _, id := range hydratedIDs {
+		seen[id]++
+	}
+	for _, id := range unhydratedIDs {
+		seen[id]++
+	}
+	for id, n := range seen {
+		if !requestedSet[id] {
+			return fmt.Errorf("reply named %q which was never requested (invented ID)", id)
+		}
+		if n != 1 {
+			return fmt.Errorf("requested ID %q appears %d times across hydrated∪unhydrated, want exactly 1 (duplicated)", id, n)
+		}
+	}
+	for id := range requestedSet {
+		if seen[id] != 1 {
+			return fmt.Errorf("requested ID %q appears %d times across hydrated∪unhydrated, want exactly 1 (dropped)", id, seen[id])
+		}
+	}
+	return nil
+}
+
+// batchResponseExactlyOnce runs the shared exactly-once guard over a RAW batch reply.
+func batchResponseExactlyOnce(requested []string, resp graph.EntityBatchResponse) error {
+	hydrated := make([]string, 0, len(resp.Entities))
+	for _, e := range resp.Entities {
+		hydrated = append(hydrated, e.ID)
+	}
+	missing := make([]string, 0, len(resp.Missing))
+	for _, m := range resp.Missing {
+		missing = append(missing, m.ID)
+	}
+	return assertReconciledExactlyOnce(requested, hydrated, missing)
+}
+
+// hydrationExactlyOnce runs the shared exactly-once guard over a PRODUCTION-client
+// fusion.Hydration (Entities ∪ Unhydrated).
+func hydrationExactlyOnce(requested []string, hyd fusion.Hydration) error {
+	hydrated := make([]string, 0, len(hyd.Entities))
+	for _, e := range hyd.Entities {
+		hydrated = append(hydrated, e.ID)
+	}
+	unhydrated := make([]string, 0, len(hyd.Unhydrated))
+	for _, u := range hyd.Unhydrated {
+		unhydrated = append(unhydrated, u.Handle)
+	}
+	return assertReconciledExactlyOnce(requested, hydrated, unhydrated)
+}
+
 // assertBatchReconciliation is assertion 1: a batch of known-present IDs plus one
-// deliberately-absent ID must report {id: absent, reason: not_found} and account
-// for every requested ID exactly once across entities ∪ missing.
+// deliberately-absent ID must report {id: absent, reason: not_found} on the RAW
+// graph.query.batch wire and account for every requested ID exactly once across
+// entities ∪ missing.
 func (s *TieredScenario) assertBatchReconciliation(ctx context.Context, present []string, expectedAbsent *int, result *Result) error {
 	sample := present
 	if len(sample) > 5 {
@@ -207,30 +294,9 @@ func (s *TieredScenario) assertBatchReconciliation(ctx context.Context, present 
 	}
 
 	// Exactly-once accounting across entities ∪ missing: no drop, no duplicate, no
-	// invented ID.
-	requestedSet := make(map[string]bool, len(requested))
-	for _, id := range requested {
-		requestedSet[id] = true
-	}
-	seen := make(map[string]int, len(requested))
-	for _, e := range resp.Entities {
-		seen[e.ID]++
-	}
-	for _, m := range resp.Missing {
-		seen[m.ID]++
-	}
-	for id, n := range seen {
-		if !requestedSet[id] {
-			return fmt.Errorf("assertion-1: batch reply named %q which was never requested (invented ID)", id)
-		}
-		if n != 1 {
-			return fmt.Errorf("assertion-1: requested ID %q appears %d times across entities∪missing, want exactly 1 (duplicated)", id, n)
-		}
-	}
-	for _, id := range requested {
-		if seen[id] != 1 {
-			return fmt.Errorf("assertion-1: requested ID %q appears %d times across entities∪missing, want exactly 1 (dropped)", id, seen[id])
-		}
+	// invented ID (Finding 5 shared guard).
+	if err := batchResponseExactlyOnce(requested, resp); err != nil {
+		return fmt.Errorf("assertion-1: %w", err)
 	}
 
 	// Every present-sample ID must hydrate (belt-and-braces on the reconciliation).
@@ -252,17 +318,28 @@ func (s *TieredScenario) assertBatchReconciliation(ctx context.Context, present 
 	return nil
 }
 
-// assertBatchRequestOrder is assertion 2: the hydrated entities come back in
-// REQUESTED order.
+// assertBatchReconciliationClient is assertion 2: it drives the PRODUCTION
+// reconciliation client (fusionnats.Client.Entities → reconcileHydration) over a
+// real graph.query.batch request — known-present IDs plus one deliberately-absent
+// ID — and asserts the production half of gh#599's contract that no other stage
+// exercises: the missing→unhydrated mapping. The absent ID must surface as an EXACT
+// fusion.Unhydrated{Handle: absentID, Reason: not_found} entry (a value in the
+// CLOSED fusion.UnhydratedReason set), the present set must all hydrate, and every
+// requested ID must be accounted for exactly once across Entities ∪ Unhydrated.
 //
-// Order preservation is the gh#604 fix, and it lives in the production fusion
-// retrieval client (fusionnats.Client.Entities → reconcileHydration), NOT on the
-// raw batch wire: fetchEntitiesConcurrent returns cache-hits-then-misses order by
-// contract, and only that layer — where request order is still known — restores
-// it. So this assertion drives the PRODUCTION fusionnats client (a real
-// graph.query.batch request over the same NATS connection) and asserts it returns
-// request order. That is the correct layer, and it is still the production wire.
-func (s *TieredScenario) assertBatchRequestOrder(ctx context.Context, present []string, result *Result) error {
+// DOWNSCOPE (Finding 1 — the gh#604 REORDER is NOT exercised here). This call
+// requests the present sample in REVERSED order and asserts the hydrated entities
+// come back in requested order, but that is a deterministic property of
+// reconcileHydration's request-order ITERATION, NOT a live exercise of the
+// reorder-under-cache-miss fix. The graph-ingest entity cache is a hard-coded
+// 5000-entry / 30s hybrid and the semantic dataset is ~74 entities, so every read
+// here is an all-cache-hit; fetchEntitiesConcurrent already returns all-cache-hits
+// in requested order, so a reconcile that trusted the raw order would pass this
+// unchanged. The reorder is covered by its unit fixture (pkg/fusion/fusionnats
+// reconcile_test.go); a LIVE reorder exercise needs a cache-control seam and is
+// deferred to gh#643 (the cache-seam follow-up). What this call DOES deterministically
+// prove is the production client's missing→unhydrated reconciliation.
+func (s *TieredScenario) assertBatchReconciliationClient(ctx context.Context, present []string, expectedAbsent *int, result *Result) error {
 	fc := fusionnats.New(s.natsClient.Client(), 5*time.Second)
 	defer fc.Close()
 
@@ -270,32 +347,59 @@ func (s *TieredScenario) assertBatchRequestOrder(ctx context.Context, present []
 	if len(sample) > 5 {
 		sample = sample[:5]
 	}
-	// Request in REVERSED sorted order so the requested order differs from the
-	// handler's natural (sorted / cache-residency) order — a failure to reorder to
-	// request order would be visible rather than coincidentally masked.
-	requested := make([]string, len(sample))
+	// Request the present IDs in REVERSED order (see downscope note) plus one
+	// guaranteed-absent ID, so the production client must reconcile a missing entry.
+	absentID := fmt.Sprintf("c360.e2e.reconcile.client.absent.%d", time.Now().UnixNano())
+	requested := make([]string, 0, len(sample)+1)
 	for i := range sample {
-		requested[i] = sample[len(sample)-1-i]
+		requested = append(requested, sample[len(sample)-1-i])
 	}
+	presentRequested := append([]string(nil), requested...) // reversed present, before absent
+	requested = append(requested, absentID)
+	*expectedAbsent++ // absentID legitimately increments reason=not_found
 
 	hyd, err := fc.Entities(ctx, requested)
 	if err != nil {
 		return fmt.Errorf("assertion-2 fusionnats batch hydration failed: %w", err)
 	}
-	if len(hyd.Unhydrated) != 0 {
-		return fmt.Errorf("assertion-2: %d known-present IDs did not hydrate: %+v", len(hyd.Unhydrated), hyd.Unhydrated)
-	}
-	if len(hyd.Entities) != len(requested) {
-		return fmt.Errorf("assertion-2: hydrated %d entities, requested %d", len(hyd.Entities), len(requested))
+
+	// The present sample must all hydrate, in requested order (deterministic
+	// request-order-iteration property of reconcileHydration; see downscope note —
+	// this does NOT prove reorder-under-cache-miss).
+	if len(hyd.Entities) != len(sample) {
+		return fmt.Errorf("assertion-2: production client hydrated %d entities, want %d present", len(hyd.Entities), len(sample))
 	}
 	for i, e := range hyd.Entities {
-		if e.ID != requested[i] {
-			return fmt.Errorf("assertion-2: position %d is %q, want %q — request order not preserved (gh#604 regression)", i, e.ID, requested[i])
+		if e.ID != presentRequested[i] {
+			return fmt.Errorf("assertion-2: hydrated position %d is %q, want %q — reconcileHydration did not return present entities in requested order", i, e.ID, presentRequested[i])
 		}
 	}
 
-	result.Metrics["batch_order_entities"] = len(hyd.Entities)
-	fmt.Printf("[BATCH RECON] assertion-2 OK: %d entities returned in exact requested order (gh#604)\n", len(hyd.Entities))
+	// The absent ID must surface as an EXACT unhydrated entry: its handle + a reason
+	// in the CLOSED fusion.UnhydratedReason set, specifically not_found. This is the
+	// production-client half of gh#599's unhydrated reporting (Finding 2) — the
+	// missing→unhydrated mapping reconcileHydration owns.
+	if len(hyd.Unhydrated) != 1 {
+		return fmt.Errorf("assertion-2: production client reported %d unhydrated entries, want exactly 1 (the deliberate absent ID): %+v", len(hyd.Unhydrated), hyd.Unhydrated)
+	}
+	u := hyd.Unhydrated[0]
+	if u.Handle != absentID {
+		return fmt.Errorf("assertion-2: unhydrated handle is %q, want the deliberate absent %q", u.Handle, absentID)
+	}
+	if u.Reason != fusion.UnhydratedNotFound {
+		return fmt.Errorf("assertion-2: absent %q reported unhydrated reason %q, want %q (closed fusion.UnhydratedReason set)", absentID, u.Reason, fusion.UnhydratedNotFound)
+	}
+
+	// Exactly-once accounting across Entities ∪ Unhydrated: no drop, no duplicate, no
+	// invented ID — the production-client mirror of assertion 1's raw-wire guard.
+	if err := hydrationExactlyOnce(requested, hyd); err != nil {
+		return fmt.Errorf("assertion-2: %w", err)
+	}
+
+	result.Metrics["batch_client_hydrated"] = len(hyd.Entities)
+	result.Metrics["batch_client_unhydrated"] = len(hyd.Unhydrated)
+	fmt.Printf("[BATCH RECON] assertion-2 OK: production client hydrated %d present (requested order) + reconciled 1 absent → unhydrated{not_found}\n",
+		len(hyd.Entities))
 	return nil
 }
 
@@ -361,44 +465,50 @@ func (s *TieredScenario) assertSemanticScores(ctx context.Context, result *Resul
 	return rankedIDs, nil
 }
 
-// runBatchMissingSoak is the gh#597 soak phase. The diversity axis gh#597 tracks
-// comes SOLELY from chunked batch reads of the full present set (churnPresentReads),
-// which force real ENTITY_STATES re-reads through the graph-ingest read-through
-// cache. The interleaved semantic queries warm the embedding search path
-// (graph.embedding.query.search) and add timing interleave — they do NOT touch the
-// graph-ingest entity cache. After the churn it batch-reads the entities the
-// semantic index actually ranked. Every entity read here is KNOWN-PRESENT, so any
-// that comes back in `missing` is the cross-store gap gh#597 describes — hard-fail
-// (deterministic: static testdata means no legitimate serve-under-lag window remains
-// this late). The counter DELTA the caller reports is the soak datum that
-// corroborates it.
-func (s *TieredScenario) runBatchMissingSoak(ctx context.Context, present, rankedIDs []string, result *Result) error {
+// runReconciliationRegressionGuard is a deterministic regression GUARD for the
+// gh#604 reconciliation contract — NOT a cache-eviction soak (Finding 4).
+//
+// With the hard-coded 5000-entry / 30s entity cache over ~74 entities, the repeated
+// reads below NEVER evict, so this does NOT exercise the #597 cache-residency /
+// real-KV-read axis (that needs the cache-control seam — gh#643).
+// What it deterministically does is re-read the full present set (in chunks) and the
+// entities the semantic index actually ranked, and HARD-FAIL — via the shared
+// exactly-once guard (Finding 5) — on any present entity appearing in `missing`,
+// any drop, any duplicate, or any invented ID. Every entity read here is
+// KNOWN-PRESENT and ingest is settled, so a present ID in `missing` is the gh#597
+// cross-store gap; there is no legitimate serve-under-lag window this late. The
+// batch_query_missing_total delta the caller gates is the corroborating datum.
+func (s *TieredScenario) runReconciliationRegressionGuard(ctx context.Context, present, rankedIDs []string, result *Result) error {
 	const rounds = 2
 	for round := 0; round < rounds; round++ {
-		if err := s.churnPresentReads(ctx, present); err != nil {
-			return fmt.Errorf("soak churn round %d: %w", round, err)
+		if err := s.readPresentInChunks(ctx, present); err != nil {
+			return fmt.Errorf("regression guard present-read round %d: %w", round, err)
 		}
+		// Interleave semantic queries: they warm graph.embedding.query.search and add
+		// timing interleave; they do NOT touch the graph-ingest entity cache.
 		if _, err := s.assertSemanticScores(ctx, result); err != nil {
-			return fmt.Errorf("soak semantic query round %d: %w", round, err)
+			return fmt.Errorf("regression guard semantic query round %d: %w", round, err)
 		}
 	}
-	// The ranked set, read right after cache churn — the exact gh#597 shape.
-	if len(rankedIDs) > 0 {
-		if err := s.assertAllHydrate(ctx, rankedIDs); err != nil {
-			return fmt.Errorf("soak ranked-entity read: %w", err)
+	// The ranked set, re-read after the interleaved reads — the exact gh#597 shape.
+	// Dedupe first so the exactly-once guard sees a unique requested set.
+	ranked := uniqueStrings(rankedIDs)
+	if len(ranked) > 0 {
+		if err := s.assertAllHydrate(ctx, ranked); err != nil {
+			return fmt.Errorf("regression guard ranked-entity read: %w", err)
 		}
 	}
 
 	result.Metrics["batch_soak_present_read"] = len(present)
-	result.Metrics["batch_soak_ranked_read"] = len(rankedIDs)
-	fmt.Printf("[BATCH RECON] soak OK: churned %d present entities x%d rounds, read %d ranked entities, all hydrated\n",
-		len(present), rounds, len(rankedIDs))
+	result.Metrics["batch_soak_ranked_read"] = len(ranked)
+	fmt.Printf("[BATCH RECON] reconciliation guard OK: re-read %d present entities x%d rounds + %d ranked entities, all reconciled exactly-once\n",
+		len(present), rounds, len(ranked))
 	return nil
 }
 
-// churnPresentReads batch-reads the full present set in chunks, asserting each
-// chunk hydrates completely.
-func (s *TieredScenario) churnPresentReads(ctx context.Context, present []string) error {
+// readPresentInChunks batch-reads the full present set in chunks, asserting each
+// chunk reconciles completely and exactly-once.
+func (s *TieredScenario) readPresentInChunks(ctx context.Context, present []string) error {
 	const chunk = 20
 	for i := 0; i < len(present); i += chunk {
 		end := i + chunk
@@ -412,8 +522,10 @@ func (s *TieredScenario) churnPresentReads(ctx context.Context, present []string
 	return nil
 }
 
-// assertAllHydrate batch-reads known-present IDs and hard-fails if any is reported
-// missing (the gh#597 cross-store gap) or the reconciliation under-reports.
+// assertAllHydrate batch-reads known-present IDs and hard-fails if the reply is not
+// an exactly-once accounting of the request (Finding 5: no drop, no duplicate, no
+// invented ID) or if any known-present ID comes back in `missing` (the gh#597
+// cross-store gap). Callers pass a UNIQUE id slice.
 func (s *TieredScenario) assertAllHydrate(ctx context.Context, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -422,6 +534,13 @@ func (s *TieredScenario) assertAllHydrate(ctx context.Context, ids []string) err
 	if err != nil {
 		return fmt.Errorf("batch query for %d present IDs failed: %w", len(ids), err)
 	}
+	// Exactly-once accounting first: a [A,A] reply for requested [A,B] fails here even
+	// though a length check would pass — the count-only-accounting flake class.
+	if err := batchResponseExactlyOnce(ids, resp); err != nil {
+		return fmt.Errorf("reconciliation over %d present IDs: %w", len(ids), err)
+	}
+	// Every requested ID is known-present, so ANY that came back in `missing` is the
+	// gh#597 cross-store gap — hard-fail.
 	if len(resp.Missing) > 0 {
 		missing := make([]string, 0, len(resp.Missing))
 		for _, m := range resp.Missing {
@@ -429,11 +548,21 @@ func (s *TieredScenario) assertAllHydrate(ctx context.Context, ids []string) err
 		}
 		return fmt.Errorf("%d known-present entities came back unhydrated (cross-store gap gh#597): %v", len(resp.Missing), missing)
 	}
-	if len(resp.Entities) != len(ids) {
-		return fmt.Errorf("batch read of %d present IDs returned %d entities with no missing report — under-reported reconciliation",
-			len(ids), len(resp.Entities))
-	}
 	return nil
+}
+
+// uniqueStrings returns ids with duplicates removed, preserving first-seen order.
+func uniqueStrings(ids []string) []string {
+	seen := make(map[string]bool, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 // scrapeBatchMissingByReason reads batch_query_missing_total for each
@@ -454,53 +583,84 @@ func (s *TieredScenario) scrapeBatchMissingByReason(ctx context.Context) (map[st
 	return out, nil
 }
 
-// recordBatchMissingVerdict is assertion 4: report the per-reason counter deltas
-// and the gh#597 verdict.
+// assertBatchMissingVerdict is assertion 4: it makes the gh#597 counter LOAD-BEARING
+// (Finding 3) and records the delta datum.
 //
-// The not_found delta is attributed: expectedAbsent increments are the
-// deliberately-absent IDs this stage requested; anything ABOVE that baseline is a
-// not_found on a KNOWN-PRESENT entity — the gh#597 cross-store gap. The
-// deterministic assertAllHydrate checks above already hard-fail on that exact
-// condition, so this verdict corroborates the gate rather than replacing it (the
-// counter is process-global and a soak signal, not a naive pass/fail).
-func (s *TieredScenario) recordBatchMissingVerdict(before, after map[string]float64, expectedAbsent int, result *Result) {
+// The counter is PROCESS-GLOBAL (a sync.Once CounterVec in graph-ingest), so the
+// window delta cannot be perfectly attributed to this stage's own requests. The gate
+// is therefore a LOWER BOUND, not an exact match. The deliberately-absent IDs this
+// stage requests (expectedAbsent — one raw-wire in assertion 1, one production-client
+// in assertion 2) MUST each increment reason=not_found once (handleQueryBatchNATS →
+// reportBatchMissing, processor/graph-ingest/query.go; live-registry scrape, no
+// scrape-interval lag, request/reply synchronous), so:
+//
+//	deltaNotFound >= expectedAbsent   (and never < 0)
+//
+// HARD-FAILS (neither can be produced by process-global noise, which only ADDS
+// increments — it can never push the delta below expectedAbsent):
+//   - deltaNotFound < 0              → the counter RESET (a monotonic counter went backwards).
+//   - deltaNotFound < expectedAbsent → reportBatchMissing STOPPED incrementing reason=not_found
+//     for a known-absent ID. A presence check (SumMetricInSubsystem above) would still pass —
+//     this is exactly the silent-stop Finding 3 closes: the counter is no longer load-bearing.
+//
+// The gh#597 cross-store gap (a not_found on a KNOWN-PRESENT entity) is detected
+// DETERMINISTICALLY and with entity-ID attribution by the assertion-1/2 hydration
+// checks and assertAllHydrate — NOT by an upper bound on this process-global counter,
+// which would false-positive on any concurrent batch-miss. An excess is therefore
+// RECORDED to corroborate those gates, not hard-failed.
+func (s *TieredScenario) assertBatchMissingVerdict(before, after map[string]float64, expectedAbsent int, result *Result) error {
 	deltaNotFound := after[string(graph.MissingNotFound)] - before[string(graph.MissingNotFound)]
 	deltaError := after[string(graph.MissingError)] - before[string(graph.MissingError)]
-	excess := deltaNotFound - float64(expectedAbsent)
 
-	// This stage runs after ingest settles, so the active-write cross-store race
-	// gh#597 describes CANNOT fire in this profile — a clean delta is NOT proof the
-	// race is closed. It only establishes that no known-present entity dropped under
-	// cache churn (the gh#604 reconciliation contract held). The counter is a
-	// process-global soak signal, so the verdict NAMES THE OBSERVATION, it does not
-	// claim resolution. Only a real write-concurrent workload can exercise the race.
-	verdict := "no_present_gap_observed"
-	if excess > 0 {
-		verdict = "present_entity_gap" // not_found on a known-present entity — the gh#597 cross-store gap
-	}
-
+	// Record the datums regardless of verdict.
 	result.Metrics["batch_missing_not_found_delta"] = deltaNotFound
 	result.Metrics["batch_missing_error_delta"] = deltaError
 	result.Metrics["batch_missing_expected_absent"] = expectedAbsent
-	result.Metrics["batch_missing_present_gap_count"] = excess
+
+	if deltaNotFound < 0 {
+		result.Metrics["gh597_verdict"] = "counter_reset"
+		return fmt.Errorf("gh#597 counter reset: reason=not_found delta is %.0f (< 0) — a monotonic counter went backwards", deltaNotFound)
+	}
+	if deltaNotFound < float64(expectedAbsent) {
+		result.Metrics["gh597_verdict"] = "counter_undercount"
+		return fmt.Errorf("gh#597 counter NOT load-bearing: reason=not_found delta %.0f < %d deliberately-absent IDs requested — reportBatchMissing stopped incrementing (a presence check would still pass)",
+			deltaNotFound, expectedAbsent)
+	}
+	// deltaNotFound >= expectedAbsent: the counter is load-bearing — every known-absent
+	// ID incremented it. An EXCESS over expectedAbsent is process-global counter noise
+	// (a concurrent batch-miss elsewhere in graph-ingest), RECORDED as a corroborating
+	// observation — never a hard-fail. A real gh#597 present-entity gap is caught
+	// deterministically, with entity-ID attribution, by the assertion-1/2 hydration
+	// checks and assertAllHydrate; it does not rely on this process-global upper bound.
+	excess := deltaNotFound - float64(expectedAbsent)
+	verdict := "counter_load_bearing_ok"
+	if excess > 0 {
+		verdict = "counter_load_bearing_ok_excess_observed"
+	}
 	result.Metrics["gh597_verdict"] = verdict
+	result.Metrics["batch_missing_present_gap_excess"] = excess
 	result.Details["gh597_soak"] = map[string]any{
 		"before":          before,
 		"after":           after,
 		"not_found_delta": deltaNotFound,
 		"error_delta":     deltaError,
 		"expected_absent": expectedAbsent,
-		"present_gap":     excess,
+		"excess":          excess,
 		"verdict":         verdict,
-		"interpretation": "This stage validates the gh#604 reconciliation contract, installs a deterministic " +
-			"regression guard (a known-present entity in `missing` hard-fails), and wires batch_query_missing_total " +
-			"as the workload soak signal. It does NOT exercise the gh#597 active-write cross-store race — ingest is " +
-			"settled by the time it runs — so a clean delta (== expected-absent baseline) is NOT proof gh#597 is " +
-			"closed; it means no present-entity gap was observed under cache churn. A delta ABOVE baseline is a " +
-			"not_found on a known-present entity: the cross-store gap, which only a real write-concurrent workload " +
-			"can surface here.",
+		"interpretation": "This stage validates the gh#604 reconciliation contract over BOTH the raw " +
+			"graph.query.batch wire and the production reconcileHydration client, and makes " +
+			"batch_query_missing_total LOAD-BEARING via a LOWER BOUND: the deliberately-absent IDs this " +
+			"stage requests must each increment reason=not_found, so deltaNotFound must be >= expected_absent " +
+			"(and never < 0) — an undercount is a silent-stop of the counter (Finding 3). The counter is " +
+			"process-global, so an EXCESS over expected_absent is unrelated traffic and is recorded, not " +
+			"failed; the gh#597 cross-store gap (a not_found on a known-present entity) is caught " +
+			"deterministically with entity-ID attribution by the hydration guards. This stage does NOT " +
+			"exercise the gh#604 reorder-under-cache-miss or a real #597 cache-residency soak: the " +
+			"hard-coded 5000/30s entity cache over ~74 entities never evicts, so those axes need a " +
+			"cache-control seam (gh#643) and are honestly deferred, not faked.",
 	}
 
-	fmt.Printf("[BATCH RECON] gh#597 soak: not_found delta=%.0f (expected-absent baseline=%d, present-entity gap=%.0f), error delta=%.0f → verdict=%s\n",
-		deltaNotFound, expectedAbsent, excess, deltaError, verdict)
+	fmt.Printf("[BATCH RECON] assertion-4 OK: gh#597 counter load-bearing — reason=not_found delta=%.0f >= expected-absent=%d (excess=%.0f), error delta=%.0f\n",
+		deltaNotFound, expectedAbsent, excess, deltaError)
+	return nil
 }
