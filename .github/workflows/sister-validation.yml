@@ -16,11 +16,15 @@ name: Sister Validation
 # processor/rule/ that breaks ENTITY_STATES for every consumer — any plausible
 # path filter would have skipped it.
 
+# DISABLED pre-v1 (owner, 2026-07-23) — no automatic triggers. The sisters
+# conform to semstreams at TAG boundaries (lockstep), not per-commit, so gating
+# every intermediate PR (and nightly) on a sister's full product e2e costs CI
+# time for a break we catch at tag time anyway. Meanwhile the ingest→graph→query
+# path is gated per-PR by our own e2e ladder (e2e-ladder.yml, statistical tier)
+# and cross-repo breaks are caught by tag-time lockstep + the pre-tag e2e HARD
+# RULE (CLAUDE.md). RE-ENABLE at v1/RC: restore `pull_request:` and the nightly
+# `schedule:` cron below. The workflow still runs on demand via workflow_dispatch.
 on:
-  pull_request:
-  schedule:
-    # 07:00 UTC nightly — full sweep against main.
-    - cron: "0 7 * * *"
   workflow_dispatch:
     inputs:
       semsource_ref:

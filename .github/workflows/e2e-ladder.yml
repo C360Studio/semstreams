@@ -1,0 +1,57 @@
+name: E2E Ladder
+
+# Our own e2e ladder — the per-PR end-to-end gate that exercises the
+# ingest → entity → graph store → query path THIS repo owns. It replaces the
+# per-PR sister-validation gate (semsource/semboids), which is disabled pre-v1
+# (see sister-validation.yml): the sisters conform to semstreams at TAG
+# boundaries (lockstep), not per-commit, so gating every intermediate PR on a
+# sister's full product e2e cost a lot for a break we catch at tag time anyway.
+#
+# Tier choice (owner, 2026-07-23): run the `statistical` tier per-PR. It runs
+# the tiered scenario at --variant statistical, which subsumes the structural
+# stages and drives the full graph path under BM25 + community detection — no
+# neural/ML services, so it stays CI-affordable. This is the pre-v1 program's
+# Epic D "automate a tier first" (ci.yml itself runs no e2e).
+#
+# NOT covered here (deliberately, for CI cost):
+#   - e2e:core (--scenario all: health/dataflow/federation) is a SEPARATE
+#     scenario, not part of the tiered/statistical variant. Cheap to add as a
+#     second job if the health/federation smoke is wanted per-PR.
+#   - e2e:semantic (neural embeddings + seminstruct, incl. the 8b thematic
+#     gate) is too heavy for per-PR. It stays the pre-tag HARD RULE
+#     (CLAUDE.md: a relevant e2e tier green before any BREAKING tag) + nightly.
+#     TODO (end of pre-v1 mega-plan cleanup): add e2e:semantic here — either a
+#     nightly job or a labeled/opt-in per-PR job — so the neural thematic path
+#     has a standing CI gate, not only the manual pre-tag run. Tracked in the
+#     pre-v1 baton (docs/proposals/prev1-program.md, Epic D).
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: e2e-ladder-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION: "1.26"
+
+jobs:
+  e2e-statistical:
+    name: e2e statistical
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Install task
+        run: sh -c "$(curl --location https://taskfile.dev/install.sh)" -- -d -b /usr/local/bin
+
+      - name: Run e2e statistical tier
+        run: task e2e:statistical
