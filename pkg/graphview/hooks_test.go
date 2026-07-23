@@ -118,6 +118,22 @@ func (h *hookHarness) takeFanOut() *[2]int {
 	}
 }
 
+// waitFanOut blocks for the OnFanOut report of a window the caller KNOWS
+// fired one (changed keys AND at least one subscriber). Unlike takeFanOut it
+// does not race the hook: OnFanOut fires immediately after OnTick on the
+// ticker goroutine, so a non-blocking read taken the instant tickNow returns
+// (having only consumed OnTick) can miss a report that is still in flight.
+func (h *hookHarness) waitFanOut() [2]int {
+	h.t.Helper()
+	select {
+	case f := <-h.fanouts:
+		return f
+	case <-time.After(testWait):
+		h.t.Fatal("timed out waiting for OnFanOut")
+		return [2]int{}
+	}
+}
+
 // TestOnSubscribersFiresOnAttachAndDetach: the subscriber-count hook fires
 // with the new count on every attach (both modes) and every detach path —
 // Unsubscribe, subscription-context cancel — so a gauge wired to it tracks
@@ -252,10 +268,13 @@ func TestOnFanOutCountsOverwrites(t *testing.T) {
 		h.put("K", "v"+string(rune('0'+rev)), rev)
 		r := h.tickNow()
 		require.Equal(t, 1, r.changed)
-		if f := h.takeFanOut(); f != nil {
-			overwritten += f[0]
-			require.LessOrEqual(t, f[1], 1, "single-key windows can never buffer more than one pending delta")
-		}
+		// Every window here has a changed key and a subscriber, so OnFanOut
+		// is guaranteed to fire — block for it rather than racing the hook
+		// with a non-blocking read (OnFanOut fires just after OnTick, which
+		// is what tickNow already consumed).
+		f := h.waitFanOut()
+		overwritten += f[0]
+		require.LessOrEqual(t, f[1], 1, "single-key windows can never buffer more than one pending delta")
 	}
 	require.GreaterOrEqual(t, overwritten, 1,
 		"four undrained single-key windows must overwrite at least once (capacity is three)")
