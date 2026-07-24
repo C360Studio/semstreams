@@ -4,6 +4,7 @@ package clustering
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -363,6 +364,21 @@ func (p *EntityIDProvider) ensureTypePrefixCache(ctx context.Context) error {
 		if system != "" {
 			systemMap[system] = append(systemMap[system], entityID)
 		}
+	}
+
+	// Canonicalize each candidate list. findSiblingNeighbors / findSystemPeerNeighbors
+	// keep the first maxSiblings / maxSystemPeers entries, so if the base-provider
+	// order varies (kvProvider's JetStream Keys() is watcher-delivery order, not
+	// sorted), WHICH candidates survive the cap would vary and the synthesized edge
+	// set — and thus the LPA partition — would flip run-to-run. Sorting here makes
+	// the capped edge set deterministic regardless of base order. This changes which
+	// siblings/peers are kept vs. the previous unsorted-then-cap behavior, but does
+	// NOT change weights or caps.
+	for prefix := range prefixMap {
+		sort.Strings(prefixMap[prefix])
+	}
+	for system := range systemMap {
+		sort.Strings(systemMap[system])
 	}
 
 	p.typePrefixCache = prefixMap

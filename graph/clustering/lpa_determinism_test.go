@@ -3,6 +3,7 @@ package clustering
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"testing"
@@ -65,19 +66,47 @@ func levelSignature(communities map[int][]*Community, level int) string {
 	return strings.Join(groups, "|")
 }
 
-// detectGrid runs one full detection over a freshly-built grid and returns the
-// per-level community map. A fresh provider+storage per call guarantees no state
-// carries between runs, so any run-to-run agreement is the algorithm being
-// deterministic on the fixed edge set, not a warm index.
-func detectGrid(t *testing.T, rows, cols int) map[int][]*Community {
+// detectPartition runs one full detection over the given provider and returns the
+// per-level community map. A fresh storage per call guarantees no state carries
+// between runs, so any agreement is the algorithm being deterministic, not a warm
+// index.
+func detectPartition(t *testing.T, provider Provider) map[int][]*Community {
 	t.Helper()
 	storage := NewMockCommunityStorage()
-	detector := NewLPADetector(gridProvider(rows, cols), storage).WithMaxIterations(50)
+	detector := NewLPADetector(provider, storage).WithMaxIterations(50)
 
 	communities, err := detector.DetectCommunities(context.Background())
 	require.NoError(t, err)
 	require.NotEmpty(t, communities[0])
 	return communities
+}
+
+// detectGrid runs one full detection over a freshly-built grid.
+func detectGrid(t *testing.T, rows, cols int) map[int][]*Community {
+	t.Helper()
+	return detectPartition(t, gridProvider(rows, cols))
+}
+
+// reversedOrderProvider wraps a MockProvider and returns GetAllEntityIDs in
+// REVERSED order, leaving neighbours and weights untouched — so the ONLY thing
+// that differs from the wrapped provider is the entity-iteration order the
+// detector observes. It stands in for the fact that the graph.Provider contract
+// does not promise a stable order (the wired kvProvider returns JetStream Keys()
+// in watcher-delivery order, which varies across restarts/rebuilds).
+type reversedOrderProvider struct {
+	*MockProvider
+}
+
+func (r reversedOrderProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
+	ids, err := r.MockProvider.GetAllEntityIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := append([]string(nil), ids...)
+	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+		out[i], out[j] = out[j], out[i]
+	}
+	return out, nil
 }
 
 // TestLPADetector_DeterministicPartitionOnVoteTie is the §6.3 regression:
@@ -127,6 +156,68 @@ func TestLPADetector_DeterministicPartitionOnVoteTie(t *testing.T) {
 				"DetectCommunities is not reproducible at this level",
 			level, runs, len(distinctByLevel[level]))
 	}
+}
+
+// TestLPADetector_DeterministicAcrossProviderOrder guards the detector boundary
+// (P1a): the graph.Provider contract does not promise a stable GetAllEntityIDs
+// order, so the SAME entity set delivered in a DIFFERENT order must still yield
+// the SAME partition at every level. Without the boundary sort in
+// DetectCommunities the seeded shuffle applies a fixed permutation to a varying
+// input and the partition flips (probe: reversing a 4x6 grid's entities moved
+// level 0 from 4 communities to 1). The insertion-order mock in the repeated-run
+// test cannot catch this — only a re-ordered delivery does.
+func TestLPADetector_DeterministicAcrossProviderOrder(t *testing.T) {
+	natural := detectPartition(t, gridProvider(4, 6))
+	reversed := detectPartition(t, reversedOrderProvider{gridProvider(4, 6)})
+
+	for _, level := range []int{0, 1, 2} {
+		require.Equalf(t, levelSignature(natural, level), levelSignature(reversed, level),
+			"level %d partition differs when the same entity set is delivered in reversed order — "+
+				"processing order is not canonicalized at the detector boundary", level)
+	}
+}
+
+// TestEntityIDProvider_SiblingCapDeterministicAcrossBaseOrder guards P1b: the
+// sibling/system-peer candidate lists are capped, so WHICH candidates survive the
+// cap must not depend on the base provider's entity order (kvProvider's JetStream
+// Keys() is watcher-delivery order, not sorted). 15 siblings share one type prefix
+// and the query is one of them → 14 candidates for a cap of 10; delivered forward
+// vs reversed, the capped set must be identical. Without the candidate sort the
+// forward run keeps {s01..s10} and the reversed run keeps {s05..s14}.
+func TestEntityIDProvider_SiblingCapDeterministicAcrossBaseOrder(t *testing.T) {
+	const typePrefix = "c360.log.env.sensor.temp."
+	ids := make([]string, 0, 15)
+	for i := 0; i < 15; i++ {
+		ids = append(ids, fmt.Sprintf("%ss%02d", typePrefix, i))
+	}
+	query := ids[0]
+
+	cappedSiblings := func(order []string) []string {
+		base := &entityIDTestProvider{
+			entities:  append([]string(nil), order...),
+			neighbors: map[string][]string{},
+			weights:   map[string]float64{},
+		}
+		p := NewEntityIDProvider(base, EntityIDProviderConfig{
+			IncludeSiblings:    true,
+			IncludeSystemPeers: false, // isolate the sibling cap
+			MaxSiblings:        10,
+		}, slog.Default())
+		neighbors, err := p.GetNeighbors(context.Background(), query, "both")
+		require.NoError(t, err)
+		sort.Strings(neighbors)
+		return neighbors
+	}
+
+	reversed := append([]string(nil), ids...)
+	for i, j := 0, len(reversed)-1; i < j; i, j = i+1, j-1 {
+		reversed[i], reversed[j] = reversed[j], reversed[i]
+	}
+
+	forward := cappedSiblings(ids)
+	require.Len(t, forward, 10, "cap must keep exactly maxSiblings candidates")
+	require.Equal(t, forward, cappedSiblings(reversed),
+		"the capped sibling set must be identical regardless of base-provider entity order")
 }
 
 // TestLPADetector_ComputeNewLabel_TieBreaksLexicographically pins §6.2 directly and

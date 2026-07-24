@@ -189,6 +189,17 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		return nil, errs.WrapTransient(err, "LPADetector", "DetectCommunities", "get entities")
 	}
 
+	// Canonicalize processing order at the detector boundary. The graph.Provider
+	// contract does NOT promise a stable order from GetAllEntityIDs — the wired
+	// kvProvider returns JetStream Keys() in watcher-delivery order, which can
+	// differ across restarts/rebuilds. The seeded shuffle below fixes the
+	// PERMUTATION, so a varying input order would still flip the realized
+	// partition. Sorting a defensive copy here (not mutating the provider's slice)
+	// makes the partition reproducible from ANY provider order; combined with
+	// buildCommunities' ordered output this holds at every hierarchical level.
+	entityIDs = append([]string(nil), entityIDs...)
+	sort.Strings(entityIDs)
+
 	if len(entityIDs) == 0 {
 		// A graph with no entities has no communities. Prune everything so the
 		// index matches the graph rather than retaining a partition for entities
@@ -455,8 +466,11 @@ func (d *LPADetector) computeNewLabel(
 //   - detectHierarchicalLevel flattens these Members back into the entity set it
 //     re-runs LPA over, so an unordered Members/community order would make the
 //     level-1/level-2 partitions non-reproducible even with the seeded shuffle.
-//   - The stored partition's member order is stabilized, which removes spurious
-//     COMMUNITY_INDEX re-write churn on an unchanged graph (#606).
+//   - The stored partition's payload BYTES are stabilized — a prerequisite for
+//     idempotent writes — but this does NOT by itself remove COMMUNITY_INDEX
+//     re-write churn: SaveCommunity still Puts every community + entity mapping
+//     unconditionally each cycle (storage.go), so identical bytes still create new
+//     revisions/events. Idempotent writes are tracked separately in #661.
 //
 // Community IDs are the label (a seed entity ID), which is deterministic given the
 // label assignment; only the emission ORDER was map-dependent, which sorting fixes.
