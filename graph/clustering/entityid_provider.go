@@ -437,6 +437,21 @@ func (p *EntityIDProvider) areSiblings(entityA, entityB string) bool {
 	return prefixA != "" && prefixA == prefixB
 }
 
+// explicitEdgeWeight returns the explicit edge weight from the underlying base
+// provider only, with no virtual-tier synthesis. A decorator computing a
+// multi-tier resolved weight (SemanticEdgeProvider) uses this to keep explicit
+// edges strictly dominant without EntityIDProvider.GetEdgeWeight's first-match
+// cascade collapsing tier identity into a single number.
+func (p *EntityIDProvider) explicitEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+	return p.base.GetEdgeWeight(ctx, fromID, toID)
+}
+
+// siblingsEnabled reports whether sibling virtual-edge synthesis is enabled.
+func (p *EntityIDProvider) siblingsEnabled() bool { return p.includeSiblings }
+
+// systemPeersEnabled reports whether system-peer virtual-edge synthesis is enabled.
+func (p *EntityIDProvider) systemPeersEnabled() bool { return p.includeSystemPeers }
+
 // ClearCache clears the type prefix cache and propagates to wrapped providers.
 // Call this when entities are added/removed.
 func (p *EntityIDProvider) ClearCache() {

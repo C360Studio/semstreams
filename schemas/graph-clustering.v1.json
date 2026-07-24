@@ -324,6 +324,21 @@
       "description": "Port configuration",
       "category": "basic"
     },
+    "semantic_edges": {
+      "type": "object",
+      "description": "Semantic co-location virtual-edge synthesis (mutual-kNN); omit to keep OFF (default)",
+      "category": "advanced",
+      "properties": {
+        "enable_semantic_edges": {
+          "type": "boolean",
+          "description": "Enable semantic co-location (mutual-kNN) virtual edges in community detection (default false; enabling also rebalances the structural edge caps so the tier competes)"
+        },
+        "semantic_max_neighbors": {
+          "type": "integer",
+          "description": "Mutual-kNN k — per-direction top-k candidate set size; bounds per-entity semantic degree (starting value 8)"
+        }
+      }
+    },
     "startup_attempts": {
       "type": "integer",
       "description": "Max attempts to wait for dependencies at startup",

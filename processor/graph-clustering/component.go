@@ -86,11 +86,20 @@ type Config struct {
 	// community detection on explicit topology alone.
 	EntityIDEdges *EntityIDEdgesConfig `json:"entity_id_edges,omitempty" schema:"type:object,description:EntityID virtual-edge synthesis for community detection; omit to keep defaults (siblings + system-peers on),category:advanced"`
 
+	// Semantic co-location virtual-edge synthesis (Epic B B2, ADR-086). Omit to
+	// keep the tier OFF (byte-identical to today). When enabled, mutual-kNN
+	// semantic edges join the detection vote and the structural edge caps are
+	// rebalanced so the new tier competes rather than being dominated.
+	SemanticEdges *SemanticEdgesConfig `json:"semantic_edges,omitempty" schema:"type:object,description:Semantic co-location virtual-edge synthesis (mutual-kNN); omit to keep OFF (default),category:advanced"`
+
 	// Parsed durations (set by ApplyDefaults)
 	detectionInterval time.Duration
 	// Resolved EntityID virtual-edge config (set by ApplyDefaults from
-	// EntityIDEdges over a DefaultEntityIDProviderConfig baseline).
+	// EntityIDEdges over a DefaultEntityIDProviderConfig baseline, or over the
+	// semantic-enabled rebalanced baseline when SemanticEdges is enabled).
 	entityIDEdges clustering.EntityIDProviderConfig
+	// Resolved semantic-edge config (set by ApplyDefaults from SemanticEdges).
+	semanticEdges resolvedSemanticEdges
 }
 
 // EntityIDEdgesConfig is the operator-facing shape for community detection's
@@ -126,6 +135,106 @@ func rejectUnknownEntityIDEdgeKeys(raw json.RawMessage) error {
 			fmt.Sprintf("entity_id_edges has a key that does not bind and would be silently ignored at runtime (gh#461/ADR-054): %v", err))
 	}
 	return nil
+}
+
+// SemanticEdgesConfig is the operator-facing block for community detection's
+// semantic co-location virtual-edge synthesis (Epic B B2, ADR-086). It is a
+// strict-decoded block (see rejectUnknownSemanticEdgeKeys) so an operator's typo
+// on the enable toggle fails loudly rather than silently leaving the feature
+// off. Omitting the block keeps the tier OFF and the detection edge set exactly
+// what it is today (the gh#461 default-preservation invariant).
+//
+// Numeric fields default when zero (mirrors clustering.NewSemanticEdgeProvider);
+// the starting values are EMPIRICAL (ADR-086), tuned against
+// partition_colocation_mean — recorded as a starting point, not asserted final.
+type SemanticEdgesConfig struct {
+	EnableSemanticEdges         bool    `json:"enable_semantic_edges,omitempty" schema:"type:bool,description:Enable semantic co-location (mutual-kNN) virtual edges in community detection (default false; enabling also rebalances the structural edge caps so the tier competes)"`
+	SemanticSimilarityThreshold float64 `json:"semantic_similarity_threshold,omitempty" schema:"type:number,description:Minimum cosine similarity for a candidate to count toward an entity's top-k semantic neighbors (starting value 0.75)"`
+	SemanticMaxNeighbors        int     `json:"semantic_max_neighbors,omitempty" schema:"type:int,description:Mutual-kNN k — per-direction top-k candidate set size; bounds per-entity semantic degree (starting value 8)"`
+	SemanticEdgeWeight          float64 `json:"semantic_edge_weight,omitempty" schema:"type:number,description:Weight of a synthesized mutual-kNN semantic edge (starting value 0.9; below explicit 1.0, above the rebalanced structural tiers)"`
+}
+
+// resolvedSemanticEdges is the ApplyDefaults-resolved semantic-edge config the
+// provider chain consumes. enabled=false means the tier is OFF and the chain is
+// unchanged (two providers, not three).
+type resolvedSemanticEdges struct {
+	enabled   bool
+	threshold float64
+	k         int
+	weight    float64
+}
+
+// resolve maps the operator block onto the resolved semantic-edge config,
+// applying the empirical starting values for any unset numeric. A nil receiver
+// resolves to enabled=false — the load-bearing "omitted block == feature OFF"
+// invariant.
+func (s *SemanticEdgesConfig) resolve() resolvedSemanticEdges {
+	r := resolvedSemanticEdges{
+		threshold: clustering.DefaultSemanticThreshold,
+		k:         clustering.DefaultSemanticMaxNeighbors,
+		weight:    clustering.DefaultSemanticEdgeWeight,
+	}
+	if s == nil {
+		return r
+	}
+	r.enabled = s.EnableSemanticEdges
+	if s.SemanticSimilarityThreshold > 0 {
+		r.threshold = s.SemanticSimilarityThreshold
+	}
+	if s.SemanticMaxNeighbors > 0 {
+		r.k = s.SemanticMaxNeighbors
+	}
+	if s.SemanticEdgeWeight > 0 {
+		r.weight = s.SemanticEdgeWeight
+	}
+	return r
+}
+
+// rejectUnknownSemanticEdgeKeys strict-decodes the semantic_edges block and
+// rejects any key that does not bind, so an operator enabling the feature via a
+// typo'd key (e.g. "enable_semantic_edge" singular) fails loudly at load rather
+// than silently leaving the tier OFF. Mirrors rejectUnknownEntityIDEdgeKeys /
+// inference.RejectUnknownKeys (ADR-054, no-silent-drop).
+func rejectUnknownSemanticEdgeKeys(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	var probe SemanticEdgesConfig
+	if err := dec.Decode(&probe); err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "graphclustering", "rejectUnknownSemanticEdgeKeys",
+			fmt.Sprintf("semantic_edges has a key that does not bind and would be silently ignored at runtime (ADR-086/ADR-054): %v", err))
+	}
+	return nil
+}
+
+// Semantic-enabled structural rebalance (Epic B B2, ADR-086 / design.md). When
+// the semantic tier is ON, the sibling/system-peer caps and system-peer weight
+// tighten so a third (semantic) voting tier competes rather than being drowned
+// out by an ever-larger structural total. EMPIRICAL starting values, tuned
+// against partition_colocation_mean — NOT final. These apply ONLY when the
+// operator enables semantic edges; an explicit entity_id_edges override still
+// wins (resolveOver applies operator overrides over this baseline).
+const (
+	semanticEnabledSiblingWeight    = 0.7 // unchanged from today's default
+	semanticEnabledMaxSiblings      = 5   // 10 -> 5
+	semanticEnabledSystemPeerWeight = 0.2 // 0.3 -> 0.2
+	semanticEnabledMaxSystemPeers   = 8   // 15 -> 8
+)
+
+// semanticEnabledEntityIDBaseline is the EntityID provider baseline used when
+// the semantic tier is enabled: the rebalanced structural caps/weights above,
+// with synthesis still ON by default.
+func semanticEnabledEntityIDBaseline() clustering.EntityIDProviderConfig {
+	return clustering.EntityIDProviderConfig{
+		SiblingWeight:      semanticEnabledSiblingWeight,
+		MaxSiblings:        semanticEnabledMaxSiblings,
+		IncludeSiblings:    true,
+		IncludeSystemPeers: true,
+		SystemPeerWeight:   semanticEnabledSystemPeerWeight,
+		MaxSystemPeers:     semanticEnabledMaxSystemPeers,
+	}
 }
 
 // removedConfigFields maps every field withdrawn from this component's operator
@@ -169,7 +278,16 @@ func rejectRemovedConfigKeys(raw json.RawMessage) error {
 // zero numeric keeps the default. A nil receiver resolves to the defaults
 // verbatim — the load-bearing "omitted config == current behavior" invariant.
 func (e *EntityIDEdgesConfig) resolve() clustering.EntityIDProviderConfig {
-	cfg := clustering.DefaultEntityIDProviderConfig()
+	return e.resolveOver(clustering.DefaultEntityIDProviderConfig())
+}
+
+// resolveOver is resolve with an explicit baseline, so the semantic-enabled path
+// can supply the rebalanced structural caps/weights baseline while operator
+// overrides still win. A nil receiver returns the baseline verbatim. The
+// zero-arg resolve() over DefaultEntityIDProviderConfig() preserves today's
+// behavior exactly (the gh#461 default-preservation invariant).
+func (e *EntityIDEdgesConfig) resolveOver(baseline clustering.EntityIDProviderConfig) clustering.EntityIDProviderConfig {
+	cfg := baseline
 	if e == nil {
 		return cfg
 	}
@@ -300,10 +418,21 @@ func (c *Config) ApplyDefaults() {
 		c.StartupInterval = 500 // milliseconds
 	}
 
+	// Resolve semantic co-location virtual-edge synthesis (Epic B B2, ADR-086).
+	// Nil SemanticEdges resolves to enabled=false — omitting the block keeps the
+	// tier OFF and the detection chain unchanged.
+	c.semanticEdges = c.SemanticEdges.resolve()
+
 	// Resolve EntityID virtual-edge synthesis (gh#461). Nil EntityIDEdges
 	// resolves to the built-in defaults (synthesis ON) — omitting the block
-	// preserves current behavior.
-	c.entityIDEdges = c.EntityIDEdges.resolve()
+	// preserves current behavior. When the semantic tier is enabled, resolve over
+	// the rebalanced structural baseline instead (operator overrides still win);
+	// when disabled, this is the exact same call as before — byte-identical.
+	if c.semanticEdges.enabled {
+		c.entityIDEdges = c.EntityIDEdges.resolveOver(semanticEnabledEntityIDBaseline())
+	} else {
+		c.entityIDEdges = c.EntityIDEdges.resolve()
+	}
 
 	// Add optional output ports based on enabled features
 	if c.Ports != nil {
@@ -524,6 +653,16 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		if err := json.Unmarshal(rawConfig, &rawEdges); err == nil {
 			if err := rejectUnknownEntityIDEdgeKeys(rawEdges.EntityIDEdges); err != nil {
 				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "entity_id_edges")
+			}
+		}
+		// Same no-silent-drop guard for semantic_edges (ADR-086): an enable-toggle
+		// typo must fail loudly, not silently leave the feature OFF.
+		var rawSemantic struct {
+			SemanticEdges json.RawMessage `json:"semantic_edges"`
+		}
+		if err := json.Unmarshal(rawConfig, &rawSemantic); err == nil {
+			if err := rejectUnknownSemanticEdgeKeys(rawSemantic.SemanticEdges); err != nil {
+				return nil, errs.Wrap(err, "CreateGraphClustering", "factory", "semantic_edges")
 			}
 		}
 	} else {
@@ -1030,10 +1169,21 @@ func (c *Component) initProviderAndDetector() {
 		c.logger,
 	)
 
+	// Epic B B2 (ADR-086): when the semantic-edge tier is enabled, decorate the
+	// EntityID provider with mutual-kNN semantic edges so the chain becomes
+	// kvProvider -> EntityIDProvider -> SemanticEdgeProvider. When disabled the
+	// chain is exactly the two providers it is today (byte-identical). The
+	// mutual-kNN candidates come from the component's existing similarity finder
+	// path (no second RPC — §1.2).
+	var topProvider clustering.Provider = entityIDProvider
+	if c.config.semanticEdges.enabled {
+		topProvider = c.wrapSemanticEdges(entityIDProvider)
+	}
+
 	entityQuerier := c.newEntityStateQuerier()
 	summarizer := clustering.NewStatisticalSummarizer()
 
-	detector := clustering.NewLPADetector(entityIDProvider, c.storage).
+	detector := clustering.NewLPADetector(topProvider, c.storage).
 		WithLogger(c.logger).
 		WithMaxIterations(c.config.MaxIterations).
 		WithLevels(3).
@@ -1041,7 +1191,39 @@ func (c *Component) initProviderAndDetector() {
 
 	detector.SetEntityProvider(entityQuerier)
 	c.detector = detector
-	c.graphProvider = entityIDProvider
+	c.graphProvider = topProvider
+}
+
+// wrapSemanticEdges decorates the EntityID provider with the mutual-kNN semantic
+// tier, sourcing candidates from the existing graph.embedding.query.similar
+// finder via a thin adapter (no second similarity RPC — B2 §1.2). The resolved
+// WeightConfig carries the rebalanced structural weights alongside the semantic
+// weight so GetEdgeWeight resolves max-not-sum across all four tiers in one
+// place (B2 §2). (The readiness-aware fail-open wrapper around the finder is
+// B2 §5, a later slice; here the finder's existing blanket fail-open stands.)
+func (c *Component) wrapSemanticEdges(entityIDProvider *clustering.EntityIDProvider) clustering.Provider {
+	finder := c.initQuerySimilarityFinder()
+	if finder == nil {
+		// No NATS client -> no similarity path. Degrade to structural-only rather
+		// than failing Start; the tier is additive over an always-valid floor.
+		c.logger.Warn("semantic edges enabled but similarity finder unavailable, running structural-only")
+		return entityIDProvider
+	}
+	weights := clustering.WeightConfig{
+		SiblingWeight:    c.config.entityIDEdges.SiblingWeight,
+		SystemPeerWeight: c.config.entityIDEdges.SystemPeerWeight,
+		SemanticWeight:   c.config.semanticEdges.weight,
+	}
+	return clustering.NewSemanticEdgeProvider(
+		entityIDProvider,
+		semanticFinderAdapter{finder: finder},
+		weights,
+		clustering.SemanticEdgeParams{
+			K:         c.config.semanticEdges.k,
+			Threshold: c.config.semanticEdges.threshold,
+		},
+		c.logger,
+	)
 }
 
 // newEntityStateQuerier builds the consume-path ENTITY_STATES reader with the
