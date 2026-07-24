@@ -9,30 +9,44 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **#645 SHIPPED — PR #653 MERGED (`02e752ab`, 2026-07-24); #645 CLOSED; tree clean; tag baseline
-> `v1.0.0-beta.158`.** #653 bundled: the #645 retrieval zero-fallback (`empty_answer_count` 4/5→0/5;
-> fallback now recorded under a NEUTRAL `type_filter_fallback_total`, not classifier_garbage), the
-> `reasoning_effort` graph/llm gap-fill, the frontier diagnostic harness (`task e2e:semantic:frontier`),
-> and all 6 Codex findings. The re-measure evidence + corrections are below (accurate history).
+> **B2 IS DECIDED — partition rebuild HAS ROI. The confounded frontier "low-ROI" hypothesis is REVERSED
+> by a white-box, LLM-independent measurement (session 11, 2026-07-24).** The owner course-corrected off the
+> frontier comparison (a black-box proxy; #654 re-scoped): with a KNOWN corpus we don't need a frontier model
+> to define "good" — we trace where each known-expected entity lands in the partition. New diagnostic
+> `test/e2e/scenarios/validate_partition_colocation.go` (stage `validate-partition-colocation`, built + reviewed
+> + unit-green; RECORDER, cheap 1.7b `task e2e:semantic`, no 8B/frontier). It reads `GetAllCommunities` and, per
+> B0 thematic query, measures whether the known-expected entities are co-located in one level-0 community.
 >
-> **NEXT — three live Epic B threads; sequencing matters:**
-> 1. **8B-harness saturation → #652 (the unblocker; recommended first).** ROOT CAUSE found: `graph/llm`
->    honors neither `max_concurrent` nor `requests_per_minute` (agentic-model does), and clustering's 5
->    enhancement workers oversubscribe the 8b instance's 2 llama.cpp slots — that IS the `pending=10`/EOF.
->    Same two-clients drift as the reasoning_effort gap ([[two-llm-clients-consolidation]]). Fix = CONCURRENCY
->    ADMISSION (not RPM): shared `model`-layer gate keyed by endpoint URL/model both clients honor + narrow
->    retries (429/503 only) + the SemStreams-owns-concurrency / SemInstruct-owns-slots boundary. **Quick-win:
->    align `enhancement_workers` ↔ `MODEL_PARALLEL` per tier (start 1, measure, try 2).** Do this first — it
->    gives a RELIABLE 8b harness, which #654 depends on.
-> 2. **B2 is UNDECIDED → #654 (do NOT treat "partition rebuild is low-ROI" as settled).** The frontier probe
->    *suggested* synthesis isn't the bottleneck (Gemini 2.5 Flash ≈ local 8b on 4/5 queries, +1 entity on
->    dock), but it's CONFOUNDED — frontier vs local were separate re-clustered runs (determinism 0.83). Firm
->    up with a FROZEN-`COMMUNITY_INDEX` paired run (both synthesizers, one partition). THEN decide B2.
-> 3. **B1 — partition determinism is 0.83, NOT 1.0** (live gap; session-9's 1.0 was the smaller corpus).
+> **The finding (decisive): the partition clusters by ENTITY TYPE/STATUS, not by THEME.** All completed
+> `maint-*` → one blob; all `doc-*` → one blob; all `obs-*` → one blob; all sensor-docs → one blob (driven by
+> entity-id sibling edges dominating the LPA). Coverage is perfect (`entities_not_in_community=0`, all 18
+> present; trust guard clean — 5 communities, not collapsed). So any theme that spans entity types SCATTERS:
+> forklift 0.40 (maint+obs+doc across 3 comms), conveyor 0.33, fire 0.50, dock 0.75; cold-chain is the ONLY
+> co-located query (1.00) because both its entities are the same type (sensor-docs). `colocation_mean=0.60`.
+> This EXPLAINS the frontier "caps at 3/4" — the missing entity is a different type in a different community,
+> so retrieving "the relevant community" structurally cannot reach it; a better synthesizer can't fix a
+> theme-blind partition. **⇒ B2 (ADR-061 semantic-kNN co-location edges that cross type boundaries) is the
+> right lever, un-confounded.**
 >
-> Full #652 admission-gate consolidation is architect-owned. Default `task e2e:semantic` stays 1.7b (fast CI
-> gate); 8b/frontier are the quality read; until the admission gate lands, an 8b run may not survive the full
-> 48-step scenario on 23 GiB — stream container logs or use `task e2e:semantic:debug` (no teardown).
+> **NEXT (sequencing):**
+> 1. **Land the B2 diagnostic PR** — `validate_partition_colocation.go` + `_test.go` + `tiered.go` registration
+>    (+ the `enhancement_workers: 2` pin in `configs/semantic-8b.json`, #652 quick-win, bundled). Test-instrumentation
+>    + config only; unit-green + lint-clean. Merge gate = Codex → addressed → CI green (owner-run Codex).
+> 2. **Scope the B2 build (architect-owned)** — re-add ADR-061 semantic-kNN edges + #618 readiness gate; the
+>    open design question is how to weight semantic edges against the entity-id sibling edges that currently
+>    dominate (theme vs type). Success metric already instrumented: `colocation_mean` should rise on
+>    theme-spanning queries. Write **ADR-08x** (semantic partition + readiness; promote ADR-061) now that B2 is scoped.
+> 3. **B1 determinism** — this run measured `1.00` on the ~74-entity corpus (run1=5/run2=5); the 0.83 was the
+>    ~175-entity corpus. So B1's determinism piece is a LARGER-CORPUS phenomenon, not universal — verify on the
+>    bigger corpus before treating as a live gap.
+> 4. **#652 de-prioritized but CORROBORATED.** This 1.7b run took stage-20=2m25s / stage-21=4m28s with LLM
+>    `pending=9`, and `validate-globalsearch-known-answer` (stage 42) then TIMED OUT on graph-query `loadEntities`
+>    under that sustained load — the SAME enhancement-oversubscription (5 workers vs 2 slots) biting the 1.7b tier,
+>    not just 8B. The standard `configs/semantic.json` also defaults `enhancement_workers=5` (unpinned). Extending
+>    the pin to the standard config is a candidate #652 follow-up. Full admission-gate consolidation stays architect-owned.
+>
+> Default `task e2e:semantic` stays 1.7b (fast CI gate); 8b/frontier are optional quality reads. The B2 decision
+> needs NEITHER — the co-location signal is LLM-independent, so it's read on the cheap tier.
 >
 > **THE RE-MEASURE (the whole point — done; measure-before-building paid off AGAIN).** The #645 fix
 > RESOLVED the dominant thematic-retrieval defect:
