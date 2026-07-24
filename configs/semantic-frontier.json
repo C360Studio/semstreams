@@ -326,7 +326,7 @@
       "name": "rule-processor",
       "enabled": true,
       "config": {
-        "pack_id": "semantic-8b-rules",
+        "pack_id": "semantic-frontier-rules",
         "entity_watch_buckets": {
           "ENTITY_STATES": [
             "c360.*.*.*.*.*"
