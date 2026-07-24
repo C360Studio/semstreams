@@ -35,7 +35,7 @@ type queryMetrics struct {
 	// query with a generic example string). High rate indicates the
 	// classifier model is too thin for the workload — operators should
 	// upsize or relax single-token-bypass thresholds.
-	classifierGarbage *prometheus.CounterVec // labels: type (template_filter|query_dropped)
+	classifierGarbage *prometheus.CounterVec // labels: type (template_filter|query_dropped|type_filter_zeroed)
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -144,7 +144,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_query",
 				Name:      "classifier_garbage_total",
-				Help:      "Defenses triggered against malformed classifier output: template_filter (literal placeholder in type_filters) or query_dropped (single-token original query replaced by classifier-emitted template). High rate = classifier model too thin for workload.",
+				Help:      "Defenses triggered against malformed classifier output: template_filter (literal placeholder in type_filters), query_dropped (single-token original query replaced by classifier-emitted template), or type_filter_zeroed (invented type filters would have zeroed a non-empty semantic result set — fell back to unfiltered, #645). High rate = classifier model too thin for workload.",
 			}, []string{"type"}),
 		}
 
@@ -259,9 +259,11 @@ func (m *queryMetrics) recordGlobalSearchDegraded(reason string) {
 }
 
 // recordClassifierGarbage records a defense firing against malformed classifier
-// output. Type is "template_filter" (literal `<...>` etc. in type_filters) or
-// "query_dropped" (single-token original replaced by classifier template).
-// LOUD signal — paired with a Warn log at the call site.
+// output. Type is "template_filter" (literal `<...>` etc. in type_filters),
+// "query_dropped" (single-token original replaced by classifier template), or
+// "type_filter_zeroed" (invented type filters would have zeroed a non-empty
+// semantic result set — fell back to unfiltered, #645).
+// LOUD signal — paired with a log at the call site.
 func (m *queryMetrics) recordClassifierGarbage(garbageType string) {
 	m.classifierGarbage.WithLabelValues(garbageType).Inc()
 }

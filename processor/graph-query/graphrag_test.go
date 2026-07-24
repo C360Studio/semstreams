@@ -253,9 +253,75 @@ func TestFilterEntityIDsByType_UsesExtractEntityType(t *testing.T) {
 		"a.b.c.d.sensor.003",
 		"a.b.c.d.mission.004",
 	}
-	got := filterEntityIDsByType(ids, []string{"sensor"})
+	got, fellBack := filterEntityIDsByType(ids, []string{"sensor"})
 	if len(got) != 2 {
 		t.Errorf("filterEntityIDsByType() returned %d, want 2", len(got))
+	}
+	if fellBack {
+		t.Errorf("filterEntityIDsByType() fellBack=true on a partial match, want false")
+	}
+}
+
+// TestFilterEntityIDsByType_ZeroFallback covers the graceful-fallback contract
+// (#645): the classifier (qwen3-0.6b) invents type names that match no real
+// type segment, and hard-zeroing a non-empty semantic result set produces an
+// empty answer. The filter must instead preserve the input and signal fellBack.
+func TestFilterEntityIDsByType_ZeroFallback(t *testing.T) {
+	tests := []struct {
+		name        string
+		entityIDs   []string
+		typeFilters []string
+		wantIDs     []string
+		wantFellBk  bool
+	}{
+		{
+			// Classifier guessed types that match nothing real → do NOT zero a
+			// non-empty semantic result set; return it unfiltered + fellBack.
+			name:        "fallback: non-empty input, filters match nothing",
+			entityIDs:   []string{"a.b.c.d.sensor.001", "a.b.c.d.drone.002"},
+			typeFilters: []string{"Procedure", "equipment process"},
+			wantIDs:     []string{"a.b.c.d.sensor.001", "a.b.c.d.drone.002"},
+			wantFellBk:  true,
+		},
+		{
+			name:        "partial match: some IDs match → subset, no fallback",
+			entityIDs:   []string{"a.b.c.d.sensor.001", "a.b.c.d.drone.002", "a.b.c.d.sensor.003"},
+			typeFilters: []string{"sensor"},
+			wantIDs:     []string{"a.b.c.d.sensor.001", "a.b.c.d.sensor.003"},
+			wantFellBk:  false,
+		},
+		{
+			// Nothing to preserve — an already-empty input is not a fallback.
+			name:        "already-empty input with non-empty filters → empty, no fallback",
+			entityIDs:   []string{},
+			typeFilters: []string{"sensor"},
+			wantIDs:     []string{},
+			wantFellBk:  false,
+		},
+		{
+			name:        "empty typeFilters → input unchanged, no fallback",
+			entityIDs:   []string{"a.b.c.d.sensor.001", "a.b.c.d.drone.002"},
+			typeFilters: nil,
+			wantIDs:     []string{"a.b.c.d.sensor.001", "a.b.c.d.drone.002"},
+			wantFellBk:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, fellBack := filterEntityIDsByType(tt.entityIDs, tt.typeFilters)
+			if fellBack != tt.wantFellBk {
+				t.Errorf("fellBack = %v, want %v", fellBack, tt.wantFellBk)
+			}
+			if len(got) != len(tt.wantIDs) {
+				t.Fatalf("got %d IDs %v, want %d %v", len(got), got, len(tt.wantIDs), tt.wantIDs)
+			}
+			for i := range tt.wantIDs {
+				if got[i] != tt.wantIDs[i] {
+					t.Errorf("got[%d] = %q, want %q", i, got[i], tt.wantIDs[i])
+				}
+			}
+		})
 	}
 }
 
