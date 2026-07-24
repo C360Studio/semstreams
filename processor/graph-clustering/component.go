@@ -580,6 +580,13 @@ type Component struct {
 	// the load that makes readiness interesting (gh#590). It is rebuilt on every
 	// Start: a stopped Watcher cannot be restarted.
 	statusWatcher *readiness.Watcher
+	// embeddingStatusWatcher holds graph-embedding's last-known readiness envelope
+	// from the SAME GRAPH_STATUS bucket (KeyGraphEmbedding), and is bound ONLY when
+	// enable_semantic_edges is true — the second axis of the detection gate
+	// (B2 §4). It never DEFERS a cycle: a cold embedding index degrades the cycle
+	// to structural-only (semantic_edges_applied=false), it never withholds the
+	// always-committing structural floor. Rebuilt on every Start like statusWatcher.
+	embeddingStatusWatcher *readiness.Watcher
 	// statusHeartbeat declares the producer's publish interval, which sets the
 	// freshness window (readiness.FreshnessMultiplier x heartbeat). Zero means
 	// readiness.DefaultHeartbeat. Unexported and not an operator knob (ADR-083 D2
@@ -591,6 +598,18 @@ type Component struct {
 	// deferMu because Stop may race the detection goroutine's final tick.
 	deferMu         sync.Mutex
 	lastDeferReason graph.DeferReason
+	// semanticProvider is the concrete SemanticEdgeProvider handle (also the top of
+	// c.graphProvider's chain) when enable_semantic_edges is true, nil otherwise. It
+	// is held typed so applySemanticGate can toggle it per cycle from embedding
+	// readiness. Set under c.mu in initProviderAndDetector before the detection
+	// goroutine launches, then only read/toggled by that goroutine (B3's enhancement
+	// worker becomes a second reader; the toggle is atomic).
+	semanticProvider *clustering.SemanticEdgeProvider
+	// lastSemanticApplied tracks the previous cycle's semantic-tier verdict so a
+	// structural-only <-> full TRANSITION logs one visible line rather than silence
+	// or a per-tick flood. nil = no cycle observed yet. Guarded by semanticMu.
+	semanticMu          sync.Mutex
+	lastSemanticApplied *bool
 
 	// Lifecycle state
 	mu                sync.RWMutex
@@ -1046,17 +1065,22 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.cancel()
 	}
 
-	// Detach the readiness watcher under the lock but join it after unlocking: Stop
-	// blocks until the watch goroutine exits, and a stopped Watcher cannot be
-	// restarted, so the next Start builds a fresh one.
+	// Detach the readiness watchers under the lock but join them after unlocking:
+	// Stop blocks until the watch goroutine exits, and a stopped Watcher cannot be
+	// restarted, so the next Start builds fresh ones.
 	statusWatcher := c.statusWatcher
 	c.statusWatcher = nil
+	embeddingStatusWatcher := c.embeddingStatusWatcher
+	c.embeddingStatusWatcher = nil
 
 	c.running = false
 	c.mu.Unlock()
 
 	if statusWatcher != nil {
 		statusWatcher.Stop()
+	}
+	if embeddingStatusWatcher != nil {
+		embeddingStatusWatcher.Stop()
 	}
 
 	// Wait for goroutines with timeout
@@ -1205,16 +1229,19 @@ func (c *Component) initProviderAndDetector() {
 
 // wrapSemanticEdges decorates the EntityID provider with the mutual-kNN semantic
 // tier, sourcing candidates from the existing graph.embedding.query.similar
-// finder via a thin adapter (no second similarity RPC — B2 §1.2). The resolved
-// WeightConfig carries the rebalanced structural weights alongside the semantic
-// weight so GetEdgeWeight resolves max-not-sum across all four tiers in one
-// place (B2 §2). (The readiness-aware fail-open wrapper around the finder is
-// B2 §5, a later slice; here the finder's existing blanket fail-open stands.)
+// finder via a thin readiness-aware adapter (no second similarity RPC — B2 §1.2;
+// the fail-open classification is §5.1, inside semanticFinderAdapter). The
+// resolved WeightConfig carries the rebalanced structural weights alongside the
+// semantic weight so GetEdgeWeight resolves max-not-sum across all four tiers in
+// one place (B2 §2). It also stores the concrete provider on c.semanticProvider
+// so applySemanticGate can toggle it per cycle from embedding readiness (§4).
 func (c *Component) wrapSemanticEdges(entityIDProvider *clustering.EntityIDProvider) clustering.Provider {
 	finder := c.initQuerySimilarityFinder()
 	if finder == nil {
 		// No NATS client -> no similarity path. Degrade to structural-only rather
 		// than failing Start; the tier is additive over an always-valid floor.
+		// c.semanticProvider stays nil, so applySemanticGate is a no-op and the
+		// deployment runs permanent structural-only.
 		c.logger.Warn("semantic edges enabled but similarity finder unavailable, running structural-only")
 		return entityIDProvider
 	}
@@ -1223,7 +1250,7 @@ func (c *Component) wrapSemanticEdges(entityIDProvider *clustering.EntityIDProvi
 		SystemPeerWeight: c.config.entityIDEdges.SystemPeerWeight,
 		SemanticWeight:   c.config.semanticEdges.weight,
 	}
-	return clustering.NewSemanticEdgeProvider(
+	provider := clustering.NewSemanticEdgeProvider(
 		entityIDProvider,
 		semanticFinderAdapter{finder: finder},
 		weights,
@@ -1233,6 +1260,8 @@ func (c *Component) wrapSemanticEdges(entityIDProvider *clustering.EntityIDProvi
 		},
 		c.logger,
 	)
+	c.semanticProvider = provider
+	return provider
 }
 
 // newEntityStateQuerier builds the consume-path ENTITY_STATES reader with the
@@ -1294,6 +1323,9 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 				continue
 			}
 			c.observeDetectionRun(decision)
+			// Set the semantic tier active/inactive for THIS cycle from the
+			// embedding-readiness verdict BEFORE detection reads the provider (B2 §4).
+			c.applySemanticGate(decision)
 			c.runCommunityDetection(ctx)
 		}
 	}
@@ -1323,6 +1355,22 @@ func (c *Component) startStatusWatcher(ctx context.Context) error {
 			readiness.BucketGraphStatus, readiness.KeyGraphIndex, err)
 	}
 	c.statusWatcher = watcher
+
+	// Second readiness axis (B2 §4.1): graph-embedding's status key, bound ONLY
+	// when the semantic-edge tier is enabled so an unopted deployment starts no
+	// wasted subscription. A cold embedding index does not defer the cycle — it
+	// drops the cycle to structural-only — so an absent/unknown feed here is
+	// benign, exactly like the index watcher's absent case.
+	if c.config.semanticEdges.enabled {
+		embWatcher := readiness.NewWatcher(c.natsClient, readiness.KeyGraphEmbedding,
+			readiness.WithHeartbeat(heartbeat),
+			readiness.WithLogger(c.logger))
+		if err := embWatcher.Start(ctx); err != nil {
+			return fmt.Errorf("start readiness watcher on %s/%s: %w",
+				readiness.BucketGraphStatus, readiness.KeyGraphEmbedding, err)
+		}
+		c.embeddingStatusWatcher = embWatcher
+	}
 	return nil
 }
 
@@ -1340,6 +1388,13 @@ type gateDecision struct {
 	// overrode an unknown status. Such a run has no verified view age, so it must
 	// not record a staleness of 0 — that would read as "verified caught up".
 	ungated bool
+	// semanticActive is the SECOND-axis verdict (B2 §4): whether the semantic-edge
+	// tier may apply this cycle — true only when the tier is enabled AND
+	// graph-embedding's readiness envelope is healthy. Meaningful only on a proceed
+	// and only when semantic edges are enabled; false otherwise (structural-only or
+	// n/a). It drives applySemanticGate's per-cycle provider toggle and the
+	// semantic_edges_applied signal.
+	semanticActive bool
 }
 
 // evaluateReadiness decides whether it is safe to run community detection against the
@@ -1373,6 +1428,7 @@ func (c *Component) evaluateReadiness() gateDecision {
 	// blocks on I/O, and Stop is deliberately joined outside c.mu.
 	c.mu.RLock()
 	watcher := c.statusWatcher
+	embWatcher := c.embeddingStatusWatcher
 	c.mu.RUnlock()
 
 	var reading readiness.Reading
@@ -1384,15 +1440,45 @@ func (c *Component) evaluateReadiness() gateDecision {
 		reading.Err = errors.New("readiness status watcher not started")
 	}
 
+	// The semantic axis is independent of the index gate: it governs whether the
+	// additive tier applies on a cycle the index gate has ALREADY allowed, never
+	// whether the cycle runs. Evaluated once here so both the proceed and the
+	// ungated proceed carry it.
+	semanticActive := c.evaluateSemanticReadiness(embWatcher)
+
 	proceed, reason := graph.EvaluateReadinessGate(
 		graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh})
 	if proceed {
-		return gateDecision{proceed: true, reading: reading}
+		return gateDecision{proceed: true, reading: reading, semanticActive: semanticActive}
 	}
 	if reason == graph.DeferStatusUnknown && c.config.AllowUngatedReads {
-		return gateDecision{proceed: true, reading: reading, ungated: true}
+		return gateDecision{proceed: true, reading: reading, ungated: true, semanticActive: semanticActive}
 	}
 	return gateDecision{reason: reason, reading: reading}
+}
+
+// evaluateSemanticReadiness reports whether the semantic-edge tier may run this
+// cycle: true only when the tier is ENABLED and graph-embedding's readiness
+// envelope is HEALTHY (the same graph.EvaluateReadinessGate the index axis uses).
+// An unknown or not-ready embedding feed yields false — which degrades the cycle
+// to structural-only, never a defer (the additive-over-a-structural-floor tenet).
+// It only READS held readiness state; it never queries embeddings, builds, or
+// consults the mutual-kNN cache.
+func (c *Component) evaluateSemanticReadiness(embWatcher *readiness.Watcher) bool {
+	if !c.config.semanticEdges.enabled || embWatcher == nil {
+		return false
+	}
+	return semanticActiveFromReading(embWatcher.Read())
+}
+
+// semanticActiveFromReading is the pure reading -> verdict step: the semantic tier
+// applies only when graph-embedding's held envelope passes the SAME health gate
+// the index axis uses. An unknown feed (never received / stale) is !Fresh and
+// yields false (structural-only), never a fabricated ready.
+func semanticActiveFromReading(r readiness.Reading) bool {
+	proceed, _ := graph.EvaluateReadinessGate(
+		graph.StatusReading{Status: r.Status, Fresh: r.Fresh})
+	return proceed
 }
 
 // recordDefer makes a defer evidence rather than a bare constant. The gh#590
@@ -1468,6 +1554,57 @@ func (c *Component) noteGateOutcome(reason graph.DeferReason) (changed bool) {
 	changed = reason != c.lastDeferReason
 	c.lastDeferReason = reason
 	return changed
+}
+
+// applySemanticGate sets the semantic-edge tier active/inactive for THIS cycle
+// from the embedding-readiness verdict, BEFORE detection reads the provider. It
+// is the concrete mechanism behind the structural-floor guarantee (B2 §4): the
+// provider chain is built once and the mutual-kNN cache is build-once, so "run
+// structural-only this cycle" is expressed by DEACTIVATING the provider —
+// GetNeighbors/GetEdgeWeight then behave exactly as the wrapped EntityIDProvider
+// and never trigger the cache build. Because the cache is only ever built on an
+// ACTIVE cycle, it can never latch to the empty structural-only set during a
+// cold-embedding window: a later ready cycle reactivates and builds it fresh.
+//
+// It also surfaces the #618 signal: semantic_edges_applied (gauge 1/0) plus a
+// transition log, so a structurally-blind cycle (enabled but embeddings cold) is
+// DISTINGUISHABLE from a full cycle that simply found no mutual-kNN neighbors.
+//
+// A no-op when the tier is disabled or unwired (no provider to gate) — the n/a
+// row of the readiness table; the gauge is deliberately left untouched so a
+// disabled deployment never publishes a misleading 0/1.
+func (c *Component) applySemanticGate(d gateDecision) {
+	if !c.config.semanticEdges.enabled || c.semanticProvider == nil {
+		return
+	}
+	c.semanticProvider.SetActive(d.semanticActive)
+	if c.metrics != nil {
+		c.metrics.setSemanticEdgesApplied(d.semanticActive)
+	}
+	c.noteSemanticApplied(d.semanticActive)
+}
+
+// noteSemanticApplied logs the structural-only <-> full TRANSITION once, at a
+// level that is visible without raising the log level, while a steady state stays
+// quiet (mirrors noteGateOutcome). The structural-only transition is a WARN
+// because a semantically-blind partition is exactly the #618 silent failure this
+// diagnostic exists to make loud.
+func (c *Component) noteSemanticApplied(active bool) {
+	c.semanticMu.Lock()
+	changed := c.lastSemanticApplied == nil || *c.lastSemanticApplied != active
+	v := active
+	c.lastSemanticApplied = &v
+	c.semanticMu.Unlock()
+	if !changed {
+		return
+	}
+	if active {
+		c.logger.Info("semantic-edge tier active; community detection includes mutual-kNN semantic edges",
+			slog.Bool("semantic_edges_applied", true))
+		return
+	}
+	c.logger.Warn("semantic-edge tier INACTIVE; running STRUCTURAL-ONLY this cycle — graph-embedding is not ready, so the partition is semantically blind (#618)",
+		slog.Bool("semantic_edges_applied", false))
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.

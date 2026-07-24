@@ -52,6 +52,17 @@ type clusteringMetrics struct {
 	// longer one to tune. All series are pre-initialized at zero so a reason that has
 	// never fired is still scrapeable (absent series break rate() alerting).
 	deferTotal *prometheus.CounterVec
+
+	// semanticEdgesApplied is the #618 "is this partition semantically blind?"
+	// signal: 1 when the most recent detection cycle ran with the semantic-edge
+	// tier ACTIVE (graph-embedding ready, mutual-kNN edges in the vote), 0 when it
+	// ran STRUCTURAL-ONLY because the embedding index was not ready. It is the axis
+	// that distinguishes "semantics ran and found nothing" (gauge 1, a full cycle
+	// with no mutual-kNN pairs) from "semantics never ran" (gauge 0, a cold-index
+	// structural-only cycle) — the exact confusion that let a semantically-blind
+	// partition commit silently. Only updated on deployments that ENABLE the tier;
+	// an unopted deployment never touches it (its value is meaningless there).
+	semanticEdgesApplied prometheus.Gauge
 }
 
 // deferReasons is the closed label set for deferTotal, sourced from graph.AllDeferReasons
@@ -94,6 +105,12 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 				Name:      "defer_total",
 				Help:      "Community detection ticks deferred by the readiness gate, by reason: hard_stop (degraded/reset_required index), status_unknown (no fresh readiness envelope — the feed died or graph-index is absent), bootstrap_incomplete (producer has not finished its initial build this process lifetime), unrecognized_state (envelope State is blank or outside the known set — version skew). All four are index-health faults; a merely lagging view is never deferred — its age is reported on staleness_at_detection_ms.",
 			}, []string{"reason"}),
+			semanticEdgesApplied: prometheus.NewGauge(prometheus.GaugeOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_clustering",
+				Name:      "semantic_edges_applied",
+				Help:      "Whether the most recent community-detection cycle applied the semantic-edge tier: 1 = active (graph-embedding ready, mutual-kNN edges in the vote), 0 = structural-only (embedding index not ready). Distinguishes a full cycle that found no mutual-kNN neighbors (1) from a semantically-blind cycle that never ran semantics (0) — the #618 signal. Only meaningful where enable_semantic_edges is true.",
+			}),
 		}
 		for _, reason := range deferReasons {
 			metrics.deferTotal.WithLabelValues(string(reason))
@@ -102,10 +119,12 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 			_ = registry.RegisterGauge("graph-clustering", "staleness_at_detection_ms", metrics.stalenessAtDetection)
 			_ = registry.RegisterCounterVec("graph-clustering", "defer_total", metrics.deferTotal)
 			_ = registry.RegisterHistogram("graph-clustering", "detection_duration_seconds", metrics.detectionDuration)
+			_ = registry.RegisterGauge("graph-clustering", "semantic_edges_applied", metrics.semanticEdgesApplied)
 		} else {
 			_ = prometheus.DefaultRegisterer.Register(metrics.stalenessAtDetection)
 			_ = prometheus.DefaultRegisterer.Register(metrics.deferTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.detectionDuration)
+			_ = prometheus.DefaultRegisterer.Register(metrics.semanticEdgesApplied)
 		}
 	})
 	return metrics
@@ -124,6 +143,17 @@ func (m *clusteringMetrics) setStalenessAtDetection(stalenessMs uint64) {
 // observation would hide.
 func (m *clusteringMetrics) observeDetectionDuration(d time.Duration) {
 	m.detectionDuration.Observe(d.Seconds())
+}
+
+// setSemanticEdgesApplied records whether the most recent detection cycle ran with
+// the semantic-edge tier active (1) or structural-only (0). Set every enabled-tier
+// cycle so the gauge reflects the latest verdict, not the last time it flipped.
+func (m *clusteringMetrics) setSemanticEdgesApplied(active bool) {
+	if active {
+		m.semanticEdgesApplied.Set(1)
+		return
+	}
+	m.semanticEdgesApplied.Set(0)
 }
 
 // countDefer increments the typed defer counter. An unrecognized reason would create
