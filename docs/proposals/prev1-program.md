@@ -542,4 +542,11 @@ Append one line per session. Newest last.
   Per owner ("keep the harness lean, note honest findings") #2/#4 are DOCUMENTED as harness limitations
   (record-only, not gated; no quota-safe retry) + `enhancement_workers:1`, not built into gates; the rigorous
   frozen-partition paired run is a filed follow-up. Next: owner re-review/CI/merge; then B1/B2 (via the paired
-  run) + client-consolidation.**
+  run) + client-consolidation.** **Also incorporated (owner saturation analysis, verified):** the 8B endpoint
+  saturation (`pending=10`/EOF) is the SAME two-clients drift — `graph/llm` honors neither `max_concurrent`
+  nor `requests_per_minute` (agentic-model does, via `EndpointThrottle`), and clustering defaults to 5
+  enhancement workers vs 2 llama.cpp slots (2.5× oversubscription). Fix = concurrency-admission (not RPM): a
+  shared `model`-layer admission gate keyed by endpoint URL/model that both clients honor + narrow retries
+  (429/503 only) + the SemStreams/SemInstruct ownership boundary; immediate quick-win is aligning
+  `enhancement_workers` ↔ `MODEL_PARALLEL` per tier. Folded into **#652** (concrete deliverable); subsumes
+  #654's retry note. So "decide 8B-harness viability" now has a path, not just a question.
