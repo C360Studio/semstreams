@@ -645,6 +645,7 @@
         "detection_interval": "30s",
         "batch_size": 100,
         "enable_llm": true,
+        "enhancement_workers": 1,
         "min_community_size": 2,
         "max_iterations": 100,
         "enable_structural": true,

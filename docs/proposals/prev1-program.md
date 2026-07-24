@@ -49,13 +49,14 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > passed → reconfirms the 8b EOF was pure capacity). **Result: Gemini MATCHED local qwen3-8b on 4/5 thematic
 > queries; it only lifted the weakest (dock-equipment 0.50→0.75, one entity). Every 4-expected-entity query
 > (forklift/fire/dock) caps at exactly 3/4 EVEN at the frontier.** Reading: (1) **synthesis quality is NOT
-> the bottleneck — the edge 8b is within ~1 entity of a frontier model**, so the tiered-fallback story holds
-> (cloud not required); (2) the "misses exactly one" that survives a frontier model is a NARROW
-> retrieval/partition residual (the 4th entity isn't reachable through current retrieval+partition). **→ B2
-> (semantic partition REBUILD) looks LOW-ROI; chase the residual as a TARGETED retrieval fix, not a partition
-> overhaul.** B1 (determinism 0.83) is still a live gap. Caveat: single run, ~74-entity corpus, 5 queries,
-> recall coarse at N=4 — directional not statistical; confirm on a larger corpus before formally de-scoping
-> B2. (Gotcha that made the probe valid: `gemini-2.5-flash` is a thinking model; the hardcoded 200-tok
+> the bottleneck — the edge 8b appears within ~1 entity of a frontier model** on this corpus, consistent with
+> the tiered-fallback story (cloud not required); (2) the "misses exactly one" that survives a frontier model
+> *looks like* a NARROW retrieval/partition residual. **BUT the comparison is CONFOUNDED (Codex, PR #653): the
+> frontier and local runs were SEPARATE runs, each re-clustered from clean at level-0 determinism ~0.83, so
+> the recall delta conflates model quality with a possibly-different realized partition.** So **"B2 rebuild is
+> low-ROI" is a HYPOTHESIS, not a finding** — a rigorous answer needs a FROZEN `COMMUNITY_INDEX` evaluated by
+> both synthesizers in ONE paired run (filed as a follow-up). B1 (determinism 0.83) is still a live gap. Also
+> single run, ~74-entity corpus, 5 queries, recall coarse at N=4. (Gotcha that made the probe valid: `gemini-2.5-flash` is a thinking model; the hardcoded 200-tok
 > community_summary cap truncates under thinking → needs `reasoning_effort: none`, which exposed a graph/llm
 > gap — see log.)
 >
@@ -530,5 +531,15 @@ Append one line per session. Newest last.
   proved the partition rebuild is low-ROI without building it; (b) **verify a "we already support X" claim
   from code** — the owner was right that `reasoning_effort` exists (registry + agentic), I was wrong it needed
   new code; the real bug was one client dropping it. **Bundling #645 + reasoning_effort + frontier harness +
-  this baton into ONE PR (owner: run counts as review for the simple reasoning_effort fix); filing the
-  two-LLM-clients issue. Next: owner Codex → CI → merge; then B1/B2 scoping + the client-consolidation.**
+  this baton into ONE PR (**#653**, owner: run counts as review for the simple reasoning_effort fix); filed the
+  two-LLM-clients issue (**#652**). **Codex round on #653 (6 findings):** #1 pack_id reuse (had already self-
+  caught + fixed — my pre-commit gate ran only touched packages, not `./...`, so CI caught it first; lesson
+  re-learned); addressed #5 (reasoning_effort test bypassed the `OpenAIConfigFromEndpoint` seam it guards —
+  rewrote through the translator + `io.ReadAll`, mutation-proven) and #6 (fallback mislabeled as
+  `classifier_garbage` — moved to a neutral `type_filter_fallback_total`; a zero-match only means no candidate
+  in the window, not proven-invented). **#3 was the sharp one — the frontier-vs-local comparison did NOT hold
+  the partition fixed, so the "B2 low-ROI" read is a HYPOTHESIS not a finding; walked it back here + in memory.**
+  Per owner ("keep the harness lean, note honest findings") #2/#4 are DOCUMENTED as harness limitations
+  (record-only, not gated; no quota-safe retry) + `enhancement_workers:1`, not built into gates; the rigorous
+  frozen-partition paired run is a filed follow-up. Next: owner re-review/CI/merge; then B1/B2 (via the paired
+  run) + client-consolidation.**

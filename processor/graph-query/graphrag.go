@@ -701,13 +701,15 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 		if len(typeFilters) > 0 {
 			filtered, fellBack := filterEntityIDsByType(entityIDs, typeFilters)
 			if fellBack {
-				// Classifier's invented type filters matched nothing real — do not
-				// zero a healthy semantic set (#645); keep the unfiltered hits.
+				// No candidate in the retrieval window matched the classifier's
+				// type filters — do not zero a healthy semantic set (#645); keep the
+				// unfiltered hits. Neutral fallback: a valid inferred type can also
+				// miss the window, so this is NOT recorded as classifier garbage.
 				c.logger.Debug("type filter would zero non-empty semantic set — falling back to unfiltered",
 					"types", typeFilters,
 					"hits", len(filtered))
 				if c.promMetrics != nil {
-					c.promMetrics.recordClassifierGarbage("type_filter_zeroed")
+					c.promMetrics.recordTypeFilterFallback()
 				}
 			}
 			entityIDs = filtered
@@ -963,15 +965,17 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		before := len(entityIDs)
 		filtered, fellBack := filterEntityIDsByType(entityIDs, typeFilters)
 		if fellBack {
-			// Classifier's invented type filters matched nothing real — do not
-			// zero a healthy semantic set (#645); keep the unfiltered hits. On a
-			// fallback before-after == 0, so hits-dropped records 0 drops and the
-			// type_filter_zeroed counter is what marks the fallback.
+			// No candidate in the retrieval window matched the classifier's type
+			// filters — do not zero a healthy semantic set (#645); keep the
+			// unfiltered hits. On a fallback before-after == 0, so hits-dropped
+			// records 0 drops and the type_filter_fallback counter marks it.
+			// Neutral: a valid inferred type can also miss the window, so this is
+			// NOT classifier garbage.
 			c.logger.Debug("type filter would zero non-empty semantic set — falling back to unfiltered",
 				"types", typeFilters,
 				"hits", len(filtered))
 			if c.promMetrics != nil {
-				c.promMetrics.recordClassifierGarbage("type_filter_zeroed")
+				c.promMetrics.recordTypeFilterFallback()
 			}
 		}
 		entityIDs = filtered
@@ -1357,13 +1361,15 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 // Returns all IDs (fellBack=false) if typeFilters is empty.
 //
 // Graceful-fallback contract (#645): the type filters come from the classifier
-// (qwen3-0.6b), which invents type names ("Procedure", "equipment process") that
-// do not match any real corpus type segment. A lowercased exact-match filter over
-// such guesses zeroes an otherwise-healthy semantic result set → count=0 → empty
-// answer. semstreams degrades, it does not zero: when the input is NON-EMPTY but
-// the filter produces an EMPTY set, this returns the UNFILTERED input and signals
-// fellBack=true so callers can log + count the fallback. An already-empty input is
-// NOT a fallback (there was nothing to preserve) — it returns (empty, false).
+// (qwen3-0.6b). A lowercased exact-match filter over them can zero an otherwise-
+// healthy semantic result set → count=0 → empty answer. That happens both when the
+// classifier invents a type ("Procedure", "equipment process") AND, legitimately,
+// when a valid inferred type simply has no candidate in the current retrieval
+// window — this function cannot tell the two apart. So semstreams degrades, it
+// does not zero: when the input is NON-EMPTY but the filter produces an EMPTY set,
+// this returns the UNFILTERED input and signals fellBack=true so callers can log +
+// count the fallback (as a NEUTRAL type_filter_fallback, not classifier garbage).
+// An already-empty input is NOT a fallback (nothing to preserve) — (empty, false).
 //
 // Axis note (ADR-071): this is the TYPE-SEGMENT axis (position 5, exact segment
 // equality from the classifier), which is genuinely NOT expressible as a leading

@@ -22,6 +22,24 @@
 # two local mid instances stay light/unused (base tiered.yml) and the box does not
 # thrash. The full 48-step scenario should complete cleanly.
 #
+# KNOWN LIMITATIONS — this is a lean, RECORD-ONLY diagnostic, not a gated test
+# (Codex review, 2026-07-24). Read the run before trusting it:
+#   1. A green run does NOT prove Gemini served the answers. The clustering probe
+#      accepts any HTTP status, worker failures warn-and-continue, answer errors
+#      degrade to the template path, and the thematic eval RECORDS rather than
+#      fails. Verify manually: thematic degraded_count == 0 AND llm_enhanced ==
+#      communities_total in the run output before quoting any conclusion.
+#   2. The frontier-vs-local comparison does NOT hold the partition fixed. Each
+#      variant runs from :e2e:clean with its own re-clustering (level-0
+#      determinism ~0.83), so a recall delta between a local run and this run
+#      conflates model quality with a different realized partition. A rigorous
+#      B2 answer needs a frozen COMMUNITY_INDEX evaluated by both synthesizers in
+#      one paired run — tracked as a follow-up, not built here.
+#   3. enhancement_workers is pinned to 1 in configs/semantic-frontier.json to
+#      keep cloud calls quota-safe, but there is still NO retry/backoff: a 429 or
+#      transient error is persisted as terminal llm-failed. Re-run on provider
+#      noise rather than treating a failed summary as signal.
+#
 # Compose with the base tiered.yml (base first, this second so it wins the merge):
 #   docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.frontier.yml \
 #     --profile semantic up -d --wait --build
