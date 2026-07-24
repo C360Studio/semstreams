@@ -9,14 +9,30 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **NEXT = commit the validated #645 fix → PR → owner-run Codex → CI green → merge; THEN owner +
-> architect scope B1/B2 against the real re-measure numbers below.** #645 is **FIXED + VALIDATED**
-> (session 10, branch `fix/645-type-filter-zero-fallback`, **UNCOMMITTED**): zero-fallback in
-> `filterEntityIDsByType` (returns `(filtered, fellBack)`; a non-empty semantic set that filters to
-> empty falls back to UNFILTERED + `classifier_garbage{type=type_filter_zeroed}`), + the #650 NIT
-> folded in (deduped `clusteringDetectionCountMetric`→`clusteringRunsMetric`). semstreams-reviewer
-> **APPROVE-WITH-NITS** (mutation-proven), the one substantive NIT taken. Full local gate green.
-> **Main tip `543f8c5d`; tag baseline `v1.0.0-beta.158`; clean.** (Epic A COMPLETE + released.)
+> **#645 SHIPPED — PR #653 MERGED (`02e752ab`, 2026-07-24); #645 CLOSED; tree clean; tag baseline
+> `v1.0.0-beta.158`.** #653 bundled: the #645 retrieval zero-fallback (`empty_answer_count` 4/5→0/5;
+> fallback now recorded under a NEUTRAL `type_filter_fallback_total`, not classifier_garbage), the
+> `reasoning_effort` graph/llm gap-fill, the frontier diagnostic harness (`task e2e:semantic:frontier`),
+> and all 6 Codex findings. The re-measure evidence + corrections are below (accurate history).
+>
+> **NEXT — three live Epic B threads; sequencing matters:**
+> 1. **8B-harness saturation → #652 (the unblocker; recommended first).** ROOT CAUSE found: `graph/llm`
+>    honors neither `max_concurrent` nor `requests_per_minute` (agentic-model does), and clustering's 5
+>    enhancement workers oversubscribe the 8b instance's 2 llama.cpp slots — that IS the `pending=10`/EOF.
+>    Same two-clients drift as the reasoning_effort gap ([[two-llm-clients-consolidation]]). Fix = CONCURRENCY
+>    ADMISSION (not RPM): shared `model`-layer gate keyed by endpoint URL/model both clients honor + narrow
+>    retries (429/503 only) + the SemStreams-owns-concurrency / SemInstruct-owns-slots boundary. **Quick-win:
+>    align `enhancement_workers` ↔ `MODEL_PARALLEL` per tier (start 1, measure, try 2).** Do this first — it
+>    gives a RELIABLE 8b harness, which #654 depends on.
+> 2. **B2 is UNDECIDED → #654 (do NOT treat "partition rebuild is low-ROI" as settled).** The frontier probe
+>    *suggested* synthesis isn't the bottleneck (Gemini 2.5 Flash ≈ local 8b on 4/5 queries, +1 entity on
+>    dock), but it's CONFOUNDED — frontier vs local were separate re-clustered runs (determinism 0.83). Firm
+>    up with a FROZEN-`COMMUNITY_INDEX` paired run (both synthesizers, one partition). THEN decide B2.
+> 3. **B1 — partition determinism is 0.83, NOT 1.0** (live gap; session-9's 1.0 was the smaller corpus).
+>
+> Full #652 admission-gate consolidation is architect-owned. Default `task e2e:semantic` stays 1.7b (fast CI
+> gate); 8b/frontier are the quality read; until the admission gate lands, an 8b run may not survive the full
+> 48-step scenario on 23 GiB — stream container logs or use `task e2e:semantic:debug` (no teardown).
 >
 > **THE RE-MEASURE (the whole point — done; measure-before-building paid off AGAIN).** The #645 fix
 > RESOLVED the dominant thematic-retrieval defect:
