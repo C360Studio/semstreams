@@ -303,6 +303,15 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// Semantic-only; RECORDER, not a hard gate (see validate_thematic_eval.go
 		// header). Only an unreachable transport fails.
 		{"validate-thematic-answer-eval", s.executeValidateThematicAnswerEval, []string{"semantic"}},
+		// Epic B increment B2 — partition co-location diagnostic — runs immediately
+		// after B0 so its per-query plurality_share lines up 1:1 (by query id) with
+		// the B0 theme-recall recorded on the same run. It only READS the level-0
+		// COMMUNITY_INDEX partition (no LLM, no answer synthesis), so it answers the
+		// B2 decision (partition vs synthesizer) deterministically on the cheap 1.7b
+		// run. Semantic-only; RECORDER, not a hard gate (see
+		// validate_partition_colocation.go header). Only an unreachable partition
+		// index (GetAllCommunities) fails.
+		{"validate-partition-colocation", s.executePartitionColocation, []string{"semantic"}},
 		// NL intent routing tests (validates classifier → strategy routing through globalSearch)
 		{"test-nl-path-intent", s.executeTestNLPathIntent, nil},
 		{"test-nl-temporal-intent", s.executeTestNLTemporalIntent, []string{"statistical", "semantic"}},
