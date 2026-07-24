@@ -415,6 +415,17 @@ func (d *LPADetector) computeNewLabel(
 		return labels[entityID], nil
 	}
 
+	// Canonicalize neighbor order before accumulating votes. The Provider contract
+	// does NOT promise a stable GetNeighbors order — the wired kvProvider emits a
+	// map range — and float addition is NON-ASSOCIATIVE, so the same fixed weighted
+	// edge set can yield different per-label totals depending on summation order
+	// (e.g. 0.7+0.7+0.3+0.3 == 2.0 but 0.3+0.3+0.7+0.7 == 1.9999999999999998).
+	// The exact-equality tie-break below depends on those totals, so an unsorted
+	// order would flip the winner. Sorting a defensive copy fixes the summation
+	// order without mutating the provider's slice.
+	neighbors = append([]string(nil), neighbors...)
+	sort.Strings(neighbors)
+
 	// Count label frequencies (weighted by edge weights)
 	labelVotes := make(map[string]float64)
 	for _, neighborID := range neighbors {

@@ -220,6 +220,78 @@ func TestEntityIDProvider_SiblingCapDeterministicAcrossBaseOrder(t *testing.T) {
 		"the capped sibling set must be identical regardless of base-provider entity order")
 }
 
+// orderedWeightProvider returns a fixed neighbor list for one query entity in a
+// caller-specified ORDER, with per-neighbor edge weights. It exercises float
+// non-associativity in the vote accumulation directly, without depending on the
+// real EntityIDProvider wiring to construct the tie.
+type orderedWeightProvider struct {
+	query     string
+	neighbors []string           // returned verbatim (order is the test variable)
+	weights   map[string]float64 // weight of edge query->neighbor
+}
+
+func (p *orderedWeightProvider) GetAllEntityIDs(context.Context) ([]string, error) {
+	return append([]string{p.query}, p.neighbors...), nil
+}
+
+func (p *orderedWeightProvider) GetNeighbors(_ context.Context, id, _ string) ([]string, error) {
+	if id == p.query {
+		return p.neighbors, nil
+	}
+	return nil, nil
+}
+
+func (p *orderedWeightProvider) GetEdgeWeight(_ context.Context, from, to string) (float64, error) {
+	if from == p.query {
+		if w, ok := p.weights[to]; ok {
+			return w, nil
+		}
+	}
+	return 0.0, nil
+}
+
+// TestLPADetector_ComputeNewLabel_TieStableUnderNeighborOrder guards the third
+// determinism layer: computeNewLabel sums float edge weights in GetNeighbors
+// order, the Provider contract does not promise that order (kvProvider emits a map
+// range), and float addition is NON-ASSOCIATIVE. Label "a" carries weights
+// {0.7,0.7,0.3,0.3} and label "b" carries {1.0,1.0}. Summed low-to-high
+// (0.3+0.3+0.7+0.7) "a" totals 1.9999999999999998; summed high-to-low
+// (0.7+0.7+0.3+0.3) it totals exactly 2.0 — so the winner flips with neighbor
+// order unless computeNewLabel canonicalizes it. The vote must be identical
+// forward vs reversed, and (canonicalized to 2.0 == b) resolve to the smaller "a".
+func TestLPADetector_ComputeNewLabel_TieStableUnderNeighborOrder(t *testing.T) {
+	weights := map[string]float64{
+		"na1": 0.7, "na2": 0.7, "na3": 0.3, "na4": 0.3,
+		"nb1": 1.0, "nb2": 1.0,
+	}
+	labels := map[string]string{
+		"x":   "x",
+		"na1": "a", "na2": "a", "na3": "a", "na4": "a",
+		"nb1": "b", "nb2": "b",
+	}
+	forward := []string{"na1", "na2", "na3", "na4", "nb1", "nb2"}
+	reversed := make([]string, len(forward))
+	for i, id := range forward {
+		reversed[len(forward)-1-i] = id
+	}
+
+	winner := func(order []string) string {
+		provider := &orderedWeightProvider{query: "x", neighbors: order, weights: weights}
+		d := NewLPADetector(provider, NewMockCommunityStorage())
+		got, err := d.computeNewLabel(context.Background(), "x", labels)
+		require.NoError(t, err)
+		return got
+	}
+
+	fwd := winner(forward)
+	rev := winner(reversed)
+	require.Equalf(t, fwd, rev,
+		"computeNewLabel must return the same label regardless of neighbor delivery order "+
+			"(got %q forward, %q reversed) — float-weight summation order is not canonicalized", fwd, rev)
+	require.Equal(t, "a", fwd,
+		"canonicalized, both labels total 2.0 → the lexicographic tie-break picks the smaller label")
+}
+
 // TestLPADetector_ComputeNewLabel_TieBreaksLexicographically pins §6.2 directly and
 // without relying on LPA convergence dynamics: an entity whose neighbours each
 // carry a distinct label with equal weight casts an exact multi-way vote tie, and
