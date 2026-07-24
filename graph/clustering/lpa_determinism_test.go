@@ -66,6 +66,23 @@ func levelSignature(communities map[int][]*Community, level int) string {
 	return strings.Join(groups, "|")
 }
 
+// orderedLevelSignature is the STRICT projection of one level: it preserves the
+// community SLICE order, each community's Community.ID, and its stored Members
+// SEQUENCE — all exactly as returned, NOT sorted. It verifies buildCommunities'
+// promise of fully-ordered, byte-stable output, which levelSignature (grouping-
+// only) canonicalizes away and so cannot catch community-order, member-order, or
+// seed-ID churn. Terminal level 2 is only guarded by this projection, since its
+// output is not re-fed through another LPA pass where ordering would surface as a
+// membership change (Codex #658 P2).
+func orderedLevelSignature(communities map[int][]*Community, level int) string {
+	parts := make([]string, 0, len(communities[level]))
+	for _, c := range communities[level] {
+		parts = append(parts, c.ID+"=>"+strings.Join(c.Members, ","))
+	}
+	// Community slice order preserved — deliberately NOT sorted.
+	return strings.Join(parts, "|")
+}
+
 // detectPartition runs one full detection over the given provider and returns the
 // per-level community map. A fresh storage per call guarantees no state carries
 // between runs, so any agreement is the algorithm being deterministic, not a warm
@@ -136,10 +153,16 @@ func TestLPADetector_DeterministicPartitionOnVoteTie(t *testing.T) {
 	levels := []int{0, 1, 2}
 
 	// Per-level set of distinct partition signatures across all runs. Determinism
-	// at a level ⇒ its set has exactly one member.
+	// at a level ⇒ its set has exactly one member. We track BOTH the grouping-only
+	// signature (same entities grouped the same way) AND the strict ordered
+	// signature (byte-stable community order + IDs + member sequence), so the test
+	// verifies buildCommunities' full ordered-output contract, not just grouping
+	// (Codex #658 P2). Terminal level 2 is guarded only by the ordered projection.
 	distinctByLevel := make(map[int]map[string]struct{}, len(levels))
+	orderedByLevel := make(map[int]map[string]struct{}, len(levels))
 	for _, level := range levels {
 		distinctByLevel[level] = make(map[string]struct{})
+		orderedByLevel[level] = make(map[string]struct{})
 	}
 
 	for r := 0; r < runs; r++ {
@@ -147,6 +170,7 @@ func TestLPADetector_DeterministicPartitionOnVoteTie(t *testing.T) {
 		for _, level := range levels {
 			require.NotNilf(t, communities[level], "run %d: fixture must produce level %d", r, level)
 			distinctByLevel[level][levelSignature(communities, level)] = struct{}{}
+			orderedByLevel[level][orderedLevelSignature(communities, level)] = struct{}{}
 		}
 	}
 
@@ -155,6 +179,10 @@ func TestLPADetector_DeterministicPartitionOnVoteTie(t *testing.T) {
 			"level %d must yield exactly ONE distinct partition across %d runs, got %d — "+
 				"DetectCommunities is not reproducible at this level",
 			level, runs, len(distinctByLevel[level]))
+		require.Lenf(t, orderedByLevel[level], 1,
+			"level %d must yield exactly ONE byte-stable ordered output (community order + IDs + "+
+				"member sequence) across %d runs, got %d — buildCommunities' ordered-output promise is broken",
+			level, runs, len(orderedByLevel[level]))
 	}
 }
 
@@ -174,6 +202,42 @@ func TestLPADetector_DeterministicAcrossProviderOrder(t *testing.T) {
 		require.Equalf(t, levelSignature(natural, level), levelSignature(reversed, level),
 			"level %d partition differs when the same entity set is delivered in reversed order — "+
 				"processing order is not canonicalized at the detector boundary", level)
+		// Strict: the ordered output (community order + IDs + member sequence) must
+		// ALSO be identical regardless of provider order, since buildCommunities
+		// canonicalizes it. This guards the ordered promise at every level incl. the
+		// terminal level 2 (Codex #658 P2).
+		require.Equalf(t, orderedLevelSignature(natural, level), orderedLevelSignature(reversed, level),
+			"level %d ordered output (community order/IDs/member sequence) differs under reversed "+
+				"provider delivery — buildCommunities' output is not order-independent", level)
+	}
+}
+
+// TestLPADetector_BuildCommunities_OrderedOutputStableAcrossMapIteration is the
+// direct guard on buildCommunities' ordered-output promise (Codex #658 P2). Go
+// randomizes map range order per call, so repeatedly building from the SAME labels
+// map exercises different iteration orders; the emitted community slice order, each
+// Community.ID, and each Members sequence must be byte-identical every time — and
+// equal to the sorted-canonical form, not merely self-consistent.
+func TestLPADetector_BuildCommunities_OrderedOutputStableAcrossMapIteration(t *testing.T) {
+	labels := map[string]string{
+		"e1": "cA", "e3": "cA", "e6": "cA", "e7": "cA",
+		"e2": "cB", "e5": "cB", "e8": "cB",
+		"e4": "cC", "e9": "cC",
+	}
+	d := NewLPADetector(gridProvider(1, 1), NewMockCommunityStorage())
+	sig := func() string {
+		comms := d.buildCommunities(labels, 0, nil)
+		parts := make([]string, 0, len(comms))
+		for _, c := range comms {
+			parts = append(parts, c.ID+"=>"+strings.Join(c.Members, ","))
+		}
+		return strings.Join(parts, "|")
+	}
+	const want = "cA=>e1,e3,e6,e7|cB=>e2,e5,e8|cC=>e4,e9"
+	require.Equal(t, want, sig(), "buildCommunities must emit sorted-canonical ordered output")
+	for i := 0; i < 40; i++ {
+		require.Equalf(t, want, sig(),
+			"buildCommunities ordered output must be byte-stable across map iteration orders; run %d differed", i)
 	}
 }
 
