@@ -77,11 +77,11 @@
 
 ## 6. Determinism fixes (folds in B1/#606)
 
-- [ ] 6.1 `lpa.go:284`'s unseeded global `math/rand.Shuffle` becomes a per-`DetectCommunities`-call seeded
+- [x] 6.1 `lpa.go:284`'s unseeded global `math/rand.Shuffle` becomes a per-`DetectCommunities`-call seeded
       `*rand.Rand`. A fixed edge set MUST produce the same partition across repeated runs.
-- [ ] 6.2 `lpa.go:398-405`'s map-iteration vote tie-break becomes deterministic: on an exact vote-total tie,
+- [x] 6.2 `lpa.go:398-405`'s map-iteration vote tie-break becomes deterministic: on an exact vote-total tie,
       the lexicographically smallest label wins.
-- [ ] 6.3 A regression test: two `DetectCommunities` runs over an identical fixed edge set (including a
+- [x] 6.3 A regression test: two `DetectCommunities` runs over an identical fixed edge set (including a
       deliberate vote tie) yield identical partitions.
 
 ## 7. Bounded, cached edge build
