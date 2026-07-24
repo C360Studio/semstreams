@@ -1,0 +1,66 @@
+# Frontier-model GraphRAG measurement overlay for the semantic tier —
+# DIAGNOSTIC / CLOUD RUN ONLY. NOT offline. NOT CI.
+#
+# ⚠️  This is a YARDSTICK, not a product path. semstreams is offline-first edge;
+#     the production Tier-2 stays local seminstruct (qwen3-8b recommended, 1.7b
+#     fallback). This overlay routes answer_synthesis + community_summary (+
+#     anomaly_review) to Google's Gemini 2.5 Flash so we can measure the
+#     SYNTHESIS-QUALITY CEILING over the SAME retrieval + partition — i.e. answer
+#     the B2 question: is the residual thematic-recall gap (dock-equipment 0.50)
+#     synthesis-model capacity, or partition coherence? If a clearly-capable
+#     frontier model still can't lift recall over this partition, B2 is warranted;
+#     if it nails it, the gap is model-capacity and B2 is unnecessary.
+#
+# Why it works with NO Go code: the answer_synthesis / community_summary path is a
+# plain OpenAI-compatible ChatCompletion (no tools), and the model-registry→client
+# bridge (llm.OpenAIConfigFromEndpoint) already plumbs url+model+api_key_env →
+# Bearer auth. Gemini's OpenAI-compat endpoint (…/v1beta/openai) takes the same
+# wire shape. The first-class "gemini" provider adapter (processor/agentic-model/
+# adapter_gemini.go) is only needed for the tool-calling agentic path, not here.
+#
+# It also sidesteps the 8B memory saturation: synthesis/summary are REMOTE, so the
+# two local mid instances stay light/unused (base tiered.yml) and the box does not
+# thrash. The full 48-step scenario should complete cleanly.
+#
+# KNOWN LIMITATIONS — this is a lean, RECORD-ONLY diagnostic, not a gated test
+# (Codex review, 2026-07-24). Read the run before trusting it:
+#   1. A green run does NOT prove Gemini served the answers. The clustering probe
+#      accepts any HTTP status, worker failures warn-and-continue, answer errors
+#      degrade to the template path, and the thematic eval RECORDS rather than
+#      fails. Verify manually: thematic degraded_count == 0 AND llm_enhanced ==
+#      communities_total in the run output before quoting any conclusion.
+#   2. The frontier-vs-local comparison does NOT hold the partition fixed. Each
+#      variant runs from :e2e:clean with its own re-clustering (level-0
+#      determinism ~0.83), so a recall delta between a local run and this run
+#      conflates model quality with a different realized partition. A rigorous
+#      B2 answer needs a frozen COMMUNITY_INDEX evaluated by both synthesizers in
+#      one paired run — tracked as a follow-up, not built here.
+#   3. enhancement_workers is pinned to 1 in configs/semantic-frontier.json to
+#      keep cloud calls quota-safe, but there is still NO retry/backoff: a 429 or
+#      transient error is persisted as terminal llm-failed. Re-run on provider
+#      noise rather than treating a failed summary as signal.
+#
+# Compose with the base tiered.yml (base first, this second so it wins the merge):
+#   docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.frontier.yml \
+#     --profile semantic up -d --wait --build
+# The `task e2e:semantic:frontier` target wires this + configs/semantic-frontier.json
+# and requires GEMINI_API_KEY in the environment (source ../semdev/.env).
+
+services:
+  # Point the ML app at the frontier config variant (Gemini endpoints for
+  # answer_synthesis / community_summary / anomaly_review; local 0.6b classifier +
+  # semembed unchanged). GEMINI_API_KEY is read at up-time from the host env and
+  # injected so the process resolves the endpoint's api_key_env. The NATS
+  # request-handler ceiling is raised to 120s (default 30s stays for CI) to cover
+  # network + Gemini latency on the globalSearch path; sleep 30 preserves the base
+  # file's ordering guard.
+  semstreams-ml:
+    command:
+      ["sleep 30 && /app/semstreams --config /app/configs/semantic-frontier.json"]
+    environment:
+      - SEMSTREAMS_NATS_URLS=nats://nats:4222
+      - SEMSTREAMS_LOG_LEVEL=debug
+      - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
+      - SEMSTREAMS_DEBUG_PORT=6060
+      - SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT=120s
+      - GEMINI_API_KEY=${GEMINI_API_KEY:?set GEMINI_API_KEY in the env (e.g. source ../semdev/.env) before running the frontier tier}

@@ -38,6 +38,21 @@ tasks:
       # Both unset elsewhere = unchanged CI behavior.
       - cd cmd/e2e && SEMSTREAMS_E2E_GLOBALSEARCH_TIMEOUT=300s SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT=10m ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
 
+  frontier:
+    desc: "DIAGNOSTIC/CLOUD (not offline, not CI): semantic tier with Gemini 2.5 Flash for answer+summary — measures the synthesis-quality CEILING over the same retrieval/partition. Needs GEMINI_API_KEY (source ../semdev/.env). ~5min."
+    silent: false
+    deps: [":e2e:clean", ":e2e:check-ports", ":build:e2e"]
+    cmds:
+      - echo "[SEMANTIC-FRONTIER] Routing answer_synthesis + community_summary to Gemini 2.5 Flash — a CLOUD yardstick, NOT the offline-first product path. Production Tier-2 stays local seminstruct."
+      - 'test -n "$GEMINI_API_KEY" || { echo "[ERROR] GEMINI_API_KEY is unset. Source it first, e.g.: set -a && source ../semdev/.env && set +a"; exit 1; }'
+      # Base tiered.yml (base first) + the frontier overlay (wins the merge). Local
+      # mids stay light/unused (synthesis→Gemini), so the box does not thrash like 8b.
+      - defer: docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.frontier.yml --profile semantic down -v --timeout 15
+      - docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.frontier.yml --profile semantic up -d --wait --wait-timeout 300 --build
+      - echo "[OK] Frontier stack healthy (semembed + seminstruct-fast/0.6b classifier; synthesis+summary → Gemini 2.5 Flash)"
+      - echo "[SEMANTIC-FRONTIER] Running semantic tier scenario (includes the B0 thematic eval)..."
+      - cd cmd/e2e && SEMSTREAMS_E2E_GLOBALSEARCH_TIMEOUT=180s SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT=5m ./e2e --scenario tiered --variant semantic --base-url http://localhost:38180 --udp-endpoint localhost:34650 --metrics-url http://localhost:39190 --output-dir ./test/e2e/results
+
   debug:
     desc: Start semantic tier for debugging (leaves containers running)
     silent: false

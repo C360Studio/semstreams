@@ -36,6 +36,14 @@ type queryMetrics struct {
 	// classifier model is too thin for the workload — operators should
 	// upsize or relax single-token-bypass thresholds.
 	classifierGarbage *prometheus.CounterVec // labels: type (template_filter|query_dropped)
+
+	// typeFilterFallback counts graceful type-filter fallbacks (#645): the
+	// classifier's type filters would have zeroed a NON-EMPTY semantic result
+	// set, so the unfiltered set was kept. Deliberately NOT under
+	// classifierGarbage — a zero match only proves no candidate in the current
+	// retrieval window matched, which a valid inferred type can also cause; it
+	// is not evidence the classifier emitted garbage.
+	typeFilterFallback prometheus.Counter
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -146,6 +154,13 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 				Name:      "classifier_garbage_total",
 				Help:      "Defenses triggered against malformed classifier output: template_filter (literal placeholder in type_filters) or query_dropped (single-token original query replaced by classifier-emitted template). High rate = classifier model too thin for workload.",
 			}, []string{"type"}),
+
+			typeFilterFallback: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_query",
+				Name:      "type_filter_fallback_total",
+				Help:      "Times the classifier type-filter would have zeroed a NON-EMPTY semantic result set and fell back to the unfiltered set (#645). Neutral by design: a valid inferred corpus type may simply have no candidate in the retrieval window, so this is NOT necessarily malformed classifier output — distinct from classifier_garbage_total.",
+			}),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -164,6 +179,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = registry.RegisterCounterVec("graph-query", "global_search_hits_dropped_total", metrics.globalSearchHitsDropped)
 			_ = registry.RegisterCounterVec("graph-query", "global_search_degraded_total", metrics.globalSearchDegraded)
 			_ = registry.RegisterCounterVec("graph-query", "classifier_garbage_total", metrics.classifierGarbage)
+			_ = registry.RegisterCounter("graph-query", "type_filter_fallback_total", metrics.typeFilterFallback)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.communityCacheHits)
@@ -180,6 +196,7 @@ func getMetrics(registry *metric.MetricsRegistry) *queryMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchHitsDropped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.globalSearchDegraded)
 			_ = prometheus.DefaultRegisterer.Register(metrics.classifierGarbage)
+			_ = prometheus.DefaultRegisterer.Register(metrics.typeFilterFallback)
 		}
 	})
 	return metrics
@@ -264,4 +281,13 @@ func (m *queryMetrics) recordGlobalSearchDegraded(reason string) {
 // LOUD signal — paired with a Warn log at the call site.
 func (m *queryMetrics) recordClassifierGarbage(garbageType string) {
 	m.classifierGarbage.WithLabelValues(garbageType).Inc()
+}
+
+// recordTypeFilterFallback records a graceful type-filter fallback (#645): the
+// classifier's type filters would have zeroed a non-empty semantic result set,
+// so the unfiltered set was kept. Neutral, NOT a classifier-garbage signal — a
+// zero match only means nothing in the current retrieval window matched, which a
+// valid inferred type can also cause. See the metric Help.
+func (m *queryMetrics) recordTypeFilterFallback() {
+	m.typeFilterFallback.Inc()
 }

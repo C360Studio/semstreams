@@ -9,39 +9,56 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **NEXT = fix #645 (classifier type-filter zeroing) — the MEASURED lever — then re-measure on the
-> 8B harness for the first clean community-quality read.** Epic B (re-scoped to *"make communities
-> deliver trustworthy NL→thematic answers via GraphRAG"*) is in progress; **B0 SHIPPED** (thematic
-> instrument + repeatable 8B harness, PR **#650 `e588e2dd`**). Also landed this session: **#646**
-> natsclient configurable handler timeout (8B synthesis needs >30s; the hardcoded 30s was
-> truncating it), **#647** CI redesign (our own `e2e:statistical` ladder per-PR; **sister-validation
-> OFF until v1/RC** — sisters conform at tag boundaries, cross-repo breaks caught by tag-lockstep +
-> the pre-tag e2e HARD RULE), **#649** graphview flake fix. **Main tip `e588e2dd`; tag baseline
-> `v1.0.0-beta.158`; clean.** (Epic A COMPLETE + released as beta.158 — see log.)
+> **NEXT = commit the validated #645 fix → PR → owner-run Codex → CI green → merge; THEN owner +
+> architect scope B1/B2 against the real re-measure numbers below.** #645 is **FIXED + VALIDATED**
+> (session 10, branch `fix/645-type-filter-zero-fallback`, **UNCOMMITTED**): zero-fallback in
+> `filterEntityIDsByType` (returns `(filtered, fellBack)`; a non-empty semantic set that filters to
+> empty falls back to UNFILTERED + `classifier_garbage{type=type_filter_zeroed}`), + the #650 NIT
+> folded in (deduped `clusteringDetectionCountMetric`→`clusteringRunsMetric`). semstreams-reviewer
+> **APPROVE-WITH-NITS** (mutation-proven), the one substantive NIT taken. Full local gate green.
+> **Main tip `543f8c5d`; tag baseline `v1.0.0-beta.158`; clean.** (Epic A COMPLETE + released.)
 >
-> **THE FINDING that reframes Epic B (measure-before-building paid off — hard).** The 8B measurement
-> (`task e2e:semantic:8b`) showed the DOMINANT thematic-answer defect is a **RETRIEVAL bug, NOT
-> partition coherence** (which the audit predicted): the intent classifier's guessed entity-type
-> filters hard-zero the semantic result set — `filterEntityIDsByType` (`processor/graph-query/
-> graphrag.go:1339`) exact-matches invented type names ("Procedure", "Equipment Repair") against the
-> corpus's real types (`maintenance.work.*`, `document`, …) with **no zero-fallback** → 4 of 5
-> thematic queries returned `count=0` → empty answer (also non-deterministic per ask). Filed **#645**.
-> Two confirmations: (a) **8B synthesis is necessary and WORKS** — the one query that retrieved
-> entities gave a grounded corpus answer ("Forklift Hydraulic System Repair"), escaping the 1.7b
-> metadata-template degeneration (Microsoft/seminstruct: community summarization below ~7B is noise →
-> the valid read NEEDS the 8B; default `task e2e:semantic` stays on 1.7b as the fast CI gate). (b)
-> **Partition determinism is already 1.0** on the ~74-entity corpus → B1's determinism piece is
-> low-leverage (re-check on a larger/dynamic corpus before de-scoping).
+> **THE RE-MEASURE (the whole point — done; measure-before-building paid off AGAIN).** The #645 fix
+> RESOLVED the dominant thematic-retrieval defect:
+> - **dim1 `empty_answer_count=0/5` (was 4/5)** at BOTH tiers — every question now retrieves
+>   (count=68) and reaches synthesis. First clean thematic read achieved.
+> - **8B synthesis quality confirmed GOOD once retrieval works:** all 5 grounded, no fabrication;
+>   recall 0.50–1.00 (cold-chain/conveyor 1.00; dock-equipment **0.50** weakest).
+> - **1.7b `task e2e:semantic` full 48-step gate GREEN (exit 0)** on the branch, incl. the
+>   known-answer step — proves the fix does NOT regress the standard CI tier.
 >
-> **The RE-ORDERED sequence (the finding moved the target upstream):**
-> 1. **Fix #645** (small, the lever): don't zero a non-empty semantic result set — fall back to
->    unfiltered / treat classifier types as soft preference / gate on the corpus type vocab; add a
->    "would-have-zeroed → fell back" metric. **At commit, fold in the #650 reviewer NIT:**
->    `validate_thematic_eval.go:451` should reuse the `clusteringRunsMetric` constant, not the
->    hardcoded literal.
-> 2. **Re-measure** via `task e2e:semantic:8b` → the FIRST clean thematic read (all 5 questions reach
->    synthesis) → **THEN decide whether B2 (semantic partition) is even needed**, against real numbers.
-> 3. The rest of the original plan (below) AS NEEDED, scoped by that re-measure.
+> **Two prior-claim CORRECTIONS the re-measure forced (do not carry the old ones forward):**
+> 1. **Partition determinism is 0.83, NOT 1.0** (run1=6 comms / run2=5, level0=5, 175-entity corpus).
+>    The session-9 "already 1.0" was on the ~74-entity corpus. **B1's determinism piece is a LIVE gap**,
+>    not low-leverage.
+> 2. **Recall spread 0.50–1.00 is now MEASURABLE** (was invisible behind the zeroing) — that spread,
+>    esp. dock-equipment 0.50, is the concrete **B2 coherence signal**. Scope B2 against it.
+>
+> **8B harness caveat (capacity, not correctness).** `task e2e:semantic:8b` itself ran RED end-to-end:
+> two qwen3-8b on a 23.2 GiB box SATURATE — `validate-llm-enhancement` left `pending=10` after its
+> 10-min budget, total run 33m (vs ~10m), and `validate-globalsearch-known-answer` (step 41) failed
+> with a server-side **`EOF`** on the graphql POST (2/3 probes). The B0 eval (step 21) passed and the
+> SAME step passes at 1.7b → capacity artifact, NOT a regression. Container logs were LOST to the
+> `defer docker compose down -v` before OOM-vs-server-timeout could be confirmed — next 8B run must
+> stream container logs or use `task e2e:semantic:debug` (no teardown). Owner call needed on 8B-harness
+> viability (one shared 8b? more RAM?). See [[reference_seminstruct_8b_for_graphrag_measurement]].
+>
+> **The B2 DECISION — now armed with a FRONTIER-CEILING probe (session 10, `task e2e:semantic:frontier`,
+> Gemini 2.5 Flash routing answer_synthesis + community_summary; cloud YARDSTICK, not the offline
+> product path).** Full 48-step scenario GREEN in 3m42s (remote synthesis → no 8b saturation; known-answer
+> passed → reconfirms the 8b EOF was pure capacity). **Result: Gemini MATCHED local qwen3-8b on 4/5 thematic
+> queries; it only lifted the weakest (dock-equipment 0.50→0.75, one entity). Every 4-expected-entity query
+> (forklift/fire/dock) caps at exactly 3/4 EVEN at the frontier.** Reading: (1) **synthesis quality is NOT
+> the bottleneck — the edge 8b appears within ~1 entity of a frontier model** on this corpus, consistent with
+> the tiered-fallback story (cloud not required); (2) the "misses exactly one" that survives a frontier model
+> *looks like* a NARROW retrieval/partition residual. **BUT the comparison is CONFOUNDED (Codex, PR #653): the
+> frontier and local runs were SEPARATE runs, each re-clustered from clean at level-0 determinism ~0.83, so
+> the recall delta conflates model quality with a possibly-different realized partition.** So **"B2 rebuild is
+> low-ROI" is a HYPOTHESIS, not a finding** — a rigorous answer needs a FROZEN `COMMUNITY_INDEX` evaluated by
+> both synthesizers in ONE paired run (filed as a follow-up). B1 (determinism 0.83) is still a live gap. Also
+> single run, ~74-entity corpus, 5 queries, recall coarse at N=4. (Gotcha that made the probe valid: `gemini-2.5-flash` is a thinking model; the hardcoded 200-tok
+> community_summary cap truncates under thinking → needs `reasoning_effort: none`, which exposed a graph/llm
+> gap — see log.)
 >
 > **Original B0–B3 plan (stands, but now GATED by the #645 re-measure):**
 > - **B1** — `WithLevels(1)`, `EnableLLM=false` (interim, re-enabled B3), deterministic partition,
@@ -475,3 +492,61 @@ Append one line per session. Newest last.
   bot; owner runs it + relays under their account; agent can't trigger it (owner waived it for the
   low-risk PRs this session). **Next: fix #645 (+ the #650 NIT), re-measure on `task e2e:semantic:8b`,
   scope B2 against real numbers.**
+- **2026-07-23 (session 10)** — **#645 FIXED + VALIDATED; re-measure done.** Zero-fallback in
+  `filterEntityIDsByType` (`(filtered, fellBack)`; non-empty→empty falls back to unfiltered +
+  `classifier_garbage{type=type_filter_zeroed}`) + the #650 NIT folded in. semstreams-developer built
+  it, **semstreams-reviewer APPROVE-WITH-NITS** (mutation-proven the tests catch the old hard-zero),
+  the one substantive NIT taken (a stale operator-triage comment the fix made misleading). Full local
+  gate green. Branch `fix/645-type-filter-zero-fallback`, **UNCOMMITTED** (awaiting owner go for
+  commit→PR→Codex→CI→merge). **Re-measure: retrieval defect RESOLVED — `empty_answer_count=0/5` (was
+  4/5) at both tiers; 8B all 5 count=68 grounded+no-fab (recall 0.50–1.00); 1.7b full 48-step gate
+  GREEN (exit 0).** Three findings that move the plan: (1) **partition determinism is 0.83 NOT 1.0**
+  (175-entity corpus; session-9's 1.0 was the ~74-entity corpus) → B1 determinism is a LIVE gap;
+  (2) **recall spread 0.50–1.00 now measurable** (dock-equipment 0.50) = the B2 coherence signal;
+  (3) **`e2e:semantic:8b` is a capacity artifact RED** — two qwen3-8b saturate 23.2 GiB (enhancement
+  `pending=10` after 10min, 33m total, known-answer step 41 `EOF`); SAME step green at 1.7b → not a
+  regression. Lessons: (a) **measure-before-building paid off a SECOND time** — the audit predicted
+  "partition coherence," the 8B measure said "retrieval bug"; fixing the retrieval bug (not rebuilding
+  the partition) cleared 4/5 of the defect. (b) **validate a capacity-suspect e2e RED at the cheaper
+  tier** — the 1.7b gate green + same-step attribution disambiguated the 8B EOF as capacity, not
+  correctness, without a 33m re-run on main. (c) **the auto-teardown `defer down -v` ate the container
+  logs** before I could confirm OOM-vs-timeout — next 8B run streams logs or uses the debug (no-teardown)
+  target. **Next: owner go on commit→PR→Codex→merge for #645; then owner+architect scope B1 (determinism
+  0.83) / B2 (recall spread), and decide 8B-harness viability.** THEN (same session, owner steer) ran a
+  **FRONTIER-CEILING probe** to decide B2 against a real upper bound: new `task e2e:semantic:frontier`
+  (`configs/semantic-frontier.json` + `docker/compose/tiered.frontier.yml`) routes answer_synthesis +
+  community_summary to **Gemini 2.5 Flash** (cloud yardstick, NOT the offline product path). Full 48-step
+  GREEN in 3m42s. **Gemini ≈ local 8b on 4/5 queries, +1 entity on dock (0.50→0.75); 4-entity queries cap
+  at 3/4 even at the frontier → synthesis is NOT the bottleneck (edge 8b is within ~1 entity of frontier;
+  tiered-fallback holds), residual is a NARROW retrieval/partition miss → B2 REBUILD looks low-ROI (targeted
+  retrieval fix instead).** Two keeper follow-ups: (1) **graph/llm `reasoning_effort` gap-fill** — the
+  validated `EndpointConfig.ReasoningEffort` setting was honored by agentic-model but SILENTLY DROPPED by the
+  graph/llm synthesis client (`OpenAIConfig` lacked the field; `doWireChat` omitted it) — needed because
+  gemini-2.5-flash is a thinking model that truncates the 200-tok community_summary without
+  `reasoning_effort: none`. (2) **owner-raised architecture finding → filed:** TWO independent LLM
+  chat-request builders (agentic-model + graph/llm) DRIFT on endpoint settings (reasoning_effort was
+  instance #1); consolidate onto one shared endpoint-applier (transport already unified via
+  `model.NewHTTPClient`; it's the request-semantics layer that's doubled). Deferred, architect-owned. Lessons:
+  (a) **MEASURE THE CEILING before building B2** (third measure-before-build win this arc) — a frontier model
+  proved the partition rebuild is low-ROI without building it; (b) **verify a "we already support X" claim
+  from code** — the owner was right that `reasoning_effort` exists (registry + agentic), I was wrong it needed
+  new code; the real bug was one client dropping it. **Bundling #645 + reasoning_effort + frontier harness +
+  this baton into ONE PR (**#653**, owner: run counts as review for the simple reasoning_effort fix); filed the
+  two-LLM-clients issue (**#652**). **Codex round on #653 (6 findings):** #1 pack_id reuse (had already self-
+  caught + fixed — my pre-commit gate ran only touched packages, not `./...`, so CI caught it first; lesson
+  re-learned); addressed #5 (reasoning_effort test bypassed the `OpenAIConfigFromEndpoint` seam it guards —
+  rewrote through the translator + `io.ReadAll`, mutation-proven) and #6 (fallback mislabeled as
+  `classifier_garbage` — moved to a neutral `type_filter_fallback_total`; a zero-match only means no candidate
+  in the window, not proven-invented). **#3 was the sharp one — the frontier-vs-local comparison did NOT hold
+  the partition fixed, so the "B2 low-ROI" read is a HYPOTHESIS not a finding; walked it back here + in memory.**
+  Per owner ("keep the harness lean, note honest findings") #2/#4 are DOCUMENTED as harness limitations
+  (record-only, not gated; no quota-safe retry) + `enhancement_workers:1`, not built into gates; the rigorous
+  frozen-partition paired run is a filed follow-up. Next: owner re-review/CI/merge; then B1/B2 (via the paired
+  run) + client-consolidation.** **Also incorporated (owner saturation analysis, verified):** the 8B endpoint
+  saturation (`pending=10`/EOF) is the SAME two-clients drift — `graph/llm` honors neither `max_concurrent`
+  nor `requests_per_minute` (agentic-model does, via `EndpointThrottle`), and clustering defaults to 5
+  enhancement workers vs 2 llama.cpp slots (2.5× oversubscription). Fix = concurrency-admission (not RPM): a
+  shared `model`-layer admission gate keyed by endpoint URL/model that both clients honor + narrow retries
+  (429/503 only) + the SemStreams/SemInstruct ownership boundary; immediate quick-win is aligning
+  `enhancement_workers` ↔ `MODEL_PARALLEL` per tier. Folded into **#652** (concrete deliverable); subsumes
+  #654's retry note. So "decide 8B-harness viability" now has a path, not just a question.

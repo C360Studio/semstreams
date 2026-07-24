@@ -32,11 +32,12 @@ const (
 //
 // Uses the standard OpenAI SDK for consistency with the embedding package.
 type OpenAIClient struct {
-	client     *openai.Client
-	wireClient *wire.Client // ADR-037: populated when WireBackend = "wire"
-	model      string
-	maxRetries int
-	logger     *slog.Logger
+	client          *openai.Client
+	wireClient      *wire.Client // ADR-037: populated when WireBackend = "wire"
+	model           string
+	maxRetries      int
+	reasoningEffort string
+	logger          *slog.Logger
 }
 
 // OpenAIConfig configures the OpenAI client.
@@ -81,6 +82,13 @@ type OpenAIConfig struct {
 	// framework-owned model/wire client (ADR-037). Mirrors
 	// EndpointConfig.WireBackend.
 	WireBackend string
+
+	// ReasoningEffort controls how much effort reasoning models spend
+	// thinking. Forwarded as reasoning_effort on the chat completion
+	// request; empty preserves the provider default. Allowed values are
+	// none|low|medium|high per model.EndpointConfig validation. Mirrors
+	// EndpointConfig.ReasoningEffort.
+	ReasoningEffort string
 }
 
 // OpenAIConfigFromEndpoint builds an OpenAIConfig from a resolved capability
@@ -116,6 +124,7 @@ func OpenAIConfigFromEndpoint(resolved *model.ResolvedEndpoint, ep *model.Endpoi
 		cfg.ResponseHeaderTimeout = ep.ResponseHeaderTimeout
 		cfg.DisableKeepAlives = ep.DisableKeepAlives
 		cfg.WireBackend = ep.WireBackend
+		cfg.ReasoningEffort = ep.ReasoningEffort
 	}
 	return cfg
 }
@@ -166,10 +175,11 @@ func NewOpenAIClient(cfg OpenAIConfig) (*OpenAIClient, error) {
 	}
 
 	out := &OpenAIClient{
-		client:     client,
-		model:      cfg.Model,
-		maxRetries: maxRetries,
-		logger:     logger,
+		client:          client,
+		model:           cfg.Model,
+		maxRetries:      maxRetries,
+		reasoningEffort: cfg.ReasoningEffort,
+		logger:          logger,
 	}
 
 	// ADR-037: per-endpoint wire backend opt-in. The wire client shares
@@ -242,6 +252,9 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 		MaxTokens:   maxTokens,
 		Temperature: float32(temperature),
 	}
+	if c.reasoningEffort != "" {
+		chatReq.ReasoningEffort = c.reasoningEffort
+	}
 
 	// Execute with retry logic. The wire backend gates inside the loop
 	// so retry semantics stay identical across backends.
@@ -300,9 +313,10 @@ func (c *OpenAIClient) ChatCompletion(ctx context.Context, req ChatRequest) (*Ch
 // SDK path produces.
 func (c *OpenAIClient) doWireChat(ctx context.Context, chatReq openai.ChatCompletionRequest) (*ChatResponse, error) {
 	wreq := &wire.ChatCompletionRequest{
-		Model:     chatReq.Model,
-		MaxTokens: chatReq.MaxTokens,
-		Messages:  make([]wire.Message, len(chatReq.Messages)),
+		Model:           chatReq.Model,
+		MaxTokens:       chatReq.MaxTokens,
+		ReasoningEffort: chatReq.ReasoningEffort,
+		Messages:        make([]wire.Message, len(chatReq.Messages)),
 	}
 	if chatReq.Temperature > 0 {
 		t := float64(chatReq.Temperature)

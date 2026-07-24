@@ -426,8 +426,10 @@ func (c *Component) classifyQuery(ctx context.Context, queryText string) *query.
 // classifier models (e.g. qwen3-0.6b) sometimes emit verbatim from their
 // response template instead of resolving — `<entity_type>`, `{type}`,
 // `$placeholder`. When seen in a type_filters slot, the literal placeholder
-// reaches filterEntityIDsByType where it matches no real entity and silently
-// drops every hit. See semspec Meshtastic report (2026-05-07).
+// reaches filterEntityIDsByType where it matches no real entity; that filter now
+// falls back to the unfiltered set rather than dropping every hit (#645), but
+// stripping the placeholder here keeps the fallback from firing needlessly. See
+// semspec Meshtastic report (2026-05-07).
 var classifierTemplatePattern = regexp.MustCompile(`^[<{$].*[>}]?$`)
 
 // extractSearchRefinements pulls query reformulation and type filters from a
@@ -697,7 +699,20 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 
 		// Apply entity type filters from classifier (narrows results to relevant types).
 		if len(typeFilters) > 0 {
-			entityIDs = filterEntityIDsByType(entityIDs, typeFilters)
+			filtered, fellBack := filterEntityIDsByType(entityIDs, typeFilters)
+			if fellBack {
+				// No candidate in the retrieval window matched the classifier's
+				// type filters — do not zero a healthy semantic set (#645); keep the
+				// unfiltered hits. Neutral fallback: a valid inferred type can also
+				// miss the window, so this is NOT recorded as classifier garbage.
+				c.logger.Debug("type filter would zero non-empty semantic set — falling back to unfiltered",
+					"types", typeFilters,
+					"hits", len(filtered))
+				if c.promMetrics != nil {
+					c.promMetrics.recordTypeFilterFallback()
+				}
+			}
+			entityIDs = filtered
 			c.logger.Debug("applied type filters",
 				"types", typeFilters,
 				"remaining", len(entityIDs))
@@ -948,7 +963,22 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 
 	if len(typeFilters) > 0 {
 		before := len(entityIDs)
-		entityIDs = filterEntityIDsByType(entityIDs, typeFilters)
+		filtered, fellBack := filterEntityIDsByType(entityIDs, typeFilters)
+		if fellBack {
+			// No candidate in the retrieval window matched the classifier's type
+			// filters — do not zero a healthy semantic set (#645); keep the
+			// unfiltered hits. On a fallback before-after == 0, so hits-dropped
+			// records 0 drops and the type_filter_fallback counter marks it.
+			// Neutral: a valid inferred type can also miss the window, so this is
+			// NOT classifier garbage.
+			c.logger.Debug("type filter would zero non-empty semantic set — falling back to unfiltered",
+				"types", typeFilters,
+				"hits", len(filtered))
+			if c.promMetrics != nil {
+				c.promMetrics.recordTypeFilterFallback()
+			}
+		}
+		entityIDs = filtered
 		c.logger.Debug("semantic strategy: after type filter",
 			"types", typeFilters,
 			"before", before,
@@ -979,9 +1009,12 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 	if c.promMetrics != nil {
 		c.promMetrics.observeGlobalSearchResponseCount(response.Count)
 		if response.Count == 0 {
-			// Pure semantic strategy + non-empty pipeline + zero entities → either
-			// threshold or type filter wiped them; the per-stage drop counters
-			// pin which one. The empty counter aggregates the total class.
+			// Pure semantic strategy + non-empty pipeline + zero entities → the
+			// relevance threshold wiped them, or a partial type-filter narrow left
+			// survivors that then failed to load. The type filter can no longer
+			// zero a non-empty set on its own (#645 falls back), so a non-zero
+			// hits_dropped{type_filter} here means a partial narrow, not a zeroing.
+			// The empty counter aggregates the total class.
 			c.promMetrics.recordGlobalSearchEmpty("semantic", "filtered_to_empty")
 		}
 	}
@@ -1325,7 +1358,18 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 // This provides better results than text matching for semantic queries.
 // filterEntityIDsByType filters entity IDs to those whose type segment (5th part of the
 // 6-part ID: org.platform.domain.system.type.instance) matches any of the requested types.
-// Returns all IDs if typeFilters is empty.
+// Returns all IDs (fellBack=false) if typeFilters is empty.
+//
+// Graceful-fallback contract (#645): the type filters come from the classifier
+// (qwen3-0.6b). A lowercased exact-match filter over them can zero an otherwise-
+// healthy semantic result set → count=0 → empty answer. That happens both when the
+// classifier invents a type ("Procedure", "equipment process") AND, legitimately,
+// when a valid inferred type simply has no candidate in the current retrieval
+// window — this function cannot tell the two apart. So semstreams degrades, it
+// does not zero: when the input is NON-EMPTY but the filter produces an EMPTY set,
+// this returns the UNFILTERED input and signals fellBack=true so callers can log +
+// count the fallback (as a NEUTRAL type_filter_fallback, not classifier garbage).
+// An already-empty input is NOT a fallback (nothing to preserve) — (empty, false).
 //
 // Axis note (ADR-071): this is the TYPE-SEGMENT axis (position 5, exact segment
 // equality from the classifier), which is genuinely NOT expressible as a leading
@@ -1336,22 +1380,29 @@ func (c *Component) loadEntities(ctx context.Context, entityIDs []string) ([]*gt
 // re-added here as a second post-retrieval ID-prefix filter. If a future
 // leading-prefix constraint reaches the semantic path, thread it to
 // SearchRequest.Scope — do not add a prefix filter alongside this one.
-func filterEntityIDsByType(entityIDs []string, typeFilters []string) []string {
+func filterEntityIDsByType(entityIDs []string, typeFilters []string) (filtered []string, fellBack bool) {
 	if len(typeFilters) == 0 {
-		return entityIDs
+		return entityIDs, false
 	}
 	filterSet := make(map[string]bool, len(typeFilters))
 	for _, t := range typeFilters {
 		filterSet[strings.ToLower(t)] = true
 	}
 
-	filtered := make([]string, 0, len(entityIDs))
+	filtered = make([]string, 0, len(entityIDs))
 	for _, id := range entityIDs {
 		if filterSet[strings.ToLower(extractEntityType(id))] {
 			filtered = append(filtered, id)
 		}
 	}
-	return filtered
+
+	// Zero-fallback: a non-empty semantic result set that filters to empty means
+	// the classifier's type guesses matched nothing real. Do not zero it —
+	// preserve the unfiltered input and signal the fallback.
+	if len(entityIDs) > 0 && len(filtered) == 0 {
+		return entityIDs, true
+	}
+	return filtered, false
 }
 
 func (c *Component) searchEntitiesSemantic(ctx context.Context, query string, limit int) ([]SemanticHit, error) {

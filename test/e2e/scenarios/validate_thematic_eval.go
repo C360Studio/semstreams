@@ -442,14 +442,6 @@ func (a thematicAggregate) detail() map[string]any {
 
 // ---- Dimension 4a: partition determinism ------------------------------------
 
-// clusteringDetectionCountMetric is the histogram `_count` graph-clustering
-// increments once per COMPLETED detection run (processor/graph-clustering/
-// metrics.go observeDetectionDuration, called after DetectCommunities persists
-// the new partition). Watching it bump is how B0 observes a FRESH detection
-// cycle over the unchanged graph without a bespoke trigger — detection runs on
-// a 30s timer in configs/semantic.json.
-const clusteringDetectionCountMetric = "semstreams_graph_clustering_detection_duration_seconds_count"
-
 type partitionDeterminism struct {
 	measured     bool
 	reason       string // why unmeasured, when !measured
@@ -473,7 +465,7 @@ func (s *TieredScenario) recordPartitionDeterminism(ctx context.Context, result 
 	if err != nil {
 		return partitionDeterminism{reason: fmt.Sprintf("read level-0 partition (run 1): %v", err)}
 	}
-	baseline, err := s.metrics.SumMetricsByName(ctx, clusteringDetectionCountMetric)
+	baseline, err := s.metrics.SumMetricsByName(ctx, clusteringRunsMetric)
 	if err != nil {
 		// Metric absent → cannot observe a fresh detection deterministically.
 		// Record rather than guess (SumMetricsByName errors on name drift, not
@@ -483,7 +475,7 @@ func (s *TieredScenario) recordPartitionDeterminism(ctx context.Context, result 
 
 	// Wait for a fresh detection cycle (30s timer + run time). 90s budget brackets
 	// the ~4-24s run + up to a full interval of phase.
-	waitErr := s.metrics.WaitForMetricChange(ctx, clusteringDetectionCountMetric, baseline, client.WaitOpts{
+	waitErr := s.metrics.WaitForMetricChange(ctx, clusteringRunsMetric, baseline, client.WaitOpts{
 		Timeout:      90 * time.Second,
 		PollInterval: 1 * time.Second,
 	})
