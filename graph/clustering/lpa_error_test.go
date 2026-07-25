@@ -120,6 +120,47 @@ func TestLPADetector_ProviderGetNeighborsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "network timeout")
 }
 
+// edgeWeightFailProvider returns a real neighbor from GetNeighbors but errors on
+// GetEdgeWeight. It exists to exercise the computeNewLabel edge-weight seam:
+// FailingMockProvider.GetNeighbors returns an empty set, so computeNewLabel never
+// reaches GetEdgeWeight there.
+type edgeWeightFailProvider struct {
+	err error
+}
+
+func (p *edgeWeightFailProvider) GetAllEntityIDs(_ context.Context) ([]string, error) {
+	return []string{"A", "B"}, nil
+}
+
+func (p *edgeWeightFailProvider) GetNeighbors(_ context.Context, entityID, _ string) ([]string, error) {
+	// A and B are mutual neighbors, so computeNewLabel accumulates votes and calls
+	// GetEdgeWeight for each.
+	if entityID == "A" {
+		return []string{"B"}, nil
+	}
+	return []string{"A"}, nil
+}
+
+func (p *edgeWeightFailProvider) GetEdgeWeight(_ context.Context, _, _ string) (float64, error) {
+	return 0, p.err
+}
+
+// TestLPADetector_ProviderGetEdgeWeightErrorPropagates pins the gh#666 fail-open
+// fix: now that GetEdgeWeight does topology I/O, a transient error must abort the
+// cycle (retry next tick) rather than default to 1.0 — which would fabricate an
+// explicit-DOMINANT edge from a KV blip and corrupt the partition.
+func TestLPADetector_ProviderGetEdgeWeightErrorPropagates(t *testing.T) {
+	provider := &edgeWeightFailProvider{err: errors.New("kv blip on edge weight")}
+	storage := NewMockCommunityStorage()
+
+	detector := NewLPADetector(provider, storage)
+	ctx := context.Background()
+
+	_, err := detector.DetectCommunities(ctx)
+	require.Error(t, err, "an edge-weight error must NOT be swallowed into a fabricated 1.0")
+	assert.Contains(t, err.Error(), "kv blip on edge weight")
+}
+
 // Test storage failures
 // A prune failure is non-fatal by design: the partition is already persisted, so
 // the index is correct and merely carries stale extras until the next cycle.

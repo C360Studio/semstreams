@@ -1826,6 +1826,31 @@ type kvProvider struct {
 	outgoingBucket jetstream.KeyValue
 	incomingBucket jetstream.KeyValue
 	logger         *slog.Logger
+
+	// explicitNeighbors memoizes each entity's "both"-direction explicit neighbor
+	// set (outgoing ∪ incoming) for ONE detection cycle (gh#665/#666).
+	// GetNeighbors("both") warms it and GetEdgeWeight reuses it, so
+	// computeNewLabel(X) — which fans out one GetNeighbors(X,"both") then a
+	// GetEdgeWeight(X,·) per neighbor — reads X's topology ONCE per cycle instead of
+	// once per neighbor. ResetEdgeCache clears it at each cycle boundary because the
+	// explicit topology changes as entities update between cycles; within a cycle
+	// the snapshot is stable, which also gives every lookup a consistent graph view.
+	//
+	// TODAY there is a single accessor: the detection goroutine runs DetectCommunities
+	// (LPA) then the structural pass sequentially, and the EnhancementWorker never
+	// calls a topology method on the provider (it reads via its own querier). The
+	// edgeCacheMu RWMutex is therefore DEFENSIVE, not resolving live contention.
+	//
+	// LATENT B3 HAZARD (comment-only, no reader exists yet): bothNeighborSet computes
+	// a miss OUTSIDE the lock, then inserts under the lock with an absence-only
+	// double-check. If a genuinely concurrent reader is ever wired (e.g. a B3
+	// enhancement path), a ResetEdgeCache landing between compute-and-insert could
+	// seed the fresh cycle's map with a prior-cycle snapshot for that one entity. A
+	// real concurrent reader will need a cycle-generation stamp (or recompute under
+	// the lock) — same class as the §7 B3 concurrency note; do NOT add it until a
+	// reader exists.
+	edgeCacheMu       sync.RWMutex
+	explicitNeighbors map[string]map[string]bool
 }
 
 // newKVProvider creates a graph provider that reads from KV buckets
@@ -1836,10 +1861,11 @@ func newKVProvider(
 	logger *slog.Logger,
 ) *kvProvider {
 	return &kvProvider{
-		entityBucket:   entityBucket,
-		outgoingBucket: outgoingBucket,
-		incomingBucket: incomingBucket,
-		logger:         logger,
+		entityBucket:      entityBucket,
+		outgoingBucket:    outgoingBucket,
+		incomingBucket:    incomingBucket,
+		logger:            logger,
+		explicitNeighbors: make(map[string]map[string]bool),
 	}
 }
 
@@ -1866,10 +1892,28 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetNeighbors", "entityID is empty")
 	}
 
+	// "both" is the explicit-edge membership question the LPA hot loop asks
+	// (computeNewLabel(X) fans out one GetNeighbors(X,"both") then a
+	// GetEdgeWeight(X,·) per neighbor), so it is served from the per-cycle edge
+	// cache: this call warms it and GetEdgeWeight reuses the same union set,
+	// reading X's topology once per cycle instead of once per neighbor (gh#666).
+	if direction == "both" {
+		set, err := p.bothNeighborSet(ctx, entityID)
+		if err != nil {
+			return nil, err
+		}
+		result := make([]string, 0, len(set))
+		for n := range set {
+			result = append(result, n)
+		}
+		return result, nil
+	}
+
+	// Single-direction reads are not part of the LPA hot loop and are left uncached.
 	neighbors := make(map[string]bool)
 
 	// Get outgoing neighbors — unchanged format: single key, JSON array of {to_entity_id, predicate}
-	if direction == "outgoing" || direction == "both" {
+	if direction == "outgoing" {
 		outgoing, err := p.getNeighborsFromBucket(ctx, p.outgoingBucket, entityID)
 		if err != nil {
 			return nil, errs.WrapTransient(err, "kvProvider", "GetNeighbors", "outgoing topology read")
@@ -1880,7 +1924,7 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 	}
 
 	// Get incoming neighbors — composite-key sharded format: prefix scan
-	if direction == "incoming" || direction == "both" {
+	if direction == "incoming" {
 		incoming, err := p.getIncomingNeighbors(ctx, entityID)
 		if err != nil {
 			return nil, errs.WrapTransient(err, "kvProvider", "GetNeighbors", "incoming topology read")
@@ -1895,6 +1939,72 @@ func (p *kvProvider) GetNeighbors(ctx context.Context, entityID string, directio
 		result = append(result, n)
 	}
 	return result, nil
+}
+
+// bothNeighborSet returns entityID's explicit "both"-direction neighbor set
+// (outgoing ∪ incoming), memoized for the current detection cycle. On a miss it
+// reads topology OUTSIDE the cache lock and then publishes; a stored entry is
+// treated as immutable, so GetNeighbors and GetEdgeWeight can share it. The
+// detector clears the cache each cycle via ResetEdgeCache — the explicit topology
+// changes between cycles — and within a cycle every lookup sees one stable graph.
+func (p *kvProvider) bothNeighborSet(ctx context.Context, entityID string) (map[string]bool, error) {
+	p.edgeCacheMu.RLock()
+	set, ok := p.explicitNeighbors[entityID]
+	p.edgeCacheMu.RUnlock()
+	if ok {
+		return set, nil
+	}
+
+	computed, err := p.computeBothNeighborSet(ctx, entityID)
+	if err != nil {
+		return nil, err
+	}
+
+	p.edgeCacheMu.Lock()
+	if existing, ok := p.explicitNeighbors[entityID]; ok {
+		set = existing // another goroutine won the race — keep the shared snapshot
+	} else {
+		p.explicitNeighbors[entityID] = computed
+		set = computed
+	}
+	p.edgeCacheMu.Unlock()
+	return set, nil
+}
+
+// computeBothNeighborSet reads entityID's outgoing ∪ incoming explicit neighbors
+// straight from the index buckets (no cache). It is the single topology-I/O seam
+// that bothNeighborSet memoizes.
+func (p *kvProvider) computeBothNeighborSet(ctx context.Context, entityID string) (map[string]bool, error) {
+	neighbors := make(map[string]bool)
+
+	outgoing, err := p.getNeighborsFromBucket(ctx, p.outgoingBucket, entityID)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "kvProvider", "computeBothNeighborSet", "outgoing topology read")
+	}
+	for _, n := range outgoing {
+		neighbors[n] = true
+	}
+
+	incoming, err := p.getIncomingNeighbors(ctx, entityID)
+	if err != nil {
+		return nil, errs.WrapTransient(err, "kvProvider", "computeBothNeighborSet", "incoming topology read")
+	}
+	for _, n := range incoming {
+		neighbors[n] = true
+	}
+
+	return neighbors, nil
+}
+
+// ResetEdgeCache drops the per-cycle explicit-neighbor cache. The detector calls
+// it at the start of each DetectCommunities run (the cycle boundary) so the next
+// cycle's membership reflects the current explicit topology rather than a stale
+// snapshot. It touches ONLY the explicit-edge cache — sibling/system-peer prefix
+// caches keep their own lifetime.
+func (p *kvProvider) ResetEdgeCache() {
+	p.edgeCacheMu.Lock()
+	p.explicitNeighbors = make(map[string]map[string]bool)
+	p.edgeCacheMu.Unlock()
 }
 
 // relationshipEntry represents a relationship in the index buckets
@@ -1994,11 +2104,29 @@ func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) 
 	return neighbors, nil
 }
 
-// GetEdgeWeight returns the weight of the edge between two entities
-func (p *kvProvider) GetEdgeWeight(_ context.Context, _, _ string) (float64, error) {
-	// For now, return 1.0 for all edges (equal weight)
-	// Could be enhanced to read confidence from the relationship data
-	return 1.0, nil
+// GetEdgeWeight returns 1.0 iff an ACTUAL explicit edge exists between fromID and
+// toID in EITHER direction (explicit edges are unit-weight today), else 0.0.
+//
+// Membership is the real "both"-direction topology from bothNeighborSet, NOT an
+// unconditional 1.0 (gh#665). The previous implementation answered 1.0 for EVERY
+// pair, which made EntityIDProvider.GetEdgeWeight's cascade ("base weight > 0 →
+// return it") fire on step 1 for every pair — so the sibling (0.7) and system-peer
+// (0.3) virtual-edge weights (gh#461) were dead and every virtual edge voted at
+// 1.0 in LPA. Gating on real membership lets the cascade fall through to the
+// intended tier weights. The lookup is memoized per cycle (gh#666): a
+// computeNewLabel pass reads fromID's topology once, not once per neighbor.
+func (p *kvProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+	if err := semtypes.ValidateEntityID(fromID); err != nil {
+		return 0.0, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetEdgeWeight", "fromID is invalid")
+	}
+	set, err := p.bothNeighborSet(ctx, fromID)
+	if err != nil {
+		return 0.0, err
+	}
+	if set[toID] {
+		return 1.0, nil
+	}
+	return 0.0, nil
 }
 
 // ============================================================================

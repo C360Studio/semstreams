@@ -49,6 +49,17 @@ type EntityProvider interface {
 	GetEntities(ctx context.Context, ids []string) ([]*gtypes.EntityState, error)
 }
 
+// edgeCacheResetter is implemented by providers that memoize explicit-edge
+// topology per detection cycle (the wired kvProvider, propagated through the
+// EntityID/semantic decorators). DetectCommunities calls ResetEdgeCache at the
+// start of every run so the memoized set reflects the CURRENT cycle's topology —
+// the explicit graph changes as entities update between cycles. Providers that
+// hold no such cache (the query-manager/predicate providers and unit-test fakes)
+// do not implement it and are simply skipped.
+type edgeCacheResetter interface {
+	ResetEdgeCache()
+}
+
 // LPADetector implements community detection using Label Propagation Algorithm
 type LPADetector struct {
 	graphProvider Provider
@@ -155,6 +166,15 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
+	// Cycle boundary (gh#666): drop the provider's per-cycle explicit-edge cache so
+	// this run's membership reflects the current topology, not a stale snapshot from
+	// the previous cycle. Providers without such a cache do not implement the
+	// interface and are skipped. Must run before any GetNeighbors/GetEdgeWeight read
+	// below populates the cache.
+	if r, ok := d.graphProvider.(edgeCacheResetter); ok {
+		r.ResetEdgeCache()
+	}
 
 	// PHASE 1: Archive LLM-enhanced communities before the rebuild
 	// This preserves expensive LLM summaries (typically 5-20s per community) that can be
@@ -434,10 +454,16 @@ func (d *LPADetector) computeNewLabel(
 			continue // Skip neighbors not in current entity set
 		}
 
-		// Get edge weight (default: 1.0)
+		// Get edge weight. GetEdgeWeight now does topology I/O to resolve real
+		// explicit-edge membership (gh#665), so a transient error must NOT default to
+		// 1.0 — that would fabricate an explicit-DOMINANT edge out of a KV blip and
+		// corrupt the partition. Propagate it instead (LPA wraps transient), exactly
+		// as the GetNeighbors read above already does; the next cycle retries. In the
+		// normal flow this never fires: the GetNeighbors(X,"both") call above warms
+		// the per-cycle edge cache, so this lookup is a warm cache hit.
 		weight, err := d.graphProvider.GetEdgeWeight(ctx, entityID, neighborID)
 		if err != nil {
-			weight = 1.0 // Default to unweighted
+			return "", errs.WrapTransient(err, "LPADetector", "computeNewLabel", "get edge weight")
 		}
 
 		labelVotes[neighborLabel] += weight
@@ -738,6 +764,12 @@ func (d *LPADetector) computeCommunityTightness(ctx context.Context, community *
 	for i := 0; i < len(community.Members); i++ {
 		for j := i + 1; j < len(community.Members); j++ {
 			possibleEdges++
+			// NOTE (gh#665/#666): the error is swallowed (treated as "no edge") rather
+			// than propagated like computeNewLabel, because this returns a bare float64
+			// with no error channel and feeds only the DORMANT
+			// InferRelationshipsFromCommunities (no production caller). Making it
+			// fail-closed means changing this + hasExplicitEdge to return errors and
+			// threading them through that unwired path — deferred until it is wired.
 			weight, _ := d.graphProvider.GetEdgeWeight(ctx, community.Members[i], community.Members[j])
 			if weight > 0 {
 				explicitEdges++
@@ -756,7 +788,11 @@ func (d *LPADetector) computeCommunityTightness(ctx context.Context, community *
 // hasExplicitEdge checks if there's already an explicit edge between two entities.
 // Returns true if edge exists (to avoid creating duplicate inferred relationships).
 func (d *LPADetector) hasExplicitEdge(ctx context.Context, entityA, entityB string) bool {
-	// Check both directions
+	// Check both directions. Errors are swallowed (treated as "no edge") rather than
+	// propagated like computeNewLabel: this returns a bare bool feeding only the
+	// DORMANT InferRelationshipsFromCommunities. Fail-closed here means adding an
+	// error return to this + computeCommunityTightness and threading it through that
+	// unwired path — deferred until it is wired (gh#665/#666).
 	weightAB, _ := d.graphProvider.GetEdgeWeight(ctx, entityA, entityB)
 	if weightAB >= 0.8 { // Only count high-confidence edges as "explicit"
 		return true
