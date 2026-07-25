@@ -30,6 +30,49 @@ func (s *stubProvider) GetEdgeWeight(_ context.Context, from, to string) (float6
 	return 0.0, nil
 }
 
+// kvLikeProvider mirrors the PRODUCTION kvProvider's actual contract, which the
+// explicit-only stubProvider above does not: GetEdgeWeight returns 1.0 for EVERY
+// pair (gh#665), and GetNeighbors("both") unions the directional explicit-edge
+// index rows (outgoing from->to, incoming to->from). A decorator that treated
+// "GetEdgeWeight > 0" as "an explicit edge exists" classifies every pair as
+// explicit-dominant against this base — masking the sibling/system-peer/semantic
+// tiers entirely. Only a membership check against the real neighbor set survives.
+type kvLikeProvider struct {
+	entities []string
+	outgoing map[string][]string // id -> explicit edges stored as outgoing of id
+	incoming map[string][]string // id -> explicit edges stored as incoming to id
+}
+
+func (p *kvLikeProvider) GetAllEntityIDs(context.Context) ([]string, error) {
+	return p.entities, nil
+}
+
+func (p *kvLikeProvider) GetNeighbors(_ context.Context, id, direction string) ([]string, error) {
+	seen := map[string]bool{}
+	var out []string
+	add := func(ids []string) {
+		for _, n := range ids {
+			if !seen[n] {
+				seen[n] = true
+				out = append(out, n)
+			}
+		}
+	}
+	if direction == "outgoing" || direction == "both" {
+		add(p.outgoing[id])
+	}
+	if direction == "incoming" || direction == "both" {
+		add(p.incoming[id])
+	}
+	return out, nil
+}
+
+// GetEdgeWeight matches the wired kvProvider byte-for-byte: 1.0 for every pair,
+// with no notion of whether an edge actually exists (gh#665).
+func (p *kvLikeProvider) GetEdgeWeight(context.Context, string, string) (float64, error) {
+	return 1.0, nil
+}
+
 // stubFinder returns a fixed directed similarity result per entity. The map is
 // interpreted as "entity -> its directed top-k neighbor list"; the mutual-kNN
 // intersection is what the provider under test computes from these directed
@@ -194,6 +237,84 @@ func TestSemanticEdgeProvider_DualQualifying_ResolvesToMax(t *testing.T) {
 	w, err := prov.GetEdgeWeight(ctx, "o.p.d.s.t.a1", "o.p.d.s.t.a2")
 	require.NoError(t, err)
 	assert.InDelta(t, 0.9, w, 1e-9, "sibling+semantic resolves to max(0.7,0.9), not the sum 1.6")
+}
+
+// TestSemanticEdgeProvider_WiredClassification_KVLikeBase is the load-bearing
+// regression for gh#665's masking effect: it drives the PRODUCTION classification
+// (a real EntityIDProvider over a base that answers GetEdgeWeight=1.0 for every
+// pair, exactly like the wired kvProvider) rather than the explicit-only stub
+// that returns 0 for absent pairs. Under the pre-fix decorator — which trusted
+// explicitEdgeWeight > 0 as "explicit edge exists" — every one of these pairs
+// would resolve to the 1.0 explicit-dominant weight, silencing every virtual
+// tier. The membership seam (isExplicitEdge over the base's real neighbor set)
+// is what makes the tiers observable again.
+func TestSemanticEdgeProvider_WiredClassification_KVLikeBase(t *testing.T) {
+	ctx := context.Background()
+
+	const (
+		// Explicit edge, stored to->from: outgoing of ex1 only, so ex2 reaches it
+		// only via its INCOMING rows. Different system+type so no virtual tier
+		// qualifies — the resolved weight can only come from the explicit edge.
+		ex1 = "o.p.d.sysx.tx.ex1"
+		ex2 = "o.p.d.sysy.ty.ex2"
+		// Semantic-only: different type prefix AND different system, mutual-kNN.
+		sem1 = "o.p.d.s1.t1.sem1"
+		sem2 = "o.p.d.s2.t2.sem2"
+		// Sibling-only (also system-peers, but 0.7 dominates 0.2), not mutual-kNN.
+		sb1 = "o.p.d.sib.tt.sb1"
+		sb2 = "o.p.d.sib.tt.sb2"
+		// System-peer-only: same system segment, different type, not mutual-kNN.
+		sp1 = "o.p.d.sp.ta.sp1"
+		sp2 = "o.p.d.sp.tb.sp2"
+		// Sibling AND mutual-kNN semantic -> max(0.7, 0.9).
+		ss1 = "o.p.d.ss.tc.ss1"
+		ss2 = "o.p.d.ss.tc.ss2"
+		// Absent: different system+type, no explicit edge, not mutual-kNN.
+		za = "o.p.d.za.tz.za1"
+		zb = "o.p.d.zb.tw.zb1"
+	)
+
+	base := &kvLikeProvider{
+		entities: []string{ex1, ex2, sem1, sem2, sb1, sb2, sp1, sp2, ss1, ss2, za, zb},
+		// The ONLY explicit edge, stored as an outgoing row of ex1 (so ex2 sees it
+		// as incoming) — proves the "both directions" membership requirement.
+		outgoing: map[string][]string{ex1: {ex2}},
+		incoming: map[string][]string{ex2: {ex1}},
+	}
+	eidp := NewEntityIDProvider(base, EntityIDProviderConfig{
+		IncludeSiblings: true, IncludeSystemPeers: true,
+		SiblingWeight: 0.7, SystemPeerWeight: 0.2,
+	}, nil)
+
+	finder := &stubFinder{directed: map[string][]string{
+		sem1: {sem2}, sem2: {sem1},
+		ss1: {ss2}, ss2: {ss1},
+	}}
+	prov := NewSemanticEdgeProvider(eidp, finder,
+		WeightConfig{SiblingWeight: 0.7, SystemPeerWeight: 0.2, SemanticWeight: 0.9},
+		SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
+
+	tests := []struct {
+		name     string
+		from, to string
+		want     float64
+	}{
+		{"absent pair -> 0 (kvProvider's 1.0 must NOT count as an edge)", za, zb, 0.0},
+		{"explicit edge, queried to->from (both-directions membership)", ex2, ex1, 1.0},
+		{"explicit edge, queried from->to", ex1, ex2, 1.0},
+		{"semantic-only mutual-kNN pair -> 0.9", sem1, sem2, 0.9},
+		{"sibling-only pair -> 0.7", sb1, sb2, 0.7},
+		{"system-peer-only pair -> 0.2", sp1, sp2, 0.2},
+		{"sibling + semantic -> max(0.7,0.9)=0.9", ss1, ss2, 0.9},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := prov.GetEdgeWeight(ctx, tc.from, tc.to)
+			require.NoError(t, err)
+			assert.InDelta(t, tc.want, got, 1e-9,
+				"wired classification: %s->%s must resolve to %v, not the base's blanket 1.0", tc.from, tc.to, tc.want)
+		})
+	}
 }
 
 // Explicit edges dominate even a dual-qualifying virtual pair.

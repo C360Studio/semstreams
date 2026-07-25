@@ -276,13 +276,24 @@ func (p *SemanticEdgeProvider) GetEdgeWeight(ctx context.Context, fromID, toID s
 
 	tiers := qualifyingTiers{}
 
-	// Explicit edge weight from the underlying base provider only (no virtual
-	// synthesis), so an explicit edge stays strictly dominant.
-	explicit, err := p.base.explicitEdgeWeight(ctx, fromID, toID)
+	// Explicit-edge membership from the base's ACTUAL neighbor set (both
+	// directions), NOT its numeric weight. The wired kvProvider.GetEdgeWeight
+	// returns 1.0 for EVERY pair (gh#665), so keying "explicit edge exists" off
+	// explicitEdgeWeight > 0 would make every pair explicit-dominant and leave the
+	// sibling/system-peer/semantic tiers dead. Only an ACTUAL explicit edge is
+	// strictly dominant; its weight is read from the base only once membership is
+	// confirmed.
+	isExplicit, err := p.base.isExplicitEdge(ctx, fromID, toID)
 	if err != nil {
 		return 0.0, errs.WrapTransient(err, "SemanticEdgeProvider", "GetEdgeWeight", "base provider error")
 	}
-	tiers.explicitWeight = explicit
+	if isExplicit {
+		explicit, err := p.base.explicitEdgeWeight(ctx, fromID, toID)
+		if err != nil {
+			return 0.0, errs.WrapTransient(err, "SemanticEdgeProvider", "GetEdgeWeight", "base provider error")
+		}
+		tiers.explicitWeight = explicit
+	}
 
 	// Sibling / system-peer membership reuse the EntityIDProvider's tested
 	// predicates and enabled flags — the semantic-identity logic lives in one

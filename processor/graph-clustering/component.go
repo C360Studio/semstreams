@@ -1175,15 +1175,24 @@ func (c *Component) initProviderAndDetector() {
 	// chain is exactly the two providers it is today (byte-identical). The
 	// mutual-kNN candidates come from the component's existing similarity finder
 	// path (no second RPC — §1.2).
-	var topProvider clustering.Provider = entityIDProvider
+	var detectorProvider clustering.Provider = entityIDProvider
 	if c.config.semanticEdges.enabled {
-		topProvider = c.wrapSemanticEdges(entityIDProvider)
+		detectorProvider = c.wrapSemanticEdges(entityIDProvider)
 	}
 
 	entityQuerier := c.newEntityStateQuerier()
 	summarizer := clustering.NewStatisticalSummarizer()
 
-	detector := clustering.NewLPADetector(topProvider, c.storage).
+	// The semantic-edge decorator is scoped to COMMUNITY DETECTION only (ADR-086):
+	// only the LPA detector votes over the mutual-kNN edges. Everything else that
+	// reads c.graphProvider — structural k-core/pivot computation
+	// (structural.go), anomaly inputs derived from those indices, and the LLM
+	// enhancement worker — MUST see the base EntityID chain, so enabling semantic
+	// edges does not silently shift k-core degrees, pivot distances, or anomaly
+	// scores. When the tier is OFF detectorProvider == entityIDProvider, so both
+	// the detector and c.graphProvider get the same base and the wiring is
+	// byte-identical to today.
+	detector := clustering.NewLPADetector(detectorProvider, c.storage).
 		WithLogger(c.logger).
 		WithMaxIterations(c.config.MaxIterations).
 		WithLevels(3).
@@ -1191,7 +1200,7 @@ func (c *Component) initProviderAndDetector() {
 
 	detector.SetEntityProvider(entityQuerier)
 	c.detector = detector
-	c.graphProvider = topProvider
+	c.graphProvider = entityIDProvider
 }
 
 // wrapSemanticEdges decorates the EntityID provider with the mutual-kNN semantic

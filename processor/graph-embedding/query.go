@@ -277,12 +277,11 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 		return nil, errs.Wrap(err, "findSimilarEntities", "helper", "list entity IDs")
 	}
 
-	// Calculate similarities
-	type scored struct {
-		entityID   string
-		similarity float64
-	}
-	var scores []scored
+	// Calculate similarities. Uses the shared embedding.ScoredEntity type so the
+	// cold path sorts through the SAME canonical comparator as the warm cache path
+	// (embedding.ScoredEntityLess) — an equal-similarity group crossing the top-k
+	// boundary must resolve identically on both paths.
+	var scores []embedding.ScoredEntity
 
 	for _, entityID := range entityIDs {
 		if err := ctx.Err(); err != nil {
@@ -315,12 +314,14 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 
 		// Calculate cosine similarity
 		sim := embedding.CosineSimilarity(queryVector, record.Vector)
-		scores = append(scores, scored{entityID: entityID, similarity: sim})
+		scores = append(scores, embedding.ScoredEntity{EntityID: entityID, Similarity: sim})
 	}
 
-	// Sort by similarity descending
+	// Sort by the canonical (similarity DESC, entity ID ASC) ordering so the
+	// top-k tie-break at the boundary is deterministic regardless of the KV
+	// key-enumeration order.
 	sort.Slice(scores, func(i, j int) bool {
-		return scores[i].similarity > scores[j].similarity
+		return embedding.ScoredEntityLess(scores[i], scores[j])
 	})
 
 	// Take top N
@@ -332,8 +333,8 @@ func (c *Component) findSimilarEntities(ctx context.Context, excludeID string, q
 	results := make([]SimilarEntity, len(scores))
 	for i, s := range scores {
 		results[i] = SimilarEntity{
-			EntityID:   s.entityID,
-			Similarity: s.similarity,
+			EntityID:   s.EntityID,
+			Similarity: s.Similarity,
 		}
 	}
 
