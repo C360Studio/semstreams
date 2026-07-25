@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -63,6 +64,25 @@ type clusteringMetrics struct {
 	// partition commit silently. Only updated on deployments that ENABLE the tier;
 	// an unopted deployment never touches it (its value is meaningless there).
 	semanticEdgesApplied prometheus.Gauge
+
+	// semanticEdgeBuildMs is the wall-clock duration, in milliseconds, of a single
+	// mutual-kNN cache refresh (B2 §7.2). It is observed on every ACTIVE cycle,
+	// including the near-zero all-reused cycles: the distribution makes the reuse
+	// win visible (a corpus that has not changed refreshes in ~0ms because it
+	// issues no similarity queries) and surfaces the O(N)-query rebuild cost when
+	// the embedding watermark advances. Only meaningful where enable_semantic_edges
+	// is true.
+	semanticEdgeBuildMs prometheus.Histogram
+
+	// semanticEdgeSimilarQueries counts the FindSimilar (graph.embedding.query.similar)
+	// calls the mutual-kNN refresh issues (B2 §7.2). It is the load the revision-keyed
+	// cache (§7.1) bounds: on an unchanged corpus a refresh reuses every directed set
+	// and this counter does not move, so increase() over a scrape interval reads ~0;
+	// it steps up by the re-queried entity count when the embedding watermark advances
+	// or a previously-errored entity is retried. Watching it is how an operator
+	// confirms the cache is actually bounding query load rather than re-issuing ~N
+	// queries per cycle. Only meaningful where enable_semantic_edges is true.
+	semanticEdgeSimilarQueries prometheus.Counter
 }
 
 // deferReasons is the closed label set for deferTotal, sourced from graph.AllDeferReasons
@@ -111,16 +131,35 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 				Name:      "semantic_edges_applied",
 				Help:      "Whether the most recent community-detection cycle applied the semantic-edge tier: 1 = active (graph-embedding ready, mutual-kNN edges in the vote), 0 = structural-only (embedding index not ready). Distinguishes a full cycle that found no mutual-kNN neighbors (1) from a semantically-blind cycle that never ran semantics (0) — the #618 signal. Only meaningful where enable_semantic_edges is true.",
 			}),
+			semanticEdgeBuildMs: prometheus.NewHistogram(prometheus.HistogramOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_clustering",
+				Name:      "semantic_edge_build_ms",
+				Help:      "Wall time of one mutual-kNN cache refresh, in milliseconds (B2 §7). Observed every active cycle: an unchanged corpus refreshes in ~0ms (it reuses every cached directed set and issues no similarity queries), while an embedding-watermark advance triggers an O(N)-query rebuild. Read alongside semantic_edge_similar_queries_total to see the revision-keyed cache bounding query load. Only meaningful where enable_semantic_edges is true.",
+				// A reuse cycle is sub-millisecond; a full rebuild spans one query per
+				// entity, each up to the 30s similarity timeout. Bracket both ends.
+				Buckets: []float64{0.1, 0.5, 1, 5, 10, 50, 100, 500, 1000, 5000, 30000},
+			}),
+			semanticEdgeSimilarQueries: prometheus.NewCounter(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "graph_clustering",
+				Name:      "semantic_edge_similar_queries_total",
+				Help:      "FindSimilar (graph.embedding.query.similar) calls issued by the mutual-kNN cache refresh (B2 §7). The revision-keyed cache (§7.1) bounds this: on an unchanged corpus a refresh reuses every directed set and this counter does not advance, so increase() over a scrape interval reads ~0; it steps up by the re-queried entity count when the embedding watermark advances or an errored entity is retried. Only meaningful where enable_semantic_edges is true.",
+			}),
 		}
 		for _, reason := range deferReasons {
 			metrics.deferTotal.WithLabelValues(string(reason))
 		}
-		// semanticEdgesApplied is created above (so the field is never nil and stamping
-		// never panics) but is deliberately NOT registered here: it is exposed ONLY for
-		// a deployment that ENABLES the tier, via registerSemanticEdgesApplied called
-		// from the factory. Registering it unconditionally would export a default 0 on
-		// every disabled deployment — indistinguishable from an enabled-but-cold cycle,
-		// the exact #618 confusion the gauge exists to resolve (Codex P2#4).
+		// The THREE semantic-tier series (semanticEdgesApplied, semanticEdgeBuildMs,
+		// semanticEdgeSimilarQueries) are created above (so the fields are never nil and
+		// stamping never panics) but are deliberately NOT registered here: they are
+		// exposed ONLY for a deployment that ENABLES the tier, via registerSemanticMetrics
+		// called from the factory. Registering them unconditionally would change the
+		// exported metric surface of a DISABLED (default-off) deployment — a registered
+		// semantic_edges_applied scrapes a default 0 indistinguishable from an
+		// enabled-but-cold cycle (#618), and the §7 refresh-cost series appear on a
+		// deployment that never runs a refresh — contradicting default-off-identical
+		// (Codex P2#4/P2#5).
 		if registry != nil {
 			_ = registry.RegisterGauge("graph-clustering", "staleness_at_detection_ms", metrics.stalenessAtDetection)
 			_ = registry.RegisterCounterVec("graph-clustering", "defer_total", metrics.deferTotal)
@@ -134,22 +173,29 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 	return metrics
 }
 
-// registerSemanticEdgesApplied exposes the semantic_edges_applied series. It is called
-// ONLY for a deployment that ENABLES the semantic-edge tier (from the factory), so a
-// disabled deployment never exports the gauge at all — its scrape is a true n/a rather
-// than a misleading 0 that reads as "enabled but embeddings cold" (#618 / Codex P2#4).
-// Idempotent: the registry dedups by key, and the default-registerer path swallows the
-// AlreadyRegistered error like the getMetrics registrations do, so repeat enabled
-// instances in one process are safe.
-func (m *clusteringMetrics) registerSemanticEdgesApplied(registry *metric.MetricsRegistry) {
+// registerSemanticMetrics exposes ALL THREE semantic-tier series —
+// semantic_edges_applied (#618), semantic_edge_build_ms and
+// semantic_edge_similar_queries_total (B2 §7.2) — and is called ONLY for a deployment
+// that ENABLES the semantic-edge tier (from the factory). A disabled (default-off)
+// deployment therefore never exports any of them, so its metric surface is byte-identical
+// to a pre-tier build: no misleading semantic_edges_applied=0 that reads as "enabled but
+// embeddings cold" (#618), and no §7 refresh-cost series on a deployment that never runs a
+// refresh (Codex P2#4/P2#5). Idempotent: the registry dedups by key, and the
+// default-registerer path swallows the AlreadyRegistered error like the getMetrics
+// registrations do, so repeat enabled instances in one process are safe.
+func (m *clusteringMetrics) registerSemanticMetrics(registry *metric.MetricsRegistry) {
 	if m == nil || m.semanticEdgesApplied == nil {
 		return
 	}
 	if registry != nil {
 		_ = registry.RegisterGauge("graph-clustering", "semantic_edges_applied", m.semanticEdgesApplied)
+		_ = registry.RegisterHistogram("graph-clustering", "semantic_edge_build_ms", m.semanticEdgeBuildMs)
+		_ = registry.RegisterCounter("graph-clustering", "semantic_edge_similar_queries_total", m.semanticEdgeSimilarQueries)
 		return
 	}
 	_ = prometheus.DefaultRegisterer.Register(m.semanticEdgesApplied)
+	_ = prometheus.DefaultRegisterer.Register(m.semanticEdgeBuildMs)
+	_ = prometheus.DefaultRegisterer.Register(m.semanticEdgeSimilarQueries)
 }
 
 // setStalenessAtDetection records the view age the most recent detection run
@@ -176,6 +222,46 @@ func (m *clusteringMetrics) setSemanticEdgesApplied(active bool) {
 		return
 	}
 	m.semanticEdgesApplied.Set(0)
+}
+
+// observeSemanticEdgeBuildMs records one mutual-kNN cache refresh's duration
+// (B2 §7.2). Recorded on every active-cycle refresh, including the ~0ms reuse
+// cycles, so the distribution shows how often an actual rebuild happens.
+func (m *clusteringMetrics) observeSemanticEdgeBuildMs(ms float64) {
+	m.semanticEdgeBuildMs.Observe(ms)
+}
+
+// addSemanticEdgeQueries adds the FindSimilar calls a refresh issued (B2 §7.2).
+// A no-op add of 0 (a fully-reused cycle) leaves the counter flat, which is the
+// observable that the revision-keyed cache is bounding query load.
+func (m *clusteringMetrics) addSemanticEdgeQueries(n int) {
+	if n <= 0 {
+		return
+	}
+	m.semanticEdgeSimilarQueries.Add(float64(n))
+}
+
+// semanticEdgeMetricsAdapter is the clustering.SemanticEdgeMetrics sink the
+// SemanticEdgeProvider records through, backed by this component's Prometheus
+// metrics. It keeps the leaf clustering package free of a prometheus import
+// while the actual registration lives here beside semantic_edges_applied.
+type semanticEdgeMetricsAdapter struct{ m *clusteringMetrics }
+
+// Verify the adapter satisfies the clustering-side sink.
+var _ clustering.SemanticEdgeMetrics = semanticEdgeMetricsAdapter{}
+
+func (a semanticEdgeMetricsAdapter) ObserveBuildMs(ms float64) {
+	if a.m == nil {
+		return
+	}
+	a.m.observeSemanticEdgeBuildMs(ms)
+}
+
+func (a semanticEdgeMetricsAdapter) AddSimilarQueries(n int) {
+	if a.m == nil {
+		return
+	}
+	a.m.addSemanticEdgeQueries(n)
 }
 
 // countDefer increments the typed defer counter. An unrecognized reason would create

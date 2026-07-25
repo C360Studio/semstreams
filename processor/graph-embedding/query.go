@@ -131,14 +131,25 @@ func (c *Component) handleQuerySimilarNATS(requestCtx context.Context, data []by
 	if err != nil {
 		return nil, errs.Wrap(err, "handleQuerySimilarNATS", "handler", "get source embedding")
 	}
+	// The three per-entity misses below all mean "this SOURCE entity has no usable
+	// embedding to query FROM." They carry the stable ErrorCodeEmbeddingUnavailable
+	// (Invalid class) so a consumer distinguishes a definitive per-entity miss from a
+	// malformed/unknown reply BY CODE, never by message text: the semantic-edge cache
+	// fails open to empty on this code, but counts an uncoded/parse error toward its
+	// coverage-threshold abort rather than caching a hollow empty (#662 / Codex P1#2).
+	// It is per-entity, NOT the producer-wide ErrorCodeIndexNotReady — the index is
+	// sound, this one entity just has no vector yet.
 	if sourceRecord == nil {
-		return nil, errs.WrapInvalid(errs.ErrKeyNotFound, "handleQuerySimilarNATS", "handler", fmt.Sprintf("entity not found: %s", req.EntityID))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
+			fmt.Errorf("entity not found: %s", req.EntityID))
 	}
 	if sourceRecord.Status != embedding.StatusGenerated {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "handleQuerySimilarNATS", "handler", fmt.Sprintf("embedding not ready for %s: status=%s", req.EntityID, sourceRecord.Status))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
+			fmt.Errorf("embedding not ready for %s: status=%s", req.EntityID, sourceRecord.Status))
 	}
 	if len(sourceRecord.Vector) == 0 {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "handleQuerySimilarNATS", "handler", fmt.Sprintf("no vector for entity %s", req.EntityID))
+		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
+			fmt.Errorf("no vector for entity %s", req.EntityID))
 	}
 
 	// Find similar entities by scanning all embeddings. The similar-to-entity

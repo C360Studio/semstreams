@@ -7,9 +7,89 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/embedding"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
+
+// TestSimilarQueryPerEntityMissCarriesEmbeddingUnavailableCode pins the wire
+// contract the semantic-edge cache depends on (Codex P1#2): the three per-entity
+// misses — no embedding record, embedding not generated, empty vector — all classify
+// Invalid AND carry the stable graph.ErrorCodeEmbeddingUnavailable, so a consumer can
+// recognize a definitive per-entity miss BY CODE and distinguish it from a malformed
+// reply (which is uncoded). A per-entity miss must NOT be the producer-wide
+// index_not_ready code — the index is sound, this one entity just has no vector.
+func TestSimilarQueryPerEntityMissCarriesEmbeddingUnavailableCode(t *testing.T) {
+	t.Parallel()
+
+	generated := func(entityID string, vector []float32) []byte {
+		data, err := json.Marshal(embedding.Record{
+			EntityID: entityID, Vector: vector, Status: embedding.StatusGenerated,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+	pending := func(entityID string) []byte {
+		data, err := json.Marshal(embedding.Record{
+			EntityID: entityID, Vector: []float32{1, 0}, Status: embedding.StatusPending,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return data
+	}
+
+	tests := []struct {
+		name string
+		get  func(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	}{
+		{
+			name: "no embedding record (entity not found)",
+			get: func(context.Context, string) (jetstream.KeyValueEntry, error) {
+				return nil, jetstream.ErrKeyNotFound // GetEmbedding -> (nil, nil) -> source == nil
+			},
+		},
+		{
+			name: "embedding not generated (status pending)",
+			get: func(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
+				return &mockKVEntry{data: pending("acme.ops.robotics.gcs.drone.001")}, nil
+			},
+		},
+		{
+			name: "generated but empty vector",
+			get: func(_ context.Context, _ string) (jetstream.KeyValueEntry, error) {
+				return &mockKVEntry{data: generated("acme.ops.robotics.gcs.drone.001", nil)}, nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			bucket := newMockKVBucket()
+			bucket.getFunc = tt.get
+			c := &Component{storage: embedding.NewStorage(bucket, nil)}
+
+			_, err := c.handleQuerySimilarNATS(context.Background(),
+				[]byte(`{"entity_id":"acme.ops.robotics.gcs.drone.001"}`))
+			var ce *errs.ClassifiedError
+			if !errors.As(err, &ce) {
+				t.Fatalf("miss error = %v, want a *errs.ClassifiedError", err)
+			}
+			if ce.Class != errs.ErrorInvalid {
+				t.Fatalf("miss class = %s, want invalid", ce.Class)
+			}
+			if ce.Code != graph.ErrorCodeEmbeddingUnavailable {
+				t.Fatalf("miss code = %q, want %q", ce.Code, graph.ErrorCodeEmbeddingUnavailable)
+			}
+			if ce.Code == graph.ErrorCodeIndexNotReady {
+				t.Fatal("a per-entity miss must not carry the producer-wide index_not_ready code")
+			}
+		})
+	}
+}
 
 func TestSimilarQueryPropagatesCallerCancellation(t *testing.T) {
 	t.Parallel()

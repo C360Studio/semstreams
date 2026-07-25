@@ -132,6 +132,22 @@ const (
 	// the kv_revision its mutation returned against the envelope's indexed_revision,
 	// which is the one sound per-entity check (ADR-084).
 	ErrorCodeIndexNotReady = "index_not_ready"
+
+	// ErrorCodeEmbeddingUnavailable indicates a similarity/embedding query targeted
+	// a SOURCE entity that has no usable embedding to query FROM — the entity has no
+	// embedding record, its embedding is not yet generated (status != generated), or
+	// its stored vector is empty. It is a PER-ENTITY miss, NOT a producer-wide index
+	// fault: the embedding index itself is sound (contrast ErrorCodeIndexNotReady),
+	// this one source entity simply has no vector yet (e.g. an aggregation/group
+	// entity never projected through the embedder). Class is ErrorInvalid.
+	//
+	// Emitted by graph-embedding's handleQuerySimilarNATS. The semantic-edge cache
+	// (B2 §7) recognizes it as a definitive "this entity has no semantic neighbors"
+	// and fails open to an empty set, distinct from a malformed / unknown reply which
+	// it must count toward its coverage-threshold abort rather than cache as a hollow
+	// empty (#662 / Codex P1#2). Consumers classify by this stable code, never by the
+	// message text.
+	ErrorCodeEmbeddingUnavailable = "embedding_unavailable"
 )
 
 // CreateEntityResponse response for entity creation
