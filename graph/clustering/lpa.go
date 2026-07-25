@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -27,6 +28,20 @@ const (
 	// SummaryTransferThreshold is the minimum Jaccard overlap for transferring LLM summaries
 	// between archived and newly detected communities
 	SummaryTransferThreshold = 0.8
+
+	// detectionShuffleSeed seeds the per-DetectCommunities RNG that shuffles entity
+	// processing order (LPA oscillation reduction). Its exact value is arbitrary;
+	// what matters is that it is a FIXED CONSTANT, so the shuffle sequence is the
+	// same across repeated runs. This is ONE of the two levers behind a reproducible
+	// partition — the other is buildCommunities emitting ordered output (so a level's
+	// entity set, and the stored member order, are deterministic too). Reproducibility
+	// is a prerequisite for the Epic B B2 colocation_mean A/B comparison to
+	// distinguish a real improvement from run-to-run noise (#606). A single RNG
+	// threaded through the whole call still varies the shuffle order between
+	// hierarchical levels within one run (its state advances as each shuffle
+	// consumes it) — only the cross-run sequence is pinned. NOT seeded from
+	// time/entropy on purpose.
+	detectionShuffleSeed int64 = 0x5EED
 )
 
 // EntityProvider interface for fetching full entity states for summarization
@@ -174,6 +189,17 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		return nil, errs.WrapTransient(err, "LPADetector", "DetectCommunities", "get entities")
 	}
 
+	// Canonicalize processing order at the detector boundary. The graph.Provider
+	// contract does NOT promise a stable order from GetAllEntityIDs — the wired
+	// kvProvider returns JetStream Keys() in watcher-delivery order, which can
+	// differ across restarts/rebuilds. The seeded shuffle below fixes the
+	// PERMUTATION, so a varying input order would still flip the realized
+	// partition. Sorting a defensive copy here (not mutating the provider's slice)
+	// makes the partition reproducible from ANY provider order; combined with
+	// buildCommunities' ordered output this holds at every hierarchical level.
+	entityIDs = append([]string(nil), entityIDs...)
+	sort.Strings(entityIDs)
+
 	if len(entityIDs) == 0 {
 		// A graph with no entities has no communities. Prune everything so the
 		// index matches the graph rather than retaining a partition for entities
@@ -184,8 +210,16 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 
 	result := make(map[int][]*Community)
 
+	// One RNG per detection call, seeded from a fixed constant so the realized
+	// partition is reproducible run-to-run (see detectionShuffleSeed; together with
+	// buildCommunities' ordered output this holds at every hierarchical level).
+	// Threaded through every level rather than reaching for the unseeded global
+	// source; its state advances across levels, so the shuffle order still varies
+	// between hierarchical levels within a single run.
+	rng := rand.New(rand.NewSource(detectionShuffleSeed)) //nolint:gosec // deterministic, not security-sensitive
+
 	// Level 0: Fine-grained communities
-	level0Communities, err := d.detectCommunitiesAtLevel(ctx, entityIDs, 0, nil)
+	level0Communities, err := d.detectCommunitiesAtLevel(ctx, entityIDs, 0, nil, rng)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +228,7 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 	// Higher levels: Hierarchical clustering
 	prevCommunities := level0Communities
 	for level := 1; level < d.levels; level++ {
-		communities, err := d.detectHierarchicalLevel(ctx, prevCommunities, level)
+		communities, err := d.detectHierarchicalLevel(ctx, prevCommunities, level, rng)
 		if err != nil {
 			return nil, err
 		}
@@ -254,12 +288,15 @@ func (d *LPADetector) pruneToPartition(ctx context.Context, keep []*Community) {
 	}
 }
 
-// detectCommunitiesAtLevel runs LPA on a set of entities
+// detectCommunitiesAtLevel runs LPA on a set of entities. The rng is the
+// per-DetectCommunities seeded source used to shuffle processing order; it is
+// threaded in (not a package global) so the partition is reproducible across runs.
 func (d *LPADetector) detectCommunitiesAtLevel(
 	ctx context.Context,
 	entityIDs []string,
 	level int,
 	parentID *string,
+	rng *rand.Rand,
 ) ([]*Community, error) {
 	// Initialize: Each entity gets unique label
 	labels := make(map[string]string)
@@ -278,10 +315,11 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 
 		changed := false
 
-		// Shuffle entity processing order (reduces oscillation)
+		// Shuffle entity processing order (reduces oscillation). Uses the per-call
+		// seeded rng so the order is reproducible across DetectCommunities runs.
 		shuffledIDs := make([]string, len(entityIDs))
 		copy(shuffledIDs, entityIDs)
-		rand.Shuffle(len(shuffledIDs), func(i, j int) {
+		rng.Shuffle(len(shuffledIDs), func(i, j int) {
 			shuffledIDs[i], shuffledIDs[j] = shuffledIDs[j], shuffledIDs[i]
 		})
 
@@ -377,6 +415,17 @@ func (d *LPADetector) computeNewLabel(
 		return labels[entityID], nil
 	}
 
+	// Canonicalize neighbor order before accumulating votes. The Provider contract
+	// does NOT promise a stable GetNeighbors order — the wired kvProvider emits a
+	// map range — and float addition is NON-ASSOCIATIVE, so the same fixed weighted
+	// edge set can yield different per-label totals depending on summation order
+	// (e.g. 0.7+0.7+0.3+0.3 == 2.0 but 0.3+0.3+0.7+0.7 == 1.9999999999999998).
+	// The exact-equality tie-break below depends on those totals, so an unsorted
+	// order would flip the winner. Sorting a defensive copy fixes the summation
+	// order without mutating the provider's slice.
+	neighbors = append([]string(nil), neighbors...)
+	sort.Strings(neighbors)
+
 	// Count label frequencies (weighted by edge weights)
 	labelVotes := make(map[string]float64)
 	for _, neighborID := range neighbors {
@@ -394,11 +443,18 @@ func (d *LPADetector) computeNewLabel(
 		labelVotes[neighborLabel] += weight
 	}
 
-	// Find label with maximum votes
+	// Find label with maximum votes. On an EXACT vote-total tie the
+	// lexicographically smallest label wins, so the winner no longer depends on
+	// Go's randomized map-iteration order (§6.2). The `maxVotes > 0` guard confines
+	// the tie-break to POSITIVE totals: a label summing to exactly 0.0 must not be
+	// selected over the "no positive votes → keep current label" path below (today
+	// all edge weights are positive, but weights become configurable in the
+	// semantic-edge PR). Labels are entity IDs and never empty, so winningLabel == ""
+	// is an "unset" sentinel, not a real candidate.
 	maxVotes := 0.0
 	var winningLabel string
 	for label, votes := range labelVotes {
-		if votes > maxVotes {
+		if votes > maxVotes || (votes == maxVotes && maxVotes > 0 && (winningLabel == "" || label < winningLabel)) {
 			maxVotes = votes
 			winningLabel = label
 		}
@@ -412,7 +468,23 @@ func (d *LPADetector) computeNewLabel(
 	return winningLabel, nil
 }
 
-// buildCommunities creates Community objects from label assignments
+// buildCommunities creates Community objects from label assignments.
+//
+// The output is FULLY ORDERED — both the returned community slice (by community
+// ID/label) and each community's Members slice (lexicographically) — so a fixed
+// label assignment always yields byte-identical output regardless of Go's
+// randomized map iteration. This is load-bearing for determinism in two places:
+//   - detectHierarchicalLevel flattens these Members back into the entity set it
+//     re-runs LPA over, so an unordered Members/community order would make the
+//     level-1/level-2 partitions non-reproducible even with the seeded shuffle.
+//   - The stored partition's payload BYTES are stabilized — a prerequisite for
+//     idempotent writes — but this does NOT by itself remove COMMUNITY_INDEX
+//     re-write churn: SaveCommunity still Puts every community + entity mapping
+//     unconditionally each cycle (storage.go), so identical bytes still create new
+//     revisions/events. Idempotent writes are tracked separately in #661.
+//
+// Community IDs are the label (a seed entity ID), which is deterministic given the
+// label assignment; only the emission ORDER was map-dependent, which sorting fixes.
 func (d *LPADetector) buildCommunities(
 	labels map[string]string,
 	level int,
@@ -424,9 +496,17 @@ func (d *LPADetector) buildCommunities(
 		labelToMembers[label] = append(labelToMembers[label], entityID)
 	}
 
-	// Create communities
+	// Emit communities in a stable, sorted-by-label order.
+	sortedLabels := make([]string, 0, len(labelToMembers))
+	for label := range labelToMembers {
+		sortedLabels = append(sortedLabels, label)
+	}
+	sort.Strings(sortedLabels)
+
 	communities := make([]*Community, 0, len(labelToMembers))
-	for label, members := range labelToMembers {
+	for _, label := range sortedLabels {
+		members := labelToMembers[label]
+		sort.Strings(members)
 		// Community ID is just the seed entity ID (label) - level is stored in Level field
 		// and used in KV key format: {level}.{community_id}
 		community := &Community{
@@ -444,11 +524,16 @@ func (d *LPADetector) buildCommunities(
 	return communities
 }
 
-// detectHierarchicalLevel creates next-level communities by clustering previous level
+// detectHierarchicalLevel creates next-level communities by clustering previous
+// level. Its entity set is the previous level's Members flattened in order — which
+// is deterministic because buildCommunities emits sorted communities and sorted
+// members — and it forwards the per-DetectCommunities seeded rng to the underlying
+// LPA pass, so the whole hierarchy stays reproducible across runs.
 func (d *LPADetector) detectHierarchicalLevel(
 	ctx context.Context,
 	prevCommunities []*Community,
 	level int,
+	rng *rand.Rand,
 ) ([]*Community, error) {
 	// Treat communities as super-nodes
 	// Build connectivity graph between communities
@@ -463,7 +548,7 @@ func (d *LPADetector) detectHierarchicalLevel(
 	}
 
 	// Run LPA with larger convergence threshold (fewer communities)
-	communities, err := d.detectCommunitiesAtLevel(ctx, allEntities, level, nil)
+	communities, err := d.detectCommunitiesAtLevel(ctx, allEntities, level, nil, rng)
 	if err != nil {
 		return nil, err
 	}

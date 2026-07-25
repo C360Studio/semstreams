@@ -2,6 +2,7 @@ package clustering
 
 import (
 	"context"
+	"sort"
 
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -162,11 +163,16 @@ func (p *PredicateProvider) GetAllEntityIDs(ctx context.Context) ([]string, erro
 		return nil, err
 	}
 
-	// Return all cached entity IDs
+	// Return all cached entity IDs in a stable order. The cache is a map, so its
+	// iteration order is randomized; sorting here upholds the clustering
+	// determinism contract (a fixed entity set must drive a fixed partition) for
+	// any future consumer, even though the wired production path today is
+	// EntityIDProvider -> kvProvider -> entityBucket.Keys() (already stable).
 	entityIDs := make([]string, 0, len(p.validEntities))
 	for id := range p.validEntities {
 		entityIDs = append(entityIDs, id)
 	}
+	sort.Strings(entityIDs)
 
 	return entityIDs, nil
 }
