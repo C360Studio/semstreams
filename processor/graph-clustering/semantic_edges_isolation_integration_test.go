@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
@@ -17,6 +18,39 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// publishHealthyReadiness drives the PRODUCTION ADR-083 readiness contract in the
+// fixture: it creates GRAPH_STATUS and heartbeats a healthy envelope on the given key
+// (KeyGraphIndex / KeyGraphEmbedding) exactly as graph-index/graph-embedding do
+// (readiness.NewPublisher(bucket, key) -> Publish per tick). The semantic-edge gate
+// (B2 §4) has NO ungated escape — evaluateSemanticReadiness returns false on an
+// unknown embedding feed — so the tier only ACTIVATES when graph-embedding's envelope
+// is genuinely READY here; without this the isolation test's semantic edge never fires.
+// It republishes on a fast tick so the envelope stays inside the freshness window for
+// the whole Eventually deadline, then stops on ctx cancel.
+func publishHealthyReadiness(ctx context.Context, t *testing.T, nc *natsclient.Client, key string) {
+	t.Helper()
+	bucket, err := readiness.EnsureBucket(ctx, nc)
+	require.NoError(t, err)
+	pub := readiness.NewPublisher(bucket, key)
+	require.NotNil(t, pub)
+	// State=ready + BootstrapComplete=true is the shape graph.EvaluateReadinessGate
+	// admits (the same healthyStatus() the §4 unit tests use).
+	healthy := graph.IndexStatusResponse{Ready: true, State: graph.IndexStateReady, BootstrapComplete: true}
+	require.NoError(t, pub.Publish(ctx, healthy)) // first envelope before the watcher binds
+	go func() {
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				_ = pub.Publish(ctx, healthy)
+			}
+		}
+	}()
+}
 
 // TestIntegration_SemanticEdges_ScopedToDetectionNotStructural proves the B2 §2
 // isolation Codex flagged: enabling the semantic-edge tier must change COMMUNITY
@@ -114,6 +148,15 @@ func TestIntegration_SemanticEdges_ScopedToDetectionNotStructural(t *testing.T) 
 	require.NoError(t, err)
 	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: graph.BucketIncomingIndex})
 	require.NoError(t, err)
+
+	// Drive BOTH readiness axes to READY before the component's watchers bind. The
+	// base index gate would also clear via AllowUngatedReads, but publishing a healthy
+	// graph-index envelope exercises the real gate rather than the standalone escape;
+	// the graph-embedding envelope is REQUIRED — the semantic gate has no ungated path,
+	// so the tier stays INACTIVE (structural-only) without it and the same-community
+	// assertion below times out. This is the readiness envelope the §4 gate needs.
+	publishHealthyReadiness(ctx, t, nc, readiness.KeyGraphIndex)
+	publishHealthyReadiness(ctx, t, nc, readiness.KeyGraphEmbedding)
 
 	require.NoError(t, clusteringComp.Start(ctx))
 	defer clusteringComp.Stop(5 * time.Second)

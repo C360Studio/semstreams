@@ -56,33 +56,43 @@
 
 ## 4. Embedding-readiness gate
 
-- [ ] 4.1 Second `readiness.NewWatcher(c.natsClient, readiness.KeyGraphEmbedding, ...)` alongside the
+- [x] 4.1 Second `readiness.NewWatcher(c.natsClient, readiness.KeyGraphEmbedding, ...)` alongside the
       existing graph-index watcher in `startStatusWatcher` (`component.go:1122`, existing watcher at
       `:1127`), started only when `enable_semantic_edges` is true.
-- [ ] 4.2 `evaluateReadiness` (`component.go:1177`) gains the second axis described in design.md: index not
+- [x] 4.2 `evaluateReadiness` (`component.go:1177`) gains the second axis described in design.md: index not
       ready → defer whole cycle (unchanged); index ready + embeddings not ready + semantic enabled → run
       structural-only, stamp `semantic_edges_applied=false`; both ready → full cycle, stamp
-      `semantic_edges_applied=true`.
-- [ ] 4.3 A structural-only cycle is a complete, valid partition — verify `pruneToPartition` and the
-      write-then-prune non-destructive rebuild (existing `graph-clustering` spec requirement) are unaffected
-      by a cycle that skips the semantic tier.
+      `semantic_edges_applied=true`. Concrete mechanism: a per-cycle atomic `active` toggle on
+      `SemanticEdgeProvider` (`applySemanticGate` sets it BEFORE each cycle from embedding readiness); when
+      inactive the provider is byte-identical to the wrapped `EntityIDProvider` and never triggers the
+      build-once cache, so it can never latch to the empty structural-only set during a cold window.
+      `semantic_edges_applied` surfaced as a Prometheus gauge (1=active / 0=structural-only) plus a
+      transition log (WARN on structural-only = the #618 signal).
+- [x] 4.3 A structural-only cycle is a complete, valid partition — verified via
+      `TestSemanticEdgeProvider_InactiveCycle_IsCompleteStructuralPartition`: an inactive cycle produces a
+      partition identical to the bare `EntityIDProvider`'s, with full coverage; `pruneToPartition` and the
+      write-then-prune rebuild are indifferent to which provider tops the chain.
 
 ## 5. Fail-open fix (clustering-edge consumer only)
 
-- [ ] 5.1 A readiness-aware wrapper around the semantic-edge path's calls into `FindSimilar`
-      (`processor/graph-clustering/similarity.go:93-99` is today's blanket `return nil, nil` on any error)
-      that distinguishes the classified `ErrorCodeIndexNotReady` transient (detect via `errs.IsTransient` +
-      the code, never message-text matching) from a genuine empty result. Not-ready degrades to
-      structural-only for that tick (handled by the readiness gate in section 4); a genuine empty result is
-      "no semantic neighbors," not an error.
-- [ ] 5.3 Concurrency check surfaced in the §1-3 core review: once enabled, the `SemanticEdgeProvider`
-      (`c.graphProvider`) is shared between the detector loop and `startEnhancementWorker`
-      (`component.go:962`). `ensureCache`'s double-checked locking keeps the build-once safe, but verify no
-      live race when §4/§5 land and (in B3) `EnableLLM` re-enables the enhancement worker — that is the first
-      time both readers run concurrently against the provider.
-- [ ] 5.2 `SemanticGapDetector`'s existing call through `FindSimilar` for anomaly detection is UNCHANGED —
-      it keeps its opportunistic fail-open. The wrapper lives at the new call site, not inside
-      `querySimilarityFinder` itself.
+- [x] 5.1 A readiness-aware wrapper around the semantic-edge path's calls into `FindSimilar`
+      (`processor/graph-clustering/similarity.go:93-99` was today's blanket `return nil, nil` on any error)
+      that distinguishes the classified `ErrorCodeIndexNotReady` transient (detected via `errs.IsTransient` +
+      `ce.Code == graph.ErrorCodeIndexNotReady`, never message-text matching) from a genuine empty result.
+      Built as `querySimilarityFinder.findSimilarClassified` (error-preserving sibling of the unchanged
+      `FindSimilar`) consumed by `semanticFinderAdapter`, which maps the not-ready transient onto the
+      package-neutral `clustering.ErrSemanticIndexNotReady` sentinel so `ensureCache` ABORTS-without-latching;
+      a genuine empty (or any other error) is a fail-open empty at this site only.
+- [x] 5.3 Concurrency check surfaced in the §1-3 core review: once enabled, the `SemanticEdgeProvider`
+      (`c.graphProvider`/`c.semanticProvider`) is shared between the detector loop and (in B3)
+      `startEnhancementWorker` (`component.go:962`). The `active` toggle is an `atomic.Bool` and `ensureCache`
+      keeps its double-checked `sync.RWMutex` locking; `go test -race` is clean. The `SetActive` writer is the
+      detector loop (sole writer today); B3's enhancement worker becomes a concurrent READER — noted for B3,
+      race-safe by construction.
+- [x] 5.2 `SemanticGapDetector`'s existing call through `FindSimilar` for anomaly detection is UNCHANGED —
+      it keeps its opportunistic fail-open (blanket `return nil, nil` on the RPC error). The wrapper
+      (`findSimilarClassified` + `semanticFinderAdapter`) lives at the new clustering-edge call site, not
+      inside the shared `FindSimilar`.
 
 ## 6. Determinism fixes (folds in B1/#606)
 
@@ -99,8 +109,20 @@
       detection cycles when the revision is unchanged (avoids ~175 `FindSimilar` calls/cycle on an
       unchanged corpus).
 - [ ] 7.2 `semantic_edge_build_ms` (duration) and a query-count metric for the semantic-edge build phase.
+- [ ] 7.3 **(blocks enablement — #662, surfaced in the §4-5 review)** The revision-keyed rebuild MUST NOT
+      persist transient-errored query results. §4-5 aborts the build only on `index_not_ready`; a non-
+      `index_not_ready` transient (timeout/no-responders) during the O(N²) build fails-open empty and,
+      because the cache is build-once, LATCHES a hollow set permanently (`semantic_edges_applied=1` but
+      semantically blind — #618 re-entered). Add a **coverage-threshold abort** (abort+retry if the
+      transient-error fraction over the build exceeds a small threshold; below it, latch — a single
+      persistently-flaky entity must not livelock the rebuild) + a test that a subset-timeout build does not
+      latch an empty cache.
 
 ## 8. Compound colocation gate
+
+> **ENABLEMENT GATE:** §8 turns `enable_semantic_edges` ON in the e2e run to measure. The §4-5 safe-activation
+> layer handles `index_not_ready` correctly, but **#662 (§7.3) MUST be resolved before enablement** — the
+> transient-latch hole becomes live the moment the feature is enabled under embedding load.
 
 - [ ] 8.1 Convert `validate_partition_colocation.go` from record-only to a pass condition requiring: (a)
       `partition_colocation_mean` rises on the theme-spanning fixture queries (forklift-maintenance,

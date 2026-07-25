@@ -2,6 +2,7 @@ package clustering
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
 	"sort"
@@ -10,6 +11,17 @@ import (
 
 	"github.com/c360studio/semstreams/pkg/errs"
 )
+
+// ErrSemanticIndexNotReady signals that the similarity source could not be
+// queried because the embedding index is not ready — a classified transient, NOT
+// a genuine empty result. A SemanticNeighborFinder returns it (wrapped) so
+// ensureCache ABORTS the whole mutual-kNN build rather than latching a
+// partial/empty adjacency: cacheInitialized stays false, the cycle degrades to
+// structural-only, and a later cycle (gated on a re-confirmed ready index)
+// rebuilds it fresh. The concrete ErrorCodeIndexNotReady classification lives at
+// the component's finder adapter (which imports graph); this leaf package stays
+// free of that import and reacts only to the neutral sentinel (B2 §5.1).
+var ErrSemanticIndexNotReady = errors.New("clustering: semantic similarity index not ready")
 
 // Semantic-edge starting values (EMPIRICAL, ADR-086 / design.md). These are the
 // semantic-enabled profile's STARTING point, to be tuned against
@@ -141,12 +153,37 @@ type SemanticEdgeProvider struct {
 	threshold float64
 	logger    *slog.Logger
 
+	// active is the per-cycle toggle behind the structural-floor guarantee
+	// (B2 §4). The component sets it from graph-embedding readiness BEFORE each
+	// detection cycle: true only when the embedding index is ready. When false,
+	// GetNeighbors/GetEdgeWeight behave EXACTLY as the wrapped EntityIDProvider and
+	// never trigger ensureCache — so the build-once cache is only ever built from a
+	// READY embedding index and can never latch to the empty structural-only set
+	// during a cold-embedding window. Defaults true (see NewSemanticEdgeProvider):
+	// a provider is fully functional unless the component deactivates it, which
+	// keeps direct provider unit tests independent of the component's gate.
+	active atomic.Bool
+
 	// Lazily-built symmetric mutual-kNN adjacency, mirroring
 	// EntityIDProvider.ensureTypePrefixCache's build-once-per-instance pattern.
 	// mutualNeighbors[a][b] is true iff a and b are a mutual-kNN pair.
 	cacheMu          sync.RWMutex
 	mutualNeighbors  map[string]map[string]bool
 	cacheInitialized atomic.Bool
+
+	// abortedThisCycle latches true when a mutual-kNN build ABORTS mid-sweep on a
+	// producer-wide not-ready/fatal signal (ErrSemanticIndexNotReady, surfaced by
+	// the readiness-aware finder adapter). It is the per-cycle no-retry guard
+	// (B2 §4, Codex P1#2): once a build aborts, the REMAINDER of this detection cycle
+	// stays structural-only instead of re-issuing the O(N) similarity sweep on every
+	// subsequent lookup. Without it a single DetectCommunities run would (a) let a
+	// mid-cycle embedding recovery split the partition — early entities vote
+	// structurally, later ones semantically — and (b) re-run the whole sweep
+	// repeatedly, saturating the similarity endpoint while the index stays cold.
+	// SetActive clears it at the next cycle boundary, so a later ready cycle rebuilds
+	// fresh (the no-latch guarantee is preserved). atomic: set under cacheMu during a
+	// build, read lock-free at the top of ensureCache and by AppliedSemanticEdges.
+	abortedThisCycle atomic.Bool
 
 	// queryCount counts SimilarNeighbors calls issued while building the cache,
 	// for observability during development. (The bounded/cached cross-cycle
@@ -189,7 +226,7 @@ func NewSemanticEdgeProvider(
 	if weights.SystemPeerWeight <= 0 {
 		weights.SystemPeerWeight = defaultSemanticSystemPeerWeight
 	}
-	return &SemanticEdgeProvider{
+	p := &SemanticEdgeProvider{
 		base:            base,
 		finder:          finder,
 		weights:         weights,
@@ -198,6 +235,46 @@ func NewSemanticEdgeProvider(
 		logger:          logger,
 		mutualNeighbors: make(map[string]map[string]bool),
 	}
+	// Default ACTIVE. In production the component overrides this from embedding
+	// readiness before the first detection cycle reads the provider; the default
+	// only governs direct provider unit tests, which expect the tier to apply
+	// without wiring the component's gate.
+	p.active.Store(true)
+	return p
+}
+
+// SetActive enables or disables the semantic tier for the NEXT detection cycle.
+// The component sets it from graph-embedding readiness BEFORE each cycle (B2 §4):
+// active only when the embedding index is ready. When inactive, GetNeighbors and
+// GetEdgeWeight behave exactly as the wrapped EntityIDProvider and never trigger
+// the build-once mutual-kNN cache, so the cache is only ever built from a ready
+// embedding index (the no-not-ready-latch guarantee). Concurrency-safe via the
+// atomic flag: the detector loop is the sole writer today, and B3's enhancement
+// worker will be a concurrent reader.
+func (p *SemanticEdgeProvider) SetActive(active bool) {
+	// A SetActive call marks a detection-cycle boundary (the component calls it once
+	// per cycle, before detection reads the provider). Clear the per-cycle abort latch
+	// so a reactivated cycle gets a fresh build attempt after a prior cycle aborted on
+	// a cold/reset embedding index (B2 §4, Codex P1#2). Order: clear the latch BEFORE
+	// flipping active, so a concurrent B3 reader that observes active=true never also
+	// observes a stale abort latch from the previous cycle.
+	p.abortedThisCycle.Store(false)
+	p.active.Store(active)
+}
+
+// IsActive reports the current per-cycle tier state (observability / tests).
+func (p *SemanticEdgeProvider) IsActive() bool { return p.active.Load() }
+
+// AppliedSemanticEdges reports the ACTUAL completed mode of the cycle that just ran:
+// true iff the tier was active AND no producer-wide not-ready/fatal signal aborted the
+// mutual-kNN build — so semantic edges genuinely voted, even if zero mutual pairs were
+// found (the #618 "semantics ran, found nothing" case, which is still applied=true).
+// It is read AFTER detection and is deliberately distinct from the preflight readiness
+// INTENT SetActive stamps BEFORE it: an intended-active cycle that aborts mid-build
+// degrades to structural-only, and the semantic_edges_applied signal must report what
+// happened, not what was intended (B2 §4, Codex P1#2).
+func (p *SemanticEdgeProvider) AppliedSemanticEdges() bool {
+	return p.active.Load() && !p.abortedThisCycle.Load()
 }
 
 // GetAllEntityIDs delegates to the wrapped provider — the semantic tier adds
@@ -219,6 +296,16 @@ func (p *SemanticEdgeProvider) GetNeighbors(ctx context.Context, entityID string
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "SemanticEdgeProvider", "GetNeighbors", "entityID is empty")
 	}
 
+	// Structural-only cycle (B2 §4): when the component has deactivated the tier
+	// for this cycle — graph-embedding is not ready — behave EXACTLY as the
+	// wrapped EntityIDProvider and, critically, do NOT trigger the build-once
+	// cache. Building it now, from a not-ready embedding index, would latch an
+	// empty/partial mutual-kNN set for the provider's lifetime; deferring the build
+	// to a ready cycle is what prevents that latch.
+	if !p.active.Load() {
+		return p.base.GetNeighbors(ctx, entityID, direction)
+	}
+
 	base, err := p.base.GetNeighbors(ctx, entityID, direction)
 	if err != nil {
 		return nil, errs.WrapTransient(err, "SemanticEdgeProvider", "GetNeighbors", "base provider error")
@@ -229,9 +316,18 @@ func (p *SemanticEdgeProvider) GetNeighbors(ctx context.Context, entityID string
 		// a cache-build failure degrades to structural neighbors, it does not
 		// fail the whole traversal.
 		if p.logger != nil {
-			p.logger.Warn("semantic edge cache build failed, returning structural neighbors only",
-				slog.String("entity_id", entityID),
-				slog.Any("error", err))
+			if errors.Is(err, ErrSemanticIndexNotReady) {
+				// Expected structural-only degrade (cold/reset embedding index, or the
+				// per-cycle abort latch): the component surfaces this ONCE per transition
+				// via semantic_edges_applied, so log at Debug — a whole cold cycle must
+				// not flood WARN once per entity (B2 §4, Codex P1#2).
+				p.logger.Debug("semantic edge tier structural-only this cycle (embedding index not ready)",
+					slog.String("entity_id", entityID))
+			} else {
+				p.logger.Warn("semantic edge cache build failed, returning structural neighbors only",
+					slog.String("entity_id", entityID),
+					slog.Any("error", err))
+			}
 		}
 		return base, nil
 	}
@@ -274,6 +370,13 @@ func (p *SemanticEdgeProvider) GetEdgeWeight(ctx context.Context, fromID, toID s
 		return 0.0, errs.WrapInvalid(errs.ErrMissingConfig, "SemanticEdgeProvider", "GetEdgeWeight", "entity IDs are empty")
 	}
 
+	// Structural-only cycle (B2 §4): delegate straight to the wrapped
+	// EntityIDProvider — same first-match cascade over the (rebalanced) structural
+	// tiers, no semantic tier, no cache build.
+	if !p.active.Load() {
+		return p.base.GetEdgeWeight(ctx, fromID, toID)
+	}
+
 	tiers := qualifyingTiers{}
 
 	// Explicit-edge membership from the base's ACTUAL neighbor set (both
@@ -305,12 +408,31 @@ func (p *SemanticEdgeProvider) GetEdgeWeight(ctx context.Context, fromID, toID s
 		tiers.systemPeer = true
 	}
 
-	// Semantic membership from the mutual-kNN cache.
-	mutual, err := p.isMutualNeighbor(ctx, fromID, toID)
-	if err != nil {
-		return 0.0, err
+	// Semantic membership from the mutual-kNN cache. A cache-build failure —
+	// including the not-ready abort (ensureCache returning ErrSemanticIndexNotReady
+	// when the embedding index went cold mid-build) — degrades THIS pair to its
+	// structural tiers rather than failing the cycle. LPA falls back to an
+	// unweighted 1.0 for an edge whose weight lookup errors (lpa.go computeNewLabel),
+	// which would corrupt the structural-only partition; resolving structural-only
+	// keeps it a clean Tier-0/1 partition.
+	if mutual, mErr := p.isMutualNeighbor(ctx, fromID, toID); mErr != nil {
+		if p.logger != nil {
+			if errors.Is(mErr, ErrSemanticIndexNotReady) {
+				// Expected structural-only degrade (see GetNeighbors): Debug, not a
+				// per-pair WARN flood. #618 is surfaced once by the component.
+				p.logger.Debug("semantic membership structural-only this cycle (embedding index not ready)",
+					slog.String("from_id", fromID),
+					slog.String("to_id", toID))
+			} else {
+				p.logger.Warn("semantic membership unavailable; resolving structural tiers only",
+					slog.String("from_id", fromID),
+					slog.String("to_id", toID),
+					slog.Any("error", mErr))
+			}
+		}
+	} else {
+		tiers.semantic = mutual
 	}
-	tiers.semantic = mutual
 
 	return p.weights.resolve(tiers), nil
 }
@@ -329,13 +451,22 @@ func (p *SemanticEdgeProvider) isMutualNeighbor(ctx context.Context, fromID, toI
 // mirroring EntityIDProvider.ensureTypePrefixCache. It queries the similarity
 // finder for each entity's directed top-k set, then keeps only the mutual
 // pairs: an edge A-B survives iff B is in A's top-k AND A is in B's top-k
-// (B2 §1.3). A finder error for a single entity yields no semantic neighbors
-// for that entity (the semantic tier is additive) — the readiness-aware
-// distinction between a cold index and a genuine empty result is B2 §5, a later
-// slice.
+// (B2 §1.3). A GENUINE per-entity finder error yields no semantic neighbors for
+// that entity (the semantic tier is additive), but a not-ready transient
+// (ErrSemanticIndexNotReady, surfaced by the readiness-aware finder adapter,
+// B2 §5.1) ABORTS the whole build so the cache is never latched from a cold
+// index. It is only ever reached on an ACTIVE cycle — the caller short-circuits
+// on the inactive toggle before ensureCache runs (B2 §4).
 func (p *SemanticEdgeProvider) ensureCache(ctx context.Context) error {
 	if p.cacheInitialized.Load() {
 		return nil
+	}
+	// Per-cycle no-retry latch (B2 §4, Codex P1#2): a build already aborted this cycle
+	// on a producer-wide not-ready/fatal signal. Do NOT re-issue the O(N) similarity
+	// sweep — stay structural-only for the rest of the cycle. SetActive clears the
+	// latch at the next cycle boundary so a later ready cycle rebuilds fresh.
+	if p.abortedThisCycle.Load() {
+		return ErrSemanticIndexNotReady
 	}
 
 	p.cacheMu.Lock()
@@ -343,6 +474,9 @@ func (p *SemanticEdgeProvider) ensureCache(ctx context.Context) error {
 
 	if p.cacheInitialized.Load() {
 		return nil
+	}
+	if p.abortedThisCycle.Load() {
+		return ErrSemanticIndexNotReady
 	}
 
 	ids, err := p.base.GetAllEntityIDs(ctx)
@@ -360,8 +494,26 @@ func (p *SemanticEdgeProvider) ensureCache(ctx context.Context) error {
 		neighbors, ferr := p.finder.SimilarNeighbors(ctx, id, p.threshold, p.k)
 		p.queryCount.Add(1)
 		if ferr != nil {
-			// Additive tier: this entity contributes no semantic edges this
-			// build. Do not fail the whole cache.
+			if errors.Is(ferr, ErrSemanticIndexNotReady) {
+				// The embedding index passed the component's readiness gate but went
+				// cold (or issued a producer-wide reset — the adapter maps both onto
+				// this sentinel) before this query. ABORT the whole build WITHOUT
+				// latching a partial/empty cache: cacheInitialized stays false, so
+				// GetNeighbors/GetEdgeWeight degrade to structural-only for this cycle
+				// and a later cycle — gated on a re-confirmed ready index — builds the
+				// cache fresh. This is the property that makes the build-once cache safe
+				// across a not-ready window (B2 §5.1). LATCH abortedThisCycle so the
+				// rest of THIS cycle stays structural-only rather than re-sweeping on the
+				// next lookup (B2 §4, Codex P1#2): a bounded partial sweep, never a
+				// repeated full one, and a consistent structural-only partition even if
+				// the index recovers mid-cycle.
+				p.abortedThisCycle.Store(true)
+				return errs.WrapTransient(ferr, "SemanticEdgeProvider", "ensureCache",
+					"embedding index not ready mid-build")
+			}
+			// Genuine per-entity miss (e.g. an aggregation/group entity never
+			// projected through the embedder): additive tier — this entity
+			// contributes no semantic edges this build. Do not fail the whole cache.
 			if p.logger != nil {
 				p.logger.Debug("semantic neighbor lookup failed, skipping entity",
 					slog.String("entity_id", id),
@@ -414,6 +566,9 @@ func (p *SemanticEdgeProvider) ClearCache() {
 	p.cacheMu.Lock()
 	p.mutualNeighbors = make(map[string]map[string]bool)
 	p.cacheInitialized.Store(false)
+	// A full cache clear is a fresh start: drop the per-cycle abort latch too so the
+	// next build attempt is not suppressed by a stale abort from before the clear.
+	p.abortedThisCycle.Store(false)
 	p.cacheMu.Unlock()
 
 	if p.base != nil {
