@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -124,8 +125,37 @@ func (f *querySimilarityFinder) FindSimilar(
 	return results, nil
 }
 
+// semanticFinderAdapter bridges the component's inference.SimilarityFinder to
+// the clustering package's narrow SemanticNeighborFinder (which returns bare
+// entity IDs and does not import graph/inference). It reuses the SAME
+// graph.embedding.query.similar path the anomaly detector already uses — the
+// SemanticEdgeProvider issues no second similarity RPC (B2 §1.2). Threshold
+// filtering is already applied inside FindSimilar, so this only projects the
+// results down to their entity IDs.
+type semanticFinderAdapter struct {
+	finder inference.SimilarityFinder
+}
+
+// Verify the adapter satisfies the clustering-side contract.
+var _ clustering.SemanticNeighborFinder = semanticFinderAdapter{}
+
+// SimilarNeighbors returns the entity IDs of the finder's similarity results.
+func (a semanticFinderAdapter) SimilarNeighbors(ctx context.Context, entityID string, threshold float64, limit int) ([]string, error) {
+	results, err := a.finder.FindSimilar(ctx, entityID, threshold, limit)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]string, 0, len(results))
+	for _, r := range results {
+		ids = append(ids, r.EntityID)
+	}
+	return ids, nil
+}
+
 // initQuerySimilarityFinder initializes the query-based similarity finder.
-// Called during Start() when EnableAnomalyDetection is true.
+// Called during Start() when EnableAnomalyDetection is true, and by
+// wrapSemanticEdges when enable_semantic_edges is true (the finder is
+// config-agnostic; both consumers share this construction).
 // Returns nil if NATS client is not available.
 func (c *Component) initQuerySimilarityFinder() *querySimilarityFinder {
 	if c.natsClient == nil {

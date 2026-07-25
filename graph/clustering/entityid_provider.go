@@ -437,6 +437,49 @@ func (p *EntityIDProvider) areSiblings(entityA, entityB string) bool {
 	return prefixA != "" && prefixA == prefixB
 }
 
+// explicitEdgeWeight returns the explicit edge weight from the underlying base
+// provider only, with no virtual-tier synthesis. A decorator computing a
+// multi-tier resolved weight (SemanticEdgeProvider) uses this to keep explicit
+// edges strictly dominant without EntityIDProvider.GetEdgeWeight's first-match
+// cascade collapsing tier identity into a single number.
+//
+// This returns the base's NUMERIC weight; it does NOT prove an explicit edge
+// exists. Today's wired kvProvider.GetEdgeWeight answers 1.0 for EVERY pair
+// (gh#665), so a caller must gate this behind isExplicitEdge — otherwise every
+// pair looks explicit-dominant and the virtual tiers go dead.
+func (p *EntityIDProvider) explicitEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
+	return p.base.GetEdgeWeight(ctx, fromID, toID)
+}
+
+// isExplicitEdge reports whether an ACTUAL explicit (base-provider) edge exists
+// between fromID and toID, in EITHER direction. It consults the base's real
+// neighbor set rather than explicitEdgeWeight's numeric answer because the wired
+// kvProvider.GetEdgeWeight returns 1.0 for every pair (gh#665, filed separately):
+// a decorator that trusted "weight > 0" as "an explicit edge exists" would treat
+// every pair as explicit and silence the sibling/system-peer/semantic tiers. A
+// single "both"-direction query is sufficient because kvProvider.GetNeighbors
+// with "both" unions the outgoing (from->to) and incoming (to->from) index rows,
+// so an edge stored in either direction is caught — and the resulting membership
+// is symmetric, which is what LPA's undirected voting relies on.
+func (p *EntityIDProvider) isExplicitEdge(ctx context.Context, fromID, toID string) (bool, error) {
+	neighbors, err := p.base.GetNeighbors(ctx, fromID, "both")
+	if err != nil {
+		return false, errs.WrapTransient(err, "EntityIDProvider", "isExplicitEdge", "base provider error")
+	}
+	for _, n := range neighbors {
+		if n == toID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// siblingsEnabled reports whether sibling virtual-edge synthesis is enabled.
+func (p *EntityIDProvider) siblingsEnabled() bool { return p.includeSiblings }
+
+// systemPeersEnabled reports whether system-peer virtual-edge synthesis is enabled.
+func (p *EntityIDProvider) systemPeersEnabled() bool { return p.includeSystemPeers }
+
 // ClearCache clears the type prefix cache and propagates to wrapped providers.
 // Call this when entities are added/removed.
 func (p *EntityIDProvider) ClearCache() {

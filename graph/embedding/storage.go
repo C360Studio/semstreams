@@ -156,6 +156,25 @@ type ScoredEntity struct {
 	Similarity float64
 }
 
+// ScoredEntityLess is the CANONICAL ordering for similarity results: by
+// similarity descending, then entity ID ascending as a total-order tie-break.
+// Both the warm cache path (FindSimilarFromCache) and the cold KV-scan fallback
+// (processor/graph-embedding's findSimilarEntities) sort through this ONE
+// comparator so that an equal-similarity group straddling the top-k boundary
+// resolves to the SAME subset regardless of map- or KV-enumeration order.
+// Sorting by similarity alone leaves the k-boundary tie to Go's randomized map
+// iteration (warm) or JetStream key-delivery order (cold), which yields
+// nondeterministic directed neighbor sets and, downstream, nondeterministic
+// mutual-kNN semantic edges and LPA partitions (Epic B B2). Entity IDs are
+// unique, so this is a strict total order — deterministic even under the
+// non-stable sort.Slice.
+func ScoredEntityLess(a, b ScoredEntity) bool {
+	if a.Similarity != b.Similarity {
+		return a.Similarity > b.Similarity
+	}
+	return a.EntityID < b.EntityID
+}
+
 // Storage handles persistence of embeddings to NATS KV buckets.
 // It also maintains an in-memory vector cache, kept current via a
 // KV watcher on the index bucket, to serve similarity queries without
@@ -840,8 +859,11 @@ func (s *Storage) FindSimilarFromCache(excludeID string, queryVector []float32, 
 		results = append(results, ScoredEntity{EntityID: entityID, Similarity: sim})
 	}
 
+	// Sort by the canonical (similarity DESC, entity ID ASC) ordering so an
+	// equal-similarity group crossing the top-k boundary resolves deterministically
+	// regardless of map-iteration order (ScoredEntityLess doc).
 	sort.Slice(results, func(i, j int) bool {
-		return results[i].Similarity > results[j].Similarity
+		return ScoredEntityLess(results[i], results[j])
 	})
 
 	if len(results) > limit {

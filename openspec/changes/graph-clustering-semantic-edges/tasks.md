@@ -5,33 +5,33 @@
 
 ## 1. `SemanticEdgeProvider` decorator
 
-- [ ] 1.1 New `graph/clustering/semantic_edge_provider.go` (or `processor/graph-clustering/`, TBD at build
+- [x] 1.1 New `graph/clustering/semantic_edge_provider.go` (or `processor/graph-clustering/`, TBD at build
       time) implementing `graph.Provider` (`GetAllEntityIDs`, `GetNeighbors`, `GetEdgeWeight`), wrapping
       `entityIDProvider` in the chain built at `processor/graph-clustering/component.go:1027`
       (`kvProvider -> EntityIDProvider -> SemanticEdgeProvider`). Model the shape on
       `graph/clustering/entityid_provider.go:146` (`GetNeighbors`) and `:389` (`GetEdgeWeight`) — do NOT
       revert ADR-061's removed commit; the chain, config shape, and readiness contract have all changed.
-- [ ] 1.2 Source candidate neighbors from the existing similarity finder path
+- [x] 1.2 Source candidate neighbors from the existing similarity finder path
       (`graph.embedding.query.similar`, `processor/graph-clustering/similarity.go:66` `FindSimilar`,
       `:130` `initQuerySimilarityFinder`) — do not build a second similarity RPC.
-- [ ] 1.3 Mutual-kNN membership test: an edge A-B synthesizes only when B is in A's top-`k` (at/above
+- [x] 1.3 Mutual-kNN membership test: an edge A-B synthesizes only when B is in A's top-`k` (at/above
       `semantic_similarity_threshold`) **and** A is in B's top-`k`. One-directional matches do not
       synthesize an edge.
-- [ ] 1.4 Wired only when `enable_semantic_edges` is true; the chain is unchanged (two providers, not
+- [x] 1.4 Wired only when `enable_semantic_edges` is true; the chain is unchanged (two providers, not
       three) when false.
 
 ## 2. Resolved `WeightConfig`
 
-- [ ] 2.1 A single, unit-testable weight-resolution function of the qualifying-tier set for a pair
+- [x] 2.1 A single, unit-testable weight-resolution function of the qualifying-tier set for a pair
       (`{explicit?, sibling?, systemPeer?, semantic?}`) — explicit strictly dominant (returned outright when
       `>0`); otherwise the **max** across qualifying virtual-edge tiers, never a sum. See design.md's
       "Weight resolution" section for why the existing first-match cascade in
       `EntityIDProvider.GetEdgeWeight` cannot be reused unmodified for a 4th tier.
-- [ ] 2.2 Starting values (empirical, tune against `colocation_mean`, record as measured not asserted):
+- [x] 2.2 Starting values (empirical, tune against `colocation_mean`, record as measured not asserted):
       explicit 1.0 (unchanged); semantic-kNN weight ≈0.9, mutual-kNN, `k≈8`, similarity threshold ≈0.75;
       sibling weight 0.7 (unchanged) cap 10→5; system-peer weight 0.3→0.2, cap 15→8 (or off in this
       profile).
-- [ ] 2.3 These starting values apply **only** when `enable_semantic_edges` is true. Omitting the config
+- [x] 2.3 These starting values apply **only** when `enable_semantic_edges` is true. Omitting the config
       MUST reproduce today's sibling/system-peer weights and caps exactly (0.7/10, 0.3/15) — verify against
       the gh#461 change's existing default-preservation tests
       (`TestEntityIDEdgesConfig_Resolve_NilKeepsDefaults`, `TestApplyDefaults_ResolvesEntityIDEdges`) still
@@ -39,16 +39,20 @@
 
 ## 3. `enable_semantic_edges` config surface
 
-- [ ] 3.1 New `Config` fields: `EnableSemanticEdges bool` + flat `SemanticSimilarityThreshold float64`,
+- [x] 3.1 New `Config` fields: `EnableSemanticEdges bool` + flat `SemanticSimilarityThreshold float64`,
       `SemanticMaxNeighbors int` (the mutual-kNN `k`), `SemanticEdgeWeight float64` — extend
       `component.go:102-108` (the `EntityIDEdgesConfig` struct region) and `:171` (`resolve()`) with the
       equivalent surface for the semantic tier; schema tags per the existing `category:advanced` convention.
-- [ ] 3.2 Strict-decode guard mirroring `rejectUnknownEntityIDEdgeKeys` (`component.go:117-129`) /
+      (Built as a strict-decodable `semantic_edges` block `SemanticEdgesConfig` carrying those four fields,
+      parallel to `EntityIDEdgesConfig`, rather than four flat top-level `Config` keys — the only shape that
+      satisfies §3.2's "unrecognized key under the semantic-edges block fails" without a blanket
+      `DisallowUnknownFields` on `Config`, which the component deliberately avoids. Field names verbatim.)
+- [x] 3.2 Strict-decode guard mirroring `rejectUnknownEntityIDEdgeKeys` (`component.go:117-129`) /
       `inference.RejectUnknownKeys` (ADR-054): an unrecognized key under the semantic-edges block fails
       config load loudly rather than being silently dropped by `encoding/json`.
-- [ ] 3.3 JSON round-trip test for every new operator-reachable field (house rule: operator-configurable
+- [x] 3.3 JSON round-trip test for every new operator-reachable field (house rule: operator-configurable
       surface needs a round-trip test; no shadow structs).
-- [ ] 3.4 `task schema:generate`; commit the drift.
+- [x] 3.4 `task schema:generate`; drift generated (left uncommitted for the reviewer/PR owner per handoff).
 
 ## 4. Embedding-readiness gate
 
@@ -71,6 +75,11 @@
       the code, never message-text matching) from a genuine empty result. Not-ready degrades to
       structural-only for that tick (handled by the readiness gate in section 4); a genuine empty result is
       "no semantic neighbors," not an error.
+- [ ] 5.3 Concurrency check surfaced in the §1-3 core review: once enabled, the `SemanticEdgeProvider`
+      (`c.graphProvider`) is shared between the detector loop and `startEnhancementWorker`
+      (`component.go:962`). `ensureCache`'s double-checked locking keeps the build-once safe, but verify no
+      live race when §4/§5 land and (in B3) `EnableLLM` re-enables the enhancement worker — that is the first
+      time both readers run concurrently against the provider.
 - [ ] 5.2 `SemanticGapDetector`'s existing call through `FindSimilar` for anomaly detection is UNCHANGED —
       it keeps its opportunistic fail-open. The wrapper lives at the new call site, not inside
       `querySimilarityFinder` itself.
