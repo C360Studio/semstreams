@@ -75,29 +75,80 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 			"a producer-wide fatal reset must abort-not-latch, never a hollow per-entity empty")
 	})
 
-	t.Run("genuine handler miss fails open to empty", func(t *testing.T) {
-		// A different classified error (e.g. this entity has no embedding) is "asked,
-		// got nothing" — fail-open to empty at THIS site (matching anomaly's per-entity
-		// tolerance), NOT the abort sentinel.
+	t.Run("recognized per-entity miss fails open to empty", func(t *testing.T) {
+		// The RECOGNIZED per-entity miss graph-embedding stamps (Invalid +
+		// ErrorCodeEmbeddingUnavailable: this source entity has no embedding record /
+		// no generated embedding / an empty vector) is "asked, got nothing" — fail-open
+		// to empty at THIS site (matching anomaly's per-entity tolerance), NOT the abort
+		// sentinel and NOT a countable transient. Only this stable code fails open.
 		finder := &fakeClassifiedFinder{err: errs.ClassifiedCode(
-			errs.ErrorInvalid, "no_embedding", errors.New("source entity has no embedding"))}
+			errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
+			errors.New("embedding not ready for o.p.d.s.t.a: status=pending"))}
 		adapter := semanticFinderAdapter{finder: finder}
 
 		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
-		require.NoError(t, err, "a genuine miss is not an error at the edge site")
+		require.NoError(t, err, "a recognized per-entity miss is not an error at the edge site")
 		assert.Empty(t, ids)
 	})
 
-	t.Run("a plain transient without the code fails open, not abort", func(t *testing.T) {
-		// A generic transport blip that is NOT the index-not-ready code must not be
-		// mistaken for a cold index (that would wrongly abort the whole build).
+	t.Run("a malformed/parse reply is COUNTABLE, never a swallowed empty (Codex P1#2)", func(t *testing.T) {
+		// parseSimilarResponse returns an UNCODED Invalid on a version-skewed/malformed
+		// reply (exactly this shape). Pre-fix it fell through to a bare empty — so a
+		// corpus-wide malformed reply latched a hollow cache and could still report
+		// semantic_edges_applied=1 (recreating #662). It carries NO recognized miss code,
+		// so it must map to the countable transient sentinel (which refreshCache counts
+		// toward its coverage-threshold abort), NOT fail-open empty and NOT abort the
+		// whole build like a cold index. A local decode error must never masquerade as
+		// "no neighbors."
+		finder := &fakeClassifiedFinder{err: errs.WrapInvalid(
+			errors.New("unexpected end of JSON input"),
+			"querySimilarityFinder", "FindSimilar", "unmarshal response")}
+		adapter := semanticFinderAdapter{finder: finder}
+
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		require.Error(t, err)
+		assert.Nil(t, ids, "a malformed reply must NOT be cached as an empty neighbor set")
+		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
+			"a parse/unknown error is countable, not a swallowed empty (#662 / P1#2)")
+		assert.NotErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
+			"a per-entity parse error must NOT abort the whole build like a cold index")
+	})
+
+	t.Run("an unknown classified error (no recognized code) is COUNTABLE, not empty", func(t *testing.T) {
+		// Any OTHER classified error graph-embedding might emit that is neither
+		// producer-wide nor the recognized miss code must count toward the abort rather
+		// than fail-open empty — the positive-allowlist safety of P1#2.
+		finder := &fakeClassifiedFinder{err: errs.ClassifiedCode(
+			errs.ErrorInvalid, "some_future_code", errors.New("a code the adapter does not recognize"))}
+		adapter := semanticFinderAdapter{finder: finder}
+
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		require.Error(t, err)
+		assert.Nil(t, ids)
+		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
+			"an unrecognized code must be countable, never a swallowed empty")
+	})
+
+	t.Run("a plain transient without the code maps to the per-entity transient sentinel (#662)", func(t *testing.T) {
+		// A generic transport blip (timeout / no-responders) that is NOT the
+		// index-not-ready code must not be mistaken for a cold index (that would
+		// wrongly abort the WHOLE build via ErrSemanticIndexNotReady). But it must
+		// ALSO not be swallowed into a bare empty result — the pre-#662 behavior that
+		// made a per-entity timeout indistinguishable from "this entity has no
+		// semantic neighbors," letting a burst of timeouts latch a hollow cache. It
+		// maps to ErrSemanticQueryTransient so the refresh counts it toward the
+		// coverage-threshold abort and re-queries the entity next cycle (B2 §7.3).
 		finder := &fakeClassifiedFinder{err: errs.WrapTransient(
 			errors.New("connection reset"), "x", "y", "z")}
 		adapter := semanticFinderAdapter{finder: finder}
 
 		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
-		require.NoError(t, err)
-		assert.Empty(t, ids)
+		require.Error(t, err)
+		assert.Nil(t, ids)
+		assert.ErrorIs(t, err, clustering.ErrSemanticQueryTransient,
+			"a per-entity transient must surface the coverage-threshold sentinel, not a swallowed empty")
+		assert.NotErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
+			"a per-entity transient must NOT abort the whole build like a cold index")
 	})
 
 	t.Run("genuine results project to entity IDs", func(t *testing.T) {
@@ -166,7 +217,8 @@ func TestIsProducerWideEmbeddingFault_ClassOrCode(t *testing.T) {
 		{"fatal, any code -> abort (fatal class is producer-wide)",
 			errs.ClassifiedCode(errs.ErrorFatal, "storage_unavailable", errors.New("no storage")), true},
 		{"invalid per-entity miss -> NOT abort (fail-open empty)",
-			errs.ClassifiedCode(errs.ErrorInvalid, "no_embedding", errors.New("no embedding for entity")), false},
+			errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEmbeddingUnavailable,
+				errors.New("no embedding for entity")), false},
 		{"plain transient blip -> NOT abort (per-entity fail-open)",
 			errs.WrapTransient(errors.New("connection reset"), "a", "b", "c"), false},
 		{"no-responders (producer crashed mid-build) -> abort",
@@ -278,7 +330,7 @@ func (fakeNeighborFinder) SimilarNeighbors(context.Context, string, float64, int
 }
 
 // oneEntityBase is a base provider with a single entity, so a wrapped
-// SemanticEdgeProvider's ensureCache actually queries its finder (an empty base would
+// SemanticEdgeProvider's refreshCache actually queries its finder (an empty base would
 // build a trivially-complete empty cache and never exercise the abort path).
 type oneEntityBase struct{}
 
@@ -442,6 +494,40 @@ func TestEvaluateReadiness_SemanticDisabled_NoEmbeddingAxis(t *testing.T) {
 	assert.False(t, got.proceed, "unknown index still fails closed, unchanged")
 	assert.Equal(t, graph.DeferStatusUnknown, got.reason)
 	assert.False(t, got.semanticActive, "the semantic axis is inert when the tier is disabled")
+}
+
+// --- §7.2: the refresh-cost metrics are wired to the shared registry -----------
+
+// The semanticEdgeMetricsAdapter records the provider's refresh cost through to
+// the component's registered Prometheus metrics: semantic_edge_similar_queries_total
+// (the query load §7.1 bounds) and semantic_edge_build_ms (refresh duration).
+func TestSemanticEdgeMetricsAdapter_RecordsToRegisteredMetrics(t *testing.T) {
+	c, _ := newLoggedComponent(t, Config{
+		Ports:         basePorts(),
+		SemanticEdges: &SemanticEdgesConfig{EnableSemanticEdges: true},
+	})
+	adapter := semanticEdgeMetricsAdapter{m: c.metrics}
+
+	before := testutil.ToFloat64(c.metrics.semanticEdgeSimilarQueries)
+	adapter.AddSimilarQueries(7)
+	assert.Equal(t, before+7, testutil.ToFloat64(c.metrics.semanticEdgeSimilarQueries),
+		"AddSimilarQueries must advance the registered query-load counter")
+
+	// A reuse cycle adds 0 — the counter must not move (the §7.1 observable).
+	steady := testutil.ToFloat64(c.metrics.semanticEdgeSimilarQueries)
+	adapter.AddSimilarQueries(0)
+	assert.Equal(t, steady, testutil.ToFloat64(c.metrics.semanticEdgeSimilarQueries),
+		"a zero-query reuse cycle must leave the counter flat")
+
+	// The build-duration histogram observation is wired and does not panic.
+	require.NotPanics(t, func() { adapter.ObserveBuildMs(12.5) })
+
+	// A nil-backed adapter is inert (the unwired-component path).
+	require.NotPanics(t, func() {
+		nilAdapter := semanticEdgeMetricsAdapter{m: nil}
+		nilAdapter.AddSimilarQueries(3)
+		nilAdapter.ObserveBuildMs(1)
+	})
 }
 
 // loggerBufFor swaps the component's logger for a fresh buffer-backed one and

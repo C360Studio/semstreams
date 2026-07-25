@@ -199,13 +199,34 @@ type classifiedSimilarityFinder interface {
 // graph.embedding.query.similar path the anomaly detector already uses — the
 // SemanticEdgeProvider issues no second similarity RPC (B2 §1.2).
 //
-// It is the readiness-aware wrapper of B2 §5.1, living at the clustering-edge
+// It is the readiness-aware wrapper of B2 §5.1/§7.3, living at the clustering-edge
 // call site (NOT inside querySimilarityFinder, so anomaly detection's policy is
-// untouched — §5.2). A classified ErrorCodeIndexNotReady transient maps to the
-// clustering package's ErrSemanticIndexNotReady sentinel so the mutual-kNN build
-// ABORTS rather than latching a semantically-blind partition; any other error
-// (including a genuine per-entity miss) is a fail-open empty — "asked, got
-// nothing."
+// untouched — §5.2). It maps the embedding service's outcomes onto the clustering
+// package's sentinels in a CLOSED precedence (classified by class/code only, never
+// message text):
+//
+//   - a PRODUCER-WIDE fault (isProducerWideEmbeddingFault: a classified
+//     ErrorCodeIndexNotReady transient — the whole index is cold — OR no-responders
+//     OR a FATAL classified error) -> ErrSemanticIndexNotReady, so the mutual-kNN
+//     refresh ABORTS the whole build rather than latching a semantically-blind
+//     partition from an empty per-entity answer (Codex P1#3);
+//   - a RECOGNIZED per-entity miss (graph.ErrorCodeEmbeddingUnavailable: this
+//     source entity has no embedding record / no generated embedding / an empty
+//     vector) -> a fail-open empty ("asked, got nothing");
+//   - EVERYTHING ELSE — a per-entity transient (timeout on this one query), a LOCAL
+//     parse/decode error, or any OTHER/unknown classified error -> the
+//     ErrSemanticQueryTransient sentinel, so the refresh COUNTS it toward the
+//     coverage-threshold abort and re-queries the entity next cycle instead of
+//     caching a hollow empty for it (#662 / B2 §7.3 / Codex P1#2).
+//
+// The last rung is the P1#2 correction: a genuine miss must be recognized
+// POSITIVELY by its stable code, because a malformed parseSimilarResponse reply is
+// an uncoded Invalid indistinguishable from a miss by class alone — treating it as
+// a miss would cache a hollow empty across the corpus and still report
+// semantic_edges_applied=1 (recreating #662). Surfacing the transient/unknown class
+// separately (rather than swallowing every non-producer-wide error into a bare
+// empty, as the pre-#662 adapter did) is what lets the refresh tell "could not ask
+// this entity" from "this entity has no semantic neighbors."
 type semanticFinderAdapter struct {
 	finder classifiedSimilarityFinder
 }
@@ -214,34 +235,76 @@ type semanticFinderAdapter struct {
 var _ clustering.SemanticNeighborFinder = semanticFinderAdapter{}
 
 // SimilarNeighbors returns the entity IDs of the finder's similarity results,
-// applying the readiness-aware error policy (B2 §5.1).
+// applying the readiness-aware error policy (B2 §5.1 / §7.3, Codex P1#2). The
+// three precedence rungs are CLOSED and ordered — classified by class/code only,
+// never message text:
+//
+//  1. producer-wide fault -> ErrSemanticIndexNotReady (abort the whole build);
+//  2. a RECOGNIZED per-entity embedding miss (ErrorCodeEmbeddingUnavailable) ->
+//     fail-open empty ("asked, got nothing");
+//  3. EVERYTHING ELSE — a per-entity transient, a LOCAL parse/decode error, or any
+//     OTHER/unknown classified error -> ErrSemanticQueryTransient (countable).
+//
+// Rung 3 is the P1#2 fix: pre-fix, every non-producer-wide/non-transient error
+// (including a malformed parseSimilarResponse reply, which is an uncoded Invalid)
+// fell through to a bare empty, so a version-skewed/malformed reply across the
+// corpus latched a hollow cache and could still report semantic_edges_applied=1
+// (recreating #662). Recognizing the miss POSITIVELY by code — and treating
+// parse/unknown as countable — makes a corpus-wide malformed reply ABORT on the
+// coverage threshold and recover next cycle instead of caching hollow. A local
+// decode error must NEVER masquerade as "no neighbors."
 func (a semanticFinderAdapter) SimilarNeighbors(ctx context.Context, entityID string, threshold float64, limit int) ([]string, error) {
 	results, err := a.finder.findSimilarClassified(ctx, entityID, threshold, limit)
 	if err != nil {
 		if isProducerWideEmbeddingFault(err) {
 			// A PRODUCER-WIDE signal: the embedding index is cold/bootstrapping
-			// (transient index_not_ready) OR has issued a sticky reset/fatal fault
-			// (graph_state_reset_required, the FATAL class generally). Map onto the
-			// package-neutral sentinel so ensureCache ABORTS the whole build rather than
-			// latching a hollow cache from an empty per-entity answer (Codex P1#3): a
-			// producer-wide fault answers EVERY entity empty, and a build that latched
-			// cacheInitialized=true off that would stay permanently hollow across a
-			// graph-embedding restart. Aborting retries a later cycle instead.
+			// (transient index_not_ready), has stopped answering entirely (no-responders),
+			// OR has issued a sticky reset/fatal fault (graph_state_reset_required, the
+			// FATAL class generally). Map onto the package-neutral sentinel so refreshCache
+			// ABORTS the whole build rather than latching a hollow cache from an empty
+			// per-entity answer (Codex P1#3): a producer-wide fault answers EVERY entity
+			// empty, and a build that committed off that would stay permanently hollow
+			// across a graph-embedding restart. Aborting retries a later cycle instead.
 			return nil, fmt.Errorf("%w: %v", clustering.ErrSemanticIndexNotReady, err)
 		}
-		// A RECOGNIZED per-entity condition — a genuine handler miss (this entity has
-		// no embedding yet: an aggregation/group entity never projected through the
-		// embedder), or a single transient transport blip — is "asked, got nothing."
-		// Fail-open to empty at THIS site only, so one absent embedding never degrades
-		// the whole cycle to structural-only; the shared FindSimilar's blanket policy
-		// is unchanged.
-		return nil, nil
+		if isRecognizedEmbeddingMiss(err) {
+			// A RECOGNIZED per-entity miss (ErrorCodeEmbeddingUnavailable: this source
+			// entity has no embedding record / no generated embedding / an empty vector —
+			// an aggregation/group entity never projected through the embedder) is "asked,
+			// got nothing." Fail-open to empty at THIS site only, so one absent embedding
+			// never degrades the whole cycle to structural-only; the shared FindSimilar's
+			// blanket policy is unchanged. ONLY this stable code fails open — a parse or
+			// unknown error is NOT a miss and falls through to the countable rung below.
+			return nil, nil
+		}
+		// EVERYTHING ELSE is countable (Codex P1#2): a per-entity transient (timeout /
+		// no-responders on this one query), a LOCAL parseSimilarResponse decode error
+		// (an uncoded Invalid — a version-skewed/malformed reply), or any OTHER/unknown
+		// classified error. Surface the transient sentinel so refreshCache counts it
+		// toward the coverage-threshold abort and re-queries the entity next cycle,
+		// instead of caching a hollow empty that would present as a genuine "no semantic
+		// neighbors" (#662 / B2 §7.3). A malformed reply across the corpus therefore
+		// ABORTS rather than latching a semantically-blind cache.
+		return nil, fmt.Errorf("%w: %v", clustering.ErrSemanticQueryTransient, err)
 	}
 	ids := make([]string, 0, len(results))
 	for _, r := range results {
 		ids = append(ids, r.EntityID)
 	}
 	return ids, nil
+}
+
+// isRecognizedEmbeddingMiss reports whether err is a RECOGNIZED per-entity
+// no-embedding miss — the ONLY error class the adapter fails open to empty for
+// (Codex P1#2). It keys on the stable machine code graph-embedding stamps on a
+// per-entity miss (ErrorCodeEmbeddingUnavailable), never message text or the bare
+// Invalid class: a LOCAL parse error is ALSO Invalid but uncoded, so a class-only
+// check would let a malformed reply masquerade as "no neighbors" and cache a hollow
+// empty (the #662 shape). A missing/unknown code is deliberately NOT a miss — it
+// falls through to the countable transient rung.
+func isRecognizedEmbeddingMiss(err error) bool {
+	var ce *errs.ClassifiedError
+	return errors.As(err, &ce) && ce.Code == graph.ErrorCodeEmbeddingUnavailable
 }
 
 // isEmbeddingIndexNotReady reports whether err is the classified,

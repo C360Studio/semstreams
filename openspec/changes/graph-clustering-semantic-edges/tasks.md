@@ -105,24 +105,53 @@
 
 ## 7. Bounded, cached edge build
 
-- [ ] 7.1 Cache each entity's mutual-kNN neighbor set, keyed by its embedding revision; reuse across
-      detection cycles when the revision is unchanged (avoids ~175 `FindSimilar` calls/cycle on an
-      unchanged corpus).
-- [ ] 7.2 `semantic_edge_build_ms` (duration) and a query-count metric for the semantic-edge build phase.
-- [ ] 7.3 **(blocks enablement — #662, surfaced in the §4-5 review)** The revision-keyed rebuild MUST NOT
-      persist transient-errored query results. §4-5 aborts the build only on `index_not_ready`; a non-
-      `index_not_ready` transient (timeout/no-responders) during the O(N²) build fails-open empty and,
-      because the cache is build-once, LATCHES a hollow set permanently (`semantic_edges_applied=1` but
-      semantically blind — #618 re-entered). Add a **coverage-threshold abort** (abort+retry if the
-      transient-error fraction over the build exceeds a small threshold; below it, latch — a single
-      persistently-flaky entity must not livelock the rebuild) + a test that a subset-timeout build does not
-      latch an empty cache.
+- [x] 7.1 Cache the mutual-kNN directed sets and reuse them across detection cycles while ONE COARSE
+      GLOBAL watermark is unchanged (avoids ~175 `FindSimilar` calls/cycle on an unchanged corpus). The
+      cache is keyed by a single `cacheRevision`, NOT by a per-entity embedding revision: per-entity
+      revision is not cleanly available (the similar-query reply carries none, and reading
+      `EMBEDDING_INDEX` per entity would add a bucket dependency + N KV gets/cycle — the rationale is on
+      the `component.go` watermark comment), so the coarse signal is graph-embedding's `IndexedRevision`
+      watermark from its held readiness envelope. Built as a per-cycle-refreshable cache on
+      `SemanticEdgeProvider` (`graph/clustering/semantic_edge_provider.go` `refreshCache`) replacing the
+      old build-once `ensureCache`: `BeginCycle(embeddingRevision, active)` (called from
+      `applySemanticGate`) advances a refresh epoch and records that watermark; a refresh reuses every
+      directed set the watermark can vouch for and re-queries only the missing / previously-errored
+      entities, then recomputes the mutual intersection in-memory (symmetry preserved). Unchanged
+      watermark ⇒ ZERO `FindSimilar` calls.
+      **Bounded-staleness caveat (coarse-watermark contract):** `IndexedRevision` is a low-water-of-pending
+      watermark, so a low pending revision can PIN it while a HIGHER revision for an already-cached entity
+      completes out of order — that entity's directed set is reused one watermark-generation stale until the
+      watermark advances. Symmetry is preserved and it self-heals on the next advance (§8 measurement gate
+      restates this: confirm the watermark has settled, or quiesce embeddings, before reading
+      `colocation_mean`). This is the accurate contract the code implements; the earlier "keyed by its
+      embedding revision" wording overstated it as per-entity-exact.
+- [x] 7.2 `semantic_edge_build_ms` (Histogram, refresh duration) and `semantic_edge_similar_queries_total`
+      (Counter, per-refresh query load — flat on a reuse cycle) in `processor/graph-clustering/metrics.go`,
+      registered beside `semantic_edges_applied`; the provider records through the narrow nil-safe
+      `clustering.SemanticEdgeMetrics` sink (`semanticEdgeMetricsAdapter`).
+- [x] 7.3 **(resolves #662, surfaced in the §4-5 review)** The refreshable cache makes the transient-latch
+      structurally impossible: `refreshCache` never persists transient-errored query results. The readiness
+      adapter now surfaces a THIRD class — a non-`index_not_ready` transient maps to
+      `ErrSemanticQueryTransient` (was swallowed to a bare empty pre-#662, indistinguishable from a genuine
+      miss). A **coverage-threshold abort** (`maxTransientErrorFraction = 0.10`, denominator = whole current
+      entity set) keeps the prior good cache (or degrades structural-only if none) when the transient
+      fraction exceeds the threshold, and commits below it (missing entities re-queried next cycle — a single
+      persistently-flaky entity is `1/N < 0.10` so it commits and never livelocks the rebuild). `index_not_ready`
+      still aborts the whole refresh (degrade structural this cycle, §4-5 unchanged). Tests: a subset-timeout
+      build does not latch a hollow cache (both above- and below-threshold recover the full edge set),
+      above-threshold keeps the prior good cache, single-flaky-entity commits without livelock, symmetry
+      preserved after a partial refresh.
 
 ## 8. Compound colocation gate
 
-> **ENABLEMENT GATE:** §8 turns `enable_semantic_edges` ON in the e2e run to measure. The §4-5 safe-activation
-> layer handles `index_not_ready` correctly, but **#662 (§7.3) MUST be resolved before enablement** — the
-> transient-latch hole becomes live the moment the feature is enabled under embedding load.
+> **ENABLEMENT GATE:** §8 turns `enable_semantic_edges` ON in the e2e run to measure. Two things to hold:
+> (1) **#662 (§7.3) is RESOLVED** — the §7 refreshable cache no longer latches a hollow set on transient errors
+> (coverage-threshold abort + per-cycle re-query).
+> (2) **MEASUREMENT CAVEAT (§7 review):** the coarse reuse signal is graph-embedding's `IndexedRevision`
+> low-water-of-pending watermark, which can pin low while higher embeddings complete out of order — so a cycle
+> may score `colocation_mean` on semantic edges up to one watermark-generation stale while embedding readiness
+> reports healthy (notably under 8B saturation). Symmetry is preserved and it self-heals on the next advance,
+> but a measurement run must confirm the watermark has settled (or quiesce embeddings) before reading the number.
 
 - [ ] 8.1 Convert `validate_partition_colocation.go` from record-only to a pass condition requiring: (a)
       `partition_colocation_mean` rises on the theme-spanning fixture queries (forklift-maintenance,

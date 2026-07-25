@@ -182,7 +182,7 @@ func TestSemanticEdgeProvider_NotReadyMidBuild_AbortsWithoutLatch(t *testing.T) 
 // guard (Codex P1#2b): across a whole detection cycle in which the embedding index
 // stays cold, MANY entity lookups must issue AT MOST ONE aborted similarity sweep, not
 // one per lookup. Before the per-cycle abort latch, each GetNeighbors/GetEdgeWeight
-// re-entered ensureCache and re-issued the O(N) build, hammering the similarity
+// re-entered refreshCache and re-issued the O(N) sweep, hammering the similarity
 // endpoint while the index was down.
 func TestSemanticEdgeProvider_ColdCycle_SweepsAtMostOnce(t *testing.T) {
 	ctx := context.Background()

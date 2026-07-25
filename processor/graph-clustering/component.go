@@ -707,12 +707,15 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		metrics:       getMetrics(deps.MetricsRegistry),
 	}
 
-	// Expose the #618 semantic_edges_applied gauge ONLY when the tier is enabled, so a
-	// disabled deployment does not scrape a misleading 0 that reads as enabled-but-cold
-	// (Codex P2#4). The gauge object always exists (getMetrics creates it); this opts
-	// it into the registry for enabled deployments only.
+	// Expose the semantic-tier series (semantic_edges_applied + the §7 refresh-cost
+	// metrics) ONLY when the tier is enabled, so a disabled (default-off) deployment's
+	// exported metric surface is byte-identical to a pre-tier build — no misleading
+	// semantic_edges_applied=0 that reads as enabled-but-cold (#618), and no §7 series on
+	// a deployment that never runs a refresh (Codex P2#4/P2#5). The metric objects always
+	// exist (getMetrics creates them); this opts them into the registry for enabled
+	// deployments only.
 	if comp.config.semanticEdges.enabled && comp.metrics != nil {
-		comp.metrics.registerSemanticEdgesApplied(deps.MetricsRegistry)
+		comp.metrics.registerSemanticMetrics(deps.MetricsRegistry)
 	}
 
 	// Initialize last activity
@@ -1268,6 +1271,11 @@ func (c *Component) wrapSemanticEdges(entityIDProvider *clustering.EntityIDProvi
 		},
 		c.logger,
 	)
+	// Wire the §7.2 refresh-cost recorder (build duration + query count) when the
+	// component holds a metrics registry; nil-safe otherwise (unit-test wiring).
+	if c.metrics != nil {
+		provider.WithMetrics(semanticEdgeMetricsAdapter{m: c.metrics})
+	}
 	c.semanticProvider = provider
 	return provider
 }
@@ -1408,6 +1416,26 @@ type gateDecision struct {
 	// n/a). It drives applySemanticGate's per-cycle provider toggle and the
 	// semantic_edges_applied signal.
 	semanticActive bool
+	// embeddingRevision is the COARSE cache-invalidation signal for the semantic
+	// tier (B2 §7.1): graph-embedding's IndexedRevision watermark from its held
+	// readiness envelope. applySemanticGate hands it to the provider's BeginCycle
+	// so a refresh reuses the whole mutual-kNN cache while the watermark is
+	// unchanged and rebuilds when it advances. 0 when the tier is disabled or no
+	// embedding envelope has been received. Per-entity embedding revision is not
+	// cleanly available (the similar-query reply carries none, and reading
+	// EMBEDDING_INDEX per entity would add a bucket dependency and N KV gets per
+	// cycle), so this index-level watermark is the coarse signal — conservative
+	// (it may advance without a semantic-vector change, forcing an unnecessary
+	// rebuild) and self-healing, but NOT strictly fresh: IndexedRevision is a
+	// low-water-of-pending watermark (graph-embedding/readiness.go), so a single
+	// slow in-flight embedding can pin it low while higher revisions complete out
+	// of order — during that window a refresh may reuse directed sets one
+	// watermark-generation stale. Symmetry is never broken (computeMutual
+	// intersects the full committed map), so the residual is a bounded, self-
+	// healing stale/missed edge corrected on the next advance. §8 MEASUREMENT
+	// CAVEAT: a cycle can score colocation_mean on slightly-stale semantic edges
+	// while embedding readiness reports healthy (notably under 8B saturation).
+	embeddingRevision uint64
 }
 
 // evaluateReadiness decides whether it is safe to run community detection against the
@@ -1456,32 +1484,40 @@ func (c *Component) evaluateReadiness() gateDecision {
 	// The semantic axis is independent of the index gate: it governs whether the
 	// additive tier applies on a cycle the index gate has ALREADY allowed, never
 	// whether the cycle runs. Evaluated once here so both the proceed and the
-	// ungated proceed carry it.
-	semanticActive := c.evaluateSemanticReadiness(embWatcher)
+	// ungated proceed carry it, alongside the coarse embedding-revision watermark
+	// the tier's cache keys off (B2 §7.1).
+	semanticActive, embeddingRevision := c.evaluateSemanticAxis(embWatcher)
 
 	proceed, reason := graph.EvaluateReadinessGate(
 		graph.StatusReading{Status: reading.Status, Fresh: reading.Fresh})
 	if proceed {
-		return gateDecision{proceed: true, reading: reading, semanticActive: semanticActive}
+		return gateDecision{proceed: true, reading: reading, semanticActive: semanticActive, embeddingRevision: embeddingRevision}
 	}
 	if reason == graph.DeferStatusUnknown && c.config.AllowUngatedReads {
-		return gateDecision{proceed: true, reading: reading, ungated: true, semanticActive: semanticActive}
+		return gateDecision{proceed: true, reading: reading, ungated: true, semanticActive: semanticActive, embeddingRevision: embeddingRevision}
 	}
 	return gateDecision{reason: reason, reading: reading}
 }
 
-// evaluateSemanticReadiness reports whether the semantic-edge tier may run this
-// cycle: true only when the tier is ENABLED and graph-embedding's readiness
-// envelope is HEALTHY (the same graph.EvaluateReadinessGate the index axis uses).
-// An unknown or not-ready embedding feed yields false — which degrades the cycle
-// to structural-only, never a defer (the additive-over-a-structural-floor tenet).
-// It only READS held readiness state; it never queries embeddings, builds, or
-// consults the mutual-kNN cache.
-func (c *Component) evaluateSemanticReadiness(embWatcher *readiness.Watcher) bool {
+// evaluateSemanticAxis reads graph-embedding's held readiness envelope ONCE and
+// derives both semantic-axis outputs from it: whether the tier may apply this
+// cycle (true only when the tier is ENABLED and the envelope is HEALTHY per the
+// same graph.EvaluateReadinessGate the index axis uses) and the coarse
+// embedding-index watermark the tier's cache keys off (B2 §7.1). An unknown or
+// not-ready embedding feed yields (false, revision) — which degrades the cycle
+// to structural-only, never a defer (the additive-over-a-structural-floor
+// tenet). It only READS held readiness state; it never queries embeddings,
+// builds, or consults the mutual-kNN cache.
+//
+// The revision is carried even when the tier is inactive this cycle so a later
+// active cycle keys its first refresh off the current watermark rather than a
+// stale zero. It is 0 when the tier is disabled or no envelope has arrived.
+func (c *Component) evaluateSemanticAxis(embWatcher *readiness.Watcher) (active bool, embeddingRevision uint64) {
 	if !c.config.semanticEdges.enabled || embWatcher == nil {
-		return false
+		return false, 0
 	}
-	return semanticActiveFromReading(embWatcher.Read())
+	reading := embWatcher.Read()
+	return semanticActiveFromReading(reading), reading.Status.IndexedRevision
 }
 
 // semanticActiveFromReading is the pure reading -> verdict step: the semantic tier
@@ -1570,19 +1606,20 @@ func (c *Component) noteGateOutcome(reason graph.DeferReason) (changed bool) {
 }
 
 // applySemanticGate sets the semantic-edge tier active/inactive for THIS cycle
-// from the embedding-readiness verdict, BEFORE detection reads the provider. It
-// is the concrete mechanism behind the structural-floor guarantee (B2 §4): the
-// provider chain is built once and the mutual-kNN cache is build-once, so "run
-// structural-only this cycle" is expressed by DEACTIVATING the provider —
+// from the embedding-readiness verdict, BEFORE detection reads the provider, and
+// opens the cache's per-cycle refresh window (B2 §7.1). It is the concrete
+// mechanism behind the structural-floor guarantee (B2 §4): the provider chain is
+// built once and the mutual-kNN cache only ever refreshes on an ACTIVE cycle, so
+// "run structural-only this cycle" is expressed by DEACTIVATING the provider —
 // GetNeighbors/GetEdgeWeight then behave exactly as the wrapped EntityIDProvider
-// and never trigger the cache build. Because the cache is only ever built on an
-// ACTIVE cycle, it can never latch to the empty structural-only set during a
-// cold-embedding window: a later ready cycle reactivates and builds it fresh.
+// and never trigger a refresh. Because a refresh is only ever attempted on an
+// ACTIVE cycle, the cache can never latch to the empty structural-only set during
+// a cold-embedding window: a later ready cycle reactivates and refreshes it fresh.
 //
 // This is ONLY the preflight toggle now (Codex P1#2): the semantic_edges_applied
 // signal and its transition log are stamped AFTER detection by recordSemanticMode,
 // from the ACTUAL completed mode. Stamping here would report the preflight INTENT —
-// wrong whenever an intended-active cycle aborts mid-build (embedding went cold/reset
+// wrong whenever an intended-active cycle aborts mid-refresh (embedding went cold/reset
 // past the gate) and degrades to structural-only.
 //
 // A no-op when the tier is disabled or unwired (no provider to gate) — the n/a row of
@@ -1591,7 +1628,17 @@ func (c *Component) applySemanticGate(d gateDecision) {
 	if !c.config.semanticEdges.enabled || c.semanticProvider == nil {
 		return
 	}
-	c.semanticProvider.SetActive(d.semanticActive)
+	// One synchronized per-cycle transition (B2 §7.1, Codex P2#4): BeginCycle records
+	// the coarse embedding-index watermark, sets the tier active/inactive from the
+	// readiness verdict, resets the per-cycle abort/degrade latches, and advances the
+	// refresh epoch LAST — atomically, so a concurrent B3 enhancement-worker reader can
+	// never observe the new epoch under the prior cycle's active verdict or a stale
+	// abort latch. The cycle's first refresh then reuses the whole mutual-kNN cache
+	// when the watermark is unchanged and rebuilds only when it advances; harmless on a
+	// structural-only cycle (the deactivated provider never refreshes), and it keeps
+	// the watermark current for the next active cycle. Formerly two calls
+	// (BeginCycle-then-SetActive), which left a torn-state window between them.
+	c.semanticProvider.BeginCycle(d.embeddingRevision, d.semanticActive)
 }
 
 // recordSemanticMode surfaces the #618 signal AFTER detection, from the provider's
