@@ -115,19 +115,41 @@ func getMetrics(registry *metric.MetricsRegistry) *clusteringMetrics {
 		for _, reason := range deferReasons {
 			metrics.deferTotal.WithLabelValues(string(reason))
 		}
+		// semanticEdgesApplied is created above (so the field is never nil and stamping
+		// never panics) but is deliberately NOT registered here: it is exposed ONLY for
+		// a deployment that ENABLES the tier, via registerSemanticEdgesApplied called
+		// from the factory. Registering it unconditionally would export a default 0 on
+		// every disabled deployment — indistinguishable from an enabled-but-cold cycle,
+		// the exact #618 confusion the gauge exists to resolve (Codex P2#4).
 		if registry != nil {
 			_ = registry.RegisterGauge("graph-clustering", "staleness_at_detection_ms", metrics.stalenessAtDetection)
 			_ = registry.RegisterCounterVec("graph-clustering", "defer_total", metrics.deferTotal)
 			_ = registry.RegisterHistogram("graph-clustering", "detection_duration_seconds", metrics.detectionDuration)
-			_ = registry.RegisterGauge("graph-clustering", "semantic_edges_applied", metrics.semanticEdgesApplied)
 		} else {
 			_ = prometheus.DefaultRegisterer.Register(metrics.stalenessAtDetection)
 			_ = prometheus.DefaultRegisterer.Register(metrics.deferTotal)
 			_ = prometheus.DefaultRegisterer.Register(metrics.detectionDuration)
-			_ = prometheus.DefaultRegisterer.Register(metrics.semanticEdgesApplied)
 		}
 	})
 	return metrics
+}
+
+// registerSemanticEdgesApplied exposes the semantic_edges_applied series. It is called
+// ONLY for a deployment that ENABLES the semantic-edge tier (from the factory), so a
+// disabled deployment never exports the gauge at all — its scrape is a true n/a rather
+// than a misleading 0 that reads as "enabled but embeddings cold" (#618 / Codex P2#4).
+// Idempotent: the registry dedups by key, and the default-registerer path swallows the
+// AlreadyRegistered error like the getMetrics registrations do, so repeat enabled
+// instances in one process are safe.
+func (m *clusteringMetrics) registerSemanticEdgesApplied(registry *metric.MetricsRegistry) {
+	if m == nil || m.semanticEdgesApplied == nil {
+		return
+	}
+	if registry != nil {
+		_ = registry.RegisterGauge("graph-clustering", "semantic_edges_applied", m.semanticEdgesApplied)
+		return
+	}
+	_ = prometheus.DefaultRegisterer.Register(m.semanticEdgesApplied)
 }
 
 // setStalenessAtDetection records the view age the most recent detection run

@@ -218,16 +218,23 @@ var _ clustering.SemanticNeighborFinder = semanticFinderAdapter{}
 func (a semanticFinderAdapter) SimilarNeighbors(ctx context.Context, entityID string, threshold float64, limit int) ([]string, error) {
 	results, err := a.finder.findSimilarClassified(ctx, entityID, threshold, limit)
 	if err != nil {
-		if isEmbeddingIndexNotReady(err) {
-			// "Could not ask this tick." Map onto the package-neutral sentinel so
-			// ensureCache aborts-not-latches; the §4 gate normally prevents this
-			// path entirely (structural-only when embeddings are cold) — this
-			// covers the race where the index goes cold mid-build.
+		if isProducerWideEmbeddingFault(err) {
+			// A PRODUCER-WIDE signal: the embedding index is cold/bootstrapping
+			// (transient index_not_ready) OR has issued a sticky reset/fatal fault
+			// (graph_state_reset_required, the FATAL class generally). Map onto the
+			// package-neutral sentinel so ensureCache ABORTS the whole build rather than
+			// latching a hollow cache from an empty per-entity answer (Codex P1#3): a
+			// producer-wide fault answers EVERY entity empty, and a build that latched
+			// cacheInitialized=true off that would stay permanently hollow across a
+			// graph-embedding restart. Aborting retries a later cycle instead.
 			return nil, fmt.Errorf("%w: %v", clustering.ErrSemanticIndexNotReady, err)
 		}
-		// Any other error — including a genuine handler miss (this entity has no
-		// embedding yet) — is "asked, got nothing." Fail-open to empty at THIS
-		// site only; the shared FindSimilar's blanket policy is unchanged.
+		// A RECOGNIZED per-entity condition — a genuine handler miss (this entity has
+		// no embedding yet: an aggregation/group entity never projected through the
+		// embedder), or a single transient transport blip — is "asked, got nothing."
+		// Fail-open to empty at THIS site only, so one absent embedding never degrades
+		// the whole cycle to structural-only; the shared FindSimilar's blanket policy
+		// is unchanged.
 		return nil, nil
 	}
 	ids := make([]string, 0, len(results))
@@ -249,6 +256,35 @@ func isEmbeddingIndexNotReady(err error) bool {
 	}
 	var ce *errs.ClassifiedError
 	return errors.As(err, &ce) && ce.Code == graph.ErrorCodeIndexNotReady
+}
+
+// isProducerWideEmbeddingFault reports whether a similarity-query error is a
+// PRODUCER-WIDE fault that must ABORT the mutual-kNN build (retry a later cycle)
+// rather than fail-open to an empty per-entity answer (Codex P1#3). Three disjoint
+// shapes qualify, all STRUCTURAL — the errs CLASS, stable machine CODE, or the
+// no-responders sentinel — never message text (the graph-index-readiness
+// classification discipline, B2 §5.1):
+//
+//   - a TRANSIENT index_not_ready (the index is cold / still bootstrapping);
+//   - NO-RESPONDERS — graph-embedding stopped answering entirely (e.g. crashed
+//     mid-build after passing the §4 gate): a producer-wide outage, not a per-
+//     entity miss; and
+//   - a FATAL *classified* error, which graph-embedding's ensureBootstrapReady
+//     stamps as graph_state_reset_required on a sticky producer-wide reset. This
+//     disjunct is gated on the CLASSIFIED type so it is a pure class check —
+//     errs.IsFatal alone would fall through to a message-TEXT scan for a raw /
+//     unclassified error, which this deliberately avoids.
+//
+// A per-entity miss (entity not found / embedding not ready) is classified
+// ErrorInvalid, and a lone transient transport blip is neither fatal nor
+// no-responders, so both are left to the caller's per-entity fail-open — a single
+// absent embedding never collapses the whole cycle to structural-only.
+func isProducerWideEmbeddingFault(err error) bool {
+	if isEmbeddingIndexNotReady(err) || natsclient.IsNoResponders(err) {
+		return true
+	}
+	var ce *errs.ClassifiedError
+	return errors.As(err, &ce) && ce.Class == errs.ErrorFatal
 }
 
 // initQuerySimilarityFinder initializes the query-based similarity finder.

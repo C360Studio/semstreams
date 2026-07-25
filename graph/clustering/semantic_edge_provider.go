@@ -171,6 +171,20 @@ type SemanticEdgeProvider struct {
 	mutualNeighbors  map[string]map[string]bool
 	cacheInitialized atomic.Bool
 
+	// abortedThisCycle latches true when a mutual-kNN build ABORTS mid-sweep on a
+	// producer-wide not-ready/fatal signal (ErrSemanticIndexNotReady, surfaced by
+	// the readiness-aware finder adapter). It is the per-cycle no-retry guard
+	// (B2 §4, Codex P1#2): once a build aborts, the REMAINDER of this detection cycle
+	// stays structural-only instead of re-issuing the O(N) similarity sweep on every
+	// subsequent lookup. Without it a single DetectCommunities run would (a) let a
+	// mid-cycle embedding recovery split the partition — early entities vote
+	// structurally, later ones semantically — and (b) re-run the whole sweep
+	// repeatedly, saturating the similarity endpoint while the index stays cold.
+	// SetActive clears it at the next cycle boundary, so a later ready cycle rebuilds
+	// fresh (the no-latch guarantee is preserved). atomic: set under cacheMu during a
+	// build, read lock-free at the top of ensureCache and by AppliedSemanticEdges.
+	abortedThisCycle atomic.Bool
+
 	// queryCount counts SimilarNeighbors calls issued while building the cache,
 	// for observability during development. (The bounded/cached cross-cycle
 	// build and its metrics are B2 §7, a later slice.)
@@ -237,10 +251,31 @@ func NewSemanticEdgeProvider(
 // embedding index (the no-not-ready-latch guarantee). Concurrency-safe via the
 // atomic flag: the detector loop is the sole writer today, and B3's enhancement
 // worker will be a concurrent reader.
-func (p *SemanticEdgeProvider) SetActive(active bool) { p.active.Store(active) }
+func (p *SemanticEdgeProvider) SetActive(active bool) {
+	// A SetActive call marks a detection-cycle boundary (the component calls it once
+	// per cycle, before detection reads the provider). Clear the per-cycle abort latch
+	// so a reactivated cycle gets a fresh build attempt after a prior cycle aborted on
+	// a cold/reset embedding index (B2 §4, Codex P1#2). Order: clear the latch BEFORE
+	// flipping active, so a concurrent B3 reader that observes active=true never also
+	// observes a stale abort latch from the previous cycle.
+	p.abortedThisCycle.Store(false)
+	p.active.Store(active)
+}
 
 // IsActive reports the current per-cycle tier state (observability / tests).
 func (p *SemanticEdgeProvider) IsActive() bool { return p.active.Load() }
+
+// AppliedSemanticEdges reports the ACTUAL completed mode of the cycle that just ran:
+// true iff the tier was active AND no producer-wide not-ready/fatal signal aborted the
+// mutual-kNN build — so semantic edges genuinely voted, even if zero mutual pairs were
+// found (the #618 "semantics ran, found nothing" case, which is still applied=true).
+// It is read AFTER detection and is deliberately distinct from the preflight readiness
+// INTENT SetActive stamps BEFORE it: an intended-active cycle that aborts mid-build
+// degrades to structural-only, and the semantic_edges_applied signal must report what
+// happened, not what was intended (B2 §4, Codex P1#2).
+func (p *SemanticEdgeProvider) AppliedSemanticEdges() bool {
+	return p.active.Load() && !p.abortedThisCycle.Load()
+}
 
 // GetAllEntityIDs delegates to the wrapped provider — the semantic tier adds
 // edges, never entities.
@@ -281,9 +316,18 @@ func (p *SemanticEdgeProvider) GetNeighbors(ctx context.Context, entityID string
 		// a cache-build failure degrades to structural neighbors, it does not
 		// fail the whole traversal.
 		if p.logger != nil {
-			p.logger.Warn("semantic edge cache build failed, returning structural neighbors only",
-				slog.String("entity_id", entityID),
-				slog.Any("error", err))
+			if errors.Is(err, ErrSemanticIndexNotReady) {
+				// Expected structural-only degrade (cold/reset embedding index, or the
+				// per-cycle abort latch): the component surfaces this ONCE per transition
+				// via semantic_edges_applied, so log at Debug — a whole cold cycle must
+				// not flood WARN once per entity (B2 §4, Codex P1#2).
+				p.logger.Debug("semantic edge tier structural-only this cycle (embedding index not ready)",
+					slog.String("entity_id", entityID))
+			} else {
+				p.logger.Warn("semantic edge cache build failed, returning structural neighbors only",
+					slog.String("entity_id", entityID),
+					slog.Any("error", err))
+			}
 		}
 		return base, nil
 	}
@@ -373,10 +417,18 @@ func (p *SemanticEdgeProvider) GetEdgeWeight(ctx context.Context, fromID, toID s
 	// keeps it a clean Tier-0/1 partition.
 	if mutual, mErr := p.isMutualNeighbor(ctx, fromID, toID); mErr != nil {
 		if p.logger != nil {
-			p.logger.Warn("semantic membership unavailable; resolving structural tiers only",
-				slog.String("from_id", fromID),
-				slog.String("to_id", toID),
-				slog.Any("error", mErr))
+			if errors.Is(mErr, ErrSemanticIndexNotReady) {
+				// Expected structural-only degrade (see GetNeighbors): Debug, not a
+				// per-pair WARN flood. #618 is surfaced once by the component.
+				p.logger.Debug("semantic membership structural-only this cycle (embedding index not ready)",
+					slog.String("from_id", fromID),
+					slog.String("to_id", toID))
+			} else {
+				p.logger.Warn("semantic membership unavailable; resolving structural tiers only",
+					slog.String("from_id", fromID),
+					slog.String("to_id", toID),
+					slog.Any("error", mErr))
+			}
 		}
 	} else {
 		tiers.semantic = mutual
@@ -409,12 +461,22 @@ func (p *SemanticEdgeProvider) ensureCache(ctx context.Context) error {
 	if p.cacheInitialized.Load() {
 		return nil
 	}
+	// Per-cycle no-retry latch (B2 §4, Codex P1#2): a build already aborted this cycle
+	// on a producer-wide not-ready/fatal signal. Do NOT re-issue the O(N) similarity
+	// sweep — stay structural-only for the rest of the cycle. SetActive clears the
+	// latch at the next cycle boundary so a later ready cycle rebuilds fresh.
+	if p.abortedThisCycle.Load() {
+		return ErrSemanticIndexNotReady
+	}
 
 	p.cacheMu.Lock()
 	defer p.cacheMu.Unlock()
 
 	if p.cacheInitialized.Load() {
 		return nil
+	}
+	if p.abortedThisCycle.Load() {
+		return ErrSemanticIndexNotReady
 	}
 
 	ids, err := p.base.GetAllEntityIDs(ctx)
@@ -434,12 +496,18 @@ func (p *SemanticEdgeProvider) ensureCache(ctx context.Context) error {
 		if ferr != nil {
 			if errors.Is(ferr, ErrSemanticIndexNotReady) {
 				// The embedding index passed the component's readiness gate but went
-				// cold before this query (a race window). ABORT the whole build
-				// WITHOUT latching a partial/empty cache: cacheInitialized stays
-				// false, so GetNeighbors/GetEdgeWeight degrade to structural-only for
-				// this cycle and a later cycle — gated on a re-confirmed ready index —
-				// builds the cache fresh. This is the property that makes the
-				// build-once cache safe across a not-ready window (B2 §5.1).
+				// cold (or issued a producer-wide reset — the adapter maps both onto
+				// this sentinel) before this query. ABORT the whole build WITHOUT
+				// latching a partial/empty cache: cacheInitialized stays false, so
+				// GetNeighbors/GetEdgeWeight degrade to structural-only for this cycle
+				// and a later cycle — gated on a re-confirmed ready index — builds the
+				// cache fresh. This is the property that makes the build-once cache safe
+				// across a not-ready window (B2 §5.1). LATCH abortedThisCycle so the
+				// rest of THIS cycle stays structural-only rather than re-sweeping on the
+				// next lookup (B2 §4, Codex P1#2): a bounded partial sweep, never a
+				// repeated full one, and a consistent structural-only partition even if
+				// the index recovers mid-cycle.
+				p.abortedThisCycle.Store(true)
 				return errs.WrapTransient(ferr, "SemanticEdgeProvider", "ensureCache",
 					"embedding index not ready mid-build")
 			}
@@ -498,6 +566,9 @@ func (p *SemanticEdgeProvider) ClearCache() {
 	p.cacheMu.Lock()
 	p.mutualNeighbors = make(map[string]map[string]bool)
 	p.cacheInitialized.Store(false)
+	// A full cache clear is a fresh start: drop the per-cycle abort latch too so the
+	// next build attempt is not suppressed by a stale abort from before the clear.
+	p.abortedThisCycle.Store(false)
 	p.cacheMu.Unlock()
 
 	if p.base != nil {

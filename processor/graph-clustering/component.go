@@ -707,6 +707,14 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 		metrics:       getMetrics(deps.MetricsRegistry),
 	}
 
+	// Expose the #618 semantic_edges_applied gauge ONLY when the tier is enabled, so a
+	// disabled deployment does not scrape a misleading 0 that reads as enabled-but-cold
+	// (Codex P2#4). The gauge object always exists (getMetrics creates it); this opts
+	// it into the registry for enabled deployments only.
+	if comp.config.semanticEdges.enabled && comp.metrics != nil {
+		comp.metrics.registerSemanticEdgesApplied(deps.MetricsRegistry)
+	}
+
 	// Initialize last activity
 	comp.lastActivity.Store(time.Now())
 
@@ -1327,6 +1335,11 @@ func (c *Component) runDetectionLoop(ctx context.Context) {
 			// embedding-readiness verdict BEFORE detection reads the provider (B2 §4).
 			c.applySemanticGate(decision)
 			c.runCommunityDetection(ctx)
+			// Stamp the #618 signal AFTER detection, from the ACTUAL completed mode
+			// (an intended-active cycle that aborted mid-build degraded to
+			// structural-only). Codex P1#2: report what happened, not the preflight
+			// intent.
+			c.recordSemanticMode()
 		}
 	}
 }
@@ -1566,22 +1579,41 @@ func (c *Component) noteGateOutcome(reason graph.DeferReason) (changed bool) {
 // ACTIVE cycle, it can never latch to the empty structural-only set during a
 // cold-embedding window: a later ready cycle reactivates and builds it fresh.
 //
-// It also surfaces the #618 signal: semantic_edges_applied (gauge 1/0) plus a
-// transition log, so a structurally-blind cycle (enabled but embeddings cold) is
-// DISTINGUISHABLE from a full cycle that simply found no mutual-kNN neighbors.
+// This is ONLY the preflight toggle now (Codex P1#2): the semantic_edges_applied
+// signal and its transition log are stamped AFTER detection by recordSemanticMode,
+// from the ACTUAL completed mode. Stamping here would report the preflight INTENT —
+// wrong whenever an intended-active cycle aborts mid-build (embedding went cold/reset
+// past the gate) and degrades to structural-only.
 //
-// A no-op when the tier is disabled or unwired (no provider to gate) — the n/a
-// row of the readiness table; the gauge is deliberately left untouched so a
-// disabled deployment never publishes a misleading 0/1.
+// A no-op when the tier is disabled or unwired (no provider to gate) — the n/a row of
+// the readiness table.
 func (c *Component) applySemanticGate(d gateDecision) {
 	if !c.config.semanticEdges.enabled || c.semanticProvider == nil {
 		return
 	}
 	c.semanticProvider.SetActive(d.semanticActive)
-	if c.metrics != nil {
-		c.metrics.setSemanticEdgesApplied(d.semanticActive)
+}
+
+// recordSemanticMode surfaces the #618 signal AFTER detection, from the provider's
+// ACTUAL completed mode rather than the preflight readiness intent (Codex P1#2):
+// semantic_edges_applied reads 1 iff the tier was active AND no producer-wide
+// not-ready/fatal signal aborted the mutual-kNN build, 0 when it degraded to
+// structural-only (readiness deactivated it, OR a mid-build abort collapsed an
+// intended-active cycle). A transition log makes a structurally-blind cycle loud
+// exactly once. So the gauge distinguishes "semantics ran, found nothing" (1) from
+// "semantics never ran / aborted" (0) — the confusion #618 exists to resolve.
+//
+// A no-op (n/a) when the tier is disabled or unwired: the gauge is never touched, and
+// on a disabled deployment it is not even registered (P2#4), so no misleading 0.
+func (c *Component) recordSemanticMode() {
+	if !c.config.semanticEdges.enabled || c.semanticProvider == nil {
+		return
 	}
-	c.noteSemanticApplied(d.semanticActive)
+	applied := c.semanticProvider.AppliedSemanticEdges()
+	if c.metrics != nil {
+		c.metrics.setSemanticEdgesApplied(applied)
+	}
+	c.noteSemanticApplied(applied)
 }
 
 // noteSemanticApplied logs the structural-only <-> full TRANSITION once, at a

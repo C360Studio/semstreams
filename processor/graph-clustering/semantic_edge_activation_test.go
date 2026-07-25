@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"testing"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -53,6 +55,24 @@ func TestSemanticFinderAdapter_ClassifiesNotReadyVsGenuineEmpty(t *testing.T) {
 		assert.Nil(t, ids)
 		assert.ErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
 			"a not-ready transient must map to the abort-not-latch sentinel, never a genuine empty")
+	})
+
+	t.Run("producer-wide FATAL reset maps to the abort sentinel", func(t *testing.T) {
+		// graph-embedding's ensureBootstrapReady stamps FATAL graph_state_reset_required
+		// on a sticky producer-wide reset. It is NOT the transient index_not_ready code,
+		// so the pre-fix adapter swallowed it into an empty result — and a build that
+		// latched cacheInitialized off that empty answer stayed permanently hollow across
+		// a graph-embedding restart (Codex P1#3). It must ABORT, not fail-open empty.
+		finder := &fakeClassifiedFinder{err: errs.ClassifiedCode(
+			errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+			errors.New("graph state reset required"))}
+		adapter := semanticFinderAdapter{finder: finder}
+
+		ids, err := adapter.SimilarNeighbors(ctx, "o.p.d.s.t.a", 0.75, 8)
+		require.Error(t, err)
+		assert.Nil(t, ids)
+		assert.ErrorIs(t, err, clustering.ErrSemanticIndexNotReady,
+			"a producer-wide fatal reset must abort-not-latch, never a hollow per-entity empty")
 	})
 
 	t.Run("genuine handler miss fails open to empty", func(t *testing.T) {
@@ -125,6 +145,39 @@ func TestIsEmbeddingIndexNotReady_ClassificationOnly(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Equal(t, tt.want, isEmbeddingIndexNotReady(tt.err))
+		})
+	}
+}
+
+// isProducerWideEmbeddingFault is the ABORT-not-latch classifier (Codex P1#3): the
+// transient index_not_ready shape OR any FATAL classified error (of which the reset
+// code is the concrete producer-wide instance) aborts; a per-entity ErrorInvalid miss
+// or a lone transient blip does not. Keyed on class/code only, never message text.
+func TestIsProducerWideEmbeddingFault_ClassOrCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"transient + index_not_ready -> abort",
+			errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady, errors.New("cold")), true},
+		{"fatal + graph_state_reset_required -> abort",
+			errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired, errors.New("reset")), true},
+		{"fatal, any code -> abort (fatal class is producer-wide)",
+			errs.ClassifiedCode(errs.ErrorFatal, "storage_unavailable", errors.New("no storage")), true},
+		{"invalid per-entity miss -> NOT abort (fail-open empty)",
+			errs.ClassifiedCode(errs.ErrorInvalid, "no_embedding", errors.New("no embedding for entity")), false},
+		{"plain transient blip -> NOT abort (per-entity fail-open)",
+			errs.WrapTransient(errors.New("connection reset"), "a", "b", "c"), false},
+		{"no-responders (producer crashed mid-build) -> abort",
+			nats.ErrNoResponders, true},
+		{"raw fatal-TEXT error -> NOT abort (structural class check, not message text)",
+			errors.New("fatal: disk corrupted"), false},
+		{"nil -> NOT abort", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, isProducerWideEmbeddingFault(tt.err))
 		})
 	}
 }
@@ -224,6 +277,29 @@ func (fakeNeighborFinder) SimilarNeighbors(context.Context, string, float64, int
 	return nil, nil
 }
 
+// oneEntityBase is a base provider with a single entity, so a wrapped
+// SemanticEdgeProvider's ensureCache actually queries its finder (an empty base would
+// build a trivially-complete empty cache and never exercise the abort path).
+type oneEntityBase struct{}
+
+func (oneEntityBase) GetAllEntityIDs(context.Context) ([]string, error) {
+	return []string{"o.p.d.s.t.a"}, nil
+}
+func (oneEntityBase) GetNeighbors(context.Context, string, string) ([]string, error) {
+	return nil, nil
+}
+func (oneEntityBase) GetEdgeWeight(context.Context, string, string) (float64, error) {
+	return 0, nil
+}
+
+// abortingFinder always returns the not-ready sentinel, modelling an embedding index
+// that went cold past the §4 gate: a build over it ABORTS and latches structural-only.
+type abortingFinder struct{}
+
+func (abortingFinder) SimilarNeighbors(context.Context, string, float64, int) ([]string, error) {
+	return nil, fmt.Errorf("%w: embedding index cold mid-build", clustering.ErrSemanticIndexNotReady)
+}
+
 // enabledSemanticComponent builds a component whose semantic tier is enabled and
 // whose provider handle is a real SemanticEdgeProvider, so applySemanticGate has
 // something to toggle.
@@ -244,10 +320,15 @@ func enabledSemanticComponent(t *testing.T) (*Component, *clustering.SemanticEdg
 func TestApplySemanticGate_TogglesProviderAndStampsSignal(t *testing.T) {
 	c, sep := enabledSemanticComponent(t)
 
+	// One cycle = applySemanticGate (preflight toggle, BEFORE detection) then
+	// recordSemanticMode (stamp the #618 signal from the ACTUAL completed mode, AFTER
+	// detection — Codex P1#2). The fake finder never aborts, so here actual == intent.
+
 	// Active cycle: provider active, gauge = 1, an INFO transition line.
 	_, bufActive := loggerBufFor(t, c)
 	c.applySemanticGate(gateDecision{proceed: true, semanticActive: true})
 	assert.True(t, sep.IsActive(), "an active verdict must activate the provider")
+	c.recordSemanticMode()
 	assert.Equal(t, float64(1), testutil.ToFloat64(c.metrics.semanticEdgesApplied),
 		"semantic_edges_applied must read 1 on a full cycle")
 	assert.Contains(t, bufActive.String(), `"semantic_edges_applied":true`)
@@ -257,6 +338,7 @@ func TestApplySemanticGate_TogglesProviderAndStampsSignal(t *testing.T) {
 	_, bufStructural := loggerBufFor(t, c)
 	c.applySemanticGate(gateDecision{proceed: true, semanticActive: false})
 	assert.False(t, sep.IsActive(), "a not-ready verdict must deactivate the provider (structural-only)")
+	c.recordSemanticMode()
 	assert.Equal(t, float64(0), testutil.ToFloat64(c.metrics.semanticEdgesApplied),
 		"semantic_edges_applied must read 0 on a structural-only cycle")
 	structural := bufStructural.String()
@@ -265,27 +347,72 @@ func TestApplySemanticGate_TogglesProviderAndStampsSignal(t *testing.T) {
 	assert.Contains(t, structural, "STRUCTURAL-ONLY")
 }
 
-// A steady state logs once per TRANSITION, not per tick.
+// TestRecordSemanticMode_ReportsActualNotIntent is the direct Codex P1#2b pin at the
+// component seam: when an intended-ACTIVE cycle aborts mid-build (embedding went cold
+// past the gate), recordSemanticMode must stamp semantic_edges_applied=0 and the WARN
+// transition — the ACTUAL structural-only mode — even though applySemanticGate set the
+// provider active. Before the split, applySemanticGate stamped the preflight intent (1)
+// and this degraded cycle would have reported a false "semantics applied".
+func TestRecordSemanticMode_ReportsActualNotIntent(t *testing.T) {
+	c, _ := newLoggedComponent(t, Config{
+		Ports:         basePorts(),
+		SemanticEdges: &SemanticEdgesConfig{EnableSemanticEdges: true},
+	})
+	require.True(t, c.config.semanticEdges.enabled)
+
+	// A provider whose finder always reports the not-ready sentinel, over a base with
+	// one entity, so a triggered build ABORTS and latches structural-only this cycle.
+	eidp := clustering.NewEntityIDProvider(oneEntityBase{}, clustering.DefaultEntityIDProviderConfig(), nil)
+	sep := clustering.NewSemanticEdgeProvider(eidp, abortingFinder{},
+		clustering.WeightConfig{}, clustering.SemanticEdgeParams{}, nil)
+	c.semanticProvider = sep
+
+	// Preflight INTENT: active.
+	c.applySemanticGate(gateDecision{proceed: true, semanticActive: true})
+	require.True(t, sep.IsActive(), "the preflight verdict set the provider active")
+
+	// Detection reads the provider and aborts the build (the finder is cold).
+	_, err := sep.GetNeighbors(context.Background(), "o.p.d.s.t.a", "both")
+	require.NoError(t, err, "an abort degrades to structural-only, it does not error")
+
+	// ACTUAL mode after detection: structural-only. The signal must report 0, not the
+	// intended 1.
+	_, buf := loggerBufFor(t, c)
+	c.recordSemanticMode()
+	assert.Equal(t, float64(0), testutil.ToFloat64(c.metrics.semanticEdgesApplied),
+		"an intended-active cycle that aborted must stamp semantic_edges_applied=0 (actual mode)")
+	out := buf.String()
+	assert.Contains(t, out, `"level":"WARN"`, "the degraded cycle is the #618 signal, at WARN")
+	assert.Contains(t, out, `"semantic_edges_applied":false`)
+	assert.Contains(t, out, "STRUCTURAL-ONLY")
+}
+
+// A steady state logs once per TRANSITION, not per tick. The transition log now lives
+// on recordSemanticMode (the actual-mode stamp), so a full cycle is applySemanticGate
+// + recordSemanticMode.
 func TestApplySemanticGate_LogsOnlyOnTransition(t *testing.T) {
 	c, _ := enabledSemanticComponent(t)
 
 	_, buf := loggerBufFor(t, c)
 	c.applySemanticGate(gateDecision{proceed: true, semanticActive: true})
+	c.recordSemanticMode()
 	assert.Contains(t, buf.String(), `"semantic_edges_applied":true`, "first cycle is a transition and must log")
 
 	_, buf2 := loggerBufFor(t, c)
 	c.applySemanticGate(gateDecision{proceed: true, semanticActive: true})
+	c.recordSemanticMode()
 	assert.NotContains(t, buf2.String(), "semantic_edges_applied",
 		"a steady active state must not log a line per tick")
 }
 
-// Disabled or unwired: applySemanticGate is a no-op — no panic on a nil provider,
-// and it never touches the gauge or logs (the n/a row).
+// Disabled or unwired: BOTH applySemanticGate and recordSemanticMode are no-ops — no
+// panic on a nil provider, and neither touches the gauge or logs (the n/a row).
 func TestApplySemanticGate_DisabledOrUnwired_NoOp(t *testing.T) {
 	t.Run("tier disabled", func(t *testing.T) {
 		c, buf := newLoggedComponent(t, Config{Ports: basePorts()})
 		require.False(t, c.config.semanticEdges.enabled)
 		c.applySemanticGate(gateDecision{proceed: true, semanticActive: true}) // must not panic
+		c.recordSemanticMode()                                                 // must not panic
 		assert.Empty(t, buf.String(), "a disabled tier must not log a semantic verdict")
 	})
 
@@ -296,6 +423,7 @@ func TestApplySemanticGate_DisabledOrUnwired_NoOp(t *testing.T) {
 		})
 		c.semanticProvider = nil
 		c.applySemanticGate(gateDecision{proceed: true, semanticActive: true}) // must not panic
+		c.recordSemanticMode()                                                 // must not panic
 		assert.Empty(t, buf.String())
 	})
 }

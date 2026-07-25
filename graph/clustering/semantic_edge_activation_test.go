@@ -152,13 +152,109 @@ func TestSemanticEdgeProvider_NotReadyMidBuild_AbortsWithoutLatch(t *testing.T) 
 	require.NoError(t, err)
 	assert.InDelta(t, 0.0, w, 1e-9, "structural-only resolution during the cold window")
 
-	// Recover: the index comes back. The next cycle rebuilds and applies edges,
-	// proving nothing latched during the cold window.
+	// Recover the index MID-cycle, then look up again WITHOUT a cycle boundary: the
+	// per-cycle abort latch (Codex P1#2) keeps this call structural-only, so the
+	// partition stays consistent (no early-structural/late-semantic split) and the
+	// O(N) sweep is not re-issued. The next lookup does not re-query the finder.
 	finder.blocked = false
+	callsAfterAbort := finder.calls
+	sameCycle, err := prov.GetNeighbors(ctx, "o.p.d.s1.t1.a", "both")
+	require.NoError(t, err)
+	assert.NotContains(t, sameCycle, "o.p.d.s2.t2.b",
+		"a mid-cycle recovery must NOT flip this cycle to semantic — the abort latch holds it structural-only")
+	assert.Equal(t, callsAfterAbort, finder.calls,
+		"the aborted cycle must not re-issue the O(N) similarity sweep on the next lookup")
+	require.False(t, prov.AppliedSemanticEdges(),
+		"an aborted cycle reports structural-only as its ACTUAL mode, even though active")
+
+	// A NEW cycle boundary (SetActive, as the component calls each tick) clears the
+	// latch: the recovered index now builds fresh and applies edges, proving nothing
+	// latched permanently during the cold window (the no-latch guarantee).
+	prov.SetActive(true)
 	na2, err := prov.GetNeighbors(ctx, "o.p.d.s1.t1.a", "both")
 	require.NoError(t, err)
 	assert.Contains(t, na2, "o.p.d.s2.t2.b", "the recovered cycle builds fresh and applies the edge")
 	require.True(t, prov.cacheInitialized.Load(), "the recovered build initializes the cache")
+	require.True(t, prov.AppliedSemanticEdges(), "the rebuilt cycle reports semantic-applied as its actual mode")
+}
+
+// TestSemanticEdgeProvider_ColdCycle_SweepsAtMostOnce is the endpoint-saturation
+// guard (Codex P1#2b): across a whole detection cycle in which the embedding index
+// stays cold, MANY entity lookups must issue AT MOST ONE aborted similarity sweep, not
+// one per lookup. Before the per-cycle abort latch, each GetNeighbors/GetEdgeWeight
+// re-entered ensureCache and re-issued the O(N) build, hammering the similarity
+// endpoint while the index was down.
+func TestSemanticEdgeProvider_ColdCycle_SweepsAtMostOnce(t *testing.T) {
+	ctx := context.Background()
+	finder := &notReadyFinder{
+		directed: map[string][]string{
+			"o.p.d.s1.t1.a": {"o.p.d.s2.t2.b"},
+			"o.p.d.s2.t2.b": {"o.p.d.s1.t1.a"},
+		},
+		blocked: true, // index cold for the whole cycle
+	}
+	prov := NewSemanticEdgeProvider(structuralOnlyEIDP(), finder,
+		WeightConfig{SiblingWeight: 0.7, SystemPeerWeight: 0.2, SemanticWeight: 0.9},
+		SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
+	require.True(t, prov.IsActive())
+
+	// Simulate a cycle's worth of provider reads: many neighbor + weight lookups.
+	for _, id := range []string{"o.p.d.s1.t1.a", "o.p.d.s2.t2.b", "o.p.d.s3.t3.c"} {
+		_, err := prov.GetNeighbors(ctx, id, "both")
+		require.NoError(t, err)
+	}
+	for i := 0; i < 5; i++ {
+		_, err := prov.GetEdgeWeight(ctx, "o.p.d.s1.t1.a", "o.p.d.s2.t2.b")
+		require.NoError(t, err)
+	}
+
+	assert.LessOrEqual(t, finder.calls, 1,
+		"a cold cycle must issue at most one aborted sweep across all lookups (no per-lookup re-sweep)")
+	assert.False(t, prov.AppliedSemanticEdges(),
+		"an active-but-aborted cycle's ACTUAL mode is structural-only")
+
+	// The next cycle boundary clears the latch and allows one fresh attempt.
+	prov.SetActive(true)
+	_, err := prov.GetNeighbors(ctx, "o.p.d.s1.t1.a", "both")
+	require.NoError(t, err)
+	assert.Greater(t, finder.calls, 1, "a new cycle is allowed exactly one fresh sweep attempt")
+}
+
+// TestSemanticEdgeProvider_AppliedSemanticEdges_IntentVsActual pins the Codex P1#2b
+// distinction directly: AppliedSemanticEdges is the ACTUAL completed mode, not the
+// SetActive intent. An active cycle with a healthy finder reports applied; an active
+// cycle that aborts reports NOT applied; an inactive cycle reports NOT applied.
+func TestSemanticEdgeProvider_AppliedSemanticEdges_IntentVsActual(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("active + healthy build -> applied (even with zero mutual pairs)", func(t *testing.T) {
+		// A finder with no mutual pairs still means "semantics ran, found nothing".
+		prov := NewSemanticEdgeProvider(structuralOnlyEIDP(), &stubFinder{directed: map[string][]string{}},
+			WeightConfig{SemanticWeight: 0.9}, SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
+		prov.SetActive(true)
+		_, err := prov.GetNeighbors(ctx, "o.p.d.s1.t1.a", "both")
+		require.NoError(t, err)
+		assert.True(t, prov.AppliedSemanticEdges(),
+			"a completed build with no mutual pairs is still applied=true (the #618 'ran, found nothing')")
+	})
+
+	t.Run("active + aborted build -> NOT applied (intent was active)", func(t *testing.T) {
+		prov := NewSemanticEdgeProvider(structuralOnlyEIDP(),
+			&notReadyFinder{directed: map[string][]string{}, blocked: true},
+			WeightConfig{SemanticWeight: 0.9}, SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
+		prov.SetActive(true)
+		_, err := prov.GetNeighbors(ctx, "o.p.d.s1.t1.a", "both")
+		require.NoError(t, err)
+		assert.False(t, prov.AppliedSemanticEdges(),
+			"an intended-active cycle that aborted reports its actual structural-only mode")
+	})
+
+	t.Run("inactive -> NOT applied", func(t *testing.T) {
+		prov := NewSemanticEdgeProvider(structuralOnlyEIDP(), mutualABFinder(),
+			WeightConfig{SemanticWeight: 0.9}, SemanticEdgeParams{K: 8, Threshold: 0.75}, nil)
+		prov.SetActive(false)
+		assert.False(t, prov.AppliedSemanticEdges())
+	})
 }
 
 // §4.3: a structural-only cycle (inactive tier) yields a COMPLETE, valid
