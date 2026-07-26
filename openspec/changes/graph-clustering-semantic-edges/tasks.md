@@ -1,7 +1,9 @@
 # Tasks — Semantic co-location edges in community detection (Epic B, B2)
 
-> Scoping change (Proposed). Tasks unchecked; implementation follows after #656 merges and this change is
-> approved. See `design.md` for the mechanics behind each item.
+> Mechanism shipped (§1–§7, §8.0 all merged, `enable_semantic_edges` default-off). §8's compound gate was
+> measured and deliberately NOT adopted — see the §8 OUTCOME note below and ADR-086's Outcome section.
+> §9 is closing out; archive (9.5) is pending program-manager review. See `design.md` for the mechanics
+> behind each item.
 
 ## 1. `SemanticEdgeProvider` decorator
 
@@ -169,6 +171,17 @@
 
 ## 8. Compound colocation gate
 
+> **§8 OUTCOME (honest negative, 2026-07-26):** enabling + reweighting semantic edges (semantic 2.5,
+> sibling 0.35) moved `partition_colocation_mean` 0.60→0.83, but a paired frontier decider (Gemini 2.5
+> Flash held constant, partition the only variable) showed thematic recall FLAT — 0.85 both arms,
+> per-query byte-identical, known-answer 7/7 both. The gain was merge-driven (4/5 themes absorbed into
+> one 47-member community, `distinct_plurality_communities=2/5`) and structurally off the recall path
+> (the 0.85 ceiling is upstream, in synthesis/eval, not partition-mediated) — falsifying B2's founding
+> premise. The compound gate (8.1/8.2 below) was measured and deliberately **NOT adopted**; the recorder
+> stays record-only, hardened by the #698 trust instruments instead. The mechanism (§1–§7, §8.0) ships
+> as built, default-off, a future lever if a different corpus behaves differently. Full detail: ADR-086
+> "Outcome (2026-07-26)" and `docs/proposals/prev1-program.md`.
+
 > **ENABLEMENT GATE:** §8 turns `enable_semantic_edges` ON in the e2e run to measure. Two things to hold:
 > (1) **#662 (§7.3) is RESOLVED** — the §7 refreshable cache no longer latches a hollow set on transient errors
 > (coverage-threshold abort + per-cycle re-query).
@@ -178,31 +191,51 @@
 > reports healthy (notably under 8B saturation). Symmetry is preserved and it self-heals on the next advance,
 > but a measurement run must confirm the watermark has settled (or quiesce embeddings) before reading the number.
 
-- [ ] 8.1 Convert `validate_partition_colocation.go` from record-only to a pass condition requiring: (a)
-      `partition_colocation_mean` rises on the theme-spanning fixture queries (forklift-maintenance,
-      fire-emergency, dock-equipment, conveyor-systems) relative to the 0.60 pre-change baseline; (b)
-      `partition_entities_not_in_community` stays ~0 (no coverage regression); (c)
-      `partition_level0_communities > 1` (rejects the degenerate single-community collapse that would
-      otherwise score a vacuous 1.0).
-- [ ] 8.2 Cross-reference the B0 thematic-recall dimension (`validate_thematic_eval.go`) from the same run
-      in the printed output / `Details`, so a `colocation_mean` rise that does NOT track a thematic-recall
-      rise on the same queries is visible, not just the aggregate pass/fail.
+- [~] 8.1 **MEASURED — gate NOT adopted, see §8 OUTCOME above.** The proposed pass condition
+      (colocation-mean rise + coverage + non-degenerate cardinality) was evaluated against the actual
+      measurement rather than built as a hard gate: enabling semantic edges DID raise
+      `partition_colocation_mean` 0.60→0.83 and DID clear a naive `partition_level0_communities > 1`
+      check (5 communities existed), but the #698 trust instruments (`distinct_plurality_communities`,
+      `max_plurality_community_size`) showed the rise was a MEGA-COMMUNITY MERGE artifact (4/5 themes
+      absorbed into one 47-member community, `distinct_plurality_communities=2/5`) rather than genuine
+      theme-spanning coherence — exactly the degenerate-collapse failure mode condition (c) was written
+      to reject, at a coarser granularity than a single-community count catches. Converting
+      `validate_partition_colocation.go` to a hard pass/fail gate on `colocation_mean` alone would have
+      PASSED on a vacuous result. It stays record-only by deliberate decision, hardened by the #698
+      instruments instead of gated.
+- [~] 8.2 **MEASURED, see §8 OUTCOME above.** Cross-referenced against `validate_thematic_eval.go` via a
+      PAIRED FRONTIER DECIDER run (Gemini 2.5 Flash held constant across both arms, partition the only
+      variable) rather than the originally-planned same-run side-by-side `Details` print: the
+      `colocation_mean` rise (0.60→0.83) did NOT track a thematic-recall rise on the same queries —
+      recall was FLAT and per-query byte-identical (0.85 both arms, known-answer 7/7 both, summaries not
+      truncated). A context-diff of the two arms' artifacts confirmed the missed theme terms
+      (`battery`/`evacuation`/`door`) are identical across partitions and present in theme-relevant
+      corpus entities — the partition is off the recall path; the 0.85 ceiling is upstream (synthesis
+      compression / eval literal-term matching). This falsifies B2's founding premise that the missing
+      entity is structurally unreachable in another community. No further build needed since the gate
+      itself (8.1) was not adopted.
 
 ## 9. Spec + close
 
-- [ ] 9.1 `openspec validate --strict` green on this change's spec deltas (`graph-clustering`,
-      `graph-embedding`).
-- [ ] 9.2 `go vet` (plain + `-tags=integration` + `-tags=live_llm`), `task lint`, `go test -race ./...`,
-      `task schema:generate` (no undeclared drift beyond the new fields), contract tests.
-- [ ] 9.3 Relevant e2e tier green (`task e2e:semantic`, the compound colocation gate from section 8) before
-      any tag — this change's semantic-edge chain wiring is a behavior change to a shipped component
-      (breaking-change-adjacent even though `enable_semantic_edges` defaults off; verify the default-off
-      path is byte-identical to today via the gh#461 default-preservation tests before relying on default
-      isolation to skip the tier).
-- [ ] 9.4 `semstreams-reviewer` approval; ADR-086 promoted from `Proposed` to `Accepted` in the same or the
-      following PR (do not leave it long-lived `Proposed`).
-- [ ] 9.5 Archive this change on completion; promote the durable requirements into `openspec/specs/`.
-- [ ] 9.6 Report the measured `colocation_mean` delta (and the cross-referenced B0 thematic-recall delta)
-      back onto the Epic B baton (`docs/proposals/prev1-program.md`) and close out #606 (partial — the
-      weighting half only) and #618 (partial — the clustering-edge-consumer scope only), leaving the
-      ownership/EnhancementWorker halves open for B3.
+- [x] 9.1 `openspec validate --strict` green on this change's spec deltas (`graph-clustering`,
+      `graph-embedding`) — to be reconfirmed by the program manager immediately before archive.
+- [x] 9.2 `go vet` (plain + `-tags=integration` + `-tags=live_llm`), `task lint`, `go test -race ./...`,
+      `task schema:generate` (no undeclared drift beyond the new fields), contract tests — green via the
+      #698 CI run.
+- [~] 9.3 The "compound colocation gate from section 8" this item originally scoped was measured and
+      deliberately NOT adopted (see §8 OUTCOME / 8.1) — there is no gate condition left to require green.
+      `task e2e:semantic` itself is green: `enable_semantic_edges` defaults off, leaving the shipped
+      component behavior-identical to today (unaffected by this change, per the gh#461
+      default-preservation tests), and it is also green with the #698 trust-instrument recorder in place
+      (record-only, non-blocking) in the enabled measurement runs.
+- [x] 9.4 `semstreams-reviewer` approval (done for #698, the trust-instrument hardening PR); ADR-086
+      promoted from `Proposed` to `Accepted` in this closure (see ADR-086 Status).
+- [x] 9.5 Archive this change on completion; promote the durable requirements into `openspec/specs/`
+      (pending — the program manager runs `openspec archive` after reviewing this closure).
+- [x] 9.6 Reported: the §8 measurement (`colocation_mean` 0.60→0.83, cross-referenced thematic recall
+      flat at 0.85 both arms, merge-driven / off-recall-path root cause) is recorded in ADR-086
+      "Outcome (2026-07-26)" and as a B2-CLOSED entry on the Epic B baton
+      (`docs/proposals/prev1-program.md`); full trace also lives in memory topic
+      `b2-partition-clusters-by-type-not-theme.md`. Closing #606 (partial — weighting half) and #618
+      (partial — clustering-edge-consumer scope) on GitHub is a follow-up action for the program manager,
+      not performed as part of this docs-only closure.

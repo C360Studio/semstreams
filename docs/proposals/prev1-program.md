@@ -9,6 +9,26 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **B2 CLOSED (2026-07-26, honest negative) — SUPERSEDES the "B2 IS DECIDED ... HAS ROI" framing
+> immediately below.** The weight-tuning lever is exhausted: enabling the merged semantic-edge mechanism
+> raised `colocation_mean` 0.60→0.83, but a paired frontier decider (Gemini 2.5 Flash held constant,
+> partition the only variable) found thematic recall FLAT — 0.85 both arms, per-query byte-identical,
+> known-answer 7/7 both — because the colocation rise was a mega-community merge artifact
+> (`distinct_plurality_communities=2/5`, one 47-member community absorbing 4/5 themes), not genuine
+> theme coherence, and the partition sits off the recall path entirely (a context-diff showed the same
+> missed theme terms present in-corpus under both partitions; the 0.85 ceiling is upstream, in synthesis
+> compression / eval literal-term matching). This falsifies B2's founding premise. The mechanism (§1–§7,
+> §8.0 of the change) ships MERGED + DEFAULT-OFF as a future lever for a different corpus; the compound
+> colocation gate was measured and deliberately NOT adopted — the recorder stays record-only, hardened
+> by two trust instruments landed via PR #698 (`304368d9`). Two levers recorded out of B2 scope, future
+> work: retrieval-side multi-community query expansion, and embedding-input shaping (the absorbing
+> community's membership hints the embedding space organizes by document genre at least as strongly as
+> by theme). Full detail: ADR-086 "Outcome (2026-07-26)",
+> `openspec/changes/graph-clustering-semantic-edges/tasks.md` §8, and memory
+> `b2-partition-clusters-by-type-not-theme.md`. **The historical trace below (sessions 8–11) stands
+> as-is and is not re-derived — read it for how B2 was scoped and built, not for its "HAS ROI"
+> conclusion, which this note corrects.**
+
 > **B2 IS DECIDED — partition rebuild HAS ROI. The confounded frontier "low-ROI" hypothesis is REVERSED
 > by a white-box, LLM-independent measurement (session 11, 2026-07-24).** The owner course-corrected off the
 > frontier comparison (a black-box proxy; #654 re-scoped): with a KNOWN corpus we don't need a frontier model
@@ -270,7 +290,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 | **IN PROGRESS — plan approved, B0 starting** |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 | **IN PROGRESS — B0/B1/B2 CLOSED (B2 honest negative, mechanism merged default-off, #698); B3 (ownership split, Tier-2) not started** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -580,3 +600,24 @@ Append one line per session. Newest last.
   (429/503 only) + the SemStreams/SemInstruct ownership boundary; immediate quick-win is aligning
   `enhancement_workers` ↔ `MODEL_PARALLEL` per tier. Folded into **#652** (concrete deliverable); subsumes
   #654's retry note. So "decide 8B-harness viability" now has a path, not just a question.
+- **2026-07-26 (session 12, docs closure)** — **B2 CLOSED, honest negative.** §8 (weight-tuning) is DONE:
+  a paired frontier decider (Gemini 2.5 Flash held constant across both arms, partition the only
+  variable) found the colocation_mean rise (0.60→0.83) is a mega-community merge artifact
+  (`distinct_plurality_communities=2/5`, one 47-member community absorbing 4/5 themes) that bought ZERO
+  thematic recall (flat 0.85 both arms, per-query byte-identical, known-answer 7/7 both, summaries not
+  truncated). A context-diff confirmed the missed theme terms are identical across partitions and
+  present in-corpus under both — the recall ceiling is upstream (synthesis compression / eval
+  literal-term matching), falsifying B2's founding premise that the missing entity is structurally
+  unreachable in another community. The mechanism (§1–§7, §8.0 of `graph-clustering-semantic-edges`)
+  ships MERGED + DEFAULT-OFF as a future lever; the compound colocation gate (§8.1/§8.2) was measured
+  and deliberately NOT adopted — `validate_partition_colocation.go` stays record-only, hardened by two
+  trust instruments (mega-community discriminators, per-query dilution channel) landed via PR #698
+  (`304368d9`). ADR-086 promoted `Proposed` → `Accepted` with an `Outcome (2026-07-26)` section
+  recording this — the measurement refines expected ROI, it does not reverse the mechanism decision.
+  `tasks.md` §9 updated: validate/gates/reviewer-approval marked done, 9.3's e2e gate item annotated
+  (no gate condition exists since 8.1 was not adopted; the tier itself is green), 9.5 (archive) left
+  pending. Two levers recorded out of B2 scope, future work: retrieval-side multi-community query
+  expansion, embedding-input shaping (themes collapse by document genre in the absorbing community's
+  membership). Docs-only change; the mechanism spec deltas were left untouched (already accurate).
+  **Next:** program manager reviews this closure, runs `openspec validate --strict` and `openspec
+  archive`, then decides B3 (ownership split, Tier-2) vs. the next epic.
