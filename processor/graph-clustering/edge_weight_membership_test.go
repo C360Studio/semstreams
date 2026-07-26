@@ -21,12 +21,14 @@ package graphclustering
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"sync"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/clustering"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -222,4 +224,104 @@ func TestKVProviderEdgeCache_OneFetchPerEntity(t *testing.T) {
 	_, err = p.GetEdgeWeight(ctx, x, neighbors[0])
 	require.NoError(t, err)
 	assert.Equal(t, 2, countOf(), "ResetEdgeCache must re-fetch X's topology next cycle")
+}
+
+// readCountingBucket wraps a mockKVBucket and counts the two read entry-points
+// kvProvider.bothNeighborSet uses to resolve edge membership: Get (the
+// OUTGOING_INDEX single-key fetch) and ListKeysFiltered (the INCOMING_INDEX
+// composite-key prefix scan, via natsclient.FilteredKeys). A non-zero count
+// after a validation-rejected GetEdgeWeight proves the guard side-effected I/O.
+type readCountingBucket struct {
+	*mockKVBucket
+	mu    sync.Mutex
+	reads int
+}
+
+func newReadCountingBucket() *readCountingBucket {
+	return &readCountingBucket{mockKVBucket: newMockKVBucket()}
+}
+
+func (b *readCountingBucket) reset() {
+	b.mu.Lock()
+	b.reads = 0
+	b.mu.Unlock()
+}
+
+func (b *readCountingBucket) count() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.reads
+}
+
+func (b *readCountingBucket) Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	b.mu.Lock()
+	b.reads++
+	b.mu.Unlock()
+	return b.mockKVBucket.Get(ctx, key)
+}
+
+func (b *readCountingBucket) ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error) {
+	b.mu.Lock()
+	b.reads++
+	b.mu.Unlock()
+	return b.mockKVBucket.ListKeysFiltered(ctx, filters...)
+}
+
+// TestKVProviderGetEdgeWeight_InvalidEndpointFailsWithoutIO pins gh#665 Codex P2:
+// a malformed fromID OR toID is rejected with ErrInvalidConfig BEFORE any topology
+// read or cache insertion. Before the fix only fromID was validated; a malformed
+// toID silently did the bothNeighborSet I/O (bucket reads + per-cycle cache
+// insertion) and THEN reported "no edge" (0.0). This locks the symmetric guard:
+// both endpoints fail identically, with zero side effects.
+func TestKVProviderGetEdgeWeight_InvalidEndpointFailsWithoutIO(t *testing.T) {
+	ctx := context.Background()
+	const (
+		valid   = "acme.ops.robotics.gcs.drone.001"
+		target  = "acme.ops.robotics.gcs.mission.001"
+		invalid = "not-a-valid-entity-id" // not 6 dot-separated tokens
+	)
+
+	cases := []struct {
+		name         string
+		fromID, toID string
+	}{
+		{"invalid toID (the P2 gap)", valid, invalid},
+		{"invalid fromID (existing guard)", invalid, valid},
+		{"both invalid", invalid, invalid},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			outgoing := newReadCountingBucket()
+			incoming := newReadCountingBucket()
+			// Seed a REAL neighbor set for the valid endpoint so that, absent the
+			// guard, bothNeighborSet(valid) WOULD read both buckets and cache the
+			// result — this makes the zero-read / empty-cache assertions meaningful
+			// rather than vacuous. putOutgoingEdge/putIncomingEdge use Put, which the
+			// spy does not count, so the seed itself leaves the read counter at 0.
+			putOutgoingEdge(t, outgoing.mockKVBucket, valid, target)
+			putIncomingEdge(t, incoming.mockKVBucket, valid, "acme.ops.robotics.gcs.sensor.009")
+			outgoing.reset()
+			incoming.reset()
+
+			p := newKVProvider(newMockKVBucket(), outgoing, incoming, slog.Default())
+
+			w, err := p.GetEdgeWeight(ctx, tc.fromID, tc.toID)
+			require.Error(t, err, "a malformed endpoint must return an error, not a silent 0.0")
+			assert.True(t, errors.Is(err, errs.ErrInvalidConfig),
+				"error must wrap errs.ErrInvalidConfig, got %v", err)
+			assert.Equal(t, 0.0, w)
+
+			assert.Equal(t, 0, outgoing.count(),
+				"no OUTGOING_INDEX read may occur on a validation-rejected call")
+			assert.Equal(t, 0, incoming.count(),
+				"no INCOMING_INDEX read may occur on a validation-rejected call")
+
+			p.edgeCacheMu.RLock()
+			cacheLen := len(p.explicitNeighbors)
+			p.edgeCacheMu.RUnlock()
+			assert.Equal(t, 0, cacheLen,
+				"no per-cycle cache insertion may occur on a validation-rejected call")
+		})
+	}
 }

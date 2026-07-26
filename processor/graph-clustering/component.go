@@ -2115,9 +2115,19 @@ func (p *kvProvider) getIncomingNeighbors(ctx context.Context, entityID string) 
 // 1.0 in LPA. Gating on real membership lets the cascade fall through to the
 // intended tier weights. The lookup is memoized per cycle (gh#666): a
 // computeNewLabel pass reads fromID's topology once, not once per neighbor.
+//
+// Both endpoints are validated up front, symmetrically: a malformed fromID OR
+// toID returns the same WrapInvalid(ErrInvalidConfig) shape BEFORE any topology
+// I/O, so an invalid destination fails without a bucket read or a cache
+// insertion (gh#665 Codex P2). In production both endpoints already come from the
+// validated partition entity set, so this is pure hardening — the same as the
+// fromID guard.
 func (p *kvProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
 	if err := semtypes.ValidateEntityID(fromID); err != nil {
 		return 0.0, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetEdgeWeight", "fromID is invalid")
+	}
+	if err := semtypes.ValidateEntityID(toID); err != nil {
+		return 0.0, errs.WrapInvalid(errs.ErrInvalidConfig, "kvProvider", "GetEdgeWeight", "toID is invalid")
 	}
 	set, err := p.bothNeighborSet(ctx, fromID)
 	if err != nil {
