@@ -220,16 +220,61 @@ its bounded production corpus, it:
   JavaScript, TypeScript, Svelte, TOML, GraphQL, Protocol Buffer, and CUE sources;
 - reports recognized Go triple fields, predicate constants, lifecycle tags, ownership/projection declarations,
   rule/config fields, schema defaults, generated tool enums, and exact-query fields;
-- emits repository, file, line, candidate, and typed rejection reason;
+- emits repository, file, line, column, extraction surface, candidate authority/status, and typed finding reason;
 - uses the ADR-074 grammar exactly, including ASCII and byte limits;
-- exits nonzero for any unclassified or invalid production candidate; and
 - accepts one or more repository roots, so sister repositories can pin the same implementation without enabling a
   permissive runtime mode.
 
-Intentional invalid files inside the scanned production corpus require an exact
-`predicate-audit:allow-invalid <identity> <reason>` annotation. Go test files and `testdata` are not scanned by
-this command. Their negative identities are owned by executable grammar/contract tests; the broad candidate
-manifest and native tests must separately classify stale positive fixtures.
+### Occurrence-Exact Unrelated Classifications
+
+An unrelated classification is available only for a heuristic, name-derived Go candidate reported with
+`authority=predicate-shaped`. Use it when a declaration or assignment name resembles a predicate surface but the
+specific value belongs to another domain. It is not an exception to the predicate grammar and must not classify
+stored predicates, registered predicates, rule/config predicates, lifecycle tags, substitutions, or other
+authoritative evidence.
+
+Place this annotation in the same Go source file as the candidate:
+
+```go
+// predicate-audit:classify unrelated "quest.failed" line=983 column=15 surface=go-assignment:predicate reviewed
+```
+
+The containing file supplies the file coordinate; do not add a `file=` field. The quoted value, target line,
+target column, and extraction surface must identify exactly one candidate in that file. The final text is the
+required review basis: it must be nonblank and no more than 160 bytes. Keep it short and specific enough for a
+reviewer to understand why this occurrence is unrelated to graph predicates.
+
+The locator fails closed. A missing or moved target, wrong line, column, value, or surface, duplicate annotation,
+ambiguous match, malformed or overlong basis, or attempt to classify authoritative evidence produces a finding.
+Classifying one occurrence does not classify another occurrence of the same value.
+
+`predicate-audit:allow-invalid` has been removed. Every retained legacy broad marker is itself a
+`legacy-broad-allowance` finding, even when it matches no current candidate, and it suppresses nothing. Remove the
+marker and fix authoritative invalid evidence; use an occurrence-exact unrelated classification only when the
+auditor reports that exact candidate with `authority=predicate-shaped`.
+
+Go test files and `testdata` are not scanned by this command. Their negative identities are owned by executable
+grammar/contract tests; the broad candidate manifest and native tests must separately classify stale positive
+fixtures.
+
+### Output and Exit Contract
+
+`task predicate:audit` uses the default human-readable text report. Use the versioned, deterministic JSON report
+when preserving or processing machine evidence:
+
+```bash
+go run ./cmd/predicate-audit --format=json .
+```
+
+The JSON report includes audited roots; candidate, classification, and finding counts; every candidate's
+authority and status; each accepted classification's exact locator, value, and basis; and findings with stable
+codes. `--format=text` explicitly selects the default text behavior.
+
+The exit status is part of the release-gate contract:
+
+- `0`: the audited corpus is clean;
+- `1`: the audit completed and produced contract findings; and
+- `2`: invocation, filesystem/I/O, source-parse, report-encoding, or report-write failure.
 
 OpenSpec task 1.1 is complete for the declared local production corpus: the committed auditor generates the
 structured candidate set, while native grammar/contract tests own intentional invalid and positive test fixtures

@@ -22,17 +22,73 @@ import (
 
 // Candidate records one structurally extracted predicate use.
 type Candidate struct {
-	File      string
-	Line      int
-	Column    int
-	Predicate string
-	Surface   string
+	File                string    `json:"file"`
+	Line                int       `json:"line"`
+	Column              int       `json:"column"`
+	Predicate           string    `json:"value"`
+	Surface             string    `json:"surface"`
+	Authority           Authority `json:"authority"`
+	Status              string    `json:"status"`
+	ClassificationBasis string    `json:"classification_basis,omitempty"`
 }
 
-// Finding is an invalid, unclassified candidate.
+// Authority distinguishes graph predicate storage surfaces from heuristic
+// name-derived source candidates.
+type Authority string
+
+const (
+	// AuthorityStoredPredicate marks a source surface that authoritatively
+	// stores, registers, configures, or substitutes a graph predicate.
+	AuthorityStoredPredicate Authority = "stored-predicate"
+	// AuthorityPredicateShaped marks a heuristic Go declaration or assignment
+	// whose name caused extraction but whose value may belong to another domain.
+	AuthorityPredicateShaped Authority = "predicate-shaped"
+
+	// CandidateStatusValid marks a candidate accepted by the predicate grammar.
+	CandidateStatusValid = "valid"
+	// CandidateStatusFinding marks a candidate or marker producing a contract finding.
+	CandidateStatusFinding = "finding"
+	// CandidateStatusClassifiedUnrelated marks one exact accepted heuristic disposition.
+	CandidateStatusClassifiedUnrelated = "classified-unrelated"
+
+	maxClassificationsPerFile   = 100
+	maxClassificationLineBytes  = 512
+	maxClassificationBasisBytes = 160
+)
+
+// FindingCode is a stable production-audit contract code.
+type FindingCode string
+
+const (
+	// FindingInvalidPredicate identifies an unclassified grammar violation.
+	FindingInvalidPredicate FindingCode = "invalid-predicate"
+	// FindingLegacyBroadAllowance identifies a removed file/value-wide escape hatch.
+	FindingLegacyBroadAllowance FindingCode = "legacy-broad-allowance"
+	// FindingClassificationMalformed identifies an annotation outside the exact grammar or bounds.
+	FindingClassificationMalformed FindingCode = "classification-malformed"
+	// FindingClassificationDuplicate identifies repeated annotations for one exact locator.
+	FindingClassificationDuplicate FindingCode = "classification-duplicate"
+	// FindingClassificationAmbiguous identifies a locator resolving to multiple extracted candidates.
+	FindingClassificationAmbiguous FindingCode = "classification-ambiguous"
+	// FindingClassificationIneligible identifies an annotation targeting an authoritative occurrence.
+	FindingClassificationIneligible FindingCode = "classification-ineligible"
+	// FindingClassificationWrongLine identifies an otherwise exact locator with a moved target line.
+	FindingClassificationWrongLine FindingCode = "classification-wrong-line"
+	// FindingClassificationWrongColumn identifies an otherwise exact locator with a moved target column.
+	FindingClassificationWrongColumn FindingCode = "classification-wrong-column"
+	// FindingClassificationWrongSurface identifies a locator naming a different extraction surface.
+	FindingClassificationWrongSurface FindingCode = "classification-wrong-surface"
+	// FindingClassificationWrongValue identifies a locator naming a different extracted value.
+	FindingClassificationWrongValue FindingCode = "classification-wrong-value"
+	// FindingClassificationStale identifies a locator with no uniquely diagnosable current target.
+	FindingClassificationStale FindingCode = "classification-stale"
+)
+
+// Finding is an invalid candidate or classification-contract violation.
 type Finding struct {
 	Candidate
-	Reason string
+	Code   FindingCode `json:"code"`
+	Reason string      `json:"reason"`
 }
 
 var (
@@ -40,25 +96,56 @@ var (
 	structuredRE   = regexp.MustCompile(
 		`(?i)(?:predicate|predicates|phasePredicate|linkPredicate|referencePredicates|triplePredicate)` +
 			`["']?[[:space:]]*(?::|=)[[:space:]]*["'\x60]([^"'\x60]*)["'\x60]`)
-	allowRE        = regexp.MustCompile(`predicate-audit:allow-invalid[[:space:]]+([^[:space:]]+)[[:space:]]+(.+)$`)
-	lifecycleTagRE = regexp.MustCompile(`(?:^|[,[:space:]])predicate=([^,"[:space:]]+)`)
+	classificationRE  = regexp.MustCompile(`predicate-audit:classify[[:space:]]+unrelated[[:space:]]+("(?:[^"\\]|\\.)*")[[:space:]]+line=([0-9]+)[[:space:]]+column=([0-9]+)[[:space:]]+surface=([^[:space:]]+)[[:space:]]+(.+)$`)
+	lifecycleTagRE    = regexp.MustCompile(`(?:^|[,[:space:]])predicate=([^,"[:space:]]+)`)
+	yamlBlockScalarRE = regexp.MustCompile(
+		`(?:^|[:=-][[:space:]]*)[|>](?:[1-9][+-]?|[+-][1-9]?)?[[:space:]]*$`,
+	)
 )
 
-// Audit walks roots and returns every extracted candidate plus invalid
-// candidates that lack an explicit predicate-audit:allow-invalid annotation.
+type classification struct {
+	File            string
+	DeclarationLine int
+	TargetLine      int
+	TargetColumn    int
+	Surface         string
+	Value           string
+	Basis           string
+}
+
+type auditRoot struct {
+	physical     string
+	evidenceBase string
+	label        string
+}
+
+// Audit walks roots and returns every extracted candidate plus all stable
+// predicate and classification contract findings.
 func Audit(roots ...string) ([]Candidate, []Finding, error) {
-	symbols, err := collectGoSymbols(roots)
+	if len(roots) == 0 {
+		roots = []string{"."}
+	}
+	auditRoots, err := canonicalAuditRoots(roots)
+	if err != nil {
+		return nil, nil, err
+	}
+	physicalRoots := make([]string, 0, len(auditRoots))
+	for _, root := range auditRoots {
+		physicalRoots = append(physicalRoots, root.physical)
+	}
+	symbols, err := collectGoSymbols(physicalRoots)
 	if err != nil {
 		return nil, nil, err
 	}
 	var candidates []Candidate
-	for _, root := range roots {
-		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+	var findings []Finding
+	for _, root := range auditRoots {
+		err := filepath.WalkDir(root.physical, func(path string, entry os.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
 			if entry.IsDir() {
-				if path != root && ignoredDir(entry.Name()) {
+				if path != root.physical && ignoredDir(entry.Name()) {
 					return filepath.SkipDir
 				}
 				return nil
@@ -87,6 +174,14 @@ func Audit(roots ...string) ([]Candidate, []Finding, error) {
 			if err != nil {
 				return err
 			}
+			classifications, markerFindings, err := loadProductionClassifications(path)
+			if err != nil {
+				return err
+			}
+			_, classificationFindings := applyProductionClassifications(path, extracted, classifications)
+			normalizeEvidencePaths(root, path, extracted, markerFindings, classificationFindings)
+			findings = append(findings, markerFindings...)
+			findings = append(findings, classificationFindings...)
 			candidates = append(candidates, extracted...)
 			return nil
 		})
@@ -96,22 +191,158 @@ func Audit(roots ...string) ([]Candidate, []Finding, error) {
 	}
 
 	candidates = deduplicate(candidates)
-	findings := make([]Finding, 0)
-	allowCache := make(map[string]map[string]string)
-	for _, candidate := range candidates {
+	for index := range candidates {
+		candidate := &candidates[index]
+		if candidate.Status == CandidateStatusClassifiedUnrelated {
+			continue
+		}
 		if _, err := vocabulary.ParsePredicate(candidate.Predicate); err != nil {
-			allowed, ok := allowCache[candidate.File]
-			if !ok {
-				allowed, _ = loadAllowances(candidate.File)
-				allowCache[candidate.File] = allowed
+			candidate.Status = CandidateStatusFinding
+			findings = append(findings, Finding{
+				Candidate: *candidate, Code: FindingInvalidPredicate, Reason: err.Error(),
+			})
+			continue
+		}
+		candidate.Status = CandidateStatusValid
+	}
+	sortFindings(findings)
+	return candidates, findings, nil
+}
+
+func canonicalAuditRoots(roots []string) ([]auditRoot, error) {
+	physical := make([]string, 0, len(roots))
+	bases := make([]string, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		absolute, err := filepath.Abs(root)
+		if err != nil {
+			return nil, fmt.Errorf("resolve audit root %q: %w", root, err)
+		}
+		absolute = filepath.Clean(absolute)
+		if _, duplicate := seen[absolute]; duplicate {
+			continue
+		}
+		seen[absolute] = struct{}{}
+		info, err := os.Stat(absolute)
+		if err != nil {
+			return nil, fmt.Errorf("inspect audit root %q: %w", root, err)
+		}
+		physical = append(physical, absolute)
+		if repositoryRoot, found := findGitWorktreeRoot(absolute, info.IsDir()); found {
+			bases = append(bases, repositoryRoot)
+			continue
+		}
+		localBase := absolute
+		if !info.IsDir() {
+			localBase = filepath.Dir(absolute)
+		}
+		bases = append(bases, localBase)
+	}
+	type rootAndBase struct {
+		physical string
+		base     string
+	}
+	pairs := make([]rootAndBase, 0, len(physical))
+	for index := range physical {
+		pairs = append(pairs, rootAndBase{physical: physical[index], base: bases[index]})
+	}
+	sort.Slice(pairs, func(i, j int) bool {
+		return pairs[i].physical < pairs[j].physical
+	})
+	bases = bases[:0]
+	for _, pair := range pairs {
+		bases = append(bases, pair.base)
+	}
+	base := commonPath(bases)
+	out := make([]auditRoot, 0, len(physical))
+	for _, pair := range pairs {
+		label, err := filepath.Rel(base, pair.physical)
+		if err != nil {
+			return nil, fmt.Errorf("label audit root %q: %w", pair.physical, err)
+		}
+		out = append(out, auditRoot{
+			physical: pair.physical, evidenceBase: base, label: filepath.ToSlash(label),
+		})
+	}
+	return out, nil
+}
+
+func findGitWorktreeRoot(path string, isDirectory bool) (string, bool) {
+	current := path
+	if !isDirectory {
+		current = filepath.Dir(current)
+	}
+	for {
+		gitMetadata, err := os.Stat(filepath.Join(current, ".git"))
+		if err == nil && (gitMetadata.IsDir() || gitMetadata.Mode().IsRegular()) {
+			return current, true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", false
+		}
+		current = parent
+	}
+}
+
+func commonPath(paths []string) string {
+	if len(paths) == 0 {
+		return "."
+	}
+	base := paths[0]
+	for _, path := range paths[1:] {
+		for !pathWithin(base, path) {
+			parent := filepath.Dir(base)
+			if parent == base {
+				break
 			}
-			if _, classified := allowed[candidate.Predicate]; classified {
-				continue
-			}
-			findings = append(findings, Finding{Candidate: candidate, Reason: err.Error()})
+			base = parent
 		}
 	}
-	return candidates, findings, nil
+	return base
+}
+
+func pathWithin(base, path string) bool {
+	relative, err := filepath.Rel(base, path)
+	if err != nil {
+		return false
+	}
+	return relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
+func normalizeEvidencePaths(
+	root auditRoot,
+	physicalPath string,
+	candidates []Candidate,
+	findingGroups ...[]Finding,
+) {
+	relative, err := filepath.Rel(root.evidenceBase, physicalPath)
+	if err != nil {
+		return
+	}
+	display := filepath.ToSlash(relative)
+	for index := range candidates {
+		candidates[index].File = display
+	}
+	for _, findings := range findingGroups {
+		for index := range findings {
+			findings[index].File = display
+		}
+	}
+}
+
+func canonicalRootLabels(roots []string) []string {
+	auditRoots, err := canonicalAuditRoots(roots)
+	if err != nil {
+		labels := append([]string(nil), roots...)
+		sort.Strings(labels)
+		return labels
+	}
+	labels := make([]string, 0, len(auditRoots))
+	for _, root := range auditRoots {
+		labels = append(labels, root.label)
+	}
+	return labels
 }
 
 type goSymbols struct {
@@ -282,7 +513,7 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			return "", false
 		}
 	}
-	addExpr := func(expr ast.Expr, surface string) {
+	addExpr := func(expr ast.Expr, surface string, authority Authority) {
 		value, ok := resolve(expr)
 		if !ok {
 			return
@@ -294,6 +525,7 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		for _, predicate := range literalCandidates(value) {
 			out = append(out, Candidate{
 				File: path, Line: position.Line, Column: position.Column, Predicate: predicate, Surface: surface,
+				Authority: authority,
 			})
 		}
 	}
@@ -302,25 +534,35 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 		switch n := node.(type) {
 		case *ast.KeyValueExpr:
 			if ident, ok := n.Key.(*ast.Ident); ok && isPredicateName(ident.Name) {
-				addExpr(n.Value, "go-field:"+ident.Name)
+				addExpr(n.Value, "go-field:"+ident.Name, AuthorityStoredPredicate)
 			}
 		case *ast.ValueSpec:
 			for i, name := range n.Names {
-				isVocabularyConst := strings.Contains(filepath.ToSlash(path), "/vocabulary/")
-				if (isPredicateDeclarationName(name.Name) || isVocabularyConst) && i < len(n.Values) {
-					addExpr(n.Values[i], "go-declaration:"+name.Name)
+				if isPredicateDeclarationName(name.Name) && i < len(n.Values) {
+					addExpr(n.Values[i], "go-declaration:"+name.Name, AuthorityPredicateShaped)
 				}
 			}
 		case *ast.AssignStmt:
 			for i, lhs := range n.Lhs {
 				if ident, ok := lhs.(*ast.Ident); ok && strings.EqualFold(ident.Name, "predicate") && i < len(n.Rhs) {
-					addExpr(n.Rhs[i], "go-assignment:"+ident.Name)
+					addExpr(n.Rhs[i], "go-assignment:"+ident.Name, AuthorityPredicateShaped)
+				}
+				if selector, ok := lhs.(*ast.SelectorExpr); ok &&
+					strings.EqualFold(selector.Sel.Name, "predicate") &&
+					i < len(n.Rhs) {
+					addExpr(n.Rhs[i], "go-assignment:"+selector.Sel.Name, AuthorityStoredPredicate)
 				}
 			}
 		case *ast.CallExpr:
 			if selector, ok := n.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == "Register" && len(n.Args) > 0 {
-				if pkg, ok := selector.X.(*ast.Ident); ok && pkg.Name == "vocabulary" {
-					addExpr(n.Args[0], "go-register")
+				if pkg, ok := selector.X.(*ast.Ident); ok {
+					packageName := pkg.Name
+					if imported, exists := importPackages[pkg.Name]; exists {
+						packageName = imported
+					}
+					if packageName == "vocabulary" {
+						addExpr(n.Args[0], "go-register", AuthorityStoredPredicate)
+					}
 				}
 			}
 		case *ast.Field:
@@ -331,7 +573,7 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 					for _, predicate := range lifecycleTagCandidates(value) {
 						out = append(out, Candidate{
 							File: path, Line: position.Line, Column: position.Column,
-							Predicate: predicate, Surface: "go-lifecycle-tag",
+							Predicate: predicate, Surface: "go-lifecycle-tag", Authority: AuthorityStoredPredicate,
 						})
 					}
 				}
@@ -348,7 +590,7 @@ func auditGo(path string, symbols *goSymbols) ([]Candidate, error) {
 			for _, predicate := range substitutionCandidates(value) {
 				out = append(out, Candidate{
 					File: path, Line: position.Line, Column: position.Column,
-					Predicate: predicate, Surface: "go-substitution",
+					Predicate: predicate, Surface: "go-substitution", Authority: AuthorityStoredPredicate,
 				})
 			}
 		}
@@ -364,8 +606,10 @@ func auditJSON(path string) ([]Candidate, error) {
 	}
 	var root any
 	if err := json.Unmarshal(data, &root); err != nil {
-		// JSON5 and template-bearing files fall back to the structured lexer.
-		return auditStructuredText(path)
+		if strings.EqualFold(filepath.Ext(path), ".json5") {
+			return auditStructuredText(path)
+		}
+		return nil, fmt.Errorf("parse JSON %s: %w", path, err)
 	}
 	return walkConfig(path, root), nil
 }
@@ -401,11 +645,15 @@ func walkConfig(path string, root any) []Candidate {
 			}
 		case string:
 			if isPredicateConfigKey(key) && !strings.HasPrefix(typed, "$") && typed != "" && !isSymbolicConstant(typed) {
-				out = append(out, Candidate{File: path, Line: findLine(path, typed), Predicate: typed, Surface: "config:" + key})
+				out = append(out, Candidate{
+					File: path, Line: findLine(path, typed), Predicate: typed, Surface: "config:" + key,
+					Authority: AuthorityStoredPredicate,
+				})
 			}
 			for _, predicate := range substitutionCandidates(typed) {
 				out = append(out, Candidate{
 					File: path, Line: findLine(path, typed), Predicate: predicate, Surface: "config-substitution",
+					Authority: AuthorityStoredPredicate,
 				})
 			}
 		}
@@ -426,10 +674,16 @@ func auditStructuredText(path string) ([]Candidate, error) {
 		line++
 		text := scanner.Text()
 		for _, match := range structuredRE.FindAllStringSubmatch(text, -1) {
-			out = append(out, Candidate{File: path, Line: line, Predicate: match[1], Surface: "structured-text"})
+			out = append(out, Candidate{
+				File: path, Line: line, Predicate: match[1], Surface: "structured-text",
+				Authority: AuthorityStoredPredicate,
+			})
 		}
 		for _, predicate := range substitutionCandidates(text) {
-			out = append(out, Candidate{File: path, Line: line, Predicate: predicate, Surface: "structured-substitution"})
+			out = append(out, Candidate{
+				File: path, Line: line, Predicate: predicate, Surface: "structured-substitution",
+				Authority: AuthorityStoredPredicate,
+			})
 		}
 	}
 	return out, scanner.Err()
@@ -515,18 +769,519 @@ func findLine(path, needle string) int {
 	return 0
 }
 
-func loadAllowances(path string) (map[string]string, error) {
+func loadProductionClassifications(path string) ([]classification, []Finding, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	allowed := make(map[string]string)
-	for _, line := range strings.Split(string(data), "\n") {
-		if match := allowRE.FindStringSubmatch(line); match != nil {
-			allowed[match[1]] = strings.TrimSpace(match[2])
+	type sourceComment struct {
+		line int
+		text string
+	}
+	var comments []sourceComment
+	isGo := filepath.Ext(path) == ".go"
+	if isGo {
+		fset := token.NewFileSet()
+		file, err := parser.ParseFile(fset, path, data, parser.ParseComments)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse Go annotations %s: %w", path, err)
+		}
+		for _, group := range file.Comments {
+			for _, comment := range group.List {
+				comments = append(comments, sourceComment{
+					line: fset.Position(comment.Pos()).Line,
+					text: comment.Text,
+				})
+			}
+		}
+	} else {
+		for _, comment := range nonGoProductionComments(path, data) {
+			comments = append(comments, sourceComment{line: comment.line, text: comment.text})
 		}
 	}
-	return allowed, nil
+	var classifications []classification
+	var findings []Finding
+	for _, comment := range comments {
+		if strings.Contains(comment.text, "predicate-audit:allow-invalid") {
+			findings = append(findings, markerFinding(
+				path, comment.line, FindingLegacyBroadAllowance,
+				"predicate-audit:allow-invalid is a removed broad allowance and suppresses no candidate",
+			))
+		}
+		if !isGo || !strings.Contains(comment.text, "predicate-audit:classify") {
+			continue
+		}
+		if strings.Count(comment.text, "predicate-audit:classify") != 1 {
+			findings = append(findings, markerFinding(
+				path, comment.line, FindingClassificationDuplicate,
+				"one source comment must contain exactly one production classification",
+			))
+			continue
+		}
+		item, parseErr := parseProductionClassification(path, comment.line, comment.text)
+		if parseErr != nil {
+			findings = append(findings, markerFinding(path, comment.line, FindingClassificationMalformed, parseErr.Error()))
+			continue
+		}
+		classifications = append(classifications, item)
+		if len(classifications) > maxClassificationsPerFile {
+			findings = append(findings, markerFinding(
+				path, comment.line, FindingClassificationMalformed,
+				fmt.Sprintf("more than %d production classifications", maxClassificationsPerFile),
+			))
+			classifications = classifications[:maxClassificationsPerFile]
+		}
+	}
+	return classifications, findings, nil
+}
+
+type nonGoComment struct {
+	line int
+	text string
+}
+
+func nonGoProductionComments(path string, data []byte) []nonGoComment {
+	extension := strings.ToLower(filepath.Ext(path))
+	switch extension {
+	case ".yaml", ".yml":
+		return yamlProductionComments(data)
+	case ".py", ".toml", ".graphql", ".gql":
+		return hashProductionComments(data)
+	case ".js", ".mjs", ".cjs", ".ts", ".tsx", ".proto", ".cue", ".json5":
+		return slashProductionComments(data)
+	case ".svelte":
+		comments := slashProductionComments(data)
+		comments = append(comments, markupProductionComments(data)...)
+		sort.Slice(comments, func(i, j int) bool {
+			if comments[i].line != comments[j].line {
+				return comments[i].line < comments[j].line
+			}
+			return comments[i].text < comments[j].text
+		})
+		return comments
+	default:
+		return nil
+	}
+}
+
+func yamlProductionComments(data []byte) []nonGoComment {
+	var comments []nonGoComment
+	blockParentIndent := -1
+	for lineIndex, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		indent := leadingSpaceCount(line)
+		if blockParentIndent >= 0 {
+			if trimmed == "" || indent > blockParentIndent {
+				continue
+			}
+			blockParentIndent = -1
+		}
+		commentStart := yamlCommentStart(line)
+		code := line
+		if commentStart >= 0 {
+			code = line[:commentStart]
+			comments = append(comments, nonGoComment{
+				line: lineIndex + 1,
+				text: line[commentStart:],
+			})
+		}
+		if yamlBlockScalarRE.MatchString(strings.TrimSpace(code)) {
+			blockParentIndent = indent
+		}
+	}
+	return comments
+}
+
+func leadingSpaceCount(line string) int {
+	count := 0
+	for count < len(line) && line[count] == ' ' {
+		count++
+	}
+	return count
+}
+
+func yamlCommentStart(line string) int {
+	var quote byte
+	for index := 0; index < len(line); {
+		char := line[index]
+		if quote != 0 {
+			if quote == '"' && char == '\\' {
+				index += 2
+				continue
+			}
+			if quote == '\'' && char == '\'' &&
+				index+1 < len(line) && line[index+1] == '\'' {
+				index += 2
+				continue
+			}
+			if char == quote {
+				quote = 0
+			}
+			index++
+			continue
+		}
+		if char == '"' || char == '\'' {
+			quote = char
+			index++
+			continue
+		}
+		if char == '#' {
+			return index
+		}
+		index++
+	}
+	return -1
+}
+
+func hashProductionComments(data []byte) []nonGoComment {
+	var comments []nonGoComment
+	var tripleQuote string
+	for lineIndex, line := range strings.Split(string(data), "\n") {
+		var quote byte
+		for index := 0; index < len(line); {
+			if tripleQuote != "" {
+				end := strings.Index(line[index:], tripleQuote)
+				if end == -1 {
+					break
+				}
+				index += end + len(tripleQuote)
+				tripleQuote = ""
+				continue
+			}
+			if quote != 0 {
+				if line[index] == '\\' && quote == '"' {
+					index += 2
+					continue
+				}
+				if line[index] == quote {
+					quote = 0
+				}
+				index++
+				continue
+			}
+			if index+3 <= len(line) &&
+				(line[index:index+3] == `"""` || line[index:index+3] == `'''`) {
+				tripleQuote = line[index : index+3]
+				index += 3
+				continue
+			}
+			if line[index] == '"' || line[index] == '\'' {
+				quote = line[index]
+				index++
+				continue
+			}
+			if line[index] == '#' {
+				comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:]})
+				break
+			}
+			index++
+		}
+	}
+	return comments
+}
+
+func slashProductionComments(data []byte) []nonGoComment {
+	lines := strings.Split(string(data), "\n")
+	var comments []nonGoComment
+	inBlock := false
+	var quote byte
+	for lineIndex, line := range lines {
+		for index := 0; index < len(line); {
+			if inBlock {
+				end := strings.Index(line[index:], "*/")
+				if end == -1 {
+					comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:]})
+					break
+				}
+				end += index
+				comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:end]})
+				index = end + 2
+				inBlock = false
+				continue
+			}
+			char := line[index]
+			if quote != 0 {
+				if char == '\\' {
+					index += 2
+					continue
+				}
+				if char == quote {
+					quote = 0
+				}
+				index++
+				continue
+			}
+			if char == '"' || char == '\'' || char == '`' {
+				quote = char
+				index++
+				continue
+			}
+			if index+1 < len(line) && line[index:index+2] == "//" {
+				comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:]})
+				break
+			}
+			if index+1 < len(line) && line[index:index+2] == "/*" {
+				inBlock = true
+				index += 2
+				continue
+			}
+			index++
+		}
+		if !quotedLineContinues(quote, line) {
+			quote = 0
+		}
+	}
+	return comments
+}
+
+func markupProductionComments(data []byte) []nonGoComment {
+	lines := strings.Split(string(data), "\n")
+	var comments []nonGoComment
+	inComment := false
+	var quote byte
+	for lineIndex, line := range lines {
+		for index := 0; index < len(line); {
+			if inComment {
+				end := strings.Index(line[index:], "-->")
+				if end == -1 {
+					comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:]})
+					break
+				}
+				end += index
+				comments = append(comments, nonGoComment{line: lineIndex + 1, text: line[index:end]})
+				index = end + 3
+				inComment = false
+				continue
+			}
+			if quote != 0 {
+				if line[index] == '\\' {
+					index += 2
+					continue
+				}
+				if line[index] == quote {
+					quote = 0
+				}
+				index++
+				continue
+			}
+			if line[index] == '"' || line[index] == '\'' || line[index] == '`' {
+				quote = line[index]
+				index++
+				continue
+			}
+			if index+4 <= len(line) && line[index:index+4] == "<!--" {
+				inComment = true
+				index += 4
+				continue
+			}
+			index++
+		}
+		if !quotedLineContinues(quote, line) {
+			quote = 0
+		}
+	}
+	return comments
+}
+
+func quotedLineContinues(quote byte, line string) bool {
+	if quote == '`' {
+		return true
+	}
+	if quote != '"' && quote != '\'' {
+		return false
+	}
+	backslashes := 0
+	for index := len(line) - 1; index >= 0 && line[index] == '\\'; index-- {
+		backslashes++
+	}
+	return backslashes%2 == 1
+}
+
+func parseProductionClassification(path string, line int, text string) (classification, error) {
+	if len(text) > maxClassificationLineBytes {
+		return classification{}, fmt.Errorf("production classification exceeds %d bytes", maxClassificationLineBytes)
+	}
+	match := classificationRE.FindStringSubmatch(text)
+	if match == nil {
+		return classification{}, fmt.Errorf("malformed production unrelated classification")
+	}
+	value, err := strconv.Unquote(match[1])
+	if err != nil {
+		return classification{}, fmt.Errorf("unquote production classification: %w", err)
+	}
+	targetLine, err := strconv.Atoi(match[2])
+	if err != nil || targetLine < 1 {
+		return classification{}, fmt.Errorf("classification target line must be positive")
+	}
+	targetColumn, err := strconv.Atoi(match[3])
+	if err != nil || targetColumn < 1 {
+		return classification{}, fmt.Errorf("classification target column must be positive")
+	}
+	basis := strings.TrimSpace(match[5])
+	basis = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(basis, "*/"), "-->"))
+	if basis == "" || len(basis) > maxClassificationBasisBytes {
+		return classification{}, fmt.Errorf(
+			"classification basis must be 1-%d bytes", maxClassificationBasisBytes,
+		)
+	}
+	return classification{
+		File: path, DeclarationLine: line, TargetLine: targetLine, TargetColumn: targetColumn,
+		Surface: match[4], Value: value, Basis: basis,
+	}, nil
+}
+
+func applyProductionClassifications(
+	path string,
+	candidates []Candidate,
+	classifications []classification,
+) ([]classification, []Finding) {
+	var accepted []classification
+	var findings []Finding
+	duplicates := make(map[string]bool)
+	firstDeclaration := make(map[string]int)
+	for _, item := range classifications {
+		key := classificationKey(item)
+		if first, exists := firstDeclaration[key]; exists {
+			duplicates[key] = true
+			findings = append(findings, classificationFinding(
+				item, FindingClassificationDuplicate,
+				fmt.Sprintf("duplicate classification; first declared at line %d", first),
+			))
+			continue
+		}
+		firstDeclaration[key] = item.DeclarationLine
+	}
+	for _, item := range classifications {
+		if duplicates[classificationKey(item)] {
+			continue
+		}
+		matches := candidateIndexes(candidates, func(candidate Candidate) bool {
+			return candidate.Line == item.TargetLine &&
+				candidate.Column == item.TargetColumn &&
+				candidate.Surface == item.Surface &&
+				candidate.Predicate == item.Value
+		})
+		if len(matches) > 1 {
+			findings = append(findings, classificationFinding(
+				item, FindingClassificationAmbiguous,
+				fmt.Sprintf("classification resolves to %d candidates", len(matches)),
+			))
+			continue
+		}
+		if len(matches) == 0 {
+			code := diagnoseClassificationMiss(candidates, item)
+			findings = append(findings, classificationFinding(
+				item, code,
+				fmt.Sprintf(
+					"classification does not resolve exactly at line=%d column=%d surface=%s value=%q",
+					item.TargetLine, item.TargetColumn, item.Surface, item.Value,
+				),
+			))
+			continue
+		}
+		candidate := &candidates[matches[0]]
+		if candidate.Authority != AuthorityPredicateShaped {
+			findingCandidate := *candidate
+			findingCandidate.Status = CandidateStatusFinding
+			findings = append(findings, Finding{
+				Candidate: findingCandidate,
+				Code:      FindingClassificationIneligible,
+				Reason:    "only predicate-shaped heuristic Go occurrences may be classified unrelated",
+			})
+			continue
+		}
+		candidate.Status = CandidateStatusClassifiedUnrelated
+		candidate.ClassificationBasis = item.Basis
+		accepted = append(accepted, item)
+	}
+	_ = path
+	return accepted, findings
+}
+
+func diagnoseClassificationMiss(candidates []Candidate, item classification) FindingCode {
+	for _, candidate := range candidates {
+		if candidate.Line == item.TargetLine && candidate.Column == item.TargetColumn &&
+			candidate.Surface == item.Surface && candidate.Predicate != item.Value {
+			return FindingClassificationWrongValue
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.Line == item.TargetLine && candidate.Column == item.TargetColumn &&
+			candidate.Predicate == item.Value && candidate.Surface != item.Surface {
+			return FindingClassificationWrongSurface
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.Line == item.TargetLine && candidate.Surface == item.Surface &&
+			candidate.Predicate == item.Value && candidate.Column != item.TargetColumn {
+			return FindingClassificationWrongColumn
+		}
+	}
+	for _, candidate := range candidates {
+		if candidate.Column == item.TargetColumn && candidate.Surface == item.Surface &&
+			candidate.Predicate == item.Value && candidate.Line != item.TargetLine {
+			return FindingClassificationWrongLine
+		}
+	}
+	return FindingClassificationStale
+}
+
+func classificationKey(item classification) string {
+	return fmt.Sprintf(
+		"%d:%d:%s:%s", item.TargetLine, item.TargetColumn, item.Surface, item.Value,
+	)
+}
+
+func candidateIndexes(candidates []Candidate, matches func(Candidate) bool) []int {
+	var indexes []int
+	for index, candidate := range candidates {
+		if matches(candidate) {
+			indexes = append(indexes, index)
+		}
+	}
+	return indexes
+}
+
+func markerFinding(path string, line int, code FindingCode, reason string) Finding {
+	return Finding{
+		Candidate: Candidate{
+			File: path, Line: line, Surface: "classification", Authority: AuthorityPredicateShaped,
+			Status: CandidateStatusFinding,
+		},
+		Code: code, Reason: reason,
+	}
+}
+
+func classificationFinding(item classification, code FindingCode, reason string) Finding {
+	return Finding{
+		Candidate: Candidate{
+			File: item.File, Line: item.TargetLine, Column: item.TargetColumn,
+			Predicate: item.Value, Surface: item.Surface, Authority: AuthorityPredicateShaped,
+			Status: CandidateStatusFinding,
+		},
+		Code: code, Reason: reason,
+	}
+}
+
+func sortFindings(findings []Finding) {
+	sort.Slice(findings, func(i, j int) bool {
+		if findings[i].File != findings[j].File {
+			return findings[i].File < findings[j].File
+		}
+		if findings[i].Line != findings[j].Line {
+			return findings[i].Line < findings[j].Line
+		}
+		if findings[i].Column != findings[j].Column {
+			return findings[i].Column < findings[j].Column
+		}
+		if findings[i].Code != findings[j].Code {
+			return findings[i].Code < findings[j].Code
+		}
+		if findings[i].Surface != findings[j].Surface {
+			return findings[i].Surface < findings[j].Surface
+		}
+		return findings[i].Predicate < findings[j].Predicate
+	})
 }
 
 func deduplicate(in []Candidate) []Candidate {

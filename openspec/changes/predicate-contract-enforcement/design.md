@@ -117,7 +117,43 @@ Any replace/update operation validates the intended final candidate before delet
 validation or persistence fails, the prior valid state remains unchanged. This is ordinary mutation
 atomicity, not deprecated compatibility behavior.
 
-### 8. Make the fail-closed gate evidence-based
+### 8. Make production non-predicate classifications occurrence-exact
+
+The production predicate auditor may classify a scanner candidate as unrelated
+only when the extractor marks that occurrence as a heuristic
+`predicate-shaped` surface rather than an authoritative `stored-predicate`
+surface. Vocabulary registration, lifecycle tags, rule/config predicates and
+substitutions, and recognized `message.Triple.Predicate` fields are
+authoritative and cannot be disposed as unrelated.
+
+Production Go source uses the same explicit locator shape as the entity-ID
+auditor:
+
+```text
+// predicate-audit:classify unrelated "quest.failed" line=983 column=15 surface=go-assignment:predicate reviewed
+```
+
+The containing file is authoritative and the annotation names the exact target
+line, column, extraction surface, quoted value, and a bounded nonblank review
+basis. One annotation must resolve to exactly one candidate. A moved or missing
+target, wrong value or surface, duplicate annotation, or locator that resolves
+to multiple candidates fails closed. A same-value occurrence elsewhere remains
+independent.
+
+`predicate-audit:allow-invalid` is removed rather than deprecated. Any remaining
+broad allowance is itself a finding, even when no candidate currently uses it.
+Intentional malformed stored predicates remain confined to the complementary
+test-fixture corpus and its exact `predicate-audit:invalid` contract.
+
+The CLI retains its existing text output by default and adds
+`--format=text|json`. JSON output is deterministic and versioned. It reports the
+audited roots, candidate/classification/finding counts, each candidate's
+authority and status, every accepted unrelated classification with its exact
+locator and basis, and every finding with a stable code. Exit status remains
+zero for a clean corpus, one for contract findings, and two for invocation,
+I/O, source-parse, or report-encoding failures.
+
+### 9. Make the fail-closed gate evidence-based
 
 Enforcement requires:
 

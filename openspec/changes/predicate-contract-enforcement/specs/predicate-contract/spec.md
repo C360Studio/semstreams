@@ -115,6 +115,76 @@ MUST resolve to exactly one candidate.
 - **THEN** it accepts the exception only when exactly one candidate matches and parsing returns that reason
 - **AND** a missing, stale, duplicate, broad, unmatched, or wrong-reason classification fails the audit
 
+### Requirement: Production non-predicate classifications are occurrence-exact
+
+The production predicate auditor MUST distinguish authoritative
+`stored-predicate` candidates from heuristic `predicate-shaped` candidates.
+Only a heuristic candidate MAY be classified as unrelated to graph predicates.
+Vocabulary registration, lifecycle tags, rule and configuration predicates and
+substitutions, and recognized `message.Triple.Predicate` fields MUST remain
+authoritative and MUST NOT accept an unrelated classification.
+
+A production classification MUST use
+`predicate-audit:classify unrelated "<value>" line=<line> column=<column> surface=<surface> <basis>`.
+The containing source file, target line, target column, extraction surface,
+exact quoted value, and bounded nonblank basis MUST identify exactly one
+candidate. Missing, moved, stale, duplicate, ambiguous, wrong-value, or
+wrong-surface classifications MUST fail. A same-value candidate at another
+occurrence MUST remain independently audited.
+
+`predicate-audit:allow-invalid` MUST NOT be accepted. Any retained broad
+allowance MUST fail the production audit even when it currently matches no
+candidate. Intentional malformed stored-predicate fixtures MUST remain under
+the complementary test-fixture audit's exact `predicate-audit:invalid`
+contract.
+
+The production CLI MUST retain text output as its default and MUST support a
+deterministic, versioned JSON report. The JSON report MUST include roots,
+candidate, classification, and finding counts; each candidate's authority and
+status; each accepted unrelated classification's file, line, column, surface,
+value, and basis; and findings with stable codes. A clean corpus MUST exit zero,
+contract findings MUST exit one, and invocation, I/O, source-parse, or
+report-encoding failures MUST exit two.
+
+#### Scenario: one exact non-predicate occurrence is accepted and reported
+
+- **GIVEN** one heuristic `go-assignment:predicate` candidate carries an exact
+  unrelated classification
+- **WHEN** the production audit runs in JSON mode
+- **THEN** that occurrence produces no invalid-predicate finding
+- **AND** the report records its exact locator, value, and review basis
+
+#### Scenario: a second same-value occurrence remains independently audited
+
+- **GIVEN** one exact occurrence of a value is classified as unrelated
+- **AND** the same file contains a second candidate with the same value
+- **WHEN** the production audit runs
+- **THEN** the classification resolves only the named occurrence
+- **AND** the second occurrence remains valid or becomes its own finding
+
+#### Scenario: stale or ambiguous classification fails closed
+
+- **GIVEN** an unrelated classification has a moved line or column, wrong
+  surface or value, duplicate locator, or locator matching multiple candidates
+- **WHEN** the production audit resolves classifications
+- **THEN** the audit exits with a stable contract finding
+- **AND** no candidate is silently disposed
+
+#### Scenario: stored predicates cannot be classified as unrelated
+
+- **GIVEN** a recognized authoritative stored-predicate occurrence
+- **WHEN** an unrelated classification targets that occurrence
+- **THEN** the production audit rejects the classification
+- **AND** predicate grammar validation still applies to the candidate
+
+#### Scenario: a broad legacy allowance is rejected
+
+- **GIVEN** scanned production source contains
+  `predicate-audit:allow-invalid`
+- **WHEN** the production audit runs
+- **THEN** it reports a stable legacy-broad-allowance finding
+- **AND** the marker suppresses no candidate
+
 ### Requirement: The beta cutover updates owned producers and resets incompatible state
 
 The breaking release MUST update every SemStreams producer, owned reference design, generated schema/tool

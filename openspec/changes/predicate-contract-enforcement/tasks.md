@@ -87,6 +87,27 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       `lineage.*` occurrence is removed unless it belongs to a record explicitly identified as historical
 - [ ] 5.1b Run the same production and fixture audits in every owned sister repository and reference design; require
       zero unexplained violations before the v1 release/archive gate
+- [ ] 5.1c Resolve SemStreams #671 with a RED/GREEN and mutation-tested
+      production classification contract. Model
+      `predicate-audit:classify unrelated "<value>" line=<line> column=<column> surface=<surface> <basis>`
+      after the entity-ID auditor. Bind every classification to one exact file,
+      line, column, extraction surface, quoted value, and bounded nonblank
+      basis; reject moved, stale, duplicate, ambiguous, wrong-value, and
+      wrong-surface locators. Mark candidates as authoritative
+      `stored-predicate` or heuristic `predicate-shaped`, permit unrelated
+      classifications only for the heuristic kind, and prove a classified
+      value cannot hide a same-value stored predicate. Remove
+      `predicate-audit:allow-invalid` completely and make any retained marker a
+      stable `legacy-broad-allowance` finding. Preserve the separate exact
+      `predicate-audit:invalid` test-fixture contract. Add deterministic
+      `--format=text|json` output without changing default text output; JSON
+      must report versioned roots, counts, candidates, exact classifications
+      with basis, and stable-code findings. Prove exit statuses zero for clean,
+      one for contract findings, and two for invocation/I/O/parse/encode
+      failures. Require focused and full race tests, both predicate audit
+      tasks, strict OpenSpec validation, clean schema/diff checks, architect,
+      semstreams-developer, semstreams-reviewer, and technical-writer approval,
+      and live CI before checking this task
 - [x] 5.2 Seed synthetic incompatible beta state, run the exact wipe/restart/reseed procedure, and prove expected
       query-result fixtures without exporting, inspecting, or preserving that state. Evidence:
       `TestIntegration_PredicateCleanWipeReseedRestoresQueryParity` deletes the graph-index-owned incompatible
