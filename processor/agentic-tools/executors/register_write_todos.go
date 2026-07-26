@@ -1,12 +1,17 @@
 package executors
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+)
+
+var errWriteTodosMutationClientRequired = errors.New(
+	"register write_todos: projection mutation client is required",
 )
 
 // registerWriteTodos wires the ADR-036 write_todos tool. The tool
@@ -17,7 +22,7 @@ import (
 // deployments.
 func registerWriteTodos(reg *agentictools.ExecutorRegistry, client projection.OwnedReplacer, platform component.PlatformMeta, logger *slog.Logger) error {
 	if client == nil {
-		return fmt.Errorf("register write_todos: projection mutation client is required")
+		return errWriteTodosMutationClientRequired
 	}
 	executor := agentictools.NewWriteTodosExecutor(client, platform)
 	executor.SetLogger(logger)

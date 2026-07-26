@@ -190,7 +190,12 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 		gate("emit_diagnosis", func() error { return registerEmitDiagnosis(reg, deps.NATSClient, deps.Platform, logger) })
 		gate("emit_lesson", func() error { return registerEmitLesson(reg, deps.NATSClient, deps.Platform, logger) })
 		gate("graph_query", func() error { return registerGraphQuery(ctx, reg, deps.NATSClient, logger) })
-		gate("write_todos", func() error { return registerWriteTodos(reg, deps.MutationClient, deps.Platform, logger) })
+		gate("write_todos", func() error {
+			if deps.MutationClient == nil {
+				return errWriteTodosMutationClientRequired
+			}
+			return registerWriteTodos(reg, deps.MutationClient, deps.Platform, logger)
+		})
 		gate("scratchpad", func() error { return registerScratchpad(reg, deps.NATSClient, deps.Platform, logger) })
 		// Gateway-first discovery tools (PR #54 step 2): thin wrappers
 		// over the new graph.query.summary + graph.query.searchGraph
