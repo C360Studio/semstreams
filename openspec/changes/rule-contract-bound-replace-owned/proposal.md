@@ -19,12 +19,14 @@ the processor receives only `projection.OwnedReplacer`, and rule execution names
 
 ## What Changes
 
-- Replace rule-pack `BindAndHeartbeat` and owner-token injection with exactly one `BindMutationClient` per enabled
-  contract-bearing rule pack before `StartAll`.
-- Preflight every enabled pack, its immutable contracts, and all `replace_owned` action targets before the first
-  client bind.
-- Treat invalid composition, overlap, heartbeat, binding, and missing mutation dependencies as fail-closed boot
-  errors.
+- Replace rule-pack `BindAndHeartbeat` and owner-token injection with one complete immutable `MutationClient` per
+  disjoint, enabled, contract-bearing owner `rule-pack.<packID>` before `StartAll`.
+- Preflight every enabled rule pack, its immutable contracts, and all `replace_owned` action targets before the
+  first rule-pack bind. The built-in aggregate from #696 intentionally binds earlier and is an incumbent during
+  rule-pack binding.
+- Enforce the Registry-wide one-successful-registration invariant. Duplicate pack IDs fail preflight; repeated
+  binder invocation returns `ErrOwnerAlreadyBound`; every bind, heartbeat, dependency, pack-pack overlap, and
+  pack-vs-built-in overlap error aborts boot.
 - Inject the narrow `projection.OwnedReplacer` capability into each rule processor.
 - Build one immutable exact target index from the pack-level contracts and use it for initial load and hot reload.
 - Require every `replace_owned` action to name its projection contract and named `replace-owned` group.
@@ -35,7 +37,12 @@ the processor receives only `projection.OwnedReplacer`, and rule execution names
 - Preserve `projection.MutationError`, its classified cause, commit state, code, and retry meaning across the action
   boundary.
 - Remove rule-owned owner-token state and the raw `TripleMutator.ReplaceOwned` implementation.
-- Migrate the lesson lifecycle reference pack to exact birth predicates and the named `lesson-lifecycle` group.
+- Treat contract birth predicates as create-only authorization through the public client, not graph-enforced
+  immutable facts. Replacement preserves them, but a nonconforming writer can still change them.
+- Defer the lesson lifecycle reference-pack migration. Its `agentic.lesson-record` / `lesson-lifecycle` claims
+  overlap the #696 built-in owner, so PR2 must not bind them again as `rule-pack.lesson-lifecycle`.
+- Keep built-in-owned rule consumption under #688/shared follow-up until a separate prebound-client authorization
+  design defines how a rule may use an already-bound built-in capability without registering the owner again.
 - Keep raw `AddTriple` and `RemoveTriple` temporarily; their retirement remains a separate unfinished part of
   [#688](https://github.com/C360Studio/semstreams/issues/688).
 
@@ -53,8 +60,8 @@ the processor receives only `projection.OwnedReplacer`, and rule execution names
 ### Consumers
 
 SemDragon and every product composing SemStreams rules receive one framework-owned, contract-validated replacement
-path. Product rule packs must migrate each `replace_owned` action to explicit contract and group selectors. The
-lesson lifecycle pack is the in-repository reference migration.
+path for disjoint rule-pack-owned groups. Product rule packs must migrate each `replace_owned` action to explicit
+contract and group selectors. Rules targeting groups already owned by the #696 built-in client remain deferred.
 
 ### Compatibility
 
@@ -63,6 +70,8 @@ lesson lifecycle pack is the in-repository reference migration.
 - NATS subjects and graph mutation wire envelopes do not change.
 - Hot reload may change rules only inside the contracts bound at boot; it cannot alter pack identity, projection
   contracts, or mutation-client binding.
+- Both `cmd/semstreams` and `cmd/e2e-semstreams` already call the same pre-`StartAll` rule-pack helper; PR2 verifies
+  those call sites and does not churn them unless the helper signature must change.
 - The change completes only the rule-engine `ReplaceOwned` slice of #688. It does not close the issue while raw
   `AddTriple` and `RemoveTriple` remain.
 
@@ -73,4 +82,6 @@ lesson lifecycle pack is the in-repository reference migration.
 - Adding a new graph mutation subject, wire envelope, graph-ingest handler, or persisted representation.
 - Allowing a rule action to provide an arbitrary removal list or a caller-driven expected revision.
 - Rebinding contracts during hot reload.
+- Migrating the lesson lifecycle reference pack or any rule that consumes a #696 built-in-owned group.
+- Designing or injecting a shared/prebound built-in mutation client; that remains a #688/shared follow-up.
 - Moving SemDragon product semantics, rule policy, or vocabulary into SemStreams.

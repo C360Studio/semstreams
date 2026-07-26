@@ -17,7 +17,7 @@ abstractions.
 
 ## Decision
 
-### 1. Bind one immutable mutation client per contract-bearing rule pack
+### 1. Bind one complete immutable mutation client per disjoint rule-pack owner
 
 `BindRulePackContracts` remains the single composition-root operation before `Manager.StartAll`. For every enabled
 rule pack with a non-empty projection-contract set, it constructs exactly one `projection.MutationClientConfig`
@@ -29,15 +29,22 @@ with:
 - the pack's complete copied projection-contract set.
 
 It calls `projection.BindMutationClient` exactly once for that pack and injects the returned client only as
-`projection.OwnedReplacer`. It does not call `BindAndHeartbeat`, `Registry.OwnerToken`, or any token setter.
+`projection.OwnedReplacer`. It does not call `BindAndHeartbeat`, `Registry.OwnerToken`, or any token setter. The
+pack's contracts must be disjoint from every other pack and from claims already bound by the #696 built-in owner
+`agentic-loop-graph-writer`.
+
+The Registry-wide invariant permits one successful registration for an owner and Registry. The first successful
+bind consumes `rule-pack.<packID>` for that Registry lifetime. A concurrent or repeated invocation fails with
+`ownership.ErrOwnerAlreadyBound` before heartbeat or claim mutation, even when it supplies the identical complete
+contract set. Correction after a successful bind requires a new Registry/incarnation; this helper never rebinds.
 
 The service-level duck-typed composition interface becomes:
 
 ```go
 type ProjectionBinder interface {
-	ProjectionBindings() (packID string, contracts []projection.Contract)
-	PreflightProjectionMutations() error
-	SetOwnedReplacer(projection.OwnedReplacer) error
+    ProjectionBindings() (packID string, contracts []projection.Contract)
+    PreflightProjectionMutations() error
+    SetOwnedReplacer(projection.OwnedReplacer) error
 }
 ```
 
@@ -47,11 +54,11 @@ client for a contract-bearing pack, unavailable NATS dependency, failed injectio
 injection is a composition error.
 
 A pack with no contracts receives no mutation client because the public constructor intentionally rejects an empty
-contract set. It can run actions that do not require owned replacement, while any `replace_owned` action fails
-preflight because no target exists. This preserves exactly one client per pack that has a mutation envelope and
-does not invent a rule-local no-op replacer.
+contract set. It is still preflighted and can run actions that do not require owned replacement, while any
+`replace_owned` action fails preflight because no target exists. This preserves exactly one client per pack that
+has a mutation envelope and does not invent a rule-local no-op replacer.
 
-### 2. Preflight the whole composition before the first bind
+### 2. Preflight every rule pack before the first rule-pack bind
 
 `BindRulePackContracts` performs every side-effect-free check for all enabled packs before the first call to
 `BindMutationClient`:
@@ -64,12 +71,19 @@ does not invent a rule-local no-op replacer.
 6. reject a missing NATS client or any contract-required registry or heartbeater;
 7. detect overlaps among the enabled pack contract sets.
 
-This prevents avoidable partial composition. A registry conflict introduced externally between preflight and bind
-can still fail a later bind; that error aborts boot, no processor starts, and no mutation is published. The design
-does not invent rollback for an ownership registry that does not provide transactional multi-owner registration.
+The #696 built-in aggregate intentionally binds before `BindRulePackContracts`; it is not part of this rule-pack
+preflight batch. Preflight detects pack-pack conflicts before rule-pack binding. Each later client bind arbitrates
+against the live Registry, so a pack-vs-built-in overlap, a stale external claim, or another conflict introduced
+between preflight and bind fails at that bind.
 
-Binding and overlap errors are never observe-only warnings. The original typed or classified cause is wrapped with
-`%w` and returned to the binary composition root.
+This prevents avoidable partial composition. Any Registry conflict aborts boot, no processor starts, and no
+mutation is published. The design does not invent rollback for an ownership registry that does not provide
+transactional multi-owner registration. If an earlier pack registered before a later bind failed, process boot
+still fails; the process must discard that Registry rather than continue with a partial rule-pack composition.
+
+Binding and overlap errors are never observe-only warnings. This includes `ErrOwnershipOverlap`,
+`ErrOwnerAlreadyBound`, missing dependencies, heartbeat/liveness failure, and client injection failure. The
+original typed or classified cause is wrapped with `%w` and returned to the binary composition root.
 
 The preflight parser and the start-time rule loader must share one implementation. Preflight retains an immutable
 validated initial-rule snapshot, and initialization consumes that snapshot instead of rereading rule files. This
@@ -86,6 +100,9 @@ Runtime configuration updates may add, remove, or change rule definitions only w
 `replace_owned` action validates against the frozen index. A hot-reload payload that changes `pack_id`,
 `projection_contracts`, target group membership, or mutation-client identity is rejected atomically. Hot reload
 never calls the service binder, ownership registry, heartbeater, or mutation-client constructor.
+
+Both `cmd/semstreams` and `cmd/e2e-semstreams` already make the same `BindRulePackContracts` call before
+`StartAll`. PR2 verifies those call sites and does not churn them unless the helper signature changes.
 
 ### 4. Resolve an exact contract, named group, and predicate
 
@@ -138,6 +155,10 @@ The public client derives the removal set from the complete selected group. Ther
 - an empty object clears the entire selected group;
 - sibling groups, birth predicates, append-only predicates, foreign predicates, and unrelated facts are untouched.
 
+Birth predicates are create-only authorization through the public client. They derive no owner claim, are not part
+of a replacement removal set, and remain untouched by conforming rule replacement. They are not graph-enforced
+immutable facts: another accepted, nonconforming write lane can still change or remove them.
+
 This intentionally changes the old one-predicate patch semantics. Rule authors who need independent preservation
 must declare independent named groups. The engine must not read current state to synthesize omitted siblings,
 because doing so would restore patch behavior and race the authoritative writer.
@@ -184,40 +205,20 @@ Deletion is gated by an `rg` audit showing zero production callers and by replac
 client path. Token-shape tests and raw transport tests are deleted or rewritten only after their assertions are
 represented at the new boundary.
 
-### 8. Migrate the lesson lifecycle reference pack exactly
+### 8. Defer built-in-owned rule consumption
 
-`configs/rules/lessons/lesson-lifecycle-rulepack.json` keeps:
+PR #696 already binds contract `agentic.lesson-record` and group `lesson-lifecycle` under built-in owner
+`agentic-loop-graph-writer`. Binding the lesson reference pack as owner `rule-pack.lesson-lifecycle` would claim the
+same cells and must fail with `ErrOwnershipOverlap`.
 
-- contract `agentic.lesson-record`;
-- message type `agentic.agent_lesson.v1`;
-- entity pattern `*.*.agent.lesson.record.*`.
+PR2 therefore removes the lesson reference-pack migration from its diff. It does not change the lesson contract,
+config, README, or lifecycle action as a demonstration of rule-pack binding. The overlap is a design boundary, not
+a coordination waiver or observe-only exception.
 
-It names one `replace-owned` group `lesson-lifecycle` containing exactly:
-
-- `agent.lesson.status`;
-- `agent.lesson.superseded-by`;
-- `agent.lesson.retired-at`.
-
-It declares these exact immutable birth predicates:
-
-- `agent.lesson.category`;
-- `agent.lesson.polarity`;
-- `agent.lesson.severity`;
-- `agent.lesson.created-at`;
-- `agent.lesson.summary`;
-- `agent.lesson.detail`;
-- `agent.lesson.injection-form`;
-- `agent.lesson.evidence`;
-- `agent.lesson.applies-to`;
-- `agent.lesson.observed-role`;
-- `agent.action.executed-by`.
-
-The illustrative birth-time status action names `agentic.lesson-record` and `lesson-lifecycle`. Because the lesson
-is newly born and has no lifecycle siblings yet, the example keeps its intended output while demonstrating
-complete-group semantics.
-
-The adjacent README and generated schema/config round-trip evidence are updated with the explicit selectors and
-delete-on-omission warning.
+A rule that legitimately consumes a built-in-owned group needs a separate design for receiving an already-bound,
+least-privilege client without registering the same claims under another owner. That prebound-client/shared
+capability design remains under #688 and its shared follow-up. PR2 neither invents that API nor borrows the #696
+client implicitly.
 
 ## Alternatives Considered
 
@@ -251,9 +252,13 @@ work.
   load/hot-reload contract tests before deleting fallback code.
 - **Unexpected sibling deletion:** document complete-group behavior and test delete-on-omission and group isolation.
 - **Partial binding:** preflight every pack first and fail boot on any later bind error.
+- **Built-in overlap:** keep lesson/built-in-owned consumption out of PR2 and test pack-vs-built-in conflict as a
+  fatal boot error.
+- **Repeated composition:** rely on the Registry-wide one-bind invariant and preserve `ErrOwnerAlreadyBound`.
 - **Reload drift:** freeze pack identity, contracts, client, and target index; reject attempted changes atomically.
 - **Error semantic loss:** assert `errors.As`, `errors.Is`, code, class, kind, and commit state at the action boundary.
-- **Half-migrated binaries:** update and test both `cmd/semstreams` and `cmd/e2e-semstreams` composition call sites.
+- **Binary drift:** verify both existing identical helper calls remain aligned;
+  do not churn either main unless the helper signature changes.
 
 ## Architecture Sign-Off Gates
 
@@ -266,5 +271,8 @@ Implementation is conformant only when:
 5. binding and overlap failures fail closed;
 6. hot reload cannot change or rebind the static mutation envelope;
 7. typed commit-aware errors and receipt revisions cross the action boundary intact;
-8. the lesson contract and action match the exact predicates and selectors above;
-9. raw Add/Remove remain explicitly deferred under #688.
+8. lesson/built-in-owned rule consumption is absent and remains deferred to a prebound-client design under #688;
+9. both binaries retain the same existing helper call without unnecessary churn;
+10. raw Add/Remove remain explicitly deferred under #688;
+11. Fable review is requested only if implementation exposes a public-contract/framework issue or materially
+    expands that reviewed surface.

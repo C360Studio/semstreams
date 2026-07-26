@@ -4,15 +4,21 @@
 
 ### Requirement: Rule packs bind one public mutation client fail closed
 
-Before component start, the composition root MUST bind exactly one public projection mutation client for every
-enabled rule pack with a non-empty projection-contract set. It MUST use owner `rule-pack.<packID>`, the runtime NATS
-client, the ownership registry, the static-owner heartbeater, and the pack's complete projection-contract set.
+Before component start, the composition root MUST bind exactly one complete immutable public projection mutation
+client for every enabled rule pack with a non-empty projection-contract set. It MUST use owner
+`rule-pack.<packID>`, the runtime NATS client, the ownership registry, the static-owner heartbeater, and the pack's
+complete copied projection-contract set. Every pack's claims MUST be disjoint from other packs and from claims
+already registered by the #696 built-in aggregate.
 
 The resulting client MUST be injected into the processor only as `projection.OwnedReplacer`. The rule-pack path
 MUST NOT separately call `BindAndHeartbeat`, mint or expose an owner token, or retain a raw replacement publisher.
 
 Invalid dependencies, contract validation, ownership overlap, binding failure, heartbeat failure, and injection
 failure MUST abort boot before `StartAll`. They MUST NOT be downgraded to observe-only warnings.
+
+The Registry-wide one-successful-registration invariant MUST apply. A repeated helper invocation for an already
+bound `rule-pack.<packID>` MUST preserve `ErrOwnerAlreadyBound` and fail boot before heartbeat or claim mutation.
+It MUST NOT treat an identical contract set as an idempotent rebind.
 
 #### Scenario: Two packs bind independently
 
@@ -29,6 +35,19 @@ failure MUST abort boot before `StartAll`. They MUST NOT be downgraded to observ
 - **AND** `StartAll` is not called
 - **AND** no rule action can publish a mutation
 
+#### Scenario: Rule-pack overlaps the built-in aggregate
+
+- **GIVEN** #696 already bound a built-in-owned predicate group
+- **WHEN** a rule pack attempts to bind the same ownership cells under `rule-pack.<packID>`
+- **THEN** `ErrOwnershipOverlap` remains inspectable and boot fails
+- **AND** the conflict is not downgraded to an observe-only warning
+
+#### Scenario: Binder is invoked twice
+
+- **GIVEN** a rule-pack owner registered successfully in one Registry
+- **WHEN** rule-pack composition is invoked again with the identical pack and contract set
+- **THEN** `ErrOwnerAlreadyBound` remains inspectable and boot fails before heartbeat or claim mutation
+
 #### Scenario: Pack has no contract
 
 - **GIVEN** an enabled pack declares no projection contract
@@ -38,12 +57,17 @@ failure MUST abort boot before `StartAll`. They MUST NOT be downgraded to observ
 
 ### Requirement: The complete pack set is preflighted before binding
 
-The composition root MUST perform all side-effect-free validation for every enabled pack before the first mutation
-client bind. Preflight MUST validate pack IDs, duplicate IDs, complete contract sets, required dependencies,
-enabled-pack overlaps, exact target indexes, and every initially configured `replace_owned` action.
+The composition root MUST perform all side-effect-free validation for every enabled rule pack, including packs with
+no contracts, before the first rule-pack mutation-client bind. Preflight MUST validate pack IDs, duplicate IDs,
+complete contract sets, required dependencies, enabled-pack overlaps, exact target indexes, and every initially
+configured `replace_owned` action.
 
-No ownership registration, heartbeat enrollment, owner-token minting, client injection, or mutation transport MAY
-occur before preflight succeeds for the complete enabled set.
+The #696 built-in aggregate MUST remain bound earlier and outside this rule-pack preflight batch. Every rule-pack
+bind MUST still arbitrate against its live Registry claims, and any pack-vs-built-in overlap MUST fail closed.
+
+No rule-pack ownership registration, rule-pack heartbeat enrollment, rule-pack owner-token minting, rule-pack
+client injection, or rule-pack mutation transport MAY occur before preflight succeeds for the complete enabled
+rule-pack set.
 
 Preflight and initialization MUST consume the same immutable validated initial-rule snapshot. Initialization MUST
 NOT reread rule files into a different mutation target after contracts bind.
@@ -59,6 +83,12 @@ NOT reread rule files into a different mutation target after contracts bind.
 
 - **WHEN** two enabled processors declare the same pack ID
 - **THEN** preflight returns a composition error before any binding side effect
+
+#### Scenario: Two packs overlap during preflight
+
+- **WHEN** two enabled rule packs claim the same owned cell
+- **THEN** preflight fails before the first rule-pack bind
+- **AND** neither pack receives a mutation client
 
 #### Scenario: Rule file changes after preflight
 
@@ -121,6 +151,10 @@ empty desired set. Every predicate in the selected group that is omitted from de
 Predicates in sibling groups, birth predicates, append-only predicates, foreign predicates, and unrelated facts
 MUST remain untouched.
 
+Birth predicates MUST be treated as create-only authorization through the public client. They MUST derive no
+ownership claim and MUST NOT enter a replacement removal set. The rule layer MUST NOT represent them as
+graph-enforced immutable facts; another accepted, nonconforming write lane MAY change or remove them.
+
 The executor MUST NOT read current state to restore omitted selected-group siblings. It MUST NOT provide an
 arbitrary removal list or expected revision.
 
@@ -142,6 +176,13 @@ arbitrary removal list or expected revision.
 - **GIVEN** the same contract contains another replace-owned group
 - **WHEN** the selected group is replaced
 - **THEN** no predicate in the sibling group is removed, added, or included in verification
+
+#### Scenario: Create-only birth predicate remains outside replacement
+
+- **GIVEN** the entity contains a predicate declared only in `BirthPredicates`
+- **WHEN** a rule replaces one selected owned group
+- **THEN** the birth predicate is excluded from desired and removal sets and remains untouched by that operation
+- **AND** no graph-wide immutability guarantee is inferred
 
 #### Scenario: Typed desired value
 
@@ -171,6 +212,12 @@ replacement. Retry and authoritative verification MUST remain the public mutatio
 - **AND** its kind, code, class, not-committed state, and underlying classified cause remain inspectable
 - **AND** the rule layer does not retry
 
+#### Scenario: Target entity is not found
+
+- **WHEN** the public client returns a not-found mutation error
+- **THEN** the rule action preserves its kind, code, not-committed state, and unwrap chain
+- **AND** the rule layer does not auto-vivify the entity
+
 #### Scenario: Commit outcome is uncertain
 
 - **WHEN** the public client returns commit-unknown or committed-unverified
@@ -185,6 +232,9 @@ all resulting targets are valid.
 
 Hot reload MUST NOT add, remove, or change a projection contract, rebind an owner, start a heartbeater, replace the
 mutation client, or alter a target group's predicate set.
+
+Both `cmd/semstreams` and `cmd/e2e-semstreams` MUST retain the same existing `BindRulePackContracts` call before
+`StartAll`. No call-site change is required unless the helper signature changes.
 
 #### Scenario: In-envelope rule reload
 
@@ -219,26 +269,25 @@ Processor and action-executor state MUST NOT carry projection owner tokens or to
 - **THEN** existing raw Add/Remove behavior remains unchanged
 - **AND** #688 remains open for its later bounded retirement
 
-### Requirement: Lesson lifecycle is the exact reference migration
+### Requirement: Built-in-owned rule consumption remains deferred
 
-The lesson lifecycle reference contract MUST be named `agentic.lesson-record`, use message type
-`agentic.agent_lesson.v1`, and match entity pattern `*.*.agent.lesson.record.*`.
+PR2 MUST NOT migrate the lesson lifecycle reference pack. PR #696 already binds
+`agentic.lesson-record` / `lesson-lifecycle` claims under built-in owner `agentic-loop-graph-writer`; attempting the
+same claims under `rule-pack.lesson-lifecycle` MUST fail with `ErrOwnershipOverlap`.
 
-It MUST define named replace-owned group `lesson-lifecycle` with exactly `agent.lesson.status`,
-`agent.lesson.superseded-by`, and `agent.lesson.retired-at`.
+PR2 MUST NOT add a coordination waiver, downgrade that overlap, implicitly borrow the #696 client, or introduce an
+unreviewed prebound-client API. A separate least-privilege design for rules consuming built-in-owned groups MUST
+remain under #688/shared follow-up.
 
-It MUST declare exactly these birth predicates: `agent.lesson.category`, `agent.lesson.polarity`,
-`agent.lesson.severity`, `agent.lesson.created-at`, `agent.lesson.summary`, `agent.lesson.detail`,
-`agent.lesson.injection-form`, `agent.lesson.evidence`, `agent.lesson.applies-to`,
-`agent.lesson.observed-role`, and `agent.action.executed-by`.
+#### Scenario: Lesson reference pack is evaluated for PR2
 
-Its illustrative birth-time replacement action MUST name contract `agentic.lesson-record` and group
-`lesson-lifecycle`.
+- **GIVEN** the #696 built-in owner already holds the lesson lifecycle group
+- **WHEN** PR2 scope is assembled
+- **THEN** lesson config, README, and reference-pack migration changes are absent
+- **AND** built-in-owned rule consumption remains linked to #688/shared follow-up
 
-#### Scenario: Birth-time status migration
+#### Scenario: Lesson rule-pack bind is attempted
 
-- **GIVEN** a newly born proposed lesson has no superseded-by or retired-at facts
-- **WHEN** the illustrative rule replaces status with `retired`
-- **THEN** it selects `agentic.lesson-record` and `lesson-lifecycle`
-- **AND** the lesson's exact birth predicates remain untouched
-- **AND** the output matches the intended prior birth-time result
+- **WHEN** `rule-pack.lesson-lifecycle` attempts to claim the built-in-owned lesson lifecycle cells
+- **THEN** composition returns `ErrOwnershipOverlap` and fails boot
+- **AND** no lesson rule processor starts
