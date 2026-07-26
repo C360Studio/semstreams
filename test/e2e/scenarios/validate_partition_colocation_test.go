@@ -267,6 +267,36 @@ func TestAggregateColocationEmpty(t *testing.T) {
 	require.Equal(t, 1, agg.level0Communities) // trust-guard value survives even with no found entities
 }
 
+// TestAggregateColocationMegaCommunity locks in the mega-community discriminator:
+// distinctPluralityCommunities and maxPluralityCommunitySize are what separate a
+// genuine high mean (themes in distinct, size-bounded communities) from a vacuous
+// one (every theme absorbed into one big community). Queries with found=0 must not
+// contribute a plurality community or a size.
+func TestAggregateColocationMegaCommunity(t *testing.T) {
+	t.Run("all themes in one big community => distinct 1 (vacuous)", func(t *testing.T) {
+		grades := []colocationGrade{
+			{ID: "a", FoundCount: 3, PluralityShare: 1.0, PluralityCommunity: "0.blob", PluralityCommunitySize: 47},
+			{ID: "b", FoundCount: 2, PluralityShare: 1.0, PluralityCommunity: "0.blob", PluralityCommunitySize: 47},
+			{ID: "c", FoundCount: 4, PluralityShare: 1.0, PluralityCommunity: "0.blob", PluralityCommunitySize: 47},
+			{ID: "d", FoundCount: 0, PluralityShare: 0.0}, // excluded: no plurality community
+		}
+		agg := aggregateColocation(grades, 6)
+		require.Equal(t, 1, agg.distinctPluralityCommunities, "all found queries share one community")
+		require.Equal(t, 47, agg.maxPluralityCommunitySize)
+	})
+
+	t.Run("themes in distinct communities => distinct = query count", func(t *testing.T) {
+		grades := []colocationGrade{
+			{ID: "a", FoundCount: 3, PluralityShare: 1.0, PluralityCommunity: "0.x", PluralityCommunitySize: 12},
+			{ID: "b", FoundCount: 2, PluralityShare: 1.0, PluralityCommunity: "0.y", PluralityCommunitySize: 30},
+			{ID: "c", FoundCount: 4, PluralityShare: 0.5, PluralityCommunity: "0.z", PluralityCommunitySize: 18},
+		}
+		agg := aggregateColocation(grades, 6)
+		require.Equal(t, 3, agg.distinctPluralityCommunities)
+		require.Equal(t, 30, agg.maxPluralityCommunitySize, "largest plurality community across queries")
+	})
+}
+
 // TestPartitionColocationExpectationsMirrorThematic locks the B2 fixtures to the
 // B0 thematicQuestions by id, so the two tables always line up 1:1 by row.
 func TestPartitionColocationExpectationsMirrorThematic(t *testing.T) {

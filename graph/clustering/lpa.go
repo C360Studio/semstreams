@@ -830,6 +830,10 @@ func transferSummary(newComm *Community, archived []*Community, threshold float6
 	// Transfer the LLM summary from best match
 	newComm.LLMSummary = bestMatch.LLMSummary
 	newComm.SummaryStatus = "llm-enhanced"
+	// The truncation flag travels with the summary text it describes, or the B2
+	// dilution channel under-counts truncation on any community that inherited its
+	// summary through a rebuild transfer rather than fresh enhancement.
+	newComm.SummaryTruncated = bestMatch.SummaryTruncated
 
 	// Initialize metadata if nil (atomic assignment pattern)
 	metadata := newComm.Metadata
