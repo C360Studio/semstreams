@@ -1,5 +1,7 @@
 package projection
 
+//revive:disable:max-public-structs The public mutation API uses explicit request, receipt, and typed-error structs.
+
 import (
 	"context"
 	"fmt"
@@ -63,6 +65,8 @@ type AppendEvidenceMutation struct {
 // CommitState reports what the client can prove about the authoritative write.
 type CommitState string
 
+// Commit states describe progressively stronger knowledge about whether the
+// authoritative mutation was applied.
 const (
 	CommitNotCommitted CommitState = "not-committed"
 	CommitUnknown      CommitState = "unknown"
@@ -81,6 +85,7 @@ type MutationReceipt struct {
 // MutationOperation identifies the public capability that produced an outcome.
 type MutationOperation string
 
+// Mutation operations identify each public mutation-client capability.
 const (
 	MutationOperationBind              MutationOperation = "bind"
 	MutationOperationCreate            MutationOperation = "create-with-triples"
@@ -92,6 +97,7 @@ const (
 // MutationErrorKind is the stable caller-facing mutation failure taxonomy.
 type MutationErrorKind string
 
+// Mutation error kinds form the stable caller-facing failure taxonomy.
 const (
 	MutationInvalid             MutationErrorKind = "invalid"
 	MutationNotFound            MutationErrorKind = "not-found"
@@ -153,3 +159,5 @@ type EvidenceAppender interface {
 type AuthoritativeReader interface {
 	ReadAuthoritative(context.Context, string) (*graph.EntityState, error)
 }
+
+//revive:enable:max-public-structs

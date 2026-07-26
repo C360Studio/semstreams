@@ -506,6 +506,8 @@ func newMutationError(operation MutationOperation, err error, commit CommitState
 	return mapped
 }
 
+// CreateWithTriples atomically creates an entity with the complete initial
+// facts authorized by the named projection contract.
 func (c *MutationClient) CreateWithTriples(
 	ctx context.Context,
 	req CreateMutation,
@@ -604,6 +606,8 @@ func (c *MutationClient) CreateWithTriples(
 	panic("unreachable")
 }
 
+// ReplaceOwned reconciles one complete replace-owned predicate group on an
+// existing entity while preserving facts outside that group.
 func (c *MutationClient) ReplaceOwned(
 	ctx context.Context,
 	req ReplaceOwnedMutation,
@@ -668,6 +672,8 @@ func (c *MutationClient) ReplaceOwned(
 	return receipt, nil
 }
 
+// AppendEvidence appends contract-authorized evidence to an existing entity
+// with ambiguity-safe authoritative readback.
 func (c *MutationClient) AppendEvidence(
 	ctx context.Context,
 	req AppendEvidenceMutation,
@@ -756,6 +762,8 @@ func (c *MutationClient) AppendEvidence(
 	panic("unreachable")
 }
 
+// ReadAuthoritative returns the current graph-ingest source-of-truth state for
+// entityID.
 func (c *MutationClient) ReadAuthoritative(ctx context.Context, entityID string) (*graph.EntityState, error) {
 	if c == nil || c.rpc == nil {
 		return nil, invalidMutationError(MutationOperationReadAuthoritative, errors.New("mutation client is nil"))
