@@ -161,6 +161,32 @@ NPC memory is the graph; context assembly per event is a scoped thematic query (
 NPC know that is relevant?") — the B2 retrieval shape again. All decisions land as provenance-
 stamped triples, so the writer loop replays NPC inner life for free.
 
+## The chronicler: a running prose collection during play
+
+Every substrate piece exists; the assembly is one agentic persona + config. Pipeline:
+**salience → chronicler → egress.**
+
+1. **Salience at authoring time.** Structural markers are rules (named-NPC death, quest completion,
+   critical verdict classes — free, deterministic); judged salience is one extra field in the
+   narrator's exit contract (`scene.salience.*` triples — zero additional LLM calls). What counts
+   as chronicle-worthy is a rule-pack threshold — another tunability dial.
+2. **Chronicler = the ops role wearing a bard costume.** Rule fires on salience/scene-complete →
+   `publish_agent chronicler` → reads the scene window (trajectories, triples, ObjectStore prose
+   refs) → terminal tool emits a polished vignette to ObjectStore PLUS a `chronicle` graph entity
+   with ref-triples to everything it derives from. Async, background priority behind the narrator
+   in the admission queue, salient scenes only (~1 in 5–10 turns).
+3. **Egress is config.** File output component writes `chronicles/<campaign>/<seq>-<slug>.md`
+   with frontmatter metadata — real markdown accumulating on disk during play.
+
+Two structural consequences: (a) **the chronicle re-enters the world as lore** — vignettes are
+retrievable graph entities, so bard NPCs retell them and legends-mode queries surface them (DF
+engravings: the world recording its own history as in-world artifacts; requires prose to be
+addressable state, so bolt-on journals cannot copy it); (b) **the novel becomes assembly, not
+archaeology** — each vignette is a pre-compressed, provenance-linked chapter draft written while
+context was small; the manuscript pass is selection + smoothing over the collection. Incremental
+chronicling dominates batch replay; batch remains for retrospective angles ("retell from the
+villain's perspective" is a replay job over the same provenance chain).
+
 ## Substrate gaps (file as engine asks, never hand-roll)
 
 1. **Multi-tenant campaign scoping** — per-campaign graph isolation (bucket topology, retention per
@@ -192,6 +218,27 @@ another world's namespace; travel = entity export with provenance (envelope-on-c
 stamps). NATS leaf nodes/gateways provide federation at the transport layer natively. Product
 payoff: **federated legends mode** — one world's history retrievable from another (a character's
 deeds precede them as queryable facts) — impossible for save-file architectures.
+
+## Hosted cost model (Gemini reference, July 2026 prices — re-verify at build time)
+
+Per-turn budget from the decomposition: adjudicator ~2.5k/250 (Flash-Lite class), narrator ~6k/500
+(Flash class), ~1 NPC decision ~1.5k/150, chronicler amortized (1-in-8 turns) ~1k/125 ≈ **11k in /
+1k out per turn, FLAT regardless of campaign length** (context is graph-retrieval-bounded, not
+append-everything — the drift fix is also the cost fix; naive append reaches ~100k/turn by turn
+200). At 3.1 Flash-Lite $0.25/$1.50, Gemini 3 Flash $0.50/$3, 3.1 Pro $2/$12: budget config
+~$0.50 / 2-hr session (~120 turns), default (Flash narrator) ~$0.85, premium (Pro narrator)
+~$2.40; 20-session campaign ≈ $10/$17/$48. Cache reads at 10% of input (stable persona/system
+prefix ≈ 60% of input) → default ~$0.50/session; batch rates (50% off) apply to exactly the calls
+the architecture already made async (chronicler, life ticks). A $10/mo tier carries a heavy player
+with margin.
+
+**Length estimation is a non-problem by construction:** nothing burns while idle, so a playthrough
+has no intrinsic cost duration — only turns (~100–200/session at text-RPG pacing) × constant
+per-turn cost. And cost is a POLICY, not a forecast: per-session budget enforced by the admission
+gate + spend ledger (lift semdragon's `tokenbudget` circuit-breaker pattern), with LOD degradation
+absorbing variance (ambient NPCs → state machines first, chronicler → batch, narrator context
+depth last). Every LLM call is an evented, attributable message — per-campaign cost curves are a
+query from session one.
 
 ## Recommendation and sequencing
 
