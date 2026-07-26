@@ -83,8 +83,8 @@
 - [ ] 7.1 Run formatting, lint, unit, integration, race, schema, and applicable end-to-end suites.
 - [x] 7.2 Confirm all new critical paths and ambiguity branches have behavioral tests.
 - [x] 7.3 Obtain SemStreams developer implementation sign-off.
-- [ ] 7.4 Obtain mandatory Fable approval for ownership, retry, wire compatibility, and public API stability after
-  B1/B3/B4/B5 remediation. Repeat Fable review after any material change to this large public API surface.
+- [x] 7.4 Complete the initial mandatory Fable review for ownership, retry, wire compatibility, and public API
+  stability; record its `REQUEST CHANGES` findings and obtain user approval for the internal remediation.
 - [x] 7.5 Update issue #313 with slice results and keep downstream migration gated on the reviewed public contract.
 
 ## Evidence
@@ -94,14 +94,17 @@
   commit; authoritative recovery still queried the real graph-ingest path. No internal handler fault was claimed.
 - Full production audit reported 500 passed and 0 failed.
 - Strict OpenSpec validation reported 32 passed and 0 failed.
-- The current mandatory Fable review verdict is `REQUEST CHANGES`; approval has not been granted.
-- B1 requires duplicate-resistant language and explicit late-commit double-apply disclosure.
-- B3 requires fail-closed lease enforcement and rollout evidence on every serving graph-ingest instance.
-- B4 now uses a Registry-wide `ErrOwnerAlreadyBound` invariant across direct and projection binding paths: one
-  successful registration per owner/Registry, failed first attempts release, and static built-in contracts are
-  aggregated before binding. PR #696 remains later adoption.
-- B5 requires create-only birth-predicate language without a graph-enforced immutability claim.
-- Fable re-review is a standing gate for material ownership, retry, or public-surface changes in this API.
+- The initial mandatory Fable review completed with a `REQUEST CHANGES` verdict. Its findings are recorded here;
+  Fable has not reviewed or approved the remediated fixes.
+- The user approved internal remediation of the recorded findings and cleared continuation of PR #687.
+- B1 remediation uses duplicate-resistant language and explicitly discloses the late-commit double-apply race.
+- B3 remediation adds fail-closed lease enforcement and rollout evidence on every serving graph-ingest instance.
+- B4 remediation uses a Registry-wide `ErrOwnerAlreadyBound` invariant across direct and projection binding paths.
+  It permits one successful registration per owner/Registry, releases failed first attempts, and aggregates static
+  built-in contracts before binding. PR #696 remains later adoption.
+- B5 remediation uses create-only birth-predicate language without a graph-enforced immutability claim.
+- Fable re-review is required only if remediation exposes an unresolved issue or materially changes or expands the
+  reviewed public contract; it is not an automatic post-remediation gate.
 - Issue #313 records PR #687, its local verification evidence, and the still-gated internal migration scope.
 - Unrelated whole-repository baselines remain outside this ledger, including the expected dependency tracked by
   issue #686. Live PR CI, schema, and applicable end-to-end gates remain open under task 7.1.
