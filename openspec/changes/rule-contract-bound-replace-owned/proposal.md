@@ -24,9 +24,13 @@ the processor receives only `projection.OwnedReplacer`, and rule execution names
 - Preflight every enabled rule pack, its immutable contracts, and all `replace_owned` action targets before the
   first rule-pack bind. The built-in aggregate from #696 intentionally binds earlier and is an incumbent during
   rule-pack binding.
-- Enforce the Registry-wide one-successful-registration invariant. Duplicate pack IDs fail preflight; repeated
-  binder invocation returns `ErrOwnerAlreadyBound`; every bind, heartbeat, dependency, pack-pack overlap, and
-  pack-vs-built-in overlap error aborts boot.
+- Enforce the Registry-wide one-successful-registration invariant when a pack produces non-empty owner or foreign
+  claims. Repeated claim-bearing binding returns `ErrOwnerAlreadyBound`; repeated claimless/birth-only composition
+  fails through one-time client injection instead. Identical contract-bearing inputs never succeed idempotently.
+- Make every bind, heartbeat, dependency, client-injection, pack-pack overlap, and pack-vs-built-in overlap error
+  abort boot.
+- Require NATS for every contract-bearing client, an ownership Registry only when the complete contract set derives
+  a non-empty owner/foreign registration, and a heartbeater only when replace-owned or CAS claims require liveness.
 - Inject the narrow `projection.OwnedReplacer` capability into each rule processor.
 - Build one immutable exact target index from the pack-level contracts and use it for initial load and hot reload.
 - Require every `replace_owned` action to name its projection contract and named `replace-owned` group.

@@ -239,8 +239,9 @@ func run() error {
 	// the rule processors) and BEFORE StartAll runs inside runWithSignalHandling.
 	// SAME shared helper as cmd/semstreams. Pack contracts are read ONCE,
 	// statically; this is the ONLY rule-pack bind site and must NEVER be invoked
-	// from the hot-reload path. Composition identity errors are boot gates;
-	// ownership-substrate bind errors remain observe-only inside the helper.
+	// from the hot-reload path. Every composition, overlap, ownership/liveness
+	// bind, and mutation-client injection error is a boot gate. Repeated owning
+	// and claim-free binds can fail at different one-time guards.
 	if err := service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger); err != nil {
 		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}

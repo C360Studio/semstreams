@@ -28,21 +28,20 @@ const (
 	outOfEnvelopePredicate = "test.status.unowned"
 )
 
-func init() {
-	for _, predicate := range []string{
-		ownedPredicate,
-		ownedSibling,
-		siblingPredicate,
-		appendPredicate,
-		birthPredicate,
-		foreignPredicate,
-		outOfEnvelopePredicate,
-	} {
-		vocabulary.Register(predicate)
-	}
+func registerReplaceOwnedTestVocabulary(t testing.TB) {
+	t.Helper()
+	vocabulary.Register(ownedPredicate)
+	vocabulary.Register(ownedSibling)
+	vocabulary.Register(siblingPredicate)
+	vocabulary.Register(appendPredicate)
+	vocabulary.Register(birthPredicate)
+	vocabulary.Register(foreignPredicate)
+	vocabulary.Register(outOfEnvelopePredicate)
 }
 
-func replaceOwnedTestContracts() []projection.Contract {
+func replaceOwnedTestContracts(t testing.TB) []projection.Contract {
+	t.Helper()
+	registerReplaceOwnedTestVocabulary(t)
 	return []projection.Contract{{
 		Name:          testReplaceContract,
 		MessageType:   "test.status.v1",
@@ -78,7 +77,7 @@ func replaceOwnedAction(predicate, object string) Action {
 		Type:               ActionTypeReplaceOwned,
 		ProjectionContract: testReplaceContract,
 		ProjectionGroup:    testReplaceGroup,
-		Predicate:          predicate,
+		Predicate:          predicate, // predicate-audit:unrelated {"column":23,"surface":"go-field:Predicate","value":"","basis":"reviewed helper forwards a caller-supplied registered fixture predicate"}
 		Object:             object,
 	}
 }
@@ -115,7 +114,7 @@ func replaceOwnedExecutor(
 	tracker revisionTracker,
 ) *ActionExecutor {
 	t.Helper()
-	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts())
+	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts(t))
 	require.NoError(t, err)
 	executor := NewActionExecutor(nil)
 	executor.SetOwnedReplacer(replacer)
@@ -125,7 +124,7 @@ func replaceOwnedExecutor(
 
 func TestReplaceOwnedAuthoringRequiresExactTarget(t *testing.T) {
 	t.Parallel()
-	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts())
+	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts(t))
 	require.NoError(t, err)
 
 	tests := []struct {
@@ -176,10 +175,26 @@ func TestReplaceOwnedAuthoringRequiresExactTarget(t *testing.T) {
 			want: "outside projection contract",
 		},
 		{
+			name: "birth predicate outside selected group",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: testReplaceGroup, Predicate: birthPredicate,
+			},
+			want: "outside projection contract",
+		},
+		{
+			name: "foreign edge outside selected group",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: testReplaceGroup, Predicate: foreignPredicate,
+			},
+			want: "outside projection contract",
+		},
+		{
 			name: "dynamic predicate",
 			action: Action{
 				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
-				ProjectionGroup: testReplaceGroup, Predicate: "$message.predicate",
+				ProjectionGroup: testReplaceGroup, Predicate: "$message.predicate", // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.predicate","reason":"arity"}
 			},
 			want: "must be a literal",
 		},
@@ -202,7 +217,7 @@ func TestReplaceOwnedAuthoringRequiresExactTarget(t *testing.T) {
 
 func TestProjectionTargetIndexCopiesContractsAndRejectsAmbiguity(t *testing.T) {
 	t.Parallel()
-	contracts := replaceOwnedTestContracts()
+	contracts := replaceOwnedTestContracts(t)
 	index, err := buildProjectionTargetIndex(contracts)
 	require.NoError(t, err)
 	contracts[0].Groups[0].Predicates[0] = outOfEnvelopePredicate
@@ -211,7 +226,7 @@ func TestProjectionTargetIndexCopiesContractsAndRejectsAmbiguity(t *testing.T) {
 	_, err = index.resolve(testReplaceContract, testReplaceGroup, outOfEnvelopePredicate)
 	require.Error(t, err)
 
-	duplicate := append(replaceOwnedTestContracts(), replaceOwnedTestContracts()[0])
+	duplicate := append(replaceOwnedTestContracts(t), replaceOwnedTestContracts(t)[0])
 	_, err = buildProjectionTargetIndex(duplicate)
 	require.ErrorContains(t, err, "more than once")
 }
@@ -245,7 +260,28 @@ func TestReplaceOwnedReconcilesSelectedCompleteGroup(t *testing.T) {
 		&ExecutionContext{EntityID: entityID},
 	))
 	require.Len(t, replacer.requests, 1)
-	require.Empty(t, replacer.requests[0].Desired, "empty object clears the complete selected group")
+	require.Empty(t, replacer.requests[0].Desired, "raw empty object clears the entire selected named group")
+}
+
+func TestReplaceOwnedRawNonEmptySubstitutionResolvingEmptyStillReplaces(t *testing.T) {
+	t.Parallel()
+	replacer := &capturingOwnedReplacer{}
+	executor := replaceOwnedExecutor(t, replacer, nil)
+
+	err := executor.Execute(
+		context.Background(),
+		replaceOwnedAction(ownedPredicate, "$message.value"),
+		&ExecutionContext{
+			EntityID:    "acme.ops.robotics.gcs.drone.001",
+			MessageData: map[string]any{"value": ""},
+		},
+	)
+	require.NoError(t, err)
+	require.Len(t, replacer.requests, 1)
+	require.Len(t, replacer.requests[0].Desired, 1,
+		"raw non-empty object authors a replacement even when substitution resolves empty")
+	require.Equal(t, ownedPredicate, replacer.requests[0].Desired[0].Predicate)
+	require.Equal(t, "", replacer.requests[0].Desired[0].Object)
 }
 
 func TestReplaceOwnedPreservesTypedSubstitution(t *testing.T) {
@@ -315,7 +351,7 @@ func TestReplaceOwnedTracksReceiptAndPreservesTypedError(t *testing.T) {
 func TestReplaceOwnedFileAndHotReloadUseFrozenTargetIndex(t *testing.T) {
 	t.Parallel()
 	config := mustTestConfig(t, "replace-owned-test")
-	config.ProjectionContracts = replaceOwnedTestContracts()
+	config.ProjectionContracts = replaceOwnedTestContracts(t)
 	config.InlineRules = []Definition{{
 		ID: "initial", Type: "test_rule", Name: "initial", Enabled: true,
 		OnEnter: []Action{replaceOwnedAction(ownedPredicate, "ready")},
@@ -353,7 +389,7 @@ func TestReplaceOwnedInitialRuleSnapshotIsNotReread(t *testing.T) {
 	good := `[{"id":"snapshot","type":"test_rule","name":"snapshot","enabled":true,"on_enter":[{"type":"replace_owned","projection_contract":"test-projection","projection_group":"lifecycle","predicate":"test.status.phase","object":"ready"}]}]`
 	require.NoError(t, os.WriteFile(path, []byte(good), 0o600))
 	config := mustTestConfig(t, "snapshot-pack")
-	config.ProjectionContracts = replaceOwnedTestContracts()
+	config.ProjectionContracts = replaceOwnedTestContracts(t)
 	config.RulesFiles = []string{path}
 	processor, err := NewProcessor(nil, &config)
 	require.NoError(t, err)

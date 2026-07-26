@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
@@ -19,6 +20,7 @@ import (
 	"github.com/c360studio/semstreams/service"
 	"github.com/c360studio/semstreams/types"
 	"github.com/c360studio/semstreams/vocabulary"
+	"github.com/c360studio/semstreams/vocabulary/builtins"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,12 +29,6 @@ const (
 	missionStatusPhasePredicate     = "mission.status.phase"
 	sensorStatusCalibratedPredicate = "sensor.status.calibrated"
 )
-
-func init() {
-	vocabulary.Register(droneStatusStatePredicate)
-	vocabulary.Register(missionStatusPhasePredicate)
-	vocabulary.Register(sensorStatusCalibratedPredicate)
-}
 
 // ruleComponentConfig builds the operator-facing component config for a rule
 // processor carrying a pack_id and projection contracts. The Config field is a
@@ -117,11 +113,13 @@ func newOwnershipRegistryForBind(t *testing.T, ctx context.Context, tc *natsclie
 }
 
 func droneStatusContract() projection.Contract {
+	vocabulary.Register(droneStatusStatePredicate)
 	return projection.Contract{
 		Name:          "drone.status",
 		MessageType:   "telemetry.robotics.drone-status.v1",
 		EntityPattern: "acme.ops.robotics.gcs.drone.*",
 		Groups: []projection.PredicateGroup{{
+			Name:       "state",
 			Mode:       ownership.ModeReplaceOwned,
 			Predicates: []string{droneStatusStatePredicate},
 		}},
@@ -176,6 +174,15 @@ func TestBindRulePackContracts_OwnerAlreadyBoundFailsClosed(t *testing.T) {
 		t,
 		service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()),
 	)
+	claims, claimsErr := tc.Client.GetKeyValueBucket(ctx, ownership.BucketOwnerClaims)
+	require.NoError(t, claimsErr)
+	presence, presenceErr := tc.Client.GetKeyValueBucket(ctx, ownership.BucketOwnerPresence)
+	require.NoError(t, presenceErr)
+	beforeClaims, claimsErr := claims.Get(ctx, "_registry")
+	require.NoError(t, claimsErr)
+	beforePresence, presenceErr := presence.Get(ctx, "heartbeat.rule-pack.single-bind-v1")
+	require.NoError(t, presenceErr)
+
 	err := service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
 	require.ErrorIs(t, err, ownership.ErrOwnerAlreadyBound)
 	owner, found, ownerErr := ownerReg.OwnerOf(
@@ -186,13 +193,18 @@ func TestBindRulePackContracts_OwnerAlreadyBoundFailsClosed(t *testing.T) {
 	require.NoError(t, ownerErr)
 	require.True(t, found)
 	require.Equal(t, "rule-pack.single-bind-v1", owner)
+	afterClaims, claimsErr := claims.Get(ctx, "_registry")
+	require.NoError(t, claimsErr)
+	afterPresence, presenceErr := presence.Get(ctx, "heartbeat.rule-pack.single-bind-v1")
+	require.NoError(t, presenceErr)
+	require.Equal(t, beforeClaims.Revision(), afterClaims.Revision(),
+		"rejected repeat bind must not mutate ownership claims")
+	require.Equal(t, beforePresence.Revision(), afterPresence.Revision(),
+		"rejected repeat bind must not heartbeat again")
+	require.True(t, hb.IsEnrolled("rule-pack.single-bind-v1"))
 }
 
-// TestBindRulePackContracts_OverlapLoggedNotAborted proves a second pack whose
-// contract overlaps an already-claimed cell is rejected by the substrate with
-// ErrOwnershipOverlap, the helper logs+continues (observe-only), and the FIRST
-// owner still holds the cell.
-func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
+func TestBindRulePackContracts_StaleOverlapFailsClosed(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer tc.Terminate()
@@ -215,8 +227,8 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 			[]projection.Contract{overlapping}),
 	})
 
-	// Must NOT panic / abort — helper swallows the overlap as observe-only.
-	require.NoError(t, service.BindRulePackContracts(ctx, managerB, ownerReg, hb, slog.Default()))
+	err := service.BindRulePackContracts(ctx, managerB, ownerReg, hb, slog.Default())
+	require.ErrorIs(t, err, ownership.ErrOwnershipOverlap)
 
 	// The cell still belongs to pack-a; pack-b was rejected.
 	owner, ok, err := ownerReg.OwnerOf(ctx,
@@ -227,8 +239,7 @@ func TestBindRulePackContracts_OverlapLoggedNotAborted(t *testing.T) {
 	require.False(t, hb.IsEnrolled("rule-pack.pack-b"),
 		"a rejected (overlapping) owner must not be heartbeat-enrolled")
 
-	// Sanity: the substrate genuinely treats this as an overlap (the helper hides
-	// it, so assert against a direct derive to keep the test honest).
+	// Sanity: the substrate and the production helper expose the same overlap.
 	_, derr := projection.Derive("rule-pack.pack-b", overlapping)
 	require.NoError(t, derr, "derive itself is valid; the overlap is cross-owner at register time")
 	_, berr := projection.Bind(ctx, ownerReg, "rule-pack.pack-c", overlapping)
@@ -243,6 +254,7 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer tc.Terminate()
+	vocabulary.Register(missionStatusPhasePredicate)
 
 	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
 	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
@@ -251,6 +263,7 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 		Name:          "mission.status",
 		EntityPattern: "acme.ops.robotics.gcs.mission.*",
 		Groups: []projection.PredicateGroup{{
+			Name:       "phase",
 			Mode:       ownership.ModeReplaceOwned,
 			Predicates: []string{missionStatusPhasePredicate},
 		}},
@@ -287,6 +300,35 @@ func TestBindRulePackContracts_MultiPackAndDuplicate(t *testing.T) {
 	err = service.BindRulePackContracts(ctx, dupManager, ownerReg, hb, slog.Default())
 	require.ErrorContains(t, err, `duplicate enabled rule pack_id "dup-pack"`)
 	require.False(t, hb.IsEnrolled("rule-pack.dup-pack"))
+}
+
+func TestBindRulePackContracts_BuiltInOverlapFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+	builtins.Register()
+
+	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
+	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+	_, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
+		NATS:        tc.Client,
+		Registry:    ownerReg,
+		Heartbeater: hb,
+		Owner:       builtinprojection.OwnerID,
+		Contracts:   builtinprojection.Contracts(),
+	})
+	require.NoError(t, err)
+
+	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"rule-built-in-overlap": ruleComponentConfig(
+			t,
+			"lesson-rule-pack",
+			[]projection.Contract{builtinprojection.Contracts()[1]},
+		),
+	})
+	err = service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
+	require.ErrorIs(t, err, ownership.ErrOwnershipOverlap)
+	require.False(t, hb.IsEnrolled("rule-pack.lesson-rule-pack"))
 }
 
 func TestRulePackMissingPackIDRejectedAtFactory(t *testing.T) {
@@ -359,10 +401,12 @@ func TestRulePackInvalidPackID_RejectedAtFactory(t *testing.T) {
 }
 
 func missionContract2() projection.Contract {
+	vocabulary.Register(sensorStatusCalibratedPredicate)
 	return projection.Contract{
 		Name:          "dup.status",
 		EntityPattern: "acme.ops.robotics.gcs.sensor.*",
 		Groups: []projection.PredicateGroup{{
+			Name:       "calibration",
 			Mode:       ownership.ModeReplaceOwned,
 			Predicates: []string{sensorStatusCalibratedPredicate},
 		}},

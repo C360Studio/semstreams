@@ -35,19 +35,14 @@ const (
 	ActionTypeRemoveTriple = "remove_triple"
 	// ActionTypeUpdateTriple updates metadata on an existing triple
 	ActionTypeUpdateTriple = "update_triple"
-	// ActionTypeReplaceOwned replaces (or clears) the OWNED value of a
-	// single-valued predicate the rule pack is the projection owner of
-	// (ADR-056 Decision 3). Unlike update_triple's remove-then-add, this
-	// is a SINGLE atomic update_with_triples mutation: RemoveTriples names
-	// the predicate (dropping any prior value) and AddTriples carries the
-	// new value, so a watcher never observes the predicate absent between
-	// the two operations. Empty Object clears the predicate (RemoveTriples
-	// only). The Predicate MUST be a literal (no `$` substitution) and MUST
-	// fall inside one of the pack's ModeReplaceOwned projection-contract
-	// groups — both enforced at load/hot-reload time (HARD-FAIL on
-	// violation). NEVER a CAS write: the constructed request always carries
-	// ExpectedRevision == 0; this is owned-current-state reconciliation, not
-	// a state-machine transition (that is cas-transition's lane).
+	// ActionTypeReplaceOwned replaces (or clears) the selected predicate
+	// through the rule pack's bound projection.MutationClient. The public
+	// client atomically reconciles the complete named ModeReplaceOwned group,
+	// preserving predicates outside that group. A raw empty Object clears the
+	// entire selected named group; a raw non-empty Object authors one desired
+	// triple even when substitution resolves to an empty value. The contract,
+	// group, and literal predicate are resolved against the immutable boot-time
+	// projection target index at load/hot-reload time (HARD-FAIL on violation).
 	ActionTypeReplaceOwned = "replace_owned"
 	// ActionTypePublishAgent triggers an agentic loop by publishing a TaskMessage
 	ActionTypePublishAgent = "publish_agent"
@@ -1035,29 +1030,21 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 	return nil
 }
 
-// executeReplaceOwned executes a replace_owned action (ADR-056 Decision 3),
-// atomically replacing — or, when action.Object is empty, clearing — the owned
-// value of a single-valued predicate on the target entity via ONE
-// update_with_triples mutation. This differs from update_triple's remove-then-add
-// two-step in being atomic: a watcher never observes the predicate absent
-// between operations.
+// executeReplaceOwned executes a replace_owned action (ADR-056 Decision 3)
+// through the rule pack's bound public mutation client. The client reconciles
+// the complete selected projection group atomically.
 //
 // Routing decision is made on the RAW action.Object BEFORE substitution
-// (per ADR-056 Decision 3): empty Object → clear (RemoveTriples only);
-// non-empty Object → replace (RemoveTriples + AddTriples). This keeps the
-// clear-vs-replace branch independent of what the substitution resolves to —
-// a clear is authored by omitting Object, never by an Object that happens to
-// resolve to "".
+// (per ADR-056 Decision 3): an empty Object clears the entire selected named
+// group; a non-empty Object supplies one desired triple. This keeps the
+// clear-vs-replace branch independent of what substitution resolves to — a
+// non-empty expression that resolves to "" still authors that empty value.
 //
 // Predicate is always a literal (validation rejects any `$` in the predicate of
 // a replace_owned action), so it is NOT run through substitution. Object IS
 // substituted through the same typed dispatch as add_triple / update_triple so
-// numeric / bool values round-trip their source type.
-//
-// The owner identity ("rule-pack.<packID>") is required: a replace_owned firing
-// with an empty ownerID is an authoring/wiring error (an unidentified owner
-// cannot reconcile an owned predicate group) and returns an error before any
-// mutation.
+// numeric / bool values round-trip their source type. Ownership identity and
+// fencing remain encapsulated by projection.MutationClient.
 func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action, ec *ExecutionContext) error {
 	entityID, err := resolveTripleSubject(action, ec)
 	if err != nil {
@@ -1077,7 +1064,8 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 	}
 
 	// Clear vs replace is decided on the RAW Object before substitution.
-	// Empty → clear (RemoveTriples only, zero objects). Non-empty → replace.
+	// Empty clears the entire selected group; non-empty authors one desired
+	// triple even when substitution resolves to an empty value.
 	var objects []message.Triple
 	timestamp := time.Now().UTC()
 	if action.Object != "" {

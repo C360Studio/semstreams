@@ -31,7 +31,6 @@
       "entity_pattern": "*.*.agent.lesson.record.*",
       "groups": [
         {
-          "name": "lesson-lifecycle",
           "mode": "replace-owned",
           "predicates": [
             "agent.lesson.status",
@@ -39,19 +38,6 @@
             "agent.lesson.retired-at"
           ]
         }
-      ],
-      "birth_predicates": [
-        "agent.lesson.category",
-        "agent.lesson.polarity",
-        "agent.lesson.severity",
-        "agent.lesson.created-at",
-        "agent.lesson.summary",
-        "agent.lesson.detail",
-        "agent.lesson.injection-form",
-        "agent.lesson.evidence",
-        "agent.lesson.applies-to",
-        "agent.lesson.observed-role",
-        "agent.action.executed-by"
       ]
     }
   ],
@@ -69,13 +55,7 @@
       ],
       "logic": "and",
       "on_enter": [
-        {
-          "type": "replace_owned",
-          "projection_contract": "agentic.lesson-record",
-          "projection_group": "lesson-lifecycle",
-          "predicate": "agent.lesson.status",
-          "object": "retired"
-        }
+        {"type": "replace_owned", "predicate": "agent.lesson.status", "object": "retired"}
       ]
     }
   ]

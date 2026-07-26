@@ -1,243 +1,249 @@
 //go:build integration
 
-// Package rule — integration tests for the replace_owned action (ADR-056
-// Decision 3) driven against a REAL graph-ingest update_with_triples handler.
-// These exercise the atomic-write contract (exactly-one value, clear, must-exist)
-// and the processor owner-wiring path through live NATS/KV.
 package rule
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
 	"github.com/c360studio/semstreams/component"
-	gtypes "github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/semantictest"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/c360studio/semstreams/pkg/projection"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
-	"github.com/c360studio/semstreams/vocabulary/rulepacks"
+	"github.com/c360studio/semstreams/vocabulary"
+	"github.com/stretchr/testify/require"
 )
 
-// startGraphIngest stands up a real graph-ingest Component bound to the test
-// NATS client and returns it (already Started). It owns the
-// graph.mutation.entity.update_with_triples handler the rule mutator drives.
-func startGraphIngest(t *testing.T, natsClient *natsclient.Client) *graphingest.Component {
+const replaceOwnedIntegrationOwner = "rule-pack.replace-owned-integration"
+
+type replaceOwnedIntegrationHarness struct {
+	ctx         context.Context
+	nats        *natsclient.Client
+	registry    *ownership.Registry
+	heartbeater *ownership.Heartbeater
+	ingest      *graphingest.Component
+	client      *projection.MutationClient
+	contract    projection.Contract
+}
+
+func newReplaceOwnedIntegrationHarness(t *testing.T) *replaceOwnedIntegrationHarness {
 	t.Helper()
-	ctx := context.Background()
+	registerReplaceOwnedTestVocabulary(t)
 
-	cfg := graphingest.DefaultConfig()
-	configJSON, err := json.Marshal(cfg)
+	ctx, cancel := context.WithCancel(t.Context())
+	testClient := natsclient.NewTestClient(
+		t,
+		natsclient.WithKV(),
+		natsclient.WithStreams(natsclient.TestStreamConfig{
+			Name: "ENTITY", Subjects: []string{"entity.>"},
+		}),
+	)
+	registry, err := ownership.EnsureBuckets(
+		ctx,
+		testClient.Client,
+		slog.Default(),
+		vocabulary.InverseResolver,
+	)
 	require.NoError(t, err)
+	heartbeater := registry.NewHeartbeater(20 * time.Millisecond)
+	go heartbeater.Run(ctx)
 
-	comp, err := graphingest.CreateGraphIngest(configJSON, component.Dependencies{NATSClient: natsClient})
-	require.NoError(t, err)
-
-	gi := comp.(*graphingest.Component)
-	require.NoError(t, gi.Initialize())
-	require.NoError(t, gi.Start(ctx))
-	t.Cleanup(func() { _ = gi.Stop(5 * time.Second) })
-
-	// Let the mutation subscriptions propagate.
-	time.Sleep(150 * time.Millisecond)
-	return gi
-}
-
-// readEntity fetches the stored EntityState directly from the ENTITY_STATES KV
-// bucket (graph-ingest is the writer; this is a read-back probe). Reading the
-// bucket rather than a component method keeps the assertion on the durable
-// post-write state, independent of any read-cache.
-func readEntity(t *testing.T, natsClient *natsclient.Client, entityID string) *gtypes.EntityState {
-	t.Helper()
-	js, err := natsClient.JetStream()
-	require.NoError(t, err)
-	kv, err := js.KeyValue(context.Background(), gtypes.BucketEntityStates)
-	require.NoError(t, err)
-	entry, err := kv.Get(context.Background(), entityID)
-	require.NoError(t, err)
-	var es gtypes.EntityState
-	require.NoError(t, json.Unmarshal(entry.Value(), &es))
-	return &es
-}
-
-// triplesForPredicate returns the triples on es whose Predicate matches.
-func triplesForPredicate(es *gtypes.EntityState, predicate string) []message.Triple {
-	var out []message.Triple
-	for _, tr := range es.Triples {
-		if tr.Predicate == predicate {
-			out = append(out, tr)
-		}
-	}
-	return out
-}
-
-// --- Case 1: replace inside envelope succeeds, atomic, exactly-one value ---
-
-func TestIntegration_ReplaceOwned_ReplaceExactlyOneValue(t *testing.T) {
-	ctx := context.Background()
-	streams := []natsclient.TestStreamConfig{
-		{Name: "ENTITY", Subjects: []string{"entity.>"}},
-	}
-	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	natsClient := tc.Client
-
-	gi := startGraphIngest(t, natsClient)
-
-	const entityID = "acme.ops.robotics.gcs.drone.001"
-	const pred = rulepacks.WorkflowStatePhase
-
-	// Seed the entity carrying an initial value for the owned predicate.
-	require.NoError(t, gi.CreateEntity(ctx, &gtypes.EntityState{
-		ID: entityID,
-		Triples: []message.Triple{
-			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "initializing", Confidence: 1.0, Timestamp: time.Now()},
+	contract := replaceOwnedTestContracts(t)[0]
+	client, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
+		NATS:        testClient.Client,
+		Registry:    registry,
+		Heartbeater: heartbeater,
+		Owner:       replaceOwnedIntegrationOwner,
+		Contracts:   []projection.Contract{contract},
+		Timeout:     2 * time.Second,
+		Retry: natsclient.RetryConfig{
+			MaxRetries:        1,
+			InitialBackoff:    time.Millisecond,
+			BackoffMultiplier: 1,
 		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}))
-
-	mutator := newTripleMutator(natsClient, nil)
-	rev, err := mutator.ReplaceOwned(ctx, "rule-1", "rule-pack.test", entityID, pred,
-		[]message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
-	require.NoError(t, err, "in-envelope replace against the real handler must succeed")
-	assert.Positive(t, rev, "a successful replace returns a non-zero KV revision")
-
-	es := readEntity(t, natsClient, entityID)
-	got := triplesForPredicate(es, pred)
-	require.Len(t, got, 1, "replace_owned must leave EXACTLY ONE triple for the owned predicate (atomic replace-by-predicate)")
-	assert.Equal(t, "running", got[0].Object, "the single remaining value must be the new one")
-}
-
-// --- Case 5 (integration): clear sub-case ---
-
-func TestIntegration_ReplaceOwned_ClearRemovesPredicate(t *testing.T) {
-	ctx := context.Background()
-	streams := []natsclient.TestStreamConfig{
-		{Name: "ENTITY", Subjects: []string{"entity.>"}},
-	}
-	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	natsClient := tc.Client
-
-	gi := startGraphIngest(t, natsClient)
-
-	const entityID = "acme.ops.robotics.gcs.drone.002"
-	const pred = rulepacks.WorkflowStatePhase
-
-	require.NoError(t, gi.CreateEntity(ctx, &gtypes.EntityState{
-		ID: entityID,
-		Triples: []message.Triple{
-			{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()},
-			// A second, unrelated predicate that must survive the clear.
-			{Subject: entityID, Predicate: semantictest.Predicate(t, "entity", "identity", "type"), Object: "drone", Confidence: 1.0, Timestamp: time.Now()},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}))
-
-	mutator := newTripleMutator(natsClient, nil)
-	// Empty objects slice = clear (RemoveTriples only).
-	_, err := mutator.ReplaceOwned(ctx, "rule-1", "rule-pack.test", entityID, pred, nil)
-	require.NoError(t, err)
-
-	es := readEntity(t, natsClient, entityID)
-	assert.Empty(t, triplesForPredicate(es, pred), "clear must leave ZERO triples for the predicate")
-	assert.Len(t, triplesForPredicate(es, rulepacks.EntityIdentityType), 1, "clear must not touch sibling predicates")
-}
-
-// --- Case 9 (integration): must-exist — non-existent entity → EntityNotFound ---
-
-func TestIntegration_ReplaceOwned_MustExist(t *testing.T) {
-	ctx := context.Background()
-	streams := []natsclient.TestStreamConfig{
-		{Name: "ENTITY", Subjects: []string{"entity.>"}},
-	}
-	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	natsClient := tc.Client
-
-	gi := startGraphIngest(t, natsClient)
-	_ = gi // started so the handler is live; the entity is deliberately absent.
-
-	const missing = "acme.ops.robotics.gcs.drone.404"
-	mutator := newTripleMutator(natsClient, nil)
-	_, err := mutator.ReplaceOwned(ctx, "rule-1", "rule-pack.test", missing, rulepacks.WorkflowStatePhase,
-		[]message.Triple{{Subject: missing, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
-	require.Error(t, err, "replace_owned on a non-existent entity must error (no auto-vivify)")
-	assert.Contains(t, err.Error(), gtypes.ErrorCodeEntityNotFound,
-		"the handler's entity_not_found code must surface to the caller")
-}
-
-// --- The production tripleMutator stamps OwnerToken onto the wire (M2) ---
-
-// TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire drives the REAL
-// tripleMutator.ReplaceOwned and captures the marshalled
-// UpdateEntityWithTriplesRequest off the wire via a fake responder, asserting the
-// OwnerToken field is actually placed on the request (the literal
-// `req.OwnerToken = ownerToken` line PR-1 adds at triple_mutator.go). A unit test
-// cannot cover this seam — tripleMutator holds a concrete *natsclient.Client, not
-// an interface — so the production marshal path is only reachable through live
-// NATS. The fake responder stands in for graph-ingest so the assertion is purely
-// on the bytes the production mutator emits.
-// (feedback_integration_tests_must_drive_production_wire)
-func TestIntegration_ReplaceOwned_StampsOwnerTokenOnWire(t *testing.T) {
-	ctx := context.Background()
-	tc := natsclient.NewTestClient(t, natsclient.WithKV())
-	natsClient := tc.Client
-
-	captured := make(chan gtypes.UpdateEntityWithTriplesRequest, 1)
-	_, err := natsClient.Subscribe(ctx, SubjectEntityUpdateWithTriples, func(_ context.Context, msg *nats.Msg) {
-		var req gtypes.UpdateEntityWithTriplesRequest
-		if err := json.Unmarshal(msg.Data, &req); err == nil {
-			select {
-			case captured <- req:
-			default:
-			}
-		}
-		resp, _ := json.Marshal(gtypes.UpdateEntityWithTriplesResponse{
-			MutationResponse: gtypes.MutationResponse{KVRevision: 1},
-		})
-		_ = msg.Respond(resp)
 	})
 	require.NoError(t, err)
-	// Let the subscription propagate before the request fires.
-	time.Sleep(100 * time.Millisecond)
 
-	const entityID = "acme.ops.robotics.gcs.drone.001"
-	const wantToken = "rule-pack.test#deadbeef01234567"
-	mutator := newTripleMutator(natsClient, nil)
-	_, err = mutator.ReplaceOwned(ctx, "rule-1", wantToken, entityID, rulepacks.WorkflowStatePhase,
-		[]message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "workflow", "state", "phase"), Object: "running", Confidence: 1.0, Timestamp: time.Now()}})
-	require.NoError(t, err, "fake responder replies success; the call must round-trip")
+	config := graphingest.DefaultConfig()
+	config.EnforceOwnerLease = true
+	rawConfig, err := json.Marshal(config)
+	require.NoError(t, err)
+	created, err := graphingest.CreateGraphIngest(
+		rawConfig,
+		component.Dependencies{NATSClient: testClient.Client},
+	)
+	require.NoError(t, err)
+	ingest := created.(*graphingest.Component)
+	require.NoError(t, ingest.Initialize())
+	require.NoError(t, ingest.Start(ctx))
+	require.NoError(t, testClient.GetNativeConnection().Flush())
 
-	select {
-	case req := <-captured:
-		assert.Equal(t, wantToken, req.OwnerToken,
-			"production tripleMutator.ReplaceOwned must stamp the ownerToken argument onto req.OwnerToken")
-	case <-time.After(2 * time.Second):
-		t.Fatal("no update_with_triples request captured on the wire")
+	t.Cleanup(func() {
+		_ = ingest.Stop(5 * time.Second)
+		cancel()
+	})
+	return &replaceOwnedIntegrationHarness{
+		ctx:         ctx,
+		nats:        testClient.Client,
+		registry:    registry,
+		heartbeater: heartbeater,
+		ingest:      ingest,
+		client:      client,
+		contract:    contract,
 	}
 }
 
-// --- Processor owner-wiring (requires NATS for initializeStateTracker) ---
+func (h *replaceOwnedIntegrationHarness) createEntity(
+	t *testing.T,
+	entityID string,
+	triples ...message.Triple,
+) projection.MutationReceipt {
+	t.Helper()
+	for i := range triples {
+		triples[i].Subject = entityID
+		triples[i].Confidence = 1
+	}
+	receipt, err := h.client.CreateWithTriples(h.ctx, projection.CreateMutation{
+		Contract: testReplaceContract,
+		Entity: &graph.EntityState{
+			ID: entityID,
+			MessageType: message.Type{
+				Domain: "test", Category: "status", Version: "v1",
+			},
+		},
+		Triples: triples,
+		Metadata: projection.MutationMetadata{
+			RequestID: "create-" + entityID,
+			TraceID:   "trace-" + entityID,
+			Source:    "rule-integration",
+			Timestamp: time.Now().UTC(),
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, projection.CommitVerified, receipt.Commit)
+	require.Positive(t, receipt.KVRevision)
+	return receipt
+}
 
-func TestIntegration_ReplaceOwned_ProcessorWiresOwner(t *testing.T) {
-	ctx := context.Background()
-	tc := natsclient.NewTestClient(t, natsclient.WithKV())
-	natsClient := tc.Client
+func exactRuleTripleCount(entity *graph.EntityState, predicate string, object any) int {
+	count := 0
+	for _, triple := range entity.Triples {
+		if triple.Predicate == predicate && triple.Object == object {
+			count++
+		}
+	}
+	return count
+}
 
-	cfg := mustTestConfig(t, "replace-owned-test")
-	cfg.ProjectionContracts = replaceOwnedTestContracts()
-	rp, err := NewProcessorWithMetrics(natsClient, &cfg, nil)
+func TestIntegration_ReplaceOwnedActionReconcilesCompleteGroupAndTracksRevision(t *testing.T) {
+	harness := newReplaceOwnedIntegrationHarness(t)
+	const entityID = "acme.ops.robotics.gcs.drone.rule-001"
+	harness.createEntity(
+		t,
+		entityID,
+		message.Triple{Predicate: ownedPredicate, Object: "active"},
+		message.Triple{Predicate: ownedSibling, Object: "yesterday"},
+		message.Triple{Predicate: siblingPredicate, Object: "display-me"},
+		message.Triple{Predicate: birthPredicate, Object: "born-once"},
+	)
+
+	tracker := &capturingRevisionTracker{}
+	executor := replaceOwnedExecutor(t, harness.client, tracker)
+	err := executor.Execute(
+		harness.ctx,
+		replaceOwnedAction(ownedPredicate, "retired"),
+		&ExecutionContext{
+			EntityID: entityID,
+			State:    &MatchState{RuleID: "retire-rule", Iteration: 2},
+		},
+	)
+	require.NoError(t, err)
+	require.Positive(t, tracker.revision)
+	require.Equal(t, "retire-rule", tracker.ruleID)
+	require.Equal(t, entityID, tracker.entityID)
+
+	entity, err := harness.client.ReadAuthoritative(harness.ctx, entityID)
+	require.NoError(t, err)
+	require.Equal(t, 1, exactRuleTripleCount(entity, ownedPredicate, "retired"))
+	require.Zero(t, exactRuleTripleCount(entity, ownedSibling, "yesterday"),
+		"omitted selected-group sibling must be deleted")
+	require.Equal(t, 1, exactRuleTripleCount(entity, siblingPredicate, "display-me"),
+		"sibling replace-owned group must remain isolated")
+	require.Equal(t, 1, exactRuleTripleCount(entity, birthPredicate, "born-once"),
+		"create-only birth predicate must remain outside replacement")
+}
+
+func TestIntegration_ReplaceOwnedActionNotFoundDoesNotVivify(t *testing.T) {
+	harness := newReplaceOwnedIntegrationHarness(t)
+	const entityID = "acme.ops.robotics.gcs.drone.missing"
+	executor := replaceOwnedExecutor(t, harness.client, nil)
+
+	err := executor.Execute(
+		harness.ctx,
+		replaceOwnedAction(ownedPredicate, "retired"),
+		&ExecutionContext{EntityID: entityID, State: &MatchState{RuleID: "missing-rule"}},
+	)
+	var mutationErr *projection.MutationError
+	require.ErrorAs(t, err, &mutationErr)
+	require.Equal(t, projection.MutationNotFound, mutationErr.Kind)
+	require.Equal(t, graph.ErrorCodeEntityNotFound, mutationErr.Code)
+	require.Equal(t, projection.CommitNotCommitted, mutationErr.Commit)
+
+	_, readErr := harness.client.ReadAuthoritative(harness.ctx, entityID)
+	require.ErrorAs(t, readErr, &mutationErr)
+	require.Equal(t, projection.MutationNotFound, mutationErr.Kind)
+}
+
+func TestIntegration_ReplaceOwnedActionPreservesStaleTokenFailure(t *testing.T) {
+	harness := newReplaceOwnedIntegrationHarness(t)
+	const entityID = "acme.ops.robotics.gcs.drone.stale-001"
+	harness.createEntity(
+		t,
+		entityID,
+		message.Triple{Predicate: ownedPredicate, Object: "active"},
+	)
+
+	replacementRegistry, err := ownership.EnsureBuckets(
+		harness.ctx,
+		harness.nats,
+		slog.Default(),
+		vocabulary.InverseResolver,
+	)
+	require.NoError(t, err)
+	_, err = projection.Bind(
+		harness.ctx,
+		replacementRegistry,
+		replaceOwnedIntegrationOwner,
+		harness.contract,
+	)
 	require.NoError(t, err)
 
-	require.NoError(t, rp.initializeStateTracker(ctx))
-	exec, ok := rp.actionExecutor.(*ActionExecutor)
-	require.True(t, ok, "expected concrete *ActionExecutor")
-	assert.Equal(t, "rule-pack.replace-owned-test", exec.ownerID,
-		"processor must wire rule-pack.<PackID> onto the executor at state-tracker init")
+	executor := replaceOwnedExecutor(t, harness.client, nil)
+	err = executor.Execute(
+		harness.ctx,
+		replaceOwnedAction(ownedPredicate, "must-not-land"),
+		&ExecutionContext{EntityID: entityID, State: &MatchState{RuleID: "stale-rule"}},
+	)
+	var mutationErr *projection.MutationError
+	require.ErrorAs(t, err, &mutationErr)
+	require.Equal(t, projection.MutationStaleOwnerToken, mutationErr.Kind)
+	require.Equal(t, graph.ErrorCodeOwnerLeaseStale, mutationErr.Code)
+	require.Equal(t, errs.ErrorInvalid, mutationErr.Class)
+	require.Equal(t, projection.CommitNotCommitted, mutationErr.Commit)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	require.True(t, errors.Is(err, classified))
+
+	entity, readErr := harness.client.ReadAuthoritative(harness.ctx, entityID)
+	require.NoError(t, readErr)
+	require.Equal(t, 1, exactRuleTripleCount(entity, ownedPredicate, "active"))
+	require.Zero(t, exactRuleTripleCount(entity, ownedPredicate, "must-not-land"))
 }

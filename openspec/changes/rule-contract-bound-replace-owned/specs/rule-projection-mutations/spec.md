@@ -6,9 +6,15 @@
 
 Before component start, the composition root MUST bind exactly one complete immutable public projection mutation
 client for every enabled rule pack with a non-empty projection-contract set. It MUST use owner
-`rule-pack.<packID>`, the runtime NATS client, the ownership registry, the static-owner heartbeater, and the pack's
-complete copied projection-contract set. Every pack's claims MUST be disjoint from other packs and from claims
-already registered by the #696 built-in aggregate.
+`rule-pack.<packID>`, the runtime NATS client, and the pack's complete copied projection-contract set. The runtime
+NATS client MUST be non-nil for every such client.
+
+The ownership Registry MUST be non-nil only when the complete contract set derives a non-empty
+`ownership.Registration` containing owner claims or foreign-edge claims. The static-owner heartbeater MUST be
+non-nil only when an owning `replace-owned` or `cas-transition` claim requires liveness. A claimless/birth-only
+contract set MUST be allowed to bind with nil Registry and nil heartbeater. A non-empty registration with no owning
+claim MUST be allowed to bind with a nil heartbeater. Every derived claim MUST be disjoint from other packs and
+from claims already registered by the #696 built-in aggregate.
 
 The resulting client MUST be injected into the processor only as `projection.OwnedReplacer`. The rule-pack path
 MUST NOT separately call `BindAndHeartbeat`, mint or expose an owner token, or retain a raw replacement publisher.
@@ -16,9 +22,14 @@ MUST NOT separately call `BindAndHeartbeat`, mint or expose an owner token, or r
 Invalid dependencies, contract validation, ownership overlap, binding failure, heartbeat failure, and injection
 failure MUST abort boot before `StartAll`. They MUST NOT be downgraded to observe-only warnings.
 
-The Registry-wide one-successful-registration invariant MUST apply. A repeated helper invocation for an already
-bound `rule-pack.<packID>` MUST preserve `ErrOwnerAlreadyBound` and fail boot before heartbeat or claim mutation.
-It MUST NOT treat an identical contract set as an idempotent rebind.
+The Registry-wide one-successful-registration invariant MUST apply when the complete contract set produces a
+non-empty `ownership.Registration` with owner or foreign claims. A repeated helper invocation for that registered
+`rule-pack.<packID>` MUST preserve `ErrOwnerAlreadyBound` and fail boot before heartbeat or claim mutation.
+
+A contract-bearing pack with an empty registration, including a birth-only pack, MUST NOT promise
+`ErrOwnerAlreadyBound`. Its repeated composition MUST fail through the one-time `SetOwnedReplacer`
+client-injection boundary as a composition error. Repeated composition with identical contract-bearing inputs MUST
+NOT succeed idempotently on either path.
 
 #### Scenario: Two packs bind independently
 
@@ -35,6 +46,19 @@ It MUST NOT treat an identical contract set as an idempotent rebind.
 - **AND** `StartAll` is not called
 - **AND** no rule action can publish a mutation
 
+#### Scenario: Claimless client has nil ownership dependencies
+
+- **GIVEN** a non-empty birth-only contract set derives an empty ownership registration
+- **WHEN** the rule pack binds with a runtime NATS client and nil Registry and heartbeater
+- **THEN** binding succeeds and the processor receives its `OwnedReplacer`
+
+#### Scenario: Registration dependencies follow derived claims
+
+- **GIVEN** a complete contract set derives a non-empty registration
+- **WHEN** its Registry is nil
+- **THEN** binding fails before client injection or mutation transport
+- **AND** a nil heartbeater is allowed unless the registration contains owning replace/CAS claims
+
 #### Scenario: Rule-pack overlaps the built-in aggregate
 
 - **GIVEN** #696 already bound a built-in-owned predicate group
@@ -42,11 +66,18 @@ It MUST NOT treat an identical contract set as an idempotent rebind.
 - **THEN** `ErrOwnershipOverlap` remains inspectable and boot fails
 - **AND** the conflict is not downgraded to an observe-only warning
 
-#### Scenario: Binder is invoked twice
+#### Scenario: Claim-bearing binder is invoked twice
 
-- **GIVEN** a rule-pack owner registered successfully in one Registry
+- **GIVEN** a rule-pack owner registered a non-empty owner or foreign claim set in one Registry
 - **WHEN** rule-pack composition is invoked again with the identical pack and contract set
 - **THEN** `ErrOwnerAlreadyBound` remains inspectable and boot fails before heartbeat or claim mutation
+
+#### Scenario: Claimless binder is invoked twice
+
+- **GIVEN** a birth-only pack has an empty registration and received its `OwnedReplacer`
+- **WHEN** rule-pack composition is invoked again with the identical pack and contract set
+- **THEN** one-time `SetOwnedReplacer` injection rejects the repeat as a composition error
+- **AND** boot fails without requiring `ErrOwnerAlreadyBound`
 
 #### Scenario: Pack has no contract
 
@@ -62,8 +93,9 @@ no contracts, before the first rule-pack mutation-client bind. Preflight MUST va
 complete contract sets, required dependencies, enabled-pack overlaps, exact target indexes, and every initially
 configured `replace_owned` action.
 
-The #696 built-in aggregate MUST remain bound earlier and outside this rule-pack preflight batch. Every rule-pack
-bind MUST still arbitrate against its live Registry claims, and any pack-vs-built-in overlap MUST fail closed.
+The #696 built-in aggregate MUST remain bound earlier and outside this rule-pack preflight batch. Every
+claim-bearing rule-pack bind MUST still arbitrate against live Registry claims, and any pack-vs-built-in overlap
+MUST fail closed.
 
 No rule-pack ownership registration, rule-pack heartbeat enrollment, rule-pack owner-token minting, rule-pack
 client injection, or rule-pack mutation transport MAY occur before preflight succeeds for the complete enabled
@@ -146,10 +178,10 @@ The processor MUST NOT use the public client's omitted-group compatibility to in
 The executor MUST issue one `projection.ReplaceOwnedMutation` through the injected `OwnedReplacer`. It MUST name
 the resolved contract and group, target the resolved entity ID, and provide the action's complete desired state.
 
-A non-empty action object MUST produce one desired triple for the action predicate. An empty object MUST produce an
-empty desired set. Every predicate in the selected group that is omitted from desired state MUST be removed.
-Predicates in sibling groups, birth predicates, append-only predicates, foreign predicates, and unrelated facts
-MUST remain untouched.
+An omitted or raw-empty `Action.Object` MUST produce an empty desired set. A raw-non-empty `Action.Object` MUST
+produce one desired triple for the action predicate, even when substitution resolves the object to an empty value.
+Every predicate in the selected group that is omitted from desired state MUST be removed. Predicates in sibling
+groups, birth predicates, append-only predicates, foreign predicates, and unrelated facts MUST remain untouched.
 
 Birth predicates MUST be treated as create-only authorization through the public client. They MUST derive no
 ownership claim and MUST NOT enter a replacement removal set. The rule layer MUST NOT represent them as
@@ -165,11 +197,18 @@ arbitrary removal list or expected revision.
 - **THEN** the replacement desires that status triple
 - **AND** existing `superseded-by` and `retired-at` facts are removed
 
-#### Scenario: Empty object clears the group
+#### Scenario: Omitted or raw-empty object clears the group
 
-- **WHEN** a replacement action resolves an empty object
+- **WHEN** a replacement action omits `Action.Object` or supplies it as raw-empty
 - **THEN** it sends an empty desired set for the selected group
 - **AND** every existing predicate in that group is removed
+
+#### Scenario: Non-empty object resolves empty
+
+- **GIVEN** a replacement action has a raw-non-empty `Action.Object`
+- **WHEN** substitution resolves that object to an empty value
+- **THEN** desired state contains one triple for the action predicate with that empty resolved object
+- **AND** the operation is not treated as a complete-group clear
 
 #### Scenario: Sibling group remains isolated
 

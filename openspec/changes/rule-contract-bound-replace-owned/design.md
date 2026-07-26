@@ -23,8 +23,9 @@ abstractions.
 rule pack with a non-empty projection-contract set, it constructs exactly one `projection.MutationClientConfig`
 with:
 
-- the manager's runtime NATS client;
-- the ownership registry and static-owner heartbeater;
+- the manager's required runtime NATS client;
+- the ownership Registry only when the complete contract set derives a non-empty `ownership.Registration`;
+- the static-owner heartbeater only when an owning `replace-owned` or `cas-transition` claim requires liveness;
 - owner `rule-pack.<packID>`;
 - the pack's complete copied projection-contract set.
 
@@ -33,10 +34,25 @@ It calls `projection.BindMutationClient` exactly once for that pack and injects 
 pack's contracts must be disjoint from every other pack and from claims already bound by the #696 built-in owner
 `agentic-loop-graph-writer`.
 
-The Registry-wide invariant permits one successful registration for an owner and Registry. The first successful
-bind consumes `rule-pack.<packID>` for that Registry lifetime. A concurrent or repeated invocation fails with
-`ownership.ErrOwnerAlreadyBound` before heartbeat or claim mutation, even when it supplies the identical complete
-contract set. Correction after a successful bind requires a new Registry/incarnation; this helper never rebinds.
+Architecture option A applies the Registry-wide one-successful-registration invariant only when the complete
+contract set produces a non-empty `ownership.Registration` with owner or foreign claims. The first successful
+claim-bearing bind consumes `rule-pack.<packID>` for that Registry lifetime. A concurrent or repeated claim-bearing
+invocation fails with `ownership.ErrOwnerAlreadyBound` before heartbeat or claim mutation, even when it supplies
+the identical complete contract set.
+
+A contract-bearing pack whose registration is empty, including a birth-only pack, does not consume the Registry
+owner sentinel and may bind with nil Registry and nil heartbeater. Its first composition still receives one client.
+A repeated composition reaches the processor's one-time `SetOwnedReplacer` guard and fails as a
+client-injection/composition error. No sentinel type is promised for that claimless path, but identical
+contract-bearing composition never succeeds idempotently. Correction after any successful composition requires a
+fresh process composition; this helper never rebinds a running processor.
+
+Dependency requirements follow the public #687 constructor contract. NATS is required for every non-empty contract
+set because every returned client needs mutation transport. A Registry is required only when derivation produces a
+non-empty registration containing owner claims or foreign-edge claims. A heartbeater is required only when that
+registration contains owning claims derived from `replace-owned` or `cas-transition`; append-only or
+foreign-edge-only registration does not independently require liveness. Birth predicates derive no registration
+and therefore require neither Registry nor heartbeater.
 
 The service-level duck-typed composition interface becomes:
 
@@ -50,8 +66,8 @@ type ProjectionBinder interface {
 
 `PreflightProjectionMutations` is a local, repeat-safe preparation step with no NATS, registry, heartbeat, or
 mutation side effects. `SetOwnedReplacer` is a one-time injection that must finish before processor start. A nil
-client for a contract-bearing pack, unavailable NATS dependency, failed injection, or a second inconsistent
-injection is a composition error.
+client for a contract-bearing pack, unavailable NATS dependency, failed injection, or any second injection is a
+composition error, including a second injection of an equivalent client.
 
 A pack with no contracts receives no mutation client because the public constructor intentionally rejects an empty
 contract set. It is still preflighted and can run actions that do not require owned replacement, while any
@@ -68,7 +84,8 @@ has a mutation envelope and does not invent a rule-local no-op replacer.
 3. build each processor's exact action-target index;
 4. validate all initially loaded and inline `replace_owned` actions against that index;
 5. reject duplicate or ambiguous contract/group/predicate targets;
-6. reject a missing NATS client or any contract-required registry or heartbeater;
+6. reject missing NATS for any contract-bearing pack, missing Registry for a non-empty registration, or missing
+   heartbeater for owning replace/CAS claims;
 7. detect overlaps among the enabled pack contract sets.
 
 The #696 built-in aggregate intentionally binds before `BindRulePackContracts`; it is not part of this rule-pack
@@ -82,8 +99,10 @@ transactional multi-owner registration. If an earlier pack registered before a l
 still fails; the process must discard that Registry rather than continue with a partial rule-pack composition.
 
 Binding and overlap errors are never observe-only warnings. This includes `ErrOwnershipOverlap`,
-`ErrOwnerAlreadyBound`, missing dependencies, heartbeat/liveness failure, and client injection failure. The
-original typed or classified cause is wrapped with `%w` and returned to the binary composition root.
+`ErrOwnerAlreadyBound` for a non-empty registration, missing dependencies, heartbeat/liveness failure, and client
+injection failure. A claimless/birth-only repeat preserves its injection/composition error without promising an
+ownership sentinel. The original typed or classified cause is wrapped with `%w` and returned to the binary
+composition root.
 
 The preflight parser and the start-time rule loader must share one implementation. Preflight retains an immutable
 validated initial-rule snapshot, and initialization consumes that snapshot instead of rereading rule files. This
@@ -144,15 +163,16 @@ At execution, the action resolves its prevalidated target and constructs one
 - `Contract` is the selected contract name;
 - `Group` is the selected group name;
 - `EntityID` is the resolved action subject or trigger entity;
-- `Desired` is empty for a clear, otherwise one canonical triple for the action predicate and resolved typed
-  object;
+- `Desired` is empty only when raw `Action.Object` is omitted or empty; otherwise it contains one canonical triple
+  for the action predicate and resolved typed object;
 - metadata preserves stable rule/action correlation and provenance.
 
 The public client derives the removal set from the complete selected group. Therefore:
 
 - every selected-group predicate omitted from `Desired` is removed;
-- a non-empty action writes its one desired predicate and clears every omitted sibling in that group;
-- an empty object clears the entire selected group;
+- a raw-non-empty `Action.Object` writes its one desired predicate and clears every omitted sibling in that group,
+  even when substitution resolves the object to an empty value;
+- an omitted or raw-empty `Action.Object` clears the entire selected group;
 - sibling groups, birth predicates, append-only predicates, foreign predicates, and unrelated facts are untouched.
 
 Birth predicates are create-only authorization through the public client. They derive no owner claim, are not part
@@ -164,7 +184,9 @@ must declare independent named groups. The engine must not read current state to
 because doing so would restore patch behavior and race the authoritative writer.
 
 Typed substitution remains unchanged: resolved numeric, boolean, structured, and string objects are carried as the
-canonical `message.Triple.Object` value. Replace-owned remains non-CAS; the action exposes no expected revision.
+canonical `message.Triple.Object` value. Clear intent is decided from the raw `Action.Object` before substitution,
+so a non-empty template that resolves empty still produces one desired triple. Replace-owned remains non-CAS; the
+action exposes no expected revision.
 
 ### 6. Preserve receipts and typed failures
 
@@ -241,6 +263,12 @@ group boundary.
 Rejected. Mutation authorization is a static composition invariant. Lazy binding permits partially started packs
 and makes overlap failure runtime-dependent.
 
+### Treat identical repeated composition as idempotent
+
+Rejected. Architecture option A keeps composition single-use. Non-empty registrations preserve the Registry's
+`ErrOwnerAlreadyBound` sentinel. Claimless/birth-only clients cannot rely on that sentinel, so their repeated
+composition fails at the one-time `SetOwnedReplacer` injection boundary. Neither path accepts an identical repeat.
+
 ### Remove Add/Remove in the same PR
 
 Rejected. Their consumers and semantic envelopes need a separate bounded migration. #688 remains open for that
@@ -254,7 +282,8 @@ work.
 - **Partial binding:** preflight every pack first and fail boot on any later bind error.
 - **Built-in overlap:** keep lesson/built-in-owned consumption out of PR2 and test pack-vs-built-in conflict as a
   fatal boot error.
-- **Repeated composition:** rely on the Registry-wide one-bind invariant and preserve `ErrOwnerAlreadyBound`.
+- **Repeated composition:** preserve `ErrOwnerAlreadyBound` for non-empty registrations and reject a repeated
+  claimless/birth-only client at one-time injection without promising that sentinel.
 - **Reload drift:** freeze pack identity, contracts, client, and target index; reject attempted changes atomically.
 - **Error semantic loss:** assert `errors.As`, `errors.Is`, code, class, kind, and commit state at the action boundary.
 - **Binary drift:** verify both existing identical helper calls remain aligned;
@@ -275,4 +304,6 @@ Implementation is conformant only when:
 9. both binaries retain the same existing helper call without unnecessary churn;
 10. raw Add/Remove remain explicitly deferred under #688;
 11. Fable review is requested only if implementation exposes a public-contract/framework issue or materially
-    expands that reviewed surface.
+    expands that reviewed surface;
+12. repeated contract-bearing composition fails even for identical inputs, with `ErrOwnerAlreadyBound` promised
+    only for non-empty registrations and a composition error required for repeated claimless client injection.

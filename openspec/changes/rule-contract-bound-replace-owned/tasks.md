@@ -4,8 +4,9 @@
 
 - [ ] 1.1 Extend `processor/rule/actions_replace_owned_test.go` with explicit `projection_contract` and
   `projection_group` authoring cases, including missing, unknown, unnamed, wrong-mode, and ambiguous targets.
-- [ ] 1.2 Add full-group behavior tests for sibling deletion, entire-group clear, sibling-group isolation,
-  create-only birth-predicate preservation, foreign/append predicate rejection, and typed object substitution.
+- [ ] 1.2 Add full-group behavior tests for sibling deletion, omitted/raw-empty object group clear, raw-non-empty
+  object substitution resolving empty, sibling-group isolation, create-only birth-predicate preservation,
+  foreign/append predicate rejection, and typed object substitution.
 - [ ] 1.3 Add action-boundary tests for not-found and stale-token errors, commit state and unwrap preservation, and
   non-zero `MutationReceipt.KVRevision` feedback tracking.
 - [ ] 1.4 Extend `processor/rule/config_projection_test.go` to lock JSON and schema round trips for the two new action
@@ -22,18 +23,22 @@
 - [ ] 2.1 Rewrite `service/rule_pack_bind.go` so every enabled rule pack is preflighted before the first rule-pack
   bind; retain the intentionally earlier #696 built-in aggregate bind.
 - [ ] 2.2 Validate unique pack IDs, complete copied contract sets, exact action-target indexes, initial actions,
-  required dependencies, and pack-pack overlap during side-effect-free preflight.
+  required NATS for every client, Registry only for non-empty registrations, heartbeater only for owning replace/CAS
+  claims, and pack-pack overlap during side-effect-free preflight.
 - [ ] 2.3 Call `projection.BindMutationClient` exactly once per disjoint enabled contract-bearing pack with owner
   `rule-pack.<packID>` and inject only `projection.OwnedReplacer` before `StartAll`.
 - [ ] 2.4 Remove all `BindAndHeartbeat`, `Registry.OwnerToken`, `SetProjectionOwnerToken`, and observe-only binding
   behavior from the rule-pack composition path.
-- [ ] 2.5 Add service tests for zero, one, and multiple packs, empty packs, missing NATS/Registry/heartbeater,
-  injection failure, and proof that no processor starts after a composition error.
+- [ ] 2.5 Add service tests for zero, one, and multiple packs, empty packs, missing NATS for any client, missing
+  Registry for a non-empty registration, missing heartbeater for owning replace/CAS claims, nil Registry and
+  heartbeater accepted for claimless/birth-only contracts, nil heartbeater accepted when non-empty registration has
+  no owning claim, injection failure, and proof that no processor starts after a composition error.
 - [x] 2.6 Verify `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` already make the identical existing
   `BindRulePackContracts` call before `StartAll`; do not churn either call site unless the helper signature changes.
-- [ ] 2.7 Add service integration tests for duplicate pack IDs, repeated binder invocation preserving
-  `ErrOwnerAlreadyBound`, pack-pack overlap, pack-vs-#696-built-in overlap, and stale external overlap; every case
-  must fail closed rather than log and continue.
+- [ ] 2.7 Add service integration tests for duplicate pack IDs, repeated claim-bearing binding preserving
+  `ErrOwnerAlreadyBound`, repeated claimless/birth-only composition failing one-time client injection without a
+  sentinel assertion, pack-pack overlap, pack-vs-#696-built-in overlap, and stale external overlap; identical
+  repeated inputs must never succeed, and every failure must be fail closed.
 
 ## 3. Build the immutable rule target index
 
@@ -53,7 +58,8 @@
   `projection.OwnedReplacer` injection into `Processor` and `ActionExecutor`.
 - [ ] 4.2 Build one `projection.ReplaceOwnedMutation` per action with the selected contract, selected group, resolved
   entity ID, complete desired state, and stable rule/action metadata.
-- [ ] 4.3 Preserve typed substitution; treat an empty object as an empty desired set for the complete selected group.
+- [ ] 4.3 Preserve typed substitution; clear the complete selected group only when raw `Action.Object` is omitted or
+  empty, and emit one desired triple when raw `Action.Object` is non-empty even if substitution resolves empty.
 - [ ] 4.4 Track non-zero `MutationReceipt.KVRevision` through the existing per-rule revision tracker.
 - [ ] 4.5 Wrap failures with `%w`; do not flatten mutation kind, code, class, commit state, or the underlying cause.
 - [ ] 4.6 Add no action-level blind retry; rely on the public client's operation-specific retry and verification.
@@ -106,5 +112,8 @@
 
 - Base: `46e1e6cb`; rebased SDD: `e8a739ec`; implementation checkpoint: `15037036`.
 - Task 2.6 is verified at the checkpoint: both binaries already call the same helper before `StartAll`.
+- Architecture decision: option A scopes `ErrOwnerAlreadyBound` to non-empty registrations and uses one-time client
+  injection failure for repeated claimless/birth-only composition; identical contract-bearing repeats are never
+  idempotent.
 - The checkpoint is provisional implementation evidence, not acceptance. Its lesson reference-pack migration must
   be removed because the claims overlap the #696 built-in owner.
