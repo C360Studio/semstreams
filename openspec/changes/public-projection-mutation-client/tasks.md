@@ -127,7 +127,7 @@
 - [x] 9.9 Run the production predicate audit independently of the fixture-oriented `predicate:test-audit`.
 - [x] 9.10 Run the full race suite.
 - [x] 9.11 Run `task e2e:agentic` and explicitly tear down its stack.
-- [ ] 9.12 Confirm live PR CI.
+- [ ] 9.12 Confirm live PR CI on the final rebased PR head.
 - [x] 9.13 Obtain the required independent architect and code-review approvals for the internal migration.
 - [x] 9.14 Record that #696 does not require automatic Fable review. Request Fable review only if remediation exposes
   an unresolved issue or this migration materially changes or expands the reviewed public contract.
@@ -218,3 +218,9 @@
 - Live GitHub CI remains the only open #696 gate under task 9.12.
 - No separate automatic Fable review was required for the internal-only #696 migration. The later #700 public
   contract expansion received the mandatory Fable approval recorded under task 8.10.
+- At check time, PR #696 head was `40a22d75`; GitHub `e2e statistical` reported `PASS` in 2m08s
+  ([Actions run 30223713900, job 89850412086][ci-696]).
+- This is historical #696 candidate evidence only. The evidence commit changes the PR head, so task 9.12 remains
+  open until the final rebased head reruns green.
+
+[ci-696]: https://github.com/C360Studio/semstreams/actions/runs/30223713900/job/89850412086
