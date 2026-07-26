@@ -2,10 +2,12 @@
 
 ## Status
 
-**Proposed — 2026-07-24.** Decision record for the OpenSpec change
+**Accepted — 2026-07-26.** Decision record for the OpenSpec change
 `graph-clustering-semantic-edges` (Epic B, increment B2). Reverses the "no consumer" premise of
 [ADR-061](061-community-semantic-virtual-edges.md); its "would not move primary search" premise is
-unaffected and stands.
+unaffected and stands. See [Outcome](#outcome-2026-07-26) for the §8 measurement that followed
+acceptance — it refines the expected ROI of the mechanism this ADR ships; it does not reverse the
+decision below.
 
 ## Decision
 
@@ -86,6 +88,48 @@ improvement in synthesis quality can retrieve. This decision is grounded in that
   (#607, #608, #617) are unaffected — this change builds and measures with `EnableLLM=false` (the B1
   interim), so that surface stays dormant.
 
+## Outcome (2026-07-26)
+
+The mechanism this ADR decided on shipped in full (§1–§7 of the change's `tasks.md`, plus the
+§8.0 explicit-edge weight-correctness prereq, #665/#666) and **ships default-off**, exactly as
+consequenced above. §8 then ran the compound-gate measurement the decision anticipated, and the
+result is an **honest negative on the weight-tuning lever**, not a reversal of the decision itself:
+
+- Enabling `enable_semantic_edges` and reweighting semantic edges above the structural tiers
+  (semantic 2.5, sibling 0.35) DID raise `partition_colocation_mean` from the 0.60 type-partition
+  baseline to 0.83. Two trust instruments added to harden the recorder
+  (`distinct_plurality_communities`, `max_plurality_community_size`) then showed that rise was a
+  **mega-community merge artifact** — 4 of 5 theme-spanning queries' expected entities were
+  absorbed into one 47-member community, not genuinely co-located by theme.
+- A **paired frontier decider** (Gemini 2.5 Flash held constant across both arms — the type
+  baseline and the 2.5/0.35 semantic reweight — so partition was the only variable) measured
+  thematic recall directly instead of trusting the co-location proxy. Recall was **flat**: 0.85 in
+  both arms, per-query byte-identical, known-answer 7/7 in both, community summaries not
+  truncated (286–339 chars, well under the cap, ruling out a summary-dilution artifact).
+- A context-diff of the two arms' retrieval artifacts found the exact theme terms every capped
+  query missed (`battery`, `evacuation`, `door`) are **identical across both partitions** and are
+  present in theme-relevant corpus entities in both. The partition is off the recall path; the
+  0.85 ceiling is upstream, in synthesis compression and/or the eval's literal-term matching. This
+  **falsifies B2's founding premise** — that the missing entity is structurally unreachable
+  because it lands in a different community than the query's other expected entities.
+
+**Conclusion:** on this ~74-entity corpus, the mutual-kNN mechanism has no thematic-recall ROI via
+weight-tuning. The compound colocation gate (`tasks.md` §8.1/§8.2) was measured and deliberately
+**not adopted** — `validate_partition_colocation.go` stays a recorder, not a pass condition — and
+the two trust instruments that exposed the merge artifact, plus a per-query dilution channel
+(`summary_len`/`truncated`), landed as permanent recorder hardening via PR #698 (`304368d9`). The
+mechanism itself is unchanged and stays merged, default-off, as a future lever: a different corpus
+whose semantic neighborhoods do not collapse into one document-genre mega-community could still
+realize the colocation gain this ADR targeted. Two levers are recorded as **out of B2 scope,
+future work**: retrieval-side multi-community query expansion, and embedding-input shaping (the
+absorbing mega-community's membership hints the embedding space organizes by document genre at
+least as strongly as by theme).
+
+This measurement refines the mechanism's *expected ROI* on the corpus tested; it does not
+invalidate the Decision above, which was and remains about building a tiered, gated, additive
+mechanism at the point the "no consumer" premise expired. See
+`docs/proposals/prev1-program.md` and the change's `tasks.md` §8 for the full trace.
+
 ## Alternatives considered
 
 1. **Leiden (rejected for v1, recorded as a gated future fork).** Leiden generally produces higher-quality,
@@ -131,4 +175,7 @@ improvement in synthesis quality can retrieve. This decision is grounded in that
   reasoning explicitly walks back.
 - gh#606 (partition-quality/weighting half only), gh#618 (clustering-edge-consumer scope only) — subsumed by
   the linked change; gh#607/#608/#617 and #606's ownership half remain open, deferred to B3.
+- PR #698 (`304368d9`) — the recorder-hardening trust instruments (`distinct_plurality_communities`,
+  `max_plurality_community_size`, per-query `summary_len`/`truncated`) that exposed and evidence the
+  [Outcome](#outcome-2026-07-26)'s mega-community merge finding.
 - `docs/proposals/prev1-program.md` — the Epic B baton this increment reports back onto.
