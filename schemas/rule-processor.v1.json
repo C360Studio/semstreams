@@ -1201,6 +1201,13 @@
       "items": {
         "type": "object",
         "properties": {
+          "birth_predicates": {
+            "type": "array",
+            "description": "birth_predicates",
+            "items": {
+              "type": "string"
+            }
+          },
           "entity_pattern": {
             "type": "string",
             "description": "entity_pattern"
@@ -1235,6 +1242,10 @@
                 "mode": {
                   "type": "string",
                   "description": "mode"
+                },
+                "name": {
+                  "type": "string",
+                  "description": "name"
                 },
                 "predicates": {
                   "type": "array",
