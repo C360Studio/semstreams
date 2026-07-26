@@ -70,7 +70,7 @@
 - [x] 7.2 Confirm all new critical paths and ambiguity branches have behavioral tests.
 - [x] 7.3 Obtain SemStreams developer implementation sign-off.
 - [x] 7.4 Obtain SemStreams reviewer approval for ownership, retry, wire compatibility, and public API stability.
-- [ ] 7.5 Update issue #313 with slice results and keep downstream migration gated on the reviewed public contract.
+- [x] 7.5 Update issue #313 with slice results and keep downstream migration gated on the reviewed public contract.
 
 ## Evidence
 
@@ -80,5 +80,6 @@
 - Full production audit reported 500 passed and 0 failed.
 - Strict OpenSpec validation reported 32 passed and 0 failed.
 - The mandatory SemStreams reviewer verdict was `APPROVE`; developer implementation evidence was accepted.
+- Issue #313 records PR #687, its local verification evidence, and the still-gated internal migration scope.
 - Unrelated whole-repository baselines remain outside this ledger, including the expected dependency tracked by
   issue #686. Live PR CI, schema, and applicable end-to-end gates remain open under task 7.1.
