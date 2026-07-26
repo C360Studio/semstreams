@@ -137,6 +137,119 @@ func TestDerive_DuplicateContractName(t *testing.T) {
 	}
 }
 
+func TestContract_GroupNamesAreOptionalUniqueSubjectTokens(t *testing.T) {
+	t.Parallel()
+	valid := Contract{
+		Name: "named-groups", EntityPattern: sysPat,
+		Groups: []PredicateGroup{
+			{Name: "identity", Mode: ownership.ModeReplaceOwned, Predicates: []string{"sensorml.process.label"}},
+			{Name: "Position-V2", Mode: ownership.ModeReplaceOwned, Predicates: []string{"sensorml.process.position"}},
+			{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"}},
+		},
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid named and unnamed groups: %v", err)
+	}
+
+	tests := []struct {
+		name string
+		edit func(*Contract)
+	}{
+		{name: "duplicate", edit: func(contract *Contract) {
+			contract.Groups[1].Name = contract.Groups[0].Name
+		}},
+		{name: "dot", edit: func(contract *Contract) { contract.Groups[0].Name = "identity.v2" }},
+		{name: "space", edit: func(contract *Contract) { contract.Groups[0].Name = "identity v2" }},
+		{name: "star", edit: func(contract *Contract) { contract.Groups[0].Name = "identity*" }},
+		{name: "greater", edit: func(contract *Contract) { contract.Groups[0].Name = "identity>" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := valid
+			contract.Groups = append([]PredicateGroup(nil), valid.Groups...)
+			tt.edit(&contract)
+			if err := contract.Validate(); !errors.Is(err, ErrInvalidContract) {
+				t.Fatalf("Validate() = %v, want ErrInvalidContract", err)
+			}
+		})
+	}
+}
+
+func TestContract_BirthPredicatesValidateWithoutDerivingClaims(t *testing.T) {
+	t.Parallel()
+	birthOnly := Contract{
+		Name:            "birth-only",
+		MessageType:     "test.fixture.v1",
+		EntityPattern:   sysPat,
+		BirthPredicates: []string{"sensorml.process.uid"},
+	}
+	if err := birthOnly.Validate(); err != nil {
+		t.Fatalf("birth-only Validate: %v", err)
+	}
+	registration, err := Derive("birth-writer", birthOnly)
+	if err != nil {
+		t.Fatalf("birth-only Derive: %v", err)
+	}
+	if len(registration.Claims) != 0 || len(registration.ForeignEdges) != 0 {
+		t.Fatalf("birth-only derived claims: %#v", registration)
+	}
+
+	sameForeign := birthOnly
+	sameForeign.Name = "birth-and-foreign"
+	sameForeign.ForeignEdges = []ForeignEdge{{
+		Predicate:     "sensorml.process.uid",
+		Mode:          ownership.EdgeNoBirthStub,
+		TargetPattern: sysPat,
+	}}
+	if err := sameForeign.Validate(); err != nil {
+		t.Fatalf("birth predicate may share a foreign-edge predicate: %v", err)
+	}
+}
+
+func TestContract_BirthPredicateRejections(t *testing.T) {
+	t.Parallel()
+	base := Contract{
+		Name:            "birth-validation",
+		EntityPattern:   sysPat,
+		BirthPredicates: []string{"sensorml.process.uid"},
+	}
+	tests := []struct {
+		name string
+		edit func(*Contract)
+	}{
+		{name: "duplicate", edit: func(contract *Contract) {
+			contract.BirthPredicates = []string{"sensorml.process.uid", "sensorml.process.uid"}
+		}},
+		{name: "mutable overlap", edit: func(contract *Contract) {
+			contract.Groups = []PredicateGroup{{
+				Mode: ownership.ModeReplaceOwned, Predicates: []string{"sensorml.process.uid"},
+			}}
+		}},
+		{name: "undeclared canonical", edit: func(contract *Contract) {
+			contract.BirthPredicates = []string{"test.birth.undeclared"}
+		}},
+		{name: "empty", edit: func(contract *Contract) {
+			contract.BirthPredicates = []string{""} // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		}},
+		{name: "wildcard", edit: func(contract *Contract) {
+			contract.BirthPredicates = []string{"sensorml.process.*"} // predicate-audit:invalid {"kind":"stored-predicate","value":"sensorml.process.*","reason":"segment_start"}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			contract := Contract{
+				Name:            base.Name,
+				EntityPattern:   base.EntityPattern,
+				BirthPredicates: []string{"sensorml.process.uid"},
+			}
+			tt.edit(&contract)
+			if err := contract.Validate(); !errors.Is(err, ErrInvalidContract) {
+				t.Fatalf("Validate() = %v, want ErrInvalidContract", err)
+			}
+		})
+	}
+}
+
 // TestDerive_CrossContractModeContradiction: one owner declaring a predicate as
 // replace-owned in one contract and append-evidence in another, over
 // INTERSECTING patterns, is a contradiction the per-contract check can't see but

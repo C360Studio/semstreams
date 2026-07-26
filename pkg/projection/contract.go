@@ -4,8 +4,11 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/c360studio/semstreams/pkg/ownership"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
+	"github.com/c360studio/semstreams/vocabulary"
 )
 
 // validIndexingProfiles are the ADR-054 channel-b profile values a contract may
@@ -25,6 +28,7 @@ const validationOwner = "projection-validation-probe"
 // (ADR-056 Decision 1). A predicate appears in exactly one group per contract —
 // one predicate, one write mode per owner.
 type PredicateGroup struct {
+	Name       string              `json:"name,omitempty"`
 	Mode       ownership.WriteMode `json:"mode"`
 	Predicates []string            `json:"predicates"`
 }
@@ -59,6 +63,10 @@ type Contract struct {
 	EntityPattern string `json:"entity_pattern"`
 	// Groups are the owned/append predicate groups by write mode.
 	Groups []PredicateGroup `json:"groups,omitempty"`
+	// BirthPredicates are immutable primary-subject facts accepted only during
+	// entity creation. They are validation metadata and derive no ownership
+	// claim.
+	BirthPredicates []string `json:"birth_predicates,omitempty"`
 	// ForeignEdges are the relationship edges the projection writes onto other
 	// entities.
 	ForeignEdges []ForeignEdge `json:"foreign_edges,omitempty"`
@@ -76,14 +84,36 @@ func (c Contract) Validate() error {
 	if strings.TrimSpace(c.Name) == "" {
 		return fmt.Errorf("%w: contract has no name", ErrInvalidContract)
 	}
-	if len(c.Groups) == 0 && len(c.ForeignEdges) == 0 {
-		return fmt.Errorf("%w: contract %q declares no predicate groups or foreign edges", ErrInvalidContract, c.Name)
+	if len(c.Groups) == 0 && len(c.BirthPredicates) == 0 && len(c.ForeignEdges) == 0 {
+		return fmt.Errorf(
+			"%w: contract %q declares no predicate groups, birth predicates, or foreign edges",
+			ErrInvalidContract,
+			c.Name,
+		)
+	}
+	if err := semtypes.ValidateEntityIDPattern(c.EntityPattern); err != nil {
+		return fmt.Errorf("%w: contract %q has invalid entity pattern: %w", ErrInvalidContract, c.Name, err)
 	}
 
 	// A predicate must have exactly one write mode within a contract (one owner):
 	// the same predicate in replace-owned and append-evidence is contradictory.
 	seen := make(map[string]ownership.WriteMode)
+	groupNames := make(map[string]struct{})
 	for _, g := range c.Groups {
+		if err := validatePredicateGroupName(g.Name); err != nil {
+			return fmt.Errorf("%w: contract %q: %w", ErrInvalidContract, c.Name, err)
+		}
+		if g.Name != "" {
+			if _, duplicate := groupNames[g.Name]; duplicate {
+				return fmt.Errorf(
+					"%w: contract %q repeats predicate group name %q",
+					ErrInvalidContract,
+					c.Name,
+					g.Name,
+				)
+			}
+			groupNames[g.Name] = struct{}{}
+		}
 		for _, p := range g.Predicates {
 			if prev, dup := seen[p]; dup {
 				return fmt.Errorf("%w: contract %q lists predicate %q in two write modes (%q and %q)",
@@ -91,6 +121,35 @@ func (c Contract) Validate() error {
 			}
 			seen[p] = g.Mode
 		}
+	}
+	birthSeen := make(map[string]struct{}, len(c.BirthPredicates))
+	for _, predicate := range c.BirthPredicates {
+		if err := vocabulary.RequireDeclaredPredicate(predicate); err != nil {
+			return fmt.Errorf(
+				"%w: contract %q has invalid birth predicate: %w",
+				ErrInvalidContract,
+				c.Name,
+				err,
+			)
+		}
+		if _, duplicate := birthSeen[predicate]; duplicate {
+			return fmt.Errorf(
+				"%w: contract %q repeats birth predicate %q",
+				ErrInvalidContract,
+				c.Name,
+				predicate,
+			)
+		}
+		if mode, overlap := seen[predicate]; overlap {
+			return fmt.Errorf(
+				"%w: contract %q birth predicate %q overlaps %q group",
+				ErrInvalidContract,
+				c.Name,
+				predicate,
+				mode,
+			)
+		}
+		birthSeen[predicate] = struct{}{}
 	}
 
 	if c.IndexingProfile != "" {
@@ -100,10 +159,26 @@ func (c Contract) Validate() error {
 		}
 	}
 
-	// Full field validation via the ownership validators (pattern, predicates,
-	// modes, foreign edges, intra-registration self-overlap).
-	if err := c.registration(validationOwner).Validate(); err != nil {
-		return fmt.Errorf("%w: contract %q: %w", ErrInvalidContract, c.Name, err)
+	// Full mutable-lane validation via the ownership validators (predicates,
+	// modes, foreign edges, intra-registration self-overlap). A birth-only
+	// contract deliberately derives no registration.
+	if len(c.Groups) != 0 || len(c.ForeignEdges) != 0 {
+		if err := c.registration(validationOwner).Validate(); err != nil {
+			return fmt.Errorf("%w: contract %q: %w", ErrInvalidContract, c.Name, err)
+		}
+	}
+	return nil
+}
+
+func validatePredicateGroupName(name string) error {
+	if name == "" {
+		return nil
+	}
+	if strings.ContainsAny(name, ".*>") || strings.IndexFunc(name, unicode.IsSpace) >= 0 {
+		return fmt.Errorf(
+			"predicate group name %q must be one subject-safe token without dots, whitespace, or wildcards",
+			name,
+		)
 	}
 	return nil
 }
@@ -157,8 +232,10 @@ func Derive(owner string, contracts ...Contract) (ownership.Registration, error)
 		reg.Claims = append(reg.Claims, derived.Claims...)
 		reg.ForeignEdges = append(reg.ForeignEdges, derived.ForeignEdges...)
 	}
-	if err := reg.Validate(); err != nil {
-		return ownership.Registration{}, fmt.Errorf("%w: deriving owner %q: %w", ErrInvalidContract, owner, err)
+	if len(reg.Claims) != 0 || len(reg.ForeignEdges) != 0 {
+		if err := reg.Validate(); err != nil {
+			return ownership.Registration{}, fmt.Errorf("%w: deriving owner %q: %w", ErrInvalidContract, owner, err)
+		}
 	}
 	return reg, nil
 }
@@ -175,6 +252,12 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 	registration, err := Derive(owner, contracts...)
 	if err != nil {
 		return ownership.OwnerToken{}, err
+	}
+	if len(registration.Claims) == 0 && len(registration.ForeignEdges) == 0 {
+		return ownership.OwnerToken{}, nil
+	}
+	if ownerReg == nil {
+		return ownership.OwnerToken{}, fmt.Errorf("%w: ownership registry is required", ErrInvalidContract)
 	}
 	if err := ownerReg.RegisterOwner(ctx, registration); err != nil {
 		return ownership.OwnerToken{}, err
@@ -200,10 +283,20 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 // shutdown-cancelled context (go hb.Run(ctx)), and pass it here for every static
 // owner it binds.
 func BindAndHeartbeat(ctx context.Context, ownerReg *ownership.Registry, hb *ownership.Heartbeater, owner string, contracts ...Contract) (ownership.OwnerToken, error) {
-	token, err := Bind(ctx, ownerReg, owner, contracts...)
+	registration, err := Derive(owner, contracts...)
 	if err != nil {
 		return ownership.OwnerToken{}, err
 	}
+	if len(registration.Claims) == 0 && len(registration.ForeignEdges) == 0 {
+		return ownership.OwnerToken{}, nil
+	}
+	if ownerReg == nil {
+		return ownership.OwnerToken{}, fmt.Errorf("%w: ownership registry is required", ErrInvalidContract)
+	}
+	if err := ownerReg.RegisterOwner(ctx, registration); err != nil {
+		return ownership.OwnerToken{}, err
+	}
+	token := ownerReg.OwnerToken(owner)
 	if hb != nil {
 		hb.Add(owner)
 	}
