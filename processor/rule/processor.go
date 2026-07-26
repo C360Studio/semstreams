@@ -17,7 +17,6 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -219,13 +218,11 @@ type Processor struct {
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
 
-	// projectionOwnerToken is the typed write-lease credential minted by the
-	// ownership Registry (ADR-056 PR-3.5). Set via SetProjectionOwnerToken by
-	// service.BindRulePackContracts (which holds the Registry) BEFORE
-	// initializeStateTracker, which forwards it to the ActionExecutor. The
-	// executor stamps token.Wire() on every replace_owned request — the
-	// "<owner>#<incarnation>" format lives only in pkg/ownership.
-	projectionOwnerToken ownership.OwnerToken
+	projectionTargets  *projectionTargetIndex
+	initialRules       []Definition
+	initialRulesReady  bool
+	ownedReplacer      projection.OwnedReplacer
+	replacerConfigured bool
 }
 
 // NewProcessor creates a new rule processor
@@ -246,6 +243,18 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 	if err := config.Validate(); err != nil {
 		return nil, err
 	}
+	configCopy := *config
+	configCopy.RulesFiles = append([]string(nil), config.RulesFiles...)
+	configCopy.ProjectionContracts = cloneProjectionContracts(config.ProjectionContracts)
+	inlineRules, err := cloneRuleDefinitions(config.InlineRules)
+	if err != nil {
+		return nil, err
+	}
+	configCopy.InlineRules = inlineRules
+	targets, err := buildProjectionTargetIndex(configCopy.ProjectionContracts)
+	if err != nil {
+		return nil, err
+	}
 
 	// Create message cache - will be initialized with context in Start()
 	msgCache := cache.NewNoop[message.Message]()
@@ -264,7 +273,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		matchCounters:         make(map[string]*atomic.Int64),
 		cronRules:             make(map[string]*CronRule),
 		messageCache:          msgCache,
-		config:                config,
+		config:                &configCopy,
 		metricsRegistry:       metricsRegistry,
 		entityWatchers:        make([]jetstream.KeyWatcher, 0),
 		entityWatcherMap:      make(map[string]jetstream.KeyWatcher),
@@ -273,6 +282,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		graphStateGuardDone:   make(chan struct{}),
 		ownRevisions:          make(map[ruleRevKey]map[uint64]time.Time),
 		revisionTTL:           defaultRevisionTTL,
+		projectionTargets:     targets,
 		health: component.HealthStatus{
 			Healthy:    true,
 			LastCheck:  time.Now(),
@@ -377,17 +387,38 @@ func (rp *Processor) ConfigSchema() component.ConfigSchema {
 // The processor is substrate-agnostic: it returns a declaration and never
 // touches the ownership registry. All binding happens main-side.
 func (rp *Processor) ProjectionBindings() (packID string, contracts []projection.Contract) {
-	return rp.config.PackID, rp.config.ProjectionContracts
+	return rp.config.PackID, cloneProjectionContracts(rp.config.ProjectionContracts)
 }
 
-// SetProjectionOwnerToken stores the typed write-lease credential minted by the
-// ownership Registry so initializeStateTracker can forward it to the
-// ActionExecutor. Must be called by service.BindRulePackContracts BEFORE Start
-// (which calls initializeStateTracker). Mirrors SetProjectionOwner's timing
-// contract. A zero token is tolerated — test paths and unowned packs stamp an
-// empty wire string, which the lease check skips.
-func (rp *Processor) SetProjectionOwnerToken(token ownership.OwnerToken) {
-	rp.projectionOwnerToken = token
+// PreflightProjectionMutations validates and freezes the initial rules and
+// projection target index without performing mutation, ownership, heartbeat,
+// or NATS side effects.
+func (rp *Processor) PreflightProjectionMutations() error {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	return rp.prepareInitialRules()
+}
+
+// SetOwnedReplacer injects the pack's one public mutation capability. It is a
+// one-time composition operation and must follow successful preflight.
+func (rp *Processor) SetOwnedReplacer(replacer projection.OwnedReplacer) error {
+	rp.mu.Lock()
+	defer rp.mu.Unlock()
+	if !rp.initialRulesReady {
+		return fmt.Errorf("rule pack %q mutation preflight has not completed", rp.config.PackID)
+	}
+	if len(rp.config.ProjectionContracts) == 0 {
+		return fmt.Errorf("rule pack %q has no projection contracts", rp.config.PackID)
+	}
+	if replacer == nil {
+		return fmt.Errorf("rule pack %q owned replacer is nil", rp.config.PackID)
+	}
+	if rp.replacerConfigured {
+		return fmt.Errorf("rule pack %q owned replacer is already configured", rp.config.PackID)
+	}
+	rp.ownedReplacer = replacer
+	rp.replacerConfigured = true
+	return nil
 }
 
 // Health returns current health status. Pure getter: the derived fields
@@ -646,29 +677,15 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 		}
 	}
 
-	// ADR-056 Decision 3: wire the rule pack's projection-owner identity onto
-	// the executor so replace_owned actions can thread it to the mutator
-	// boundary. The owner is "rule-pack.<PackID>" — the SAME identity the
-	// composition root binds the pack's ProjectionContracts under (inc 2).
-	// Config validation makes PackID universally present before construction.
-	// Same type-assert setter pattern as SetToolRegistry / SetLifecycleManager.
+	// Wire the immutable replacement envelope and the one public mutation
+	// capability before any evaluator or scheduler can dispatch an action.
 	if setter, ok := actionExecutor.(interface {
-		SetProjectionOwner(string)
+		SetOwnedReplacer(projection.OwnedReplacer)
 	}); ok {
-		setter.SetProjectionOwner("rule-pack." + rp.config.PackID)
+		setter.SetOwnedReplacer(rp.ownedReplacer)
 	}
-	// ADR-056 PR-3.5: forward the typed OwnerToken so the executor can stamp
-	// its wire form on every replace_owned request. The token is minted by
-	// the ownership Registry and set by service.BindRulePackContracts (which
-	// holds the Registry) BEFORE Start is called. A zero token (Registry not
-	// wired) yields an empty wire string — correct for test paths where the
-	// ownership registry is intentionally absent.
-	if !rp.projectionOwnerToken.IsZero() {
-		if setter, ok := actionExecutor.(interface {
-			SetProjectionOwnerToken(ownership.OwnerToken)
-		}); ok {
-			setter.SetProjectionOwnerToken(rp.projectionOwnerToken)
-		}
+	if executor, ok := actionExecutor.(*ActionExecutor); ok {
+		executor.setProjectionTargets(rp.projectionTargets, rp)
 	}
 
 	// Persist the executor on the processor so the cron scheduler
@@ -797,6 +814,14 @@ func (rp *Processor) Start(ctx context.Context) error {
 
 	if rp.running {
 		return errs.WrapInvalid(errs.ErrAlreadyStarted, "RuleProcessor", "Start", "check processor state")
+	}
+	if len(rp.config.ProjectionContracts) > 0 && !rp.replacerConfigured {
+		return errs.WrapInvalid(
+			fmt.Errorf("rule pack %q has projection contracts but no owned replacer", rp.config.PackID),
+			"RuleProcessor",
+			"Start",
+			"validate mutation composition",
+		)
 	}
 
 	// Initialize message cache with context and metrics
@@ -1278,62 +1303,21 @@ func (rp *Processor) DebugStatus() any {
 	}
 }
 
-// ownedReplacePredicates returns the union of every predicate this rule pack
-// declares in a ModeReplaceOwned group across all of its ProjectionContracts
-// (ADR-056 Decision 3). This is the envelope a replace_owned action must stay
-// inside: a replace_owned naming a predicate NOT in this set is reaching outside
-// the pack's owned-current-state claim and is rejected at load/hot-reload time.
-//
-// Validation runs against the processor's OWN contracts — there is no registry
-// injection. The contracts are pack-level and static, so the set is stable for
-// the processor lifetime; computing it per-validation-call is cheap (contracts
-// are a handful of predicates) and avoids any cache-invalidation question.
-func (rp *Processor) ownedReplacePredicates() map[string]struct{} {
-	owned := make(map[string]struct{})
-	for _, c := range rp.config.ProjectionContracts {
-		for _, g := range c.Groups {
-			if g.Mode != ownership.ModeReplaceOwned {
-				continue
-			}
-			for _, p := range g.Predicates {
-				owned[p] = struct{}{}
-			}
-		}
-	}
-	return owned
+func (rp *Processor) validateReplaceOwnedAction(ruleID string, a Action) error {
+	return validateReplaceOwnedAction(rp.projectionTargets, ruleID, a)
 }
 
-// validateReplaceOwnedAction enforces the ADR-056 Decision 3 envelope on a
-// single action. It is a no-op for any non-replace_owned action. For a
-// replace_owned action it requires:
-//
-//   - a non-empty Predicate;
-//   - a LITERAL Predicate (no `$` substitution tokens — the predicate names the
-//     owned cell and must be statically checkable against the contract);
-//   - the Predicate to fall inside one of the pack's ModeReplaceOwned groups.
-//
-// A violation returns an error; both load paths treat that as a HARD-FAIL
-// (file-load aborts boot; hot-reload rejects the change). The owned-predicate
-// set is the processor's OWN ProjectionContracts — no registry injection.
-func (rp *Processor) validateReplaceOwnedAction(ruleID string, a Action) error {
+func validateReplaceOwnedAction(index *projectionTargetIndex, ruleID string, a Action) error {
 	if a.Type != ActionTypeReplaceOwned {
 		return nil
 	}
-	if a.Predicate == "" {
+	if _, err := index.resolve(a.ProjectionContract, a.ProjectionGroup, a.Predicate); err != nil {
 		return errs.WrapInvalid(
-			fmt.Errorf("rule %s replace_owned action requires a non-empty predicate", ruleID),
-			"RuleProcessor", "validateReplaceOwnedAction", "check predicate present")
-	}
-	if strings.Contains(a.Predicate, "$") {
-		return errs.WrapInvalid(
-			fmt.Errorf("rule %s replace_owned predicate %q must be a literal (no `$` substitution); the predicate names the owned cell and must be statically checkable against the projection contract (ADR-056 Decision 3)", ruleID, a.Predicate),
-			"RuleProcessor", "validateReplaceOwnedAction", "check predicate literal")
-	}
-	owned := rp.ownedReplacePredicates()
-	if _, ok := owned[a.Predicate]; !ok {
-		return errs.WrapInvalid(
-			fmt.Errorf("rule %s replace_owned predicate %q is outside this pack's owned-replace projection contracts; declare it in a replace-owned group of a projection_contract (owner rule-pack.%s) or use add_triple/update_triple (ADR-056 Decision 3)", ruleID, a.Predicate, rp.config.PackID),
-			"RuleProcessor", "validateReplaceOwnedAction", "check predicate in envelope")
+			fmt.Errorf("rule %s replace_owned target: %w", ruleID, err),
+			"RuleProcessor",
+			"validateReplaceOwnedAction",
+			"resolve projection target",
+		)
 	}
 	return nil
 }
@@ -1347,6 +1331,10 @@ func (rp *Processor) validateReplaceOwnedAction(ruleID string, a Action) error {
 // aborting boot) rather than skipping the rule, so a broken owned-write claim
 // can never silently ship.
 func (rp *Processor) validateRuleReplaceOwnedActions(def Definition) error {
+	return validateRuleReplaceOwnedActions(rp.projectionTargets, def)
+}
+
+func validateRuleReplaceOwnedActions(index *projectionTargetIndex, def Definition) error {
 	for label, actions := range map[string][]Action{
 		"on_enter":    def.OnEnter,
 		"on_exit":     def.OnExit,
@@ -1355,7 +1343,7 @@ func (rp *Processor) validateRuleReplaceOwnedActions(def Definition) error {
 		"actions":     def.Actions,
 	} {
 		for i, a := range actions {
-			if err := rp.validateReplaceOwnedAction(def.ID, a); err != nil {
+			if err := validateReplaceOwnedAction(index, def.ID, a); err != nil {
 				return errs.Wrap(err, "RuleProcessor", "validateRuleReplaceOwnedActions",
 					fmt.Sprintf("rule %s %s[%d]", def.ID, label, i))
 			}

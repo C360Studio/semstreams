@@ -1,502 +1,366 @@
-// Package rule — unit tests for the replace_owned action + envelope validation
-// (ADR-056 Decision 3). The integration variant (real graph-ingest handler,
-// atomic-write assertions) lives in actions_replace_owned_integration_test.go
-// behind the `integration` build tag.
 package rule
 
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
-
-	gtypes "github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
-	"github.com/c360studio/semstreams/processor/rule/expression"
+	"github.com/c360studio/semstreams/vocabulary"
+	"github.com/stretchr/testify/require"
 )
 
-// ownedPredicate is the predicate the test rule pack declares in a
-// replace-owned projection group; replace_owned actions naming it are inside
-// the envelope.
-const ownedPredicate = "test.status.phase"
+const (
+	testReplaceContract    = "test-projection"
+	testReplaceGroup       = "lifecycle"
+	ownedPredicate         = "test.status.phase"
+	ownedSibling           = "test.status.retired-at"
+	siblingPredicate       = "test.display.label"
+	appendPredicate        = "test.status.note"
+	birthPredicate         = "test.status.created-at"
+	foreignPredicate       = "test.status.foreign"
+	outOfEnvelopePredicate = "test.status.unowned"
+)
 
-// outOfEnvelopePredicate is a predicate NOT in any replace-owned group — a
-// replace_owned action naming it must be rejected at both load paths.
-const outOfEnvelopePredicate = "test.status.unowned"
+func init() {
+	for _, predicate := range []string{
+		ownedPredicate,
+		ownedSibling,
+		siblingPredicate,
+		appendPredicate,
+		birthPredicate,
+		foreignPredicate,
+		outOfEnvelopePredicate,
+	} {
+		vocabulary.Register(predicate)
+	}
+}
 
-const testReplaceOwnedPackID = "replace-owned-test"
-const testReplaceOwnedOwner = "rule-pack." + testReplaceOwnedPackID
-
-// replaceOwnedTestContracts is the projection-contract set the test pack owns:
-// one replace-owned group containing ownedPredicate.
 func replaceOwnedTestContracts() []projection.Contract {
-	return []projection.Contract{
-		{
-			Name:          "test-projection",
-			EntityPattern: "acme.ops.robotics.gcs.drone.*",
-			Groups: []projection.PredicateGroup{
-				{
-					Mode:       ownership.ModeReplaceOwned,
-					Predicates: []string{ownedPredicate},
-				},
+	return []projection.Contract{{
+		Name:          testReplaceContract,
+		MessageType:   "test.status.v1",
+		EntityPattern: "acme.ops.robotics.gcs.drone.*",
+		Groups: []projection.PredicateGroup{
+			{
+				Name:       testReplaceGroup,
+				Mode:       ownership.ModeReplaceOwned,
+				Predicates: []string{ownedPredicate, ownedSibling},
+			},
+			{
+				Name:       "display",
+				Mode:       ownership.ModeReplaceOwned,
+				Predicates: []string{siblingPredicate},
+			},
+			{
+				Name:       "notes",
+				Mode:       ownership.ModeAppendEvidence,
+				Predicates: []string{appendPredicate},
 			},
 		},
+		BirthPredicates: []string{birthPredicate},
+		ForeignEdges: []projection.ForeignEdge{{
+			Predicate:     foreignPredicate,
+			Mode:          ownership.EdgeStrict,
+			TargetPattern: "acme.ops.robotics.gcs.mission.*",
+		}},
+	}}
+}
+
+func replaceOwnedAction(predicate, object string) Action {
+	return Action{
+		Type:               ActionTypeReplaceOwned,
+		ProjectionContract: testReplaceContract,
+		ProjectionGroup:    testReplaceGroup,
+		Predicate:          predicate,
+		Object:             object,
 	}
 }
 
-// newReplaceOwnedTestProcessor builds a Processor (no NATS) configured with the
-// test pack id + replace-owned projection contracts, suitable for exercising
-// the load-path and hot-reload-path envelope validators.
-func newReplaceOwnedTestProcessor(t *testing.T) *Processor {
+type capturingOwnedReplacer struct {
+	requests []projection.ReplaceOwnedMutation
+	receipt  projection.MutationReceipt
+	err      error
+}
+
+func (replacer *capturingOwnedReplacer) ReplaceOwned(
+	_ context.Context,
+	request projection.ReplaceOwnedMutation,
+) (projection.MutationReceipt, error) {
+	replacer.requests = append(replacer.requests, request)
+	return replacer.receipt, replacer.err
+}
+
+type capturingRevisionTracker struct {
+	ruleID   string
+	entityID string
+	revision uint64
+}
+
+func (tracker *capturingRevisionTracker) trackRuleRevision(ruleID, entityID string, revision uint64) {
+	tracker.ruleID = ruleID
+	tracker.entityID = entityID
+	tracker.revision = revision
+}
+
+func replaceOwnedExecutor(
+	t *testing.T,
+	replacer projection.OwnedReplacer,
+	tracker revisionTracker,
+) *ActionExecutor {
 	t.Helper()
-	cfg := mustTestConfig(t, "rule-test-pack")
-	cfg.PackID = testReplaceOwnedPackID
-	cfg.ProjectionContracts = replaceOwnedTestContracts()
-	rp, err := NewProcessor(nil, &cfg)
-	require.NoError(t, err, "NewProcessor")
-	return rp
+	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts())
+	require.NoError(t, err)
+	executor := NewActionExecutor(nil)
+	executor.SetOwnedReplacer(replacer)
+	executor.setProjectionTargets(index, tracker)
+	return executor
 }
 
-// executorWithOwner returns an executor wired with the given mock mutator and
-// the test projection owner identity.
-func executorWithOwner(mutator TripleMutator, owner string) *ActionExecutor {
-	e := NewActionExecutorFull(nil, mutator, nil)
-	e.SetProjectionOwner(owner)
-	return e
-}
-
-// --- Case 2: replace OUTSIDE envelope → file-load HARD-FAILS ---
-
-func TestReplaceOwned_FileLoad_OutOfEnvelope_HardFails(t *testing.T) {
+func TestReplaceOwnedAuthoringRequiresExactTarget(t *testing.T) {
 	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-	rp.config.InlineRules = []Definition{
-		{
-			ID:      "bad-replace",
-			Type:    "test_rule",
-			Name:    "bad-replace",
-			Enabled: true,
-			OnEnter: []Action{
-				{Type: ActionTypeReplaceOwned, Predicate: outOfEnvelopePredicate, Object: "running"},
-			},
-		},
-	}
+	index, err := buildProjectionTargetIndex(replaceOwnedTestContracts())
+	require.NoError(t, err)
 
-	err := rp.loadRules()
-	require.Error(t, err, "loadRules MUST hard-fail when a replace_owned predicate is outside the pack's owned-replace contracts")
-	assert.Contains(t, err.Error(), outOfEnvelopePredicate)
-	// HARD-FAIL means boot aborts — the rule must NOT have been loaded.
-	_, loaded := rp.rules["bad-replace"]
-	assert.False(t, loaded, "out-of-envelope rule must not be registered after a hard-failed load")
-}
-
-func TestReplaceOwned_FileLoad_InEnvelope_Succeeds(t *testing.T) {
-	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-	rp.config.InlineRules = []Definition{
-		{
-			ID:      "good-replace",
-			Type:    "test_rule",
-			Name:    "good-replace",
-			Enabled: true,
-			OnEnter: []Action{
-				{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"},
-			},
-		},
-	}
-
-	require.NoError(t, rp.loadRules(), "in-envelope replace_owned must load cleanly")
-	_, loaded := rp.rules["good-replace"]
-	assert.True(t, loaded, "in-envelope rule must be registered")
-}
-
-// --- Case 3 + 4: hot-reload in/out of envelope ---
-
-func TestReplaceOwned_HotReload_InEnvelope_NilError(t *testing.T) {
-	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-
-	err := rp.ValidateConfigUpdate(map[string]any{
-		"rules": map[string]any{
-			"hot-good": map[string]any{
-				"type": "test_rule",
-				"on_enter": []any{
-					map[string]any{
-						"type":      ActionTypeReplaceOwned,
-						"predicate": ownedPredicate,
-						"object":    "running",
-					},
-				},
-			},
-		},
-	})
-	require.NoError(t, err, "hot-reload of an in-envelope replace_owned must validate clean")
-}
-
-func TestReplaceOwned_HotReload_OutOfEnvelope_Rejected(t *testing.T) {
-	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-
-	err := rp.ValidateConfigUpdate(map[string]any{
-		"rules": map[string]any{
-			"hot-bad": map[string]any{
-				"type": "test_rule",
-				"on_enter": []any{
-					map[string]any{
-						"type":      ActionTypeReplaceOwned,
-						"predicate": outOfEnvelopePredicate,
-						"object":    "running",
-					},
-				},
-			},
-		},
-	})
-	require.Error(t, err, "hot-reload of an out-of-envelope replace_owned must be rejected")
-	assert.Contains(t, err.Error(), outOfEnvelopePredicate)
-	assert.True(t, errs.IsInvalid(err), "rejection must be the Invalid error class")
-}
-
-// TestReplaceOwned_HotReload_ParseErrorDoesNotBypassEnvelope is the go-reviewer
-// I1 regression. Pre-fix, the hot-reload envelope check was guarded by
-// `if definitionFromMap(...) == nil`, so a parse error on an UNRELATED field
-// (here a malformed entity.watch_buckets) skipped the envelope check entirely;
-// validateExpressionRule (conditions-only) then reported the change VALID,
-// silently accepting an out-of-envelope replace_owned. The fix hard-rejects on
-// the parse error, so the envelope guarantee no longer depends on the apply path
-// re-hitting the same error. This rule has well-formed conditions (so the
-// expression path alone would pass), a malformed entity.watch_buckets (so
-// definitionFromMap errors on a non-action field), AND an out-of-envelope
-// replace_owned that must not slip through.
-func TestReplaceOwned_HotReload_ParseErrorDoesNotBypassEnvelope(t *testing.T) {
-	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-
-	err := rp.ValidateConfigUpdate(map[string]any{
-		"rules": map[string]any{
-			"hot-bypass": map[string]any{
-				"type": "test_rule",
-				"conditions": []any{
-					map[string]any{"field": "test.fixture.x", "operator": "eq", "value": "y"},
-				},
-				"entity": map[string]any{
-					"watch_buckets": []any{123}, // non-string → definitionFromMap errors
-				},
-				"on_enter": []any{
-					map[string]any{
-						"type":      ActionTypeReplaceOwned,
-						"predicate": outOfEnvelopePredicate,
-						"object":    "running",
-					},
-				},
-			},
-		},
-	})
-	require.Error(t, err, "a definitionFromMap parse error must hard-reject, not skip the envelope check")
-	assert.True(t, errs.IsInvalid(err), "rejection must be the Invalid error class")
-}
-
-// --- Case 5 (unit): clear sub-case ---
-
-func TestReplaceOwned_EmptyObject_ClearsViaRemoveOnly(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	mutator := &mockTripleMutator{}
-	executor := executorWithOwner(mutator, testReplaceOwnedOwner)
-
-	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: ""}
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.001"}))
-
-	require.Len(t, mutator.replaceOwnedCalls, 1)
-	call := mutator.replaceOwnedCalls[0]
-	assert.Equal(t, ownedPredicate, call.predicate)
-	assert.Empty(t, call.objects, "empty Object must yield zero objects (clear = RemoveTriples only)")
-}
-
-// --- Case 6 (unit): Object typed round-trip ---
-
-func TestReplaceOwned_ObjectTypedRoundTrip(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-
-	cases := []struct {
-		name      string
-		field     string
-		msgValue  any
-		wantType  reflect.Type
-		wantValue any
+	tests := []struct {
+		name   string
+		action Action
+		want   string
 	}{
-		{"float64", "f", float64(3.14), reflect.TypeOf(float64(0)), float64(3.14)},
-		{"int", "n", 7, reflect.TypeOf(0), 7},
-		{"bool", "b", true, reflect.TypeOf(false), true},
-		{"string", "s", "ready", reflect.TypeOf(""), "ready"},
+		{
+			name:   "missing contract",
+			action: Action{Type: ActionTypeReplaceOwned, ProjectionGroup: testReplaceGroup, Predicate: ownedPredicate},
+			want:   "projection_contract is required",
+		},
+		{
+			name:   "missing group",
+			action: Action{Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract, Predicate: ownedPredicate},
+			want:   "projection_group is required",
+		},
+		{
+			name: "unknown contract",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: "unknown",
+				ProjectionGroup: testReplaceGroup, Predicate: ownedPredicate,
+			},
+			want: "unknown projection contract",
+		},
+		{
+			name: "unknown or unnamed group",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: "unnamed", Predicate: ownedPredicate,
+			},
+			want: "no named projection group",
+		},
+		{
+			name: "wrong mode",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: "notes", Predicate: appendPredicate,
+			},
+			want: "not replace-owned",
+		},
+		{
+			name: "predicate outside selected group",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: testReplaceGroup, Predicate: siblingPredicate,
+			},
+			want: "outside projection contract",
+		},
+		{
+			name: "dynamic predicate",
+			action: Action{
+				Type: ActionTypeReplaceOwned, ProjectionContract: testReplaceContract,
+				ProjectionGroup: testReplaceGroup, Predicate: "$message.predicate",
+			},
+			want: "must be a literal",
+		},
 	}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			mutator := &mockTripleMutator{}
-			executor := executorWithOwner(mutator, testReplaceOwnedOwner)
+			err := validateReplaceOwnedAction(index, "rule-a", test.action)
+			require.ErrorContains(t, err, test.want)
+			require.True(t, errs.IsInvalid(err))
+		})
+	}
 
-			action := Action{
-				Type:      ActionTypeReplaceOwned,
-				Predicate: ownedPredicate,
-				Object:    "$message." + tc.field,
-			}
-			ec := &ExecutionContext{
+	target, err := index.resolve(testReplaceContract, testReplaceGroup, ownedPredicate)
+	require.NoError(t, err)
+	require.Equal(t, []string{ownedPredicate, ownedSibling}, target.Predicates)
+}
+
+func TestProjectionTargetIndexCopiesContractsAndRejectsAmbiguity(t *testing.T) {
+	t.Parallel()
+	contracts := replaceOwnedTestContracts()
+	index, err := buildProjectionTargetIndex(contracts)
+	require.NoError(t, err)
+	contracts[0].Groups[0].Predicates[0] = outOfEnvelopePredicate
+	_, err = index.resolve(testReplaceContract, testReplaceGroup, ownedPredicate)
+	require.NoError(t, err, "index must retain its copied target set")
+	_, err = index.resolve(testReplaceContract, testReplaceGroup, outOfEnvelopePredicate)
+	require.Error(t, err)
+
+	duplicate := append(replaceOwnedTestContracts(), replaceOwnedTestContracts()[0])
+	_, err = buildProjectionTargetIndex(duplicate)
+	require.ErrorContains(t, err, "more than once")
+}
+
+func TestReplaceOwnedReconcilesSelectedCompleteGroup(t *testing.T) {
+	t.Parallel()
+	replacer := &capturingOwnedReplacer{}
+	executor := replaceOwnedExecutor(t, replacer, nil)
+	entityID := "acme.ops.robotics.gcs.drone.001"
+
+	require.NoError(t, executor.Execute(
+		context.Background(),
+		replaceOwnedAction(ownedPredicate, "retired"),
+		&ExecutionContext{EntityID: entityID},
+	))
+	require.Len(t, replacer.requests, 1)
+	request := replacer.requests[0]
+	require.Equal(t, testReplaceContract, request.Contract)
+	require.Equal(t, testReplaceGroup, request.Group)
+	require.Equal(t, entityID, request.EntityID)
+	require.Len(t, request.Desired, 1)
+	require.Equal(t, ownedPredicate, request.Desired[0].Predicate)
+	require.Equal(t, "retired", request.Desired[0].Object)
+	require.NotEmpty(t, request.Metadata.RequestID)
+	require.Equal(t, "rule_engine", request.Metadata.Source)
+
+	replacer.requests = nil
+	require.NoError(t, executor.Execute(
+		context.Background(),
+		replaceOwnedAction(ownedPredicate, ""),
+		&ExecutionContext{EntityID: entityID},
+	))
+	require.Len(t, replacer.requests, 1)
+	require.Empty(t, replacer.requests[0].Desired, "empty object clears the complete selected group")
+}
+
+func TestReplaceOwnedPreservesTypedSubstitution(t *testing.T) {
+	t.Parallel()
+	values := []any{7, 3.14, true, "ready", map[string]any{"nested": true}}
+	for _, value := range values {
+		value := value
+		t.Run(reflect.TypeOf(value).String(), func(t *testing.T) {
+			replacer := &capturingOwnedReplacer{}
+			executor := replaceOwnedExecutor(t, replacer, nil)
+			action := replaceOwnedAction(ownedPredicate, "$message.value")
+			err := executor.Execute(context.Background(), action, &ExecutionContext{
 				EntityID:    "acme.ops.robotics.gcs.drone.001",
-				MessageData: map[string]any{tc.field: tc.msgValue},
-			}
-			require.NoError(t, executor.Execute(ctx, action, ec))
-
-			require.Len(t, mutator.replaceOwnedCalls, 1)
-			require.Len(t, mutator.replaceOwnedCalls[0].objects, 1)
-			obj := mutator.replaceOwnedCalls[0].objects[0].Object
-			assert.Equal(t, tc.wantType, reflect.TypeOf(obj),
-				"stored Object type must match the source type for %s", tc.name)
-			assert.Equal(t, tc.wantValue, obj)
+				MessageData: map[string]any{"value": value},
+			})
+			require.NoError(t, err)
+			require.Equal(t, value, replacer.requests[0].Desired[0].Object)
 		})
 	}
 }
 
-// --- Case 7: predicate containing `$` is rejected at validation ---
-
-func TestReplaceOwned_DollarPredicate_RejectedAtValidation(t *testing.T) {
+func TestReplaceOwnedTracksReceiptAndPreservesTypedError(t *testing.T) {
 	t.Parallel()
-	rp := newReplaceOwnedTestProcessor(t)
-
-	// File-load path.
-	rp.config.InlineRules = []Definition{
-		{
-			ID:      "dollar-pred",
-			Type:    "test_rule",
-			Name:    "dollar-pred",
-			Enabled: true,
-			OnEnter: []Action{
-				{Type: ActionTypeReplaceOwned, Predicate: "$message.predicate_name", Object: "running"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.predicate_name","reason":"arity"}
-			},
-		},
+	tracker := &capturingRevisionTracker{}
+	replacer := &capturingOwnedReplacer{
+		receipt: projection.MutationReceipt{KVRevision: 42, Commit: projection.CommitVerified},
 	}
-	err := rp.loadRules()
-	require.Error(t, err, "a `$`-bearing predicate must be rejected at load")
-	assert.Contains(t, err.Error(), "literal")
+	executor := replaceOwnedExecutor(t, replacer, tracker)
+	state := &MatchState{RuleID: "rule-a", Iteration: 3}
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	require.NoError(t, executor.Execute(
+		context.Background(),
+		replaceOwnedAction(ownedPredicate, "retired"),
+		&ExecutionContext{EntityID: entityID, State: state},
+	))
+	require.Equal(t, "rule-a", tracker.ruleID)
+	require.Equal(t, entityID, tracker.entityID)
+	require.Equal(t, uint64(42), tracker.revision)
 
-	// Hot-reload path.
-	rp2 := newReplaceOwnedTestProcessor(t)
-	hotErr := rp2.ValidateConfigUpdate(map[string]any{
-		"rules": map[string]any{
-			"dollar-hot": map[string]any{
-				"type": "test_rule",
-				"on_enter": []any{
-					map[string]any{
-						"type":      ActionTypeReplaceOwned,
-						"predicate": "$message.predicate_name", // predicate-audit:invalid {"kind":"stored-predicate","value":"$message.predicate_name","reason":"arity"}
-						"object":    "running",
-					},
-				},
-			},
-		},
-	})
-	require.Error(t, hotErr, "a `$`-bearing predicate must be rejected at hot-reload")
-	assert.Contains(t, hotErr.Error(), "literal")
-}
-
-// --- Case 8: scope red-line — request always has ExpectedRevision == 0 ---
-
-// The mutator signature for ReplaceOwned has NO revision parameter — that is
-// the compile-time half of the red-line. The runtime half: the constructed
-// UpdateEntityWithTriplesRequest must carry ExpectedRevision == 0 regardless of
-// any When clause on the action. We assert this by capturing the marshaled
-// request through a revision-asserting mutator.
-type revisionAssertingMutator struct {
-	gotExpectedRevision uint64
-	called              bool
-}
-
-func (m *revisionAssertingMutator) AddTriple(context.Context, string, message.Triple) (uint64, error) {
-	return 0, nil
-}
-
-func (m *revisionAssertingMutator) RemoveTriple(context.Context, string, string, string) (uint64, error) {
-	return 0, nil
-}
-
-func (m *revisionAssertingMutator) ReplaceOwned(_ context.Context, _, _, entityID, predicate string, objects []message.Triple) (uint64, error) {
-	// Reconstruct the request the production mutator would build and assert
-	// its ExpectedRevision is the zero value. The action layer threads no
-	// revision; this guards against a future refactor wiring one in.
-	req := gtypes.UpdateEntityWithTriplesRequest{
-		Entity:        &gtypes.EntityState{ID: entityID},
-		RemoveTriples: []string{predicate},
-		AddTriples:    objects,
+	cause := errors.New("stale lease")
+	classified := errs.WrapInvalid(cause, "projection", "replace", "stale owner")
+	mutationErr := &projection.MutationError{
+		Operation: projection.MutationOperationReplaceOwned,
+		Kind:      projection.MutationStaleOwnerToken,
+		Code:      "owner_lease_stale",
+		Class:     errs.ErrorInvalid,
+		Commit:    projection.CommitNotCommitted,
+		Err:       classified,
 	}
-	m.gotExpectedRevision = req.ExpectedRevision
-	m.called = true
-	return 1, nil
+	replacer.err = mutationErr
+	err := executor.Execute(
+		context.Background(),
+		replaceOwnedAction(ownedPredicate, "retired"),
+		&ExecutionContext{EntityID: entityID, State: state},
+	)
+	require.Error(t, err)
+	var gotMutation *projection.MutationError
+	require.ErrorAs(t, err, &gotMutation)
+	require.Same(t, mutationErr, gotMutation)
+	var gotClassified *errs.ClassifiedError
+	require.ErrorAs(t, err, &gotClassified)
+	require.ErrorIs(t, err, cause)
+	require.Equal(t, projection.MutationStaleOwnerToken, gotMutation.Kind)
+	require.Equal(t, projection.CommitNotCommitted, gotMutation.Commit)
 }
 
-func TestReplaceOwned_AlwaysZeroExpectedRevision(t *testing.T) {
+func TestReplaceOwnedFileAndHotReloadUseFrozenTargetIndex(t *testing.T) {
 	t.Parallel()
-	ctx := context.Background()
-	mutator := &mockTripleMutator{}
-	executor := executorWithOwner(mutator, testReplaceOwnedOwner)
-
-	// Action carries a When clause — replace_owned is still NOT a CAS write.
-	action := Action{
-		Type:      ActionTypeReplaceOwned,
-		Predicate: ownedPredicate,
-		Object:    "running",
-		When:      nil, // When-honoring regression is in its own test below.
-	}
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.001"}))
-	require.Len(t, mutator.replaceOwnedCalls, 1)
-
-	// Compile-time red-line: ReplaceOwned's signature has no revision param.
-	// Inspect the INTERFACE type directly (not a concrete value) and confirm
-	// none of the method's input params is a uint64 revision.
-	ifaceT := reflect.TypeOf((*TripleMutator)(nil)).Elem()
-	mt, ok := ifaceT.MethodByName("ReplaceOwned")
-	require.True(t, ok, "ReplaceOwned must exist on the TripleMutator interface")
-	// On an interface method type, In(0) is the first declared param (no
-	// receiver in the func type).
-	for i := 0; i < mt.Type.NumIn(); i++ {
-		assert.NotEqual(t, reflect.TypeOf(uint64(0)), mt.Type.In(i),
-			"ReplaceOwned param %d must not be a uint64 revision (replace_owned is never CAS)", i)
-	}
-
-	// Runtime red-line: the request the production mutator builds carries a
-	// zero ExpectedRevision.
-	ra := &revisionAssertingMutator{}
-	_, err := ra.ReplaceOwned(ctx, "rule-1", testReplaceOwnedOwner, "acme.ops.robotics.gcs.drone.001", ownedPredicate, nil)
+	config := mustTestConfig(t, "replace-owned-test")
+	config.ProjectionContracts = replaceOwnedTestContracts()
+	config.InlineRules = []Definition{{
+		ID: "initial", Type: "test_rule", Name: "initial", Enabled: true,
+		OnEnter: []Action{replaceOwnedAction(ownedPredicate, "ready")},
+	}}
+	processor, err := NewProcessor(nil, &config)
 	require.NoError(t, err)
-	require.True(t, ra.called)
-	assert.Equal(t, uint64(0), ra.gotExpectedRevision, "replace_owned request must always have ExpectedRevision == 0")
-}
+	require.NoError(t, processor.loadRules())
 
-// --- Case 9: must-exist — non-existent entity surfaces EntityNotFound ---
-
-func TestReplaceOwned_EntityNotFound_SurfacesError(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	mutator := &mockTripleMutator{
-		replaceOwnedErr: errors.New("replace_owned mutation failed [entity_not_found]: entity not found: acme.ops.robotics.gcs.drone.404"),
+	validRule := map[string]any{
+		"type": "test_rule",
+		"on_enter": []any{map[string]any{
+			"type": ActionTypeReplaceOwned, "projection_contract": testReplaceContract,
+			"projection_group": testReplaceGroup, "predicate": ownedPredicate, "object": "ready",
+		}},
 	}
-	executor := executorWithOwner(mutator, testReplaceOwnedOwner)
+	require.NoError(t, processor.ValidateConfigUpdate(map[string]any{
+		"rules": map[string]any{"hot": validRule},
+	}))
 
-	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"}
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.404"})
-	require.Error(t, err, "replace_owned on a non-existent entity must surface an error (no auto-vivify)")
-	assert.Contains(t, err.Error(), graphErrorCodeEntityNotFound())
-}
-
-// graphErrorCodeEntityNotFound keeps the test honest about which code string it
-// asserts on without hard-coding the literal in two places.
-func graphErrorCodeEntityNotFound() string { return gtypes.ErrorCodeEntityNotFound }
-
-// --- Case 10: owner identity ---
-
-func TestReplaceOwned_OwnerIdentityThreaded(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	mutator := &mockTripleMutator{}
-	// The owner identity reaches the mutator embedded in the fenced token. Under
-	// the two-state contract the owner is observable on the wire only when an
-	// incarnation is wired (without one the token is empty — see
-	// TestReplaceOwned_OwnerToken_WithoutIncarnation).
-	executor := executorWithOwnerAndIncarnation(mutator, testReplaceOwnedOwner, testIncarnation)
-
-	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"}
-	require.NoError(t, executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.001"}))
-
-	require.Len(t, mutator.replaceOwnedCalls, 1)
-	assert.Equal(t, testReplaceOwnedOwner+"#"+testIncarnation, mutator.replaceOwnedCalls[0].owner,
-		"mutator must receive owner == rule-pack.<PackID> threaded into the fenced token")
-}
-
-func TestReplaceOwned_EmptyOwner_Errors(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	mutator := &mockTripleMutator{}
-	// No SetProjectionOwner — ownerID stays empty.
-	executor := NewActionExecutorFull(nil, mutator, nil)
-
-	action := Action{Type: ActionTypeReplaceOwned, Predicate: ownedPredicate, Object: "running"}
-	err := executor.Execute(ctx, action, &ExecutionContext{EntityID: "acme.ops.robotics.gcs.drone.001"})
-	require.Error(t, err, "replace_owned with an empty owner must error before any mutation")
-	assert.Empty(t, mutator.replaceOwnedCalls, "no mutation may be issued when the owner is unset")
-}
-
-// Note: the processor-level owner-wiring assertion (initializeStateTracker
-// calls SetProjectionOwner("rule-pack.<PackID>")) requires a live NATS client
-// and lives in actions_replace_owned_integration_test.go. The unit tests above
-// cover the executor-side behavior (owner threaded to the mutator; empty owner
-// errors).
-
-// --- Case 11: MaxIterations / When honored like other actions (regression) ---
-
-// The When clause and per-action MaxIterations cap are evaluated in the
-// StatefulEvaluator's runActions BEFORE the action is dispatched to Execute by
-// type — so the gate is action-type-agnostic. These regressions drive a
-// replace_owned OnEnter action through the production evaluator (the same
-// driveEntries helper the MaxIterations suite uses) and assert it is gated
-// identically to publish / add_triple. mockActionExecutor.executeCallCount
-// counts every dispatched Execute regardless of action type.
-
-func TestReplaceOwned_MaxIterationsHonored(t *testing.T) {
-	bucket := newMockKVBucket()
-	executor := &mockActionExecutor{}
-	evaluator := NewStatefulEvaluator(NewStateTracker(bucket, slog.Default()), executor, slog.Default())
-
-	ruleDef := Definition{
-		ID:   "rule-replace-owned-cap",
-		Type: "expression",
-		OnEnter: []Action{
-			{
-				Type:          ActionTypeReplaceOwned,
-				Predicate:     ownedPredicate,
-				Object:        "running",
-				MaxIterations: intPtr(1),
-			},
-		},
+	validRule["on_enter"].([]any)[0].(map[string]any)["projection_group"] = "notes"
+	err = processor.ValidateConfigUpdate(map[string]any{
+		"rules": map[string]any{"hot": validRule},
+	})
+	require.ErrorContains(t, err, "not replace-owned")
+	for _, field := range []string{"pack_id", "projection_contracts", "projection_targets", "mutation_client"} {
+		err = processor.ValidateConfigUpdate(map[string]any{field: "changed"})
+		require.ErrorContains(t, err, "static")
 	}
-
-	// 5 entries, explicit cap of 1 → exactly one dispatch.
-	driveEntries(t, evaluator, ruleDef, "acme.ops.robotics.gcs.drone.001", 5)
-	assert.Equal(t, 1, executor.executeCallCount,
-		"replace_owned must honor MaxIterations exactly like other actions (capped at 1 over 5 entries)")
 }
 
-func TestReplaceOwned_WhenClauseHonored(t *testing.T) {
-	bucket := newMockKVBucket()
-	executor := &mockActionExecutor{}
-	evaluator := NewStatefulEvaluator(NewStateTracker(bucket, slog.Default()), executor, slog.Default())
+func TestReplaceOwnedInitialRuleSnapshotIsNotReread(t *testing.T) {
+	t.Parallel()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "rules.json")
+	good := `[{"id":"snapshot","type":"test_rule","name":"snapshot","enabled":true,"on_enter":[{"type":"replace_owned","projection_contract":"test-projection","projection_group":"lifecycle","predicate":"test.status.phase","object":"ready"}]}]`
+	require.NoError(t, os.WriteFile(path, []byte(good), 0o600))
+	config := mustTestConfig(t, "snapshot-pack")
+	config.ProjectionContracts = replaceOwnedTestContracts()
+	config.RulesFiles = []string{path}
+	processor, err := NewProcessor(nil, &config)
+	require.NoError(t, err)
+	require.NoError(t, processor.PreflightProjectionMutations())
 
-	// When clause requires $state.iteration > 100, which never holds across a
-	// handful of entries — so the replace_owned action is always skipped by the
-	// gate and never reaches Execute.
-	ruleDef := Definition{
-		ID:   "rule-replace-owned-when",
-		Type: "expression",
-		OnEnter: []Action{
-			{
-				Type:      ActionTypeReplaceOwned,
-				Predicate: ownedPredicate,
-				Object:    "running",
-				When: []expression.ConditionExpression{
-					{Field: "$state.iteration", Operator: "gt", Value: 100},
-				},
-			},
-		},
-	}
-
-	driveEntries(t, evaluator, ruleDef, "acme.ops.robotics.gcs.drone.001", 3)
-	assert.Equal(t, 0, executor.executeCallCount,
-		"replace_owned must be skipped when its When clause is unmet (gated identically to other actions)")
+	bad := strings.ReplaceAll(good, `"projection_group":"lifecycle"`, `"projection_group":"notes"`)
+	require.NoError(t, os.WriteFile(path, []byte(bad), 0o600))
+	require.NoError(t, processor.loadRules())
+	require.Contains(t, processor.rules, "snapshot")
 }

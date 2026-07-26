@@ -3,8 +3,8 @@
 Reference configuration for the `agent.lesson.*` gated lifecycle (ADR-080,
 change `agent-memory-lesson-substrate`). A lesson is born `proposed`; only
 `active` lessons are injected into future loop briefs. Two lanes move a lesson
-between states, both riding the canonical single-valued **replace** write
-(`graph.mutation.entity.update_with_triples`, ADR-056) — never an append.
+between states through the contract-bound public projection mutation client —
+never a rule-local transport or append.
 
 ## The owned projection group
 
@@ -17,14 +17,17 @@ in `projection_contracts`:
 | `agent.lesson.superseded-by` | entity ID of the replacing lesson |
 | `agent.lesson.retired-at` | retirement timestamp |
 
-These three are **mutable** and single-valued, so they belong in a
-`replace-owned` group. This mirrors `lessonRecordProjectionContract()` in both
+These three are **mutable** and single-valued, so they belong in the named
+`replace-owned` group `lesson-lifecycle`. A replacement supplies the complete
+desired state for that group: omitting `superseded-by` or `retired-at` deletes
+their existing values. Predicates in other groups and birth predicates are
+untouched. This mirrors `lessonRecordProjectionContract()` in both
 `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` (the boot-time owner
 registry). The **immutable birth predicates** — `agent.lesson.created-at`,
 `category`, `polarity`, `severity`, `summary`, `detail`, `injection-form`,
-`evidence`, `applies-to`, `observed-role` — are stamped once at emit and are
-deliberately **absent** from any owned group, so a `replace_owned` action can
-never overwrite a lesson's identity or evidence.
+`evidence`, `applies-to`, `observed-role`, and `agent.action.executed-by` — are
+stamped once at emit and are deliberately **absent** from any owned group, so a
+`replace_owned` action can never overwrite a lesson's identity or evidence.
 
 ## Lane 1 — VALIDATED promotion (evidence-existence-resolved)
 
@@ -57,7 +60,8 @@ is a **birth-time suppression** policy:
 - **Trigger** (both reachable at birth): `agent.lesson.status == "proposed"`
   (the born state) **and** `agent.lesson.category == "deprecated"` (an
   illustrative product convention on the open `category` taxonomy).
-- **Action**: `replace_owned agent.lesson.status → "retired"`.
+- **Action**: `replace_owned agent.lesson.status → "retired"` through contract
+  `agentic.lesson-record`, group `lesson-lifecycle`.
 
 Effect: a freshly-born proposed lesson a product never wants injected (e.g. it
 documents an already-fixed anti-pattern, kept only for audit) is retired
@@ -89,7 +93,7 @@ predicate you **write** stays inside the owned group.
 
 Point a rule processor at this file (or fold `projection_contracts` +
 `inline_rules` into an existing ops rule pack). At load, the rule engine
-HARD-FAILS if any `replace_owned` predicate is not a literal inside a
-`replace-owned` group in this pack's `projection_contracts` (ADR-056
-Decision 3) — `retire-deprecated-lesson` passes because `agent.lesson.status`
-is in the owned group above.
+HARD-FAILS unless every `replace_owned` action explicitly names a contract and
+named `replace-owned` group and its literal predicate belongs to that exact
+group. The shipped action passes because `agent.lesson.status` belongs to
+`agentic.lesson-record` / `lesson-lifecycle`.
