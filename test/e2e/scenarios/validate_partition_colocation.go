@@ -103,17 +103,26 @@ type colocationMatch struct {
 // colocationGrade is the per-query co-location outcome, recorded verbatim into
 // result.Details for the B2 ledger.
 type colocationGrade struct {
-	ID                  string            `json:"id"`
-	ExpectedCount       int               `json:"expected_count"`
-	FoundCount          int               `json:"found_count"`
-	NotInPartitionCount int               `json:"not_in_partition_count"`
-	NotInPartition      []string          `json:"not_in_partition"`
-	DistinctCommunities int               `json:"distinct_communities"`
-	PluralityCommunity  string            `json:"plurality_community_id"`
-	PluralityCount      int               `json:"plurality_count"`
-	PluralityShare      float64           `json:"plurality_share"`
-	MultiMembership     []colocationMatch `json:"multi_membership,omitempty"`
-	Matches             []colocationMatch `json:"matches"`
+	ID                  string   `json:"id"`
+	ExpectedCount       int      `json:"expected_count"`
+	FoundCount          int      `json:"found_count"`
+	NotInPartitionCount int      `json:"not_in_partition_count"`
+	NotInPartition      []string `json:"not_in_partition"`
+	DistinctCommunities int      `json:"distinct_communities"`
+	PluralityCommunity  string   `json:"plurality_community_id"`
+	PluralityCount      int      `json:"plurality_count"`
+	PluralityShare      float64  `json:"plurality_share"`
+	// PluralityCommunitySize is the TOTAL member count of the plurality community —
+	// the mega-community detector. A high plurality_share with a large size here is
+	// theme-merging (vacuous), not theme-bridging.
+	PluralityCommunitySize int `json:"plurality_community_size"`
+	// PluralityCommunitySummaryLen / PluralityCommunityTruncated attribute a recall
+	// miss on this "co-located" theme: a diluted (long-but-heterogeneous) vs a
+	// mechanically truncated summary of the plurality community (B2 §8 dilution channel).
+	PluralityCommunitySummaryLen int               `json:"plurality_community_summary_len"`
+	PluralityCommunityTruncated  bool              `json:"plurality_community_truncated"`
+	MultiMembership              []colocationMatch `json:"multi_membership,omitempty"`
+	Matches                      []colocationMatch `json:"matches"`
 }
 
 // executePartitionColocation is the B2 co-location diagnostic. It reads the
@@ -152,6 +161,11 @@ func (s *TieredScenario) executePartitionColocation(ctx context.Context, result 
 	result.Metrics["partition_colocation_mean"] = agg.mean
 	result.Metrics["partition_entities_not_in_community"] = agg.entitiesNotInCommunity
 	result.Metrics["partition_level0_communities"] = agg.level0Communities
+	// Mega-community discriminators (B2 §8): a high mean is only genuine theme
+	// co-location when the themes land in DISTINCT, size-bounded communities. All
+	// themes collapsing into one big plurality community scores 1.0 vacuously.
+	result.Metrics["partition_distinct_plurality_communities"] = agg.distinctPluralityCommunities
+	result.Metrics["partition_max_plurality_community_size"] = agg.maxPluralityCommunitySize
 
 	// ---- full ledger into Details ----
 	result.Details["partition_colocation"] = map[string]any{
@@ -187,6 +201,24 @@ type level0ColocationIndex struct {
 	commIDs map[string][]string
 	// fullIDs maps lastSegment -> sorted distinct full member EntityIDs.
 	fullIDs map[string][]string
+	// commSummaryLen maps a level-0 community ID -> the char length of the summary a
+	// GraphRAG query would retrieve (LLM summary if present, else statistical). The
+	// dilution channel (B2 §8): a 47-member community compressed into a ~200-token
+	// summary loses content, so a recall miss on a "co-located" theme may be a
+	// summary problem, not a partition problem.
+	commSummaryLen map[string]int
+	// commTruncated maps a level-0 community ID -> whether its LLM summary hit the
+	// token budget (Community.SummaryTruncated). Distinguishes a mechanically
+	// TRUNCATED summary (raise MaxTokens) from a complete-but-diluted one (a
+	// partition/merge problem) when attributing a recall miss.
+	commTruncated map[string]bool
+	// commSizes maps a level-0 community ID -> its TOTAL member count. The
+	// co-location metric is recall-shaped (are the expected entities together?) and
+	// carries no penalty for how much ELSE shares the community, so a plurality_share
+	// of 1.0 achieved by merging every theme into one mega-community reads identical
+	// to genuine theme-bridging. commSizes is what distinguishes them: a plurality
+	// community holding 60-of-74 entities is theme-MERGING (vacuous), not bridging.
+	commSizes map[string]int
 	// level0Communities counts the level-0 communities scanned (for the print).
 	level0Communities int
 }
@@ -197,12 +229,22 @@ type level0ColocationIndex struct {
 func buildLevel0ColocationIndex(comms []*clustering.Community) level0ColocationIndex {
 	commSets := make(map[string]map[string]struct{})
 	fullSets := make(map[string]map[string]struct{})
+	commSizes := make(map[string]int)
+	commSummaryLen := make(map[string]int)
+	commTruncated := make(map[string]bool)
 	level0 := 0
 	for _, c := range comms {
 		if c == nil || c.Level != 0 {
 			continue
 		}
 		level0++
+		commSizes[c.ID] = len(c.Members)
+		summary := c.LLMSummary
+		if summary == "" {
+			summary = c.StatisticalSummary
+		}
+		commSummaryLen[c.ID] = len(summary)
+		commTruncated[c.ID] = c.SummaryTruncated
 		for _, m := range c.Members {
 			seg := lastSegment(m)
 			if commSets[seg] == nil {
@@ -216,6 +258,9 @@ func buildLevel0ColocationIndex(comms []*clustering.Community) level0ColocationI
 	idx := level0ColocationIndex{
 		commIDs:           make(map[string][]string, len(commSets)),
 		fullIDs:           make(map[string][]string, len(fullSets)),
+		commSizes:         commSizes,
+		commSummaryLen:    commSummaryLen,
+		commTruncated:     commTruncated,
 		level0Communities: level0,
 	}
 	for seg, set := range commSets {
@@ -281,6 +326,11 @@ func gradeColocation(e colocationExpectation, idx level0ColocationIndex) colocat
 	if g.FoundCount > 0 {
 		g.PluralityShare = float64(g.PluralityCount) / float64(g.FoundCount)
 	}
+	if g.PluralityCommunity != "" {
+		g.PluralityCommunitySize = idx.commSizes[g.PluralityCommunity]
+		g.PluralityCommunitySummaryLen = idx.commSummaryLen[g.PluralityCommunity]
+		g.PluralityCommunityTruncated = idx.commTruncated[g.PluralityCommunity]
+	}
 
 	return g
 }
@@ -296,6 +346,18 @@ type colocationAggregate struct {
 	// partition scores mean 1.0 while being the worst possible partition, so a high
 	// mean is only meaningful when this is > 1 (see the Details note).
 	level0Communities int
+	// distinctPluralityCommunities is how many DISTINCT communities the queries'
+	// plurality communities span (over queries with found>0). This is the
+	// mega-community discriminator the >1-community cardinality guard misses: if all
+	// N theme queries resolve to the SAME plurality community, this is 1 — every
+	// theme was merged into one blob and the 1.0 mean is vacuous. N distinct
+	// plurality communities is genuine per-theme co-location.
+	distinctPluralityCommunities int
+	// maxPluralityCommunitySize is the largest plurality-community member count over
+	// the queries. A theme "co-located" inside a 60-member community is diluted: its
+	// summary compresses heterogeneous content and retrieval loses the entity in the
+	// blob. Bounded size is a co-condition on trusting a high mean.
+	maxPluralityCommunitySize int
 }
 
 // aggregateColocation computes partition_colocation_mean (mean plurality_share
@@ -305,13 +367,21 @@ type colocationAggregate struct {
 func aggregateColocation(grades []colocationGrade, level0Communities int) colocationAggregate {
 	a := colocationAggregate{totalQueries: len(grades), level0Communities: level0Communities}
 	var shareSum float64
+	pluralityComms := make(map[string]struct{})
 	for _, g := range grades {
 		a.entitiesNotInCommunity += g.NotInPartitionCount
 		if g.FoundCount > 0 {
 			a.includedQueries++
 			shareSum += g.PluralityShare
+			if g.PluralityCommunity != "" {
+				pluralityComms[g.PluralityCommunity] = struct{}{}
+			}
+			if g.PluralityCommunitySize > a.maxPluralityCommunitySize {
+				a.maxPluralityCommunitySize = g.PluralityCommunitySize
+			}
 		}
 	}
+	a.distinctPluralityCommunities = len(pluralityComms)
 	if a.includedQueries > 0 {
 		a.mean = shareSum / float64(a.includedQueries)
 	}
@@ -320,11 +390,13 @@ func aggregateColocation(grades []colocationGrade, level0Communities int) coloca
 
 func (a colocationAggregate) detail() map[string]any {
 	return map[string]any{
-		"total_queries":             a.totalQueries,
-		"included_queries":          a.includedQueries, // found_count > 0
-		"colocation_mean":           a.mean,
-		"entities_not_in_community": a.entitiesNotInCommunity,
-		"level0_communities":        a.level0Communities,
+		"total_queries":                  a.totalQueries,
+		"included_queries":               a.includedQueries, // found_count > 0
+		"colocation_mean":                a.mean,
+		"entities_not_in_community":      a.entitiesNotInCommunity,
+		"level0_communities":             a.level0Communities,
+		"distinct_plurality_communities": a.distinctPluralityCommunities,
+		"max_plurality_community_size":   a.maxPluralityCommunitySize,
 	}
 }
 
@@ -343,8 +415,9 @@ func printPartitionColocation(grades []colocationGrade, agg colocationAggregate)
 			g.ID, g.ExpectedCount, g.FoundCount, g.NotInPartitionCount,
 			g.DistinctCommunities, g.PluralityShare, label)
 		if g.PluralityCommunity != "" {
-			fmt.Printf("      plurality_community=%s (%d/%d found here)\n",
-				g.PluralityCommunity, g.PluralityCount, g.FoundCount)
+			fmt.Printf("      plurality_community=%s (%d/%d found here; community_total_size=%d; summary_len=%d truncated=%t)\n",
+				g.PluralityCommunity, g.PluralityCount, g.FoundCount, g.PluralityCommunitySize,
+				g.PluralityCommunitySummaryLen, g.PluralityCommunityTruncated)
 		}
 		for _, m := range g.Matches {
 			fmt.Printf("      %-16s -> comm=%s  member=%s\n", m.Expected, m.CommunityID, m.FullEntityID)
@@ -363,6 +436,13 @@ func printPartitionColocation(grades []colocationGrade, agg colocationAggregate)
 	fmt.Printf("  partition_entities_not_in_community = %d\n", agg.entitiesNotInCommunity)
 	fmt.Printf("  partition_level0_communities        = %d (partition cardinality — trust guard on mean)\n",
 		agg.level0Communities)
+	fmt.Printf("  partition_distinct_plurality_communities = %d/%d (themes landing in DISTINCT communities; =1 => all merged into one blob)\n",
+		agg.distinctPluralityCommunities, agg.includedQueries)
+	fmt.Printf("  partition_max_plurality_community_size   = %d (largest theme community; a big number => 'co-located' but diluted)\n",
+		agg.maxPluralityCommunitySize)
+	if agg.mean >= PartitionColocationHighShare && agg.distinctPluralityCommunities <= 1 && agg.includedQueries > 1 {
+		fmt.Println("  ** MEGA-COMMUNITY WARNING: high mean but all themes share ONE plurality community => theme-MERGING, not bridging; treat the mean as vacuous. **")
+	}
 	fmt.Println("  interpret: HIGH mean + LOW B0 recall => co-located, gap is downstream => partition-rebuild LOW-ROI.")
 	fmt.Println("             LOW mean (scattered)       => partition fights thematic recall => kNN co-location HAS ROI.")
 	fmt.Println("  TRUST GUARD: a HIGH mean is meaningful ONLY when entities_not_in_community is low AND level0_communities>1;")

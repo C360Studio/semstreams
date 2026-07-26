@@ -657,11 +657,18 @@ func (s *LLMSummarizer) SummarizeCommunity(
 		return community, nil // Graceful degradation for direct calls
 	}
 
-	// Update community with LLM-generated summary
+	// Update community with LLM-generated summary. Truncation (LLM stopped on the
+	// MaxTokens budget, finish_reason "length") is carried on a SEPARATE flag, NOT
+	// folded into SummaryStatus, so every exact-match consumer of
+	// SummaryStatus=="llm-enhanced" (e.g. lpa.go's archival-preservation gate) keeps
+	// working. It lets a B2 §8 recall miss be attributed: a merged community whose
+	// summary TRUNCATED lost content mechanically (raise the budget), distinct from a
+	// complete-but-semantically-diluted summary of heterogeneous themes.
 	community.LLMSummary = resp.Content
 	community.Keywords = keywords
 	community.RepEntities = repEntities
 	community.SummaryStatus = "llm-enhanced"
+	community.SummaryTruncated = resp.FinishReason == "length"
 
 	return community, nil
 }

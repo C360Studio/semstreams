@@ -350,6 +350,10 @@ func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerI
 	// Preserve statistical summary, add LLM summary
 	community.LLMSummary = enhanced.LLMSummary
 	community.SummaryStatus = "llm-enhanced"
+	// Carry the truncation flag back from the summarizer's result — this worker
+	// saves its own `community`, not `enhanced`, so a field set only on `enhanced`
+	// would be dropped on save (B2 §8 dilution channel).
+	community.SummaryTruncated = enhanced.SummaryTruncated
 
 	// Save enhanced community
 	if err := w.storage.SaveCommunity(w.ctx, &community); err != nil {
