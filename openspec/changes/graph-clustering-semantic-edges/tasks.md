@@ -142,6 +142,31 @@
       above-threshold keeps the prior good cache, single-flaky-entity commits without livelock, symmetry
       preserved after a partial refresh.
 
+## 8.0 Correct structural baseline (#665/#666) — prereq for the §8 A/B measurement
+
+> #665/#666 fix the all-`1.0` explicit-membership bug that let every EntityID virtual edge vote a flat
+> explicit weight, so the gh#461 sibling (0.7) / system-peer (0.3) tier weights were DEAD in LPA. This is the
+> "correct structural baseline" §8's enablement A/B measures against. Contract captured in the
+> `graph-clustering` delta's "Explicit-edge membership for weight resolution is bidirectional, per-cycle, and
+> fails closed" requirement.
+
+- [x] 8.0.1 (#665) `kvProvider.GetEdgeWeight` returns explicit `1.0` iff a real explicit edge exists in
+      EITHER direction (outgoing ∪ incoming, via `computeBothNeighborSet` reading OUTGOING_INDEX +
+      composite-keyed INCOMING_INDEX), else `0.0`, so `EntityIDProvider.GetEdgeWeight`'s cascade falls
+      through to the sibling/system-peer tier weights for non-explicit pairs instead of short-circuiting
+      every pair to a flat `1.0`.
+- [x] 8.0.2 (#666) Explicit membership is memoized per detection cycle (`explicitNeighbors`) and reset at the
+      top of `DetectCommunities` (`ResetEdgeCache` propagates through the
+      `SemanticEdgeProvider → EntityIDProvider → kvProvider` decorator chain); `computeNewLabel`'s fail-open
+      PROPAGATES a `GetEdgeWeight` error instead of fabricating an explicit-dominant `1.0`.
+- [x] 8.0.3 Real-NATS integration test (`edge_weight_membership_integration_test.go`,
+      `TestIntegration_EdgeWeightMembership_RealBuckets`): outgoing/incoming explicit symmetry through the real
+      composite-key INCOMING parse, a non-neighbor pair falling through to `0.0`, and a topology transition
+      across a cycle boundary (an explicit edge removed between cycles stops counting as explicit) proving
+      `ResetEdgeCache` propagates through the `EntityIDProvider → kvProvider` leg. The
+      `SemanticEdgeProvider → EntityIDProvider` forwarding leg is covered separately by
+      `graph/clustering/lpa_edge_cache_reset_test.go`.
+
 ## 8. Compound colocation gate
 
 > **ENABLEMENT GATE:** §8 turns `enable_semantic_edges` ON in the e2e run to measure. Two things to hold:

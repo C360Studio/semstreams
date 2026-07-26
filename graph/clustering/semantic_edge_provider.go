@@ -569,12 +569,14 @@ func (p *SemanticEdgeProvider) GetEdgeWeight(ctx context.Context, fromID, toID s
 	tiers := qualifyingTiers{}
 
 	// Explicit-edge membership from the base's ACTUAL neighbor set (both
-	// directions), NOT its numeric weight. The wired kvProvider.GetEdgeWeight
-	// returns 1.0 for EVERY pair (gh#665), so keying "explicit edge exists" off
-	// explicitEdgeWeight > 0 would make every pair explicit-dominant and leave the
-	// sibling/system-peer/semantic tiers dead. Only an ACTUAL explicit edge is
-	// strictly dominant; its weight is read from the base only once membership is
-	// confirmed.
+	// directions). Since gh#665 the wired kvProvider.GetEdgeWeight is
+	// membership-correct (1.0 only for a real explicit neighbor, 0 otherwise), so
+	// keying "explicit edge exists" off explicitEdgeWeight > 0 would also be correct
+	// today. Consulting the neighbor set keeps the membership decision independent of
+	// the base's numeric weight contract, so this max-across-tiers resolution stays
+	// correct even if explicit edges later carry a non-unit confidence: only an
+	// ACTUAL explicit edge is strictly dominant, and its weight is read from the base
+	// only once membership is confirmed.
 	isExplicit, err := p.base.isExplicitEdge(ctx, fromID, toID)
 	if err != nil {
 		return 0.0, errs.WrapTransient(err, "SemanticEdgeProvider", "GetEdgeWeight", "base provider error")
@@ -898,6 +900,15 @@ func computeMutual(directed map[string]map[string]bool) map[string]map[string]bo
 		}
 	}
 	return mutual
+}
+
+// ResetEdgeCache forwards the per-cycle explicit-edge cache reset down the
+// provider chain (gh#666). The mutual-kNN cache has its own per-cycle lifetime
+// (BeginCycle/refreshCache), so this only forwards to the wrapped EntityIDProvider.
+func (p *SemanticEdgeProvider) ResetEdgeCache() {
+	if p.base != nil {
+		p.base.ResetEdgeCache()
+	}
 }
 
 // ClearCache resets the mutual-kNN adjacency and propagates the clear to the

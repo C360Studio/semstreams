@@ -443,24 +443,28 @@ func (p *EntityIDProvider) areSiblings(entityA, entityB string) bool {
 // edges strictly dominant without EntityIDProvider.GetEdgeWeight's first-match
 // cascade collapsing tier identity into a single number.
 //
-// This returns the base's NUMERIC weight; it does NOT prove an explicit edge
-// exists. Today's wired kvProvider.GetEdgeWeight answers 1.0 for EVERY pair
-// (gh#665), so a caller must gate this behind isExplicitEdge — otherwise every
-// pair looks explicit-dominant and the virtual tiers go dead.
+// This returns the base's NUMERIC weight. Since gh#665 the wired
+// kvProvider.GetEdgeWeight is membership-correct — it answers 1.0 only for an
+// actual explicit neighbor and 0 otherwise — so a numeric answer now DOES imply an
+// explicit edge. Callers still gate this behind isExplicitEdge (the two consult
+// the same "both"-direction topology) so the "explicit exists" decision reads from
+// one source and cannot drift if the base's numeric contract ever changes again.
 func (p *EntityIDProvider) explicitEdgeWeight(ctx context.Context, fromID, toID string) (float64, error) {
 	return p.base.GetEdgeWeight(ctx, fromID, toID)
 }
 
 // isExplicitEdge reports whether an ACTUAL explicit (base-provider) edge exists
 // between fromID and toID, in EITHER direction. It consults the base's real
-// neighbor set rather than explicitEdgeWeight's numeric answer because the wired
-// kvProvider.GetEdgeWeight returns 1.0 for every pair (gh#665, filed separately):
-// a decorator that trusted "weight > 0" as "an explicit edge exists" would treat
-// every pair as explicit and silence the sibling/system-peer/semantic tiers. A
-// single "both"-direction query is sufficient because kvProvider.GetNeighbors
-// with "both" unions the outgoing (from->to) and incoming (to->from) index rows,
-// so an edge stored in either direction is caught — and the resulting membership
-// is symmetric, which is what LPA's undirected voting relies on.
+// neighbor set as the single source of the explicit-membership decision. Since
+// gh#665 the base kvProvider.GetEdgeWeight is membership-correct (1.0 only for a
+// real explicit neighbor, 0 otherwise), so keying "explicit exists" off a numeric
+// weight > 0 would also be correct today; consulting GetNeighbors keeps the
+// membership question independent of the base's numeric weight contract, so a
+// decorator resolving max-across-tiers stays correct even if explicit edges later
+// carry a non-unit confidence. A single "both"-direction query suffices because
+// kvProvider.GetNeighbors with "both" unions the outgoing (from->to) and incoming
+// (to->from) index rows, so an edge stored in either direction is caught — and the
+// resulting membership is symmetric, which is what LPA's undirected voting relies on.
 func (p *EntityIDProvider) isExplicitEdge(ctx context.Context, fromID, toID string) (bool, error) {
 	neighbors, err := p.base.GetNeighbors(ctx, fromID, "both")
 	if err != nil {
@@ -479,6 +483,17 @@ func (p *EntityIDProvider) siblingsEnabled() bool { return p.includeSiblings }
 
 // systemPeersEnabled reports whether system-peer virtual-edge synthesis is enabled.
 func (p *EntityIDProvider) systemPeersEnabled() bool { return p.includeSystemPeers }
+
+// ResetEdgeCache propagates the per-cycle explicit-edge cache reset to the wrapped
+// base provider (gh#666). It deliberately does NOT clear the sibling/system-peer
+// prefix caches — those keep their own lifetime via ClearCache — so a per-cycle
+// edge-cache reset stays scoped to the explicit topology the detector
+// re-snapshots each cycle. A base provider without such a cache is skipped.
+func (p *EntityIDProvider) ResetEdgeCache() {
+	if r, ok := p.base.(interface{ ResetEdgeCache() }); ok {
+		r.ResetEdgeCache()
+	}
+}
 
 // ClearCache clears the type prefix cache and propagates to wrapped providers.
 // Call this when entities are added/removed.

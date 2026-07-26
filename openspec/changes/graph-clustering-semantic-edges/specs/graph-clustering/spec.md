@@ -49,6 +49,49 @@ for a deployment that has not opted in.
 - **THEN** the sibling and system-peer virtual-edge weights and per-entity caps are exactly what they were
   before the semantic-edge tier existed
 
+### Requirement: Explicit-edge membership for weight resolution is bidirectional, per-cycle, and fails closed
+
+Community detection MUST decide explicit-edge membership for weight resolution from a real graph edge in
+EITHER direction (outgoing or incoming) between the pair, and MUST resolve a pair to the strictly-dominant
+explicit weight only when such an edge exists. A pair with NO explicit edge in either direction MUST fall
+through to the maximum of its qualifying virtual-edge tiers (sibling, system-peer, semantic) and MUST NOT
+resolve to the explicit weight — every virtual-edge pair therefore votes at its tier weight, never a flat
+explicit weight. Explicit-edge membership MUST reflect the current detection cycle's graph topology, so an
+explicit edge removed between cycles MUST NOT count as explicit in the following cycle. A failed edge-weight
+or topology read during resolution MUST abort the detection cycle rather than fabricate an explicit-dominant
+weight, so a transient read error can never silently partition every pair as explicitly connected.
+
+#### Scenario: An explicit edge in either direction makes the pair explicit
+
+- **GIVEN** a pair of entities connected by a real explicit graph edge in exactly one stored direction
+  (present in the outgoing index for the source, equivalently in the incoming index for the target)
+- **WHEN** the edge weight between them is resolved
+- **THEN** the pair is treated as explicit and resolves to the strictly-dominant explicit weight
+- **AND** the stored direction of the edge does not change the result
+
+#### Scenario: A non-explicit pair resolves to its virtual tier, not the explicit weight
+
+- **GIVEN** a pair of entities with NO explicit graph edge in either direction that qualifies as siblings
+  (sibling weight 0.7) and qualifies under no higher virtual tier
+- **WHEN** the edge weight between them is resolved
+- **THEN** the resolved weight is the sibling weight (0.7), not the explicit weight (1.0)
+- **AND** it is never the flat explicit weight that an "every pair is explicit" resolution would return
+
+#### Scenario: An explicit edge removed between cycles stops counting as explicit
+
+- **GIVEN** a pair treated as explicit in one detection cycle because a real explicit edge connected them
+- **AND** that explicit edge is removed from the graph before the next detection cycle
+- **WHEN** the edge weight between them is resolved in the next cycle
+- **THEN** the pair is no longer treated as explicit
+- **AND** it resolves to the maximum of its qualifying virtual-edge tiers instead
+
+#### Scenario: A failed topology read aborts the cycle rather than defaulting to explicit
+
+- **GIVEN** the weight-resolution path performs an explicit-edge or topology read that fails
+- **WHEN** a detection tick resolves edge weights
+- **THEN** the detection cycle aborts and surfaces the read error
+- **AND** no partition is committed that treats the unread pairs as explicitly connected
+
 ### Requirement: Community detection gates semantic edges on embedding readiness with a structural-floor guarantee
 
 Community detection MUST gate semantic-edge synthesis on a dedicated embedding-readiness signal, distinct
