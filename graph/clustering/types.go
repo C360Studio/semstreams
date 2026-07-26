@@ -40,6 +40,13 @@ type Community struct {
 	// Values: "statistical" (initial), "llm-enhanced" (enhanced), "llm-failed" (enhancement failed)
 	SummaryStatus string `json:"summary_status,omitempty"`
 
+	// SummaryTruncated is true when the LLM summary hit the token budget
+	// (finish_reason "length"). A SEPARATE flag, not a SummaryStatus enum value, so
+	// exact-match consumers of SummaryStatus (e.g. lpa.go archival-preservation)
+	// are unaffected. Read by the B2 partition-colocation recorder's dilution
+	// channel to attribute a recall miss (truncated summary vs semantically diluted).
+	SummaryTruncated bool `json:"summary_truncated,omitempty"`
+
 	// Metadata stores additional community properties
 	Metadata map[string]interface{} `json:"metadata,omitempty"`
 }
