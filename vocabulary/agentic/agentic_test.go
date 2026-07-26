@@ -586,7 +586,7 @@ func TestLessonPredicatesRegistered(t *testing.T) {
 
 	agentic.Register()
 
-	lessonPredicates := []struct {
+	lessonPredicates := []struct { // predicate-audit:unrelated {"column":22,"surface":"go-assignment:lessonPredicates","value":"","basis":"reviewed:runtime-predicate-metadata-collection"}
 		name       string
 		predicate  string
 		dataType   string

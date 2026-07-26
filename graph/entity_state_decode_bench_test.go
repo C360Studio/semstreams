@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -12,47 +13,17 @@ import (
 // roughly the shape the semboids load generator produces per boid (gh#562):
 // a 6-part ID and ~24 triples with realistic three-part predicates — and
 // returns its MarshalEntityState bytes.
-func benchmarkEntityStateBytes(b *testing.B) []byte {
+func benchmarkEntityStateBytes(b *testing.B, prototypes []message.Triple) []byte {
 	b.Helper()
 	const entityID = "c360.sim.robotics.swarm.boid.017"
 	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
 
-	predicates := []string{
-		"boid.telemetry.position-x",
-		"boid.telemetry.position-y",
-		"boid.telemetry.position-z",
-		"boid.telemetry.velocity-x",
-		"boid.telemetry.velocity-y",
-		"boid.telemetry.velocity-z",
-		"boid.telemetry.heading",
-		"boid.telemetry.speed",
-		"boid.state.phase",
-		"boid.state.battery-level",
-		"boid.state.flock-role",
-		"boid.state.neighbor-count",
-		"entity.system.status",
-		"entity.system.last-seen",
-		"entity.indexing.profile",
-		"boid.mission.assignment",
-		"boid.mission.waypoint-index",
-		"boid.mission.progress",
-		"boid.sensor.proximity-min",
-		"boid.sensor.proximity-mean",
-		"boid.config.max-speed",
-		"boid.config.separation-weight",
-		"boid.config.alignment-weight",
-		"boid.config.cohesion-weight",
-	}
-
-	triples := make([]message.Triple, 0, len(predicates))
-	for i, predicate := range predicates {
-		triples = append(triples, message.Triple{
-			Subject:    entityID,
-			Predicate:  predicate,
-			Object:     fmt.Sprintf("value-%d", i),
-			Timestamp:  now,
-			Confidence: 1.0,
-		})
+	triples := append([]message.Triple(nil), prototypes...)
+	for i := range triples {
+		triples[i].Subject = entityID
+		triples[i].Object = fmt.Sprintf("value-%d", i)
+		triples[i].Timestamp = now
+		triples[i].Confidence = 1.0
 	}
 
 	data, err := MarshalEntityState(&EntityState{
@@ -71,7 +42,32 @@ func benchmarkEntityStateBytes(b *testing.B) []byte {
 // BenchmarkUnmarshalEntityState measures the validating decoder — the cost
 // the per-key-serialized RMW read paid before gh#562.
 func BenchmarkUnmarshalEntityState(b *testing.B) {
-	data := benchmarkEntityStateBytes(b)
+	data := benchmarkEntityStateBytes(b, []message.Triple{
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-x")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-y")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-z")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-x")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-y")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-z")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "heading")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "speed")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "phase")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "battery-level")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "flock-role")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "neighbor-count")},
+		{Predicate: semantictest.Predicate(b, "entity", "system", "status")},
+		{Predicate: semantictest.Predicate(b, "entity", "system", "last-seen")},
+		{Predicate: semantictest.Predicate(b, "entity", "indexing", "profile")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "assignment")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "waypoint-index")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "progress")},
+		{Predicate: semantictest.Predicate(b, "boid", "sensor", "proximity-min")},
+		{Predicate: semantictest.Predicate(b, "boid", "sensor", "proximity-mean")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "max-speed")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "separation-weight")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "alignment-weight")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "cohesion-weight")},
+	})
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
@@ -83,9 +79,36 @@ func BenchmarkUnmarshalEntityState(b *testing.B) {
 }
 
 // BenchmarkUnmarshalEntityStateTrusted measures the trusted decoder used by
-// the ENTITY_STATES owner's own RMW reads after gh#562.
+// the ENTITY_STATES owner's own RMW reads after gh#562. The canonical
+// prototypes intentionally remain direct benchmark fixtures: hiding
+// semantictest.Predicate behind the byte-builder would evade fixture authority.
 func BenchmarkUnmarshalEntityStateTrusted(b *testing.B) {
-	data := benchmarkEntityStateBytes(b)
+	data := benchmarkEntityStateBytes(b, []message.Triple{
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-x")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-y")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "position-z")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-x")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-y")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "velocity-z")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "heading")},
+		{Predicate: semantictest.Predicate(b, "boid", "telemetry", "speed")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "phase")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "battery-level")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "flock-role")},
+		{Predicate: semantictest.Predicate(b, "boid", "state", "neighbor-count")},
+		{Predicate: semantictest.Predicate(b, "entity", "system", "status")},
+		{Predicate: semantictest.Predicate(b, "entity", "system", "last-seen")},
+		{Predicate: semantictest.Predicate(b, "entity", "indexing", "profile")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "assignment")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "waypoint-index")},
+		{Predicate: semantictest.Predicate(b, "boid", "mission", "progress")},
+		{Predicate: semantictest.Predicate(b, "boid", "sensor", "proximity-min")},
+		{Predicate: semantictest.Predicate(b, "boid", "sensor", "proximity-mean")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "max-speed")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "separation-weight")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "alignment-weight")},
+		{Predicate: semantictest.Predicate(b, "boid", "config", "cohesion-weight")},
+	})
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {

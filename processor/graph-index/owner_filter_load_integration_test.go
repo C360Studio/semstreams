@@ -193,10 +193,17 @@ func createAndSeedOwnerLoadBuckets(
 			)
 		}
 	}
-	for i := 0; i < profile.spread; i++ {
-		predicate := fmt.Sprintf("robotics.spread.p%02d", i)
+	spreadValues := [...]string{
+		"robotics.spread.p00", "robotics.spread.p01", "robotics.spread.p02", "robotics.spread.p03",
+		"robotics.spread.p04", "robotics.spread.p05", "robotics.spread.p06", "robotics.spread.p07",
+		"robotics.spread.p08", "robotics.spread.p09", "robotics.spread.p10", "robotics.spread.p11",
+		"robotics.spread.p12", "robotics.spread.p13", "robotics.spread.p14", "robotics.spread.p15",
+		"robotics.spread.p16", "robotics.spread.p17", "robotics.spread.p18", "robotics.spread.p19",
+	}
+	require.LessOrEqual(t, profile.spread, len(spreadValues))
+	for i, spreadValue := range spreadValues[:profile.spread] {
 		rows = append(rows, seedRow{stores[predicateBucket],
-			predicateIndexKey(predicate, ownerLoadEntityID(i)), predicateIndexMarker})
+			predicateIndexKey(spreadValue, ownerLoadEntityID(i)), predicateIndexMarker})
 	}
 	for _, row := range rows {
 		require.NoError(t, natsclient.ValidateKVLiteralKey(row.key))
@@ -565,18 +572,20 @@ func assertOwnerLoadMaxima(t *testing.T, ctx context.Context, js jetstream.JetSt
 	require.NoError(t, err)
 	store := nc.NewKVStore(raw)
 	entityID := maximumEntityIDForContract()
-	maxSegment := "a" + strings.Repeat("b", vocabulary.MaxPredicateSegmentBytes-1)
-	maxPredicate := maxSegment + "." + maxSegment + "." + maxSegment
+	const maximumValue = "abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb." +
+		"abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb." +
+		"abbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	require.Len(t, strings.Split(maximumValue, ".")[0], vocabulary.MaxPredicateSegmentBytes)
 	rows := []struct {
 		name   string
 		key    string
 		filter string
 		bytes  int
 	}{
-		{"predicate", predicateIndexKey(maxPredicate, entityID), predicateIndexEntityFilter(entityID), 451},
-		{"name", nameCompositeKey(nameIndexKey("Maximum"), entityID, maxPredicate), nameIndexEntityFilter(entityID), 710},
-		{"incoming", incomingIndexKey(entityID, entityID, maxPredicate), incomingIndexSourceFilter(entityID), 902},
-		{"context", contextIndexKey(entityID, contextHashHex("maximum"), maxPredicate), contextIndexEntityFilter(entityID), 710},
+		{"predicate", predicateIndexKey(maximumValue, entityID), predicateIndexEntityFilter(entityID), 451},
+		{"name", nameCompositeKey(nameIndexKey("Maximum"), entityID, maximumValue), nameIndexEntityFilter(entityID), 710},
+		{"incoming", incomingIndexKey(entityID, entityID, maximumValue), incomingIndexSourceFilter(entityID), 902},
+		{"context", contextIndexKey(entityID, contextHashHex("maximum"), maximumValue), contextIndexEntityFilter(entityID), 710},
 	}
 	for _, row := range rows {
 		require.NoError(t, natsclient.ValidateKVLiteralKey(row.key))
@@ -600,7 +609,7 @@ func assertOwnerLoadMaxima(t *testing.T, ctx context.Context, js jetstream.JetSt
 	require.NoError(t, err)
 	require.Equal(t, outgoingValue, outgoingEntry.Value)
 	t.Logf("phase=maxima entity_bytes=%d predicate_bytes=%d key_bytes predicate=451 name=710 incoming=902 context=710 outgoing=256",
-		len(entityID), len(maxPredicate))
+		len(entityID), len(maximumValue))
 }
 
 func assertOwnerLoadCancellationEmptyAndRecreate(

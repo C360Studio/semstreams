@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -29,7 +30,7 @@ func TestPredicateIndexProductionCodec_RawNineTokenContract(t *testing.T) {
 func TestPredicateIndexProductionCodec_MaximumBoundary(t *testing.T) {
 	entityID := maximumEntityIDForContract()
 	segment := "a" + strings.Repeat("b", 63)
-	predicate := segment + "." + segment + "." + segment
+	predicate := semantictest.Predicate(t, segment, segment, segment)
 	require.Len(t, predicateIndexKey(predicate, entityID), 451)
 	for _, filter := range append(predicateIndexForwardFilters(predicate), predicateIndexEntityFilter(entityID)) {
 		require.NoError(t, natsclient.ValidateKVWildcardFilter(filter))
@@ -113,7 +114,7 @@ func TestPredicateQuery_MaximumBoundaryUsesValidatedExactFilter(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	entityID := maximumEntityIDForContract()
 	segment := "a" + strings.Repeat("b", 63)
-	predicate := segment + "." + segment + "." + segment
+	predicate := semantictest.Predicate(t, segment, segment, segment)
 	expectedFilter := predicate + ".*.*.*.*.*.*"
 
 	var listCalls atomic.Int64

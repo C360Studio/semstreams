@@ -98,7 +98,7 @@ func TestUnmarshalEntityStateTrusted_AdmitsNoncanonicalState(t *testing.T) {
 			name: "noncanonical predicate",
 			data: []byte(`{"id":"c360.test.graph.decode.entity.002",` +
 				`"triples":[{"subject":"c360.test.graph.decode.entity.002",` +
-				`"predicate":"Test.Poison.Predicate","object":"x"}],` +
+				`"predicate":"Test.Poison.Predicate","object":"x"}],` + // predicate-audit:invalid {"kind":"stored-predicate","value":"Test.Poison.Predicate","reason":"segment_start"}
 				`"message_type":{"domain":"test","category":"decode","version":"v1"},` +
 				`"version":1,"updated_at":"2026-01-01T00:00:00Z"}`),
 		},

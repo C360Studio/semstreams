@@ -23,7 +23,7 @@ import (
 
 func TestProcessEntityUpdate_ReplacesPublicIndexResults(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	comp.namePredicates = map[string]int{"core.identity.name": 0}
+	comp.namePredicates = map[string]int{semantictest.Predicate(t, "core", "identity", "name"): 0} // predicate-audit:unrelated {"column":24,"surface":"go-assignment:namePredicates","value":"","basis":"reviewed component test configuration map; contained predicate is runtime-authoritative"}
 	ctx := context.Background()
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	targetA := "acme.ops.robotics.gcs.mission.001"
@@ -340,7 +340,7 @@ func TestOwnerFilters_MaximumEntityIDStayWithinSharedFilterContract(t *testing.T
 	require.NoError(t, semtypes.ValidateEntityID(owner))
 
 	for name, filter := range map[string]string{
-		"predicate": predicateIndexEntityFilter(owner),
+		"predicate": predicateIndexEntityFilter(owner), // predicate-audit:unrelated {"column":16,"surface":"go-field:predicate","value":"","basis":"reviewed owner-filter test case label, not predicate syntax"}
 		"name":      nameIndexEntityFilter(owner),
 		"incoming":  incomingIndexSourceFilter(owner),
 	} {

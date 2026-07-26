@@ -87,6 +87,19 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       `lineage.*` occurrence is removed unless it belongs to a record explicitly identified as historical
 - [ ] 5.1b Run the same production and fixture audits in every owned sister repository and reference design; require
       zero unexplained violations before the v1 release/archive gate
+- [x] 5.1d Reconcile the SemStreams-local test-fixture audit drift tracked by issue #684 without weakening the
+      fail-closed contract or absorbing the independent #671 scope. Start from the recorded 62-finding baseline
+      (2,068 candidates and 134 exact classifications): first restore production/fixture substitution-extraction
+      parity and lock it with focused scanner tests; then repair the exact stale, moved, and wrong-kind occurrence
+      contracts; classify only true intentional malformed predicates; and eliminate every remaining unresolved
+      Go surface by using the grammar-only `internal/semantictest` helper at the authoritative occurrence or an exact
+      unrelated disposition for a proven non-predicate surface. Record the new candidate/classification totals only
+      after `task predicate:test-audit`, focused predicate-audit race tests, and the full race suite pass. Evidence:
+      the test-fixture audit passes with 2,128 candidates, 147 exact classifications, and zero findings; the production
+      audit passes with 500 candidates and zero findings; focused predicate-audit race, full unit race, affected
+      graph-index/graph-ingest Docker race, exact tagged gateway/graph-gateway and lifecycle race, lint, vet, revive,
+      gofmt, strict OpenSpec, and diff gates pass. The aggregate tagged integration run was stopped after an unrelated
+      orchestration wedge; its affected packages passed through the exact standalone tagged race gates
 - [x] 5.2 Seed synthetic incompatible beta state, run the exact wipe/restart/reseed procedure, and prove expected
       query-result fixtures without exporting, inspecting, or preserving that state. Evidence:
       `TestIntegration_PredicateCleanWipeReseedRestoresQueryParity` deletes the graph-index-owned incompatible

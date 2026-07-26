@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
@@ -281,7 +282,10 @@ func TestGraph_FactCap_ObservableAndIndependent(t *testing.T) {
 	// 67 distinct facts against the cap of 64 → 3 dropped.
 	triples := make([]message.Triple, 0, 67)
 	for i := range 67 {
-		triples = append(triples, message.Triple{Predicate: fmt.Sprintf("acme.fact.p%03d", i), Object: i})
+		triples = append(triples, message.Triple{
+			Predicate: semantictest.Predicate(t, "acme", "fact", "cap"),
+			Object:    i,
+		})
 	}
 	seed := &fusion.Entity{ID: "S", Triples: triples}
 	resp := fuseGraph(t, graphSeed(seed), refLens{})
@@ -602,7 +606,7 @@ func TestGraphProjection_ResponseJSONRoundTrip(t *testing.T) {
 				ID:        "a|p|b",
 				Source:    "a",
 				Target:    "b",
-				Predicate: "p",
+				Predicate: "p", // predicate-audit:invalid {"kind":"stored-predicate","value":"p","reason":"arity"}
 				Direction: fusion.GraphDirectionOutgoing,
 				Evidence:  []fusion.GraphEvidence{{Source: "walker"}},
 				Truncated: true,

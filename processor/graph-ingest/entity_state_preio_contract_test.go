@@ -39,6 +39,10 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 		ID:      validID,
 		Triples: []message.Triple{{Subject: "", Predicate: semantictest.Predicate(t, "test", "state", "value")}},
 	}
+	malformedRootEntity := &graph.EntityState{
+		ID:      "bad",
+		Triples: []message.Triple{{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value")}},
+	}
 
 	tests := []struct {
 		name string
@@ -76,10 +80,7 @@ func TestMutationEntityIdentityRejectionPrecedesKVIO(t *testing.T) {
 			// though the full candidate pass moved to the write gate.
 			name: "merge entity malformed root ID",
 			run: func(component *Component) error {
-				return component.MergeEntity(context.Background(), &graph.EntityState{
-					ID:      "bad",
-					Triples: []message.Triple{{Subject: validID, Predicate: validPredicate}},
-				})
+				return component.MergeEntity(context.Background(), malformedRootEntity)
 			},
 		},
 		{
