@@ -132,13 +132,27 @@ type AuthoritativeReader interface {
 These signatures are the implementation contract. Naming may change before implementation only through an
 architect-reviewed OpenSpec amendment.
 
-### 2. Bind contracts and ownership once
+### 2. Register each owner once per Registry across every entry point
 
 `BindMutationClient` validates and indexes all supplied contracts before registration or heartbeat side effects. If
 any contract derives an owning claim from a `replace-owned` or `cas-transition` group, a non-nil heartbeater is
 required. The constructor then calls `BindAndHeartbeat` and stores the opaque owner token. The constructed client is
 immutable and safe for concurrent use.
 
+- The one-registration rule belongs to `ownership.Registry` and applies beyond `MutationClient`. Direct
+  `RegisterOwner`, `projection.Bind`, `BindAndHeartbeat`, and `BindMutationClient` all converge on the same guard.
+- The composition root must collect every contract intended for a registered owner before its first registration.
+  All static built-in contracts for the same owner are aggregated and passed to one `BindAndHeartbeat` call rather
+  than registered incrementally.
+- The first successful registration consumes that owner identity for the Registry lifetime. A concurrent or later
+  same-owner attempt returns `ErrOwnerAlreadyBound` before the owner-presence heartbeat, ownership-claim KV
+  mutation, or heartbeater enrollment. Identical, overlapping, and disjoint second registrations are all rejected.
+- A failed first registration releases its in-progress identity guard, so a corrected first registration may be
+  attempted against the same Registry. After a successful registration, correction or revival requires a new
+  `Registry`, which provides a new incarnation; resigning or changing contracts does not permit same-Registry
+  registration.
+- `BindMutationClient` preserves `ErrOwnerAlreadyBound` for `errors.Is` and classifies it as a not-committed mutation
+  conflict.
 - The caller owns the heartbeater lifecycle and cancels it through the supplied context/composition root.
 - Create requests containing owning facts and all replace-owned requests carry the bound token.
 - Append-evidence requests do not carry an owner token.
@@ -146,11 +160,13 @@ immutable and safe for concurrent use.
   append and read-back; create and replace fail validation before transport or registry mutation.
 - A birth-only contract has no ownership claim. It may bind and create without a heartbeater or owner token.
 - When the complete contract set derives no claim or foreign edge, binding skips ownership registration and retains
-  a zero token.
+  a zero token. Because `RegisterOwner` is not called, a birth-only/no-claim client does not consume the owner's
+  one-registration identity.
 - `BirthPredicates` never cause heartbeat or token requirements. A contract that also contains a `replace-owned` or
   `cas-transition` group still requires liveness because that group derives an owning claim.
-- A stale-token response is terminal for that client instance. The client never silently rebinds because doing so
-  can overlap owner incarnations and weaken fencing.
+- A stale-token response is terminal for that client instance. The client never silently rebinds. Recovery replaces
+  the Registry and owner incarnation at the composition root; it does not bind the same owner a second time against
+  the old Registry.
 - The token is not exposed as a string or accepted per request.
 
 ### 3. Enforce the declared contract before transport
@@ -174,14 +190,18 @@ boundary: omission intentionally clears a predicate in that group. Callers canno
 For `AppendEvidence`, every triple must belong to an `append-evidence` group and target the requested entity as its
 subject. The first version is deliberately single-entity; it does not claim cross-entity atomicity.
 
-`Contract.BirthPredicates` is an optional list of immutable create-only facts. Each value is a registered canonical
-exact predicate. Duplicates are invalid, and a birth predicate cannot also appear in any write-mode predicate group
+`Contract.BirthPredicates` is an optional list of create-only facts. Each value is a registered canonical exact
+predicate. Duplicates are invalid, and a birth predicate cannot also appear in any write-mode predicate group
 (`replace-owned`, `cas-transition`, or `append-evidence`). A matching `ForeignEdge` is not an overlap because it
 targets a different subject lane.
 
 `BirthPredicates` are validation metadata only. They derive no `OwnerClaim` or `ForeignEdgeClaim`, are never added
 to a replacement removal set, and cannot authorize append. A contract with birth predicates but no groups or
 foreign edges is valid.
+
+Create-only is a client authorization rule, not a graph write-once invariant. Graph-ingest does not lease, fence, or
+otherwise protect a birth predicate after creation. A nonconforming writer using another mutation lane can change
+or remove it. Consumers that require immutable facts need a separately enforced ownership or storage contract.
 
 For `CreateWithTriples`, every supplied triple must use the primary entity ID as its subject and be declared either
 in `BirthPredicates` or in a `replace-owned` or `cas-transition` group. An `append-evidence` group alone does not
@@ -228,8 +248,10 @@ primary-subject birth fact matches as a complete canonical `message.Triple`. Equ
 including `Confidence` and `ExpiresAt`. Framework-injected facts may be ignored, but a divergent requested
 predicate is a conflict.
 
-If read-back proves the entity absent, the client may retry within the configured budget using identical metadata.
-If read-back is unavailable, it returns `commit-unknown` and does not retry.
+`no responders` proves that no serving handler accepted that attempt, so the client may retry it within the
+configured budget. A timeout or lost response is ambiguous. If read-back finds the entity, equality can verify the
+commit. If read-back does not find it, that observation does not prove the original request cannot commit late; a
+retry can race the late commit. The operation remains duplicate-resistant, not exactly-once.
 
 #### Replace owned
 
@@ -249,9 +271,15 @@ the client reads the entity and searches for the exact canonical evidence tuple:
 This six-field tuple is intentionally narrower than create and replace equality. Append ambiguity checks do not add
 timestamp, confidence, expiration, or another `message.Triple` field to the idempotency key.
 
-If the tuple is present, the operation is verified. If it is absent, the client may retry within budget using
-identical values. If read-back is unavailable, it returns `commit-unknown` and does not retry. This rule prevents
-duplicate appends without claiming the underlying append handler is idempotent.
+If the tuple is present, the operation is verified. If it is absent, the client may retry within its configured
+budget using identical values, but it cannot prove the original request will not commit after the read. The original
+can commit late and the retry can then append the same evidence again. This narrows the ambiguity window but does
+not prevent duplicates.
+
+Callers must not wrap any mutation operation in a generic outer retry. A deployment that requires strict no-retry
+append behavior sets `Retry.MaxRetries=0` until graph-ingest implements the server-side idempotency primitive tracked
+by [#697](https://github.com/C360Studio/semstreams/issues/697). A `no responders` result remains distinct: it proves
+that attempt did not reach a serving handler and may be retried by the client according to its configured budget.
 
 #### Degraded responses
 
@@ -317,9 +345,10 @@ The required mappings are:
 | `entity_not_found` | not found | not committed | never |
 | divergent `entity_already_exists` | conflict | not committed | never |
 | `revision_mismatch` | revision conflict | not committed | never |
-| `owner_lease_stale` | stale owner token | not committed | rebind/restart required |
+| `owner_lease_stale` | stale owner token | not committed | new Registry/incarnation; no old-Registry rebind |
+| NATS `no responders` | unavailable | not committed | bounded client retry |
 | transient handler error | unavailable | not committed | existing classified policy |
-| ambiguous transport with failed verification | commit unknown | unknown | never |
+| timeout/lost response with failed verification | commit unknown | unknown | no outer retry; internal risk per mode |
 | degraded response with failed verification | committed unverified | committed | never |
 | `graph_state_reset_required` or fatal/internal invariant | internal | not committed | never |
 
@@ -340,7 +369,18 @@ constants may be centralized internally, but values and JSON shapes must not cha
 `Contract.BirthPredicates`, and `ReplaceOwnedMutation.Group` are local contract/client inputs and are not serialized
 onto graph mutation requests. No graph-ingest handler, persisted schema, or compatibility migration is required.
 
-### 8. Keep issue #683 as a model-layer dependency
+### 8. Make owner-lease enforcement a rollout prerequisite
+
+Every graph-ingest instance serving mutation subjects for an owner-bound client must run with
+`enforce_owner_lease=true`. A mixed serving fleet is unsafe because a request routed to a non-enforcing instance can
+bypass the token fence.
+
+Before enabling an owner-bound client, operators must prove that every serving instance has the claim reader
+configured, the owner heartbeat is live, and owner-lease mismatch metrics remain zero during a bounded rollout
+window. Configuration review alone is insufficient. Semdragon issue
+[#313](https://github.com/C360Studio/semstreams/issues/313) remains gated on this evidence.
+
+### 9. Keep issue #683 as a model-layer dependency
 
 If issue #683 selects canonical child entities for repeated structured values, it may depend on this client for
 atomic child creation, owned replacement, and read-back. Issue #683 must still define child IDs, predicates, parent
@@ -373,8 +413,9 @@ Rejected. Owner incarnation changes are a composition-root event and must not be
 3. Add the classified RPC/read-back adapter and authoritative create path.
 4. Add selected-group owned replacement.
 5. Add append evidence with lost-response verification tests.
-6. Migrate duplicated in-repository writers behind narrow interfaces.
-7. Publish a Semdragon migration note after the public API and integration tests are stable.
+6. Prove lease enforcement, claim-reader wiring, heartbeat liveness, and zero mismatch metrics on every serving
+   graph-ingest instance.
+7. Keep PR #696 and Semdragon #313 as later adoptions after the public contract and rollout gate are approved.
 
 Existing APIs remain in place throughout. Removal of duplicated internal helpers requires separate evidence that no
 caller depends on their old surface.
@@ -388,7 +429,12 @@ caller depends on their old surface.
 - NATS/graph-ingest integration tests proving wire token propagation, stale-token fencing, primary-subject atomic
   create, cross-subject rejection, conflict/read-back, owned delete-on-omit, foreign-predicate preservation, and
   authoritative read-back.
-- Lost-response append tests proving exact evidence is not duplicated.
+- Lost-response append tests proving duplicate resistance and the documented late-commit double-apply boundary.
+- Registry and bind tests proving exactly one successful same-owner registration across direct `RegisterOwner`,
+  `Bind`, `BindAndHeartbeat`, and `BindMutationClient`; identical and concurrent second attempts fail before
+  heartbeat or claim mutation, while a failed first attempt releases the identity.
+- Composition-root tests proving static built-in contracts for one owner are validated, aggregated, and bound once.
+- Deployment tests proving every serving graph-ingest instance enforces owner leases before mutation traffic.
 - Concurrency and race tests for one immutable client used by multiple goroutines.
 - Compatibility tests that compare subjects and serialized request/response shapes with existing graph types.
 
@@ -400,6 +446,7 @@ caller depends on their old surface.
 - Structured-value encoding or issue #683's domain model.
 - Domain adapters or Semdragon source changes.
 - Cryptographic authorization, signing, or provenance attestation.
-- Ownership modes or claim semantics beyond the rule that birth predicates derive no claim.
+- Graph-enforced write-once semantics for birth predicates; they derive no claim and nonconforming writers remain
+  able to mutate them.
 - Changes to graph handlers, NATS wire shapes, or persisted storage.
 - A singleton/global client or a replacement for all graph query APIs.

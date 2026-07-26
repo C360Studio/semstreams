@@ -84,24 +84,110 @@ func TestRegistry_RegisterAndReject(t *testing.T) {
 	}
 }
 
-func TestRegistry_Idempotent(t *testing.T) {
-	r, _, ctx := newTestRegistry(t)
+func TestRegistry_SameInstanceOwnerCanBindOnlyOnceWithoutSideEffects(t *testing.T) {
+	r, claims, ctx := newTestRegistry(t)
 	entity := "c360.semconnect.systems.csapi.system.drone-001"
 
 	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.a"}}}}); err != nil {
 		t.Fatal(err)
 	}
-	// Re-register the SAME owner with a different predicate set → replaces, no overlap.
-	if err := r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.b"}}}}); err != nil {
-		t.Fatalf("re-registration of same owner should succeed: %v", err)
+	beforeEpoch := readEpoch(t, claims, ctx)
+	beforePresence, err := r.presence.Get(ctx, presenceKeyPrefix+"cs-api")
+	if err != nil {
+		t.Fatalf("read initial presence: %v", err)
 	}
 
-	if _, ok, _ := r.OwnerOf(ctx, entity, "test.value.a"); ok {
-		t.Error("test.value.a should no longer be owned after re-registration replaced it")
+	err = r.RegisterOwner(ctx, Registration{Owner: "cs-api", Claims: []OwnerClaim{OwnerClaim{Owner: "cs-api", Pattern: sysPat, Mode: ModeReplaceOwned, Predicates: []string{"test.value.b"}}}})
+	if !errors.Is(err, ErrOwnerAlreadyBound) {
+		t.Fatalf("second registration error = %v, want ErrOwnerAlreadyBound", err)
 	}
-	owner, ok, err := r.OwnerOf(ctx, entity, "test.value.b")
+
+	owner, ok, err := r.OwnerOf(ctx, entity, "test.value.a")
 	if err != nil || !ok || owner != "cs-api" {
-		t.Errorf("OwnerOf(test.value.b) = %q,%v,%v want cs-api,true,nil", owner, ok, err)
+		t.Errorf("first claim changed after rejected bind: %q,%v,%v", owner, ok, err)
+	}
+	if _, ok, _ := r.OwnerOf(ctx, entity, "test.value.b"); ok {
+		t.Error("rejected second claim mutated the epoch")
+	}
+	afterEpoch := readEpoch(t, claims, ctx)
+	afterPresence, err := r.presence.Get(ctx, presenceKeyPrefix+"cs-api")
+	if err != nil {
+		t.Fatalf("read final presence: %v", err)
+	}
+	if afterEpoch.Version != beforeEpoch.Version ||
+		afterPresence.Revision != beforePresence.Revision {
+		t.Fatalf(
+			"rejected bind changed epoch/presence revisions: epoch %d→%d presence %d→%d",
+			beforeEpoch.Version,
+			afterEpoch.Version,
+			beforePresence.Revision,
+			afterPresence.Revision,
+		)
+	}
+}
+
+func TestRegistry_ConcurrentSameOwnerRegistrationHasOneSideEffectingWinner(t *testing.T) {
+	r, claims, ctx := newTestRegistry(t)
+	registrations := []Registration{
+		{Owner: "race-owner", Claims: []OwnerClaim{{
+			Owner: "race-owner", Pattern: sysPat, Mode: ModeReplaceOwned,
+			Predicates: []string{"test.value.a"},
+		}}},
+		{Owner: "race-owner", Claims: []OwnerClaim{{
+			Owner: "race-owner", Pattern: sysPat, Mode: ModeReplaceOwned,
+			Predicates: []string{"test.value.b"},
+		}}},
+	}
+	start := make(chan struct{})
+	results := make(chan error, len(registrations))
+	for _, registration := range registrations {
+		registration := registration
+		go func() {
+			<-start
+			results <- r.RegisterOwner(ctx, registration)
+		}()
+	}
+	close(start)
+	var success, rejected int
+	for range registrations {
+		switch err := <-results; {
+		case err == nil:
+			success++
+		case errors.Is(err, ErrOwnerAlreadyBound):
+			rejected++
+		default:
+			t.Fatalf("registration error = %v", err)
+		}
+	}
+	if success != 1 || rejected != 1 {
+		t.Fatalf("success/rejected = %d/%d, want 1/1", success, rejected)
+	}
+	ep := readEpoch(t, claims, ctx)
+	if ep.Version != 1 || len(ep.Owners) != 1 {
+		t.Fatalf("epoch = %#v, want one committed registration", ep)
+	}
+	presence, err := r.presence.Get(ctx, presenceKeyPrefix+"race-owner")
+	if err != nil {
+		t.Fatalf("presence: %v", err)
+	}
+	if presence.Revision != 1 {
+		t.Fatalf("presence revision = %d, want one heartbeat write", presence.Revision)
+	}
+}
+
+func TestRegistry_FailedFirstRegistrationReleasesOwnerBinding(t *testing.T) {
+	r, _, ctx := newTestRegistry(t)
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	registration := Registration{Owner: "retry-owner", Claims: []OwnerClaim{{
+		Owner: "retry-owner", Pattern: sysPat, Mode: ModeReplaceOwned,
+		Predicates: []string{"test.value.a"},
+	}}}
+	if err := r.RegisterOwner(canceled, registration); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled registration error = %v, want context.Canceled", err)
+	}
+	if err := r.RegisterOwner(ctx, registration); err != nil {
+		t.Fatalf("retry after failed first registration: %v", err)
 	}
 }
 

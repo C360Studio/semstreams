@@ -16,6 +16,25 @@ import (
 	"github.com/c360studio/semstreams/pkg/retry"
 )
 
+// ErrOwnerAlreadyBound reports that this Registry instance has already started
+// or completed registration for an owner. An owner is bound at most once per
+// Registry lifetime; a restarted process uses a new Registry and incarnation.
+var ErrOwnerAlreadyBound = errors.New("ownership: owner already bound")
+
+type ownerBindingState uint8
+
+const (
+	ownerRegistering ownerBindingState = iota + 1
+	ownerBound
+)
+
+func (state ownerBindingState) String() string {
+	if state == ownerRegistering {
+		return "registering"
+	}
+	return "bound"
+}
+
 // Registry is the KV-backed owner registry (ADR-056 Decision 2): a single
 // `_registry` epoch key in OWNER_CLAIMS advanced under CAS, plus a separate
 // OWNER_PRESENCE heartbeat bucket for stale-owner compaction.
@@ -78,6 +97,9 @@ type Registry struct {
 	// setRevivalUpdates) so integration tests await detection deterministically
 	// rather than sleeping; nil in production. Non-blocking buffered send.
 	revivalUpdates chan<- struct{}
+
+	ownerBindingMu sync.Mutex
+	ownerBindings  map[string]ownerBindingState
 }
 
 // NewRegistry constructs a Registry over the two pre-opened KV stores. The
@@ -105,13 +127,14 @@ func NewRegistry(claims, presence *natsclient.KVStore, logger *slog.Logger) *Reg
 		panic(fmt.Sprintf("ownership: generate incarnation nonce: %v", err))
 	}
 	return &Registry{
-		claims:       claims,
-		presence:     presence,
-		logger:       logger,
-		incarnation:  hex.EncodeToString(b),
-		registered:   make(map[string]struct{}),
-		quiesced:     make(map[string]struct{}),
-		absentWarned: make(map[string]struct{}),
+		claims:        claims,
+		presence:      presence,
+		logger:        logger,
+		incarnation:   hex.EncodeToString(b),
+		registered:    make(map[string]struct{}),
+		quiesced:      make(map[string]struct{}),
+		absentWarned:  make(map[string]struct{}),
+		ownerBindings: make(map[string]ownerBindingState),
 	}
 }
 
@@ -207,8 +230,8 @@ func (r Registration) selfOverlap() error {
 }
 
 func (r Registration) validateStructural() error {
-	if !validOwnerID(r.Owner) {
-		return fmt.Errorf("%w: registration owner %q is empty or not subject-safe", ErrInvalidClaim, r.Owner)
+	if err := ValidateOwnerID(r.Owner); err != nil {
+		return fmt.Errorf("registration: %w", err)
 	}
 	if len(r.Claims) == 0 && len(r.ForeignEdges) == 0 {
 		return fmt.Errorf("%w: registration by %q declares no claims", ErrInvalidClaim, r.Owner)
@@ -258,8 +281,11 @@ func (r Registration) hasNoEnforceableClaim() bool {
 	return true
 }
 
-// RegisterOwner registers (or re-registers, idempotently) an owner's claims
-// against the single epoch key. Inside one UpdateWithRetry CAS callback
+// RegisterOwner binds an owner's complete claim set exactly once for this
+// Registry instance. A concurrent or later call for the same owner fails with
+// ErrOwnerAlreadyBound before heartbeat or KV mutation. A restarted process
+// has a new Registry/incarnation and may replace the persisted entry for that
+// stable owner. Inside one UpdateWithRetry CAS callback
 // (ADR-056 Decision 2): read epoch → compact stale owners by presence → drop
 // the registrant's prior entry → update the registrant's half of the waiver set
 // → check overlap of the candidate against every OTHER owner → on overlap FAIL
@@ -269,6 +295,9 @@ func (r Registration) hasNoEnforceableClaim() bool {
 // Returns a *OverlapError (errors.Is(err, ErrOwnershipOverlap)) on collision,
 // or ErrInvalidClaim on a malformed registration.
 func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
+	if reg == nil {
+		return fmt.Errorf("%w: registry is nil", ErrInvalidClaim)
+	}
 	if err := r.Validate(); err != nil {
 		return err
 	}
@@ -280,6 +309,28 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 	if err := reg.checkInverseGate(r.ForeignEdges); err != nil {
 		return err
 	}
+	reg.ownerBindingMu.Lock()
+	if reg.ownerBindings == nil {
+		reg.ownerBindings = make(map[string]ownerBindingState)
+	}
+	if state, exists := reg.ownerBindings[r.Owner]; exists {
+		reg.ownerBindingMu.Unlock()
+		return fmt.Errorf("%w: owner %q is %s", ErrOwnerAlreadyBound, r.Owner, state)
+	}
+	reg.ownerBindings[r.Owner] = ownerRegistering
+	reg.ownerBindingMu.Unlock()
+
+	bound := false
+	defer func() {
+		reg.ownerBindingMu.Lock()
+		defer reg.ownerBindingMu.Unlock()
+		if bound {
+			reg.ownerBindings[r.Owner] = ownerBound
+		} else {
+			delete(reg.ownerBindings, r.Owner)
+		}
+	}()
+
 	if r.hasNoEnforceableClaim() {
 		reg.logger.Warn("ownership: registration has no enforceable (owning or foreign-edge) claim — it will not be protected",
 			slog.String("owner", r.Owner))
@@ -324,9 +375,10 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 				slog.Any("evicted", evicted))
 		}
 
-		// Idempotent re-registration: drop the registrant's prior entry so the
-		// overlap check never compares the candidate against itself, and update
-		// only the registrant's half of the epoch-scoped waiver set.
+		// A new Registry incarnation may replace the stable owner's prior
+		// persisted entry. Drop it so the overlap check never compares the
+		// replacement against itself, and update only the registrant's half of
+		// the epoch-scoped waiver set.
 		delete(ep.Owners, r.Owner)
 		ep.setWaiversFor(r.Owner, r.Waivers)
 
@@ -355,6 +407,7 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 	reg.registeredMu.Lock()
 	reg.registered[r.Owner] = struct{}{}
 	reg.registeredMu.Unlock()
+	bound = true
 	return nil
 }
 
@@ -416,9 +469,9 @@ func (reg *Registry) checkInverseGate(edges []ForeignEdgeClaim) error {
 }
 
 // rollbackPresence drops the heartbeat key written by a registration that then
-// failed — but ONLY for an owner that had no prior epoch entry. A re-registration
-// failure must NOT resign a still-live owner whose existing claims remain in the
-// epoch (that would get them compacted on the next pass). Best-effort.
+// failed — but ONLY for an owner that had no prior epoch entry. A new Registry
+// incarnation's failed replacement must NOT resign the still-live owner whose
+// existing claims remain in the epoch. Best-effort.
 func (reg *Registry) rollbackPresence(ctx context.Context, owner string, preExisted bool) {
 	if preExisted {
 		return

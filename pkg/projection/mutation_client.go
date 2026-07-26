@@ -28,13 +28,6 @@ const (
 
 type mutationRequester interface {
 	RequestClassified(context.Context, string, []byte, time.Duration) ([]byte, error)
-	RequestWithRetryClassified(
-		context.Context,
-		string,
-		[]byte,
-		time.Duration,
-		natsclient.RetryConfig,
-	) ([]byte, error)
 }
 
 type contractBinding struct {
@@ -69,8 +62,8 @@ func BindMutationClient(ctx context.Context, cfg MutationClientConfig) (*Mutatio
 	if cfg.NATS == nil {
 		return nil, invalidMutationError(MutationOperationBind, errors.New("NATS client is required"))
 	}
-	if strings.TrimSpace(cfg.Owner) == "" {
-		return nil, invalidMutationError(MutationOperationBind, errors.New("owner is required"))
+	if err := ownership.ValidateOwnerID(cfg.Owner); err != nil {
+		return nil, invalidMutationError(MutationOperationBind, err)
 	}
 	contracts, err := buildContractIndex(cfg.Contracts)
 	if err != nil {
@@ -99,14 +92,15 @@ func BindMutationClient(ctx context.Context, cfg MutationClientConfig) (*Mutatio
 	if err != nil {
 		return nil, newMutationError(MutationOperationBind, err, CommitNotCommitted)
 	}
-	return &MutationClient{
+	client := &MutationClient{
 		rpc:       cfg.NATS,
 		token:     token,
 		contracts: contracts,
 		timeout:   normalizeMutationTimeout(cfg.Timeout),
 		retry:     normalizeRetryConfig(cfg.Retry),
 		retryWait: waitMutationRetry,
-	}, nil
+	}
+	return client, nil
 }
 
 func contractsRequireHeartbeat(contracts map[string]contractBinding) bool {
@@ -140,6 +134,19 @@ func bindingCanCreate(binding contractBinding) bool {
 	return len(binding.birthPredicates) != 0 || bindingHasOwningPredicates(binding)
 }
 
+func isNilMutationRequester(requester mutationRequester) bool {
+	if requester == nil {
+		return true
+	}
+	value := reflect.ValueOf(requester)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}
+
 func newMutationClient(
 	rpc mutationRequester,
 	token ownership.OwnerToken,
@@ -147,7 +154,7 @@ func newMutationClient(
 	timeout time.Duration,
 	retry natsclient.RetryConfig,
 ) (*MutationClient, error) {
-	if rpc == nil {
+	if isNilMutationRequester(rpc) {
 		return nil, errors.New("mutation requester is required")
 	}
 	index, err := buildContractIndex(contracts)
@@ -181,8 +188,8 @@ func normalizeRetryConfig(retry natsclient.RetryConfig) natsclient.RetryConfig {
 	if retry.InitialBackoff < 0 {
 		retry.InitialBackoff = 0
 	}
-	if retry.MaxBackoff < 0 {
-		retry.MaxBackoff = 0
+	if retry.MaxBackoff <= 0 {
+		retry.MaxBackoff = natsclient.DefaultRetryConfig().MaxBackoff
 	}
 	return retry
 }
@@ -455,6 +462,11 @@ func newMutationError(operation MutationOperation, err error, commit CommitState
 		mapped.Class = errs.ErrorInvalid
 		return mapped
 	}
+	if errors.Is(err, ownership.ErrOwnerAlreadyBound) {
+		mapped.Kind = MutationConflict
+		mapped.Class = errs.ErrorInvalid
+		return mapped
+	}
 	var classified *errs.ClassifiedError
 	if errors.As(err, &classified) {
 		mapped.Code = classified.Code
@@ -530,6 +542,7 @@ func (c *MutationClient) CreateWithTriples(
 			invalidMutationError(MutationOperationCreate, fmt.Errorf("marshal request: %w", err))
 	}
 
+	var ambiguousCause error
 	for attempt := 0; attempt <= c.retry.MaxRetries; attempt++ {
 		responseData, requestErr := c.rpc.RequestClassified(
 			ctx, subjectCreateWithTriples, data, c.timeout,
@@ -537,6 +550,16 @@ func (c *MutationClient) CreateWithTriples(
 		if requestErr == nil {
 			var response graph.CreateEntityWithTriplesResponse
 			if err := json.Unmarshal(responseData, &response); err != nil {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationCreate,
+							errors.Join(
+								ambiguousCause,
+								fmt.Errorf("decode later create response: %w", err),
+							),
+						)
+				}
 				return committedUnverified(
 					MutationOperationCreate,
 					MutationReceipt{Commit: CommitCommitted},
@@ -565,23 +588,86 @@ func (c *MutationClient) CreateWithTriples(
 				if readErr == nil && createFactsMatch(canonical, entity) {
 					return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
 				}
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationCreate,
+							errors.Join(ambiguousCause, requestErr, readErr),
+						)
+				}
 				if readErr == nil {
 					return MutationReceipt{Commit: CommitNotCommitted},
 						newMutationError(MutationOperationCreate, requestErr, CommitNotCommitted)
 				}
 			}
+			if ambiguousCause != nil {
+				return MutationReceipt{Commit: CommitUnknown},
+					commitUnknown(
+						MutationOperationCreate,
+						errors.Join(ambiguousCause, requestErr),
+					)
+			}
 			return MutationReceipt{Commit: CommitNotCommitted},
 				newMutationError(MutationOperationCreate, requestErr, CommitNotCommitted)
 		}
 
+		if natsclient.IsNoResponders(requestErr) {
+			if attempt == c.retry.MaxRetries {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationCreate,
+							errors.Join(ambiguousCause, requestErr, ctx.Err()),
+						)
+				}
+				return MutationReceipt{Commit: CommitNotCommitted},
+					newMutationError(
+						MutationOperationCreate,
+						errors.Join(requestErr, ctx.Err()),
+						CommitNotCommitted,
+					)
+			}
+			if err := c.retryWait(ctx, c.retry, attempt); err != nil {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationCreate,
+							errors.Join(ambiguousCause, requestErr, err),
+						)
+				}
+				return MutationReceipt{Commit: CommitNotCommitted},
+					newMutationError(
+						MutationOperationCreate,
+						errors.Join(requestErr, err),
+						CommitNotCommitted,
+					)
+			}
+			continue
+		}
+		ambiguousCause = errors.Join(ambiguousCause, requestErr)
 		if ctx.Err() != nil {
 			return MutationReceipt{Commit: CommitUnknown},
-				commitUnknown(MutationOperationCreate, requestErr)
+				commitUnknown(
+					MutationOperationCreate,
+					errors.Join(ambiguousCause, ctx.Err()),
+				)
 		}
 		entity, readErr := c.ReadAuthoritative(ctx, canonical.entity.ID)
 		if readErr == nil {
 			if createFactsMatch(canonical, entity) {
 				return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
+			}
+			if ambiguousCause != nil {
+				return MutationReceipt{Entity: entity, Commit: CommitUnknown},
+					commitUnknown(
+						MutationOperationCreate,
+						errors.Join(
+							ambiguousCause,
+							errors.New(
+								"authoritative entity diverges from requested creation",
+							),
+						),
+					)
 			}
 			return MutationReceipt{Commit: CommitNotCommitted},
 				&MutationError{
@@ -592,15 +678,21 @@ func (c *MutationClient) CreateWithTriples(
 		}
 		if !isNotFound(readErr) {
 			return MutationReceipt{Commit: CommitUnknown},
-				commitUnknown(MutationOperationCreate, requestErr)
+				commitUnknown(
+					MutationOperationCreate,
+					errors.Join(ambiguousCause, readErr),
+				)
 		}
 		if attempt == c.retry.MaxRetries {
-			return MutationReceipt{Commit: CommitNotCommitted},
-				newMutationError(MutationOperationCreate, requestErr, CommitNotCommitted)
+			return MutationReceipt{Commit: CommitUnknown},
+				commitUnknown(MutationOperationCreate, ambiguousCause)
 		}
 		if err := c.retryWait(ctx, c.retry, attempt); err != nil {
-			return MutationReceipt{Commit: CommitNotCommitted},
-				newMutationError(MutationOperationCreate, err, CommitNotCommitted)
+			return MutationReceipt{Commit: CommitUnknown},
+				commitUnknown(
+					MutationOperationCreate,
+					errors.Join(ambiguousCause, err),
+				)
 		}
 	}
 	panic("unreachable")
@@ -629,16 +721,33 @@ func (c *MutationClient) ReplaceOwned(
 		return MutationReceipt{Commit: CommitNotCommitted},
 			invalidMutationError(MutationOperationReplaceOwned, fmt.Errorf("marshal request: %w", err))
 	}
-	responseData, err := c.rpc.RequestWithRetryClassified(
-		ctx, subjectUpdateWithTriples, data, c.timeout, c.retry,
-	)
-	if err != nil {
-		if !isClassified(err) {
+	var responseData []byte
+	for attempt := 0; attempt <= c.retry.MaxRetries; attempt++ {
+		responseData, err = c.rpc.RequestClassified(
+			ctx,
+			subjectUpdateWithTriples,
+			data,
+			c.timeout,
+		)
+		if err == nil {
+			break
+		}
+		if isClassified(err) {
+			return MutationReceipt{Commit: CommitNotCommitted},
+				newMutationError(MutationOperationReplaceOwned, err, CommitNotCommitted)
+		}
+		if !natsclient.IsNoResponders(err) {
 			return MutationReceipt{Commit: CommitUnknown},
 				commitUnknown(MutationOperationReplaceOwned, err)
 		}
-		return MutationReceipt{Commit: CommitNotCommitted},
-			newMutationError(MutationOperationReplaceOwned, err, CommitNotCommitted)
+		if attempt == c.retry.MaxRetries {
+			return MutationReceipt{Commit: CommitNotCommitted},
+				newMutationError(MutationOperationReplaceOwned, err, CommitNotCommitted)
+		}
+		if waitErr := c.retryWait(ctx, c.retry, attempt); waitErr != nil {
+			return MutationReceipt{Commit: CommitNotCommitted},
+				newMutationError(MutationOperationReplaceOwned, waitErr, CommitNotCommitted)
+		}
 	}
 	var response graph.UpdateEntityWithTriplesResponse
 	if err := json.Unmarshal(responseData, &response); err != nil {
@@ -690,6 +799,7 @@ func (c *MutationClient) AppendEvidence(
 		return MutationReceipt{Commit: CommitNotCommitted},
 			invalidMutationError(MutationOperationAppendEvidence, fmt.Errorf("marshal request: %w", err))
 	}
+	var ambiguousCause error
 	for attempt := 0; attempt <= c.retry.MaxRetries; attempt++ {
 		responseData, requestErr := c.rpc.RequestClassified(
 			ctx, subjectAddTriplesBatch, data, c.timeout,
@@ -697,11 +807,19 @@ func (c *MutationClient) AppendEvidence(
 		if requestErr == nil {
 			var response graph.AddTriplesBatchResponse
 			if err := json.Unmarshal(responseData, &response); err != nil {
+				anomaly := fmt.Errorf("decode append response: %w", err)
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationAppendEvidence,
+							errors.Join(ambiguousCause, anomaly),
+						)
+				}
 				return c.verifyAnomalousAppend(
 					ctx,
 					req.EntityID,
 					evidence,
-					fmt.Errorf("decode append response: %w", err),
+					anomaly,
 				)
 			}
 			receipt := MutationReceipt{
@@ -718,6 +836,20 @@ func (c *MutationClient) AppendEvidence(
 				len(evidence),
 			)
 			if validFailure {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationAppendEvidence,
+							errors.Join(
+								ambiguousCause,
+								fmt.Errorf(
+									"later append response rejected entity %q: %s",
+									req.EntityID,
+									requestedFailure,
+								),
+							),
+						)
+				}
 				return c.resolveRequestedAppendFailure(
 					ctx,
 					req.EntityID,
@@ -725,6 +857,13 @@ func (c *MutationClient) AppendEvidence(
 				)
 			}
 			if anomaly != nil {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationAppendEvidence,
+							errors.Join(ambiguousCause, anomaly),
+						)
+				}
 				return c.verifyAnomalousAppend(
 					ctx,
 					req.EntityID,
@@ -735,12 +874,56 @@ func (c *MutationClient) AppendEvidence(
 			return receipt, nil
 		}
 		if isClassified(requestErr) {
+			if ambiguousCause != nil {
+				return MutationReceipt{Commit: CommitUnknown},
+					commitUnknown(
+						MutationOperationAppendEvidence,
+						errors.Join(ambiguousCause, requestErr),
+					)
+			}
 			return MutationReceipt{Commit: CommitNotCommitted},
 				newMutationError(MutationOperationAppendEvidence, requestErr, CommitNotCommitted)
 		}
+		if natsclient.IsNoResponders(requestErr) {
+			if attempt == c.retry.MaxRetries {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationAppendEvidence,
+							errors.Join(ambiguousCause, requestErr, ctx.Err()),
+						)
+				}
+				return MutationReceipt{Commit: CommitNotCommitted},
+					newMutationError(
+						MutationOperationAppendEvidence,
+						errors.Join(requestErr, ctx.Err()),
+						CommitNotCommitted,
+					)
+			}
+			if err := c.retryWait(ctx, c.retry, attempt); err != nil {
+				if ambiguousCause != nil {
+					return MutationReceipt{Commit: CommitUnknown},
+						commitUnknown(
+							MutationOperationAppendEvidence,
+							errors.Join(ambiguousCause, requestErr, err),
+						)
+				}
+				return MutationReceipt{Commit: CommitNotCommitted},
+					newMutationError(
+						MutationOperationAppendEvidence,
+						errors.Join(requestErr, err),
+						CommitNotCommitted,
+					)
+			}
+			continue
+		}
+		ambiguousCause = errors.Join(ambiguousCause, requestErr)
 		if ctx.Err() != nil {
 			return MutationReceipt{Commit: CommitUnknown},
-				commitUnknown(MutationOperationAppendEvidence, requestErr)
+				commitUnknown(
+					MutationOperationAppendEvidence,
+					errors.Join(ambiguousCause, ctx.Err()),
+				)
 		}
 		entity, readErr := c.ReadAuthoritative(ctx, req.EntityID)
 		if readErr == nil && appendFactsPresent(evidence, entity) {
@@ -748,15 +931,21 @@ func (c *MutationClient) AppendEvidence(
 		}
 		if readErr != nil && !isNotFound(readErr) {
 			return MutationReceipt{Commit: CommitUnknown},
-				commitUnknown(MutationOperationAppendEvidence, requestErr)
+				commitUnknown(
+					MutationOperationAppendEvidence,
+					errors.Join(ambiguousCause, readErr),
+				)
 		}
 		if attempt == c.retry.MaxRetries {
-			return MutationReceipt{Commit: CommitNotCommitted},
-				newMutationError(MutationOperationAppendEvidence, requestErr, CommitNotCommitted)
+			return MutationReceipt{Commit: CommitUnknown},
+				commitUnknown(MutationOperationAppendEvidence, ambiguousCause)
 		}
 		if err := c.retryWait(ctx, c.retry, attempt); err != nil {
-			return MutationReceipt{Commit: CommitNotCommitted},
-				newMutationError(MutationOperationAppendEvidence, err, CommitNotCommitted)
+			return MutationReceipt{Commit: CommitUnknown},
+				commitUnknown(
+					MutationOperationAppendEvidence,
+					errors.Join(ambiguousCause, err),
+				)
 		}
 	}
 	panic("unreachable")
@@ -765,7 +954,7 @@ func (c *MutationClient) AppendEvidence(
 // ReadAuthoritative returns the current graph-ingest source-of-truth state for
 // entityID.
 func (c *MutationClient) ReadAuthoritative(ctx context.Context, entityID string) (*graph.EntityState, error) {
-	if c == nil || c.rpc == nil {
+	if c == nil || isNilMutationRequester(c.rpc) {
 		return nil, invalidMutationError(MutationOperationReadAuthoritative, errors.New("mutation client is nil"))
 	}
 	if err := semtypes.ValidateEntityID(entityID); err != nil {
@@ -1184,7 +1373,15 @@ func isNotFound(err error) bool {
 
 func commitUnknown(operation MutationOperation, err error) *MutationError {
 	mapped := newMutationError(operation, err, CommitUnknown)
+	if mapped == nil {
+		return internalInvariantMutationError(
+			operation,
+			CommitUnknown,
+			"commitUnknown called with nil cause",
+		)
+	}
 	mapped.Kind = MutationCommitUnknown
+	mapped.Class = errs.ErrorTransient
 	return mapped
 }
 
@@ -1195,19 +1392,42 @@ func committedUnverified(
 ) (MutationReceipt, error) {
 	receipt.Commit = CommitCommitted
 	mapped := newMutationError(operation, err, CommitCommitted)
+	if mapped == nil {
+		return receipt, internalInvariantMutationError(
+			operation,
+			CommitCommitted,
+			"committedUnverified called with nil cause",
+		)
+	}
 	mapped.Kind = MutationCommittedUnverified
 	return receipt, mapped
 }
 
+func internalInvariantMutationError(
+	operation MutationOperation,
+	commit CommitState,
+	detail string,
+) *MutationError {
+	return &MutationError{
+		Operation: operation,
+		Kind:      MutationInternal,
+		Class:     errs.ErrorFatal,
+		Commit:    commit,
+		Err:       fmt.Errorf("projection: internal invariant: %s", detail),
+	}
+}
+
 func waitMutationRetry(ctx context.Context, retry natsclient.RetryConfig, retryIndex int) error {
-	delay := float64(retry.InitialBackoff) * math.Pow(retry.BackoffMultiplier, float64(retryIndex))
-	if retry.MaxBackoff > 0 && delay > float64(retry.MaxBackoff) {
-		delay = float64(retry.MaxBackoff)
-	}
+	delay := mutationRetryDelay(retry, retryIndex)
 	if delay <= 0 {
-		return nil
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+			return nil
+		}
 	}
-	timer := time.NewTimer(time.Duration(delay))
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
@@ -1215,4 +1435,29 @@ func waitMutationRetry(ctx context.Context, retry natsclient.RetryConfig, retryI
 	case <-timer.C:
 		return nil
 	}
+}
+
+func mutationRetryDelay(retry natsclient.RetryConfig, retryIndex int) time.Duration {
+	if retry.InitialBackoff <= 0 {
+		return 0
+	}
+	maxBackoff := retry.MaxBackoff
+	if maxBackoff <= 0 {
+		maxBackoff = natsclient.DefaultRetryConfig().MaxBackoff
+	}
+	multiplier := retry.BackoffMultiplier
+	if multiplier <= 0 {
+		multiplier = 1
+	}
+	if retryIndex < 0 {
+		retryIndex = 0
+	}
+	delay := float64(retry.InitialBackoff) * math.Pow(multiplier, float64(retryIndex))
+	if math.IsInf(delay, 0) || math.IsNaN(delay) || delay >= float64(maxBackoff) {
+		return maxBackoff
+	}
+	if delay <= 0 {
+		return 0
+	}
+	return time.Duration(delay)
 }

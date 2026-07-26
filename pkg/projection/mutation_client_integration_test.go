@@ -148,6 +148,183 @@ func mutationIntegrationContract() Contract {
 	}
 }
 
+func TestIntegration_BindMutationClientRejectsSameRegistryRebindBeforeOwnershipMutationAndReleasesFailure(
+	t *testing.T,
+) {
+	harness := newMutationIntegrationHarness(t)
+	const secondPredicate = "test.projection.second"
+	vocabulary.Register(secondPredicate)
+
+	secondContract := Contract{
+		Name:          "test.projection.second",
+		EntityPattern: "acme.ops.test.system.widget.*",
+		Groups: []PredicateGroup{{
+			Mode:       ownership.ModeReplaceOwned,
+			Predicates: []string{secondPredicate},
+		}},
+	}
+	heartbeater := harness.registry.NewHeartbeater(20 * time.Millisecond)
+	second, err := BindMutationClient(harness.ctx, MutationClientConfig{
+		NATS:        harness.nats,
+		Registry:    harness.registry,
+		Heartbeater: heartbeater,
+		Owner:       integrationOwner,
+		Contracts:   []Contract{secondContract},
+	})
+	require.Nil(t, second)
+	require.ErrorIs(t, err, ownership.ErrOwnerAlreadyBound)
+	var mutationErr *MutationError
+	require.ErrorAs(t, err, &mutationErr)
+	require.Equal(t, MutationConflict, mutationErr.Kind)
+	require.Equal(t, CommitNotCommitted, mutationErr.Commit)
+	_, found, ownerErr := harness.registry.OwnerOf(
+		harness.ctx,
+		"acme.ops.test.system.widget.001",
+		secondPredicate,
+	)
+	require.NoError(t, ownerErr)
+	require.False(t, found, "binding conflict must precede ownership registration")
+
+	_, err = Bind(
+		harness.ctx,
+		harness.registry,
+		integrationOwner,
+		harness.contract,
+	)
+	require.ErrorIs(t, err, ownership.ErrOwnerAlreadyBound)
+
+	failedOwner := "failed-then-retried-owner"
+	_, err = BindMutationClient(harness.ctx, MutationClientConfig{
+		NATS:        harness.nats,
+		Registry:    harness.registry,
+		Heartbeater: heartbeater,
+		Owner:       failedOwner,
+		Contracts:   []Contract{harness.contract},
+	})
+	require.ErrorIs(t, err, ownership.ErrOwnershipOverlap)
+
+	retryContract := secondContract
+	retryContract.EntityPattern = "acme.ops.test.system.gadget.*"
+	retried, err := BindMutationClient(harness.ctx, MutationClientConfig{
+		NATS:        harness.nats,
+		Registry:    harness.registry,
+		Heartbeater: heartbeater,
+		Owner:       failedOwner,
+		Contracts:   []Contract{retryContract},
+	})
+	require.NoError(t, err, "failed bind must release its process-local binding state")
+	require.NotNil(t, retried)
+}
+
+func TestIntegration_DirectBindAndPublicMutationClientHaveOneConcurrentWinner(t *testing.T) {
+	t.Cleanup(vocabulary.SnapshotRegistry())
+	vocabulary.Register(integrationOwnedLabel)
+	vocabulary.Register(integrationOwnedState)
+	vocabulary.Register(integrationEvidence)
+	vocabulary.Register(integrationForeignFact)
+	vocabulary.Register(integrationForeignEdge)
+
+	ctx := t.Context()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	registry, err := ownership.EnsureBuckets(ctx, testClient.Client, nil, nil)
+	require.NoError(t, err)
+	contract := mutationIntegrationContract()
+	heartbeater := registry.NewHeartbeater(time.Hour)
+
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-start
+		_, bindErr := Bind(ctx, registry, "mixed-path-owner", contract)
+		results <- bindErr
+	}()
+	go func() {
+		<-start
+		_, bindErr := BindMutationClient(ctx, MutationClientConfig{
+			NATS:        testClient.Client,
+			Registry:    registry,
+			Heartbeater: heartbeater,
+			Owner:       "mixed-path-owner",
+			Contracts:   []Contract{contract},
+		})
+		results <- bindErr
+	}()
+	close(start)
+
+	var succeeded, rejected int
+	for range 2 {
+		switch result := <-results; {
+		case result == nil:
+			succeeded++
+		case errors.Is(result, ownership.ErrOwnerAlreadyBound):
+			rejected++
+		default:
+			t.Fatalf("mixed-path bind: %v", result)
+		}
+	}
+	require.Equal(t, 1, succeeded)
+	require.Equal(t, 1, rejected)
+	owner, found, err := registry.OwnerOf(
+		ctx,
+		"acme.ops.test.system.widget.001",
+		integrationOwnedLabel,
+	)
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "mixed-path-owner", owner)
+}
+
+func TestIntegration_CreateRetriesWhenResponderAppearsAfterInitialAbsence(t *testing.T) {
+	ctx := t.Context()
+	testClient := natsclient.NewTestClient(t)
+	request := validCreateMutation()
+	contract := birthOnlyMutationTestContract()
+	request.Contract = contract.Name
+	request.Triples[0].Predicate = contract.BirthPredicates[0]
+	entity := canonicalMutationTestEntity(request)
+	client, err := BindMutationClient(ctx, MutationClientConfig{
+		NATS:      testClient.Client,
+		Owner:     "late-responder-owner",
+		Contracts: []Contract{contract},
+		Timeout:   500 * time.Millisecond,
+		Retry: natsclient.RetryConfig{
+			MaxRetries:        5,
+			InitialBackoff:    30 * time.Millisecond,
+			MaxBackoff:        100 * time.Millisecond,
+			BackoffMultiplier: 1,
+		},
+	})
+	require.NoError(t, err)
+
+	var deliveries atomic.Int32
+	client.retryWait = func(
+		_ context.Context,
+		_ natsclient.RetryConfig,
+		_ int,
+	) error {
+		_, subscribeErr := testClient.Client.SubscribeForRequests(
+			ctx,
+			subjectCreateWithTriples,
+			func(_ context.Context, _ []byte) ([]byte, error) {
+				deliveries.Add(1)
+				return json.Marshal(graph.CreateEntityWithTriplesResponse{
+					MutationResponse: graph.MutationResponse{KVRevision: 1},
+					Entity:           entity,
+				})
+			},
+		)
+		if subscribeErr != nil {
+			return subscribeErr
+		}
+		return testClient.GetNativeConnection().Flush()
+	}
+
+	receipt, err := client.CreateWithTriples(ctx, request)
+	require.NoError(t, err)
+	require.Equal(t, CommitVerified, receipt.Commit)
+	require.Positive(t, deliveries.Load(), "late responder must receive a retried request")
+}
+
 func integrationCreateMutation(entityID, label, state, requestID string) CreateMutation {
 	timestamp := time.Date(2026, 7, 27, 10, 0, 0, 0, time.UTC)
 	return CreateMutation{

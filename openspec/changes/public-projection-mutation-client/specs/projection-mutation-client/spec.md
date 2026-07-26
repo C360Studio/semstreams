@@ -7,6 +7,23 @@
 The framework MUST expose a concurrency-safe projection mutation client bound from an owner, one or more
 projection contracts, the ownership registry, an optional heartbeater, and a NATS client.
 
+An ownership `Registry` MUST permit at most one successful registration for an owner during that Registry's
+lifetime. The rule MUST be enforced by `RegisterOwner` and therefore apply equally to direct `RegisterOwner`,
+`projection.Bind`, `BindAndHeartbeat`, and `BindMutationClient`. A concurrent or later same-owner attempt MUST
+return an error matching `ErrOwnerAlreadyBound` before owner-presence heartbeat, ownership-claim mutation, or
+heartbeater enrollment. The rejection MUST apply when the second registration is identical, overlapping, or
+disjoint.
+
+The composition root MUST aggregate the complete contract set intended for a registered owner before its first
+registration. All static built-in contracts for one owner MUST be validated together and bound in one call. A
+failed first registration MUST release the in-progress owner identity so a corrected first attempt can proceed
+against the same Registry. After a successful registration, correction or revival MUST use a new Registry and
+incarnation.
+
+When a contract collection derives neither an ownership claim nor a foreign-edge claim, binding MUST skip
+`RegisterOwner`, return a zero owner token, and MUST NOT consume the owner registration identity. This exception
+includes a birth-only client.
+
 If any supplied contract derives an owning claim from a `replace-owned` or `cas-transition` group, the client MUST
 require a non-nil heartbeater before registration, heartbeat, or transport side effects. It MUST bind that
 collection through the existing ownership registry and heartbeat path, retain the returned opaque owner token, and
@@ -17,6 +34,32 @@ MUST NOT expose or refresh the token per request.
 - **WHEN** a caller binds a valid owner and non-conflicting contracts
 - **THEN** the client registers the contracts, starts owner liveness through the supplied heartbeater, and returns a
   client ready for mutation
+
+#### Scenario: Same owner registers a second time through any entry point
+
+- **GIVEN** one owner has registered successfully against an ownership Registry
+- **WHEN** direct `RegisterOwner`, `Bind`, `BindAndHeartbeat`, or `BindMutationClient` attempts the same owner again
+- **THEN** the attempt fails with `ErrOwnerAlreadyBound` before heartbeat, claim mutation, or enrollment
+- **AND** identical contracts do not make the second attempt idempotent
+- **AND** `BindMutationClient` reports a not-committed mutation conflict while preserving the sentinel
+
+#### Scenario: Failed first registration releases the identity
+
+- **GIVEN** an owner's first registration fails before a clean commit
+- **WHEN** the caller corrects the cause and retries against the same Registry
+- **THEN** the corrected registration may become the owner's one successful registration
+
+#### Scenario: Static contracts are bound as one owner set
+
+- **GIVEN** multiple built-in projection contracts share one static owner
+- **WHEN** the composition root performs ownership wiring
+- **THEN** it validates and aggregates the contracts before one owner registration
+
+#### Scenario: Successful owner needs correction or revival
+
+- **GIVEN** an owner has registered successfully or its token has become stale
+- **WHEN** the composition root needs to change its contracts or revive the writer
+- **THEN** it creates a new Registry and incarnation instead of registering the owner again on the old Registry
 
 #### Scenario: Owning contract has no heartbeater
 
@@ -34,6 +77,7 @@ MUST NOT expose or refresh the token per request.
 - **WHEN** a contract has birth predicates but no mutable groups or foreign edges
 - **THEN** binding may return a client authorized for create and authoritative read-back
 - **AND** the client does not start a heartbeat or mint an owner token
+- **AND** it does not consume that owner's registration identity in a supplied Registry
 
 #### Scenario: Stale owner token
 
@@ -71,7 +115,7 @@ Existing unnamed groups MUST remain valid. An unnamed group MUST NOT be selectab
 - **WHEN** two groups have the same name or a name contains a forbidden subject character
 - **THEN** contract validation fails before ownership registration
 
-### Requirement: Immutable create-only birth predicates
+### Requirement: Create-only birth predicates are not graph-enforced immutable facts
 
 `Contract` MUST expose optional `BirthPredicates`. Every birth predicate MUST be a registered canonical exact
 predicate. Duplicates and overlap with any `replace-owned`, `cas-transition`, or `append-evidence` group in the same
@@ -81,6 +125,9 @@ Birth predicates MUST derive no ownership or foreign-edge claim, MUST NOT partic
 and MUST NOT authorize append. A contract containing only birth predicates MUST be valid.
 
 A birth predicate MAY equal a foreign-edge predicate because foreign edges apply to a different subject lane.
+Create-only MUST describe authorization through this client only. Graph-ingest MUST NOT be represented as enforcing
+write-once behavior for these predicates. A nonconforming writer using another accepted mutation lane MAY change or
+remove them.
 
 #### Scenario: Valid birth-only contract
 
@@ -126,10 +173,16 @@ Authoritative create verification MUST compare every field of each canonical `me
 - **AND** every supplied triple has the primary entity as its subject
 - **AND** the receipt reports the commit state and authoritative entity when available
 
-#### Scenario: Immutable birth-only creation
+#### Scenario: Birth-only creation
 
 - **WHEN** all create triples are declared birth predicates and the contract has no owning group
 - **THEN** the existing create-with-triples request carries no owner token
+
+#### Scenario: Another writer changes a birth predicate
+
+- **GIVEN** an entity was created through a birth predicate
+- **WHEN** a nonconforming writer changes that predicate through another accepted mutation lane
+- **THEN** this client contract provides no lease or write-once enforcement against that change
 
 #### Scenario: Append-only contract attempts creation
 
@@ -160,7 +213,7 @@ Authoritative create verification MUST compare every field of each canonical `me
 - **THEN** the client performs authoritative read-back before any retry
 - **AND** it reports verified success only if entity identity, message type, and every requested primary-subject
   birth fact match as a complete canonical `message.Triple`
-- **AND** it returns commit-unknown without retry when authoritative verification is unavailable
+- **AND** an absent read does not prove the original request cannot commit late
 
 #### Scenario: Existing entity is divergent
 
@@ -221,7 +274,7 @@ groups.
 - **THEN** the client may resend the identical replacement request
 - **AND** the owner token and schema-derived removal set remain unchanged
 
-### Requirement: Duplicate-safe append evidence
+### Requirement: Duplicate-resistant append evidence
 
 The evidence appender MUST accept only triples in the named contract's `append-evidence` groups and MUST limit an
 operation to one entity subject.
@@ -230,21 +283,57 @@ It MUST NOT unconditionally retry an ambiguous append. It MUST first read author
 exact canonical evidence tuple of subject, predicate, object, datatype, source, and request-ID context. This
 six-field append key MUST remain intentionally narrower than complete create and replace triple equality.
 
+The client MUST NOT claim exactly-once behavior or prove absence after a timeout. If read-back reports the tuple
+absent and the client retries, the original request MAY commit after that read and the retry MAY append a duplicate.
+Generic outer retry loops MUST be prohibited. Deployments requiring strict no-retry behavior MUST configure
+`Retry.MaxRetries=0` until the server-side idempotency primitive tracked by
+[issue #697](https://github.com/C360Studio/semstreams/issues/697) exists.
+
 #### Scenario: Append response is lost after commit
 
 - **WHEN** the append commits but its response is lost
 - **THEN** authoritative read-back finds the exact evidence tuple
-- **AND** the client reports verified success without appending a duplicate
+- **AND** the client reports verified success without issuing another append
 
-#### Scenario: Append absence is proven
+#### Scenario: Append read-back is absent
 
-- **WHEN** an ambiguous append is followed by authoritative read-back that proves the exact tuple absent
+- **WHEN** an ambiguous append is followed by authoritative read-back that does not contain the exact tuple
 - **THEN** the client may retry within the configured budget using identical provenance
+- **AND** the result remains vulnerable to the original attempt committing late and double-applying
 
 #### Scenario: Append cannot be verified
 
 - **WHEN** both append outcome and authoritative read-back are unavailable
 - **THEN** the client returns commit-unknown and does not retry
+
+#### Scenario: No responders is distinct from timeout
+
+- **WHEN** NATS reports no responders for a mutation attempt
+- **THEN** the client may retry within its configured budget because no serving handler accepted that attempt
+- **AND** a timeout or lost response remains ambiguous and MUST NOT be classified as no responders
+
+### Requirement: Owner-bound rollout requires fail-closed lease enforcement
+
+Every graph-ingest instance serving mutation subjects for an owner-bound client MUST enable
+`enforce_owner_lease=true`. Before owner-bound mutation traffic is enabled, rollout evidence MUST prove claim-reader
+wiring on every serving instance, a live owner heartbeat, and zero owner-lease mismatch metrics during a bounded
+observation window.
+
+Semdragon issue #313 MUST remain gated until that evidence exists. A configuration containing a non-enforcing
+serving instance MUST fail deployment readiness rather than rely on routing affinity.
+
+#### Scenario: One serving instance does not enforce leases
+
+- **GIVEN** a graph-ingest fleet serving the same mutation subjects
+- **AND** one instance does not enable owner-lease enforcement
+- **WHEN** owner-bound client rollout is evaluated
+- **THEN** readiness fails and Semdragon #313 remains blocked
+
+#### Scenario: Enforcement rollout is proven
+
+- **GIVEN** every serving instance enables owner-lease enforcement and has a claim reader
+- **WHEN** the owner heartbeat remains live and mismatch metrics remain zero for the rollout window
+- **THEN** owner-bound mutation traffic may be enabled
 
 ### Requirement: Stable mutation provenance
 
@@ -309,6 +398,9 @@ subjects and their existing JSON request/response types.
 The change MUST NOT add an envelope, use `BaseMessage`, require a new graph-ingest handler, or alter a persisted
 representation. Predicate-group names, birth predicates, and the replace group selector MUST remain local client
 and contract inputs and MUST NOT be added to graph mutation requests.
+
+PR #696 MUST remain a later internal-adoption change and MUST NOT be treated as part of this public API change or
+as evidence that Semdragon #313 has passed its serving-fleet enforcement gate.
 
 #### Scenario: Existing graph-ingest deployment
 

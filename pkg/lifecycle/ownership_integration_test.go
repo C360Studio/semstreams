@@ -111,3 +111,28 @@ func TestIntegration_ManagerOwnership_DisjointOwnersCoexist(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, "other", sensorOwner)
 }
+
+func TestIntegration_ManagerRegisterFailsClosedWhenOwnerAlreadyBound(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	reg, err := ownership.EnsureBuckets(ctx, tc.Client, nil, nil)
+	require.NoError(t, err)
+	workflow := lifecycle{}.fixtureWorkflow()
+	meta, err := parseSchemaType(workflow.Schema)
+	require.NoError(t, err)
+	require.NoError(t, reg.RegisterOwner(ctx, deriveOwnerRegistration(workflow, meta)))
+
+	mgr := NewManager(tc.Client, nil)
+	mgr.AttachOwnership(ctx, reg)
+	err = mgr.Register(workflow)
+	require.ErrorIs(t, err, ownership.ErrOwnerAlreadyBound)
+	_, lookupErr := mgr.lookupByWorkflow(workflow.Name)
+	require.Error(t, lookupErr, "owner binding conflict must not land a local workflow")
+	require.False(
+		t,
+		mgr.heartbeater.IsEnrolled(workflow.Name),
+		"rejected workflow must not enroll another ownership heartbeat",
+	)
+}

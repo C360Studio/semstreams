@@ -157,6 +157,37 @@ func TestBindRulePackContracts_ClaimInEpochBeforeStart(t *testing.T) {
 		"a bound static owner must be heartbeat-enrolled")
 }
 
+func TestBindRulePackContracts_OwnerAlreadyBoundFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+
+	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
+	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"rule-processor": ruleComponentConfig(
+			t,
+			"single-bind-v1",
+			[]projection.Contract{droneStatusContract()},
+		),
+	})
+
+	require.NoError(
+		t,
+		service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()),
+	)
+	err := service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default())
+	require.ErrorIs(t, err, ownership.ErrOwnerAlreadyBound)
+	owner, found, ownerErr := ownerReg.OwnerOf(
+		ctx,
+		"acme.ops.robotics.gcs.drone.001",
+		droneStatusStatePredicate,
+	)
+	require.NoError(t, ownerErr)
+	require.True(t, found)
+	require.Equal(t, "rule-pack.single-bind-v1", owner)
+}
+
 // TestBindRulePackContracts_OverlapLoggedNotAborted proves a second pack whose
 // contract overlaps an already-claimed cell is rejected by the substrate with
 // ErrOwnershipOverlap, the helper logs+continues (observe-only), and the FIRST

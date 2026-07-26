@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/nats-io/nats.go"
 )
 
 func TestMutationClientImplementsNarrowPublicCapabilities(t *testing.T) {
@@ -38,6 +40,585 @@ func TestMutationClientImplementsNarrowPublicCapabilities(t *testing.T) {
 	}
 
 	_ = context.Background()
+}
+
+func TestNoRespondersRetriesOnlyProvenNonDelivery(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	entity := canonicalMutationTestEntity(request)
+
+	tests := []struct {
+		name       string
+		subject    string
+		success    []byte
+		invoke     func(*MutationClient) (MutationReceipt, error)
+		wantCommit CommitState
+	}{
+		{
+			name:    "create",
+			subject: subjectCreateWithTriples,
+			success: marshalMutationTestJSON(t, graph.CreateEntityWithTriplesResponse{
+				MutationResponse: graph.MutationResponse{KVRevision: 10},
+				Entity:           entity,
+			}),
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.CreateWithTriples(context.Background(), request)
+			},
+			wantCommit: CommitVerified,
+		},
+		{
+			name:    "append",
+			subject: subjectAddTriplesBatch,
+			success: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
+				MutationResponse: graph.MutationResponse{KVRevision: 11},
+				WrittenCount:     1,
+			}),
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.AppendEvidence(context.Background(), AppendEvidenceMutation{
+					Contract: request.Contract,
+					EntityID: request.Entity.ID,
+					Evidence: []message.Triple{{
+						Subject: request.Entity.ID, Predicate: "shared.value.p", Object: "proof",
+					}},
+					Metadata: request.Metadata,
+				})
+			},
+			wantCommit: CommitCommitted,
+		},
+		{
+			name:    "replace owned",
+			subject: subjectUpdateWithTriples,
+			success: marshalMutationTestJSON(t, graph.UpdateEntityWithTriplesResponse{
+				MutationResponse: graph.MutationResponse{KVRevision: 12},
+				Entity:           entity,
+			}),
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.ReplaceOwned(context.Background(), ReplaceOwnedMutation{
+					Contract: request.Contract,
+					EntityID: request.Entity.ID,
+					Desired:  entity.Triples,
+					Metadata: request.Metadata,
+				})
+			},
+			wantCommit: CommitVerified,
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+				test.subject: {
+					{err: fmt.Errorf("startup: %w", nats.ErrNoResponders)},
+					{data: test.success},
+				},
+			}}
+			client := newMutationTestClient(t, rpc)
+			client.retry.MaxRetries = 1
+			receipt, err := test.invoke(client)
+			if err != nil {
+				t.Fatalf("invoke: %v", err)
+			}
+			if receipt.Commit != test.wantCommit {
+				t.Fatalf("receipt = %#v, want commit %q", receipt, test.wantCommit)
+			}
+			if rpc.callCount() != 2 {
+				t.Fatalf("calls = %#v, want exactly two mutation attempts", rpc.calls)
+			}
+			for _, call := range rpc.calls {
+				if call.subject != test.subject || call.retry != nil {
+					t.Fatalf("call = %#v, want direct scripted mutation retry", call)
+				}
+			}
+		})
+	}
+}
+
+func TestNoRespondersExhaustionIsUnavailableAndNotCommitted(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	entity := canonicalMutationTestEntity(request)
+
+	tests := []struct {
+		name    string
+		subject string
+		invoke  func(*MutationClient) (MutationReceipt, error)
+	}{
+		{
+			name: "create", subject: subjectCreateWithTriples,
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.CreateWithTriples(context.Background(), request)
+			},
+		},
+		{
+			name: "append", subject: subjectAddTriplesBatch,
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.AppendEvidence(context.Background(), AppendEvidenceMutation{
+					Contract: request.Contract, EntityID: request.Entity.ID,
+					Evidence: []message.Triple{{
+						Subject: request.Entity.ID, Predicate: "shared.value.p", Object: "proof",
+					}},
+					Metadata: request.Metadata,
+				})
+			},
+		},
+		{
+			name: "replace owned", subject: subjectUpdateWithTriples,
+			invoke: func(client *MutationClient) (MutationReceipt, error) {
+				return client.ReplaceOwned(context.Background(), ReplaceOwnedMutation{
+					Contract: request.Contract, EntityID: request.Entity.ID,
+					Desired: entity.Triples, Metadata: request.Metadata,
+				})
+			},
+		},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+				test.subject: {
+					{err: nats.ErrNoResponders},
+					{err: fmt.Errorf("still absent: %w", nats.ErrNoResponders)},
+				},
+			}}
+			client := newMutationTestClient(t, rpc)
+			client.retry.MaxRetries = 1
+			receipt, err := test.invoke(client)
+			var mutationErr *MutationError
+			if !errors.As(err, &mutationErr) ||
+				mutationErr.Kind != MutationUnavailable ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitNotCommitted ||
+				receipt.Commit != CommitNotCommitted ||
+				!errors.Is(err, nats.ErrNoResponders) {
+				t.Fatalf("receipt/error = %#v/%#v", receipt, mutationErr)
+			}
+			if rpc.callCount() != 2 {
+				t.Fatalf("calls = %#v, want exhausted direct attempts", rpc.calls)
+			}
+		})
+	}
+}
+
+func TestReadAuthoritativeMapsNoRespondersAsUnavailableNotCommitted(t *testing.T) {
+	t.Parallel()
+	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+		subjectQueryEntity: {{err: fmt.Errorf("query absent: %w", nats.ErrNoResponders)}},
+	}}
+	client := newMutationTestClient(t, rpc)
+	_, err := client.ReadAuthoritative(context.Background(), validCreateMutation().Entity.ID)
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) ||
+		mutationErr.Kind != MutationUnavailable ||
+		mutationErr.Class != errs.ErrorTransient ||
+		mutationErr.Commit != CommitNotCommitted ||
+		!errors.Is(err, nats.ErrNoResponders) {
+		t.Fatalf("error = %#v", mutationErr)
+	}
+}
+
+func TestAmbiguousMutationAttemptCannotBeDowngradedByLaterFailure(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	absent := canonicalMutationTestEntity(request)
+	absent.Triples = nil
+
+	terminalClassifiedCause := errors.New("terminal classified")
+	terminalClassified := errs.ClassifiedCodeDetail(
+		errs.ErrorInvalid,
+		graph.ErrorCodeInvalidRequest,
+		nil,
+		terminalClassifiedCause,
+	)
+	terminalAmbiguous := errors.New("second reply lost")
+	tests := []struct {
+		name         string
+		terminal     error
+		wantTerminal error
+	}{
+		{
+			name:         "no responders exhaustion",
+			terminal:     fmt.Errorf("responder disappeared: %w", nats.ErrNoResponders),
+			wantTerminal: nats.ErrNoResponders,
+		},
+		{
+			name:         "classified rejection",
+			terminal:     terminalClassified,
+			wantTerminal: terminalClassifiedCause,
+		},
+		{
+			name:         "second ambiguous failure",
+			terminal:     terminalAmbiguous,
+			wantTerminal: terminalAmbiguous,
+		},
+	}
+	for _, operation := range []string{"create", "append"} {
+		operation := operation
+		for _, test := range tests {
+			test := test
+			t.Run(operation+"/"+test.name, func(t *testing.T) {
+				t.Parallel()
+				firstAmbiguous := errors.New("first reply lost")
+				responses := map[string][]fakeRPCResult{
+					subjectQueryEntity: {
+						{err: errs.ClassifiedCodeDetail(
+							errs.ErrorInvalid,
+							graph.ErrorCodeEntityNotFound,
+							nil,
+							errors.New("entity absent"),
+						)},
+					},
+				}
+				if operation == "create" {
+					responses[subjectCreateWithTriples] = []fakeRPCResult{
+						{err: firstAmbiguous},
+						{err: test.terminal},
+					}
+				} else {
+					responses[subjectAddTriplesBatch] = []fakeRPCResult{
+						{err: firstAmbiguous},
+						{err: test.terminal},
+					}
+					responses[subjectQueryEntity] = []fakeRPCResult{
+						{data: marshalMutationTestJSON(t, absent)},
+					}
+				}
+				rpc := &fakeMutationRequester{responses: responses}
+				client := newMutationTestClient(t, rpc)
+				client.retry.MaxRetries = 1
+
+				var receipt MutationReceipt
+				var err error
+				if operation == "create" {
+					receipt, err = client.CreateWithTriples(context.Background(), request)
+				} else {
+					receipt, err = client.AppendEvidence(
+						context.Background(),
+						AppendEvidenceMutation{
+							Contract: request.Contract,
+							EntityID: request.Entity.ID,
+							Evidence: []message.Triple{{
+								Subject:   request.Entity.ID,
+								Predicate: "shared.value.p",
+								Object:    "proof",
+							}},
+							Metadata: request.Metadata,
+						},
+					)
+				}
+				var mutationErr *MutationError
+				if !errors.As(err, &mutationErr) ||
+					mutationErr.Kind != MutationCommitUnknown ||
+					mutationErr.Class != errs.ErrorTransient ||
+					mutationErr.Commit != CommitUnknown ||
+					receipt.Commit != CommitUnknown ||
+					!errors.Is(err, firstAmbiguous) ||
+					!errors.Is(err, test.wantTerminal) {
+					t.Fatalf("receipt/error = %#v/%#v", receipt, mutationErr)
+				}
+			})
+		}
+	}
+}
+
+func TestAppendEvidenceAmbiguitySurvivesNonDefinitiveSuccessResponse(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	absent := canonicalMutationTestEntity(request)
+	absent.Triples = nil
+	tests := []struct {
+		name             string
+		response         []byte
+		wantQueryCount   int
+		wantErrorSnippet string
+	}{
+		{
+			name: "requested failure",
+			response: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
+				FailedSubjects: map[string]string{
+					request.Entity.ID: "entity rejected",
+				},
+			}),
+			wantQueryCount:   1,
+			wantErrorSnippet: "entity rejected",
+		},
+		{
+			name: "zero written count",
+			response: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
+				WrittenCount: 0,
+			}),
+			wantQueryCount:   1,
+			wantErrorSnippet: "wrote 0 of 1",
+		},
+		{
+			name: "excess written count",
+			response: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
+				WrittenCount: 2,
+			}),
+			wantQueryCount:   1,
+			wantErrorSnippet: "wrote 2 of 1",
+		},
+		{
+			name:             "malformed response",
+			response:         []byte("not-json"),
+			wantQueryCount:   1,
+			wantErrorSnippet: "decode append response",
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ambiguous := errors.New("first append reply lost")
+			queries := make([]fakeRPCResult, test.wantQueryCount)
+			for index := range queries {
+				queries[index].data = marshalMutationTestJSON(t, absent)
+			}
+			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+				subjectAddTriplesBatch: {
+					{err: ambiguous},
+					{data: test.response},
+				},
+				subjectQueryEntity: queries,
+			}}
+			client := newMutationTestClient(t, rpc)
+			client.retry.MaxRetries = 1
+
+			receipt, err := client.AppendEvidence(
+				context.Background(),
+				AppendEvidenceMutation{
+					Contract: request.Contract,
+					EntityID: request.Entity.ID,
+					Evidence: []message.Triple{{
+						Subject:   request.Entity.ID,
+						Predicate: "shared.value.p",
+						Object:    "proof",
+					}},
+					Metadata: request.Metadata,
+				},
+			)
+			var mutationErr *MutationError
+			if !errors.As(err, &mutationErr) ||
+				mutationErr.Kind != MutationCommitUnknown ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitUnknown ||
+				receipt.Commit != CommitUnknown ||
+				!errors.Is(err, ambiguous) ||
+				!strings.Contains(err.Error(), test.wantErrorSnippet) {
+				t.Fatalf("receipt/error = %#v/%#v", receipt, mutationErr)
+			}
+			if rpc.callCount() != 2+test.wantQueryCount {
+				t.Fatalf(
+					"calls = %d, want two appends and %d authoritative queries",
+					rpc.callCount(),
+					test.wantQueryCount,
+				)
+			}
+		})
+	}
+}
+
+func TestCreateAmbiguitySurvivesDivergentReadAndMalformedLaterResponse(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	divergent := canonicalMutationTestEntity(request)
+	divergent.Triples[0].Object = "changed after the ambiguous create"
+	tests := []struct {
+		name      string
+		creates   []fakeRPCResult
+		queries   []fakeRPCResult
+		wantCalls int
+	}{
+		{
+			name:    "divergent authoritative read",
+			creates: []fakeRPCResult{{err: errors.New("placeholder")}},
+			queries: []fakeRPCResult{{
+				data: marshalMutationTestJSON(t, divergent),
+			}},
+			wantCalls: 2,
+		},
+		{
+			name: "malformed later response",
+			creates: []fakeRPCResult{
+				{err: errors.New("placeholder")},
+				{data: []byte("not-json")},
+			},
+			queries: []fakeRPCResult{{
+				err: errs.ClassifiedCodeDetail(
+					errs.ErrorInvalid,
+					graph.ErrorCodeEntityNotFound,
+					nil,
+					errors.New("entity absent"),
+				),
+			}},
+			wantCalls: 3,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ambiguous := errors.New("first create reply lost")
+			test.creates[0].err = ambiguous
+			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+				subjectCreateWithTriples: test.creates,
+				subjectQueryEntity:       test.queries,
+			}}
+			client := newMutationTestClient(t, rpc)
+			client.retry.MaxRetries = 1
+
+			receipt, err := client.CreateWithTriples(context.Background(), request)
+			var mutationErr *MutationError
+			if !errors.As(err, &mutationErr) ||
+				mutationErr.Kind != MutationCommitUnknown ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitUnknown ||
+				receipt.Commit != CommitUnknown ||
+				!errors.Is(err, ambiguous) {
+				t.Fatalf("receipt/error = %#v/%#v", receipt, mutationErr)
+			}
+			if rpc.callCount() != test.wantCalls {
+				t.Fatalf("calls = %d, want %d", rpc.callCount(), test.wantCalls)
+			}
+		})
+	}
+}
+
+func TestNoRespondersOnlyCancellationRemainsNotCommitted(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	for _, operation := range []string{"create", "append"} {
+		operation := operation
+		t.Run(operation, func(t *testing.T) {
+			t.Parallel()
+			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{}}
+			subject := subjectCreateWithTriples
+			if operation == "append" {
+				subject = subjectAddTriplesBatch
+			}
+			rpc.responses[subject] = []fakeRPCResult{{err: nats.ErrNoResponders}}
+			client := newMutationTestClient(t, rpc)
+			client.retry.MaxRetries = 1
+			ctx, cancel := context.WithCancel(context.Background())
+			client.retryWait = func(
+				waitCtx context.Context,
+				_ natsclient.RetryConfig,
+				_ int,
+			) error {
+				cancel()
+				return waitCtx.Err()
+			}
+
+			var receipt MutationReceipt
+			var err error
+			if operation == "create" {
+				receipt, err = client.CreateWithTriples(ctx, request)
+			} else {
+				receipt, err = client.AppendEvidence(
+					ctx,
+					AppendEvidenceMutation{
+						Contract: request.Contract,
+						EntityID: request.Entity.ID,
+						Evidence: []message.Triple{{
+							Subject:   request.Entity.ID,
+							Predicate: "shared.value.p",
+							Object:    "proof",
+						}},
+						Metadata: request.Metadata,
+					},
+				)
+			}
+			var mutationErr *MutationError
+			if !errors.As(err, &mutationErr) ||
+				mutationErr.Kind != MutationUnavailable ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitNotCommitted ||
+				receipt.Commit != CommitNotCommitted ||
+				!errors.Is(err, nats.ErrNoResponders) ||
+				!errors.Is(err, context.Canceled) {
+				t.Fatalf("receipt/error = %#v/%#v", receipt, mutationErr)
+			}
+		})
+	}
+}
+
+func TestRetryNormalizationAndDelayBounds(t *testing.T) {
+	t.Parallel()
+	defaultMax := natsclient.DefaultRetryConfig().MaxBackoff
+	for _, maxBackoff := range []time.Duration{0, -time.Second} {
+		normalized := normalizeRetryConfig(natsclient.RetryConfig{
+			InitialBackoff:    time.Second,
+			MaxBackoff:        maxBackoff,
+			BackoffMultiplier: 2,
+		})
+		if normalized.MaxBackoff != defaultMax || normalized.MaxBackoff <= 0 {
+			t.Fatalf("normalize MaxBackoff(%s) = %s, want %s", maxBackoff, normalized.MaxBackoff, defaultMax)
+		}
+	}
+
+	retry := normalizeRetryConfig(natsclient.RetryConfig{
+		InitialBackoff:    time.Second,
+		MaxBackoff:        2 * time.Second,
+		BackoffMultiplier: 2,
+	})
+	if delay := mutationRetryDelay(retry, int(^uint(0)>>1)); delay != retry.MaxBackoff {
+		t.Fatalf("large-index delay = %s, want cap %s", delay, retry.MaxBackoff)
+	}
+}
+
+func TestWaitMutationRetryZeroDelayChecksContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := waitMutationRetry(ctx, natsclient.RetryConfig{}, 0)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("zero-delay wait error = %v, want context cancellation", err)
+	}
+}
+
+func TestBindMutationClientValidatesBirthOnlyOwnerSubjectSafety(t *testing.T) {
+	t.Parallel()
+	config := MutationClientConfig{
+		NATS:      &natsclient.Client{},
+		Owner:     "not subject safe",
+		Contracts: []Contract{birthOnlyMutationTestContract()},
+	}
+	client, err := BindMutationClient(context.Background(), config)
+	var mutationErr *MutationError
+	if client != nil ||
+		!errors.As(err, &mutationErr) ||
+		!errors.Is(err, ownership.ErrInvalidClaim) ||
+		mutationErr.Kind != MutationInvalid ||
+		mutationErr.Commit != CommitNotCommitted {
+		t.Fatalf("client/error = %#v/%#v", client, mutationErr)
+	}
+}
+
+func TestNewMutationClientRejectsTypedNilRequester(t *testing.T) {
+	t.Parallel()
+	var requester *fakeMutationRequester
+	_, err := newMutationClient(
+		requester,
+		ownership.OwnerToken{},
+		[]Contract{mutationTestContract()},
+		time.Second,
+		natsclient.RetryConfig{},
+	)
+	if err == nil || !strings.Contains(err.Error(), "mutation requester is required") {
+		t.Fatalf("typed-nil requester error = %v", err)
+	}
+	client := &MutationClient{rpc: requester}
+	_, err = client.ReadAuthoritative(
+		context.Background(),
+		"acme.ops.test.system.widget.001",
+	)
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) || mutationErr.Kind != MutationInvalid {
+		t.Fatalf("typed-nil read error = %#v", mutationErr)
+	}
 }
 
 type fakeRPCResult struct {
@@ -364,6 +945,49 @@ func TestMutationErrorMapsInternalCodeByClass(t *testing.T) {
 	}
 }
 
+func TestMutationErrorMapsOwnerAlreadyBoundAsConflict(t *testing.T) {
+	t.Parallel()
+	mapped := newMutationError(
+		MutationOperationBind,
+		fmt.Errorf("static owner: %w", ownership.ErrOwnerAlreadyBound),
+		CommitNotCommitted,
+	)
+	if mapped == nil ||
+		mapped.Kind != MutationConflict ||
+		mapped.Class != errs.ErrorInvalid ||
+		mapped.Commit != CommitNotCommitted ||
+		!errors.Is(mapped, ownership.ErrOwnerAlreadyBound) {
+		t.Fatalf("owner-already-bound mapping = %#v", mapped)
+	}
+}
+
+func TestCommitStateHelpersRejectNilCauseWithoutPanicking(t *testing.T) {
+	t.Parallel()
+	unknown := commitUnknown(MutationOperationCreate, nil)
+	if unknown == nil ||
+		unknown.Kind != MutationInternal ||
+		unknown.Class != errs.ErrorFatal ||
+		unknown.Commit != CommitUnknown ||
+		!strings.Contains(unknown.Error(), "internal invariant") {
+		t.Fatalf("commitUnknown(nil) = %#v", unknown)
+	}
+
+	receipt, err := committedUnverified(
+		MutationOperationAppendEvidence,
+		MutationReceipt{},
+		nil,
+	)
+	var mutationErr *MutationError
+	if receipt.Commit != CommitCommitted ||
+		!errors.As(err, &mutationErr) ||
+		mutationErr.Kind != MutationInternal ||
+		mutationErr.Class != errs.ErrorFatal ||
+		mutationErr.Commit != CommitCommitted ||
+		!strings.Contains(mutationErr.Error(), "internal invariant") {
+		t.Fatalf("committedUnverified(nil) = %#v/%#v", receipt, mutationErr)
+	}
+}
+
 func TestMutationClientCopiesContractIndex(t *testing.T) {
 	t.Parallel()
 	contract := mutationTestContract()
@@ -499,6 +1123,45 @@ func TestCreateWithTriplesReadsBackAmbiguousCommitWithoutBlindRetry(t *testing.T
 		wire.RequestID != req.Metadata.RequestID ||
 		wire.Triples[0].Source != req.Metadata.Source {
 		t.Fatalf("create wire = %#v", wire)
+	}
+}
+
+func TestCreateWithTriplesRetriesStableRequestAfterAuthoritativeAbsence(t *testing.T) {
+	t.Parallel()
+	request := validCreateMutation()
+	entity := canonicalMutationTestEntity(request)
+	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+		subjectCreateWithTriples: {
+			{err: errors.New("reply lost")},
+			{data: marshalMutationTestJSON(t, graph.CreateEntityWithTriplesResponse{
+				MutationResponse: graph.MutationResponse{KVRevision: 15},
+				Entity:           entity,
+			})},
+		},
+		subjectQueryEntity: {{
+			err: errs.ClassifiedCodeDetail(
+				errs.ErrorInvalid,
+				graph.ErrorCodeEntityNotFound,
+				nil,
+				errors.New("entity absent"),
+			),
+		}},
+	}}
+	client := newMutationTestClient(t, rpc)
+	client.retry.MaxRetries = 1
+
+	receipt, err := client.CreateWithTriples(context.Background(), request)
+	if err != nil || receipt.Commit != CommitVerified {
+		t.Fatalf("receipt/error = %#v/%v", receipt, err)
+	}
+	if len(rpc.calls) != 3 ||
+		rpc.calls[0].subject != subjectCreateWithTriples ||
+		rpc.calls[1].subject != subjectQueryEntity ||
+		rpc.calls[2].subject != subjectCreateWithTriples {
+		t.Fatalf("calls = %#v, want create/read/create", rpc.calls)
+	}
+	if string(rpc.calls[0].data) != string(rpc.calls[2].data) {
+		t.Fatal("create retry changed canonical request bytes")
 	}
 }
 
@@ -910,7 +1573,7 @@ func TestCreateAndAppendContextCancellationStopsReadBack(t *testing.T) {
 	}
 }
 
-func TestReplaceOwnedDerivesRemovalSetAndUsesBoundedRetryRPC(t *testing.T) {
+func TestReplaceOwnedDerivesRemovalSetAndUsesDirectClassifiedRPC(t *testing.T) {
 	t.Parallel()
 	req := validCreateMutation()
 	desired := canonicalMutationTestEntity(req).Triples
@@ -934,8 +1597,8 @@ func TestReplaceOwnedDerivesRemovalSetAndUsesBoundedRetryRPC(t *testing.T) {
 	if receipt.Commit != CommitVerified || receipt.KVRevision != 17 {
 		t.Fatalf("receipt = %#v", receipt)
 	}
-	if len(rpc.calls) != 1 || rpc.calls[0].retry == nil {
-		t.Fatalf("replace calls = %#v, want retry-classified RPC", rpc.calls)
+	if len(rpc.calls) != 1 || rpc.calls[0].retry != nil {
+		t.Fatalf("replace calls = %#v, want direct classified RPC", rpc.calls)
 	}
 	var wire graph.UpdateEntityWithTriplesRequest
 	if err := json.Unmarshal(rpc.calls[0].data, &wire); err != nil {
@@ -1182,11 +1845,12 @@ func TestCreateAndAppendCancellationDuringRetryBackoffIsNotCommitted(t *testing.
 	for _, operation := range []string{"create", "append"} {
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
+			ambiguous := errors.New("reply timeout")
 			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{}}
 			if operation == "create" {
-				rpc.responses[subjectCreateWithTriples] = []fakeRPCResult{{err: errors.New("reply timeout")}}
+				rpc.responses[subjectCreateWithTriples] = []fakeRPCResult{{err: ambiguous}}
 			} else {
-				rpc.responses[subjectAddTriplesBatch] = []fakeRPCResult{{err: errors.New("reply timeout")}}
+				rpc.responses[subjectAddTriplesBatch] = []fakeRPCResult{{err: ambiguous}}
 			}
 			rpc.responses[subjectQueryEntity] = []fakeRPCResult{{err: errs.ClassifiedCodeDetail(
 				errs.ErrorInvalid,
@@ -1218,11 +1882,13 @@ func TestCreateAndAppendCancellationDuringRetryBackoffIsNotCommitted(t *testing.
 
 			var mutationErr *MutationError
 			if !errors.As(err, &mutationErr) ||
-				mutationErr.Kind != MutationUnavailable ||
-				mutationErr.Commit != CommitNotCommitted ||
-				receipt.Commit != CommitNotCommitted ||
-				!errors.Is(err, context.Canceled) {
-				t.Fatalf("receipt/error = %#v/%#v, want unavailable/not-committed cancellation", receipt, mutationErr)
+				mutationErr.Kind != MutationCommitUnknown ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitUnknown ||
+				receipt.Commit != CommitUnknown ||
+				!errors.Is(err, context.Canceled) ||
+				!errors.Is(err, ambiguous) {
+				t.Fatalf("receipt/error = %#v/%#v, want commit-unknown cancellation", receipt, mutationErr)
 			}
 			if rpc.callCount() != 2 {
 				t.Fatalf("calls = %d, want mutation plus absence read and no retry", rpc.callCount())
@@ -1240,9 +1906,10 @@ func TestCreateAndAppendCancellationAtAuthoritativeAbsenceReturnIsNotCommitted(t
 		t.Run(operation, func(t *testing.T) {
 			t.Parallel()
 			ctx, cancel := context.WithCancel(context.Background())
+			ambiguous := errors.New("reply timeout")
 			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{}}
 			if operation == "create" {
-				rpc.responses[subjectCreateWithTriples] = []fakeRPCResult{{err: errors.New("reply timeout")}}
+				rpc.responses[subjectCreateWithTriples] = []fakeRPCResult{{err: ambiguous}}
 				rpc.responses[subjectQueryEntity] = []fakeRPCResult{{
 					err: errs.ClassifiedCodeDetail(
 						errs.ErrorInvalid,
@@ -1253,7 +1920,7 @@ func TestCreateAndAppendCancellationAtAuthoritativeAbsenceReturnIsNotCommitted(t
 					beforeReturn: cancel,
 				}}
 			} else {
-				rpc.responses[subjectAddTriplesBatch] = []fakeRPCResult{{err: errors.New("reply timeout")}}
+				rpc.responses[subjectAddTriplesBatch] = []fakeRPCResult{{err: ambiguous}}
 				rpc.responses[subjectQueryEntity] = []fakeRPCResult{{
 					data:         marshalMutationTestJSON(t, absent),
 					beforeReturn: cancel,
@@ -1279,11 +1946,13 @@ func TestCreateAndAppendCancellationAtAuthoritativeAbsenceReturnIsNotCommitted(t
 
 			var mutationErr *MutationError
 			if !errors.As(err, &mutationErr) ||
-				mutationErr.Kind != MutationUnavailable ||
-				mutationErr.Commit != CommitNotCommitted ||
-				receipt.Commit != CommitNotCommitted ||
-				!errors.Is(err, context.Canceled) {
-				t.Fatalf("receipt/error = %#v/%#v, want unavailable/not-committed cancellation", receipt, mutationErr)
+				mutationErr.Kind != MutationCommitUnknown ||
+				mutationErr.Class != errs.ErrorTransient ||
+				mutationErr.Commit != CommitUnknown ||
+				receipt.Commit != CommitUnknown ||
+				!errors.Is(err, context.Canceled) ||
+				!errors.Is(err, ambiguous) {
+				t.Fatalf("receipt/error = %#v/%#v, want commit-unknown cancellation", receipt, mutationErr)
 			}
 			if rpc.callCount() != 2 {
 				t.Fatalf("calls = %d, want mutation plus definitive absence read", rpc.callCount())

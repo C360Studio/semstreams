@@ -145,15 +145,37 @@ func WireOwnership(
 	lcm.AttachOwnership(ctx, reg)
 
 	staticHB := reg.NewHeartbeater(ownership.HeartbeatInterval)
-	for _, contract := range contracts {
-		if _, err := projection.BindAndHeartbeat(ctx, reg, staticHB,
-			"agentic-loop-graph-writer", contract); err != nil {
-			logger.Warn("ownership: projection contract bind failed",
-				slog.String("contract", contract.Name),
+	if len(contracts) > 0 {
+		if err := bindStaticProjectionContracts(
+			ctx,
+			reg,
+			staticHB,
+			"agentic-loop-graph-writer",
+			contracts,
+		); err != nil {
+			logger.Warn("ownership: static projection contract-set bind failed",
+				slog.Int("contract_count", len(contracts)),
 				slog.Any("error", err))
 		}
 	}
 	return reg, staticHB
+}
+
+func bindStaticProjectionContracts(
+	ctx context.Context,
+	reg *ownership.Registry,
+	heartbeater *ownership.Heartbeater,
+	owner string,
+	contracts []projection.Contract,
+) error {
+	_, err := projection.BindAndHeartbeat(
+		ctx,
+		reg,
+		heartbeater,
+		owner,
+		contracts...,
+	)
+	return err
 }
 
 // WireOwnershipShutdown is the ADR-058 rollout-step-2 drift-killer. It returns

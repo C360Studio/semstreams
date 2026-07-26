@@ -63,9 +63,11 @@ type Contract struct {
 	EntityPattern string `json:"entity_pattern"`
 	// Groups are the owned/append predicate groups by write mode.
 	Groups []PredicateGroup `json:"groups,omitempty"`
-	// BirthPredicates are immutable primary-subject facts accepted only during
-	// entity creation. They are validation metadata and derive no ownership
-	// claim.
+	// BirthPredicates are a MutationClient convention: they authorize
+	// primary-subject facts only on CreateWithTriples and derive no ownership
+	// claim. The graph mutation service does not independently make these
+	// predicates immutable; writers outside this client contract can still
+	// mutate them.
 	BirthPredicates []string `json:"birth_predicates,omitempty"`
 	// ForeignEdges are the relationship edges the projection writes onto other
 	// entities.
@@ -283,21 +285,11 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 // shutdown-cancelled context (go hb.Run(ctx)), and pass it here for every static
 // owner it binds.
 func BindAndHeartbeat(ctx context.Context, ownerReg *ownership.Registry, hb *ownership.Heartbeater, owner string, contracts ...Contract) (ownership.OwnerToken, error) {
-	registration, err := Derive(owner, contracts...)
+	token, err := Bind(ctx, ownerReg, owner, contracts...)
 	if err != nil {
 		return ownership.OwnerToken{}, err
 	}
-	if len(registration.Claims) == 0 && len(registration.ForeignEdges) == 0 {
-		return ownership.OwnerToken{}, nil
-	}
-	if ownerReg == nil {
-		return ownership.OwnerToken{}, fmt.Errorf("%w: ownership registry is required", ErrInvalidContract)
-	}
-	if err := ownerReg.RegisterOwner(ctx, registration); err != nil {
-		return ownership.OwnerToken{}, err
-	}
-	token := ownerReg.OwnerToken(owner)
-	if hb != nil {
+	if hb != nil && !token.IsZero() {
 		hb.Add(owner)
 	}
 	return token, nil

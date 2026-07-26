@@ -7,10 +7,27 @@ and must create an entity, reconcile owned current state, append evidence, or ve
 The client is not a general graph administration API. It derives authority from `projection.Contract`, keeps the
 owner token private, and uses graph-ingest for mutations and authoritative read-back.
 
+## Mandatory graph-ingest lease gate
+
+Do not enable an owner-bound mutation client unless **every** graph-ingest instance serving its mutation subjects
+sets `enforce_owner_lease=true`. A mixed fleet is unsafe because a request routed to a non-enforcing instance
+bypasses the owner-token fence.
+
+Before rollout, record evidence that:
+
+1. every serving instance enables enforcement and has its ownership claim reader wired;
+2. the owner heartbeat is live before the writer starts; and
+3. owner-lease mismatch metrics remain zero throughout a bounded observation window.
+
+Treat missing evidence as a fail-closed deployment blocker. Semdragon
+[#313](https://github.com/C360Studio/semstreams/issues/313) must not adopt the client until this gate passes for its
+complete serving fleet.
+
 ## Bind at the composition root
 
-Create the ownership registry and one process-lifetime heartbeater before starting components. Bind each static
-owner after NATS and ownership storage are ready, but before that owner can write:
+Create the ownership registry and one process-lifetime heartbeater before starting components. Aggregate every
+static built-in contract for each stable owner, then bind that complete owner set once after NATS and ownership
+storage are ready but before the owner can write:
 
 The illustrative predicates below are assumed to be registered canonical predicates.
 
@@ -72,6 +89,20 @@ if err != nil {
 `appCtx` must be cancelled during process shutdown. The caller owns the heartbeater lifecycle; the mutation client
 does not start, stop, or replace it. Reuse the composition-root heartbeater for all static owners in that process.
 
+Owner registration is a Registry-wide invariant that applies to every binding entry point. The first successful
+registration consumes the owner identity for that Registry lifetime. Direct `Registry.RegisterOwner`,
+`projection.Bind`, `projection.BindAndHeartbeat`, and `BindMutationClient` all reject a concurrent or later
+same-owner attempt with `ownership.ErrOwnerAlreadyBound` before owner-presence heartbeat, ownership-claim mutation,
+or heartbeater enrollment. This includes an identical second registration; matching contracts do not make it
+idempotent.
+
+Collect the complete contract set intended for a registered owner before the first registration. In particular,
+aggregate all static built-in contracts for one owner and pass them to one `BindAndHeartbeat` or
+`BindMutationClient` call. Do not bind partial contract sets per component or add contracts incrementally. A failed
+first registration releases the in-progress identity guard, so its configuration can be corrected and retried.
+After a successful registration, contract correction or owner revival requires a newly constructed Registry and
+incarnation.
+
 An owning contract is any supplied contract with a `replace-owned` or `cas-transition` group. Such a collection
 requires a non-nil heartbeater. A collection containing only `append-evidence` groups may bind with a nil
 heartbeater. Without `BirthPredicates`, that client is limited to append and authoritative read-back: create and
@@ -82,7 +113,7 @@ one NATS subject token without `.`, whitespace, `*`, or `>`. Names must be uniqu
 optional only for backward compatibility; new contracts with more than one replacement group should name every
 group.
 
-`Contract.BirthPredicates` declares immutable, primary-subject facts that are valid only during entity creation.
+`Contract.BirthPredicates` declares primary-subject facts that this client accepts only during entity creation.
 Each must be a registered canonical exact predicate, cannot be duplicated, and cannot also appear in any mutable or
 append group. Birth predicates derive no ownership or foreign-edge claim, never enter a replacement removal set,
 and do not authorize append.
@@ -91,6 +122,13 @@ A contract containing only `BirthPredicates` is valid. It binds without a heartb
 registration, retains a zero owner token, and can perform tokenless creation. Birth predicates never create a
 heartbeat or token requirement. A contract that also declares an owning group still requires a heartbeater, and a
 create request containing a predicate from that owning group carries the bound token.
+
+Because a birth-only contract derives neither an ownership claim nor a foreign-edge claim, its no-claim client does
+not call `RegisterOwner` and does not consume the owner registration identity in a supplied Registry.
+
+Create-only does not mean graph-enforced immutable. Graph-ingest does not lease or protect birth predicates after
+creation, and a nonconforming writer using another accepted mutation lane can change or remove them. A product that
+requires write-once facts needs a separately enforced ownership or storage contract.
 
 Do not pass the concrete client throughout the application when a component needs less authority. Depend on the
 narrow interface that matches the component's role:
@@ -151,13 +189,14 @@ receipt, err := creator.CreateWithTriples(ctx, projection.CreateMutation{
 })
 ```
 
-In this example, `example.widget.name` is immutable because it is in `BirthPredicates`.
+In this example, `example.widget.name` is accepted only during creation by this client because it is in
+`BirthPredicates`; the graph does not enforce it as immutable.
 `example.widget.status` is an owning birth fact because it is in the named `runtime` replacement group. The contract
 therefore requires the composition-root heartbeater, and this create request carries the bound owner token.
 
 Create predicates must be declared in `BirthPredicates`, a `replace-owned` group, or a `cas-transition` group.
 An append-only contract with no birth predicates cannot create an entity. An append-only contract that also
-declares birth predicates may create only those immutable birth facts, without an owner token.
+declares birth predicates may create only those initial facts, without an owner token.
 
 `CreateMutation.Triples` is the only birth-fact source. `Entity.Triples` must be empty. The client rejects a
 populated `Entity.Triples` without sending a mutation or read request, does not merge the two fields, and does not
@@ -211,7 +250,7 @@ The client may retry replacement with the same owner token and schema-derived re
 idempotent at the selected predicate-group boundary. Callers cannot supply an arbitrary removal list or lifecycle
 expected revision; lifecycle CAS remains owned by `pkg/lifecycle`.
 
-## Append evidence once
+## Append evidence with duplicate resistance
 
 `AppendEvidence` accepts only triples in the named contract's `append-evidence` groups, all for one existing entity:
 
@@ -240,12 +279,18 @@ authoritative state and searches for the exact tuple:
 (subject, predicate, object, datatype, source, context=request-id)
 ```
 
-If the tuple exists, the client returns verified success without appending again. If authoritative state proves it
-absent, the client may retry within its configured budget using identical provenance. If read-back is unavailable,
-the result is commit-unknown and the client does not retry.
+If the tuple exists, the client returns verified success without issuing another append. If authoritative state
+does not contain it, the client may retry within its configured budget using identical provenance. That read does
+not prove absence: the original timed-out request can commit after read-back, followed by the retry, and append the
+same evidence twice. The client is duplicate-resistant, not exactly-once.
 
-Do not wrap append calls in a generic retry loop. If a higher-level workflow deliberately reissues the same logical
-append, it must preserve the original request ID, source, timestamp, trace ID, and evidence values.
+Never wrap append or another mutation call in a generic outer retry loop. Deployments requiring strict no-retry
+behavior must set `Retry.MaxRetries=0` until graph-ingest provides the server-side idempotency primitive tracked by
+[#697](https://github.com/C360Studio/semstreams/issues/697).
+
+`no responders` is different from a timeout: it proves that no serving handler accepted that attempt, so the client
+may retry it within its configured budget. A timeout or lost response is ambiguous and must not be reclassified as
+no responders.
 
 ## Handle commit state before error kind
 
@@ -312,18 +357,22 @@ Recovery belongs to the composition root:
 
 1. Quiesce the affected writer and stop accepting new work.
 2. Cancel and drain the old owner incarnation.
-3. Restart the owner lifetime so the ownership registry mints a new incarnation.
-4. Call `BindMutationClient` again before starting the replacement writer.
+3. Discard the old Registry; neither resigning nor changing contracts permits another successful registration
+   against it.
+4. Construct a replacement Registry, which mints a new incarnation, and bind the owner's complete contract set
+   before starting the writer.
 
-Do not rebind inside a request handler. A hidden rebind can overlap owner incarnations and defeat the fence that
-prevented the stale write.
+Do not rebind inside a request handler or register the same owner a second time against one Registry. The global
+guard rejects that attempt with `ErrOwnerAlreadyBound`; creating a new Registry makes the incarnation change
+explicit at the composition root.
 
 ## Semdragon replacement path
 
-Semdragon adopts this client without adding another product-local mutation framework. The replacement order is:
+Semdragon adoption remains gated by issue #313 and the mandatory lease-enforcement evidence above. After that gate,
+it adopts this client without adding another product-local mutation framework. The replacement order is:
 
-1. In `cmd/semdragons/main.go`, initialize ownership storage, run one application-lifetime heartbeater, and bind one
-   client for each approved owner and contract set before starting the corresponding components.
+1. In `cmd/semdragons/main.go`, initialize ownership storage, run one application-lifetime heartbeater, aggregate all
+   approved static contracts by owner, and bind each complete owner set once before starting its components.
 2. Declare contracts beside the projections owned by `processor/agentprogression`, `processor/agentstore`,
    `processor/guildformation`, `processor/partycoord`, `processor/bossbattle`, and `questdag`. Use the exact owners,
    entity patterns, named predicate groups, and `BirthPredicates` in
@@ -335,7 +384,7 @@ Semdragon adopts this client without adding another product-local mutation frame
    `PutEntityState` must no longer write shared `ENTITY_STATES` state for migrated owners. Keep its reads, prefix
    queries, and watches until a separate read-side migration removes them.
 5. In `questdag/unit.go`, replace `createUnitEntity` with `EntityCreator`, leaving `Entity.Triples` empty and sending
-   immutable facts declared in `BirthPredicates` and owning facts through `CreateMutation.Triples`. Retain product
+   initial facts declared in `BirthPredicates` and owning facts through `CreateMutation.Triples`. Retain product
    validation in `natsUnitCompletionWriter`, but replace its `updateUnitCompletion` transport with
    `OwnedReplacer` selecting the exact completion group. Replace exact-entity verification in `readUnitEntity` with
    `AuthoritativeReader`; the execution prefix query remains a separate read concern.
@@ -351,6 +400,7 @@ mutable group then uses a distinct named `ReplaceOwned` selection; append-only o
 
 This SemStreams change does not edit Semdragon. Downstream adoption remains tracked by
 [SemStreams issue #313](https://github.com/C360Studio/semstreams/issues/313) and Semdragon's own migration work.
+PR #696 is a later internal-adoption change, not part of this public API PR.
 
 ## Structured values remain separate
 
@@ -371,3 +421,4 @@ framework contract.
 - [Governed Semantic State](../concepts/28-governed-semantic-state.md)
 - [Issue #313: reusable Go owned-write helper](https://github.com/C360Studio/semstreams/issues/313)
 - [Issue #683: repeated structured values](https://github.com/C360Studio/semstreams/issues/683)
+- [Issue #697: server-side mutation idempotency](https://github.com/C360Studio/semstreams/issues/697)

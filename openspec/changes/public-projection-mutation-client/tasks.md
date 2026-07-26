@@ -14,6 +14,14 @@
   `pkg/projection/mutation_client.go`.
 - [x] 1.6 Add error mapping that preserves existing classified and sentinel error inspection.
 - [x] 1.7 Run focused tests and `go test -race` for the new public package.
+- [x] 1.8 Specify one successful owner registration per Registry across direct `RegisterOwner`, `Bind`,
+  `BindAndHeartbeat`, and `BindMutationClient`, including identical and concurrent second attempts.
+- [x] 1.9 Clarify that birth predicates are create-only through this client, derive no lease, and are not
+  graph-enforced write-once facts.
+- [x] 1.10 Implement `ErrOwnerAlreadyBound` before heartbeat/claim mutation, release the identity after a failed
+  first attempt, preserve the sentinel through mutation errors, and cover the global invariant with tests.
+- [x] 1.11 Aggregate static built-in contracts by owner, validate the complete set, and bind it once during ownership
+  wiring; keep birth-only/no-claim clients outside the registration-identity guard.
 
 ## 2. Classified Transport and Authoritative Read-Back
 
@@ -31,7 +39,7 @@
 - [x] 3.2 Add failing validation tests for cross-subject triples, including declared `ForeignEdgeClaim` triples.
 - [x] 3.3 Add failing tests that reject non-empty `Entity.Triples` without mutation transport or input changes.
 - [x] 3.4 Add failing tests for birth-only token-free create, create-authorized owning groups, append-only rejection,
-  and immutable birth predicates excluded from append and replacement.
+  and create-only birth predicates excluded from append and replacement.
 - [x] 3.5 Implement contract-validated `CreateWithTriples` with one existing graph request.
 - [x] 3.6 Implement complete canonical-triple verification of every requested birth fact before any retry.
 - [x] 3.7 Add graph-ingest integration tests for primary-subject atomicity, cross-subject rejection, fencing,
@@ -47,12 +55,15 @@
 - [x] 4.4 Add graph-ingest integration tests for selected-group replacement, sibling preservation, and stale fencing.
 - [x] 4.5 Run concurrency and race tests with one client shared by multiple goroutines.
 
-## 5. Duplicate-Safe Append Evidence
+## 5. Duplicate-Resistant Append Evidence
 
 - [x] 5.1 Add failing tests proving blind append is not unconditionally retried.
 - [x] 5.2 Add failing lost-response tests for present, absent, and unavailable authoritative evidence.
 - [x] 5.3 Implement single-entity `AppendEvidence` with exact canonical tuple verification before retry.
-- [x] 5.4 Add graph-ingest integration tests proving an ambiguous successful append does not create a duplicate.
+- [x] 5.4 Add graph-ingest integration coverage for the observed commit-before-read-back ambiguity path without
+  claiming absence of the late-commit double-apply race.
+- [x] 5.5 Document the timeout/read-absence/late-commit race, prohibit generic outer retry, and require
+  `Retry.MaxRetries=0` where strict no-retry behavior is required until #697.
 
 ## 6. Internal Migration and Documentation
 
@@ -63,13 +74,17 @@
   operation-specific retry behavior.
 - [x] 6.5 Document the Semdragon migration path without changing downstream code in this proposal.
 - [x] 6.6 Cross-link issue #683 and state which model decisions remain owned by that issue.
+- [x] 6.7 Document the fail-closed `enforce_owner_lease=true` serving-fleet gate, claim reader, live heartbeat, zero
+  mismatch evidence, and the resulting Semdragon #313 adoption block.
+- [x] 6.8 Keep PR #696 explicitly outside this public API change as later internal adoption.
 
 ## 7. Quality Gates
 
 - [ ] 7.1 Run formatting, lint, unit, integration, race, schema, and applicable end-to-end suites.
 - [x] 7.2 Confirm all new critical paths and ambiguity branches have behavioral tests.
 - [x] 7.3 Obtain SemStreams developer implementation sign-off.
-- [x] 7.4 Obtain SemStreams reviewer approval for ownership, retry, wire compatibility, and public API stability.
+- [ ] 7.4 Obtain mandatory Fable approval for ownership, retry, wire compatibility, and public API stability after
+  B1/B3/B4/B5 remediation. Repeat Fable review after any material change to this large public API surface.
 - [x] 7.5 Update issue #313 with slice results and keep downstream migration gated on the reviewed public contract.
 
 ## Evidence
@@ -79,7 +94,14 @@
   commit; authoritative recovery still queried the real graph-ingest path. No internal handler fault was claimed.
 - Full production audit reported 500 passed and 0 failed.
 - Strict OpenSpec validation reported 32 passed and 0 failed.
-- The mandatory SemStreams reviewer verdict was `APPROVE`; developer implementation evidence was accepted.
+- The current mandatory Fable review verdict is `REQUEST CHANGES`; approval has not been granted.
+- B1 requires duplicate-resistant language and explicit late-commit double-apply disclosure.
+- B3 requires fail-closed lease enforcement and rollout evidence on every serving graph-ingest instance.
+- B4 now uses a Registry-wide `ErrOwnerAlreadyBound` invariant across direct and projection binding paths: one
+  successful registration per owner/Registry, failed first attempts release, and static built-in contracts are
+  aggregated before binding. PR #696 remains later adoption.
+- B5 requires create-only birth-predicate language without a graph-enforced immutability claim.
+- Fable re-review is a standing gate for material ownership, retry, or public-surface changes in this API.
 - Issue #313 records PR #687, its local verification evidence, and the still-gated internal migration scope.
 - Unrelated whole-repository baselines remain outside this ledger, including the expected dependency tracked by
   issue #686. Live PR CI, schema, and applicable end-to-end gates remain open under task 7.1.
