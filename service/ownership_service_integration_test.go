@@ -19,8 +19,8 @@ func TestIntegration_StaticProjectionContractsBindAsOneOwnerSet(t *testing.T) {
 		predicateA = "test.static.a"
 		predicateB = "test.static.b"
 	)
-	vocabulary.Register(predicateA)
-	vocabulary.Register(predicateB)
+	vocabulary.Register("test.static.a")
+	vocabulary.Register("test.static.b")
 
 	ctx := t.Context()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -33,7 +33,7 @@ func TestIntegration_StaticProjectionContractsBindAsOneOwnerSet(t *testing.T) {
 			EntityPattern: "acme.ops.test.system.widget.*",
 			Groups: []projection.PredicateGroup{{
 				Mode:       ownership.ModeReplaceOwned,
-				Predicates: []string{predicateA},
+				Predicates: []string{"test.static.a"},
 			}},
 		},
 		{
@@ -41,7 +41,7 @@ func TestIntegration_StaticProjectionContractsBindAsOneOwnerSet(t *testing.T) {
 			EntityPattern: "acme.ops.test.system.widget.*",
 			Groups: []projection.PredicateGroup{{
 				Mode:       ownership.ModeReplaceOwned,
-				Predicates: []string{predicateB},
+				Predicates: []string{"test.static.b"},
 			}},
 		},
 	}
@@ -69,7 +69,7 @@ func TestIntegration_StaticProjectionContractSetValidatesBeforeOwnerBinding(t *t
 		owner     = "static-contract-validation-owner"
 		predicate = "test.static.overlap"
 	)
-	vocabulary.Register(predicate)
+	vocabulary.Register("test.static.overlap")
 
 	ctx := t.Context()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -81,7 +81,7 @@ func TestIntegration_StaticProjectionContractSetValidatesBeforeOwnerBinding(t *t
 		EntityPattern: "acme.ops.test.system.widget.*",
 		Groups: []projection.PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{predicate},
+			Predicates: []string{"test.static.overlap"},
 		}},
 	}
 	overlap := contract

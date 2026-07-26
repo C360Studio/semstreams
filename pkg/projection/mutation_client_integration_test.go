@@ -153,14 +153,14 @@ func TestIntegration_BindMutationClientRejectsSameRegistryRebindBeforeOwnershipM
 ) {
 	harness := newMutationIntegrationHarness(t)
 	const secondPredicate = "test.projection.second"
-	vocabulary.Register(secondPredicate)
+	vocabulary.Register("test.projection.second")
 
 	secondContract := Contract{
 		Name:          "test.projection.second",
 		EntityPattern: "acme.ops.test.system.widget.*",
 		Groups: []PredicateGroup{{
 			Mode:       ownership.ModeReplaceOwned,
-			Predicates: []string{secondPredicate},
+			Predicates: []string{"test.projection.second"},
 		}},
 	}
 	heartbeater := harness.registry.NewHeartbeater(20 * time.Millisecond)
@@ -280,7 +280,7 @@ func TestIntegration_CreateRetriesWhenResponderAppearsAfterInitialAbsence(t *tes
 	request := validCreateMutation()
 	contract := birthOnlyMutationTestContract()
 	request.Contract = contract.Name
-	request.Triples[0].Predicate = contract.BirthPredicates[0]
+	request.Triples[0].Predicate = "sensorml.process.uid"
 	entity := canonicalMutationTestEntity(request)
 	client, err := BindMutationClient(ctx, MutationClientConfig{
 		NATS:      testClient.Client,
