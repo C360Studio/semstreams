@@ -454,8 +454,8 @@ The change MUST NOT add an envelope, use `BaseMessage`, require a new graph-inge
 representation. Predicate-group names, birth predicates, and the replace group selector MUST remain local client
 and contract inputs and MUST NOT be added to graph mutation requests.
 
-PR #696 MUST remain a later internal-adoption change and MUST NOT be treated as part of this public API change or
-as evidence that Semdragon #313 has passed its serving-fleet enforcement gate.
+PR #696 MUST remain a separate internal-adoption follow-up to public API PR #687. It MUST NOT be treated as part of
+the #687 public API delta or as evidence that Semdragon #313 has passed its serving-fleet enforcement gate.
 
 #### Scenario: Existing graph-ingest deployment
 
@@ -478,14 +478,15 @@ query behavior, or structured-literal encoding.
 
 ### Requirement: First internal migration is aggregate, fail-closed, and bounded
 
-PR1 MUST preserve owner identity `agentic-loop-graph-writer`. One built-in contract package MUST declare the
-existing loop birth predicates, one named `todos` `replace-owned` group, the existing lesson birth predicates, and
-one named `lesson-lifecycle` `replace-owned` group.
+PR #696 MUST preserve owner identity `agentic-loop-graph-writer`. One built-in contract package MUST declare the
+complete existing loop birth predicates, one named `todos` `replace-owned` group, the complete existing lesson
+birth predicates, and one named `lesson-lifecycle` `replace-owned` group.
 
 The composition root MUST aggregate every enabled built-in static contract into exactly one
 `BindMutationClient` registration for that owner. Ownership bootstrap, contract validation, binding, heartbeat
 startup, and overlap detection MUST form a fail-closed boot gate. No affected writer may start or publish a
-mutation after any gate failure.
+mutation after any gate failure. The built-in path MUST NOT fall back to a partial `BindAndHeartbeat` registration.
+Together with the Registry-wide same-owner registration invariant, the aggregate bind MUST preserve the #691 fix.
 
 #### Scenario: All enabled built-in contracts bind once
 
@@ -499,6 +500,13 @@ mutation after any gate failure.
 - **WHEN** ownership bootstrap, validation, binding, heartbeat startup, or overlap detection fails
 - **THEN** process boot fails with the classified cause
 - **AND** no affected subscription, writer, or mutation publisher starts
+
+#### Scenario: Partial built-in rebind is attempted
+
+- **GIVEN** the complete built-in contracts already registered for `agentic-loop-graph-writer`
+- **WHEN** a later path attempts a partial registration for the same owner and Registry
+- **THEN** the Registry-wide invariant rejects it before heartbeat or claim mutation
+- **AND** the process does not continue with a partial #691 contract shape
 
 ### Requirement: Todo and lesson writers use narrow atomic replacement
 
@@ -527,13 +535,20 @@ behavior-parity evidence passes review.
 - **WHEN** helper removal is evaluated
 - **THEN** the helper remains and its deletion task stays incomplete
 
-### Requirement: PR1 does not absorb deferred mutation lanes
+#### Scenario: Helper removal has bounded evidence
 
-PR1 MUST leave raw create/append publishers, rules, `graph_writer`, research, and `agentrun` outside its migration
-diff. Those lanes remain tracked by issues #688, #689, and #690.
+- **GIVEN** a Go-source audit reports zero `OwnedFactWriter` and `NewNATSLessonCurator` references
+- **AND** focused todo, lesson, aggregate-binding, deletion, and authoritative-read-back evidence passes
+- **WHEN** PR #696 removes the legacy helper and constructor
+- **THEN** the migration retains only the narrow projection mutation interfaces
+
+### Requirement: PR #696 does not absorb deferred mutation lanes
+
+PR #696 MUST leave raw create/append publishers, rules, `graph_writer`, research, and `agentrun` outside its
+migration diff. Those lanes remain tracked by issues #688, #689, and #690.
 
 #### Scenario: Scope audit runs before review
 
-- **WHEN** the PR1 scope audit compares the diff with the pre-slice inventory
+- **WHEN** the PR #696 scope audit compares the diff with the pre-slice inventory
 - **THEN** it finds no transport or ownership migration in a deferred lane
 - **AND** each deferred lane remains assigned to its linked follow-up issue

@@ -54,7 +54,7 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
   token-fenced create or replace traffic.
 - Provide narrow interfaces so consumers depend only on the mutation mode they are authorized to use.
 - Migrate duplicated in-repository mutation orchestration after the public API is proven.
-- Make the first internal migration a bounded agentic-tools slice: preserve owner
+- Make PR #696 the first bounded internal migration slice: preserve owner
   `agentic-loop-graph-writer`; bind all enabled built-in static contracts once; fail boot on binding, bootstrap, or
   overlap errors; atomically replace todos; inject narrow mutation interfaces into `LessonCurator`; and remove
   `OwnedFactWriter` only after parity evidence.
@@ -72,7 +72,7 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
 - Operators MUST NOT receive a warning solely because a valid append-only or foreign-edge/append registration has no
   replace-owned or CAS claim.
 - Rule internals may delegate to the new client, but no rule type becomes part of the public API.
-- PR1 does not migrate raw create/append publishers, rules, `graph_writer`, research, or `agentrun`. Those lanes
+- PR #696 does not migrate raw create/append publishers, rules, `graph_writer`, research, or `agentrun`. Those lanes
   remain tracked by [#688](https://github.com/C360Studio/semstreams/issues/688),
   [#689](https://github.com/C360Studio/semstreams/issues/689), and
   [#690](https://github.com/C360Studio/semstreams/issues/690).
@@ -91,12 +91,14 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
 - Predicate-group names, birth predicates, and the replace group selector are local contract/client fields and do
   not change graph mutation JSON.
 - Existing callers and rule actions remain source- and wire-compatible during migration.
-- Built-in contracts register as one aggregate set, fixing the partial-registration hazard tracked by
-  [#691](https://github.com/C360Studio/semstreams/issues/691).
+- The Registry-wide one-registration invariant rejects partial same-owner rebinding, and PR #696 adopts the
+  complete built-in contracts in one aggregate bind. Together they preserve the fix for the partial-registration
+  hazard tracked by [#691](https://github.com/C360Studio/semstreams/issues/691).
 - Create rejects cross-subject triples, including `ForeignEdgeClaim` writes; those remain on the existing
   reconciliation path.
 - No change to lifecycle CAS transitions, entity deletion, or foreign-edge reconciliation.
 - #700 changes registration lifecycle semantics without adding a new wire envelope, subject, or persisted shape.
-- The #700 public-contract amendment requires Fable re-review before implementation acceptance.
-- This change does not perform the later internal adoption tracked by PR #696 or the Semdragon adoption tracked by
+- The #700 public-contract amendment required and received Fable re-review before implementation acceptance.
+- Public API PR #687 did not perform an internal adoption. PR #696 is the bounded follow-up delta described above;
+  it does not perform the Semdragon adoption tracked by
   [#313](https://github.com/C360Studio/semstreams/issues/313).

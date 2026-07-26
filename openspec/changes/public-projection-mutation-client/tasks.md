@@ -68,19 +68,20 @@
 ## 6. Internal Migration and Documentation
 
 - [x] 6.1 Inventory in-repository raw mutation clients and assign each to a narrow public interface.
-- [ ] 6.2 Name groups and birth predicates, then migrate rule replacement and duplicated owned-fact/create helpers.
-- [ ] 6.3 Remove an old helper only after call-site and behavior-parity evidence is recorded.
+- [x] 6.2 For the bounded #696 slice, name the built-in todo and lesson groups and birth predicates, then migrate
+  `write_todos` and `LessonCurator` to narrow mutation interfaces.
+- [x] 6.3 Remove `OwnedFactWriter` only after zero-reference and behavior-parity evidence is recorded.
 - [x] 6.4 Document composition-root binding, heartbeat lifecycle, stale-token recovery, commit-state handling, and
   operation-specific retry behavior.
 - [x] 6.5 Document the Semdragon migration path without changing downstream code in this proposal.
 - [x] 6.6 Cross-link issue #683 and state which model decisions remain owned by that issue.
 - [x] 6.7 Document the fail-closed `enforce_owner_lease=true` serving-fleet gate, claim reader, live heartbeat, zero
   mismatch evidence, and the resulting Semdragon #313 adoption block.
-- [x] 6.8 Keep PR #696 explicitly outside this public API change as later internal adoption.
+- [x] 6.8 Keep PR #696 separate from public API PR #687 as a bounded internal-adoption follow-up.
 
 ## 7. Quality Gates
 
-- [ ] 7.1 Run formatting, lint, unit, integration, race, schema, and applicable end-to-end suites.
+- [x] 7.1 Run formatting, lint, unit, integration, race, schema, and applicable end-to-end suites.
 - [x] 7.2 Confirm all new critical paths and ambiguity branches have behavioral tests.
 - [x] 7.3 Obtain SemStreams developer implementation sign-off.
 - [x] 7.4 Complete the initial mandatory Fable review for ownership, retry, wire compatibility, and public API
@@ -109,6 +110,30 @@
 - [x] 8.10 Obtain mandatory Fable re-review of the #700 public-contract amendment and resolve every finding before
   implementation acceptance.
 
+## 9. PR #696 Internal Migration
+
+- [x] 9.1 Preserve owner `agentic-loop-graph-writer`, aggregate the complete built-in contract set, and perform one
+  fail-closed `BindMutationClient` boot bind.
+- [x] 9.2 Make `write_todos` submit the complete desired `todos` group through one `OwnedReplacer` call.
+- [x] 9.3 Give `LessonCurator` `OwnedReplacer` and `AuthoritativeReader` directly for lifecycle replacement and
+  authoritative read-back.
+- [x] 9.4 Remove `OwnedFactWriter` and `NewNATSLessonCurator` after bounded zero-reference and parity audits.
+- [x] 9.5 Preserve #691 through the Registry-wide one-registration invariant and aggregate built-in adoption; add no
+  production delta under `pkg/ownership` or `pkg/projection`.
+- [x] 9.6 Run the focused package tests, tagged service aggregate-binding integration tests,
+  `task predicate:test-audit`, and diff hygiene check recorded below.
+- [x] 9.7 Run fresh repository-wide test, vet, lint, and build gates.
+- [x] 9.8 Run fresh schema generation and verify zero drift.
+- [x] 9.9 Run the production predicate audit independently of the fixture-oriented `predicate:test-audit`.
+- [x] 9.10 Run the full race suite.
+- [x] 9.11 Run `task e2e:agentic` and explicitly tear down its stack.
+- [ ] 9.12 Confirm live PR CI.
+- [x] 9.13 Obtain the required independent architect and code-review approvals for the internal migration.
+- [x] 9.14 Record that #696 does not require automatic Fable review. Request Fable review only if remediation exposes
+  an unresolved issue or this migration materially changes or expands the reviewed public contract.
+- [x] 9.15 Reject a nil concrete `*MutationClient` in `RegisterBuiltins` before interface conversion, while preserving
+  the explicit `write_todos` skip path, with focused TDD coverage.
+
 ## Evidence
 
 - Focused unit, scoped audit, and race suites passed, including the tagged real-stack integration/race run.
@@ -124,7 +149,7 @@
 - B3 remediation adds fail-closed lease enforcement and rollout evidence on every serving graph-ingest instance.
 - B4 remediation uses a Registry-wide `ErrOwnerAlreadyBound` invariant across direct and projection binding paths.
   It permits one successful registration per owner/Registry, releases failed first attempts, and aggregates static
-  built-in contracts before binding. PR #696 remains later adoption.
+  built-in contracts before binding. PR #696 is the separate internal-adoption delta recorded below.
 - B5 remediation uses create-only birth-predicate language without a graph-enforced immutability claim.
 - #700 materially changed the reviewed registration/liveness public contract, so Fable re-review was mandatory and
   is complete under task 8.10.
@@ -155,3 +180,41 @@
   Markdown lint, `git diff --check`, and the 120-column audit.
 - PR CI statistical E2E passed. That focused success does not by itself close broad gate 8.8 or the pre-existing
   repository-wide gate 7.1.
+
+### PR #696 Rebased Evidence
+
+- Review base: `7df575fa`; implementation: `64bde931`.
+- Schema generation completed 33+7 checks with zero drift in 0.85 seconds.
+- `go test -race ./...` passed across 161 packages in 68.21 seconds.
+- `go vet ./...` passed in 0.74 seconds, `task lint` passed in 4.76 seconds, and `go build ./...` passed across 161
+  packages in 4.01 seconds.
+- The production predicate audit reported 503 passed and 0 failed in 0.89 seconds.
+- `task predicate:test-audit` reported 2205 passed, 148 skipped, and 0 failed in 1.03 seconds. This remains distinct
+  from the production predicate audit.
+- Focused tests passed for `internal/builtinprojection`, `processor/agentic-tools`, `service`, and
+  `test/e2e/harness/lessoncuration`.
+- Tagged service integration tests passed for `WireOwnership` aggregate/custom binding, aggregate-validation
+  failure release, and fail-closed bind/overlap behavior.
+- The #696 implementation delta contains no production change under `pkg/ownership` or `pkg/projection`; later
+  #700 changes to those packages remain governed by section 8.
+- The migrated built-in boot path performs one aggregate `BindMutationClient` call with the complete built-in
+  contracts. It adds no legacy helper or `BindAndHeartbeat` call.
+- A Go-source audit reports zero references to `OwnedFactWriter` and `NewNATSLessonCurator`.
+- `write_todos` reconciles one complete desired `todos` group through `OwnedReplacer`; `LessonCurator` receives
+  `OwnedReplacer` and `AuthoritativeReader` directly.
+- Strict OpenSpec validation passed for this change and for the complete 32/32 set.
+- `task e2e:agentic` exited 0 in 93.47 seconds. Its deterministic scenario completed in 558.13 milliseconds with a
+  six-step trajectory, governance-approved audit evidence, and graph evidence.
+- Explicit end-to-end teardown exited 0 and left no containers running.
+- `git diff --check 7df575fa..64bde931` passed.
+- Architecture implementation review approved #696 after the stale design sentence was corrected to identify #696
+  as the completed first bounded internal adoption, separate from public API PR #687.
+- Go review returned `APPROVE` with no findings after the concrete `*MutationClient` typed-nil TDD fix.
+- The TDD fix makes `RegisterBuiltins` reject a nil concrete mutation client before conversion to `OwnedReplacer`;
+  a configured `write_todos` skip still requires no client, and a non-nil client still registers the tool.
+- Focused unit and race tests for `processor/agentic-tools/executors`, focused vet, `task lint`, and the working-tree
+  diff check passed after the typed-nil fix.
+- The typed-nil correction is internal wiring and adds no public API delta.
+- Live GitHub CI remains the only open #696 gate under task 9.12.
+- No separate automatic Fable review was required for the internal-only #696 migration. The later #700 public
+  contract expansion received the mandatory Fable approval recorded under task 8.10.
