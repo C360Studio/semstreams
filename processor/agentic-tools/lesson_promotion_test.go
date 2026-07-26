@@ -9,69 +9,58 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
-// fakeOwnedFactWriter models the production owned-fact REPLACE lane faithfully:
-// ReplaceTriples applies removePredicates then graph.MergeTriples
-// (replace-by-(subject,predicate)) — the SAME merge update_with_triples runs —
-// so a test can prove single-valued replace, not append. It enforces must-exist:
-// a replace on an un-born entity surfaces the classified entity_not_found code,
-// exactly as graph-ingest does.
-type fakeOwnedFactWriter struct {
+// fakeLessonReplacer models complete lifecycle-group reconciliation and
+// enforces must-exist, matching the public projection capability.
+type fakeLessonReplacer struct {
 	mu           sync.Mutex
 	born         map[string][]message.Triple
 	replaceErr   error
 	replaceCalls int
-	lastRemove   []string
+	lastRequest  projection.ReplaceOwnedMutation
 }
 
-func newFakeOwnedFactWriter() *fakeOwnedFactWriter {
-	return &fakeOwnedFactWriter{born: map[string][]message.Triple{}}
+func newFakeLessonReplacer() *fakeLessonReplacer {
+	return &fakeLessonReplacer{born: map[string][]message.Triple{}}
 }
 
 // birth seeds an already-created entity with its current triples.
-func (w *fakeOwnedFactWriter) birth(entityID string, triples ...message.Triple) {
+func (w *fakeLessonReplacer) birth(entityID string, triples ...message.Triple) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.born[entityID] = triples
 }
 
-func (w *fakeOwnedFactWriter) ReplaceTriples(_ context.Context, entityID string, add []message.Triple, removePredicates []string) error {
+func (w *fakeLessonReplacer) ReplaceOwned(_ context.Context, req projection.ReplaceOwnedMutation) (projection.MutationReceipt, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.replaceCalls++
-	w.lastRemove = removePredicates
+	w.lastRequest = req
 	if w.replaceErr != nil {
-		return w.replaceErr
+		return projection.MutationReceipt{}, w.replaceErr
 	}
-	cur, ok := w.born[entityID]
+	cur, ok := w.born[req.EntityID]
 	if !ok {
-		return errors.New("replace_triples mutation failed [" + graph.ErrorCodeEntityNotFound + "]: entity not found")
+		return projection.MutationReceipt{}, errors.New("replace mutation failed [" + graph.ErrorCodeEntityNotFound + "]: entity not found")
 	}
-	if len(removePredicates) > 0 {
-		rm := make(map[string]struct{}, len(removePredicates))
-		for _, p := range removePredicates {
-			rm[p] = struct{}{}
-		}
-		kept := make([]message.Triple, 0, len(cur))
-		for _, t := range cur {
-			if _, drop := rm[t.Predicate]; !drop {
-				kept = append(kept, t)
-			}
-		}
-		cur = kept
+	rm := map[string]struct{}{
+		agvocab.LessonStatus: {}, agvocab.LessonSupersededBy: {}, agvocab.LessonRetiredAt: {},
 	}
-	w.born[entityID] = graph.MergeTriples(cur, add)
-	return nil
-}
-
-func (w *fakeOwnedFactWriter) ReadOwnedPredicates(_ context.Context, _ string, _ string) ([]string, error) {
-	return nil, nil
+	kept := make([]message.Triple, 0, len(cur))
+	for _, triple := range cur {
+		if _, drop := rm[triple.Predicate]; !drop {
+			kept = append(kept, triple)
+		}
+	}
+	w.born[req.EntityID] = graph.MergeTriples(kept, req.Desired)
+	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
 }
 
 // objects returns the object strings of every triple on entityID with predicate.
-func (w *fakeOwnedFactWriter) objects(entityID, predicate string) []string {
+func (w *fakeLessonReplacer) objects(entityID, predicate string) []string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	var out []string
@@ -99,22 +88,26 @@ func newFakeLessonReader() *fakeLessonReader {
 	return &fakeLessonReader{evidence: map[string][]string{}, present: map[string]bool{}}
 }
 
-func (r *fakeLessonReader) ReadLessonEvidence(_ context.Context, lessonEntityID string) ([]string, bool, error) {
-	if r.evidenceErr != nil {
-		return nil, false, r.evidenceErr
+func (r *fakeLessonReader) ReadAuthoritative(_ context.Context, entityID string) (*graph.EntityState, error) {
+	if evidence, ok := r.evidence[entityID]; ok {
+		if r.evidenceErr != nil {
+			return nil, r.evidenceErr
+		}
+		triples := make([]message.Triple, 0, len(evidence))
+		for _, evidenceID := range evidence {
+			triples = append(triples, message.Triple{
+				Subject: entityID, Predicate: agvocab.LessonEvidence, Object: evidenceID,
+			})
+		}
+		return &graph.EntityState{ID: entityID, Triples: triples}, nil
 	}
-	ev, ok := r.evidence[lessonEntityID]
-	if !ok {
-		return nil, false, nil
-	}
-	return ev, true, nil
-}
-
-func (r *fakeLessonReader) EntityExists(_ context.Context, entityID string) (bool, error) {
 	if r.existsErr != nil {
-		return false, r.existsErr
+		return nil, r.existsErr
 	}
-	return r.present[entityID], nil
+	if r.present[entityID] {
+		return &graph.EntityState{ID: entityID}, nil
+	}
+	return nil, &projection.MutationError{Kind: projection.MutationNotFound, Err: errors.New("entity not found")}
 }
 
 const (
@@ -131,7 +124,7 @@ func statusTriple(entityID, status string) message.Triple {
 // --- Promotion happy path: proposed→active when all evidence exists ---
 
 func TestLessonCurator_Promote_HappyPath(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonBornStatus))
 	r := newFakeLessonReader()
 	r.evidence[testLessonID] = []string{testEvidence1, testEvidence2}
@@ -158,7 +151,7 @@ func TestLessonCurator_Promote_HappyPath(t *testing.T) {
 // --- Promotion REFUSED + stays proposed when a cited evidence entity is missing ---
 
 func TestLessonCurator_Promote_RefusedWhenEvidenceMissing(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonBornStatus))
 	r := newFakeLessonReader()
 	r.evidence[testLessonID] = []string{testEvidence1, testEvidence2}
@@ -185,7 +178,7 @@ func TestLessonCurator_Promote_RefusedWhenEvidenceMissing(t *testing.T) {
 }
 
 func TestLessonCurator_Promote_LessonNotFound(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	r := newFakeLessonReader() // no evidence entry ⇒ lesson absent
 
 	c := NewLessonCurator(w, r, nil)
@@ -199,7 +192,7 @@ func TestLessonCurator_Promote_LessonNotFound(t *testing.T) {
 }
 
 func TestLessonCurator_Promote_RejectsMalformedID(t *testing.T) {
-	c := NewLessonCurator(newFakeOwnedFactWriter(), newFakeLessonReader(), nil)
+	c := NewLessonCurator(newFakeLessonReplacer(), newFakeLessonReader(), nil)
 	if err := c.Promote(context.Background(), "not-an-entity-id"); err == nil {
 		t.Fatal("promote must reject a malformed entity ID")
 	}
@@ -208,7 +201,7 @@ func TestLessonCurator_Promote_RejectsMalformedID(t *testing.T) {
 // --- Re-promoting stays single-valued (idempotent-ish; no append) ---
 
 func TestLessonCurator_Promote_TwiceStaysSingleValued(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonBornStatus))
 	r := newFakeLessonReader()
 	r.evidence[testLessonID] = []string{testEvidence1}
@@ -229,7 +222,7 @@ func TestLessonCurator_Promote_TwiceStaysSingleValued(t *testing.T) {
 // --- Retirement: status→retired + retired-at ---
 
 func TestLessonCurator_Retire(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonStatusActive))
 	c := NewLessonCurator(w, newFakeLessonReader(), nil)
 
@@ -249,7 +242,7 @@ func TestLessonCurator_Retire(t *testing.T) {
 func TestLessonCurator_Retire_NoEvidenceCheck(t *testing.T) {
 	// Retirement must not consult the reader; a reader that errors on every call
 	// proves retirement never resolves evidence.
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonStatusActive))
 	r := newFakeLessonReader()
 	r.evidenceErr = errors.New("reader must not be called")
@@ -264,7 +257,7 @@ func TestLessonCurator_Retire_NoEvidenceCheck(t *testing.T) {
 // --- Supersession: status→superseded + superseded-by ---
 
 func TestLessonCurator_Supersede(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonStatusActive))
 	c := NewLessonCurator(w, newFakeLessonReader(), nil)
 
@@ -279,10 +272,40 @@ func TestLessonCurator_Supersede(t *testing.T) {
 	if len(by) != 1 || by[0] != testSupersedID {
 		t.Errorf("superseded-by = %v, want single [%s]", by, testSupersedID)
 	}
+	if w.lastRequest.Contract != "agentic.lesson-record" ||
+		w.lastRequest.Group != "lesson-lifecycle" {
+		t.Errorf("replace contract/group = %q/%q", w.lastRequest.Contract, w.lastRequest.Group)
+	}
+}
+
+func TestLessonCurator_TransitionsClearMutuallyExclusiveSiblings(t *testing.T) {
+	w := newFakeLessonReplacer()
+	w.birth(testLessonID,
+		statusTriple(testLessonID, lessonStatusSuperseded),
+		message.Triple{
+			Subject: testLessonID, Predicate: agvocab.LessonSupersededBy,
+			Object: testSupersedID,
+		},
+	)
+	c := NewLessonCurator(w, newFakeLessonReader(), nil)
+
+	if err := c.Retire(context.Background(), testLessonID); err != nil {
+		t.Fatalf("retire: %v", err)
+	}
+	if got := w.objects(testLessonID, agvocab.LessonSupersededBy); len(got) != 0 {
+		t.Fatalf("retire retained superseded-by sibling: %v", got)
+	}
+
+	if err := c.Supersede(context.Background(), testLessonID, testSupersedID); err != nil {
+		t.Fatalf("supersede: %v", err)
+	}
+	if got := w.objects(testLessonID, agvocab.LessonRetiredAt); len(got) != 0 {
+		t.Fatalf("supersede retained retired-at sibling: %v", got)
+	}
 }
 
 func TestLessonCurator_Supersede_RejectsMalformedByID(t *testing.T) {
-	w := newFakeOwnedFactWriter()
+	w := newFakeLessonReplacer()
 	w.birth(testLessonID, statusTriple(testLessonID, lessonStatusActive))
 	c := NewLessonCurator(w, newFakeLessonReader(), nil)
 
@@ -298,7 +321,7 @@ func TestLessonCurator_Supersede_RejectsMalformedByID(t *testing.T) {
 // --- Writer errors surface (must-exist and transport) ---
 
 func TestLessonCurator_Retire_MustExistSurfaces(t *testing.T) {
-	w := newFakeOwnedFactWriter() // entity never born
+	w := newFakeLessonReplacer() // entity never born
 	c := NewLessonCurator(w, newFakeLessonReader(), nil)
 	err := c.Retire(context.Background(), testLessonID)
 	if err == nil || !strings.Contains(err.Error(), graph.ErrorCodeEntityNotFound) {

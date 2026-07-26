@@ -3,15 +3,16 @@ package agentictools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -20,38 +21,12 @@ import (
 // tool. ADR-036 §First Instance.
 const WriteTodosToolName = "write_todos"
 
-// writeTodosBatchSubject is the NATS subject for the batched
-// add-triple path. Stage 2 of ADR-036; matches
-// processor/graph-ingest/mutations.go SubjectTripleAddBatch.
-const writeTodosBatchSubject = "graph.mutation.triple.add_batch"
-
-// writeTodosRemoveSubject is the NATS subject the executor uses to
-// clear prior todo state. Mirrors decide.go's mutation surface.
-const writeTodosRemoveSubject = "graph.mutation.triple.remove"
-
-// writeTodosTimeout bounds each individual round-trip to graph-ingest.
-// The tool issues one remove per todo predicate (len(todoPredicates))
-// plus one batch add per call; the per-call worst case is roughly
-// (len(todoPredicates)+1) * writeTodosTimeout * RetryAttempts and is
-// otherwise only bounded by the caller's outer context deadline.
-const writeTodosTimeout = 5 * time.Second
-
 // writeTodosToolSource is the Source field on triples this tool
 // writes. Lets operators distinguish todo writes from rule-driven or
 // coordinator-decision triples in graph queries.
 const writeTodosToolSource = "agent-write-todos"
 
-// todoPredicates lists the predicate names that compose one todo
-// item. write_todos clears all triples on the loop entity matching
-// any of these before writing the new set, implementing full-list
-// replace semantics.
-var todoPredicates = []string{
-	agvocab.TodoID,
-	agvocab.TodoContent,
-	agvocab.TodoStatus,
-	agvocab.TodoPosition,
-	agvocab.TodoUpdatedAt,
-}
+const todoTriplesPerItem = 5
 
 // validTodoStatuses enumerates the ADR-036 status enum. The executor
 // rejects any other value with ToolErrorInvalidArgs so the LLM can
@@ -60,23 +35,6 @@ var validTodoStatuses = map[string]struct{}{
 	"pending":     {},
 	"in_progress": {},
 	"completed":   {},
-}
-
-// TodoWriter is the narrow surface WriteTodosExecutor uses to mutate
-// the graph. Production satisfies it with a NATS-backed adapter; tests
-// substitute an in-memory recorder.
-//
-// RemoveByPredicate clears all triples on `subject` whose Predicate
-// matches `predicate` — the canonical full-list-replace primitive at
-// the predicate granularity. Idempotent on repeat or empty subjects.
-//
-// AddTriplesBatch atomically appends a slice of triples grouped per
-// Subject (single CAS per entity at the graph-ingest end, ADR-036
-// Stage 2). For write_todos every triple shares the loop entity ID,
-// so the call is fully atomic in practice.
-type TodoWriter interface {
-	RemoveByPredicate(ctx context.Context, subject, predicate string) error
-	AddTriplesBatch(ctx context.Context, triples []message.Triple) error
 }
 
 // WriteTodosExecutor implements the write_todos tool from ADR-036.
@@ -93,7 +51,7 @@ type TodoWriter interface {
 // executor holds no per-call mutable state. Within a single loop,
 // the agentic-loop already serialises tool calls.
 type WriteTodosExecutor struct {
-	writer   TodoWriter
+	writer   projection.OwnedReplacer
 	platform types.PlatformMeta
 	logger   *slog.Logger
 	now      func() time.Time
@@ -102,7 +60,7 @@ type WriteTodosExecutor struct {
 // NewWriteTodosExecutor constructs the executor given a writer and
 // the platform identity used to resolve loop entity IDs. The clock
 // defaults to time.Now; tests inject a frozen clock via SetClock.
-func NewWriteTodosExecutor(writer TodoWriter, platform types.PlatformMeta) *WriteTodosExecutor {
+func NewWriteTodosExecutor(writer projection.OwnedReplacer, platform types.PlatformMeta) *WriteTodosExecutor {
 	return &WriteTodosExecutor{
 		writer:   writer,
 		platform: platform,
@@ -227,32 +185,26 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 		}, errs.WrapInvalid(err, "WriteTodosExecutor", "write", "construct loop entity ID")
 	}
 
-	// Step 1 — clear prior todo state. Each predicate is one CAS on the
-	// loop entity. A future Stage 3.5 may collapse these to a single
-	// atomic update_entity_with_triples handler; for now sequential is
-	// correct and the IO cost is bounded to len(todoPredicates) round-
-	// trips per call.
-	for _, predicate := range todoPredicates {
-		if err := e.writer.RemoveByPredicate(ctx, loopEntityID, predicate); err != nil {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("clear prior %s: %v", predicate, err),
-				ErrorKind: agentic.ToolErrorNetwork,
-			}, errs.WrapTransient(err, "WriteTodosExecutor", "write", "clear prior todos")
-		}
-	}
-
-	// Step 2 — write the new set as a single batch (one CAS on the
-	// loop entity for all 5N triples thanks to ADR-036 Stage 2).
-	triples := buildTodoTriples(loopEntityID, args.Todos, e.now())
-	if len(triples) > 0 {
-		if err := e.writer.AddTriplesBatch(ctx, triples); err != nil {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("batch write todos: %v", err),
-				ErrorKind: agentic.ToolErrorNetwork,
-			}, errs.WrapTransient(err, "WriteTodosExecutor", "write", "batch add triples")
-		}
+	now := e.now()
+	triples := buildTodoTriples(loopEntityID, args.Todos, now)
+	_, err = e.writer.ReplaceOwned(ctx, projection.ReplaceOwnedMutation{
+		Contract: builtinprojection.LoopExecutionContractName,
+		Group:    builtinprojection.TodoGroupName,
+		EntityID: loopEntityID,
+		Desired:  triples,
+		Metadata: projection.MutationMetadata{
+			RequestID: "write-todos:" + call.LoopID + ":" + call.ID,
+			Source:    writeTodosToolSource,
+			Timestamp: now,
+		},
+	})
+	if err != nil {
+		errorKind, classifiedErr := classifyTodoReplaceFailure(err)
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("replace todos: %v", err),
+			ErrorKind: errorKind,
+		}, classifiedErr
 	}
 
 	// Build a compact summary for ToolResult.Content. The agent reads
@@ -284,6 +236,55 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 			"triple_count":   len(triples),
 		},
 	}, nil
+}
+
+// classifyTodoReplaceFailure preserves the projection client's commit-aware
+// taxonomy at the tool retry boundary. Only a typed unavailable outcome that is
+// known not to have committed may enter the network/transient retry lane.
+func classifyTodoReplaceFailure(err error) (agentic.ToolErrorKind, error) {
+	const (
+		component = "WriteTodosExecutor"
+		method    = "write"
+		action    = "replace todos"
+	)
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return agentic.ToolErrorUnknown, errs.WrapFatal(err, component, method, action)
+	}
+
+	var mutationErr *projection.MutationError
+	if !errors.As(err, &mutationErr) {
+		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
+	}
+	if mutationErr.Commit != projection.CommitNotCommitted {
+		if mutationErr.Commit == projection.CommitUnknown ||
+			mutationErr.Kind == projection.MutationCommitUnknown {
+			return agentic.ToolErrorUnknown, errs.WrapFatal(err, component, method, action)
+		}
+		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
+	}
+
+	switch mutationErr.Kind {
+	case projection.MutationUnavailable:
+		if mutationErr.Class == errs.ErrorTransient {
+			return agentic.ToolErrorNetwork, errs.WrapTransient(err, component, method, action)
+		}
+		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
+	case projection.MutationStaleOwnerToken:
+		return agentic.ToolErrorPermission, errs.WrapInvalid(err, component, method, action)
+	case projection.MutationInvalid,
+		projection.MutationConflict,
+		projection.MutationRevisionConflict:
+		return agentic.ToolErrorInvalidArgs, errs.WrapInvalid(err, component, method, action)
+	case projection.MutationNotFound:
+		return agentic.ToolErrorNotFound, errs.WrapInvalid(err, component, method, action)
+	case projection.MutationCommitUnknown:
+		return agentic.ToolErrorUnknown, errs.WrapFatal(err, component, method, action)
+	case projection.MutationCommittedUnverified,
+		projection.MutationInternal:
+		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
+	default:
+		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
+	}
 }
 
 // parseWriteTodosArgs decodes and validates the tool arguments.
@@ -338,7 +339,7 @@ func buildTodoTriples(loopEntityID string, todos []todoArg, now time.Time) []mes
 	if len(todos) == 0 {
 		return nil
 	}
-	triples := make([]message.Triple, 0, len(todos)*len(todoPredicates))
+	triples := make([]message.Triple, 0, len(todos)*todoTriplesPerItem)
 	updatedAt := now.UTC().Format(time.RFC3339Nano)
 	for i, t := range todos {
 		triples = append(triples,
@@ -394,66 +395,4 @@ func buildWriteTodosSummary(todos []todoArg) writeTodosSummary {
 		out.Todos = append(out.Todos, todoSummary{ID: t.ID, Status: t.Status, Position: i})
 	}
 	return out
-}
-
-// natsTodoWriter adapts natsclient.Client to TodoWriter using the
-// graph.mutation.triple.add_batch (ADR-036 Stage 2) and
-// graph.mutation.triple.remove subjects. Kept local because
-// write_todos is the only current caller; adopting it elsewhere
-// would justify hoisting into a shared package.
-type natsTodoWriter struct {
-	client *natsclient.Client
-}
-
-// NewNATSTodoWriter builds a TodoWriter backed by the
-// graph-ingest mutation surfaces.
-func NewNATSTodoWriter(client *natsclient.Client) TodoWriter {
-	return &natsTodoWriter{client: client}
-}
-
-func (w *natsTodoWriter) RemoveByPredicate(ctx context.Context, subject, predicate string) error {
-	req := graph.RemoveTripleRequest{Subject: subject, Predicate: predicate}
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal remove-triple request: %w", err)
-	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := w.client.RequestWithRetryClassified(ctx, writeTodosRemoveSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", writeTodosRemoveSubject, err)
-	}
-	// ADR-060: handler failures arrive as the classified err above. Removing
-	// from a missing entity is an idempotent no-op success on the handler side
-	// (RemoveTriple returns nil), so "entity not found" never reaches here as a
-	// failure — the first write_todos call on a fresh loop has nothing to clear.
-	var resp graph.RemoveTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal remove response: %w", err)
-	}
-	return nil
-}
-
-func (w *natsTodoWriter) AddTriplesBatch(ctx context.Context, triples []message.Triple) error {
-	req := graph.AddTriplesBatchRequest{Triples: triples}
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal batch-add request: %w", err)
-	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := w.client.RequestWithRetryClassified(ctx, writeTodosBatchSubject, reqData, writeTodosTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", writeTodosBatchSubject, err)
-	}
-	var resp graph.AddTriplesBatchResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal batch response: %w", err)
-	}
-	// ADR-060: a whole-batch failure arrives as the classified err above. A
-	// PARTIAL batch (some subjects committed) returns a success body with
-	// FailedSubjects populated (per-subject errors in the map), handled here.
-	if len(resp.FailedSubjects) > 0 {
-		return fmt.Errorf("graph-ingest partial batch (written=%d, failed=%v)",
-			resp.WrittenCount, resp.FailedSubjects)
-	}
-	return nil
 }

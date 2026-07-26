@@ -475,3 +475,65 @@ query behavior, or structured-literal encoding.
 - **WHEN** issue #683 adopts canonical child entities
 - **THEN** its implementation can depend on the public mutation interfaces
 - **AND** its own specification remains responsible for the child-entity model and lifecycle
+
+### Requirement: First internal migration is aggregate, fail-closed, and bounded
+
+PR1 MUST preserve owner identity `agentic-loop-graph-writer`. One built-in contract package MUST declare the
+existing loop birth predicates, one named `todos` `replace-owned` group, the existing lesson birth predicates, and
+one named `lesson-lifecycle` `replace-owned` group.
+
+The composition root MUST aggregate every enabled built-in static contract into exactly one
+`BindMutationClient` registration for that owner. Ownership bootstrap, contract validation, binding, heartbeat
+startup, and overlap detection MUST form a fail-closed boot gate. No affected writer may start or publish a
+mutation after any gate failure.
+
+#### Scenario: All enabled built-in contracts bind once
+
+- **GIVEN** the loop/todo and lesson writers are enabled
+- **WHEN** their composition root initializes
+- **THEN** it supplies the complete aggregate contract set to exactly one `BindMutationClient` call
+- **AND** the registry observes one complete registration for `agentic-loop-graph-writer`
+
+#### Scenario: Binding or overlap fails
+
+- **WHEN** ownership bootstrap, validation, binding, heartbeat startup, or overlap detection fails
+- **THEN** process boot fails with the classified cause
+- **AND** no affected subscription, writer, or mutation publisher starts
+
+### Requirement: Todo and lesson writers use narrow atomic replacement
+
+`write_todos` MUST construct the complete desired `todos` group and issue exactly one `ReplaceOwned` operation per
+logical write. `LessonCurator` MUST depend directly on `OwnedReplacer` and `AuthoritativeReader`, select the
+`lesson-lifecycle` group for replacement, and read current state authoritatively.
+
+`OwnedFactWriter` MUST NOT be deleted until a bounded audit reports zero production callers and focused
+behavior-parity evidence passes review.
+
+#### Scenario: Todos replace as one group
+
+- **WHEN** `write_todos` persists a logical todo set
+- **THEN** it performs one `ReplaceOwned` call selecting `todos`
+- **AND** omitted todo predicates are removed atomically without a clear/append or raw-mutation fallback
+
+#### Scenario: Lesson curator reconciles lifecycle state
+
+- **WHEN** `LessonCurator` reads and updates mutable lesson lifecycle facts
+- **THEN** it reads through `AuthoritativeReader`
+- **AND** it replaces exactly the `lesson-lifecycle` group through `OwnedReplacer`
+
+#### Scenario: Helper removal lacks parity evidence
+
+- **GIVEN** a production `OwnedFactWriter` caller remains or required parity evidence is incomplete
+- **WHEN** helper removal is evaluated
+- **THEN** the helper remains and its deletion task stays incomplete
+
+### Requirement: PR1 does not absorb deferred mutation lanes
+
+PR1 MUST leave raw create/append publishers, rules, `graph_writer`, research, and `agentrun` outside its migration
+diff. Those lanes remain tracked by issues #688, #689, and #690.
+
+#### Scenario: Scope audit runs before review
+
+- **WHEN** the PR1 scope audit compares the diff with the pre-slice inventory
+- **THEN** it finds no transport or ownership migration in a deferred lane
+- **AND** each deferred lane remains assigned to its linked follow-up issue

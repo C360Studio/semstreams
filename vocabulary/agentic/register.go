@@ -488,6 +488,18 @@ func registerLoopPredicates() {
 		vocabulary.WithDescription("Entity reference to the parent loop entity"),
 		vocabulary.WithDataType("string"))
 
+	vocabulary.Register(LoopRun,
+		vocabulary.WithDescription("Bare run loop ID this loop execution belongs to"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopRunEntityID,
+		vocabulary.WithDescription("Entity reference to the chain execution this loop belongs to"),
+		vocabulary.WithDataType("string"))
+
+	vocabulary.Register(LoopReplyTo,
+		vocabulary.WithDescription("Reply subject used to return this loop's result"),
+		vocabulary.WithDataType("string"))
+
 	vocabulary.Register(LoopWorkflow,
 		vocabulary.WithDescription("Workflow slug this loop belongs to"),
 		vocabulary.WithDataType("string"))

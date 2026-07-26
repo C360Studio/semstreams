@@ -305,16 +305,25 @@ evidence entity exists in the graph before flipping the status via the
 single-valued replace lane (`graph.mutation.entity.update_with_triples`):
 
 ```go
-curator := agentictools.NewNATSLessonCurator(natsClient, logger)
+// mutations is the application-bound *projection.MutationClient. The
+// composition root bound it once, before starting lesson consumers.
+var lessonReplacer projection.OwnedReplacer = mutations
+var lessonReader projection.AuthoritativeReader = mutations
+
+curator := agentictools.NewLessonCurator(lessonReplacer, lessonReader, logger)
 if err := curator.Promote(ctx, lessonEntityID); err != nil {
     // refused: a cited evidence entity is absent — the lesson stays proposed
 }
 ```
 
+Consumer code must not call `BindMutationClient`. Binding, ownership bootstrap,
+heartbeat startup, and overlap checks are application boot responsibilities;
+the curator receives only the already-bound narrow capabilities it needs.
+
 If any citation is missing, `Promote` **refuses** and the lesson stays
-`proposed`. `Retire` (→ `retired` + `retired-at`) and `Supersede` (→ `superseded`
-+ `superseded-by`) live on the same curator and need no evidence check. Re-run the
-step-3 query and the status now reads `active`.
+`proposed`. `Retire` writes `retired` plus `retired-at`, while `Supersede` writes
+`superseded` plus `superseded-by`; both live on the same curator and need no
+evidence check. Re-run the step-3 query and the status now reads `active`.
 
 > **Honest gap — config-only promotion is not viable for the validated path.**
 > A rule `replace_owned` action *can* mechanically flip `agent.lesson.status` to

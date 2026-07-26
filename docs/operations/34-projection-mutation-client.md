@@ -402,6 +402,31 @@ This SemStreams change does not edit Semdragon. Downstream adoption remains trac
 [SemStreams issue #313](https://github.com/C360Studio/semstreams/issues/313) and Semdragon's own migration work.
 PR #696 is a later internal-adoption change, not part of this public API PR.
 
+## First internal migration slice
+
+The first in-repository adoption is narrower than the full mutation inventory:
+
+- preserve owner identity `agentic-loop-graph-writer`;
+- aggregate every enabled built-in static contract into exactly one `BindMutationClient` call;
+- fail boot before affected writers start on ownership bootstrap, validation, binding, heartbeat, or overlap errors;
+- declare loop birth predicates and the named `todos` replacement group in the built-in contract package;
+- declare lesson birth predicates and the named `lesson-lifecycle` replacement group in that package;
+- make `write_todos` submit one complete desired set through `ReplaceOwned("todos")`; and
+- give `LessonCurator` `OwnedReplacer` and `AuthoritativeReader` directly.
+
+The aggregate registration fixes [#691](https://github.com/C360Studio/semstreams/issues/691): independently binding
+partial built-in contract sets can make registration order determine whether overlap is detected.
+
+Do not delete `OwnedFactWriter` merely because the public client exists. First record zero production callers and
+parity for todo and lesson success, delete-on-omit, authoritative read-back, classified errors, stale tokens, and
+fail-closed boot behavior.
+
+Raw create/append publishers, rules, `graph_writer`, research, and `agentrun` remain outside PR1. Their follow-up
+ownership is tracked by [#688](https://github.com/C360Studio/semstreams/issues/688),
+[#689](https://github.com/C360Studio/semstreams/issues/689), and
+[#690](https://github.com/C360Studio/semstreams/issues/690). The PR1 scope audit must prove these lanes did not
+move.
+
 ## Structured values remain separate
 
 The mutation client does not define a representation for repeated structured values. It also does not choose

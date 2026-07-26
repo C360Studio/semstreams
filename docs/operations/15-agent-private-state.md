@@ -175,11 +175,14 @@ revise the threshold and templates.
 
 ## Failure modes
 
-- **Tool call fails mid-write** (e.g. graph-ingest unreachable
-  between the 5 RemoveByPredicate calls and the batch add): the loop
-  entity is in a half-cleared state. Next call to `write_todos`
-  with the same args is idempotent — empty predicates are no-op
-  removes, then the batch add commits. Convergence in two calls.
+- **Tool call fails while writing**: `write_todos` sends the complete
+  desired `todos` predicate group through one contract-bound
+  `ReplaceOwned` operation. The group is not cleared and rebuilt in
+  separate requests. A proven pre-commit failure leaves the previous
+  group intact; a committed or commit-unknown outcome follows the
+  projection mutation client's receipt and authoritative read-back
+  contract. Consumer code must not add its own clear/batch fallback or
+  blind retry loop.
 - **Read fails on iteration build**: the model just doesn't see the
   working-list block this iteration. Next iteration retries. The
   per-iteration read budget caps at 2s — the LLM call's latency is

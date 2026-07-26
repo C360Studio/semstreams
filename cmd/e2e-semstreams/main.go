@@ -17,7 +17,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/cmd/e2e-semstreams/mission"
 	"github.com/c360studio/semstreams/component"
@@ -30,20 +29,19 @@ import (
 	optionalotel "github.com/c360studio/semstreams/frameworkadapters/otel"
 	"github.com/c360studio/semstreams/frameworkcapabilities/graphresearch"
 	rulepackcap "github.com/c360studio/semstreams/frameworkcapabilities/rulepacks"
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
 	"github.com/c360studio/semstreams/payloadregistry"
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
-	"github.com/c360studio/semstreams/pkg/ownership"
-	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/agentic-tools/executors"
 	rulepkg "github.com/c360studio/semstreams/processor/rule"
 	"github.com/c360studio/semstreams/service"
+	"github.com/c360studio/semstreams/test/e2e/harness/lessoncuration"
 	"github.com/c360studio/semstreams/types"
-	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
 
@@ -142,12 +140,37 @@ func run() error {
 		return err
 	}
 
+	lifecycleManager := lifecycle.NewManager(natsClient, logger)
+	hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, lifecycleManager)
+	defer ownershipShutdown()
+	ownerReg, staticOwnerHB, mutationClient, err := service.WireOwnership(
+		hbCtx, natsClient, lifecycleManager, logger, builtinprojection.Contracts()...,
+	)
+	if err != nil {
+		return fmt.Errorf("wire ownership: %w", err)
+	}
+	lessonCurator := agentictools.NewLessonCurator(mutationClient, mutationClient, logger)
+	lessonCurationSub, err := natsClient.SubscribeForRequests(
+		hbCtx,
+		lessoncuration.SubjectPromote,
+		lessoncuration.Handler(lessonCurator),
+	)
+	if err != nil {
+		return fmt.Errorf("subscribe E2E lesson curation control: %w", err)
+	}
+	defer func() {
+		if err := lessonCurationSub.Unsubscribe(); err != nil {
+			logger.Warn("unsubscribe E2E lesson curation control", slog.Any("error", err))
+		}
+	}()
+
 	// Build the shared tool registry and register builtins BEFORE
 	// service deps so component construction can resolve via
 	// deps.ToolRegistry. Mirrors cmd/semstreams/main.go — see ADR-029.
 	toolRegistry := agentictools.NewExecutorRegistry()
 	if err := executors.RegisterBuiltins(ctx, toolRegistry, executors.ToolDependencies{
 		NATSClient:              natsClient,
+		MutationClient:          mutationClient,
 		Platform:                platform,
 		Logger:                  logger,
 		RuleManager:             buildRuleManager(ctx, natsClient, configManager, logger),
@@ -174,23 +197,7 @@ func run() error {
 	// started until manager.StartAll inside runWithSignalHandling; seeding
 	// pre-start would deadlock (emit retry holds the goroutine that would
 	// otherwise call StartAll). See gh#170.
-	svcDeps.LifecycleManager = lifecycle.NewManager(natsClient, logger)
-
-	// ADR-058 Phase A — wire ownership buckets, Registry, and static projection
-	// contracts. Returns nil, nil on bucket-bootstrap failure (disabled this
-	// boot, best-effort — never a boot gate).
-	//
-	// The Manager-internal heartbeater (spawned by AttachOwnership inside
-	// WireOwnership) runs on hbCtx. ADR-058 rollout step 2: the Manager is
-	// deliberately NOT wrapped as a Service (it fails the Is-it-a-Service test —
-	// WaitOwnership already provides the join). Its shutdown cancel+join is
-	// factored into one shared helper so the two mains cannot drift; the deferred
-	// cleanup runs (cancel→join) before the earlier-registered NATS Close defer.
-	hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, svcDeps.LifecycleManager)
-	defer ownershipShutdown()
-
-	ownerReg, staticOwnerHB := service.WireOwnership(hbCtx, natsClient, svcDeps.LifecycleManager, logger,
-		loopExecutionProjectionContract(), lessonRecordProjectionContract())
+	svcDeps.LifecycleManager = lifecycleManager
 	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
 	// ordered shutdown.
 	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
@@ -797,52 +804,4 @@ func registerExampleComponents(registry *component.Registry) error {
 		return fmt.Errorf("register mission-command: %w", err)
 	}
 	return nil
-}
-
-// loopExecutionProjectionContract returns the graph projection contract for
-// loop-execution entities (ADR-056 W0 4c-pre-1). Mirrors cmd/semstreams/main.go.
-// See that function's godoc for the full rationale.
-func loopExecutionProjectionContract() projection.Contract {
-	return projection.Contract{
-		Name:          "agentic.loop-execution",
-		MessageType:   agentic.LoopExecutionMessageType().Key(),
-		EntityPattern: "*.*.agent.agentic-loop.execution.*",
-		Groups: []projection.PredicateGroup{{
-			Mode: ownership.ModeReplaceOwned,
-			Predicates: []string{
-				agvocab.LoopRole,
-				agvocab.LoopTask,
-				agvocab.LoopParent,
-				agvocab.LoopRun,
-				agvocab.LoopRunEntityID,
-				agvocab.LoopReplyTo,
-				agvocab.LoopWorkflow,
-				agvocab.LoopWorkflowStep,
-				agvocab.LoopUser,
-				agvocab.LoopDescription,
-			},
-		}},
-	}
-}
-
-// lessonRecordProjectionContract returns the graph projection contract for
-// agent-lesson-record entities (ADR-080 gated lifecycle). Mirrors
-// cmd/semstreams/main.go — see that function's godoc for the full rationale.
-// Declaring it in BOTH binaries is the CLAUDE.md half-migrated-binary guard: a
-// lesson lifecycle owned group present in only one main would silently break
-// promotion in the other.
-func lessonRecordProjectionContract() projection.Contract {
-	return projection.Contract{
-		Name:          "agentic.lesson-record",
-		MessageType:   agentic.AgentLessonMessageType().Key(),
-		EntityPattern: "*.*.agent.lesson.record.*",
-		Groups: []projection.PredicateGroup{{
-			Mode: ownership.ModeReplaceOwned,
-			Predicates: []string{
-				agvocab.LessonStatus,
-				agvocab.LessonSupersededBy,
-				agvocab.LessonRetiredAt,
-			},
-		}},
-	}
 }

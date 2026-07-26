@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
@@ -113,69 +114,40 @@ func (s *OwnershipService) Stop(timeout time.Duration) error {
 }
 
 // WireOwnership performs Phase-A ownership wiring (ADR-058): create buckets,
-// construct the Registry (R2 — once, here), attach it to the lifecycle Manager,
-// and bind static projection contracts. Best-effort (R1): a bucket-bootstrap
-// failure logs and returns nil, nil; callers treat nil as "ownership disabled
-// this boot" and pass it straight to NewOwnershipService (which no-ops on nil).
-//
-// Returns the Registry and its static heartbeater so the caller can (a) start
-// the Phase-B OwnershipService and (b) bind rule-pack contracts AFTER the rule
-// processors are constructed.
-//
-// contracts is the set of static projection contracts to bind at boot (e.g.,
-// the loop-execution contract from loopExecutionProjectionContract()). Passing
-// them as a variadic keeps the service package free of main-package functions.
+// construct the Registry, attach it to the lifecycle Manager, and make exactly
+// one aggregate projection-client binding. Bootstrap or binding failure is a
+// boot error: built-in writers have no raw mutation fallback.
 func WireOwnership(
 	ctx context.Context,
 	natsClient *natsclient.Client,
 	lcm *lifecycle.Manager,
 	logger *slog.Logger,
 	contracts ...projection.Contract,
-) (*ownership.Registry, *ownership.Heartbeater) {
+) (*ownership.Registry, *ownership.Heartbeater, *projection.MutationClient, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver)
 	if err != nil {
-		logger.Warn("ownership: bucket bootstrap failed — disabled this boot",
-			slog.Any("error", err))
-		return nil, nil // R1: degrade, do not abort.
+		return nil, nil, nil, fmt.Errorf("bootstrap ownership buckets: %w", err)
 	}
-	// nil-safe; spawns the Manager-internal heartbeater, joined via lcm.WaitOwnership().
+	if lcm == nil {
+		return nil, nil, nil, fmt.Errorf("attach ownership: lifecycle manager is required")
+	}
 	lcm.AttachOwnership(ctx, reg)
 
 	staticHB := reg.NewHeartbeater(ownership.HeartbeatInterval)
-	if len(contracts) > 0 {
-		if err := bindStaticProjectionContracts(
-			ctx,
-			reg,
-			staticHB,
-			"agentic-loop-graph-writer",
-			contracts,
-		); err != nil {
-			logger.Warn("ownership: static projection contract-set bind failed",
-				slog.Int("contract_count", len(contracts)),
-				slog.Any("error", err))
-		}
+	client, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
+		NATS:        natsClient,
+		Registry:    reg,
+		Heartbeater: staticHB,
+		Owner:       builtinprojection.OwnerID,
+		Contracts:   contracts,
+	})
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("bind static projection mutation client: %w", err)
 	}
-	return reg, staticHB
-}
-
-func bindStaticProjectionContracts(
-	ctx context.Context,
-	reg *ownership.Registry,
-	heartbeater *ownership.Heartbeater,
-	owner string,
-	contracts []projection.Contract,
-) error {
-	_, err := projection.BindAndHeartbeat(
-		ctx,
-		reg,
-		heartbeater,
-		owner,
-		contracts...,
-	)
-	return err
+	return reg, staticHB, client, nil
 }
 
 // WireOwnershipShutdown is the ADR-058 rollout-step-2 drift-killer. It returns

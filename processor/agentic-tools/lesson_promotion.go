@@ -2,16 +2,15 @@ package agentictools
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
@@ -29,28 +28,12 @@ const (
 	lessonStatusSuperseded = "superseded"
 )
 
-// LessonReader is the narrow graph read surface the promotion writer needs to
-// resolve evidence existence before flipping a lesson active (ADR-080: the
-// evidence citation is well-formed-gated at emit and EXISTENCE-resolved at
-// promotion). It is deliberately read-only and separate from the write surface
-// (OwnedFactWriter): promotion reads, decides, then writes through the owned
-// lane. Production satisfies it with a natsclient adapter; tests use a fake.
-type LessonReader interface {
-	// ReadLessonEvidence returns the evidence entity IDs the lesson cites
-	// (its agent.lesson.evidence objects), with found=false when the lesson
-	// entity itself is absent from the graph.
-	ReadLessonEvidence(ctx context.Context, lessonEntityID string) (evidence []string, found bool, err error)
-	// EntityExists reports whether entityID is currently present in the graph.
-	EntityExists(ctx context.Context, entityID string) (bool, error)
-}
-
 // LessonCurator is the reference VALIDATED lesson lifecycle writer (ADR-080
 // gated lifecycle, task 4.1). It promotes, retires, and supersedes lesson
-// records through the canonical owned-fact REPLACE lane (ADR-056), composing an
-// OwnedFactWriter (write) and a LessonReader (evidence resolution). Every
-// transition is a SINGLE-VALUED replace, not an append: the update_with_triples
-// merge is replace-by-(subject,predicate) (graph.MergeTriples), so writing a
-// fresh agent.lesson.status triple drops the prior value and leaves exactly one.
+// records through the contract-bound REPLACE lane (ADR-056), composing the
+// framework's least-privilege OwnedReplacer and AuthoritativeReader
+// capabilities. Every transition reconciles the complete lifecycle group, so
+// mutually exclusive sibling predicates cannot survive a transition.
 //
 // This is the OPERATOR/PRODUCT curation path, NOT an agent tool: ADR-080 makes
 // operator/product review the default promotion gate, so the framework ships no
@@ -59,25 +42,18 @@ type LessonReader interface {
 // explicit auto-promotion policy — but the evidence-existence resolution below
 // is what makes a promotion HONEST, so the validated path routes through here.
 type LessonCurator struct {
-	writer OwnedFactWriter
-	reader LessonReader
+	writer projection.OwnedReplacer
+	reader projection.AuthoritativeReader
 	logger *slog.Logger
 }
 
 // NewLessonCurator builds a curator over an explicit write + read surface
 // (testable with fakes). A nil logger falls back to slog.Default().
-func NewLessonCurator(writer OwnedFactWriter, reader LessonReader, logger *slog.Logger) *LessonCurator {
+func NewLessonCurator(writer projection.OwnedReplacer, reader projection.AuthoritativeReader, logger *slog.Logger) *LessonCurator {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &LessonCurator{writer: writer, reader: reader, logger: logger}
-}
-
-// NewNATSLessonCurator wires a curator backed by the shared graph
-// mutation/query NATS surfaces (the same update_with_triples + query.entity
-// lanes emit_lesson and OwnedFactWriter use).
-func NewNATSLessonCurator(client *natsclient.Client, logger *slog.Logger) *LessonCurator {
-	return NewLessonCurator(NewNATSOwnedFactWriter(client), NewNATSLessonReader(client), logger)
 }
 
 // Promote flips a lesson proposed→active, but ONLY after resolving that every
@@ -91,13 +67,17 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 		return fmt.Errorf("promote lesson: %q is not a well-formed 6-part entity ID", lessonEntityID)
 	}
 
-	evidence, found, err := c.reader.ReadLessonEvidence(ctx, lessonEntityID)
+	lesson, err := c.reader.ReadAuthoritative(ctx, lessonEntityID)
 	if err != nil {
+		if isProjectionNotFound(err) {
+			return fmt.Errorf("promote lesson %s: refused — lesson entity not found in the graph", lessonEntityID)
+		}
 		return fmt.Errorf("promote lesson %s: read cited evidence: %w", lessonEntityID, err)
 	}
-	if !found {
+	if lesson.IsStub() {
 		return fmt.Errorf("promote lesson %s: refused — lesson entity not found in the graph", lessonEntityID)
 	}
+	evidence := lessonEvidence(lesson)
 	if len(evidence) == 0 {
 		// Defensive: emit_lesson requires >=1 evidence, so this only fires if a
 		// lesson lost its evidence out-of-band. A promotion still must not fabricate.
@@ -106,11 +86,15 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 
 	var missing []string
 	for _, ev := range evidence {
-		exists, existsErr := c.reader.EntityExists(ctx, ev)
+		entity, existsErr := c.reader.ReadAuthoritative(ctx, ev)
 		if existsErr != nil {
+			if isProjectionNotFound(existsErr) {
+				missing = append(missing, ev)
+				continue
+			}
 			return fmt.Errorf("promote lesson %s: resolve evidence %s: %w", lessonEntityID, ev, existsErr)
 		}
-		if !exists {
+		if entity.IsStub() {
 			missing = append(missing, ev)
 		}
 	}
@@ -174,15 +158,26 @@ func (c *LessonCurator) Supersede(ctx context.Context, lessonEntityID, byEntityI
 	return nil
 }
 
-// replace writes the lifecycle triples through the owned-fact REPLACE lane. No
-// removePredicates are needed for a same-predicate flip: update_with_triples
-// merges via graph.MergeTriples (replace-by-(subject,predicate)), so a fresh
-// value for an already-present single-valued predicate fully replaces the prior
-// one — the append that a bare triple.add would produce is what this lane
-// deliberately avoids. MUST-EXIST: a never-created lesson surfaces the
-// classified entity_not_found from the handler.
+// replace reconciles the complete lifecycle group in one contract-bound
+// mutation. Predicates omitted from add are removed, which prevents retired-at
+// and superseded-by from surviving mutually exclusive transitions.
 func (c *LessonCurator) replace(ctx context.Context, lessonEntityID string, add ...message.Triple) error {
-	return c.writer.ReplaceTriples(ctx, lessonEntityID, add, nil)
+	timestamp := time.Now()
+	if len(add) != 0 {
+		timestamp = add[0].Timestamp
+	}
+	_, err := c.writer.ReplaceOwned(ctx, projection.ReplaceOwnedMutation{
+		Contract: builtinprojection.LessonRecordContractName,
+		Group:    builtinprojection.LessonLifecycleGroupName,
+		EntityID: lessonEntityID,
+		Desired:  add,
+		Metadata: projection.MutationMetadata{
+			RequestID: "lesson-curator:" + lessonEntityID + ":" + lifecycleOperation(add),
+			Source:    lessonCuratorSource,
+			Timestamp: timestamp,
+		},
+	})
+	return err
 }
 
 // lessonTriple builds a curator lifecycle triple stamped now.
@@ -203,29 +198,7 @@ func lessonTripleAt(subject, predicate, object string, now time.Time) message.Tr
 	}
 }
 
-// natsLessonReader adapts natsclient.Client to LessonReader, routing entity
-// reads through graph.ingest.query.entity (the same query lane emit_lesson's
-// read-back and OwnedFactWriter.ReadOwnedPredicates use).
-type natsLessonReader struct {
-	client *natsclient.Client
-}
-
-// NewNATSLessonReader builds a LessonReader backed by the shared graph query
-// surface.
-func NewNATSLessonReader(client *natsclient.Client) LessonReader {
-	return &natsLessonReader{client: client}
-}
-
-func (r *natsLessonReader) ReadLessonEvidence(ctx context.Context, lessonEntityID string) ([]string, bool, error) {
-	entity, found, err := r.queryEntity(ctx, lessonEntityID)
-	if err != nil {
-		return nil, false, err
-	}
-	// A bare referential-integrity stub is not a real lesson (no producer ever
-	// born it): treat it as not-found so a stub can never be promoted.
-	if !found || entity.IsStub() {
-		return nil, false, nil
-	}
+func lessonEvidence(entity *graph.EntityState) []string {
 	var evidence []string
 	for _, tr := range entity.Triples {
 		if tr.Predicate == agvocab.LessonEvidence {
@@ -234,44 +207,22 @@ func (r *natsLessonReader) ReadLessonEvidence(ctx context.Context, lessonEntityI
 			}
 		}
 	}
-	return evidence, true, nil
+	return evidence
 }
 
-func (r *natsLessonReader) EntityExists(ctx context.Context, entityID string) (bool, error) {
-	entity, found, err := r.queryEntity(ctx, entityID)
-	if err != nil {
-		return false, err
-	}
-	// Citing an entity in a lesson's evidence auto-creates a referential-
-	// integrity STUB for that target (graph.StubMessageType). A stub is a
-	// placeholder, NOT proof the cited entity was ever really produced — so it
-	// does NOT satisfy evidence existence. Only a real (non-stub) entity counts;
-	// otherwise the promotion gate would be a no-op (every citation self-stubs).
-	return found && !entity.IsStub(), nil
+func isProjectionNotFound(err error) bool {
+	var mutationErr *projection.MutationError
+	return errors.As(err, &mutationErr) && mutationErr.Kind == projection.MutationNotFound
 }
 
-// queryEntity reads a single entity via graph.ingest.query.entity, collapsing
-// the classified entity_not_found into (nil, false, nil). RequestClassified
-// (NOT the retry variant) — a QUERY: retrying a hung query masks a responder
-// problem as latency (natsclient mutation-vs-query rule). Handler errors arrive
-// as the classified err (the `error: ` response-payload convention), never a
-// zero-valued success.
-func (r *natsLessonReader) queryEntity(ctx context.Context, entityID string) (*graph.EntityState, bool, error) {
-	reqData, err := json.Marshal(entityQueryRequest{ID: entityID})
-	if err != nil {
-		return nil, false, fmt.Errorf("marshal entity query: %w", err)
-	}
-	respData, err := r.client.RequestClassified(ctx, ownedFactQuerySubject, reqData, ownedFactTimeout)
-	if err != nil {
-		var ce *errs.ClassifiedError
-		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityNotFound {
-			return nil, false, nil
+func lifecycleOperation(triples []message.Triple) string {
+	for _, triple := range triples {
+		if triple.Predicate != agvocab.LessonStatus {
+			continue
 		}
-		return nil, false, fmt.Errorf("request %s: %w", ownedFactQuerySubject, err)
+		if status, ok := triple.Object.(string); ok {
+			return status
+		}
 	}
-	var entity graph.EntityState
-	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {
-		return nil, false, fmt.Errorf("unmarshal entity query: %w", err)
-	}
-	return &entity, true, nil
+	return "transition"
 }

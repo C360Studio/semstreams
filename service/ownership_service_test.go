@@ -96,3 +96,18 @@ func TestWireOwnershipShutdown_ParentCancelPropagates(t *testing.T) {
 		t.Fatal("hbCtx must cancel when its parent cancels (derived context)")
 	}
 }
+
+func TestWireOwnership_BootstrapFailureIsBootError(t *testing.T) {
+	t.Parallel()
+
+	registry, heartbeater, mutations, err := WireOwnership(
+		context.Background(), nil, nil, slog.Default(),
+	)
+	if err == nil {
+		t.Fatal("nil NATS bootstrap must fail boot")
+	}
+	if registry != nil || heartbeater != nil || mutations != nil {
+		t.Fatalf("bootstrap failure returned partial wiring: registry=%v heartbeater=%v client=%v",
+			registry, heartbeater, mutations)
+	}
+}

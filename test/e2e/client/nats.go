@@ -82,7 +82,7 @@ func NewNATSValidationClient(ctx context.Context, natsURL string) (*NATSValidati
 
 // Client exposes the underlying natsclient.Client so a scenario can drive a
 // production writer/reader that requires the concrete type — e.g. the ops
-// scenario constructs a LessonCurator (NewNATSLessonCurator) over this client
+// scenario requests promotion from the E2E app's in-process LessonCurator
 // to act as the operator/product promotion path. Returns the live connection;
 // callers must not Close it independently (Close is owned by this wrapper).
 func (c *NATSValidationClient) Client() *natsclient.Client {

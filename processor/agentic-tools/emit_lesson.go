@@ -187,10 +187,19 @@ func defaultLessonRejectionRecorder(reason string) {
 
 // natsLessonStore adapts natsclient.Client to LessonStore, routing births
 // through graph.mutation.entity.create_with_triples and status read-back
-// through graph.ingest.query.entity (the same surfaces natsTriplePublisher and
-// OwnedFactWriter use).
+// through graph.ingest.query.entity. Lifecycle changes use the separate
+// contract-bound projection mutation client.
 type natsLessonStore struct {
 	client *natsclient.Client
+}
+
+const (
+	lessonQueryEntitySubject = "graph.ingest.query.entity"
+	lessonQueryTimeout       = 5 * time.Second
+)
+
+type lessonEntityQueryRequest struct {
+	ID string `json:"id"`
 }
 
 // NewNATSLessonStore builds a LessonStore backed by the shared graph
@@ -228,20 +237,20 @@ func (s *natsLessonStore) CreateLesson(ctx context.Context, entityID string, msg
 }
 
 func (s *natsLessonStore) ReadLessonStatus(ctx context.Context, entityID string) (string, bool, error) {
-	reqData, err := json.Marshal(entityQueryRequest{ID: entityID})
+	reqData, err := json.Marshal(lessonEntityQueryRequest{ID: entityID})
 	if err != nil {
 		return "", false, fmt.Errorf("marshal entity query: %w", err)
 	}
 	// RequestClassified (NOT the retry variant): this is a QUERY — retrying a
 	// hung query masks a responder problem as latency (natsclient
 	// mutation-vs-query rule).
-	respData, err := s.client.RequestClassified(ctx, ownedFactQuerySubject, reqData, ownedFactTimeout)
+	respData, err := s.client.RequestClassified(ctx, lessonQueryEntitySubject, reqData, lessonQueryTimeout)
 	if err != nil {
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityNotFound {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("request %s: %w", ownedFactQuerySubject, err)
+		return "", false, fmt.Errorf("request %s: %w", lessonQueryEntitySubject, err)
 	}
 	var entity graph.EntityState
 	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {

@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/rule"
 )
@@ -144,6 +146,44 @@ func TestRegisterBuiltins_NilRegistryErrors(t *testing.T) {
 	t.Parallel()
 	if err := RegisterBuiltins(context.Background(), nil, ToolDependencies{}); err == nil {
 		t.Fatalf("RegisterBuiltins(nil registry) should error")
+	}
+}
+
+type noOpOwnedReplacer struct{}
+
+func (noOpOwnedReplacer) ReplaceOwned(
+	context.Context,
+	projection.ReplaceOwnedMutation,
+) (projection.MutationReceipt, error) {
+	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
+}
+
+func TestRegisterWriteTodosRequiresProjectionClient(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+	if err := registerWriteTodos(
+		registry, nil, component.PlatformMeta{}, slog.Default(),
+	); err == nil {
+		t.Fatal("nil projection client must block write_todos registration")
+	}
+	if len(registry.ListTools()) != 0 {
+		t.Fatal("nil projection client registered write_todos")
+	}
+}
+
+func TestRegisterWriteTodosUsesProjectionCapability(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+	if err := registerWriteTodos(
+		registry,
+		noOpOwnedReplacer{},
+		component.PlatformMeta{Org: "acme", Platform: "test"},
+		slog.Default(),
+	); err != nil {
+		t.Fatalf("registerWriteTodos: %v", err)
+	}
+	if !containsName(registry.ListTools(), agentictools.WriteTodosToolName) {
+		t.Fatal("write_todos was not registered")
 	}
 }
 
