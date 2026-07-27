@@ -24,10 +24,16 @@ type rulePackBindTestBinder struct {
 	preflightCalls int
 	injectionCalls int
 	startCalls     int
+	bindingsCalls  int
+	bindingsEarly  bool
 	injected       projection.OwnedReplacer
 }
 
 func (b *rulePackBindTestBinder) ProjectionBindings() (string, []projection.Contract) {
+	b.bindingsCalls++
+	if b.preflightCalls == 0 {
+		b.bindingsEarly = true
+	}
 	return b.packID, b.contracts
 }
 
@@ -202,10 +208,37 @@ func TestBindRulePackContracts_PreflightFailurePreventsEveryInjectionAndStart(t 
 	)
 	require.ErrorIs(t, err, preflightFailure)
 	require.Equal(t, 1, second.preflightCalls)
+	require.Zero(t, first.bindingsCalls)
+	require.Zero(t, second.bindingsCalls)
 	require.Zero(t, first.injectionCalls)
 	require.Zero(t, second.injectionCalls)
 	require.Zero(t, first.startCalls)
 	require.Zero(t, second.startCalls)
+}
+
+func TestBindRulePackContractsReadsEffectiveBindingsOnlyAfterEveryPreflight(t *testing.T) {
+	t.Parallel()
+	first := &rulePackBindTestBinder{
+		baseDiscoverable: baseDiscoverable{name: "first-effective-pack"},
+		packID:           "first-effective-pack",
+	}
+	second := &rulePackBindTestBinder{
+		baseDiscoverable: baseDiscoverable{name: "second-effective-pack"},
+		packID:           "second-effective-pack",
+	}
+
+	require.NoError(t, BindRulePackContracts(
+		context.Background(),
+		rulePackBindTestManager(nil, first, second),
+		nil,
+		nil,
+		nil,
+	))
+	for _, binder := range []*rulePackBindTestBinder{first, second} {
+		require.Equal(t, 1, binder.preflightCalls)
+		require.Equal(t, 1, binder.bindingsCalls)
+		require.False(t, binder.bindingsEarly)
+	}
 }
 
 func TestBindRulePackContracts_PackOverlapFailsDuringWholeSetPreflight(t *testing.T) {

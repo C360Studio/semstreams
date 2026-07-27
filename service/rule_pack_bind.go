@@ -99,6 +99,15 @@ func preflightRulePackMutations(
 	seen := make(map[string]struct{}, len(binders))
 	var aggregate []projection.Contract
 
+	// Freeze and validate every processor snapshot before reading any effective
+	// binding. This keeps a later pack's derivation failure ahead of all
+	// dependency, Registry, heartbeat, injection, and mutation side effects.
+	for index, binder := range binders {
+		if err := binder.PreflightProjectionMutations(); err != nil {
+			return nil, fmt.Errorf("preflight enabled rule processor %d: %w", index, err)
+		}
+	}
+
 	for _, binder := range binders {
 		packID, contracts := binder.ProjectionBindings()
 		if err := rulepackcontract.ValidateID(packID); err != nil {
@@ -108,9 +117,6 @@ func preflightRulePackMutations(
 			return nil, fmt.Errorf("duplicate enabled rule pack_id %q in one composition", packID)
 		}
 		seen[packID] = struct{}{}
-		if err := binder.PreflightProjectionMutations(); err != nil {
-			return nil, fmt.Errorf("preflight rule pack %q: %w", packID, err)
-		}
 		copies := cloneRulePackContracts(contracts)
 		if len(copies) > 0 {
 			if manager.natsClient == nil {
@@ -167,6 +173,9 @@ func validateRulePackMutationDependencies(
 }
 
 func cloneRulePackContracts(contracts []projection.Contract) []projection.Contract {
+	if contracts == nil {
+		return nil
+	}
 	copies := make([]projection.Contract, len(contracts))
 	for i, contract := range contracts {
 		copies[i] = contract

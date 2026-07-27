@@ -4,8 +4,10 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -246,6 +248,12 @@ func (cm *ComponentManager) Initialize() error {
 		cm.logger.Debug("ComponentManager.Initialize: Creating components from config",
 			"count", len(cm.componentConfigs))
 
+		type rulePackInitializationFailure struct {
+			instance string
+			err      error
+		}
+		var rulePackFailures []rulePackInitializationFailure
+
 		// Iterate through component configs and create each one
 		for instanceName, componentConfig := range cm.componentConfigs {
 			// Skip disabled components
@@ -265,7 +273,17 @@ func (cm *ComponentManager) Initialize() error {
 					"factory", componentConfig.Name,
 					"type", componentConfig.Type,
 					"error", err)
-				// Continue with other components instead of failing entirely
+				// Generic components retain the established best-effort cold
+				// boot posture. Enabled rule packs are different: dropping one
+				// here would hide it from ProjectionBinders and let a partial
+				// ownership composition bind. Collect every rule-pack failure,
+				// finish the creation pass, then fail deterministically.
+				if componentConfig.Name == "rule-processor" {
+					rulePackFailures = append(rulePackFailures, rulePackInitializationFailure{
+						instance: instanceName,
+						err:      err,
+					})
+				}
 				continue
 			}
 
@@ -277,6 +295,23 @@ func (cm *ComponentManager) Initialize() error {
 
 		cm.logger.Debug("ComponentManager.Initialize: Finished creating components",
 			"created", len(cm.components))
+		if len(rulePackFailures) > 0 {
+			sort.Slice(rulePackFailures, func(i, j int) bool {
+				return rulePackFailures[i].instance < rulePackFailures[j].instance
+			})
+			failures := make([]error, 0, len(rulePackFailures))
+			for _, failure := range rulePackFailures {
+				failures = append(failures, fmt.Errorf(
+					"rule processor component %q: %w",
+					failure.instance,
+					failure.err,
+				))
+			}
+			return fmt.Errorf(
+				"enabled rule-processor cold-boot initialization failed: %w",
+				errors.Join(failures...),
+			)
+		}
 	} else {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs to create")
 	}

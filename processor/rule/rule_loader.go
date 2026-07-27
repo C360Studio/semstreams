@@ -104,10 +104,6 @@ func (rp *Processor) prepareInitialRules() error {
 	if rp.initialRulesReady {
 		return nil
 	}
-	targets, err := buildProjectionTargetIndex(rp.config.ProjectionContracts)
-	if err != nil {
-		return err
-	}
 	fileDefinitions, err := rp.loadRuleDefinitionsFromFiles()
 	if err != nil {
 		return fmt.Errorf("failed to load rule definitions from files: %w", err)
@@ -121,6 +117,20 @@ func (rp *Processor) prepareInitialRules() error {
 		if err := ValidateDefinition(definition); err != nil {
 			return fmt.Errorf("rule authoring validation failed for %s: %w", definition.ID, err)
 		}
+	}
+	snapshot, err := cloneRuleDefinitions(allDefinitions)
+	if err != nil {
+		return err
+	}
+	effective, err := deriveEffectiveProjectionContracts(snapshot, rp.config.ProjectionContracts)
+	if err != nil {
+		return fmt.Errorf("derive effective projection contracts: %w", err)
+	}
+	targets, err := buildProjectionTargetIndex(effective)
+	if err != nil {
+		return err
+	}
+	for _, definition := range snapshot {
 		if err := validateRuleReplaceOwnedActions(targets, definition); err != nil {
 			return fmt.Errorf(
 				"replace_owned envelope validation failed for rule %s: %w",
@@ -129,12 +139,8 @@ func (rp *Processor) prepareInitialRules() error {
 			)
 		}
 	}
-	snapshot, err := cloneRuleDefinitions(allDefinitions)
-	if err != nil {
-		return err
-	}
-	rp.config.ProjectionContracts = cloneProjectionContracts(rp.config.ProjectionContracts)
 	rp.initialRules = snapshot
+	rp.effectiveContracts = cloneProjectionContracts(effective)
 	rp.projectionTargets = targets
 	rp.initialRulesReady = true
 	return nil

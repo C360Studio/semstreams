@@ -1,6 +1,7 @@
 package rule
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -67,38 +68,77 @@ type Config struct {
 	// declare an explicit non-empty value; there is no default pack identity.
 	PackID string `json:"pack_id" schema:"type:string,category:basic,description:Required stable rule-pack projection owner and graph-event producer identity"`
 
-	// ProjectionContracts are the graph-projection contracts this rule pack
-	// owns (ADR-056 Decision 6). Bound to owner "rule-pack.<PackID>" at the
-	// composition root before StartAll. Pack-level and static: the binding is
-	// derived once and is NOT re-bound when rules hot-reload.
-	ProjectionContracts []projection.Contract `json:"projection_contracts,omitempty" schema:"type:array,category:advanced"`
+	// ProjectionContracts optionally override action-based derivation. Omission
+	// derives the minimal replace-owned authority when every action target is
+	// statically provable. A supplied array is an explicit immutable superset
+	// envelope for boot and hot reload. Birth predicates, foreign edges,
+	// indexing profile, and message type are never inferred.
+	ProjectionContracts []projection.Contract `json:"projection_contracts,omitempty" schema:"type:array,category:advanced,description:Optional explicit projection authorization superset; omit to derive minimal replace-owned groups and statically provable entity scope from initial actions. Birth predicates foreign edges indexing profile and message type are explicit-only"`
 }
 
 // MarshalJSON implements custom JSON marshaling for Config
 func (c Config) MarshalJSON() ([]byte, error) {
 	type Alias Config
-	return json.Marshal(&struct {
+	data, err := json.Marshal(&struct {
 		DebounceDelayMs int `json:"debounce_delay_ms"`
 		*Alias
 	}{
 		DebounceDelayMs: int(c.DebounceDelayMs / time.Millisecond),
 		Alias:           (*Alias)(&c),
 	})
+	if err != nil || c.ProjectionContracts == nil {
+		return data, err
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return nil, err
+	}
+	contracts, err := json.Marshal(c.ProjectionContracts)
+	if err != nil {
+		return nil, err
+	}
+	object["projection_contracts"] = contracts
+	return json.Marshal(object)
 }
 
 // UnmarshalJSON implements custom JSON unmarshaling for Config
 func (c *Config) UnmarshalJSON(data []byte) error {
 	type Alias Config
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	if contracts, present := fields["projection_contracts"]; present &&
+		bytes.Equal(bytes.TrimSpace(contracts), []byte("null")) {
+		return fmt.Errorf("projection_contracts must be an array, not null")
+	}
+
+	// Validate against an independent receiver before applying the overlay to a
+	// shallow copy that may share nested maps or slices with c. This makes every
+	// syntax and field-type failure atomic for the caller.
+	var validated Alias
+	if err := json.Unmarshal(data, &validated); err != nil {
+		return err
+	}
+
+	temporary := *c
 	aux := &struct {
-		DebounceDelayMs int `json:"debounce_delay_ms"`
+		DebounceDelayMs *int `json:"debounce_delay_ms"`
 		*Alias
 	}{
-		Alias: (*Alias)(c),
+		Alias: (*Alias)(&temporary),
 	}
 	if err := json.Unmarshal(data, &aux); err != nil {
 		return err
 	}
-	c.DebounceDelayMs = time.Duration(aux.DebounceDelayMs) * time.Millisecond
+	if aux.DebounceDelayMs != nil {
+		temporary.DebounceDelayMs = time.Duration(*aux.DebounceDelayMs) * time.Millisecond
+	}
+	if _, present := fields["projection_contracts"]; !present {
+		temporary.ProjectionContracts = nil
+	}
+	*c = temporary
 	return nil
 }
 

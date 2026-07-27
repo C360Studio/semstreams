@@ -50,14 +50,47 @@ func ruleComponentConfig(t *testing.T, packID string, contracts []projection.Con
 	}
 }
 
+func derivedRuleComponentConfig(
+	t *testing.T,
+	packID string,
+	definitions []rule.Definition,
+) types.ComponentConfig {
+	t.Helper()
+	rc, err := rule.NewConfig(packID)
+	require.NoError(t, err)
+	rc.EnableGraphIntegration = false
+	rc.InlineRules = definitions
+	raw, err := json.Marshal(rc)
+	require.NoError(t, err)
+	require.NotContains(t, string(raw), "projection_contracts")
+	return types.ComponentConfig{
+		Type:    types.ComponentTypeProcessor,
+		Name:    "rule-processor",
+		Enabled: true,
+		Config:  raw,
+	}
+}
+
 // newManagerWithRuleComponents drives the PRODUCTION wire: a real config
 // Manager holding the given rule component configs, a component registry with
 // the real rule processor registered, and a service.Manager whose mandatory
 // "component-manager" service constructs (but does NOT Start) those rule
-// processors. Returns the wired service.Manager. NOTHING is started — so
-// ProjectionBindings is read on freshly-constructed, never-Started processors,
-// matching the composition-root bind-before-StartAll invariant.
+// processors. Returns the wired service.Manager. NOTHING is started; the
+// composition root preflights each frozen rule snapshot before it reads the
+// effective ProjectionBindings and binds before StartAll.
 func newManagerWithRuleComponents(t *testing.T, ctx context.Context, tc *natsclient.TestClient, comps config.ComponentConfigs) *service.Manager {
+	t.Helper()
+	manager, err := createManagerWithRuleComponents(t, ctx, tc, comps)
+	require.NoError(t, err)
+	return manager
+}
+
+func createManagerWithRuleComponents(
+	t *testing.T,
+	ctx context.Context,
+	tc *natsclient.TestClient,
+	comps config.ComponentConfigs,
+) (*service.Manager, error) {
 	t.Helper()
 
 	cfgManager, err := config.NewConfigManager(&config.Config{
@@ -91,9 +124,7 @@ func newManagerWithRuleComponents(t *testing.T, ctx context.Context, tc *natscli
 	// starting them. After this, manager.ProjectionBinders() returns them.
 	_, err = manager.CreateService("component-manager",
 		json.RawMessage(`{"watch_config": false}`), deps)
-	require.NoError(t, err)
-
-	return manager
+	return manager, err
 }
 
 // componentRegistryWithRule returns a component registry with the real rule
@@ -153,6 +184,133 @@ func TestBindRulePackContracts_ClaimInEpochBeforeStart(t *testing.T) {
 	require.Equal(t, "rule-pack.drone-ops-v1", owner)
 	require.True(t, hb.IsEnrolled("rule-pack.drone-ops-v1"),
 		"a bound static owner must be heartbeat-enrolled")
+}
+
+func TestBindRulePackContracts_DerivedClaimInEpochBeforeStart(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+	vocabulary.Register(droneStatusStatePredicate)
+
+	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
+	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"rule-derived": derivedRuleComponentConfig(t, "derived-drone-v1", []rule.Definition{{
+			ID:      "derive-drone-status",
+			Type:    "expression",
+			Name:    "derive drone status",
+			Enabled: false,
+			Entity:  rule.EntityConfig{Pattern: "acme.ops.robotics.gcs.drone.*"},
+			OnEnter: []rule.Action{{
+				Type:               rule.ActionTypeReplaceOwned,
+				ProjectionContract: "drone.status",
+				ProjectionGroup:    "state",
+				Predicate:          droneStatusStatePredicate,
+				Object:             "ready",
+			}},
+		}}),
+	})
+
+	require.NoError(t, service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()))
+	owner, ok, err := ownerReg.OwnerOf(
+		ctx,
+		"acme.ops.robotics.gcs.drone.001",
+		droneStatusStatePredicate,
+	)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, "rule-pack.derived-drone-v1", owner)
+	require.True(t, hb.IsEnrolled("rule-pack.derived-drone-v1"))
+}
+
+func TestComponentManager_InvalidDerivedPackAbortsValidSiblingBeforeBinding(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+	vocabulary.Register(droneStatusStatePredicate)
+
+	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
+	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+	manager, err := createManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"valid-derived": derivedRuleComponentConfig(t, "valid-derived-v1", []rule.Definition{{
+			ID:      "valid-derived",
+			Type:    "expression",
+			Name:    "valid derived",
+			Enabled: false,
+			Entity:  rule.EntityConfig{Pattern: "acme.ops.robotics.gcs.drone.*"},
+			OnEnter: []rule.Action{{
+				Type:               rule.ActionTypeReplaceOwned,
+				ProjectionContract: "drone.status",
+				ProjectionGroup:    "state",
+				Predicate:          droneStatusStatePredicate,
+			}},
+		}}),
+		"invalid-derived": derivedRuleComponentConfig(t, "invalid-derived-v1", []rule.Definition{{
+			ID:      "invalid-derived",
+			Type:    "expression",
+			Name:    "invalid derived",
+			Enabled: false,
+			OnEnter: []rule.Action{{
+				Type:               rule.ActionTypeReplaceOwned,
+				ProjectionContract: "dynamic.status",
+				ProjectionGroup:    "state",
+				Predicate:          droneStatusStatePredicate,
+				Subject:            "$entity.triple.parent_id", // predicate-audit:invalid {"kind":"stored-predicate","value":"parent_id","reason":"arity"}
+			}},
+		}}),
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "invalid-derived")
+	require.ErrorContains(t, err, "requires an explicit projection_contracts envelope")
+	require.Empty(t, manager.ProjectionBinders(),
+		"failed component-manager construction must not expose a partial binder set")
+
+	owner, found, ownerErr := ownerReg.OwnerOf(
+		ctx,
+		"acme.ops.robotics.gcs.drone.001",
+		droneStatusStatePredicate,
+	)
+	require.NoError(t, ownerErr)
+	require.False(t, found)
+	require.Empty(t, owner)
+	require.False(t, hb.IsEnrolled("rule-pack.valid-derived-v1"))
+	require.False(t, hb.IsEnrolled("rule-pack.invalid-derived-v1"))
+}
+
+func TestComponentManager_DisabledInvalidRulePackIsIgnored(t *testing.T) {
+	ctx := context.Background()
+	tc := natsclient.NewTestClient(t, natsclient.WithKV())
+	defer tc.Terminate()
+	vocabulary.Register(droneStatusStatePredicate)
+
+	disabledInvalid := types.ComponentConfig{
+		Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: false,
+		Config: json.RawMessage(`{"pack_id":"bad:pack"}`),
+	}
+	manager, err := createManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"valid-derived": derivedRuleComponentConfig(t, "valid-disabled-sibling-v1", []rule.Definition{{
+			ID:      "valid-disabled-sibling",
+			Type:    "expression",
+			Name:    "valid disabled sibling",
+			Enabled: false,
+			Entity:  rule.EntityConfig{Pattern: "acme.ops.robotics.gcs.drone.*"},
+			OnEnter: []rule.Action{{
+				Type:               rule.ActionTypeReplaceOwned,
+				ProjectionContract: "drone.status",
+				ProjectionGroup:    "state",
+				Predicate:          droneStatusStatePredicate,
+			}},
+		}}),
+		"disabled-invalid": disabledInvalid,
+	})
+	require.NoError(t, err)
+	require.Len(t, manager.ProjectionBinders(), 1)
+
+	ownerReg := newOwnershipRegistryForBind(t, ctx, tc)
+	hb := ownerReg.NewHeartbeater(ownership.HeartbeatInterval)
+	require.NoError(t, service.BindRulePackContracts(ctx, manager, ownerReg, hb, slog.Default()))
+	require.True(t, hb.IsEnrolled("rule-pack.valid-disabled-sibling-v1"))
+	require.False(t, hb.IsEnrolled("rule-pack.bad:pack"))
 }
 
 func TestBindRulePackContracts_OwnerAlreadyBoundFailsClosed(t *testing.T) {
@@ -337,11 +495,14 @@ func TestRulePackMissingPackIDRejectedAtFactory(t *testing.T) {
 	defer tc.Terminate()
 
 	raw := json.RawMessage(`{"enable_graph_integration":false}`)
-	manager := newManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+	manager, err := createManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
 		"rule-missing-pack": {
 			Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: true, Config: raw,
 		},
 	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "rule-missing-pack")
+	require.ErrorContains(t, err, "pack_id is required")
 	require.Empty(t, manager.ProjectionBinders(), "missing pack_id must prevent processor construction")
 }
 
@@ -360,44 +521,16 @@ func TestRulePackInvalidPackID_RejectedAtFactory(t *testing.T) {
 	invalidRaw, err := json.Marshal(invalidRuleConfig)
 	require.NoError(t, err)
 
-	cfgManager, err := config.NewConfigManager(&config.Config{
-		Platform: config.PlatformConfig{
-			Org: "test", ID: "test-platform", InstanceID: "test-001", Environment: "test",
+	manager, err := createManagerWithRuleComponents(t, ctx, tc, config.ComponentConfigs{
+		"rule-processor": {
+			Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: true, Config: invalidRaw,
 		},
-		Components: config.ComponentConfigs{
-			"rule-processor": {
-				Type: types.ComponentTypeProcessor, Name: "rule-processor", Enabled: true, Config: invalidRaw,
-			},
-		},
-	}, tc.Client, slog.Default())
-	require.NoError(t, err)
-	require.NoError(t, cfgManager.PushToKV(ctx))
-	require.NoError(t, cfgManager.Start(ctx))
-	t.Cleanup(func() { _ = cfgManager.Stop(5 * time.Second) })
-
-	deps := &service.Dependencies{
-		NATSClient:        tc.Client,
-		Manager:           cfgManager,
-		Logger:            slog.Default(),
-		ComponentRegistry: componentRegistryWithRule(t),
-	}
-	svcRegistry := service.NewServiceRegistry()
-	svcRegistry.Register("component-manager", service.NewComponentManager)
-	manager := service.NewServiceManager(svcRegistry)
-	require.NoError(t, manager.ConfigureFromServices(map[string]types.ServiceConfig{}, deps))
-
-	// The ComponentManager constructor builds components; the rule factory must
-	// reject the illegal pack_id. Whether the rejection surfaces as a
-	// CreateService error or a never-constructed component, the invariant is the
-	// same: no rule.Processor with pack_id "bad:pack" exists to bind.
-	_, _ = manager.CreateService("component-manager",
-		json.RawMessage(`{"watch_config": false}`), deps)
-
-	for _, b := range manager.ProjectionBinders() {
-		packID, _ := b.ProjectionBindings()
-		require.NotEqual(t, "bad:pack", packID,
-			"an illegal pack_id must never reach a constructed processor / the bind helper")
-	}
+	})
+	require.Error(t, err)
+	require.ErrorContains(t, err, "rule-processor")
+	require.ErrorContains(t, err, "invalid pack_id")
+	require.Empty(t, manager.ProjectionBinders(),
+		"invalid pack_id must prevent partial component-manager construction")
 }
 
 func missionContract2() projection.Contract {

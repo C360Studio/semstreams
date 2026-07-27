@@ -11,10 +11,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestProcessorProjectionBindings verifies the processor returns the pack-level
-// ownership declaration it was constructed with, unchanged. The processor is
-// substrate-agnostic: ProjectionBindings is a pure read of the stored config
-// (ADR-056 #278 inc 2).
+// TestProcessorProjectionBindings verifies the processor returns the immutable
+// effective pack-level authorization only after preflight.
 func TestProcessorProjectionBindings(t *testing.T) {
 	t.Parallel()
 	vocabulary.Register("drone.status.state")
@@ -38,6 +36,9 @@ func TestProcessorProjectionBindings(t *testing.T) {
 	rp, err := NewProcessor(nil, &cfg)
 	if err != nil {
 		t.Fatalf("NewProcessor: %v", err)
+	}
+	if err := rp.PreflightProjectionMutations(); err != nil {
+		t.Fatalf("PreflightProjectionMutations: %v", err)
 	}
 
 	gotPack, gotContracts := rp.ProjectionBindings()

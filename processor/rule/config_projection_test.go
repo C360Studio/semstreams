@@ -92,6 +92,104 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestConfigUnmarshalPreservesDefaultsWhileOmissionSelectsDerivation(t *testing.T) {
+	t.Parallel()
+
+	config, err := NewConfig("before-overlay")
+	if err != nil {
+		t.Fatalf("NewConfig: %v", err)
+	}
+	config.ProjectionContracts = []projection.Contract{{
+		Name:          "old-explicit",
+		EntityPattern: "acme.ops.test.system.record.*",
+		Groups: []projection.PredicateGroup{{
+			Name:       "state",
+			Mode:       ownership.ModeReplaceOwned,
+			Predicates: []string{"test.config.old"},
+		}},
+	}}
+
+	if err := json.Unmarshal([]byte(`{"pack_id":"after-overlay"}`), &config); err != nil {
+		t.Fatalf("Unmarshal partial config: %v", err)
+	}
+	if config.PackID != "after-overlay" {
+		t.Fatalf("PackID = %q, want after-overlay", config.PackID)
+	}
+	if config.Ports == nil {
+		t.Fatal("partial decode erased default ports")
+	}
+	if config.BufferWindowSize != "10m" {
+		t.Fatalf("BufferWindowSize = %q, want preserved default 10m", config.BufferWindowSize)
+	}
+	if config.AlertCooldownPeriod != "2m" {
+		t.Fatalf("AlertCooldownPeriod = %q, want preserved default 2m", config.AlertCooldownPeriod)
+	}
+	if !config.MessageCache.Enabled {
+		t.Fatal("partial decode erased enabled default message cache")
+	}
+	if config.ProjectionContracts != nil {
+		t.Fatalf("omitted projection_contracts = %#v, want nil derivation selection",
+			config.ProjectionContracts)
+	}
+}
+
+func TestConfigUnmarshalProjectionContractsPresenceAndAtomicErrors(t *testing.T) {
+	t.Parallel()
+
+	t.Run("explicit empty remains non-nil", func(t *testing.T) {
+		config, err := NewConfig("explicit-empty")
+		if err != nil {
+			t.Fatalf("NewConfig: %v", err)
+		}
+		if err := json.Unmarshal(
+			[]byte(`{"projection_contracts":[]}`),
+			&config,
+		); err != nil {
+			t.Fatalf("Unmarshal explicit empty: %v", err)
+		}
+		if config.ProjectionContracts == nil || len(config.ProjectionContracts) != 0 {
+			t.Fatalf("ProjectionContracts = %#v, want explicit non-nil empty slice",
+				config.ProjectionContracts)
+		}
+	})
+
+	tests := []struct {
+		name  string
+		input string
+	}{
+		{name: "type error", input: `{"pack_id":123}`},
+		{name: "null contracts", input: `{"projection_contracts":null}`},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			config, err := NewConfig("atomic-error")
+			if err != nil {
+				t.Fatalf("NewConfig: %v", err)
+			}
+			config.ProjectionContracts = []projection.Contract{{
+				Name:          "keep",
+				EntityPattern: "acme.ops.test.system.record.*",
+				Groups: []projection.PredicateGroup{{
+					Name:       "state",
+					Mode:       ownership.ModeReplaceOwned,
+					Predicates: []string{"test.config.keep"},
+				}},
+			}}
+			before := config
+			before.ProjectionContracts = cloneProjectionContracts(config.ProjectionContracts)
+
+			err = json.Unmarshal([]byte(test.input), &config)
+			if err == nil {
+				t.Fatalf("Unmarshal(%s) succeeded, want error", test.input)
+			}
+			if !reflect.DeepEqual(config, before) {
+				t.Fatalf("receiver mutated on decode error:\n got %#v\nwant %#v", config, before)
+			}
+		})
+	}
+}
+
 func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
 	t.Parallel()
 
@@ -110,6 +208,17 @@ func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
 		}
 		if property.Type != "string" {
 			t.Fatalf("%s schema type = %q, want string", selector, property.Type)
+		}
+	}
+	contracts := schema.Properties["projection_contracts"]
+	for _, phrase := range []string{
+		"omit to derive minimal",
+		"explicit projection authorization superset",
+		"explicit-only",
+	} {
+		if !strings.Contains(contracts.Description, phrase) {
+			t.Fatalf("projection_contracts schema description %q does not contain %q",
+				contracts.Description, phrase)
 		}
 	}
 }

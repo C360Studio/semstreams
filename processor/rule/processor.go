@@ -219,6 +219,7 @@ type Processor struct {
 	kvConfigManager *ConfigManager
 
 	projectionTargets  *projectionTargetIndex
+	effectiveContracts []projection.Contract
 	initialRules       []Definition
 	initialRulesReady  bool
 	ownedReplacer      projection.OwnedReplacer
@@ -251,7 +252,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		return nil, err
 	}
 	configCopy.InlineRules = inlineRules
-	targets, err := buildProjectionTargetIndex(configCopy.ProjectionContracts)
+	targets, err := buildProjectionTargetIndex(nil)
 	if err != nil {
 		return nil, err
 	}
@@ -387,7 +388,12 @@ func (rp *Processor) ConfigSchema() component.ConfigSchema {
 // The processor is substrate-agnostic: it returns a declaration and never
 // touches the ownership registry. All binding happens main-side.
 func (rp *Processor) ProjectionBindings() (packID string, contracts []projection.Contract) {
-	return rp.config.PackID, cloneProjectionContracts(rp.config.ProjectionContracts)
+	rp.mu.RLock()
+	defer rp.mu.RUnlock()
+	if !rp.initialRulesReady {
+		return rp.config.PackID, nil
+	}
+	return rp.config.PackID, cloneProjectionContracts(rp.effectiveContracts)
 }
 
 // PreflightProjectionMutations validates and freezes the initial rules and
@@ -407,7 +413,7 @@ func (rp *Processor) SetOwnedReplacer(replacer projection.OwnedReplacer) error {
 	if !rp.initialRulesReady {
 		return fmt.Errorf("rule pack %q mutation preflight has not completed", rp.config.PackID)
 	}
-	if len(rp.config.ProjectionContracts) == 0 {
+	if len(rp.effectiveContracts) == 0 {
 		return fmt.Errorf("rule pack %q has no projection contracts", rp.config.PackID)
 	}
 	if replacer == nil {
@@ -815,7 +821,10 @@ func (rp *Processor) Start(ctx context.Context) error {
 	if rp.running {
 		return errs.WrapInvalid(errs.ErrAlreadyStarted, "RuleProcessor", "Start", "check processor state")
 	}
-	if len(rp.config.ProjectionContracts) > 0 && !rp.replacerConfigured {
+	if err := rp.prepareInitialRules(); err != nil {
+		return errs.WrapInvalid(err, "RuleProcessor", "Start", "preflight mutation projection")
+	}
+	if len(rp.effectiveContracts) > 0 && !rp.replacerConfigured {
 		return errs.WrapInvalid(
 			fmt.Errorf("rule pack %q has projection contracts but no owned replacer", rp.config.PackID),
 			"RuleProcessor",

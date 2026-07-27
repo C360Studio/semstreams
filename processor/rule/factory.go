@@ -81,11 +81,10 @@ func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies)
 			ruleConfig.StartupInterval = userConfig.StartupInterval
 		}
 
-		// ADR-056 #278 inc 2: the pack-level projection-producer declaration.
-		// These ride the operator config through to ProjectionBindings(), which
-		// the composition root reads ONCE before StartAll to bind ownership.
+		// Preserve nil versus non-nil: nil means omission-based derivation,
+		// while an explicitly authored [] is an empty override.
 		ruleConfig.PackID = userConfig.PackID
-		ruleConfig.ProjectionContracts = userConfig.ProjectionContracts
+		ruleConfig.ProjectionContracts = cloneProjectionContracts(userConfig.ProjectionContracts)
 
 		// Note: InputSubjects no longer supported - use Ports configuration only
 	}
