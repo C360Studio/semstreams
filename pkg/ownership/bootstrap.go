@@ -19,21 +19,23 @@ const ownerClaimsHistory = 10
 // returns a Registry over them.
 //
 // Call this EAGERLY in the framework boot path, BEFORE any
-// lifecycle.Manager.Register — registration heartbeats into OWNER_PRESENCE and
-// CAS-writes OWNER_CLAIMS, so both buckets must already exist. graph-ingest's
-// initStorage runs AFTER registration in every binary's wiring (NewManager →
-// Register → service start), so creating these alongside ENTITY_STATES there
-// would make every registration a silent no-op (the buckets would not yet
-// exist). That is why this is a standalone eager call, not graph-ingest work.
+// lifecycle.Manager.Register — every non-empty registration CAS-writes
+// OWNER_CLAIMS, while owning registrations also heartbeat into OWNER_PRESENCE,
+// so both buckets must already exist. graph-ingest's initStorage runs AFTER
+// registration in every binary's wiring (NewManager → Register → service
+// start), so creating these alongside ENTITY_STATES there would make every
+// registration a silent no-op (the buckets would not yet exist). That is why
+// this is a standalone eager call, not graph-ingest work.
 //
 // Bucket layout (ADR-056 Decision 2):
 //   - OWNER_CLAIMS — the single `_registry` epoch key; History for audit, NO
 //     TTL (a TTL would age out the durable epoch between deploys).
-//   - OWNER_PRESENCE — per-owner heartbeat keys; a bucket-level TTL = PresenceTTL
-//     IS the entire staleness backstop (an absent presence key means the owner
-//     has been silent beyond the grace window and is compactable). Without this
-//     TTL a crashed owner is never reaped and its stale claim blocks every future
-//     registrant forever — so the TTL is not optional.
+//   - OWNER_PRESENCE — heartbeat keys only for atomic registrations containing
+//     replace/CAS claims; a bucket-level TTL = PresenceTTL IS their staleness
+//     backstop. An absent key means that owning entry is compactable. Non-owning
+//     append/foreign-edge-only entries intentionally have no key and persist.
+//     Without this TTL a crashed owning lease is never reaped and its stale
+//     claim blocks every future registrant forever — so the TTL is not optional.
 //
 // PENDING_EDGES (BucketPendingEdges) is deliberately NOT created here: its
 // consumer (the Decision-4 foreign-edge buffer) is a later increment, and a

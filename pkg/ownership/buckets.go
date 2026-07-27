@@ -9,10 +9,10 @@ const (
 	// every registered owner's claims, advanced under UpdateWithRetry CAS.
 	BucketOwnerClaims = "OWNER_CLAIMS"
 
-	// BucketOwnerPresence holds per-owner heartbeat keys
-	// (`heartbeat.<owner_token>`) with a bucket-level TTL backstop, so a
-	// crashed owner's claims are compacted out of the epoch by the next
-	// registrant (availability over a dead owner's stale claim).
+	// BucketOwnerPresence holds `heartbeat.<owner>` keys only for registrations
+	// containing replace/CAS claims. Its bucket-level TTL lets the next
+	// registrant compact a crashed owner's whole atomic entry. Non-owning
+	// append/foreign-edge-only registrations have no key and persist.
 	BucketOwnerPresence = "OWNER_PRESENCE"
 
 	// BucketPendingEdges buffers Conditional foreign edges whose target has not
@@ -26,7 +26,7 @@ const (
 // `=` `.`, and the rest of the codebase keys with dots).
 const registryKey = "_registry"
 
-// presenceKeyPrefix prefixes per-owner heartbeat keys in BucketOwnerPresence,
-// dot-segmented as `heartbeat.<owner_token>` where owner_token is the
-// subject-safe FNV-1a hex of the owner id (see Token).
+// presenceKeyPrefix prefixes owning-lease heartbeat keys in
+// BucketOwnerPresence. The suffix in `heartbeat.<owner>` is the canonical,
+// subject-safe owner id.
 const presenceKeyPrefix = "heartbeat."

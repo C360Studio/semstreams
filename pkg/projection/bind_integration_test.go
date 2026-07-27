@@ -5,6 +5,7 @@ package projection
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/c360studio/semstreams/natsclient"
@@ -113,5 +114,129 @@ func TestBindAndHeartbeat_SkipsEnrollOnBindFailure(t *testing.T) {
 	}
 	if hb.IsEnrolled("other") {
 		t.Error("a rejected owner must NOT be enrolled in the heartbeater")
+	}
+}
+
+func TestBindAndHeartbeat_ModeMatrix(t *testing.T) {
+	reg, ctx := newOwnershipRegistry(t)
+	hb := reg.NewHeartbeater(ownership.HeartbeatInterval)
+	tests := []struct {
+		name       string
+		contract   Contract
+		registered bool
+		owning     bool
+	}{
+		{
+			name: "birth",
+			contract: Contract{
+				Name: "birth", MessageType: "test.birth.v1",
+				EntityPattern:   "c360.semconnect.systems.csapi.birth.*",
+				BirthPredicates: []string{"sensorml.process.uid"},
+			},
+		},
+		{
+			name: "foreign edge",
+			contract: Contract{
+				Name: "foreign", MessageType: "test.foreign.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.foreign.*",
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "append",
+			contract: Contract{
+				Name: "append", MessageType: "test.append.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.append.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"},
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "foreign edge and append",
+			contract: Contract{
+				Name: "foreign-append", MessageType: "test.foreign-append.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.foreign-append.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"},
+				}},
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "replace owned",
+			contract: Contract{
+				Name: "replace", MessageType: "test.replace.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.replace.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeReplaceOwned, Predicates: []string{"test.value.p"},
+				}},
+			},
+			registered: true,
+			owning:     true,
+		},
+		{
+			name: "cas transition",
+			contract: Contract{
+				Name: "cas", MessageType: "test.cas.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.cas.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeCASTransition, Predicates: []string{"test.value.p"},
+				}},
+			},
+			registered: true,
+			owning:     true,
+		},
+		{
+			name: "mixed",
+			contract: Contract{
+				Name: "mixed", MessageType: "test.mixed.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.mixed.*",
+				Groups: []PredicateGroup{
+					{Mode: ownership.ModeReplaceOwned, Predicates: []string{"test.value.p"}},
+					{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"}},
+				},
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+			owning:     true,
+		},
+	}
+
+	for index, test := range tests {
+		owner := fmt.Sprintf("matrix-%d", index)
+		token, err := BindAndHeartbeat(ctx, reg, hb, owner, test.contract)
+		if err != nil {
+			t.Fatalf("%s bind: %v", test.name, err)
+		}
+		if token.IsZero() == test.owning {
+			t.Fatalf("%s token zero = %v, want %v", test.name, token.IsZero(), !test.owning)
+		}
+		if enrolled := hb.IsEnrolled(owner); enrolled != test.owning {
+			t.Fatalf("%s heartbeat enrollment = %v, want %v", test.name, enrolled, test.owning)
+		}
+
+		repeatToken, repeatErr := BindAndHeartbeat(ctx, reg, hb, owner, test.contract)
+		if test.registered {
+			if !errors.Is(repeatErr, ownership.ErrOwnerAlreadyBound) || !repeatToken.IsZero() {
+				t.Fatalf("%s repeat = %q/%v, want zero token and ErrOwnerAlreadyBound",
+					test.name, repeatToken.Wire(), repeatErr)
+			}
+		} else if repeatErr != nil || !repeatToken.IsZero() {
+			t.Fatalf("%s claim-free repeat = %q/%v, want zero token and success",
+				test.name, repeatToken.Wire(), repeatErr)
+		}
 	}
 }

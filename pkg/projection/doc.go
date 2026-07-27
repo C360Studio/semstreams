@@ -14,7 +14,8 @@
 //	component / gateway boot
 //	  └─ projection.Bind(ctx, ownerRegistry, ownerID, contracts...)
 //	       derives the ownership.OwnerClaim/ForeignEdgeClaim set, registers it, and
-//	       returns the owner's typed ownership.OwnerToken to stamp on its writes
+//	       returns an ownership.OwnerToken only when replace/CAS claims make the
+//	       atomic registration an owning lease; non-owning binds return zero
 //	graph-ingest
 //	  └─ enforces the registered claims at the write boundary (a later increment)
 //
@@ -23,6 +24,13 @@
 // write-boundary enforcer. Manual ownership.RegisterOwner remains the low-level
 // escape hatch for owners whose pattern is not derivable from a single payload
 // type (the lifecycle Manager) or for migration scaffolding.
+//
+// Contract-derived append-mode and foreign-edge-only registrations are durable
+// declarations: they persist in the registry without presence, heartbeats,
+// revival monitoring, or a lease token. If a derived registration also contains
+// any replace/CAS claim, the whole claim set is one atomic owning lease:
+// presence and revival monitoring apply to the entry, and stale compaction
+// removes all of its owning and non-owning claims together.
 //
 // A Contract carries no CoordinationWaiver: a legitimately-overlapping
 // projection (the cross-product / mutual-consent case) is an explicit NON-GOAL

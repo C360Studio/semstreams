@@ -73,15 +73,12 @@ func (e *epoch) setWaiversFor(declarer string, waivers []CoordinationWaiver) {
 	e.Waivers = append(kept, waivers...)
 }
 
-// compactStale drops every owner ABSENT from the live-presence set, EXCEPT the
-// registrant (live by definition — it is registering now). Liveness is keyed on
-// the canonical owner id (NOT a hash), and the live set is derived from
-// OWNER_PRESENCE keys whose existence is itself the grace window: a key is
-// present only while its owner has heartbeated within the bucket TTL, so an
-// absent key means the owner has been silent BEYOND the grace window
-// (ttl_hint ≥ 3×max(boot, gc-pause), set at bucket creation). Returns evicted
-// owner ids for logging. This trades a brief, observable double-CLAIM window
-// for never blocking a restart on a dead owner's stale claim (Decision 2).
+// compactStale removes OWNING entries absent from live presence. Durable
+// non-owning entries are exempt because they intentionally have no presence.
+// The registrant is always exempt; an owning registrant heartbeats before the
+// CAS, and the explicit exemption also protects against a presence-read
+// anomaly. For owning entries, an absent key means silence beyond the
+// bucket-TTL grace window. Returns evicted owner ids for logging.
 func (e *epoch) compactStale(registrant string, livePresence map[string]struct{}) []string {
 	var evicted []string
 	for owner, entry := range e.Owners {
@@ -91,33 +88,14 @@ func (e *epoch) compactStale(registrant string, livePresence map[string]struct{}
 		if _, live := livePresence[owner]; live {
 			continue
 		}
-		// FE-claim-only owners are exempt from liveness compaction. A
-		// ForeignEdgeClaim is NOT a lease — it contests nothing (FE×FE never
-		// overlap; the inverse-gate, not the Decision-2 overlap check, governs
-		// it), so reaping a dead FE-claim owner frees no contested cell. It is
-		// registered once at boot from a static contract and is NOT enrolled in
-		// any heartbeater (unlike a lifecycle.Manager OwnerClaim), so without this
-		// exemption its presence key TTL-expires after PresenceTTL and the next
-		// registrant evicts it — making the T2-seam reject flap (claim seen for
-		// ~120s after each boot, then gone). An owner holding ANY OwnerClaim is
-		// still reaped: those DO hold contested cells a live owner may need.
-		//
-		// KNOWN FOLLOW-UP (4b/4c): a dead FE-only owner persists indefinitely
-		// because FE-only owners bind with a nil heartbeater (see
-		// projection.BindAndHeartbeat) and rely on this exemption — they are never
-		// reaped. (Owning projection owners DO heartbeat via the static Heartbeater
-		// since #280 — the earlier "only lifecycle.Manager enrolls a Heartbeater"
-		// no longer holds — but that enrollment does NOT cover FE-only owners, who
-		// opt out by design.) So the cross-type check (checkOverlap #2, overlap.go)
-		// could later flag a LIVE owning-claim registrant against this DEAD FE
-		// incumbent — the "stale claim blocks a restart" shape for the
-		// OwnerClaim-vs-dead-FE direction. Bind now has production callers (#280),
-		// so reachability is closer than the original note implied; it still
-		// requires a production FE producer whose predicate an owning claim
-		// overlaps. The fix — skip dead incumbents in the cross-type check,
-		// heartbeat-enroll FE owners, or declare FE claims permanent-until-resign —
-		// is a 4b/4c decision.
-		if len(entry.Claims) == 0 && len(entry.ForeignEdges) > 0 {
+		// Every non-empty entry without replace-owned/CAS claims is a durable
+		// non-owning declaration. It deliberately has no presence key, so
+		// liveness compaction must exempt append-only, foreign-edge-only, and
+		// combined append/foreign entries. Empty entries remain compactable as
+		// defense-in-depth. A mixed entry containing any owning claim is one
+		// atomic lease and is removed in full when stale.
+		if !containsOwningClaims(entry.Claims) &&
+			(len(entry.Claims) > 0 || len(entry.ForeignEdges) > 0) {
 			continue
 		}
 		evicted = append(evicted, owner)

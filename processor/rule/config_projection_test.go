@@ -28,14 +28,17 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 				EntityPattern: "acme.ops.robotics.gcs.drone.*",
 				Groups: []projection.PredicateGroup{
 					{
+						Name:       "status",
 						Mode:       ownership.ModeReplaceOwned,
 						Predicates: []string{"drone.status.state", "drone.status.battery"},
 					},
 					{
+						Name:       "notes",
 						Mode:       ownership.ModeAppendEvidence,
 						Predicates: []string{"drone.status.note"},
 					},
 				},
+				BirthPredicates: []string{"drone.identity.serial", "drone.identity.model"},
 				ForeignEdges: []projection.ForeignEdge{
 					{
 						Predicate:     "test.drone.assigned-to",

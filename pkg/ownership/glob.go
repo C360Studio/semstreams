@@ -1,10 +1,20 @@
 package ownership
 
 import (
+	"fmt"
 	"strings"
 
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
+
+// ValidateOwnerID reports whether owner is safe to use unchanged as an
+// ownership identity in NATS subjects and KV keys.
+func ValidateOwnerID(owner string) error {
+	if !validOwnerID(owner) {
+		return fmt.Errorf("%w: owner %q is empty or not subject-safe", ErrInvalidClaim, owner)
+	}
+	return nil
+}
 
 // validPattern reports whether p is a 6-part dotted entity-ID glob. Bare "*"
 // (match-any) is intentionally NOT a valid OwnerClaim pattern — an owner

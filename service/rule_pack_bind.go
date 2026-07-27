@@ -61,7 +61,10 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 //
 // The complete enabled binder set is preflighted before any owner token is
 // minted or claim is bound. Missing or duplicate pack IDs are composition
-// errors and abort boot. Substrate overlap/bind failures remain observe-only.
+// errors and abort boot. Cross-owner overlap and transient substrate failures
+// remain observe-only; ErrOwnerAlreadyBound aborts because continuing would
+// activate a pack under an owner whose complete contract set came from another
+// bind.
 //
 // ADR-056 PR-3.5: also mints the typed OwnerToken via ownerReg.OwnerToken and
 // stamps it on the binder (if it implements SetProjectionOwnerToken) so the
@@ -108,7 +111,9 @@ func BindRulePackContracts(ctx context.Context, manager *Manager, ownerReg *owne
 		}
 
 		if _, err := projection.BindAndHeartbeat(ctx, ownerReg, hb, ownerID, contracts...); err != nil {
-			if errors.Is(err, ownership.ErrOwnershipOverlap) {
+			if errors.Is(err, ownership.ErrOwnerAlreadyBound) {
+				return fmt.Errorf("rule pack owner %q already bound: %w", ownerID, err)
+			} else if errors.Is(err, ownership.ErrOwnershipOverlap) {
 				logger.Warn("ownership overlap on rule pack bind — continuing (observe-only)",
 					"owner_id", ownerID, "err", err)
 			} else {

@@ -214,9 +214,9 @@ func (m *Manager) Register(workflow Workflow) error {
 	}
 
 	// Ownership registration (Decision 5 embed) — outside the lock. Only on
-	// success is the local registration committed below, so a registry-rejected
-	// owner never half-lands; an observe-only overlap still commits (the workflow
-	// must keep working through a partial migration).
+	// success is the local registration committed below, so a duplicate owner
+	// binding never half-lands; an observe-only cross-owner overlap still commits
+	// (the workflow must keep working through a partial migration).
 	if reg != nil {
 		if ownerCtx == nil {
 			ownerCtx = context.Background()
@@ -225,6 +225,12 @@ func (m *Manager) Register(workflow Workflow) error {
 		switch err := reg.RegisterOwner(ownerCtx, regn); {
 		case err == nil:
 			hb.Add(workflow.Name)
+		case errors.Is(err, ownership.ErrOwnerAlreadyBound):
+			return fmt.Errorf(
+				"lifecycle: register %q ownership: %w",
+				workflow.Name,
+				err,
+			)
 		case errors.Is(err, ownership.ErrOwnershipOverlap):
 			// Cross-owner collision. OBSERVE-ONLY for the first consumer: the
 			// claim is not recorded in the epoch, but the workflow still
