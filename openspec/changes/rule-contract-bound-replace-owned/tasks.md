@@ -29,11 +29,10 @@
   `rule-pack.<packID>` and inject only `projection.OwnedReplacer` before `StartAll`.
 - [x] 2.4 Remove all `BindAndHeartbeat`, `Registry.OwnerToken`, `SetProjectionOwnerToken`, and observe-only binding
   behavior from the rule-pack composition path.
-- [ ] 2.5 Add service tests for zero, one, and multiple packs, empty packs, missing NATS for any client, missing
+- [x] 2.5 Add service tests for zero, one, and multiple packs, empty packs, missing NATS for any client, missing
   Registry for a non-empty registration, missing heartbeater for owning replace/CAS claims, nil Registry and
   heartbeater accepted for claimless/birth-only contracts, nil heartbeater accepted when non-empty registration has
   no owning claim, injection failure, and proof that no processor starts after a composition error.
-  Remaining: add the non-owning, non-empty registration case with a nil heartbeater; all other listed cases pass.
 - [x] 2.6 Verify `cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` already make the identical existing
   `BindRulePackContracts` call before `StartAll`; do not churn either call site unless the helper signature changes.
 - [x] 2.7 Add service integration tests for duplicate pack IDs, repeated claim-bearing binding preserving
@@ -107,29 +106,32 @@
   #313, PR #687, PR #696, and #688.
 - [x] 7.9 Obtain independent architecture and Go review for fail-closed composition, error semantics, concurrency,
   full-group behavior, hot-reload immutability, and deletion evidence.
-- [x] 7.10 Request Fable review only if implementation exposes an unresolved public projection-contract/framework
-  issue or materially expands that reviewed surface; there is no automatic Fable gate for this internal migration.
-- [ ] 7.11 Rerun the aggregate tagged integration suite on clean-host CI. Local Docker/testcontainers startup failed
-  before assertions in processor/graph-index and agentic-loop; this aggregate gate is not locally green.
+- [x] 7.10 Confirm no separate PR2 Fable review is required because the implementation does not expand the public
+  projection-contract/framework surface reviewed for PRs #687 and #700.
+- [x] 7.11 Run the full tagged processor/rule and service integration suites on a clean host; both pass without a
+  Docker/testcontainers setup failure.
 
 ## Checkpoints
 
-- Base: `46e1e6cb`; rebased SDD: `e8a739ec`; implementation checkpoint: `15037036`.
+- Rebased dependency stack: PR #687 `7d643e30`; PR #696 `12fa1ea4`; PR2 implementation checkpoint `d644e926`.
 - Task 2.6 is verified at the checkpoint: both binaries already call the same helper before `StartAll`.
 - Architecture decision: option A scopes `ErrOwnerAlreadyBound` to non-empty registrations and uses one-time client
   injection failure for repeated claimless/birth-only composition; identical contract-bearing repeats are never
   idempotent.
 - Implementation and focused evidence: rule/service unit and race suites pass; PR-relevant tagged
-  `MutationClient`/graph-ingest tests pass; the full tagged processor/graph-ingest race suite passes in 62.548s;
-  the exact graph-index regression passes in 0.45s.
+  `MutationClient`/graph-ingest tests pass. The full tagged processor/rule suite passes in 43.214s and the full
+  tagged service suite passes in 66.732s on a clean host without a Docker/testcontainers flake.
+- `TestIntegration_BindRulePackContractsForeignEdgeOnlyNeedsNoHeartbeatPresence` passes against the PR #700
+  posture with a nil heartbeater and no owner-presence dependency, closing task 2.5.
 - Review evidence: architect APPROVED; independent Go reviewer APPROVED; generated schema reviewed.
+- Fable re-review of PRs #687 and #700 returned
+  [APPROVE](https://github.com/C360Studio/semstreams/pull/687#issuecomment-5091179194), with no P1 or inline review
+  threads. No separate PR2 Fable review is required because PR2 adds no public projection-contract/framework API
+  delta.
 - `task check:push` passed at a clean checkpoint, including build, lint, vet/tag checks, schema generation with zero
   drift, contract checks, and repository-wide `go test -race ./...` on rerun.
-- Aggregate tagged integration remains pending under 7.11. Local NATS 8222 mapping and Docker daemon inspect
-  timeouts prevented processor/graph-index and agentic-loop setup before assertions; agentic-loop setup failure
-  persisted locally. These infrastructure failures are not recorded as a green aggregate run.
 - `task e2e:structural` passes 37/37; explicit teardown left no containers.
-- Predicate audits pass with `predicate:audit` reporting 503 candidates and `predicate:test-audit` reporting 2,221
+- Predicate audits pass with `predicate:audit` reporting 503 candidates and `predicate:test-audit` reporting 2,269
   candidates with 147 exact fixtures.
 - Target strict OpenSpec and all 33/33 strict validations pass. Deletion audit finds zero production legacy
   ReplaceOwned/token/update-with-triples matches; AddTriple/RemoveTriple remain intentionally inventoried for #688.
@@ -137,5 +139,3 @@
   clean.
 - Delivery references are #313, PR #687, PR #696, and #688. Task 7.8 remains open until the PR exists and can carry
   the final delivery-evidence cross-link.
-- Fable re-review was not requested because the base-relative diff does not expand the public
-  projection-contract/framework API.
