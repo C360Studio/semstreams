@@ -42,7 +42,7 @@ func (binder *observingRuleProcessorBinder) Start(context.Context) error {
 	return errors.New("test rule processor must not start during composition")
 }
 
-func birthOnlyRuleProcessorBindManager(
+func observingRuleProcessorBindManager(
 	nats *natsclient.Client,
 	binder *observingRuleProcessorBinder,
 ) *Manager {
@@ -57,6 +57,23 @@ func birthOnlyRuleProcessorBindManager(
 		},
 	}
 	return manager
+}
+
+func requireNoGraphMutationTransport(
+	t *testing.T,
+	ctx context.Context,
+	client *natsclient.Client,
+	observed <-chan string,
+) {
+	t.Helper()
+	const barrier = "graph.test.rule-pack.bind-barrier"
+	require.NoError(t, client.Publish(ctx, barrier, nil))
+	select {
+	case subject := <-observed:
+		require.Equal(t, barrier, subject, "composition must not publish graph mutation transport")
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for graph transport barrier")
+	}
 }
 
 func requireNoBindTransport(
@@ -182,7 +199,7 @@ func TestIntegration_BindRulePackContractsBirthOnlyRepeatFailsAtOneTimeInjection
 	processor, err := rule.NewProcessor(testClient.Client, &config)
 	require.NoError(t, err)
 	binder := &observingRuleProcessorBinder{Processor: processor}
-	manager := birthOnlyRuleProcessorBindManager(testClient.Client, binder)
+	manager := observingRuleProcessorBindManager(testClient.Client, binder)
 
 	observed := make(chan string, 8)
 	subscription, err := testClient.Client.Subscribe(ctx, ">", func(_ context.Context, message *nats.Msg) {
@@ -217,4 +234,65 @@ func TestIntegration_BindRulePackContractsBirthOnlyRepeatFailsAtOneTimeInjection
 	_, presenceErr := testClient.Client.GetKeyValueBucket(ctx, ownership.BucketOwnerPresence)
 	require.ErrorIs(t, presenceErr, jetstream.ErrBucketNotFound,
 		"birth-only composition must not create heartbeat presence")
+}
+
+func TestIntegration_BindRulePackContractsForeignEdgeOnlyNeedsNoHeartbeatPresence(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	vocabulary.Register("test.rule-pack.related")
+
+	registry, err := ownership.EnsureBuckets(
+		ctx,
+		testClient.Client,
+		slog.Default(),
+		vocabulary.InverseResolver,
+	)
+	require.NoError(t, err)
+	config, err := rule.NewConfig("foreign-edge-only-v1")
+	require.NoError(t, err)
+	config.EnableGraphIntegration = false
+	config.ProjectionContracts = []projection.Contract{{
+		Name:          "foreign-edge-only-record",
+		MessageType:   "test.rule-pack.foreign-edge-only.v1",
+		EntityPattern: "acme.ops.test.system.record.*",
+		ForeignEdges: []projection.ForeignEdge{{
+			Predicate:     "test.rule-pack.related",
+			Mode:          ownership.EdgeStrict,
+			TargetPattern: "acme.ops.test.system.target.*",
+		}},
+	}}
+	processor, err := rule.NewProcessor(testClient.Client, &config)
+	require.NoError(t, err)
+	binder := &observingRuleProcessorBinder{Processor: processor}
+	manager := observingRuleProcessorBindManager(testClient.Client, binder)
+
+	observed := make(chan string, 8)
+	subscription, err := testClient.Client.Subscribe(ctx, "graph.>", func(_ context.Context, message *nats.Msg) {
+		observed <- message.Subject
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, subscription.Unsubscribe()) })
+	requireNoGraphMutationTransport(t, ctx, testClient.Client, observed)
+
+	require.NoError(t, BindRulePackContracts(ctx, manager, registry, nil, slog.Default()))
+	requireNoGraphMutationTransport(t, ctx, testClient.Client, observed)
+	require.Equal(t, 1, binder.injectionAttempts)
+	require.NotNil(t, binder.injected)
+	require.Zero(t, binder.startCalls)
+
+	claim, found, claimErr := registry.ForeignEdgeClaimFor(
+		ctx,
+		"test.rule-pack.foreign-edge-only.v1",
+		"test.rule-pack.related",
+	)
+	require.NoError(t, claimErr)
+	require.True(t, found)
+	require.Equal(t, "rule-pack.foreign-edge-only-v1", claim.Owner)
+	require.Equal(t, ownership.EdgeStrict, claim.Mode)
+
+	presence, presenceErr := testClient.Client.GetKeyValueBucket(ctx, ownership.BucketOwnerPresence)
+	require.NoError(t, presenceErr)
+	_, presenceErr = presence.Get(ctx, "heartbeat.rule-pack.foreign-edge-only-v1")
+	require.ErrorIs(t, presenceErr, jetstream.ErrKeyNotFound,
+		"foreign-edge-only registration must not create heartbeat presence")
 }
