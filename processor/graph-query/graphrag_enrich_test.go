@@ -6,10 +6,115 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph/clustering"
 )
+
+// TestSelectDigestEntities covers Lever A of thematic-synthesis-context:
+// query-relevant representative selection with PageRank backfill and a full
+// PageRank fallback when no relevance scores are present.
+func TestSelectDigestEntities(t *testing.T) {
+	// A community whose top-PageRank reps are NOT the query-relevant members.
+	// Members are deliberately NOT in ID-ascending order: selectDigestEntities
+	// builds its scored slice by iterating Members, so an ID-ascending fixture
+	// would let a dropped tie-break survive (all-equal scores + insertion sort
+	// leaves the already-ascending order in place). A shuffled order makes the
+	// tie-break subtest genuinely reorder — dropping the tie-break then fails it.
+	comm := &clustering.Community{
+		ID:          "c0",
+		Level:       0,
+		Members:     []string{"m8", "m3", "m1", "m5", "m6", "m2", "m4", "m7"},
+		RepEntities: []string{"m1", "m2"}, // PageRank reps (query-agnostic)
+	}
+
+	t.Run("nil scores fall back entirely to PageRank RepEntities", func(t *testing.T) {
+		got := selectDigestEntities(comm, nil)
+		if !slices.Equal(got, comm.RepEntities) {
+			t.Errorf("nil scores: got %v, want RepEntities %v unchanged", got, comm.RepEntities)
+		}
+		got = selectDigestEntities(comm, map[string]float64{})
+		if !slices.Equal(got, comm.RepEntities) {
+			t.Errorf("empty scores: got %v, want RepEntities %v unchanged", got, comm.RepEntities)
+		}
+	})
+
+	t.Run("members ranked by score desc, capped at MaxQueryFocusedReps", func(t *testing.T) {
+		scores := map[string]float64{
+			"m8": 0.9, "m6": 0.8, "m4": 0.7, "m3": 0.6, "m2": 0.5, "m1": 0.4,
+		}
+		got := selectDigestEntities(comm, scores)
+		want := []string{"m8", "m6", "m4", "m3", "m2"} // top 5 by score
+		if !slices.Equal(got, want) {
+			t.Errorf("query-relevant order: got %v, want %v", got, want)
+		}
+		if len(got) != MaxQueryFocusedReps {
+			t.Errorf("selection not capped: got %d, want %d", len(got), MaxQueryFocusedReps)
+		}
+	})
+
+	t.Run("ties broken by entity ID ascending (determinism)", func(t *testing.T) {
+		// All equal scores → deterministic lexical order, cap 5.
+		scores := map[string]float64{
+			"m5": 1.0, "m3": 1.0, "m8": 1.0, "m1": 1.0, "m6": 1.0, "m2": 1.0,
+		}
+		got := selectDigestEntities(comm, scores)
+		want := []string{"m1", "m2", "m3", "m5", "m6"} // ID asc, top 5
+		if !slices.Equal(got, want) {
+			t.Errorf("tie-break: got %v, want %v (score-equal → ID asc)", got, want)
+		}
+	})
+
+	t.Run("thin scored members backfill from RepEntities to the cap", func(t *testing.T) {
+		// Only two members scored, both distinct from the two reps → 2 scored + 2
+		// backfilled reps = 4 (fewer than cap because the candidate pool is thin).
+		scores := map[string]float64{"m7": 0.9, "m8": 0.8}
+		got := selectDigestEntities(comm, scores)
+		want := []string{"m7", "m8", "m1", "m2"} // scored first, then reps in order
+		if !slices.Equal(got, want) {
+			t.Errorf("backfill: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("backfill does not duplicate an already-selected rep", func(t *testing.T) {
+		// m1 is both a rep AND a scored member; it must appear once.
+		scores := map[string]float64{"m1": 0.95, "m7": 0.5}
+		got := selectDigestEntities(comm, scores)
+		want := []string{"m1", "m7", "m2"} // m1 (scored), m7 (scored), m2 (rep backfill)
+		if !slices.Equal(got, want) {
+			t.Errorf("dedupe on backfill: got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("no rep slot lost versus today", func(t *testing.T) {
+		// With any relevance signal, the selection must never carry fewer slots
+		// than today's pure-RepEntities behavior (len == min(cap, len(reps))).
+		floor := len(comm.RepEntities)
+		if floor > MaxQueryFocusedReps {
+			floor = MaxQueryFocusedReps
+		}
+		for _, scores := range []map[string]float64{
+			{"m7": 0.9},                       // 1 scored, disjoint from reps
+			{"m7": 0.9, "m8": 0.8},            // 2 scored, disjoint
+			{"m1": 0.9},                       // 1 scored that IS a rep
+			{"m3": 0.9, "m4": 0.8, "m5": 0.7}, // 3 scored, disjoint
+		} {
+			got := selectDigestEntities(comm, scores)
+			if len(got) < floor {
+				t.Errorf("scores %v: got %d slots (%v), fewer than today's floor %d — a rep slot was lost",
+					scores, len(got), got, floor)
+			}
+		}
+	})
+
+	t.Run("nil community returns nil", func(t *testing.T) {
+		if got := selectDigestEntities(nil, map[string]float64{"m1": 1}); got != nil {
+			t.Errorf("selectDigestEntities(nil) = %v, want nil", got)
+		}
+	})
+}
 
 // findCommunitiesForEntities walks EVERY level, so it is the one producer that can
 // emit two summaries sharing a community ID. Each must carry its own level: the
@@ -98,7 +203,9 @@ func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing
 		{CommunityID: collidingID, Level: 1},
 	}
 
-	got, err := c.enrichCommunitySummaries(context.Background(), summaries)
+	// nil scores → pure PageRank RepEntities selection (this test asserts each
+	// summary keeps its own community's reps; relevance steering is orthogonal).
+	got, err := c.enrichCommunitySummaries(context.Background(), summaries, nil)
 	if err != nil {
 		t.Fatalf("enrichCommunitySummaries: %v", err)
 	}
@@ -129,6 +236,190 @@ func TestEnrichCommunitySummaries_CollidingIDsKeepTheirOwnRepEntities(t *testing
 			t.Errorf("level %d: rep entity = %q, want %q — a summary carrying another level's "+
 				"rep entities is a digest stitched from two different communities",
 				tc.level, s.Entities[0].ID, tc.wantRepEntitiy)
+		}
+	}
+}
+
+// TestEnrichCommunitySummaries_ScoresSteerRepDigests proves the semanticScores
+// map threaded from the strategy handlers (handleStrategySemantic and the tier-1
+// graphrag caller) is actually consumed by the enrichment path — not silently
+// dropped. The pure ranking is covered by TestSelectDigestEntities; this closes
+// the seam between it and the response-enrichment plumbing by driving the
+// production enrichCommunitySummaries with and without scores and asserting the
+// digest reps flip. The handler-level map construction itself is a literal
+// mirror of the reviewed tier-1 caller and driving handleStrategySemantic
+// end-to-end needs a semantic embedding searcher, so it is not exercised here.
+// No natsClient: loadDigestEntities degrades to unlabelled digests, but the
+// SELECTED IDs (what the scores steer) still surface as digest IDs.
+func TestEnrichCommunitySummaries_ScoresSteerRepDigests(t *testing.T) {
+	const commID = "acme.ops.robotics.gcs.drone.001"
+
+	cache := NewCommunityCache(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	b, err := json.Marshal(&clustering.Community{
+		ID:          commID,
+		Level:       0,
+		Members:     []string{"m-a", "m-b", "m-c"},
+		RepEntities: []string{"m-a"}, // PageRank rep (query-agnostic)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache.handleUpdate("0."+commID, b)
+
+	c := &Component{
+		communityCache: cache,
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+
+	// With scores steering m-c highest, the first digest must be the
+	// query-relevant member m-c — NOT the PageRank rep m-a — proving the scores
+	// map reached selectDigestEntities through enrichCommunitySummaries.
+	scored, err := c.enrichCommunitySummaries(
+		context.Background(),
+		[]CommunitySummary{{CommunityID: commID, Level: 0}},
+		map[string]float64{"m-c": 0.9, "m-b": 0.5},
+	)
+	if err != nil {
+		t.Fatalf("enrichCommunitySummaries (scores): %v", err)
+	}
+	if len(scored) != 1 {
+		t.Fatalf("scored: got %d summaries, want 1", len(scored))
+	}
+	if len(scored[0].Entities) == 0 {
+		t.Fatal("scored: got 0 rep digests, want >=1 (scores were dropped?)")
+	}
+	if scored[0].Entities[0].ID != "m-c" {
+		t.Errorf("scored digest[0] = %q, want %q (query-relevant member must outrank the PageRank rep)",
+			scored[0].Entities[0].ID, "m-c")
+	}
+
+	// Control: nil scores → pure PageRank selection → the sole digest is m-a.
+	nilScored, err := c.enrichCommunitySummaries(
+		context.Background(),
+		[]CommunitySummary{{CommunityID: commID, Level: 0}},
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("enrichCommunitySummaries (nil): %v", err)
+	}
+	if len(nilScored) != 1 || len(nilScored[0].Entities) != 1 || nilScored[0].Entities[0].ID != "m-a" {
+		t.Errorf("nil-scores digest = %v, want a single PageRank rep [m-a]", nilScored[0].Entities)
+	}
+}
+
+// TestRelevanceScoresFor_ExcludesTypeFilteredHits is the Codex P1 regression: a
+// type-filtered-out hit must not leak back into synthesis via the relevance score
+// map. selectDigestEntities ranks a community's WHOLE membership against that map,
+// so if the map is built from the raw (pre-type-filter) hits, an excluded entity
+// that shares a community with a survivor can be promoted into the digest (reps +
+// tags) and cite type-excluded evidence in the answer. The map is instead built
+// from the FINAL surviving entityIDs via relevanceScoresFor, so an excluded ID
+// carries no score and cannot be selected.
+//
+// Fail-without: replace `relevanceScoresFor(entityIDs, hits)` with a map built
+// from the raw hits — the excluded drone (0.9) then outranks the surviving sensor
+// (0.5) in selectDigestEntities and leaks into the reps, failing the
+// excluded-entity assertions below.
+func TestRelevanceScoresFor_ExcludesTypeFilteredHits(t *testing.T) {
+	const (
+		// type=drone, HIGH score, removed by the classifier's type filter.
+		excluded = "acme.ops.warehouse.dock.drone.forklift-battery"
+		// type=sensor, LOWER score, survives the type filter.
+		surviving = "acme.ops.warehouse.dock.sensor.temp-001"
+	)
+
+	// Raw semantic hits carry BOTH entities; the excluded one scores higher.
+	hits := []SemanticHit{
+		{EntityID: excluded, Score: 0.9},
+		{EntityID: surviving, Score: 0.5},
+	}
+	rawIDs := []string{excluded, surviving}
+
+	// Classifier type filter narrows to "sensor". A survivor remains, so this is a
+	// genuine narrow (fellBack=false), not the #645 zero-fallback.
+	entityIDs, fellBack := filterEntityIDsByType(rawIDs, []string{"sensor"})
+	if fellBack {
+		t.Fatalf("type filter fell back unexpectedly — a genuine narrow is required to exercise the leak")
+	}
+	if !slices.Equal(entityIDs, []string{surviving}) {
+		t.Fatalf("type-filter narrow = %v, want [%s]", entityIDs, surviving)
+	}
+
+	// The score map is keyed ONLY by the surviving IDs.
+	scores := relevanceScoresFor(entityIDs, hits)
+	if _, leaked := scores[excluded]; leaked {
+		t.Errorf("excluded entity %q leaked into the relevance score map: %v", excluded, scores)
+	}
+	if s, ok := scores[surviving]; !ok || s != 0.5 {
+		t.Errorf("surviving entity score = %v (ok=%v), want 0.5", s, ok)
+	}
+
+	// Both entities are members of ONE community; the excluded one has the higher
+	// raw score, so a raw-hits map would rank it first. With the surviving-keyed
+	// map it must never enter the selected reps.
+	comm := &clustering.Community{
+		ID:          "acme.ops.warehouse.dock.community.0",
+		Level:       0,
+		Members:     []string{excluded, surviving},
+		RepEntities: []string{surviving}, // PageRank rep is the survivor
+	}
+	reps := selectDigestEntities(comm, scores)
+	if slices.Contains(reps, excluded) {
+		t.Fatalf("type-excluded entity %q promoted into community reps %v — synthesis could cite type-excluded evidence",
+			excluded, reps)
+	}
+	if !slices.Contains(reps, surviving) {
+		t.Errorf("surviving entity %q missing from reps %v", surviving, reps)
+	}
+
+	// It must appear in neither the digest nor the rendered synthesis line.
+	var rendered []string
+	for _, id := range reps {
+		rendered = append(rendered, formatRepDigest(buildRepDigest(id, nil)))
+	}
+	line := strings.Join(rendered, " | ")
+	if strings.Contains(line, "forklift-battery") {
+		t.Errorf("excluded entity vocabulary leaked into synthesis context: %q", line)
+	}
+	if !strings.Contains(line, "temp-001") {
+		t.Errorf("surviving entity missing from synthesis context: %q", line)
+	}
+}
+
+// TestSelectDigestEntities_NilScoresCapRepEntities is the Codex P2 regression: the
+// no-score PageRank fallback must enforce MaxQueryFocusedReps even for a KV
+// community record whose stored RepEntities exceed the cap (no length invariant is
+// enforced at the KV boundary — graph-query spec scenario 4), and must return a
+// COPY so a caller mutation cannot corrupt the cached community's slice.
+//
+// Fail-without: return comm.RepEntities unchanged and (a) the result length is the
+// full >cap slice, and (b) mutating the result corrupts comm.RepEntities — both
+// assertions below fail.
+func TestSelectDigestEntities_NilScoresCapRepEntities(t *testing.T) {
+	// 7 stored reps — more than MaxQueryFocusedReps (5) — in PageRank order.
+	stored := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6"}
+	comm := &clustering.Community{
+		ID:          "acme.ops.warehouse.dock.community.0",
+		Level:       0,
+		Members:     stored,
+		RepEntities: stored,
+	}
+	// Independent snapshot of the expected capped prefix (order preserved).
+	want := append([]string(nil), stored[:MaxQueryFocusedReps]...)
+
+	for _, scores := range []map[string]float64{nil, {}} {
+		got := selectDigestEntities(comm, scores)
+		if len(got) != MaxQueryFocusedReps {
+			t.Fatalf("scores=%v: got %d reps, want cap %d — the KV record's >cap RepEntities bypassed the bound",
+				scores, len(got), MaxQueryFocusedReps)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("scores=%v: got %v, want PageRank-order prefix %v", scores, got, want)
+		}
+		// Copy, not alias: mutating the result must not corrupt the community record.
+		got[0] = "MUTATED"
+		if comm.RepEntities[0] == "MUTATED" {
+			t.Fatal("selectDigestEntities returned the caller-mutable underlying slice — a mutation corrupted comm.RepEntities")
 		}
 	}
 }

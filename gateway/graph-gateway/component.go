@@ -1600,7 +1600,7 @@ func buildIntrospectionSchema() map[string]interface{} {
 			typeDef("OBJECT", "GlobalSearchResult", "strategy", "entities", "entity_ids", "entity_digests", "summarized", "community_summaries", "relationships", "sources", "count", "duration_ms", "answer", "answer_model", "degraded", "degraded_reason"),
 			typeDef("OBJECT", "LocalSearchResult", "entities", "communityId", "count", "durationMs", "degraded", "degraded_reason"),
 			typeDef("OBJECT", "CommunitySummary", "community_id", "summary", "keywords", "level", "relevance", "member_count", "entities"),
-			typeDef("OBJECT", "EntityDigest", "id", "type", "label", "relevance"),
+			typeDef("OBJECT", "EntityDigest", "id", "type", "label", "relevance", "tags"),
 			typeDef("OBJECT", "SearchRelationship", "from_entity_id", "to_entity_id", "predicate"),
 			typeDef("OBJECT", "SearchSource", "entity_id", "community_id", "relevance"),
 			typeDef("OBJECT", "Capabilities", "queries", "mutations"),
