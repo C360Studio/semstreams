@@ -29,83 +29,83 @@ The initial public surface is:
 
 ```go
 type PredicateGroup struct {
-	Name       string              `json:"name,omitempty"`
-	Mode       ownership.WriteMode `json:"mode"`
-	Predicates []string            `json:"predicates"`
+ Name       string              `json:"name,omitempty"`
+ Mode       ownership.WriteMode `json:"mode"`
+ Predicates []string            `json:"predicates"`
 }
 
 type Contract struct {
-	Name            string           `json:"name"`
-	MessageType     string           `json:"message_type,omitempty"`
-	EntityPattern   string           `json:"entity_pattern"`
-	Groups          []PredicateGroup `json:"groups,omitempty"`
-	BirthPredicates []string         `json:"birth_predicates,omitempty"`
-	ForeignEdges    []ForeignEdge    `json:"foreign_edges,omitempty"`
-	IndexingProfile string           `json:"indexing_profile,omitempty"`
+ Name            string           `json:"name"`
+ MessageType     string           `json:"message_type,omitempty"`
+ EntityPattern   string           `json:"entity_pattern"`
+ Groups          []PredicateGroup `json:"groups,omitempty"`
+ BirthPredicates []string         `json:"birth_predicates,omitempty"`
+ ForeignEdges    []ForeignEdge    `json:"foreign_edges,omitempty"`
+ IndexingProfile string           `json:"indexing_profile,omitempty"`
 }
 
 type MutationClientConfig struct {
-	NATS        *natsclient.Client
-	Registry    *ownership.Registry
-	Heartbeater *ownership.Heartbeater
-	Owner       string
-	Contracts   []Contract
-	Timeout     time.Duration
-	Retry       natsclient.RetryConfig
+ NATS        *natsclient.Client
+ Registry    *ownership.Registry
+ Heartbeater *ownership.Heartbeater
+ Owner       string
+ Contracts   []Contract
+ Timeout     time.Duration
+ Retry       natsclient.RetryConfig
 }
 
 func BindMutationClient(
-	ctx context.Context,
-	cfg MutationClientConfig,
+ ctx context.Context,
+ cfg MutationClientConfig,
 ) (*MutationClient, error)
 
 type MutationMetadata struct {
-	RequestID string
-	TraceID   string
-	Source    string
-	Timestamp time.Time
+ RequestID string
+ TraceID   string
+ Source    string
+ Timestamp time.Time
 }
 
 type CreateMutation struct {
-	Contract string
-	Entity   *graph.EntityState
-	Triples  []message.Triple
-	Metadata MutationMetadata
+ Contract string
+ Entity   *graph.EntityState
+ Triples  []message.Triple
+ Metadata MutationMetadata
 }
 
 type ReplaceOwnedMutation struct {
-	Contract string
-	Group    string
-	EntityID string
-	Desired  []message.Triple
-	Metadata MutationMetadata
+ Contract string
+ Group    string
+ EntityID string
+ Desired  []message.Triple
+ Metadata MutationMetadata
 }
 
 type AppendEvidenceMutation struct {
-	Contract string
-	EntityID string
-	Evidence []message.Triple
-	Metadata MutationMetadata
+ Contract string
+ EntityID string
+ Evidence []message.Triple
+ Metadata MutationMetadata
 }
 
 func (c *MutationClient) CreateWithTriples(
-	ctx context.Context,
-	req CreateMutation,
+ ctx context.Context,
+ req CreateMutation,
 ) (MutationReceipt, error)
 
 func (c *MutationClient) ReplaceOwned(
-	ctx context.Context,
-	req ReplaceOwnedMutation,
+ ctx context.Context,
+ req ReplaceOwnedMutation,
 ) (MutationReceipt, error)
 
 func (c *MutationClient) AppendEvidence(
-	ctx context.Context,
-	req AppendEvidenceMutation,
+ ctx context.Context,
+ req AppendEvidenceMutation,
 ) (MutationReceipt, error)
 
 func (c *MutationClient) ReadAuthoritative(
-	ctx context.Context,
-	entityID string,
+ ctx context.Context,
+ entityID string,
 ) (*graph.EntityState, error)
 ```
 
@@ -113,19 +113,19 @@ func (c *MutationClient) ReadAuthoritative(
 
 ```go
 type EntityCreator interface {
-	CreateWithTriples(context.Context, CreateMutation) (MutationReceipt, error)
+ CreateWithTriples(context.Context, CreateMutation) (MutationReceipt, error)
 }
 
 type OwnedReplacer interface {
-	ReplaceOwned(context.Context, ReplaceOwnedMutation) (MutationReceipt, error)
+ ReplaceOwned(context.Context, ReplaceOwnedMutation) (MutationReceipt, error)
 }
 
 type EvidenceAppender interface {
-	AppendEvidence(context.Context, AppendEvidenceMutation) (MutationReceipt, error)
+ AppendEvidence(context.Context, AppendEvidenceMutation) (MutationReceipt, error)
 }
 
 type AuthoritativeReader interface {
-	ReadAuthoritative(context.Context, string) (*graph.EntityState, error)
+ ReadAuthoritative(context.Context, string) (*graph.EntityState, error)
 }
 ```
 
@@ -134,16 +134,32 @@ architect-reviewed OpenSpec amendment.
 
 ### 2. Register each owner once per Registry across every entry point
 
-`BindMutationClient` validates and indexes all supplied contracts before registration or heartbeat side effects. If
-any contract derives an owning claim from a `replace-owned` or `cas-transition` group, a non-nil heartbeater is
-required. The constructor then calls `BindAndHeartbeat` and stores the opaque owner token. The constructed client is
-immutable and safe for concurrent use.
+[#700](https://github.com/C360Studio/semstreams/issues/700) separates registration identity from lease liveness.
+`BindMutationClient` validates and indexes all supplied contracts, derives one complete atomic
+`ownership.Registration`, and classifies that registration before any registration, presence, token, or
+heartbeater side effect.
+
+Owner presence means only that a liveness-managed owner lease is live. Presence is not registration identity, does
+not make a registration persistent, and does not control the same-Registry guard. Registration identity remains a
+Registry-lifetime invariant enforced independently of presence.
+
+The complete derived owner set has exactly one posture:
+
+- A birth-only/no-claim set skips `RegisterOwner`. It creates no registration, owner-presence record, token, or
+  heartbeater enrollment.
+- A foreign-edge-only, append-only, or combined foreign-edge/append set registers one persistent atomic owner
+  entry. It retains a zero token and creates no owner-presence record or heartbeater enrollment. Absence of
+  presence is expected and must not make this persistent entry eligible for lease reaping.
+- If any contract derives an owning claim from a `replace-owned` or `cas-transition` group, the entire atomic owner
+  entry is liveness-managed. This includes every foreign-edge and append claim registered in the same owner set.
+  Binding requires a non-nil heartbeater, creates owner presence, returns a non-zero opaque token, and enrolls the
+  owner exactly once. Lease expiry applies to the complete atomic entry rather than individual claim classes.
 
 - The one-registration rule belongs to `ownership.Registry` and applies beyond `MutationClient`. Direct
   `RegisterOwner`, `projection.Bind`, `BindAndHeartbeat`, and `BindMutationClient` all converge on the same guard.
 - The composition root must collect every contract intended for a registered owner before its first registration.
-  All static built-in contracts for the same owner are aggregated and passed to one `BindAndHeartbeat` call rather
-  than registered incrementally.
+  All static built-in contracts for the same owner are aggregated and passed to one binding operation rather than
+  registered incrementally; the complete derived set selects persistent or liveness-managed posture.
 - The first successful registration consumes that owner identity for the Registry lifetime. A concurrent or later
   same-owner attempt returns `ErrOwnerAlreadyBound` before the owner-presence heartbeat, ownership-claim KV
   mutation, or heartbeater enrollment. Identical, overlapping, and disjoint second registrations are all rejected.
@@ -156,18 +172,27 @@ immutable and safe for concurrent use.
 - The caller owns the heartbeater lifecycle and cancels it through the supplied context/composition root.
 - Create requests containing owning facts and all replace-owned requests carry the bound token.
 - Append-evidence requests do not carry an owner token.
-- A collection containing only `append-evidence` groups may bind with a nil heartbeater. That client is limited to
-  append and read-back; create and replace fail validation before transport or registry mutation.
-- A birth-only contract has no ownership claim. It may bind and create without a heartbeater or owner token.
-- When the complete contract set derives no claim or foreign edge, binding skips ownership registration and retains
-  a zero token. Because `RegisterOwner` is not called, a birth-only/no-claim client does not consume the owner's
-  one-registration identity.
+- A collection containing only append and/or foreign-edge claims binds persistently with a nil heartbeater and zero
+  token. An append-capable client remains limited to append and read-back; create and replace fail validation before
+  transport or registry mutation.
+- A birth-only contract may bind and create without a Registry, heartbeater, owner token, presence record, or
+  registration identity.
 - `BirthPredicates` never cause heartbeat or token requirements. A contract that also contains a `replace-owned` or
-  `cas-transition` group still requires liveness because that group derives an owning claim.
+  `cas-transition` group makes the complete owner entry liveness-managed because that group derives an owning claim.
 - A stale-token response is terminal for that client instance. The client never silently rebinds. Recovery replaces
   the Registry and owner incarnation at the composition root; it does not bind the same owner a second time against
   the old Registry.
 - The token is not exposed as a string or accepted per request.
+
+Persistent foreign-edge registrations can conflict cross-type with a later owning registration indefinitely. #700
+does not add fake presence, time-based expiry, or selective reaping for that case. Permanent foreign-edge
+cross-type conflict policy remains a separate follow-up so it can define ordering and safety without weakening the
+atomic registration or same-Registry guard.
+
+Append-only and combined foreign-edge/append registrations are valid first-class persistent postures, not degraded
+owning registrations. Registration must not emit a misconfiguration `WARN` solely because either posture has no
+replace-owned or CAS claim. Rejection errors and warnings for independently invalid contract or registration data
+remain unchanged.
 
 ### 3. Enforce the declared contract before transport
 
@@ -296,41 +321,41 @@ never retries it. It performs its own authoritative read-back:
 type CommitState string
 
 const (
-	CommitNotCommitted CommitState = "not-committed"
-	CommitUnknown      CommitState = "unknown"
-	CommitCommitted    CommitState = "committed"
-	CommitVerified     CommitState = "verified"
+ CommitNotCommitted CommitState = "not-committed"
+ CommitUnknown      CommitState = "unknown"
+ CommitCommitted    CommitState = "committed"
+ CommitVerified     CommitState = "verified"
 )
 
 type MutationReceipt struct {
-	Entity     *graph.EntityState
-	KVRevision uint64
-	Commit     CommitState
-	Degraded   bool
+ Entity     *graph.EntityState
+ KVRevision uint64
+ Commit     CommitState
+ Degraded   bool
 }
 
 type MutationErrorKind string
 
 const (
-	MutationInvalid             MutationErrorKind = "invalid"
-	MutationNotFound            MutationErrorKind = "not-found"
-	MutationConflict            MutationErrorKind = "conflict"
-	MutationRevisionConflict    MutationErrorKind = "revision-conflict"
-	MutationStaleOwnerToken     MutationErrorKind = "stale-owner-token"
-	MutationUnavailable         MutationErrorKind = "unavailable"
-	MutationCommitUnknown       MutationErrorKind = "commit-unknown"
-	MutationCommittedUnverified MutationErrorKind = "committed-unverified"
-	MutationInternal            MutationErrorKind = "internal"
+ MutationInvalid             MutationErrorKind = "invalid"
+ MutationNotFound            MutationErrorKind = "not-found"
+ MutationConflict            MutationErrorKind = "conflict"
+ MutationRevisionConflict    MutationErrorKind = "revision-conflict"
+ MutationStaleOwnerToken     MutationErrorKind = "stale-owner-token"
+ MutationUnavailable         MutationErrorKind = "unavailable"
+ MutationCommitUnknown       MutationErrorKind = "commit-unknown"
+ MutationCommittedUnverified MutationErrorKind = "committed-unverified"
+ MutationInternal            MutationErrorKind = "internal"
 )
 
 type MutationError struct {
-	Operation MutationOperation
-	Kind      MutationErrorKind
-	Code      string
-	Class     errs.ErrorClass
-	Commit    CommitState
-	Detail    map[string]any
-	Err       error
+ Operation MutationOperation
+ Kind      MutationErrorKind
+ Code      string
+ Class     errs.ErrorClass
+ Commit    CommitState
+ Detail    map[string]any
+ Err       error
 }
 ```
 
@@ -371,13 +396,13 @@ onto graph mutation requests. No graph-ingest handler, persisted schema, or comp
 
 ### 8. Make owner-lease enforcement a rollout prerequisite
 
-Every graph-ingest instance serving mutation subjects for an owner-bound client must run with
-`enforce_owner_lease=true`. A mixed serving fleet is unsafe because a request routed to a non-enforcing instance can
-bypass the token fence.
+Every graph-ingest instance serving token-fenced create or replace traffic for a liveness-managed client must run
+with `enforce_owner_lease=true`. A mixed serving fleet is unsafe because a request routed to a non-enforcing
+instance can bypass the token fence.
 
-Before enabling an owner-bound client, operators must prove that every serving instance has the claim reader
-configured, the owner heartbeat is live, and owner-lease mismatch metrics remain zero during a bounded rollout
-window. Configuration review alone is insufficient. Semdragon issue
+Before enabling liveness-managed mutation traffic, operators must prove that every serving instance has the claim
+reader configured, the owner heartbeat is live, and owner-lease mismatch metrics remain zero during a bounded
+rollout window. Configuration review alone is insufficient. Semdragon issue
 [#313](https://github.com/C360Studio/semstreams/issues/313) remains gated on this evidence.
 
 ### 9. Keep issue #683 as a model-layer dependency
@@ -406,6 +431,16 @@ Rejected. Blind append is not idempotent, and create transport timeouts require 
 
 Rejected. Owner incarnation changes are a composition-root event and must not be hidden inside one request.
 
+### Use owner presence as registration identity
+
+Rejected by #700. Persistent non-owning owners intentionally have no presence, while the same-Registry guard must
+still reject a second registration. Identity belongs to Registry state; presence belongs only to lease liveness.
+
+### Heartbeat or expire every foreign-edge and append registration
+
+Rejected for #700. Non-owning registrations are persistent and token-free. The permanent foreign-edge cross-type
+conflict case needs a separate policy decision rather than implied liveness or selective expiry.
+
 ## Migration
 
 1. Extend contract validation with optional group names and create-only birth predicates.
@@ -416,6 +451,8 @@ Rejected. Owner incarnation changes are a composition-root event and must not be
 6. Prove lease enforcement, claim-reader wiring, heartbeat liveness, and zero mismatch metrics on every serving
    graph-ingest instance.
 7. Keep PR #696 and Semdragon #313 as later adoptions after the public contract and rollout gate are approved.
+8. Implement and validate the #700 registration-posture matrix, then obtain mandatory Fable re-review before
+   accepting the public-contract amendment.
 
 Existing APIs remain in place throughout. Removal of duplicated internal helpers requires separate evidence that no
 caller depends on their old surface.
@@ -433,6 +470,15 @@ caller depends on their old surface.
 - Registry and bind tests proving exactly one successful same-owner registration across direct `RegisterOwner`,
   `Bind`, `BindAndHeartbeat`, and `BindMutationClient`; identical and concurrent second attempts fail before
   heartbeat or claim mutation, while a failed first attempt releases the identity.
+- #700 table tests for birth-only, foreign-edge-only, append-only, foreign-edge-plus-append, owning-only, and mixed
+  owning/non-owning registrations. Each case must assert registration persistence, zero/non-zero token, presence
+  record, heartbeater enrollment, same-Registry repeat rejection, and atomic cleanup posture.
+- Log-capture tests proving valid append-only and foreign-edge-plus-append registrations emit no misconfiguration
+  warning solely because they contain no owning claim.
+- Registry integration tests proving persistent non-owning entries survive absent presence and liveness-managed
+  mixed entries apply lease expiry to the complete atomic owner set.
+- Negative tests proving birth-only binding performs no registration, presence write, token mint, or enrollment.
+- A focused audit proving #700 does not implement permanent foreign-edge cross-type expiry or conflict policy.
 - Composition-root tests proving static built-in contracts for one owner are validated, aggregated, and bound once.
 - Deployment tests proving every serving graph-ingest instance enforces owner leases before mutation traffic.
 - Concurrency and race tests for one immutable client used by multiple goroutines.

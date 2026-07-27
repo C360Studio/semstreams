@@ -89,6 +89,70 @@ func TestCoordinationWaiver_Validate(t *testing.T) {
 	}
 }
 
+func TestRegistrationContainsOwningClaims(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		registration Registration
+		want         bool
+	}{
+		{name: "empty"},
+		{
+			name: "foreign edge only",
+			registration: Registration{ForeignEdges: []ForeignEdgeClaim{{
+				Mode: EdgeStrict,
+			}}},
+		},
+		{
+			name: "append only",
+			registration: Registration{Claims: []OwnerClaim{{
+				Mode: ModeAppendEvidence,
+			}}},
+		},
+		{
+			name: "foreign edge and append",
+			registration: Registration{
+				Claims:       []OwnerClaim{{Mode: ModeAppendEvidence}},
+				ForeignEdges: []ForeignEdgeClaim{{Mode: EdgeStrict}},
+			},
+		},
+		{
+			name: "replace owned",
+			registration: Registration{Claims: []OwnerClaim{{
+				Mode: ModeReplaceOwned,
+			}}},
+			want: true,
+		},
+		{
+			name: "cas transition",
+			registration: Registration{Claims: []OwnerClaim{{
+				Mode: ModeCASTransition,
+			}}},
+			want: true,
+		},
+		{
+			name: "mixed owning and non owning",
+			registration: Registration{
+				Claims: []OwnerClaim{
+					{Mode: ModeAppendEvidence},
+					{Mode: ModeReplaceOwned},
+				},
+				ForeignEdges: []ForeignEdgeClaim{{Mode: EdgeStrict}},
+			},
+			want: true,
+		},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			if got := test.registration.ContainsOwningClaims(); got != test.want {
+				t.Fatalf("ContainsOwningClaims() = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestEpoch_OwnerOf(t *testing.T) {
 	ep := newEpoch()
 	ep.Owners["cs-api"] = ownerEntry{Claims: []OwnerClaim{
@@ -193,20 +257,29 @@ func TestEpoch_CompactStale(t *testing.T) {
 	}
 }
 
-// A dead owner whose entry is FE-claim-ONLY is exempt from compaction: a
-// ForeignEdgeClaim is not a lease and is not heartbeat-enrolled, so reaping it
-// on liveness only makes the T2-seam reject flap. A dead owner that ALSO holds
-// an OwnerClaim is still reaped (it holds a contested cell).
-func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
+// Non-owning, non-empty entries have no liveness lease and persist without
+// presence. Any entry containing replace-owned/CAS claims is removed atomically
+// when stale, including its append and foreign-edge portions.
+func TestEpoch_CompactStale_ExemptsEveryNonOwningNonEmptyEntry(t *testing.T) {
 	ep := newEpoch()
-	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "x"), TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=202 column=178 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
-	ep.Owners["mixed"] = ownerEntry{
-		Claims:       []OwnerClaim{{Owner: "mixed", Pattern: "a.b.c.d.e.f", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
-		ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "mixed", Predicate: semantictest.Predicate(t, "test", "edge", "y"), TargetPattern: "", Mode: EdgeStrict}}, // entity-id-audit:classify intentional-sentinel "" line=205 column=143 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	ep.Owners["fe-only"] = ownerEntry{ForeignEdges: []ForeignEdgeClaim{ForeignEdgeClaim{Owner: "fe-only", Predicate: semantictest.Predicate(t, "test", "edge", "x"), TargetPattern: "", Mode: EdgeNoBirthStub}}} // entity-id-audit:classify intentional-sentinel "" line=265 column=178 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	ep.Owners["append-only"] = ownerEntry{
+		Claims: []OwnerClaim{{Owner: "append-only", Pattern: "a.b.c.d.e.f", Mode: ModeAppendEvidence, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+	}
+	ep.Owners["fe-append"] = ownerEntry{
+		Claims:       []OwnerClaim{{Owner: "fe-append", Pattern: "a.b.c.d.e.f", Mode: ModeAppendEvidence, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}},
+		ForeignEdges: []ForeignEdgeClaim{{Owner: "fe-append", Predicate: semantictest.Predicate(t, "test", "edge", "y"), Mode: EdgeStrict}},
+	}
+	ep.Owners["mixed-owning"] = ownerEntry{
+		Claims: []OwnerClaim{
+			{Owner: "mixed-owning", Pattern: "a.b.c.d.e.f", Mode: ModeAppendEvidence, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}},
+			{Owner: "mixed-owning", Pattern: "a.b.c.d.e.f", Mode: ModeCASTransition, Predicates: []string{semantictest.Predicate(t, "test", "value", "q")}},
+		},
+		ForeignEdges: []ForeignEdgeClaim{{Owner: "mixed-owning", Predicate: semantictest.Predicate(t, "test", "edge", "z"), Mode: EdgeStrict}},
 	}
 	ep.Owners["owning-dead"] = ownerEntry{Claims: []OwnerClaim{OwnerClaim{Owner: "owning-dead", Pattern: "a.b.c.d.e.g", Mode: ModeReplaceOwned, Predicates: []string{semantictest.Predicate(t, "test", "value", "p")}}}}
 	// A degenerate empty entry (no claims, no edges) is NOT exempt — the
-	// exemption guards FE-claim-only owners, not empties. validateStructural
+	// exemption guards non-owning non-empty owners, not empties. validateStructural
 	// prevents registering one, so this is defense-in-depth.
 	ep.Owners["empty-dead"] = ownerEntry{}
 
@@ -216,8 +289,14 @@ func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 	if _, ok := ep.Owners["fe-only"]; !ok {
 		t.Error("FE-claim-only owner must be exempt from compaction")
 	}
-	if _, ok := ep.Owners["mixed"]; ok {
-		t.Error("owner with an OwnerClaim (even alongside a foreign edge) must still be compacted when dead")
+	if _, ok := ep.Owners["append-only"]; !ok {
+		t.Error("append-only owner must be exempt from liveness compaction")
+	}
+	if _, ok := ep.Owners["fe-append"]; !ok {
+		t.Error("foreign-edge plus append owner must be exempt from liveness compaction")
+	}
+	if _, ok := ep.Owners["mixed-owning"]; ok {
+		t.Error("mixed entry with a CAS claim must be compacted atomically when dead")
 	}
 	if _, ok := ep.Owners["owning-dead"]; ok {
 		t.Error("dead owning owner must be compacted")
@@ -225,9 +304,9 @@ func TestEpoch_CompactStale_ExemptsForeignEdgeOnlyOwners(t *testing.T) {
 	if _, ok := ep.Owners["empty-dead"]; ok {
 		t.Error("a degenerate empty entry must still be compacted (the exemption is FE-only, not empty)")
 	}
-	// evicted names the three non-exempt owners, not the FE-only one.
+	// evicted names only the two owning entries and the invalid empty entry.
 	if len(evicted) != 3 {
-		t.Fatalf("evicted = %v, want [empty-dead mixed owning-dead]", evicted)
+		t.Fatalf("evicted = %v, want [empty-dead mixed-owning owning-dead]", evicted)
 	}
 }
 
@@ -245,15 +324,15 @@ func TestRegistry_checkInverseGate(t *testing.T) {
 	}
 	withResolver := &Registry{logger: slog.Default(), inverseResolver: resolve}
 
-	condNoInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=248 column=127 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	condNoInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=327 column=127 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condNoInv}); !errors.Is(err, ErrInvalidClaim) {
 		t.Errorf("Conditional edge without a registered inverse must fail the gate; got %v", err)
 	}
-	condWithInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "has-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=252 column=130 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	condWithInv := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "has-inverse"), TargetPattern: "", Mode: EdgeConditional} // entity-id-audit:classify intentional-sentinel "" line=331 column=130 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{condWithInv}); err != nil {
 		t.Errorf("Conditional edge WITH a registered inverse must pass; got %v", err)
 	}
-	stub := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeNoBirthStub} // entity-id-audit:classify intentional-sentinel "" line=256 column=122 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
+	stub := ForeignEdgeClaim{Owner: "o", Predicate: semantictest.Predicate(t, "test", "edge", "no-inverse"), TargetPattern: "", Mode: EdgeNoBirthStub} // entity-id-audit:classify intentional-sentinel "" line=335 column=122 surface=go-field:ForeignEdgeClaim.TargetPattern entity_id_pattern_invalid:empty empty target is the match-any sentinel
 	if err := withResolver.checkInverseGate([]ForeignEdgeClaim{stub}); err != nil {
 		t.Errorf("NoBirthStub needs no inverse, must pass; got %v", err)
 	}

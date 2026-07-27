@@ -245,11 +245,11 @@ func Derive(owner string, contracts ...Contract) (ownership.Registration, error)
 // Bind is the component/gateway boot step: derive the owner's claims from its
 // contracts and register them with the ownership substrate. On success it
 // returns the owner's typed OwnerToken (ADR-056 PR-3.5) — the write-lease
-// credential the bound owner stamps on its mutation requests, surfaced on the
-// bind result so the right path is the easy path (producers never hand-compose
-// "<owner>#<incarnation>"). Returns the zero token and ownership.ErrOwnershipOverlap
-// (wrapped) when another owner already holds a derived cell, or the zero token
-// and a derive/validation error.
+// credential the bound owner stamps on its mutation requests. Non-owning
+// append/foreign registrations still persist but return the zero token.
+// Returns the zero token and ownership.ErrOwnershipOverlap (wrapped) when
+// another owner already holds a derived cell, or the zero token and a
+// derive/validation error.
 func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contracts ...Contract) (ownership.OwnerToken, error) {
 	registration, err := Derive(owner, contracts...)
 	if err != nil {
@@ -264,6 +264,9 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 	if err := ownerReg.RegisterOwner(ctx, registration); err != nil {
 		return ownership.OwnerToken{}, err
 	}
+	if !registration.ContainsOwningClaims() {
+		return ownership.OwnerToken{}, nil
+	}
 	return ownerReg.OwnerToken(owner), nil
 }
 
@@ -272,18 +275,18 @@ func Bind(ctx context.Context, ownerReg *ownership.Registry, owner string, contr
 // rule pack), as opposed to a lifecycle.Manager workflow owner (which the Manager
 // enrolls into its own heartbeater). It returns the bound owner's typed
 // OwnerToken on success (the same credential Bind surfaces; the zero token on
-// failure). A static owner that derives a real OwnerClaim
-// MUST heartbeat: RegisterOwner bumps its OWNER_PRESENCE key once at registration,
-// but without ongoing heartbeats that key ages out after ownership.PresenceTTL and
-// the next registrant compacts the claim out of the epoch — the FE-only compaction
-// exemption (epoch.go) does NOT cover an owning claim.
+// failure). A static owner that derives an owning replace/CAS OwnerClaim MUST
+// heartbeat: RegisterOwner creates its OWNER_PRESENCE key at registration, but
+// without ongoing heartbeats that key ages out after ownership.PresenceTTL and
+// the next registrant compacts the owning entry out of the epoch. Non-owning
+// append/foreign registrations create no presence and are compaction-exempt.
 //
-// Enrollment happens ONLY on a successful Bind: a rejected/overlapping owner holds
-// no recorded claim to keep alive. A nil hb binds without enrolling (caller opted
-// out of liveness, e.g. FE-only owners). The caller owns the Heartbeater's lifetime
-// — build it once at the composition root (ownerReg.NewHeartbeater), run it on a
-// shutdown-cancelled context (go hb.Run(ctx)), and pass it here for every static
-// owner it binds.
+// Enrollment happens only for a successful owning Bind: rejected owners and
+// non-owning append/foreign registrations have no lease to keep alive. A nil hb
+// binds without enrolling. The caller owns the Heartbeater's lifetime — build
+// it once at the composition root (ownerReg.NewHeartbeater), run it on a
+// shutdown-cancelled context (go hb.Run(ctx)), and pass it here for every
+// static owning owner it binds.
 func BindAndHeartbeat(ctx context.Context, ownerReg *ownership.Registry, hb *ownership.Heartbeater, owner string, contracts ...Contract) (ownership.OwnerToken, error) {
 	token, err := Bind(ctx, ownerReg, owner, contracts...)
 	if err != nil {

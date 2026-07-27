@@ -14,7 +14,8 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
 
 - Add a public, contract-bound mutation client in `pkg/projection`.
 - Require owner liveness before binding any owning contract, then apply the resulting opaque owner token to
-  authoritative create and replace-owned operations. Append-only clients may be heartbeat-free.
+  authoritative create and replace-owned operations. Append-only and foreign-edge-only registrations are
+  persistently heartbeat-free.
 - Expose four narrow capabilities:
   - atomic entity creation with primary-subject initial triples;
   - schema-derived replacement of owned predicate groups;
@@ -39,8 +40,18 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
   once. A failed first registration releases the identity for correction; after success, correction or revival
   requires a new Registry and incarnation. A birth-only client that derives no claim skips registration and does
   not consume the identity.
-- Require every serving graph-ingest instance to enable owner-lease enforcement before owner-bound clients roll
-  out.
+- Amend registration and lease semantics under
+  [#700](https://github.com/C360Studio/semstreams/issues/700): owner presence represents lease liveness, not
+  registration identity. Birth-only clients create no registration, presence, token, or heartbeat enrollment.
+  Foreign-edge-only, append-only, and combined foreign-edge/append owners register persistently with a zero token
+  and no presence or enrollment. If any replace-owned or CAS claim exists, the complete atomic owner entry is
+  liveness-managed with a non-zero token and heartbeater enrollment.
+- Treat valid append-only and combined foreign-edge/append registrations as first-class persistent postures. Their
+  lack of owning claims MUST NOT be logged as a misconfiguration warning.
+- Preserve the same-Registry one-registration guard independently of presence. Defer permanent foreign-edge
+  cross-type conflict policy to a separate follow-up rather than adding implied expiry to persistent registrations.
+- Require every serving graph-ingest instance to enable owner-lease enforcement before liveness-managed clients send
+  token-fenced create or replace traffic.
 - Provide narrow interfaces so consumers depend only on the mutation mode they are authorized to use.
 - Migrate duplicated in-repository mutation orchestration after the public API is proven.
 
@@ -52,6 +63,10 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
 - Existing `pkg/ownership`, `pkg/natsclient`, graph wire types, and graph-ingest handlers remain authoritative.
 - `pkg/ownership.Registry` rejects every second successful-registration attempt for one owner and Registry through
   the inspectable `ErrOwnerAlreadyBound` sentinel.
+- Owner-presence records are lease-liveness evidence only. Persistent non-owning registrations remain registered
+  without presence records, tokens, or heartbeater enrollment.
+- Operators MUST NOT receive a warning solely because a valid append-only or foreign-edge/append registration has no
+  replace-owned or CAS claim.
 - Rule internals may delegate to the new client, but no rule type becomes part of the public API.
 
 ### Consumers
@@ -71,5 +86,7 @@ evidence, ambiguous transport outcomes, and degraded success duplicated downstre
 - Create rejects cross-subject triples, including `ForeignEdgeClaim` writes; those remain on the existing
   reconciliation path.
 - No change to lifecycle CAS transitions, entity deletion, or foreign-edge reconciliation.
+- #700 changes registration lifecycle semantics without adding a new wire envelope, subject, or persisted shape.
+- The #700 public-contract amendment requires Fable re-review before implementation acceptance.
 - This change does not perform the later internal adoption tracked by PR #696 or the Semdragon adoption tracked by
   [#313](https://github.com/C360Studio/semstreams/issues/313).

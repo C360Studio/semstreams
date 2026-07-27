@@ -37,7 +37,7 @@ func (state ownerBindingState) String() string {
 
 // Registry is the KV-backed owner registry (ADR-056 Decision 2): a single
 // `_registry` epoch key in OWNER_CLAIMS advanced under CAS, plus a separate
-// OWNER_PRESENCE heartbeat bucket for stale-owner compaction.
+// OWNER_PRESENCE heartbeat bucket for stale owning-lease compaction.
 //
 // This is the distributed-enforcement SUBSTRATE only. Owners do not hand-build
 // claims here as a parallel registry — claims are DERIVED from registered graph
@@ -46,7 +46,7 @@ func (state ownerBindingState) String() string {
 // escape hatch for owners with dynamic patterns, e.g. the lifecycle Manager).
 type Registry struct {
 	claims   *natsclient.KVStore // OWNER_CLAIMS — the single `_registry` epoch key
-	presence *natsclient.KVStore // OWNER_PRESENCE — heartbeat.<owner> keys (TTL = grace window)
+	presence *natsclient.KVStore // OWNER_PRESENCE — owning heartbeat.<owner> keys (TTL = grace window)
 	logger   *slog.Logger
 
 	// incarnation is the per-process boot nonce (8 bytes crypto/rand hex). It
@@ -68,12 +68,12 @@ type Registry struct {
 	inverseResolver    InverseResolver
 	noResolverWarnOnce sync.Once
 
-	// registeredMu guards registered. registered is the set of owner ids THIS
-	// process successfully registered via RegisterOwner — the owners
+	// registeredMu guards registered. registered is the set of OWNING owner ids
+	// this process successfully registered via RegisterOwner — the leases
 	// WatchRevival monitors for eviction-then-supersession (ADR-056 PR-4).
-	// Populated on each successful RegisterOwner; never pruned (an owner this
-	// process claims, it owns for its lifetime — losing the claim is exactly the
-	// revival condition WatchRevival exists to catch).
+	// Non-owning append/foreign declarations cannot be superseded as a write
+	// lease and are deliberately absent. Never pruned: losing an owning claim is
+	// exactly the revival condition WatchRevival exists to catch.
 	registeredMu sync.Mutex
 	registered   map[string]struct{}
 
@@ -105,15 +105,16 @@ type Registry struct {
 // NewRegistry constructs a Registry over the two pre-opened KV stores. The
 // caller (graph-ingest boot, a later increment) creates the buckets:
 // OWNER_CLAIMS with history for audit, and — critically — OWNER_PRESENCE with a
-// bucket TTL that IS the compaction grace window. That TTL must be
+// bucket TTL that IS the owning-lease compaction grace window. That TTL must be
 // ttl_hint ≥ 3×max(boot_time, gc_pause_budget) so a single missed heartbeat
-// never evicts a live owner (compactStale treats presence-key absence as
-// "silent beyond grace"; the TTL is what makes absence mean that).
+// never evicts a live owning entry (compactStale treats its presence-key
+// absence as "silent beyond grace"; the TTL is what makes absence mean that).
 //
 // A per-process incarnation nonce (8 bytes, crypto/rand hex) is generated here
 // and stored for the lifetime of the Registry. It forms the incarnation half of
-// every OwnerToken ("<owner>#<incarnation>") stamped on outgoing mutation
-// requests (ADR-056 PR-1). Callers access it via Registry.Incarnation().
+// each non-zero OwnerToken ("<owner>#<incarnation>") stamped on outgoing
+// mutation requests (ADR-056 PR-1). Callers access it via
+// Registry.Incarnation().
 func NewRegistry(claims, presence *natsclient.KVStore, logger *slog.Logger) *Registry {
 	if logger == nil {
 		logger = slog.Default()
@@ -156,6 +157,22 @@ type Registration struct {
 	Claims       []OwnerClaim
 	ForeignEdges []ForeignEdgeClaim
 	Waivers      []CoordinationWaiver
+}
+
+// ContainsOwningClaims reports whether this registration contains at least one
+// replace-owned or CAS-transition claim. Only those modes carry an ownership
+// lease and therefore require presence, liveness monitoring, and a write token.
+func (r Registration) ContainsOwningClaims() bool {
+	return containsOwningClaims(r.Claims)
+}
+
+func containsOwningClaims(claims []OwnerClaim) bool {
+	for _, claim := range claims {
+		if claim.Mode.isOwning() {
+			return true
+		}
+	}
+	return false
 }
 
 // Validate checks structural well-formedness AND internal consistency: every
@@ -263,34 +280,17 @@ func (r Registration) validateStructural() error {
 	return nil
 }
 
-// hasNoEnforceableClaim reports whether the registration consists ENTIRELY of
-// non-owning (append-evidence) OwnerClaims and has no foreign edges — a registration the
-// registry will store but never act on (no overlap protection, no lease). That
-// is almost always a misconfiguration (an owner that meant to own a group but
-// fluffed the mode), so RegisterOwner logs a Warn rather than silently
-// accepting a no-op.
-func (r Registration) hasNoEnforceableClaim() bool {
-	if len(r.ForeignEdges) > 0 {
-		return false
-	}
-	for _, c := range r.Claims {
-		if c.Mode.isOwning() {
-			return false
-		}
-	}
-	return true
-}
-
 // RegisterOwner binds an owner's complete claim set exactly once for this
 // Registry instance. A concurrent or later call for the same owner fails with
-// ErrOwnerAlreadyBound before heartbeat or KV mutation. A restarted process
-// has a new Registry/incarnation and may replace the persisted entry for that
-// stable owner. Inside one UpdateWithRetry CAS callback
-// (ADR-056 Decision 2): read epoch → compact stale owners by presence → drop
-// the registrant's prior entry → update the registrant's half of the waiver set
-// → check overlap of the candidate against every OTHER owner → on overlap FAIL
-// (non-retryable), else merge + bump epoch → CAS-write at the read revision →
-// retry on a concurrent registrant's write.
+// ErrOwnerAlreadyBound before presence or KV mutation. A restarted process has
+// a new Registry/incarnation and may replace the persisted entry for that stable
+// owner. Inside one UpdateWithRetry CAS callback
+// (ADR-056 Decision 2): read epoch → compact stale owning entries by presence
+// while retaining non-owning entries → drop the registrant's prior entry →
+// update the registrant's half of the waiver set → check overlap of the
+// candidate against every OTHER owner → on overlap FAIL (non-retryable), else
+// merge + bump epoch → CAS-write at the read revision → retry on a concurrent
+// registrant's write.
 //
 // Returns a *OverlapError (errors.Is(err, ErrOwnershipOverlap)) on collision,
 // or ErrInvalidClaim on a malformed registration.
@@ -331,15 +331,16 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 		}
 	}()
 
-	if r.hasNoEnforceableClaim() {
-		reg.logger.Warn("ownership: registration has no enforceable (owning or foreign-edge) claim — it will not be protected",
-			slog.String("owner", r.Owner))
-	}
-
-	// Heartbeat first: mark this owner live BEFORE the CAS reads presence for
-	// compaction, so a concurrent registrant cannot see us as stale mid-flight.
-	if err := reg.Heartbeat(ctx, r.Owner); err != nil {
-		return fmt.Errorf("ownership: heartbeat before register %q: %w", r.Owner, err)
+	containsOwning := r.ContainsOwningClaims()
+	presenceWritten := false
+	if containsOwning {
+		// Owning registrations write presence first so a concurrent registrant
+		// cannot compact their lease while this CAS is in flight. Non-owning
+		// registrations persist without synthesizing liveness state.
+		if err := reg.Heartbeat(ctx, r.Owner); err != nil {
+			return fmt.Errorf("ownership: heartbeat before register %q: %w", r.Owner, err)
+		}
+		presenceWritten = true
 	}
 
 	// Stamp the per-process incarnation onto each claim before writing to the
@@ -393,26 +394,27 @@ func (reg *Registry) RegisterOwner(ctx context.Context, r Registration) error {
 	})
 
 	if overlapErr != nil {
-		reg.rollbackPresence(ctx, r.Owner, preExisted)
+		reg.rollbackPresence(ctx, r.Owner, preExisted, presenceWritten)
 		return overlapErr // clean *OverlapError for errors.As, not the retry-wrapped form
 	}
 	if err != nil {
-		reg.rollbackPresence(ctx, r.Owner, preExisted)
+		reg.rollbackPresence(ctx, r.Owner, preExisted, presenceWritten)
 		return fmt.Errorf("ownership: register %q: %w", r.Owner, err)
 	}
 
-	// Record this owner as one of ours so WatchRevival monitors it for
-	// eviction-then-supersession (ADR-056 PR-4). Only on a clean commit — a
-	// rejected/overlapping registration holds no claim to revive against.
-	reg.registeredMu.Lock()
-	reg.registered[r.Owner] = struct{}{}
-	reg.registeredMu.Unlock()
+	if containsOwning {
+		// Only owning leases can be revived and superseded. Append and
+		// foreign-edge registrations are durable non-owning declarations.
+		reg.registeredMu.Lock()
+		reg.registered[r.Owner] = struct{}{}
+		reg.registeredMu.Unlock()
+	}
 	bound = true
 	return nil
 }
 
-// registeredOwners returns a snapshot copy of the owner ids this process
-// registered — the set WatchRevival iterates each epoch update.
+// registeredOwners returns a snapshot of the owning leases this process
+// registered — the set WatchRevival iterates on each epoch update.
 func (reg *Registry) registeredOwners() map[string]struct{} {
 	reg.registeredMu.Lock()
 	defer reg.registeredMu.Unlock()
@@ -468,12 +470,17 @@ func (reg *Registry) checkInverseGate(edges []ForeignEdgeClaim) error {
 	return nil
 }
 
-// rollbackPresence drops the heartbeat key written by a registration that then
-// failed — but ONLY for an owner that had no prior epoch entry. A new Registry
-// incarnation's failed replacement must NOT resign the still-live owner whose
-// existing claims remain in the epoch. Best-effort.
-func (reg *Registry) rollbackPresence(ctx context.Context, owner string, preExisted bool) {
-	if preExisted {
+// rollbackPresence drops a heartbeat key that this registration actually wrote
+// before later failing, but only when no prior epoch entry existed. A new
+// Registry incarnation's failed replacement must not resign the still-live
+// owner whose existing claims remain in the epoch. Best-effort.
+func (reg *Registry) rollbackPresence(
+	ctx context.Context,
+	owner string,
+	preExisted bool,
+	presenceWritten bool,
+) {
+	if preExisted || !presenceWritten {
 		return
 	}
 	if err := reg.Resign(ctx, owner); err != nil {
@@ -482,11 +489,12 @@ func (reg *Registry) rollbackPresence(ctx context.Context, owner string, preExis
 	}
 }
 
-// Heartbeat (re)writes the owner's presence key, refreshing the bucket TTL. The
-// caller runs this on a ticker (interval well under the TTL); a crashed owner
-// stops, its key TTL-expires, and the next registrant compacts its claims. The
-// value is the heartbeat unix-nanos timestamp, carried for observability and
-// the later Watch-revival check.
+// Heartbeat (re)writes an owning registration's presence key, refreshing the
+// bucket TTL. The caller runs this on a ticker (interval well under the TTL); a
+// crashed owning owner stops, its key TTL-expires, and the next registrant
+// compacts the whole atomic entry. Non-owning registrations do not call
+// Heartbeat. The value is the heartbeat unix-nanos timestamp, carried for
+// observability and WatchRevival.
 func (reg *Registry) Heartbeat(ctx context.Context, owner string) error {
 	if !validOwnerID(owner) {
 		return fmt.Errorf("%w: heartbeat owner %q not subject-safe", ErrInvalidClaim, owner)
@@ -499,9 +507,9 @@ func (reg *Registry) Heartbeat(ctx context.Context, owner string) error {
 	return nil
 }
 
-// Resign deletes the owner's presence key, voluntarily releasing its claims at
-// the next registrant's compaction (clean shutdown). Best-effort; a missing key
-// is not an error.
+// Resign deletes an owning registration's presence key, voluntarily releasing
+// its whole atomic entry at the next registrant's compaction (clean shutdown).
+// Best-effort; a missing key is not an error.
 func (reg *Registry) Resign(ctx context.Context, owner string) error {
 	key := presenceKeyPrefix + owner
 	if err := reg.presence.Delete(ctx, key); err != nil && !errors.Is(err, natsclient.ErrKVKeyNotFound) {
@@ -555,10 +563,11 @@ func (reg *Registry) ForeignEdgeClaimFor(ctx context.Context, messageType, predi
 	return c, ok, nil
 }
 
-// livePresence returns the set of live owner ids — each OWNER_PRESENCE key minus
-// its prefix. Liveness is the canonical owner id (no hash); compactStale tests
-// membership directly. Keys() ignores deletes/expiry, so an absent key is a
-// genuinely silent (beyond-TTL-grace) owner.
+// livePresence returns the set of live owning owner ids — each OWNER_PRESENCE
+// key minus its prefix. Liveness is the canonical owner id (no hash);
+// compactStale tests owning entries against membership directly and exempts
+// non-owning entries. Keys() ignores deletes/expiry, so an absent owning key is
+// a genuinely silent (beyond-TTL-grace) owner.
 func (reg *Registry) livePresence(ctx context.Context) (map[string]struct{}, error) {
 	keys, err := reg.presence.Keys(ctx)
 	if err != nil {

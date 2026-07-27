@@ -87,6 +87,28 @@
   stability; record its `REQUEST CHANGES` findings and obtain user approval for the internal remediation.
 - [x] 7.5 Update issue #313 with slice results and keep downstream migration gated on the reviewed public contract.
 
+## 8. Issue #700 Registration and Lease-Liveness Amendment
+
+- [x] 8.1 Add failing table tests for birth-only, foreign-edge-only, append-only, foreign-edge-plus-append,
+  owning-only, and mixed owning/non-owning contract sets.
+- [x] 8.2 Separate Registry registration identity from owner-presence lease liveness. Preserve
+  `ErrOwnerAlreadyBound` for persistent and liveness-managed same-Registry repeats even when presence is absent.
+- [x] 8.3 Make birth-only/no-claim binding perform no registration, presence write, token mint, or heartbeater
+  enrollment.
+- [x] 8.4 Make foreign-edge-only, append-only, and foreign-edge-plus-append owners register persistently as one
+  atomic entry with zero token, no presence, and no enrollment.
+- [x] 8.5 Make any replace-owned or CAS claim classify the complete atomic owner entry as liveness-managed, with one
+  non-zero token, presence record, and heartbeater enrollment covering every owner, append, and foreign-edge claim.
+- [x] 8.6 Add Registry and mutation-client integration tests for persistence without presence, complete-entry lease
+  expiry, token posture, enrollment posture, failed-first retry, and identical/concurrent same-owner rejection.
+- [x] 8.7 Audit production and tests to prove #700 adds no implied expiry, fake presence, or selective reaping for
+  permanent foreign-edge cross-type conflicts; retain that policy as a separate follow-up.
+- [ ] 8.8 Run focused and repository-wide unit, race, integration, lint, schema, contract, and applicable end-to-end
+  gates for the #700 implementation.
+- [x] 8.9 Run strict validation for this change and the complete OpenSpec set, plus Markdown and diff hygiene.
+- [ ] 8.10 Obtain mandatory Fable re-review of the #700 public-contract amendment and resolve every finding before
+  implementation acceptance.
+
 ## Evidence
 
 - Focused unit, scoped audit, and race suites passed, including the tagged real-stack integration/race run.
@@ -103,8 +125,27 @@
   It permits one successful registration per owner/Registry, releases failed first attempts, and aggregates static
   built-in contracts before binding. PR #696 remains later adoption.
 - B5 remediation uses create-only birth-predicate language without a graph-enforced immutability claim.
-- Fable re-review is required only if remediation exposes an unresolved issue or materially changes or expands the
-  reviewed public contract; it is not an automatic post-remediation gate.
+- #700 materially changes the reviewed registration/liveness public contract, so Fable re-review is now mandatory
+  under task 8.10.
 - Issue #313 records PR #687, its local verification evidence, and the still-gated internal migration scope.
 - Unrelated whole-repository baselines remain outside this ledger, including the expected dependency tracked by
   issue #686. Live PR CI, schema, and applicable end-to-end gates remain open under task 7.1.
+- #700 implementation adds `Registration.ContainsOwningClaims`, owning-only presence/revival monitoring,
+  compaction exemption for every non-empty non-owning entry, zero tokens for persistent append/foreign binding, and
+  heartbeater enrollment only for non-zero owning tokens.
+- `TestRegistrationContainsOwningClaims`, `TestEpoch_CompactStale_ExemptsEveryNonOwningNonEmptyEntry`,
+  `TestRegistry_PresenceAndRevivalMonitoringFollowOwningSemantics`,
+  `TestRegistry_NonOwningRepeatAndConcurrentHaveOneEpochWriteNoPresence`,
+  `TestRegistry_PresenceRollbackOnlyForOwningRegistration`, and
+  `TestRegistry_StaleMixedOwningEntryIsRemovedAtomically` cover Registry classification, persistence,
+  same-Registry guards, side effects, and atomic stale cleanup.
+- `TestBindAndHeartbeat_ModeMatrix` and `TestIntegration_BindMutationClientModeMatrix` cover birth-only,
+  foreign-edge-only, append-only, foreign-edge-plus-append, owning, and mixed token/enrollment postures through
+  projection binding and the public client.
+- `TestRegistry_ValidNonOwningRegistrationsDoNotWarn` proves valid append-only and foreign-edge-plus-append
+  registrations emit no misconfiguration warning solely for lacking owning claims.
+- Architecture review required this final operational-ledger correction. Tasks 8.1 through 8.7 now reflect the
+  implemented and reviewed #700 posture; full validation task 8.8 and mandatory Fable re-review task 8.10 remain
+  open.
+- #700 documentation validation passes strict target validation, strict validation of all 32 OpenSpec items,
+  Markdown lint, `git diff --check`, and the 120-column audit.

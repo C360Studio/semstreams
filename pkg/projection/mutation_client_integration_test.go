@@ -50,6 +50,127 @@ type mutationIntegrationHarness struct {
 	contract   Contract
 }
 
+func TestIntegration_BindMutationClientModeMatrix(t *testing.T) {
+	ctx := t.Context()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	registry, err := ownership.EnsureBuckets(ctx, testClient.Client, nil, nil)
+	require.NoError(t, err)
+	heartbeater := registry.NewHeartbeater(time.Hour)
+	tests := []struct {
+		name       string
+		contract   Contract
+		registered bool
+		owning     bool
+	}{
+		{
+			name: "birth",
+			contract: Contract{
+				Name: "client-birth", MessageType: "test.client-birth.v1",
+				EntityPattern:   "c360.semconnect.systems.csapi.client-birth.*",
+				BirthPredicates: []string{"sensorml.process.uid"},
+			},
+		},
+		{
+			name: "foreign edge",
+			contract: Contract{
+				Name: "client-foreign", MessageType: "test.client-foreign.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.client-foreign.*",
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "append",
+			contract: Contract{
+				Name: "client-append", MessageType: "test.client-append.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.client-append.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"},
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "foreign edge and append",
+			contract: Contract{
+				Name: "client-foreign-append", MessageType: "test.client-foreign-append.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.client-foreign-append.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"},
+				}},
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+		},
+		{
+			name: "owning",
+			contract: Contract{
+				Name: "client-owning", MessageType: "test.client-owning.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.client-owning.*",
+				Groups: []PredicateGroup{{
+					Mode: ownership.ModeReplaceOwned, Predicates: []string{"test.value.p"},
+				}},
+			},
+			registered: true,
+			owning:     true,
+		},
+		{
+			name: "mixed",
+			contract: Contract{
+				Name: "client-mixed", MessageType: "test.client-mixed.v1",
+				EntityPattern: "c360.semconnect.systems.csapi.client-mixed.*",
+				Groups: []PredicateGroup{
+					{Mode: ownership.ModeCASTransition, Predicates: []string{"test.value.p"}},
+					{Mode: ownership.ModeAppendEvidence, Predicates: []string{"shared.value.p"}},
+				},
+				ForeignEdges: []ForeignEdge{{
+					Predicate: "sensorml.component.is-hosted-by", Mode: ownership.EdgeStrict,
+					TargetPattern: sysPat,
+				}},
+			},
+			registered: true,
+			owning:     true,
+		},
+	}
+
+	for index, test := range tests {
+		owner := fmt.Sprintf("client-matrix-%d", index)
+		client, bindErr := BindMutationClient(ctx, MutationClientConfig{
+			NATS:        testClient.Client,
+			Registry:    registry,
+			Heartbeater: heartbeater,
+			Owner:       owner,
+			Contracts:   []Contract{test.contract},
+		})
+		require.NoError(t, bindErr, test.name)
+		require.NotNil(t, client, test.name)
+		require.Equal(t, !test.owning, client.token.IsZero(), test.name)
+		require.Equal(t, test.owning, heartbeater.IsEnrolled(owner), test.name)
+
+		repeat, repeatErr := BindMutationClient(ctx, MutationClientConfig{
+			NATS:        testClient.Client,
+			Registry:    registry,
+			Heartbeater: heartbeater,
+			Owner:       owner,
+			Contracts:   []Contract{test.contract},
+		})
+		if test.registered {
+			require.Nil(t, repeat, test.name)
+			require.ErrorIs(t, repeatErr, ownership.ErrOwnerAlreadyBound, test.name)
+		} else {
+			require.NoError(t, repeatErr, test.name)
+			require.NotNil(t, repeat, test.name)
+			require.True(t, repeat.token.IsZero(), test.name)
+		}
+	}
+}
+
 func newMutationIntegrationHarness(t *testing.T) *mutationIntegrationHarness {
 	t.Helper()
 

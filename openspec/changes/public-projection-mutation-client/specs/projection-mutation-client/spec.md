@@ -5,7 +5,12 @@
 ### Requirement: Contract-bound mutation client
 
 The framework MUST expose a concurrency-safe projection mutation client bound from an owner, one or more
-projection contracts, the ownership registry, an optional heartbeater, and a NATS client.
+projection contracts, an ownership Registry when registration is derived, an optional heartbeater, and a NATS
+client.
+
+Owner presence MUST represent lease liveness only. It MUST NOT serve as registration identity or control whether a
+same-owner registration is allowed. Registration identity MUST remain a Registry-lifetime invariant independent of
+presence.
 
 An ownership `Registry` MUST permit at most one successful registration for an owner during that Registry's
 lifetime. The rule MUST be enforced by `RegisterOwner` and therefore apply equally to direct `RegisterOwner`,
@@ -21,19 +26,37 @@ against the same Registry. After a successful registration, correction or reviva
 incarnation.
 
 When a contract collection derives neither an ownership claim nor a foreign-edge claim, binding MUST skip
-`RegisterOwner`, return a zero owner token, and MUST NOT consume the owner registration identity. This exception
-includes a birth-only client.
+`RegisterOwner`, return a zero owner token, and MUST NOT consume the owner registration identity. It MUST create no
+owner-presence record and MUST NOT enroll a heartbeater. This exception includes a birth-only client.
+
+When the complete contract collection derives only foreign-edge claims, only append-evidence claims, or both,
+binding MUST register one persistent atomic owner entry. It MUST return a zero owner token, create no owner-presence
+record, and enroll no heartbeater. Missing presence MUST NOT make that persistent registration dead or eligible for
+lease reaping.
+
+Valid append-only and combined foreign-edge/append registrations MUST be treated as first-class persistent
+postures. The Registry MUST NOT emit a misconfiguration warning solely because either posture lacks a
+replace-owned or CAS claim.
 
 If any supplied contract derives an owning claim from a `replace-owned` or `cas-transition` group, the client MUST
 require a non-nil heartbeater before registration, heartbeat, or transport side effects. It MUST bind that
-collection through the existing ownership registry and heartbeat path, retain the returned opaque owner token, and
-MUST NOT expose or refresh the token per request.
+complete collection as one liveness-managed atomic owner entry, create owner presence, retain a non-zero opaque
+owner token, and enroll the owner exactly once. Liveness management MUST apply to every owner, foreign-edge, and
+append claim in that entry. The client MUST NOT expose or refresh the token per request.
 
-#### Scenario: Successful binding
+The same-Registry guard MUST reject a second registration for both persistent and liveness-managed owners even when
+no owner-presence record exists. Birth-only/no-claim binding MUST remain outside that guard because it creates no
+registration.
 
-- **WHEN** a caller binds a valid owner and non-conflicting contracts
+Permanent foreign-edge cross-type conflicts MUST remain outside #700. This amendment MUST NOT invent presence,
+expiry, selective reaping, or conflict precedence for persistent foreign-edge registrations.
+
+#### Scenario: Successful liveness-managed binding
+
+- **WHEN** a caller binds a valid owner set containing any replace-owned or CAS claim
 - **THEN** the client registers the contracts, starts owner liveness through the supplied heartbeater, and returns a
-  client ready for mutation
+  client with a non-zero owner token ready for mutation
+- **AND** the complete atomic owner entry is liveness-managed
 
 #### Scenario: Same owner registers a second time through any entry point
 
@@ -70,14 +93,45 @@ MUST NOT expose or refresh the token per request.
 
 - **WHEN** every supplied group is `append-evidence` and the heartbeater is nil
 - **THEN** binding may return a client authorized for append and authoritative read-back
+- **AND** one persistent owner entry is registered with zero token, no presence, and no enrollment
 - **AND** create and replace operations fail validation before transport or registry mutation
+
+#### Scenario: Foreign-edge-only binding has no heartbeater
+
+- **WHEN** the complete owner set contains foreign-edge claims and no owning or append claim
+- **THEN** one persistent owner entry is registered with zero token, no presence, and no enrollment
+
+#### Scenario: Foreign-edge and append binding has no heartbeater
+
+- **WHEN** the complete owner set contains foreign-edge and append claims but no replace-owned or CAS claim
+- **THEN** all claims register as one persistent atomic entry
+- **AND** the client retains zero token and creates no presence or enrollment
+
+#### Scenario: Valid persistent posture does not warn
+
+- **WHEN** a valid append-only or combined foreign-edge/append owner registers without an owning claim
+- **THEN** registration succeeds as a persistent posture
+- **AND** no misconfiguration warning is emitted solely because an owning claim is absent
 
 #### Scenario: Birth-only binding has no heartbeater
 
 - **WHEN** a contract has birth predicates but no mutable groups or foreign edges
 - **THEN** binding may return a client authorized for create and authoritative read-back
-- **AND** the client does not start a heartbeat or mint an owner token
-- **AND** it does not consume that owner's registration identity in a supplied Registry
+- **AND** the client creates no registration, presence, owner token, or heartbeater enrollment
+
+#### Scenario: Mixed owner entry contains an owning claim
+
+- **GIVEN** one complete owner set contains replace-owned or CAS plus append and/or foreign-edge claims
+- **WHEN** binding succeeds
+- **THEN** the entire owner entry is liveness-managed with one non-zero token and one heartbeater enrollment
+- **AND** no subset is registered persistently outside that atomic entry
+
+#### Scenario: Persistent owner has no presence
+
+- **GIVEN** a foreign-edge-only or append-only owner registered successfully without presence
+- **WHEN** the same owner attempts a second registration in the same Registry
+- **THEN** the attempt fails with `ErrOwnerAlreadyBound`
+- **AND** missing presence does not reopen or reap the persistent registration
 
 #### Scenario: Stale owner token
 
@@ -169,7 +223,8 @@ Authoritative create verification MUST compare every field of each canonical `me
 #### Scenario: Valid authoritative birth
 
 - **WHEN** a caller creates a conforming entity with its declared birth facts
-- **THEN** graph-ingest receives one existing create-with-triples request containing the opaque owner token
+- **THEN** graph-ingest receives one existing create-with-triples request using the client's zero or non-zero token
+  posture
 - **AND** every supplied triple has the primary entity as its subject
 - **AND** the receipt reports the commit state and authoritative entity when available
 
@@ -314,9 +369,9 @@ Generic outer retry loops MUST be prohibited. Deployments requiring strict no-re
 
 ### Requirement: Owner-bound rollout requires fail-closed lease enforcement
 
-Every graph-ingest instance serving mutation subjects for an owner-bound client MUST enable
-`enforce_owner_lease=true`. Before owner-bound mutation traffic is enabled, rollout evidence MUST prove claim-reader
-wiring on every serving instance, a live owner heartbeat, and zero owner-lease mismatch metrics during a bounded
+Every graph-ingest instance serving token-fenced create or replace traffic for a liveness-managed client MUST
+enable `enforce_owner_lease=true`. Before that traffic is enabled, rollout evidence MUST prove claim-reader wiring
+on every serving instance, a live owner heartbeat, and zero owner-lease mismatch metrics during a bounded
 observation window.
 
 Semdragon issue #313 MUST remain gated until that evidence exists. A configuration containing a non-enforcing
