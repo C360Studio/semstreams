@@ -9,7 +9,7 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **RECALL-CEILING FIX LANDED (2026-07-27, PR #702) — the newest state; supersedes the "next front"
+> **RECALL-CEILING FIX BUILT + VALIDATED (2026-07-27) — PR #702 OPEN, ready to merge, NOT yet merged (owner-gated). The newest state; supersedes the "next front"
 > framing in the B2 note below.** The owner's question "why don't communities resolve as expected?" is
 > answered: the 0.85 thematic-recall ceiling was NEVER a partition/community problem — it was
 > synthesis-projection lossiness. GraphRAG answer synthesis fed the LLM only {community summary + up to 5
@@ -311,7 +311,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix LANDED (PR #702, 0.85→0.95, pending owner Codex+merge); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix BUILT+VALIDATED, PR #702 OPEN (0.85→0.95, pending owner Codex+merge — NOT yet merged); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -642,7 +642,7 @@ Append one line per session. Newest last.
   membership). Docs-only change; the mechanism spec deltas were left untouched (already accurate).
   **Next:** program manager reviews this closure, runs `openspec validate --strict` and `openspec
   archive`, then decides B3 (ownership split, Tier-2) vs. the next epic.
-- **2026-07-27 (session 13)** — **RECALL-CEILING FIX BUILT + LANDED (PR #702); the owner's "why don't
+- **2026-07-27 (session 13)** — **RECALL-CEILING FIX BUILT + VALIDATED; PR #702 OPENED (ready to merge, not yet merged); the owner's "why don't
   communities resolve as expected?" is answered.** Cheapest-win static trace (free, no e2e) first: the
   0.85 ceiling is synthesis-projection lossiness, NOT partition. GraphRAG answer synthesis
   (`answer.go:buildAnswerPrompt`) feeds only {community summary + ≤5 PageRank query-AGNOSTIC rep titles +
