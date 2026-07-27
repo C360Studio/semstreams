@@ -9,7 +9,7 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **RECALL-CEILING FIX BUILT + VALIDATED (2026-07-27) — PR #702 OPEN, ready to merge, NOT yet merged (owner-gated). The newest state; supersedes the "next front"
+> **RECALL-CEILING FIX MERGED + ARCHIVED (2026-07-27, PR #702 `f9833ace` + archive #705 `669790d6`) — front CLOSED. The newest state; supersedes the "next front"
 > framing in the B2 note below.** The owner's question "why don't communities resolve as expected?" is
 > answered: the 0.85 thematic-recall ceiling was NEVER a partition/community problem — it was
 > synthesis-projection lossiness. GraphRAG answer synthesis fed the LLM only {community summary + up to 5
@@ -24,11 +24,14 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > 7/7, partition determinism 1.0).** Additive/non-breaking. `evacuation` (fire) stays missing — its only
 > tag-bearing entity sits in a document-type community that doesn't reach the fire query's top synthesis
 > clusters (cross-community coverage, NOT a tags defect); owner chose LAND-THE-WIN + filed **#701**
-> (retrieval-side multi-community query expansion). **NEXT (fresh session): PR #702 is owner-gated — owner
-> runs Codex + merges (CI was UNSTABLE/pending at hand-off; verify `gh pr checks 702` green + Codex
-> addressed before merge), THEN `openspec archive thematic-synthesis-context`. Then the epic-level WIP-1
-> pick: B3 (ownership split, Tier-2, #607/#617) vs #701 vs Epic C vs deferred Epic A (#619/#633/#643).**
-> Full detail: memory `epic-b-recall-ceiling-synthesis-context.md`.
+> (retrieval-side multi-community query expansion). Codex reviewed #702 once (3 findings: P1 type-filter
+> leak via the score map, P2 fallback cap, P2 baton wording) — ALL addressed (score map now keyed by
+> surviving `entityIDs`; fallback capped-copy; wording fixed) + CI green, then MERGED + ARCHIVED (#705).
+> **NEXT (fresh session): recall-ceiling front is DONE — pick the next epic-level WIP-1 item: B3 (ownership
+> split, Tier-2, #607/#617) vs #701 (multi-community query expansion) vs Epic C vs deferred Epic A
+> (#619/#633/#643).** Codex/sister-session own the separate projection-contract + predicate-audit stack
+> (#686←#687←#696←#704, #685) — merged bottom-up after sister review; NOT this thread. Full detail:
+> memory `epic-b-recall-ceiling-synthesis-context.md`.
 
 > **B2 CLOSED (2026-07-26, honest negative) — SUPERSEDES the "B2 IS DECIDED ... HAS ROI" framing
 > immediately below.** The weight-tuning lever is exhausted: enabling the merged semantic-edge mechanism
@@ -311,7 +314,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix BUILT+VALIDATED, PR #702 OPEN (0.85→0.95, pending owner Codex+merge — NOT yet merged); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix MERGED+ARCHIVED (PR #702 `f9833ace`, archive #705; 0.85→0.95, zero regressions); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -664,5 +667,13 @@ Append one line per session. Newest last.
   not just bodies) for free and reshaped the fix. (2) **fold confirm-trace into fix-validation** — one
   frontier run instead of a confirm-only run + a validation run. (3) two stale gopls diagnostics
   (undefined symbol, scratch-file) both dissolved on independent `go build` — status words lie, run the
-  command. **Next: owner Codex+merge #702 → archive → epic-level WIP-1 pick (B3 / #701 / Epic C / deferred
-  Epic A).**
+  command. **Then Codex reviewed #702 (3 findings): [P1] pre-type-filter score map could promote a
+  type-EXCLUDED entity into a shared community's digest (fixed — new `relevanceScoresFor` helper keys the
+  score map by the surviving `entityIDs` at all 3 call sites; the original reviewer had under-weighted
+  this as "acceptable"); [P2] no-score fallback bypassed `MaxQueryFocusedReps` (fixed — capped copy);
+  [P2] baton said "landed" on an open PR (fixed). All addressed + fail-without tests + CI green →
+  MERGED (`f9833ace`) + ARCHIVED (#705 `669790d6`, graph-query spec requirement promoted). Owner-authorized
+  the merge once CI green. Also declined to touch the separate codex projection-contract/predicate-audit
+  stack (owner + sister session merge it bottom-up). Lesson (4): a same-run reviewer APPROVE is not the
+  last word — Codex caught a real P1 the internal reviewer waved through; the once-through Codex gate earns
+  its keep. Recall-ceiling front CLOSED. Next: epic-level WIP-1 pick (B3 / #701 / Epic C / deferred Epic A).**
