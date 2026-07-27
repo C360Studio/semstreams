@@ -106,7 +106,7 @@
 - [ ] 8.8 Run focused and repository-wide unit, race, integration, lint, schema, contract, and applicable end-to-end
   gates for the #700 implementation.
 - [x] 8.9 Run strict validation for this change and the complete OpenSpec set, plus Markdown and diff hygiene.
-- [ ] 8.10 Obtain mandatory Fable re-review of the #700 public-contract amendment and resolve every finding before
+- [x] 8.10 Obtain mandatory Fable re-review of the #700 public-contract amendment and resolve every finding before
   implementation acceptance.
 
 ## Evidence
@@ -116,8 +116,9 @@
   commit; authoritative recovery still queried the real graph-ingest path. No internal handler fault was claimed.
 - Full production audit reported 500 passed and 0 failed.
 - Strict OpenSpec validation reported 32 passed and 0 failed.
-- The initial mandatory Fable review completed with a `REQUEST CHANGES` verdict. Its findings are recorded here;
-  Fable has not reviewed or approved the remediated fixes.
+- The initial mandatory Fable review completed with a `REQUEST CHANGES` verdict. The completed
+  [Fable re-review](https://github.com/C360Studio/semstreams/pull/687#issuecomment-5091179194) returned `APPROVE`
+  with no P1 findings and no inline review threads.
 - The user approved internal remediation of the recorded findings and cleared continuation of PR #687.
 - B1 remediation uses duplicate-resistant language and explicitly discloses the late-commit double-apply race.
 - B3 remediation adds fail-closed lease enforcement and rollout evidence on every serving graph-ingest instance.
@@ -125,8 +126,12 @@
   It permits one successful registration per owner/Registry, releases failed first attempts, and aggregates static
   built-in contracts before binding. PR #696 remains later adoption.
 - B5 remediation uses create-only birth-predicate language without a graph-enforced immutability claim.
-- #700 materially changes the reviewed registration/liveness public contract, so Fable re-review is now mandatory
-  under task 8.10.
+- #700 materially changed the reviewed registration/liveness public contract, so Fable re-review was mandatory and
+  is complete under task 8.10.
+- Fable's P2 append-idempotency observation is non-gating and remains tracked in
+  [#697](https://github.com/C360Studio/semstreams/issues/697#issuecomment-5092168779).
+- Persistent non-owning registration retirement remains a separate follow-up under
+  [#703](https://github.com/C360Studio/semstreams/issues/703).
 - Issue #313 records PR #687, its local verification evidence, and the still-gated internal migration scope.
 - Unrelated whole-repository baselines remain outside this ledger, including the expected dependency tracked by
   issue #686. Live PR CI, schema, and applicable end-to-end gates remain open under task 7.1.
@@ -145,7 +150,8 @@
 - `TestRegistry_ValidNonOwningRegistrationsDoNotWarn` proves valid append-only and foreign-edge-plus-append
   registrations emit no misconfiguration warning solely for lacking owning claims.
 - Architecture review required this final operational-ledger correction. Tasks 8.1 through 8.7 now reflect the
-  implemented and reviewed #700 posture; full validation task 8.8 and mandatory Fable re-review task 8.10 remain
-  open.
+  implemented and reviewed #700 posture. Fable task 8.10 is approved; broad validation task 8.8 remains open.
 - #700 documentation validation passes strict target validation, strict validation of all 32 OpenSpec items,
   Markdown lint, `git diff --check`, and the 120-column audit.
+- PR CI statistical E2E passed. That focused success does not by itself close broad gate 8.8 or the pre-existing
+  repository-wide gate 7.1.
