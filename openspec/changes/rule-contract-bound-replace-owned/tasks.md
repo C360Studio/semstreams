@@ -102,8 +102,8 @@
 - [x] 7.6 Run deletion and scope audits proving no raw ReplaceOwned request/token setter remains, no deferred
   Add/Remove work moved, no lesson migration remains, and `git diff --check` passes.
 - [x] 7.7 Run strict validation for this OpenSpec change and the complete OpenSpec set; run Markdown and line checks.
-- [ ] 7.8 Keep #688 open for raw Add/Remove and built-in prebound-client design; cross-link delivery evidence to
-  #313, PR #687, PR #696, and #688.
+- [x] 7.8 Keep #688 open for raw Add/Remove and built-in prebound-client design; cross-link delivery evidence to
+  #313, PR #687, PR #696, #688, and draft PR #704.
 - [x] 7.9 Obtain independent architecture and Go review for fail-closed composition, error semantics, concurrency,
   full-group behavior, hot-reload immutability, and deletion evidence.
 - [x] 7.10 Confirm no separate PR2 Fable review is required because the implementation does not expand the public
@@ -114,7 +114,7 @@
 ## Checkpoints
 
 - Rebased dependency stack: PR #687 `7d643e30`; finalized PR #696 `66a44d13`; rebased PR2 implementation
-  `fbb79bdf`; evidence checkpoint `17e04b0e`.
+  `fbb79bdf`; pre-cross-link evidence head `dfeff73a`.
 - Task 2.6 is verified at the checkpoint: both binaries already call the same helper before `StartAll`.
 - Architecture decision: option A scopes `ErrOwnerAlreadyBound` to non-empty registrations and uses one-time client
   injection failure for repeated claimless/birth-only composition; identical contract-bearing repeats are never
@@ -138,5 +138,6 @@
   ReplaceOwned/token/update-with-triples matches; AddTriple/RemoveTriple remain intentionally inventoried for #688.
 - Base-relative diffs for lesson artifacts, `pkg/ownership`, and `pkg/projection` are zero; `git diff --check` is
   clean.
-- Delivery references are #313, PR #687, PR #696, and #688. Task 7.8 remains open until the PR exists and can carry
-  the final delivery-evidence cross-link.
+- Delivery references are #313, PR #687, PR #696, #688, and
+  [draft PR #704](https://github.com/C360Studio/semstreams/pull/704), which is stacked on PR #696 and carries the
+  final delivery-evidence cross-link. This closes task 7.8; no post-cross-link CI result is claimed.
