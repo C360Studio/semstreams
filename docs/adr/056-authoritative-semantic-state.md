@@ -514,6 +514,13 @@ transition. **ADR-049 named the mechanism (`Manager`); it never named the respon
 
 ### Granularity: the unit is the predicate group, not the entity (proven on the code)
 
+> **Implementation status (2026-07-26):** the raw `RemoveByPredicate` and
+> `AddTriplesBatch` todo citations below record the implementation that supplied
+> the ADR's original existence proof. They are historical, not current guidance.
+> `write_todos` now submits the complete named `todos` group through one
+> application-bound projection client's contract-bound `ReplaceOwned` operation.
+> Do not recreate the former clear-then-batch sequence.
+
 The v1 "one owner per entity" claim is **false on the flagship control-plane entity.** The
 loop-execution entity `{org}.{platform}.agent.agentic-loop.execution.{loopID}` is written by
 **~8 distinct sources** plus two framework writers, none of which owns the whole entity:
@@ -523,7 +530,7 @@ loop-execution entity `{org}.{platform}.agent.agentic-loop.execution.{loopID}` i
 | agentic-loop graph_writer | spawn identity, completion/failure/cancellation outcome, lineage | `graph_writer.go:269-323,474-496,561-577` |
 | synthetic-decide | `coordinator.decision.*` (no-terminal-tool fallback) | `graph_writer.go:191-199` |
 | coordinator decide tool | `coordinator.decision.*` (the real decision) | `decide.go:362-370` |
-| write_todos tool | `agent.todo.*` (REPLACE — RemoveByPredicate + AddTriplesBatch) | `write_todos.go:235-247` |
+| write_todos | `agent.todo.*` named-group replace | Historical clear+batch; current projection mutation client |
 | scratchpad tool | scratchpad predicates | `scratchpad.go:217` |
 | ops emit_diagnosis | diagnosis back-links | `emit_diagnosis.go:199` |
 | web-search / http-request | web-observation back-links | `websearch.go:259`, `httprequest.go:270` |
@@ -532,10 +539,11 @@ loop-execution entity `{org}.{platform}.agent.agentic-loop.execution.{loopID}` i
 
 Two facts kill "owner per entity":
 
-1. A **non-owner** component already does owned-state REPLACE on this entity:
-   `write_todos.go:235-247` clears every `agent.todo.*` predicate (`RemoveByPredicate` loop)
-   then writes the new set (`AddTriplesBatch`). It owns the *todo predicate group* on an
-   entity it does not otherwise own. This is the predicate-group unit, in production, today.
+1. A **non-owner** component already did owned-state REPLACE on this entity when this ADR was
+   decided: historical `write_todos.go:235-247` cleared every `agent.todo.*` predicate and
+   then wrote the new set. The current implementation preserves that ownership boundary with
+   one named-group `ReplaceOwned`. In both implementations it owns the *todo predicate group*
+   on an entity it does not otherwise own, proving the predicate-group unit.
 
 2. Two **different components** write the **same predicates** on the **same entity** with
    **no framework arbitration** — the `coordinator.decision.*` collision (worked existence-
@@ -686,7 +694,7 @@ for an edge it writes onto someone else's entity. The two are arbitrated by diff
 **This replaces "one owner per entity" everywhere.** An entity has owners *of predicate
 groups*. The loop-execution entity has: the loop-graph_writer owning the
 identity/outcome/lineage group (replace), the write_todos tool owning the `agent.todo.*`
-group (replace, `write_todos.go:235-247`), a `coordinator.decision.*` owner (resolved in
+group (one contract-bound named-group replace), a `coordinator.decision.*` owner (resolved in
 Decision 2), the lifecycle Manager owning phase+audit when the loop is a Participant (CAS),
 and un-claimed evidence predicates (back-links from web/ops tools — append, no owner).
 
@@ -975,10 +983,12 @@ the two-type split no longer loses the true-positive it was never meant to.
 **The `coordinator.decision.*` collision — resolved, AND when the check actually fires
 (re-review HIGH).** Today decide-tool (`decide.go:362-370`) and synthetic-decide
 (`graph_writer.go:191-199`) both write `{CoordinatorNextAction, CoordinatorDecisionReason}`
-onto the loop-execution entity. **Crucially, both currently go through the batch/append path
-(`AddTriplesBatch`-style, `write_todos.go`'s `RemoveByPredicate`+batch shape is the replace
-exemplar; the decision writes are append today) — i.e. `append-evidence`, which is EXEMPT.**
-So Decision 2's check does NOT fire on today's code: it fires only **after the ADR-055 Wave-1
+onto the loop-execution entity. **At the time of this decision, both went through the
+batch/append path. The then-current `write_todos` clear+batch shape was the replace exemplar;
+the decision writes were append — i.e. `append-evidence`, which is EXEMPT.** The todo writer
+has since moved to one contract-bound named-group replacement; that migration does not change
+the historical classification of the decision writers. Decision 2's check does NOT fire on
+that append shape: it fires only **after the ADR-055 Wave-1
 mode reclassification** flips these two writes to `replace-owned`. No one should expect the
 overlap to be caught on current `main`; it is caught post-migration, which is precisely when
 the silent-clobber hazard becomes real. The three legal resolutions, in preference order:

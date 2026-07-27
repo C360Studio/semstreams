@@ -10,45 +10,28 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/stretchr/testify/require"
 )
 
-// recordingTodoWriter implements TodoWriter in-process so tests can
-// assert on the exact remove/add operations write_todos emitted.
-// Mirror of recordingPublisher in decide_test.go.
-type recordingTodoWriter struct {
-	removes      []removeOp
-	addedBatches [][]message.Triple
-	removeErr    error
-	addErr       error
+type recordingTodoReplacer struct {
+	requests []projection.ReplaceOwnedMutation
+	err      error
 }
 
-type removeOp struct {
-	subject   string
-	predicate string
-}
-
-func (w *recordingTodoWriter) RemoveByPredicate(_ context.Context, subject, predicate string) error {
-	if w.removeErr != nil {
-		return w.removeErr
+func (w *recordingTodoReplacer) ReplaceOwned(_ context.Context, req projection.ReplaceOwnedMutation) (projection.MutationReceipt, error) {
+	if w.err != nil {
+		return projection.MutationReceipt{}, w.err
 	}
-	w.removes = append(w.removes, removeOp{subject: subject, predicate: predicate}) // predicate-audit:unrelated {"column":70,"surface":"go-field:predicate","value":"","basis":"reviewed:mock-captures-remove-by-predicate-argument"}
-	return nil
+	req.Desired = append([]message.Triple(nil), req.Desired...)
+	w.requests = append(w.requests, req)
+	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
 }
 
-func (w *recordingTodoWriter) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
-	if w.addErr != nil {
-		return w.addErr
-	}
-	cp := make([]message.Triple, len(triples))
-	copy(cp, triples)
-	w.addedBatches = append(w.addedBatches, cp)
-	return nil
-}
-
-func newWriteTodosExecutor(writer TodoWriter) *WriteTodosExecutor {
+func newWriteTodosExecutor(writer projection.OwnedReplacer) *WriteTodosExecutor {
 	return NewWriteTodosExecutor(writer, types.PlatformMeta{Org: "acme", Platform: "test"})
 }
 
@@ -57,7 +40,7 @@ func todosArg(items ...map[string]any) map[string]any {
 }
 
 func TestWriteTodosExecutor_ListTools(t *testing.T) {
-	e := newWriteTodosExecutor(&recordingTodoWriter{})
+	e := newWriteTodosExecutor(&recordingTodoReplacer{})
 	tools := e.ListTools()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
@@ -78,11 +61,10 @@ func TestWriteTodosExecutor_ListTools(t *testing.T) {
 	}
 }
 
-// TestWriteTodosExecutor_HappyPath pins the canonical write shape:
-// one remove per todo predicate (order matches todoPredicates), then
-// one batch add carrying 5 triples per todo on the loop entity.
+// TestWriteTodosExecutor_HappyPath pins the canonical write shape: one atomic
+// group replacement carrying five desired triples per todo.
 func TestWriteTodosExecutor_HappyPath(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 
 	args := todosArg(
@@ -107,28 +89,20 @@ func TestWriteTodosExecutor_HappyPath(t *testing.T) {
 		t.Errorf("write_todos must NOT stop the loop (it is called repeatedly)")
 	}
 
-	// Removes happen first, in the canonical predicate order. Pinning
-	// both order and contents keeps the load-bearing full-list-replace
-	// invariant from drifting silently.
-	if got, want := len(w.removes), len(todoPredicates); got != want {
-		t.Fatalf("remove count = %d, want %d (one per predicate)", got, want)
+	if got := len(w.requests); got != 1 {
+		t.Fatalf("replace count = %d, want 1", got)
 	}
 	wantLoopEntityID := agentic.LoopExecutionEntityID("acme", "test", "loop-abc")
-	for i, op := range w.removes {
-		if op.subject != wantLoopEntityID {
-			t.Errorf("remove[%d].subject = %q, want %q", i, op.subject, wantLoopEntityID)
-		}
-		if op.predicate != todoPredicates[i] {
-			t.Errorf("remove[%d].predicate = %q, want %q", i, op.predicate, todoPredicates[i])
-		}
+	req := w.requests[0]
+	if req.EntityID != wantLoopEntityID || req.Contract != "agentic.loop-execution" || req.Group != "todos" {
+		t.Fatalf("replace target = %#v", req)
+	}
+	if req.Metadata.RequestID != "write-todos:loop-abc:call-1" {
+		t.Errorf("request ID = %q", req.Metadata.RequestID)
 	}
 
-	// Single batch carries 3 todos × 5 predicates = 15 triples.
-	if got, want := len(w.addedBatches), 1; got != want {
-		t.Fatalf("batch count = %d, want %d (single CAS for all triples)", got, want)
-	}
-	batch := w.addedBatches[0]
-	if got, want := len(batch), 3*len(todoPredicates); got != want {
+	batch := req.Desired
+	if got, want := len(batch), 3*todoTriplesPerItem; got != want {
 		t.Fatalf("triple count = %d, want %d", got, want)
 	}
 
@@ -182,7 +156,7 @@ func TestWriteTodosExecutor_HappyPath(t *testing.T) {
 // empty array clears prior state without writing anything new — the
 // agent's way to "delete the list."
 func TestWriteTodosExecutor_EmptyListClears(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -197,11 +171,8 @@ func TestWriteTodosExecutor_EmptyListClears(t *testing.T) {
 	if res.Error != "" {
 		t.Fatalf("ToolResult.Error = %q, want empty", res.Error)
 	}
-	if got, want := len(w.removes), len(todoPredicates); got != want {
-		t.Errorf("remove count = %d, want %d", got, want)
-	}
-	if len(w.addedBatches) != 0 {
-		t.Errorf("empty list must not add anything; got %d batch(es)", len(w.addedBatches))
+	if len(w.requests) != 1 || len(w.requests[0].Desired) != 0 {
+		t.Errorf("empty list must issue one empty desired replacement; got %#v", w.requests)
 	}
 }
 
@@ -252,7 +223,7 @@ func TestWriteTodosExecutor_ValidationRejection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := &recordingTodoWriter{}
+			w := &recordingTodoReplacer{}
 			e := newWriteTodosExecutor(w)
 			res, err := e.Execute(context.Background(), agentic.ToolCall{
 				ID:        "c",
@@ -269,9 +240,8 @@ func TestWriteTodosExecutor_ValidationRejection(t *testing.T) {
 			if !strings.Contains(res.Error, tt.wantSub) {
 				t.Errorf("Error = %q, want substring %q", res.Error, tt.wantSub)
 			}
-			if len(w.removes) != 0 || len(w.addedBatches) != 0 {
-				t.Errorf("validation rejection must not touch writer; saw removes=%d batches=%d",
-					len(w.removes), len(w.addedBatches))
+			if len(w.requests) != 0 {
+				t.Errorf("validation rejection must not touch writer; saw %d requests", len(w.requests))
 			}
 		})
 	}
@@ -280,7 +250,7 @@ func TestWriteTodosExecutor_ValidationRejection(t *testing.T) {
 // TestWriteTodosExecutor_MissingLoopIDIsInternal surfaces a
 // dispatcher-layer bug rather than a self-correctable args mistake.
 func TestWriteTodosExecutor_MissingLoopIDIsInternal(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -294,62 +264,221 @@ func TestWriteTodosExecutor_MissingLoopIDIsInternal(t *testing.T) {
 	if res.ErrorKind != agentic.ToolErrorInternal {
 		t.Errorf("ErrorKind = %q, want %q", res.ErrorKind, agentic.ToolErrorInternal)
 	}
-	if len(w.removes) != 0 {
+	if len(w.requests) != 0 {
 		t.Errorf("dispatcher-bug rejection must not touch writer")
 	}
 }
 
-// TestWriteTodosExecutor_RemoveErrorSurfaces verifies the network
-// error from clearing prior state surfaces with ToolErrorNetwork so
-// the loop's retry policy applies the right strategy.
-func TestWriteTodosExecutor_RemoveErrorSurfaces(t *testing.T) {
-	w := &recordingTodoWriter{removeErr: errors.New("graph-ingest unavailable")}
-	e := newWriteTodosExecutor(w)
+func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
+	t.Parallel()
 
-	res, err := e.Execute(context.Background(), agentic.ToolCall{
-		ID:     "c",
-		Name:   WriteTodosToolName,
-		LoopID: "loop-x",
-		Arguments: todosArg(
-			map[string]any{"id": "1", "content": "x", "status": "pending"},
-		),
-	})
-	if err == nil {
-		t.Fatal("expected wrapped Go error for transient network failure")
+	mutationFailure := func(
+		kind projection.MutationErrorKind,
+		commit projection.CommitState,
+		class errs.ErrorClass,
+		cause error,
+	) error {
+		return &projection.MutationError{
+			Operation: projection.MutationOperationReplaceOwned,
+			Kind:      kind,
+			Class:     class,
+			Commit:    commit,
+			Err:       cause,
+		}
 	}
-	if res.ErrorKind != agentic.ToolErrorNetwork {
-		t.Errorf("ErrorKind = %q, want %q", res.ErrorKind, agentic.ToolErrorNetwork)
-	}
-	if !strings.Contains(res.Error, "graph-ingest unavailable") {
-		t.Errorf("Error should propagate underlying message; got %q", res.Error)
-	}
-}
+	unavailableCause := errors.New("transport unavailable")
+	staleCause := errors.New("stale owner lease")
+	unknownCause := errors.New("response lost after write")
+	unverifiedCause := errors.New("authoritative verification failed")
+	verifiedErrorCause := errors.New("impossible post-verification error")
+	invalidCause := errors.New("invalid replacement")
+	conflictCause := errors.New("replacement conflict")
+	notFoundCause := errors.New("owned projection not found")
+	internalCause := errors.New("projection client invariant failed")
+	genericCause := errors.New("unexpected writer failure")
 
-// TestWriteTodosExecutor_AddErrorSurfaces verifies post-clear batch
-// failures also surface as ToolErrorNetwork — the retry policy
-// shouldn't differ based on which round-trip failed.
-func TestWriteTodosExecutor_AddErrorSurfaces(t *testing.T) {
-	w := &recordingTodoWriter{addErr: errors.New("CAS conflict, exhausted retries")}
-	e := newWriteTodosExecutor(w)
+	tests := []struct {
+		name          string
+		cause         error
+		failure       error
+		wantKind      agentic.ToolErrorKind
+		wantMutation  bool
+		wantTransient bool
+		wantRetry     bool
+	}{
+		{
+			name:  "unavailable not committed is retryable",
+			cause: unavailableCause,
+			failure: mutationFailure(
+				projection.MutationUnavailable,
+				projection.CommitNotCommitted,
+				errs.ErrorTransient,
+				unavailableCause,
+			),
+			wantKind:      agentic.ToolErrorNetwork,
+			wantMutation:  true,
+			wantTransient: true,
+			wantRetry:     true,
+		},
+		{
+			name:  "stale owner token is permission and non-retryable",
+			cause: staleCause,
+			failure: mutationFailure(
+				projection.MutationStaleOwnerToken,
+				projection.CommitNotCommitted,
+				errs.ErrorInvalid,
+				staleCause,
+			),
+			wantKind:     agentic.ToolErrorPermission,
+			wantMutation: true,
+		},
+		{
+			name:  "commit unknown is non-retryable",
+			cause: unknownCause,
+			failure: mutationFailure(
+				projection.MutationCommitUnknown,
+				projection.CommitUnknown,
+				errs.ErrorTransient,
+				unknownCause,
+			),
+			wantKind:     agentic.ToolErrorUnknown,
+			wantMutation: true,
+		},
+		{
+			name:  "committed unverified is internal and non-retryable",
+			cause: unverifiedCause,
+			failure: mutationFailure(
+				projection.MutationCommittedUnverified,
+				projection.CommitCommitted,
+				errs.ErrorFatal,
+				unverifiedCause,
+			),
+			wantKind:     agentic.ToolErrorInternal,
+			wantMutation: true,
+		},
+		{
+			name:  "verified error is internal and non-retryable",
+			cause: verifiedErrorCause,
+			failure: mutationFailure(
+				projection.MutationInternal,
+				projection.CommitVerified,
+				errs.ErrorFatal,
+				verifiedErrorCause,
+			),
+			wantKind:     agentic.ToolErrorInternal,
+			wantMutation: true,
+		},
+		{
+			name:  "invalid mutation is invalid arguments and non-retryable",
+			cause: invalidCause,
+			failure: mutationFailure(
+				projection.MutationInvalid,
+				projection.CommitNotCommitted,
+				errs.ErrorInvalid,
+				invalidCause,
+			),
+			wantKind:     agentic.ToolErrorInvalidArgs,
+			wantMutation: true,
+		},
+		{
+			name:  "conflict is invalid arguments and non-retryable",
+			cause: conflictCause,
+			failure: mutationFailure(
+				projection.MutationConflict,
+				projection.CommitNotCommitted,
+				errs.ErrorInvalid,
+				conflictCause,
+			),
+			wantKind:     agentic.ToolErrorInvalidArgs,
+			wantMutation: true,
+		},
+		{
+			name:  "not found is non-retryable",
+			cause: notFoundCause,
+			failure: mutationFailure(
+				projection.MutationNotFound,
+				projection.CommitNotCommitted,
+				errs.ErrorInvalid,
+				notFoundCause,
+			),
+			wantKind:     agentic.ToolErrorNotFound,
+			wantMutation: true,
+		},
+		{
+			name:  "internal mutation is non-retryable",
+			cause: internalCause,
+			failure: mutationFailure(
+				projection.MutationInternal,
+				projection.CommitNotCommitted,
+				errs.ErrorFatal,
+				internalCause,
+			),
+			wantKind:     agentic.ToolErrorInternal,
+			wantMutation: true,
+		},
+		{
+			name:  "context cancellation is non-retryable",
+			cause: context.Canceled,
+			failure: mutationFailure(
+				projection.MutationUnavailable,
+				projection.CommitNotCommitted,
+				errs.ErrorTransient,
+				context.Canceled,
+			),
+			wantKind:     agentic.ToolErrorUnknown,
+			wantMutation: true,
+		},
+		{
+			name:     "generic error is internal and non-retryable",
+			cause:    genericCause,
+			failure:  genericCause,
+			wantKind: agentic.ToolErrorInternal,
+		},
+	}
 
-	res, err := e.Execute(context.Background(), agentic.ToolCall{
-		ID:     "c",
-		Name:   WriteTodosToolName,
-		LoopID: "loop-x",
-		Arguments: todosArg(
-			map[string]any{"id": "1", "content": "x", "status": "pending"},
-		),
-	})
-	if err == nil {
-		t.Fatal("expected wrapped Go error for batch failure")
-	}
-	if res.ErrorKind != agentic.ToolErrorNetwork {
-		t.Errorf("ErrorKind = %q, want %q", res.ErrorKind, agentic.ToolErrorNetwork)
-	}
-	// Removes ran before the add failed — that's fine, full-list-replace
-	// semantics mean a retry is safe.
-	if len(w.removes) != len(todoPredicates) {
-		t.Errorf("removes should have completed before the failed add; got %d", len(w.removes))
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			replacer := &recordingTodoReplacer{err: test.failure}
+			executor := newWriteTodosExecutor(replacer)
+			result, err := executor.Execute(context.Background(), agentic.ToolCall{
+				ID:     "c",
+				Name:   WriteTodosToolName,
+				LoopID: "loop-x",
+				Arguments: todosArg(
+					map[string]any{"id": "1", "content": "x", "status": "pending"},
+				),
+			})
+			if err == nil {
+				t.Fatal("expected wrapped replace error")
+			}
+			if result.ErrorKind != test.wantKind {
+				t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, test.wantKind)
+			}
+			if !strings.Contains(result.Error, test.cause.Error()) {
+				t.Errorf("ToolResult.Error = %q, want cause %q", result.Error, test.cause)
+			}
+			if !errors.Is(err, test.cause) {
+				t.Errorf("returned error does not preserve errors.Is cause %v: %v", test.cause, err)
+			}
+			var mutationErr *projection.MutationError
+			if got := errors.As(err, &mutationErr); got != test.wantMutation {
+				t.Errorf("errors.As(*MutationError) = %v, want %v (err=%v)", got, test.wantMutation, err)
+			}
+			if got := errs.IsTransient(err); got != test.wantTransient {
+				t.Errorf("errs.IsTransient = %v, want %v (err=%v)", got, test.wantTransient, err)
+			}
+			policy := RetryPolicy{
+				MaxAttempts: 2,
+				RetryOnKinds: []string{
+					string(agentic.ToolErrorTimeout),
+					string(agentic.ToolErrorExternal),
+					string(agentic.ToolErrorNetwork),
+				},
+			}
+			if got := shouldRetry(err, result, policy); got != test.wantRetry {
+				t.Errorf("shouldRetry = %v, want %v", got, test.wantRetry)
+			}
+		})
 	}
 }
 
@@ -357,7 +486,7 @@ func TestWriteTodosExecutor_AddErrorSurfaces(t *testing.T) {
 // dispatcher contract: the executor should never see a name other
 // than WriteTodosToolName.
 func TestWriteTodosExecutor_UnknownToolNameIsRoutingBug(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c",
@@ -378,7 +507,7 @@ func TestWriteTodosExecutor_UnknownToolNameIsRoutingBug(t *testing.T) {
 // assertions about timestamp equality become deterministic instead of
 // "today, ish" tolerances.
 func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 	frozen := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	e.SetClock(func() time.Time { return frozen })
@@ -394,8 +523,8 @@ func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute returned error: %v", err)
 	}
-	require.Len(t, w.addedBatches, 1)
-	for i, tr := range w.addedBatches[0] {
+	require.Len(t, w.requests, 1)
+	for i, tr := range w.requests[0].Desired {
 		if !tr.Timestamp.Equal(frozen) {
 			t.Errorf("triple[%d].Timestamp = %v, want %v", i, tr.Timestamp, frozen)
 		}
@@ -415,7 +544,7 @@ func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
 // NOT crash the dispatch goroutine via panic from
 // LoopExecutionEntityID.
 func TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal(t *testing.T) {
-	w := &recordingTodoWriter{}
+	w := &recordingTodoReplacer{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -435,9 +564,8 @@ func TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal(t *testing.T) {
 	if !strings.Contains(res.Error, "loop entity ID") {
 		t.Errorf("Error %q should reference the loop entity ID construction", res.Error)
 	}
-	if len(w.removes) != 0 || len(w.addedBatches) != 0 {
-		t.Errorf("malformed loop_id rejection must not touch writer; saw removes=%d batches=%d",
-			len(w.removes), len(w.addedBatches))
+	if len(w.requests) != 0 {
+		t.Errorf("malformed loop_id rejection must not touch writer; saw %d requests", len(w.requests))
 	}
 }
 

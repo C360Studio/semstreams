@@ -400,7 +400,35 @@ mutable group then uses a distinct named `ReplaceOwned` selection; append-only o
 
 This SemStreams change does not edit Semdragon. Downstream adoption remains tracked by
 [SemStreams issue #313](https://github.com/C360Studio/semstreams/issues/313) and Semdragon's own migration work.
-PR #696 is a later internal-adoption change, not part of this public API PR.
+Public API PR #687 did not perform internal adoption. PR #696 is the separate bounded internal-adoption follow-up,
+not part of #687's public API delta.
+
+## First internal migration slice
+
+The first in-repository adoption is narrower than the full mutation inventory:
+
+- preserve owner identity `agentic-loop-graph-writer`;
+- aggregate every enabled built-in static contract into exactly one `BindMutationClient` call;
+- fail boot before affected writers start on ownership bootstrap, validation, binding, heartbeat, or overlap errors;
+- declare loop birth predicates and the named `todos` replacement group in the built-in contract package;
+- declare lesson birth predicates and the named `lesson-lifecycle` replacement group in that package;
+- make `write_todos` submit one complete desired set through `ReplaceOwned("todos")`; and
+- give `LessonCurator` `OwnedReplacer` and `AuthoritativeReader` directly.
+
+This adoption preserves the fix for [#691](https://github.com/C360Studio/semstreams/issues/691) at both layers. The
+Registry-wide invariant rejects a second same-owner registration, while #696 avoids the invalid partial-bind shape
+by supplying the complete built-in contract set to one `BindMutationClient` boot bind. There is no legacy helper or
+`BindAndHeartbeat` fallback in the migrated built-in path.
+
+PR #696 deletes `OwnedFactWriter` only after recording zero production callers and parity for todo and lesson
+success, delete-on-omit, authoritative read-back, classified errors, stale tokens, and fail-closed boot behavior.
+The bounded Go-source audit also reports zero `OwnedFactWriter` and `NewNATSLessonCurator` references.
+
+Raw create/append publishers, rules, `graph_writer`, research, and `agentrun` remain outside PR #696. Their follow-up
+ownership is tracked by [#688](https://github.com/C360Studio/semstreams/issues/688),
+[#689](https://github.com/C360Studio/semstreams/issues/689), and
+[#690](https://github.com/C360Studio/semstreams/issues/690). The #696 scope audit must prove these lanes did not
+move.
 
 ## Structured values remain separate
 

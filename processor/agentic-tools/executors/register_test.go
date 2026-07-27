@@ -2,12 +2,16 @@ package executors
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/processor/rule"
 )
@@ -144,6 +148,108 @@ func TestRegisterBuiltins_NilRegistryErrors(t *testing.T) {
 	t.Parallel()
 	if err := RegisterBuiltins(context.Background(), nil, ToolDependencies{}); err == nil {
 		t.Fatalf("RegisterBuiltins(nil registry) should error")
+	}
+}
+
+type noOpOwnedReplacer struct{}
+
+func (noOpOwnedReplacer) ReplaceOwned(
+	context.Context,
+	projection.ReplaceOwnedMutation,
+) (projection.MutationReceipt, error) {
+	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
+}
+
+func TestRegisterWriteTodosRequiresProjectionClient(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+	if err := registerWriteTodos(
+		registry, nil, component.PlatformMeta{}, slog.Default(),
+	); err == nil {
+		t.Fatal("nil projection client must block write_todos registration")
+	}
+	if len(registry.ListTools()) != 0 {
+		t.Fatal("nil projection client registered write_todos")
+	}
+}
+
+func TestRegisterWriteTodosUsesProjectionCapability(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+	if err := registerWriteTodos(
+		registry,
+		noOpOwnedReplacer{},
+		component.PlatformMeta{Org: "acme", Platform: "test"},
+		slog.Default(),
+	); err != nil {
+		t.Fatalf("registerWriteTodos: %v", err)
+	}
+	if !containsName(registry.ListTools(), agentictools.WriteTodosToolName) {
+		t.Fatal("write_todos was not registered")
+	}
+}
+
+func TestRegisterBuiltins_WriteTodosRequiresMutationClient(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+
+	err := RegisterBuiltins(context.Background(), registry, writeTodosOnlyDependencies(nil))
+	if err == nil {
+		t.Fatal("nil mutation client must block write_todos registration")
+	}
+	if !errors.Is(err, errWriteTodosMutationClientRequired) {
+		t.Fatalf("RegisterBuiltins error = %q, want missing mutation client error", err)
+	}
+	if containsName(registry.ListTools(), agentictools.WriteTodosToolName) {
+		t.Fatal("nil mutation client registered write_todos")
+	}
+}
+
+func TestRegisterBuiltins_WriteTodosUsesMutationClient(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+
+	if err := RegisterBuiltins(
+		context.Background(),
+		registry,
+		writeTodosOnlyDependencies(&projection.MutationClient{}),
+	); err != nil {
+		t.Fatalf("RegisterBuiltins: %v", err)
+	}
+	if !containsName(registry.ListTools(), agentictools.WriteTodosToolName) {
+		t.Fatal("non-nil mutation client did not register write_todos")
+	}
+}
+
+func TestRegisterBuiltins_SkipWriteTodosDoesNotRequireMutationClient(t *testing.T) {
+	t.Parallel()
+	registry := agentictools.NewExecutorRegistry()
+	deps := writeTodosOnlyDependencies(nil)
+	deps.SkipBuiltins = append(deps.SkipBuiltins, "write_todos")
+
+	if err := RegisterBuiltins(context.Background(), registry, deps); err != nil {
+		t.Fatalf("RegisterBuiltins with write_todos skipped: %v", err)
+	}
+	if containsName(registry.ListTools(), agentictools.WriteTodosToolName) {
+		t.Fatal("SkipBuiltins registered write_todos")
+	}
+}
+
+func writeTodosOnlyDependencies(mutations *projection.MutationClient) ToolDependencies {
+	skip := make([]string, 0, len(BuiltinGroupKeys)-1)
+	for _, key := range BuiltinGroupKeys {
+		if key != "write_todos" {
+			skip = append(skip, key)
+		}
+	}
+	return ToolDependencies{
+		// A non-nil NATS dependency drives RegisterBuiltins through its
+		// stateful registration branch. The skipped groups keep this test
+		// focused on write_todos and do not require a live connection.
+		NATSClient:     &natsclient.Client{},
+		MutationClient: mutations,
+		Logger:         slog.Default(),
+		SkipBuiltins:   skip,
 	}
 }
 

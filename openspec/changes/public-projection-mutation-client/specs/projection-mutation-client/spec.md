@@ -454,8 +454,8 @@ The change MUST NOT add an envelope, use `BaseMessage`, require a new graph-inge
 representation. Predicate-group names, birth predicates, and the replace group selector MUST remain local client
 and contract inputs and MUST NOT be added to graph mutation requests.
 
-PR #696 MUST remain a later internal-adoption change and MUST NOT be treated as part of this public API change or
-as evidence that Semdragon #313 has passed its serving-fleet enforcement gate.
+PR #696 MUST remain a separate internal-adoption follow-up to public API PR #687. It MUST NOT be treated as part of
+the #687 public API delta or as evidence that Semdragon #313 has passed its serving-fleet enforcement gate.
 
 #### Scenario: Existing graph-ingest deployment
 
@@ -475,3 +475,80 @@ query behavior, or structured-literal encoding.
 - **WHEN** issue #683 adopts canonical child entities
 - **THEN** its implementation can depend on the public mutation interfaces
 - **AND** its own specification remains responsible for the child-entity model and lifecycle
+
+### Requirement: First internal migration is aggregate, fail-closed, and bounded
+
+PR #696 MUST preserve owner identity `agentic-loop-graph-writer`. One built-in contract package MUST declare the
+complete existing loop birth predicates, one named `todos` `replace-owned` group, the complete existing lesson
+birth predicates, and one named `lesson-lifecycle` `replace-owned` group.
+
+The composition root MUST aggregate every enabled built-in static contract into exactly one
+`BindMutationClient` registration for that owner. Ownership bootstrap, contract validation, binding, heartbeat
+startup, and overlap detection MUST form a fail-closed boot gate. No affected writer may start or publish a
+mutation after any gate failure. The built-in path MUST NOT fall back to a partial `BindAndHeartbeat` registration.
+Together with the Registry-wide same-owner registration invariant, the aggregate bind MUST preserve the #691 fix.
+
+#### Scenario: All enabled built-in contracts bind once
+
+- **GIVEN** the loop/todo and lesson writers are enabled
+- **WHEN** their composition root initializes
+- **THEN** it supplies the complete aggregate contract set to exactly one `BindMutationClient` call
+- **AND** the registry observes one complete registration for `agentic-loop-graph-writer`
+
+#### Scenario: Binding or overlap fails
+
+- **WHEN** ownership bootstrap, validation, binding, heartbeat startup, or overlap detection fails
+- **THEN** process boot fails with the classified cause
+- **AND** no affected subscription, writer, or mutation publisher starts
+
+#### Scenario: Partial built-in rebind is attempted
+
+- **GIVEN** the complete built-in contracts already registered for `agentic-loop-graph-writer`
+- **WHEN** a later path attempts a partial registration for the same owner and Registry
+- **THEN** the Registry-wide invariant rejects it before heartbeat or claim mutation
+- **AND** the process does not continue with a partial #691 contract shape
+
+### Requirement: Todo and lesson writers use narrow atomic replacement
+
+`write_todos` MUST construct the complete desired `todos` group and issue exactly one `ReplaceOwned` operation per
+logical write. `LessonCurator` MUST depend directly on `OwnedReplacer` and `AuthoritativeReader`, select the
+`lesson-lifecycle` group for replacement, and read current state authoritatively.
+
+`OwnedFactWriter` MUST NOT be deleted until a bounded audit reports zero production callers and focused
+behavior-parity evidence passes review.
+
+#### Scenario: Todos replace as one group
+
+- **WHEN** `write_todos` persists a logical todo set
+- **THEN** it performs one `ReplaceOwned` call selecting `todos`
+- **AND** omitted todo predicates are removed atomically without a clear/append or raw-mutation fallback
+
+#### Scenario: Lesson curator reconciles lifecycle state
+
+- **WHEN** `LessonCurator` reads and updates mutable lesson lifecycle facts
+- **THEN** it reads through `AuthoritativeReader`
+- **AND** it replaces exactly the `lesson-lifecycle` group through `OwnedReplacer`
+
+#### Scenario: Helper removal lacks parity evidence
+
+- **GIVEN** a production `OwnedFactWriter` caller remains or required parity evidence is incomplete
+- **WHEN** helper removal is evaluated
+- **THEN** the helper remains and its deletion task stays incomplete
+
+#### Scenario: Helper removal has bounded evidence
+
+- **GIVEN** a Go-source audit reports zero `OwnedFactWriter` and `NewNATSLessonCurator` references
+- **AND** focused todo, lesson, aggregate-binding, deletion, and authoritative-read-back evidence passes
+- **WHEN** PR #696 removes the legacy helper and constructor
+- **THEN** the migration retains only the narrow projection mutation interfaces
+
+### Requirement: PR #696 does not absorb deferred mutation lanes
+
+PR #696 MUST leave raw create/append publishers, rules, `graph_writer`, research, and `agentrun` outside its
+migration diff. Those lanes remain tracked by issues #688, #689, and #690.
+
+#### Scenario: Scope audit runs before review
+
+- **WHEN** the PR #696 scope audit compares the diff with the pre-slice inventory
+- **THEN** it finds no transport or ownership migration in a deferred lane
+- **AND** each deferred lane remains assigned to its linked follow-up issue

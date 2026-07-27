@@ -450,8 +450,10 @@ conflict case needs a separate policy decision rather than implied liveness or s
 5. Add append evidence with lost-response verification tests.
 6. Prove lease enforcement, claim-reader wiring, heartbeat liveness, and zero mismatch metrics on every serving
    graph-ingest instance.
-7. Keep PR #696 and Semdragon #313 as later adoptions after the public contract and rollout gate are approved.
-8. Implement and validate the #700 registration-posture matrix, then obtain mandatory Fable re-review before
+7. Complete PR #696 as the first bounded internal adoption after public contract approval, while keeping it
+   separate from PR #687's public API delta.
+8. Keep Semdragon #313 as a later adoption gated on the serving-fleet rollout evidence in step 6.
+9. Implement and validate the #700 registration-posture matrix, then obtain mandatory Fable re-review before
    accepting the public-contract amendment.
 
 Existing APIs remain in place throughout. Removal of duplicated internal helpers requires separate evidence that no

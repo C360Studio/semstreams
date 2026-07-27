@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -32,8 +31,8 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 	"github.com/c360studio/semstreams/test/e2e/client"
+	"github.com/c360studio/semstreams/test/e2e/harness/lessoncuration"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -721,19 +720,31 @@ func (s *Scenario) verifyLessonProposed(ctx context.Context, result *scenarios.R
 }
 
 // promoteLesson is stage 3: acting as the operator, drive the validated
-// LessonCurator promotion path (NOT an agent tool). NewNATSLessonCurator writes
-// through graph.mutation.entity.update_with_triples after resolving that every
-// cited evidence entity exists — SeedLoop1ID is seeded, so the evidence-existence
-// gate passes and the status flips proposed → active via a single-valued replace.
+// LessonCurator promotion path (NOT an agent tool). The E2E binary serves this
+// request through its already-bound contract client, so the harness never takes
+// over or observes the production owner token.
 func (s *Scenario) promoteLesson(ctx context.Context, result *scenarios.Result) error {
 	if s.lessonEntityID == "" {
 		return fmt.Errorf("no lesson entity id captured from verify-lesson-proposed")
 	}
-	curator := agentictools.NewNATSLessonCurator(s.nats.Client(), slog.Default())
-	if err := curator.Promote(ctx, s.lessonEntityID); err != nil {
+	requestData, err := json.Marshal(lessoncuration.PromoteRequest{EntityID: s.lessonEntityID})
+	if err != nil {
+		return fmt.Errorf("encode lesson promotion request: %w", err)
+	}
+	responseData, err := s.nats.Client().RequestClassified(
+		ctx, lessoncuration.SubjectPromote, requestData, 5*time.Second,
+	)
+	if err != nil {
 		return fmt.Errorf(
 			"promote lesson %s: %w — the evidence-existence gate must resolve the seeded evidence entity %s",
 			s.lessonEntityID, err, SeedLoop1ID)
+	}
+	var response lessoncuration.PromoteResponse
+	if err := json.Unmarshal(responseData, &response); err != nil {
+		return fmt.Errorf("decode lesson promotion response: %w", err)
+	}
+	if !response.Promoted {
+		return fmt.Errorf("lesson promotion responder did not confirm promotion for %s", s.lessonEntityID)
 	}
 	result.Details["lesson_promoted"] = true
 
