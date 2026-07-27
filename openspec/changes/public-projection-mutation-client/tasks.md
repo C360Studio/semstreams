@@ -127,7 +127,7 @@
 - [x] 9.9 Run the production predicate audit independently of the fixture-oriented `predicate:test-audit`.
 - [x] 9.10 Run the full race suite.
 - [x] 9.11 Run `task e2e:agentic` and explicitly tear down its stack.
-- [ ] 9.12 Confirm live PR CI on the final rebased PR head.
+- [x] 9.12 Confirm live PR CI on the final rebased PR head.
 - [x] 9.13 Obtain the required independent architect and code-review approvals for the internal migration.
 - [x] 9.14 Record that #696 does not require automatic Fable review. Request Fable review only if remediation exposes
   an unresolved issue or this migration materially changes or expands the reviewed public contract.
@@ -183,7 +183,7 @@
 
 ### PR #696 Rebased Evidence
 
-- Review base: `7df575fa`; implementation: `64bde931`.
+- Review base: `7d643e30`; final PR head: `12fa1ea4`.
 - Schema generation completed 33+7 checks with zero drift in 0.85 seconds.
 - `go test -race ./...` passed across 161 packages in 68.21 seconds.
 - `go vet ./...` passed in 0.74 seconds, `task lint` passed in 4.76 seconds, and `go build ./...` passed across 161
@@ -206,7 +206,7 @@
 - `task e2e:agentic` exited 0 in 93.47 seconds. Its deterministic scenario completed in 558.13 milliseconds with a
   six-step trajectory, governance-approved audit evidence, and graph evidence.
 - Explicit end-to-end teardown exited 0 and left no containers running.
-- `git diff --check 7df575fa..64bde931` passed.
+- `git diff --check 7d643e30..12fa1ea4` passed.
 - Architecture implementation review approved #696 after the stale design sentence was corrected to identify #696
   as the completed first bounded internal adoption, separate from public API PR #687.
 - Go review returned `APPROVE` with no findings after the concrete `*MutationClient` typed-nil TDD fix.
@@ -215,12 +215,9 @@
 - Focused unit and race tests for `processor/agentic-tools/executors`, focused vet, `task lint`, and the working-tree
   diff check passed after the typed-nil fix.
 - The typed-nil correction is internal wiring and adds no public API delta.
-- Live GitHub CI remains the only open #696 gate under task 9.12.
 - No separate automatic Fable review was required for the internal-only #696 migration. The later #700 public
   contract expansion received the mandatory Fable approval recorded under task 8.10.
-- At check time, PR #696 head was `40a22d75`; GitHub `e2e statistical` reported `PASS` in 2m08s
-  ([Actions run 30223713900, job 89850412086][ci-696]).
-- This is historical #696 candidate evidence only. The evidence commit changes the PR head, so task 9.12 remains
-  open until the final rebased head reruns green.
+- PR #696 final head `12fa1ea4` passed GitHub `e2e statistical`
+  ([Actions run 30273067411, job 90000182334][ci-696-final]), closing task 9.12.
 
-[ci-696]: https://github.com/C360Studio/semstreams/actions/runs/30223713900/job/89850412086
+[ci-696-final]: https://github.com/C360Studio/semstreams/actions/runs/30273067411/job/90000182334
