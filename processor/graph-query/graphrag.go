@@ -185,10 +185,11 @@ type CommunitySummary struct {
 // EntityDigest provides lightweight, agent-readable context for an entity
 // without requiring a full EntityState load.
 type EntityDigest struct {
-	ID        string  `json:"id"`
-	Type      string  `json:"type"`                // extracted from 5th segment of entity ID
-	Label     string  `json:"label,omitempty"`     // human-readable name from key predicates
-	Relevance float64 `json:"relevance,omitempty"` // semantic similarity score when available
+	ID        string   `json:"id"`
+	Type      string   `json:"type"`                // extracted from 5th segment of entity ID
+	Label     string   `json:"label,omitempty"`     // human-readable name from key predicates
+	Relevance float64  `json:"relevance,omitempty"` // semantic similarity score when available
+	Tags      []string `json:"tags,omitempty"`      // classification tags (content.classification.tag triples), capped
 }
 
 // extractEntityType returns the type segment (5th part) of a 6-part entity ID.
@@ -386,7 +387,7 @@ func (c *Component) tryPathIntentSearch(ctx context.Context, cr *query.Classific
 				Count:      len(pathResult.Entities),
 				DurationMs: time.Since(startTime).Milliseconds(),
 			}
-			if err := c.enrichGlobalResponse(ctx, &response, queryText, pathEntityIDs); err != nil {
+			if err := c.enrichGlobalResponse(ctx, &response, queryText, pathEntityIDs, nil); err != nil {
 				return nil, false, err
 			}
 			c.recordSuccess(requestSize, 0)
@@ -741,8 +742,9 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				semanticScores[h.EntityID] = h.Score
 			}
 
-			// Enrich community summaries with RepEntity digests (single batch load)
-			enriched, enrichErr := c.enrichCommunitySummaries(ctx, communityMatches)
+			// Enrich community summaries with query-relevant, tag-enriched digests
+			// (Levers A+B): the semanticScores steer representative selection.
+			enriched, enrichErr := c.enrichCommunitySummaries(ctx, communityMatches, semanticScores)
 			if enrichErr != nil {
 				return nil, enrichErr
 			}
@@ -788,7 +790,13 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				DurationMs: time.Since(startTime).Milliseconds(),
 			}
 			if req.shouldIncludeSummaries() {
-				if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs); err != nil {
+				// Per-entity relevance is available here — thread it so digest
+				// representative selection is query-relevant (Lever A).
+				scores := make(map[string]float64, len(semanticHits))
+				for _, h := range semanticHits {
+					scores[h.EntityID] = h.Score
+				}
+				if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
 					return nil, err
 				}
 			}
@@ -896,7 +904,7 @@ func (c *Component) handleStrategyEntityLookup(ctx context.Context, cr *query.Cl
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID}); err != nil {
+	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, []string{fullID}, nil); err != nil {
 		return nil, false, err
 	}
 
@@ -1002,7 +1010,14 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
 
-	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs); err != nil {
+	// Per-entity relevance is in scope here (the threshold-filtered hits) —
+	// thread it so digest representative selection is query-relevant (Lever A),
+	// mirroring the tier-1 full-load caller in handleStrategyGraphRAG.
+	scores := make(map[string]float64, len(filtered))
+	for _, h := range filtered {
+		scores[h.EntityID] = h.Score
+	}
+	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
 		return nil, err
 	}
 
@@ -1074,7 +1089,7 @@ func (c *Component) handleStrategyTemporal(ctx context.Context, cr *query.Classi
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs); err != nil {
+	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
 		return nil, err
 	}
 
@@ -1135,7 +1150,7 @@ func (c *Component) handleStrategySpatial(ctx context.Context, cr *query.Classif
 		Count:      len(entities),
 		DurationMs: time.Since(startTime).Milliseconds(),
 	}
-	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs); err != nil {
+	if err := c.enrichGlobalResponse(ctx, &response, req.Query, entityIDs, nil); err != nil {
 		return nil, err
 	}
 
@@ -1281,9 +1296,10 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		EntitiesTruncated: truncated,
 	}
 
-	// Conditionally include summaries (default: true)
+	// Conditionally include summaries (default: true). No semantic scores on the
+	// text/statistical fallback path — PageRank representative selection unchanged.
 	if req.shouldIncludeSummaries() {
-		enriched, enrichErr := c.enrichCommunitySummaries(ctx, summaries)
+		enriched, enrichErr := c.enrichCommunitySummaries(ctx, summaries, nil)
 		if enrichErr != nil {
 			return nil, enrichErr
 		}
@@ -1535,6 +1551,128 @@ var labelPredicates = []string{
 	agvocab.ModelName,
 }
 
+// Query-focused representative selection and tag-enrichment bounds for
+// answer-synthesis digests (thematic-synthesis-context).
+const (
+	// MaxQueryFocusedReps caps the query-relevant representative entities
+	// selected per community for the synthesis prompt. Mirrors the clustering
+	// package's MaxRepEntities (5) so the prompt's rep channel stays the same
+	// scale it is today — a query-relevant selection, not a wider one.
+	MaxQueryFocusedReps = 5
+
+	// MaxDigestTags caps the classification tags rendered per representative
+	// digest. Corpus entities carry ~4 tags; 6 gives headroom while bounding a
+	// pathologically over-tagged entity so a single member cannot balloon the
+	// prompt.
+	MaxDigestTags = 6
+)
+
+// digestTagPredicates lists the predicates whose (multi-valued, string) objects
+// are surfaced as a representative's classification tags in the synthesis
+// context. Only the tag predicate is used: it carries the thematic vocabulary
+// (e.g. "battery", "door", "evacuation") that must reach the answer model;
+// category/type would add noise. References the framework-recognized
+// content-classification convention (vocabulary.ContentClassificationTag), the
+// product-neutral predicate products emit when they classify content.
+var digestTagPredicates = []string{vocabulary.ContentClassificationTag}
+
+// collectDigestTags returns up to maxTags distinct classification tag values from
+// an entity's triples, preserving first-seen order. Tags are multi-valued, so it
+// iterates Triples directly rather than using GetPropertyValue (which returns
+// only the first match). Non-string and empty objects are skipped. (maxTags, not
+// max: the latter shadows the Go builtin and trips revive/CI.)
+func collectDigestTags(entity *gtypes.EntityState, maxTags int) []string {
+	if entity == nil || maxTags <= 0 {
+		return nil
+	}
+	predSet := make(map[string]bool, len(digestTagPredicates))
+	for _, p := range digestTagPredicates {
+		predSet[p] = true
+	}
+	var tags []string
+	seen := make(map[string]bool)
+	for _, t := range entity.Triples {
+		if !predSet[t.Predicate] {
+			continue
+		}
+		s, ok := t.Object.(string)
+		if !ok || s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		tags = append(tags, s)
+		if len(tags) >= maxTags {
+			break
+		}
+	}
+	return tags
+}
+
+// selectDigestEntities picks the representative entity IDs for a community's
+// synthesis digest, Lever A of thematic-synthesis-context.
+//
+// When semanticScores carry per-entity query relevance, the community's MEMBERS
+// present in that map are ranked by score (desc, tie-broken by entity ID asc for
+// determinism), the top MaxQueryFocusedReps are taken, and any remaining slots
+// are backfilled from the community's PageRank RepEntities. This guarantees the
+// digest never carries fewer slots than today's pure-RepEntities behavior — no
+// rep slot is lost — while promoting query-relevant members that PageRank would
+// not surface.
+//
+// When semanticScores is nil/empty (the text/statistical fallback path), it
+// returns comm.RepEntities unchanged, preserving the tiered graceful-fallback
+// floor exactly.
+func selectDigestEntities(comm *clustering.Community, semanticScores map[string]float64) []string {
+	if comm == nil {
+		return nil
+	}
+	// Full fallback: no relevance signal → PageRank representatives, unchanged.
+	if len(semanticScores) == 0 {
+		return comm.RepEntities
+	}
+
+	type scoredMember struct {
+		id    string
+		score float64
+	}
+	scored := make([]scoredMember, 0, len(comm.Members))
+	for _, m := range comm.Members {
+		if s, ok := semanticScores[m]; ok {
+			scored = append(scored, scoredMember{id: m, score: s})
+		}
+	}
+	sort.Slice(scored, func(i, j int) bool {
+		if scored[i].score != scored[j].score {
+			return scored[i].score > scored[j].score
+		}
+		return scored[i].id < scored[j].id
+	})
+
+	selected := make([]string, 0, MaxQueryFocusedReps)
+	seen := make(map[string]bool)
+	for _, sm := range scored {
+		if len(selected) >= MaxQueryFocusedReps {
+			break
+		}
+		if !seen[sm.id] {
+			seen[sm.id] = true
+			selected = append(selected, sm.id)
+		}
+	}
+	// Backfill from PageRank reps to reach the cap when scored members are thin —
+	// keeps every rep slot today's behavior would have filled.
+	for _, id := range comm.RepEntities {
+		if len(selected) >= MaxQueryFocusedReps {
+			break
+		}
+		if !seen[id] {
+			seen[id] = true
+			selected = append(selected, id)
+		}
+	}
+	return selected
+}
+
 // resolveEntityLabels loads a subset of entities and extracts human-readable labels.
 // Returns a map from entity ID to label. Ordinary lookup failures and entities
 // without a recognizable label remain best-effort omissions; authoritative
@@ -1619,24 +1757,31 @@ func buildEntityDigestsFromEntities(entities []*gtypes.EntityState) []EntityDige
 	return digests
 }
 
-// enrichCommunitySummaries populates MemberCount and representative entity digests
-// on each CommunitySummary by looking up RepEntities from the community cache and
-// resolving their labels via a single batch entity load.
-func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []CommunitySummary) ([]CommunitySummary, error) {
+// enrichCommunitySummaries populates MemberCount and representative entity
+// digests on each CommunitySummary.
+//
+// Representatives are chosen by selectDigestEntities (Lever A of
+// thematic-synthesis-context): query-relevant community members when
+// semanticScores are supplied, backfilled from / falling back entirely to the
+// community's PageRank RepEntities. The selected IDs are batch-loaded ONCE into
+// full EntityStates so each digest's Label (resolveLabel) and Tags
+// (collectDigestTags — Lever B) come from a single pass, without a second
+// label-only round-trip.
+func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []CommunitySummary, semanticScores map[string]float64) ([]CommunitySummary, error) {
 	if c.communityCache == nil || len(summaries) == 0 {
 		return summaries, nil
 	}
 
-	// Collect all RepEntity IDs across matched communities (deduplicated)
+	// Collect the selected representative IDs across matched communities
+	// (deduplicated for a single batch load). Indexed by summary POSITION, not
+	// community ID: a community ID is unique only within a level, and summaries
+	// can span levels (findCommunitiesForEntities walks every level), so an
+	// ID-keyed map silently gave two same-ID summaries the last level's rep
+	// entities while each kept its own MemberCount — a digest stitched from two
+	// different communities. Position is unique by construction.
 	seen := make(map[string]bool)
-	var repEntityIDs []string
-	// Indexed by summary POSITION, not community ID. A community ID is unique
-	// only within a level, and summaries can span levels (findCommunitiesForEntities
-	// walks every level), so an ID-keyed map silently gave two same-ID summaries the
-	// last level's rep entities while each kept its own MemberCount — a digest
-	// stitched from two different communities. Position is unique by construction,
-	// so the collision is unrepresentable rather than guarded.
-	repsBySummary := make([][]string, len(summaries))
+	var selectedIDs []string
+	selectedBySummary := make([][]string, len(summaries))
 	for i := range summaries {
 		// Level-qualified: community IDs are only unique within a level, and
 		// Level here came off the same cache record as CommunityID.
@@ -1645,42 +1790,92 @@ func (c *Component) enrichCommunitySummaries(ctx context.Context, summaries []Co
 			continue
 		}
 		summaries[i].MemberCount = len(comm.Members)
-		repsBySummary[i] = comm.RepEntities
-		for _, id := range comm.RepEntities {
+		selected := selectDigestEntities(comm, semanticScores)
+		selectedBySummary[i] = selected
+		for _, id := range selected {
 			if !seen[id] {
 				seen[id] = true
-				repEntityIDs = append(repEntityIDs, id)
+				selectedIDs = append(selectedIDs, id)
 			}
 		}
 	}
 
-	// Single batch label lookup for all representative entities
-	labels, err := c.resolveEntityLabels(ctx, repEntityIDs)
+	// Single batch load of the selected entities; label + tags derive from it.
+	entities, err := c.loadDigestEntities(ctx, selectedIDs)
 	if err != nil {
 		return nil, err
 	}
 
 	// Populate Entities on each summary
 	for i := range summaries {
-		reps := repsBySummary[i]
-		if len(reps) == 0 {
+		sel := selectedBySummary[i]
+		if len(sel) == 0 {
 			continue
 		}
-		digests := make([]EntityDigest, len(reps))
-		for j, id := range reps {
-			label := labels[id]
-			if label == "" {
-				label = extractEntityInstance(id)
-			}
-			digests[j] = EntityDigest{
-				ID:    id,
-				Type:  extractEntityType(id),
-				Label: label,
-			}
+		digests := make([]EntityDigest, len(sel))
+		for j, id := range sel {
+			digests[j] = buildRepDigest(id, entities[id])
 		}
 		summaries[i].Entities = digests
 	}
 	return summaries, nil
+}
+
+// loadDigestEntities batch-loads the given entity IDs and returns them keyed by
+// ID for digest enrichment. Mirrors resolveEntityLabels' error contract:
+// authoritative graph-state failures propagate and must stop enrichment;
+// ordinary lookup failures degrade to a nil map (unlabelled, untagged digests).
+func (c *Component) loadDigestEntities(ctx context.Context, entityIDs []string) (map[string]*gtypes.EntityState, error) {
+	if len(entityIDs) == 0 {
+		return nil, nil
+	}
+	entities, err := c.loadEntities(ctx, entityIDs)
+	if err != nil {
+		if gtypes.IsStateContractError(err) {
+			return nil, err
+		}
+		c.logger.Debug("failed to load entities for digest enrichment", "error", err)
+		return nil, nil
+	}
+	byID := make(map[string]*gtypes.EntityState, len(entities))
+	for _, e := range entities {
+		byID[e.ID] = e
+	}
+	return byID, nil
+}
+
+// buildRepDigest builds a representative EntityDigest from a selected ID and its
+// (possibly nil) loaded EntityState. Label falls back to the ID instance segment
+// when no entity or label is available; Tags come from the entity's
+// classification triples, capped at MaxDigestTags.
+func buildRepDigest(id string, entity *gtypes.EntityState) EntityDigest {
+	label := ""
+	var tags []string
+	if entity != nil {
+		label = resolveLabel(entity)
+		tags = collectDigestTags(entity, MaxDigestTags)
+	}
+	if label == "" {
+		label = extractEntityInstance(id)
+	}
+	return EntityDigest{
+		ID:    id,
+		Type:  extractEntityType(id),
+		Label: label,
+		Tags:  tags,
+	}
+}
+
+// formatRepDigest renders a representative digest for the synthesis context as
+// "Label [Type]", appending " {tags: t1, t2, …}" when the digest carries
+// classification tags (Lever B). Shared by the LLM prompt (buildAnswerPrompt)
+// and the template floor (synthesizeAnswer) so both surface identical context.
+func formatRepDigest(e EntityDigest) string {
+	base := fmt.Sprintf("%s [%s]", e.Label, e.Type)
+	if len(e.Tags) == 0 {
+		return base
+	}
+	return fmt.Sprintf("%s {tags: %s}", base, strings.Join(e.Tags, ", "))
 }
 
 // synthesizeQueryAnswer delegates to the component's answer synthesizer (LLM or template).
@@ -1717,9 +1912,13 @@ func (c *Component) synthesizeQueryAnswer(ctx context.Context, query string, sum
 
 // enrichGlobalResponse adds community context and answer synthesis to a
 // GlobalSearchResponse. Looks up communities for the given entity IDs,
-// enriches them with RepEntity digests, and synthesizes an answer.
+// enriches them with representative digests, and synthesizes an answer.
 // No-op if no communities match or community cache is unavailable.
-func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearchResponse, queryText string, entityIDs []string) error {
+//
+// semanticScores steers query-relevant representative selection (Lever A) when
+// available; callers on paths without per-entity relevance (path/entity-lookup/
+// temporal/spatial) pass nil, leaving PageRank representative selection unchanged.
+func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearchResponse, queryText string, entityIDs []string, semanticScores map[string]float64) error {
 	if len(entityIDs) == 0 {
 		return nil
 	}
@@ -1727,7 +1926,7 @@ func (c *Component) enrichGlobalResponse(ctx context.Context, resp *GlobalSearch
 	if len(communityMatches) == 0 {
 		return nil
 	}
-	enriched, err := c.enrichCommunitySummaries(ctx, communityMatches)
+	enriched, err := c.enrichCommunitySummaries(ctx, communityMatches, semanticScores)
 	if err != nil {
 		return err
 	}
@@ -1769,11 +1968,11 @@ func synthesizeAnswer(summaries []CommunitySummary, totalEntities int) string {
 			b.WriteString(s.Summary)
 		}
 
-		// Representative entities
+		// Representative entities (Label [Type] {tags: …} — floor mirrors the LLM prompt)
 		if len(s.Entities) > 0 {
 			names := make([]string, len(s.Entities))
 			for i, e := range s.Entities {
-				names[i] = fmt.Sprintf("%s [%s]", e.Label, e.Type)
+				names[i] = formatRepDigest(e)
 			}
 			b.WriteString(fmt.Sprintf(" Representatives: %s.", strings.Join(names, ", ")))
 		}

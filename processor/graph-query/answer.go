@@ -278,7 +278,7 @@ func buildAnswerPrompt(query string, summaries []CommunitySummary, totalEntities
 		if len(s.Entities) > 0 {
 			names := make([]string, len(s.Entities))
 			for j, e := range s.Entities {
-				names[j] = fmt.Sprintf("%s [%s]", e.Label, e.Type)
+				names[j] = formatRepDigest(e)
 			}
 			b.WriteString(fmt.Sprintf("Representatives: %s\n", strings.Join(names, ", ")))
 		}

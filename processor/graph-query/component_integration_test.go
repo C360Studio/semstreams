@@ -585,7 +585,7 @@ func TestIntegration_AnswerSynthesis(t *testing.T) {
 	// Test enrichCommunitySummaries — this calls resolveEntityLabels which
 	// requires loadEntities (no graph-ingest running), but enrichment should
 	// still populate MemberCount and gracefully handle label resolution failure.
-	enriched, err := graphQuery.enrichCommunitySummaries(ctx, commSummaries)
+	enriched, err := graphQuery.enrichCommunitySummaries(ctx, commSummaries, nil)
 	require.NoError(t, err)
 	assert.Len(t, enriched, 2)
 	for _, cs := range enriched {
@@ -687,7 +687,7 @@ func TestIntegration_EnrichGlobalResponse(t *testing.T) {
 	response := GlobalSearchResponse{
 		Count: len(entityIDs),
 	}
-	require.NoError(t, graphQuery.enrichGlobalResponse(ctx, &response, "drone operations", entityIDs))
+	require.NoError(t, graphQuery.enrichGlobalResponse(ctx, &response, "drone operations", entityIDs, nil))
 
 	assert.NotEmpty(t, response.CommunitySummaries, "CommunitySummaries should be populated")
 	assert.NotEmpty(t, response.Answer, "Answer should be synthesized")

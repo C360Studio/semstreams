@@ -331,6 +331,15 @@ func IsValidIndexingProfile(s string) bool {
 	}
 }
 
+// Content Domain Predicates
+// Product-neutral content-classification convention. Products that classify
+// content emit these; the framework recognizes them for synthesis/enrichment.
+const (
+	// ContentClassificationTag is a multi-valued string classification tag
+	// (one triple per tag) carrying thematic vocabulary for content entities.
+	ContentClassificationTag = "content.classification.tag"
+)
+
 // NOTE: The predicates in this file are EXAMPLES for demonstration purposes.
 // SemStreams is a framework - applications should define their own domain-specific
 // vocabulary in their own packages and register predicates using the vocabulary registry.

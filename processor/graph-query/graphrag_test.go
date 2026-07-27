@@ -561,3 +561,93 @@ func TestGlobalSearchResponseEntitiesTruncatedJSON(t *testing.T) {
 		t.Errorf("complete response should omit the flag entirely: %s", completeJSON)
 	}
 }
+
+// TestCollectDigestTags is the Lever-B extractor contract: multi-valued
+// classification tags are collected from an entity's triples (not just the first
+// match), deduplicated, and capped — with non-tag/non-string triples ignored.
+func TestCollectDigestTags(t *testing.T) {
+	const id = "acme.ops.warehouse.dock.document.maint-008"
+	tagPred := semantictest.Predicate(t, "content", "classification", "tag")
+	otherPred := semantictest.Predicate(t, "content", "classification", "category")
+
+	tagTriple := func(v any) message.Triple {
+		return message.Triple{Subject: id, Predicate: tagPred, Object: v}
+	}
+
+	t.Run("multi-valued collected in order", func(t *testing.T) {
+		e := &gtypes.EntityState{ID: id, Triples: []message.Triple{
+			tagTriple("forklift"), tagTriple("battery"), tagTriple("charging"),
+		}}
+		got := collectDigestTags(e, MaxDigestTags)
+		want := []string{"forklift", "battery", "charging"}
+		if !slices.Equal(got, want) {
+			t.Errorf("collectDigestTags = %v, want %v (all tag triples, first-seen order)", got, want)
+		}
+	})
+
+	t.Run("duplicates deduped, non-tag and non-string skipped", func(t *testing.T) {
+		e := &gtypes.EntityState{ID: id, Triples: []message.Triple{
+			{Subject: id, Predicate: otherPred, Object: "operations"}, // wrong predicate
+			tagTriple("battery"),
+			tagTriple("battery"), // duplicate
+			tagTriple(42),        // non-string object
+			tagTriple(""),        // empty
+			tagTriple("dock"),
+		}}
+		got := collectDigestTags(e, MaxDigestTags)
+		want := []string{"battery", "dock"}
+		if !slices.Equal(got, want) {
+			t.Errorf("collectDigestTags = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("capped at max, first-seen order", func(t *testing.T) {
+		triples := make([]message.Triple, 0, 10)
+		for i := 0; i < 10; i++ {
+			triples = append(triples, tagTriple(fmt.Sprintf("t%d", i)))
+		}
+		e := &gtypes.EntityState{ID: id, Triples: triples}
+		got := collectDigestTags(e, MaxDigestTags)
+		if len(got) != MaxDigestTags {
+			t.Fatalf("collectDigestTags returned %d tags, want cap %d", len(got), MaxDigestTags)
+		}
+		want := []string{"t0", "t1", "t2", "t3", "t4", "t5"}
+		if !slices.Equal(got, want) {
+			t.Errorf("collectDigestTags = %v, want first %d %v", got, MaxDigestTags, want)
+		}
+	})
+
+	t.Run("nil entity and non-positive cap return nil", func(t *testing.T) {
+		if got := collectDigestTags(nil, MaxDigestTags); got != nil {
+			t.Errorf("collectDigestTags(nil) = %v, want nil", got)
+		}
+		e := &gtypes.EntityState{ID: id, Triples: []message.Triple{tagTriple("x")}}
+		if got := collectDigestTags(e, 0); got != nil {
+			t.Errorf("collectDigestTags(e, 0) = %v, want nil", got)
+		}
+	})
+}
+
+// TestSynthesizeAnswer_MirrorsTags is the owner tenet from tasks.md 3.2: the
+// template (LLM-absent) floor must render the same tag context the LLM prompt
+// shows, so a degraded answer never silently drops theme vocabulary.
+func TestSynthesizeAnswer_MirrorsTags(t *testing.T) {
+	summaries := []CommunitySummary{
+		{
+			Summary:     "Emergency procedures.",
+			MemberCount: 3,
+			Relevance:   1.0,
+			Entities: []EntityDigest{
+				{ID: "e1", Type: "document", Label: "Evac Plan", Tags: []string{"emergency", "evacuation"}},
+				{ID: "e2", Type: "document", Label: "Plain"}, // no tags
+			},
+		},
+	}
+	out := synthesizeAnswer(summaries, 3)
+	if !strings.Contains(out, "Evac Plan [document] {tags: emergency, evacuation}") {
+		t.Errorf("template floor must mirror the tag suffix; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Plain [document]") || strings.Contains(out, "Plain [document] {tags") {
+		t.Errorf("tagless rep must render bare in the template floor; got:\n%s", out)
+	}
+}

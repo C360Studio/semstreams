@@ -269,6 +269,52 @@ func TestBuildAnswerPrompt(t *testing.T) {
 	}
 }
 
+// TestBuildAnswerPrompt_RendersTags is the Lever-B assertion: a representative
+// carrying classification tags renders them on the Representatives line so the
+// theme vocabulary (e.g. "evacuation") reaches the synthesis prompt even when it
+// is absent from titles/keywords. A tagless representative renders no tag suffix.
+func TestBuildAnswerPrompt_RendersTags(t *testing.T) {
+	summaries := []CommunitySummary{
+		{
+			Summary:     "Emergency procedures cluster.",
+			MemberCount: 4,
+			Relevance:   0.9,
+			Entities: []EntityDigest{
+				{ID: "e1", Type: "document", Label: "Emergency Doc", Tags: []string{"emergency", "safety", "evacuation"}},
+				{ID: "e2", Type: "document", Label: "Plain Doc"}, // no tags
+			},
+		},
+	}
+
+	prompt := buildAnswerPrompt("fire emergency", summaries, 4)
+
+	if !strings.Contains(prompt, "Emergency Doc [document] {tags: emergency, safety, evacuation}") {
+		t.Errorf("prompt should render the tagged representative with a tags suffix; got:\n%s", prompt)
+	}
+	// The tagless representative must render bare, with no empty "{tags:" suffix.
+	if !strings.Contains(prompt, "Plain Doc [document]") {
+		t.Errorf("prompt should render the tagless representative as Label [Type]; got:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "Plain Doc [document] {tags") {
+		t.Errorf("tagless representative must not carry a tags suffix; got:\n%s", prompt)
+	}
+}
+
+// TestBuildAnswerPrompt_NoTagsSuffixWhenAllTagless guards that a cluster whose
+// representatives all lack tags produces no "{tags:" text at all.
+func TestBuildAnswerPrompt_NoTagsSuffixWhenAllTagless(t *testing.T) {
+	summaries := []CommunitySummary{
+		{
+			Summary:  "Tagless cluster.",
+			Entities: []EntityDigest{{ID: "e1", Type: "quest", Label: "Q1"}},
+		},
+	}
+	prompt := buildAnswerPrompt("q", summaries, 1)
+	if strings.Contains(prompt, "{tags:") {
+		t.Errorf("no representative has tags, prompt must contain no tags suffix; got:\n%s", prompt)
+	}
+}
+
 func TestBuildAnswerPrompt_LimitsTo5Clusters(t *testing.T) {
 	summaries := make([]CommunitySummary, 8)
 	for i := range summaries {
