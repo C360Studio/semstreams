@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph/clustering"
@@ -303,5 +304,122 @@ func TestEnrichCommunitySummaries_ScoresSteerRepDigests(t *testing.T) {
 	}
 	if len(nilScored) != 1 || len(nilScored[0].Entities) != 1 || nilScored[0].Entities[0].ID != "m-a" {
 		t.Errorf("nil-scores digest = %v, want a single PageRank rep [m-a]", nilScored[0].Entities)
+	}
+}
+
+// TestRelevanceScoresFor_ExcludesTypeFilteredHits is the Codex P1 regression: a
+// type-filtered-out hit must not leak back into synthesis via the relevance score
+// map. selectDigestEntities ranks a community's WHOLE membership against that map,
+// so if the map is built from the raw (pre-type-filter) hits, an excluded entity
+// that shares a community with a survivor can be promoted into the digest (reps +
+// tags) and cite type-excluded evidence in the answer. The map is instead built
+// from the FINAL surviving entityIDs via relevanceScoresFor, so an excluded ID
+// carries no score and cannot be selected.
+//
+// Fail-without: replace `relevanceScoresFor(entityIDs, hits)` with a map built
+// from the raw hits — the excluded drone (0.9) then outranks the surviving sensor
+// (0.5) in selectDigestEntities and leaks into the reps, failing the
+// excluded-entity assertions below.
+func TestRelevanceScoresFor_ExcludesTypeFilteredHits(t *testing.T) {
+	const (
+		// type=drone, HIGH score, removed by the classifier's type filter.
+		excluded = "acme.ops.warehouse.dock.drone.forklift-battery"
+		// type=sensor, LOWER score, survives the type filter.
+		surviving = "acme.ops.warehouse.dock.sensor.temp-001"
+	)
+
+	// Raw semantic hits carry BOTH entities; the excluded one scores higher.
+	hits := []SemanticHit{
+		{EntityID: excluded, Score: 0.9},
+		{EntityID: surviving, Score: 0.5},
+	}
+	rawIDs := []string{excluded, surviving}
+
+	// Classifier type filter narrows to "sensor". A survivor remains, so this is a
+	// genuine narrow (fellBack=false), not the #645 zero-fallback.
+	entityIDs, fellBack := filterEntityIDsByType(rawIDs, []string{"sensor"})
+	if fellBack {
+		t.Fatalf("type filter fell back unexpectedly — a genuine narrow is required to exercise the leak")
+	}
+	if !slices.Equal(entityIDs, []string{surviving}) {
+		t.Fatalf("type-filter narrow = %v, want [%s]", entityIDs, surviving)
+	}
+
+	// The score map is keyed ONLY by the surviving IDs.
+	scores := relevanceScoresFor(entityIDs, hits)
+	if _, leaked := scores[excluded]; leaked {
+		t.Errorf("excluded entity %q leaked into the relevance score map: %v", excluded, scores)
+	}
+	if s, ok := scores[surviving]; !ok || s != 0.5 {
+		t.Errorf("surviving entity score = %v (ok=%v), want 0.5", s, ok)
+	}
+
+	// Both entities are members of ONE community; the excluded one has the higher
+	// raw score, so a raw-hits map would rank it first. With the surviving-keyed
+	// map it must never enter the selected reps.
+	comm := &clustering.Community{
+		ID:          "acme.ops.warehouse.dock.community.0",
+		Level:       0,
+		Members:     []string{excluded, surviving},
+		RepEntities: []string{surviving}, // PageRank rep is the survivor
+	}
+	reps := selectDigestEntities(comm, scores)
+	if slices.Contains(reps, excluded) {
+		t.Fatalf("type-excluded entity %q promoted into community reps %v — synthesis could cite type-excluded evidence",
+			excluded, reps)
+	}
+	if !slices.Contains(reps, surviving) {
+		t.Errorf("surviving entity %q missing from reps %v", surviving, reps)
+	}
+
+	// It must appear in neither the digest nor the rendered synthesis line.
+	var rendered []string
+	for _, id := range reps {
+		rendered = append(rendered, formatRepDigest(buildRepDigest(id, nil)))
+	}
+	line := strings.Join(rendered, " | ")
+	if strings.Contains(line, "forklift-battery") {
+		t.Errorf("excluded entity vocabulary leaked into synthesis context: %q", line)
+	}
+	if !strings.Contains(line, "temp-001") {
+		t.Errorf("surviving entity missing from synthesis context: %q", line)
+	}
+}
+
+// TestSelectDigestEntities_NilScoresCapRepEntities is the Codex P2 regression: the
+// no-score PageRank fallback must enforce MaxQueryFocusedReps even for a KV
+// community record whose stored RepEntities exceed the cap (no length invariant is
+// enforced at the KV boundary — graph-query spec scenario 4), and must return a
+// COPY so a caller mutation cannot corrupt the cached community's slice.
+//
+// Fail-without: return comm.RepEntities unchanged and (a) the result length is the
+// full >cap slice, and (b) mutating the result corrupts comm.RepEntities — both
+// assertions below fail.
+func TestSelectDigestEntities_NilScoresCapRepEntities(t *testing.T) {
+	// 7 stored reps — more than MaxQueryFocusedReps (5) — in PageRank order.
+	stored := []string{"r0", "r1", "r2", "r3", "r4", "r5", "r6"}
+	comm := &clustering.Community{
+		ID:          "acme.ops.warehouse.dock.community.0",
+		Level:       0,
+		Members:     stored,
+		RepEntities: stored,
+	}
+	// Independent snapshot of the expected capped prefix (order preserved).
+	want := append([]string(nil), stored[:MaxQueryFocusedReps]...)
+
+	for _, scores := range []map[string]float64{nil, {}} {
+		got := selectDigestEntities(comm, scores)
+		if len(got) != MaxQueryFocusedReps {
+			t.Fatalf("scores=%v: got %d reps, want cap %d — the KV record's >cap RepEntities bypassed the bound",
+				scores, len(got), MaxQueryFocusedReps)
+		}
+		if !slices.Equal(got, want) {
+			t.Errorf("scores=%v: got %v, want PageRank-order prefix %v", scores, got, want)
+		}
+		// Copy, not alias: mutating the result must not corrupt the community record.
+		got[0] = "MUTATED"
+		if comm.RepEntities[0] == "MUTATED" {
+			t.Fatal("selectDigestEntities returned the caller-mutable underlying slice — a mutation corrupted comm.RepEntities")
+		}
 	}
 }

@@ -736,11 +736,12 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 				"hits", len(entityIDs),
 				"threshold", threshold)
 
-			// Build semantic score lookup for digest relevance
-			semanticScores := make(map[string]float64, len(semanticHits))
-			for _, h := range semanticHits {
-				semanticScores[h.EntityID] = h.Score
-			}
+			// Build the query-relevance score map from the FINAL surviving
+			// entityIDs (narrowed above by the type filter), not the raw hits, so a
+			// type-filtered-out entity cannot leak into representative selection via
+			// a shared community. On type-filter fallback entityIDs is the full hit
+			// set, so this is unchanged.
+			semanticScores := relevanceScoresFor(entityIDs, semanticHits)
 
 			// Enrich community summaries with query-relevant, tag-enriched digests
 			// (Levers A+B): the semanticScores steer representative selection.
@@ -791,11 +792,10 @@ func (c *Component) handleStrategyGraphRAG(ctx context.Context, searchQuery stri
 			}
 			if req.shouldIncludeSummaries() {
 				// Per-entity relevance is available here — thread it so digest
-				// representative selection is query-relevant (Lever A).
-				scores := make(map[string]float64, len(semanticHits))
-				for _, h := range semanticHits {
-					scores[h.EntityID] = h.Score
-				}
+				// representative selection is query-relevant (Lever A). Keyed by the
+				// FINAL surviving entityIDs (narrowed by the type filter) so a
+				// type-filtered-out hit cannot leak into representative selection.
+				scores := relevanceScoresFor(entityIDs, semanticHits)
 				if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
 					return nil, err
 				}
@@ -1012,11 +1012,11 @@ func (c *Component) handleStrategySemantic(ctx context.Context, searchQuery stri
 
 	// Per-entity relevance is in scope here (the threshold-filtered hits) —
 	// thread it so digest representative selection is query-relevant (Lever A),
-	// mirroring the tier-1 full-load caller in handleStrategyGraphRAG.
-	scores := make(map[string]float64, len(filtered))
-	for _, h := range filtered {
-		scores[h.EntityID] = h.Score
-	}
+	// mirroring the tier-1 full-load caller in handleStrategyGraphRAG. Keyed by
+	// the FINAL surviving entityIDs (post type-filter), NOT the pre-filter
+	// `filtered` hit set, so a type-filtered-out hit cannot leak into
+	// representative selection via a shared community.
+	scores := relevanceScoresFor(entityIDs, filtered)
 	if err := c.enrichGlobalResponse(ctx, &response, searchQuery, entityIDs, scores); err != nil {
 		return nil, err
 	}
@@ -1608,6 +1608,36 @@ func collectDigestTags(entity *gtypes.EntityState, maxTags int) []string {
 	return tags
 }
 
+// relevanceScoresFor builds the query-relevance score map that steers digest
+// representative selection, keyed ONLY by the FINAL surviving entity IDs.
+//
+// It first indexes every hit's score, then copies a score into the result only
+// for IDs present in entityIDs. Building the map from the surviving IDs — rather
+// than from the raw hit set — closes a leak: entityIDs is narrowed by
+// filterEntityIDsByType, but selectDigestEntities ranks a community's WHOLE
+// membership against this map, so a type-filtered-out hit left in the map could
+// be promoted into a shared community's digest (reps + tags) and cite
+// type-excluded evidence in the synthesized answer. Keying by the surviving IDs
+// guarantees an excluded entity carries no score and cannot be selected.
+//
+// When the type filter fell back to the unfiltered set (fellBack), entityIDs is
+// the full hit set, so every hit's ID is retained and the map is unchanged —
+// the eval path (type filter empty or fallback → count ≈ all entities) is a
+// no-op.
+func relevanceScoresFor(entityIDs []string, hits []SemanticHit) map[string]float64 {
+	hitScore := make(map[string]float64, len(hits))
+	for _, h := range hits {
+		hitScore[h.EntityID] = h.Score
+	}
+	scores := make(map[string]float64, len(entityIDs))
+	for _, id := range entityIDs {
+		if s, ok := hitScore[id]; ok {
+			scores[id] = s
+		}
+	}
+	return scores
+}
+
 // selectDigestEntities picks the representative entity IDs for a community's
 // synthesis digest, Lever A of thematic-synthesis-context.
 //
@@ -1626,9 +1656,21 @@ func selectDigestEntities(comm *clustering.Community, semanticScores map[string]
 	if comm == nil {
 		return nil
 	}
-	// Full fallback: no relevance signal → PageRank representatives, unchanged.
+	// Full fallback: no relevance signal → PageRank representatives. Return a
+	// COPIED prefix capped at MaxQueryFocusedReps rather than the caller-mutable
+	// underlying slice: community records come from KV with no enforced
+	// RepEntities length invariant, so a custom/historical record with more than
+	// MaxQueryFocusedReps reps would otherwise bypass the bounded-cap requirement
+	// (graph-query spec scenario 4). PageRank order is preserved by copying a
+	// prefix.
 	if len(semanticScores) == 0 {
-		return comm.RepEntities
+		n := len(comm.RepEntities)
+		if n > MaxQueryFocusedReps {
+			n = MaxQueryFocusedReps
+		}
+		capped := make([]string, n)
+		copy(capped, comm.RepEntities[:n])
+		return capped
 	}
 
 	type scoredMember struct {
