@@ -326,8 +326,7 @@ func fixtureEmbeddedStructuredCandidates(
 				})
 			}
 			for _, indexed := range substitutionRE.FindAllStringSubmatchIndex(line, -1) {
-				predicate := strings.TrimSuffix(line[indexed[2]:indexed[3]], ".length")
-				predicate = strings.TrimSuffix(predicate, ".triples")
+				predicate := fixtureSubstitutionPredicate(line[indexed[2]:indexed[3]])
 				innerOffset := decodedOffset + indexed[2]
 				lineNumber, column := goLiteralSourcePosition(start, literal.Value, rawOffsets[innerOffset])
 				out = append(out, FixtureCandidate{
@@ -1568,8 +1567,7 @@ func auditFixtureText(path string) ([]FixtureCandidate, error) {
 			})
 		}
 		for _, indexed := range substitutionRE.FindAllStringSubmatchIndex(text, -1) {
-			value := strings.TrimSuffix(text[indexed[2]:indexed[3]], ".length")
-			value = strings.TrimSuffix(value, ".triples")
+			value := fixtureSubstitutionPredicate(text[indexed[2]:indexed[3]])
 			column := indexed[2] + 1
 			out = append(out, FixtureCandidate{
 				File: path, Line: line, Column: column, Predicate: value, Surface: "structured-substitution",
@@ -1580,6 +1578,17 @@ func auditFixtureText(path string) ([]FixtureCandidate, error) {
 		}
 	}
 	return out, scanner.Err()
+}
+
+func fixtureSubstitutionPredicate(value string) string {
+	value = strings.TrimSuffix(value, ".length")
+	value = strings.TrimSuffix(value, ".triples")
+	if candidate := strings.TrimSuffix(value, ".value"); candidate != value {
+		if _, err := vocabulary.ParsePredicate(candidate); err == nil {
+			return candidate
+		}
+	}
+	return value
 }
 
 type orderedJSONEntry struct {

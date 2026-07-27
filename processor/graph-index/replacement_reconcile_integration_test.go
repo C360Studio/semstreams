@@ -16,6 +16,7 @@ import (
 	clusteringdata "github.com/c360studio/semstreams/graph/clustering"
 	graphquery "github.com/c360studio/semstreams/graph/query"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -40,24 +41,69 @@ func TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart(t *testin
 	targetA := "acme.ops.robotics.gcs.mission.001"
 	targetB := "acme.ops.robotics.gcs.mission.002"
 
-	revisionA, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "Alpha", "robotics.status.armed", targetA))
+	armedTriple := message.Triple{
+		Subject: entityID, Predicate: semantictest.Predicate(t, "robotics", "status", "armed"), Object: true,
+	}
+	revisionA, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "Alpha", &armedTriple, targetA))
 	require.NoError(t, err)
 	waitPublicWatermark(t, ctx, nc, revisionA)
-	assertReplacementPublicState(t, ctx, nc, entityID, "Alpha", "robotics.status.armed", targetA)
+	assertReplacementPublicState(t, ctx, nc, entityID, "Alpha", replacementPredicateRequests{
+		exactOnly: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "armed"),
+		},
+		exactWithValue: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "armed"), "value": "true",
+		},
+		stats: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "armed"), "sample_limit": 10,
+		},
+		compound: graph.CompoundPredicateQuery{
+			Predicates: []string{
+				vocabulary.DCTermsTitle,
+				semantictest.Predicate(t, "robotics", "status", "armed"),
+			},
+			Operator: "AND",
+		},
+		listWant: []string{semantictest.Predicate(t, "robotics", "status", "armed")},
+	}, targetA)
 
-	revisionB, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "Beta", "robotics.status.disarmed", targetB))
+	disarmedTriple := message.Triple{
+		Subject: entityID, Predicate: semantictest.Predicate(t, "robotics", "status", "disarmed"), Object: true,
+	}
+	revisionB, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "Beta", &disarmedTriple, targetB))
 	require.NoError(t, err)
 	waitPublicWatermark(t, ctx, nc, revisionB)
-	assertReplacementPublicState(t, ctx, nc, entityID, "Beta", "robotics.status.disarmed", targetB)
-	assertPredicateEntitiesPublic(t, ctx, nc, "robotics.status.armed", nil)
+	assertReplacementPublicState(t, ctx, nc, entityID, "Beta", replacementPredicateRequests{
+		exactOnly: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "disarmed"),
+		},
+		exactWithValue: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "disarmed"), "value": "true",
+		},
+		stats: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "disarmed"), "sample_limit": 10,
+		},
+		compound: graph.CompoundPredicateQuery{
+			Predicates: []string{
+				vocabulary.DCTermsTitle,
+				semantictest.Predicate(t, "robotics", "status", "disarmed"),
+			},
+			Operator: "AND",
+		},
+		listWant: []string{semantictest.Predicate(t, "robotics", "status", "disarmed")},
+	}, targetB)
+	assertPredicateEntitiesPublic(t, ctx, nc, map[string]any{
+		"predicate": semantictest.Predicate(t, "robotics", "status", "armed"),
+	}, nil)
 	assertNameEntitiesPublic(t, ctx, nc, "Alpha", nil)
 	assertIncomingPublic(t, ctx, nc, targetA, nil)
 
-	revisionEmpty, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "", "", ""))
+	revisionEmpty, err := states.Put(ctx, entityID, replacementStateData(t, entityID, "", nil, ""))
 	require.NoError(t, err)
 	waitPublicWatermark(t, ctx, nc, revisionEmpty)
-	assertReplacementPublicEmpty(t, ctx, nc, entityID, []string{
-		"robotics.status.armed", "robotics.status.disarmed",
+	assertReplacementPublicEmpty(t, ctx, nc, entityID, []map[string]any{
+		{"predicate": semantictest.Predicate(t, "robotics", "status", "armed")},
+		{"predicate": semantictest.Predicate(t, "robotics", "status", "disarmed")},
 	}, []string{"Alpha", "Beta"}, []string{targetA, targetB})
 	require.NoError(t, index.Stop(5*time.Second))
 
@@ -66,15 +112,23 @@ func TestIntegration_ReplacementWatcherWatermarkPublicParityAndRestart(t *testin
 	entityA := "acme.ops.robotics.gcs.drone.010"
 	entityB := "acme.ops.robotics.gcs.drone.020"
 	sharedTarget := "acme.ops.robotics.gcs.mission.010"
-	_, err = states.Put(ctx, entityB, replacementStateData(t, entityB, "Shared", "robotics.status.ready", sharedTarget))
+	entityBReady := message.Triple{
+		Subject: entityB, Predicate: semantictest.Predicate(t, "robotics", "status", "ready"), Object: true,
+	}
+	_, err = states.Put(ctx, entityB, replacementStateData(t, entityB, "Shared", &entityBReady, sharedTarget))
 	require.NoError(t, err)
-	lastRevision, err := states.Put(ctx, entityA, replacementStateData(t, entityA, "Shared", "robotics.status.ready", sharedTarget))
+	entityAReady := message.Triple{
+		Subject: entityA, Predicate: semantictest.Predicate(t, "robotics", "status", "ready"), Object: true,
+	}
+	lastRevision, err := states.Put(ctx, entityA, replacementStateData(t, entityA, "Shared", &entityAReady, sharedTarget))
 	require.NoError(t, err)
 
 	replayed := startReplacementIntegrationIndex(t, ctx, nc, 4)
 	defer replayed.Stop(5 * time.Second)
 	waitPublicWatermark(t, ctx, nc, lastRevision)
-	assertPredicateEntitiesPublic(t, ctx, nc, "robotics.status.ready", []string{entityA, entityB})
+	assertPredicateEntitiesPublic(t, ctx, nc, map[string]any{
+		"predicate": semantictest.Predicate(t, "robotics", "status", "ready"),
+	}, []string{entityA, entityB})
 	assertNameEntitiesPublic(t, ctx, nc, "Shared", []string{entityA, entityB})
 	assertIncomingPublic(t, ctx, nc, sharedTarget, []graph.IncomingEntry{
 		{FromEntityID: entityA, Predicate: "robotics.assigned.mission"},
@@ -95,7 +149,7 @@ func TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair(t *tes
 	index := startReplacementIntegrationIndex(t, ctx, nc, 4)
 	defer index.Stop(5 * time.Second)
 
-	realPredicate, err := js.KeyValue(ctx, graph.BucketPredicateIndex)
+	realPredicate, err := js.KeyValue(ctx, graph.BucketPredicateIndex) // predicate-audit:unrelated {"column":24,"surface":"go-assignment:realPredicate","value":"","basis":"reviewed predicate-index KV bucket handle used for failure injection"}
 	require.NoError(t, err)
 	fault := &failPutKeyValue{KeyValue: realPredicate}
 	fault.failing.Store(true)
@@ -103,8 +157,11 @@ func TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair(t *tes
 
 	entityID := "acme.ops.robotics.gcs.drone.030"
 	targetID := "acme.ops.robotics.gcs.mission.030"
+	failedTriple := message.Triple{
+		Subject: entityID, Predicate: semantictest.Predicate(t, "robotics", "status", "failed"), Object: true,
+	}
 	revision, err := states.Put(ctx, entityID,
-		replacementStateData(t, entityID, "Repairable", "robotics.status.failed", targetID))
+		replacementStateData(t, entityID, "Repairable", &failedTriple, targetID))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		return index.failedCount.Load() == 1 && index.watermark.Indexed() >= revision
@@ -122,7 +179,25 @@ func TestIntegration_ReplacementPartialFailureWithholdsUntilOrderedRepair(t *tes
 	require.Eventually(t, func() bool {
 		return index.failedCount.Load() == 0 && index.computeIndexStatus(ctx).Ready
 	}, 5*time.Second, 20*time.Millisecond, "ordered repair did not converge")
-	assertReplacementPublicState(t, ctx, nc, entityID, "Repairable", "robotics.status.failed", targetID)
+	assertReplacementPublicState(t, ctx, nc, entityID, "Repairable", replacementPredicateRequests{
+		exactOnly: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "failed"),
+		},
+		exactWithValue: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "failed"), "value": "true",
+		},
+		stats: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "failed"), "sample_limit": 10,
+		},
+		compound: graph.CompoundPredicateQuery{
+			Predicates: []string{
+				vocabulary.DCTermsTitle,
+				semantictest.Predicate(t, "robotics", "status", "failed"),
+			},
+			Operator: "AND",
+		},
+		listWant: []string{semantictest.Predicate(t, "robotics", "status", "failed")},
+	}, targetID)
 }
 
 func TestIntegration_MalformedAuthoritativeDeletePoisonsWatcherWatermark(t *testing.T) {
@@ -138,8 +213,11 @@ func TestIntegration_MalformedAuthoritativeDeletePoisonsWatcherWatermark(t *test
 	defer index.Stop(5 * time.Second)
 
 	entityID := "acme.ops.robotics.gcs.drone.040"
+	readyTriple := message.Triple{
+		Subject: entityID, Predicate: semantictest.Predicate(t, "robotics", "status", "ready"), Object: true,
+	}
 	baselineRevision, err := states.Put(ctx, entityID, replacementStateData(t, entityID,
-		"Baseline", "robotics.status.ready", "acme.ops.robotics.gcs.mission.040"))
+		"Baseline", &readyTriple, "acme.ops.robotics.gcs.mission.040"))
 	require.NoError(t, err)
 	waitPublicWatermark(t, ctx, nc, baselineRevision)
 
@@ -176,8 +254,11 @@ func TestIntegration_ReplacementAuthoritativeIdentityMismatchPoisonsAndCanonical
 	keyID := "acme.ops.robotics.gcs.drone.050"
 	valueID := "acme.ops.robotics.gcs.drone.051"
 	targetID := "acme.ops.robotics.gcs.mission.050"
+	poisonStatus := message.Triple{
+		Subject: valueID, Predicate: semantictest.Predicate(t, "robotics", "status", "failed"), Object: true,
+	}
 	poisonRevision, err := states.Put(ctx, keyID,
-		replacementStateData(t, valueID, "WrongOwner", "robotics.status.failed", targetID))
+		replacementStateData(t, valueID, "WrongOwner", &poisonStatus, targetID))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		status := index.computeIndexStatus(ctx)
@@ -190,8 +271,11 @@ func TestIntegration_ReplacementAuthoritativeIdentityMismatchPoisonsAndCanonical
 	_, err = index.predicateBucket.Get(ctx, predicateIndexKey("robotics.status.failed", valueID))
 	require.True(t, natsclient.IsKVNotFoundError(err), "mismatched value owner was projected")
 
+	repairStatus := message.Triple{
+		Subject: keyID, Predicate: semantictest.Predicate(t, "robotics", "status", "ready"), Object: true,
+	}
 	repairRevision, err := states.Put(ctx, keyID,
-		replacementStateData(t, keyID, "CanonicalOwner", "robotics.status.ready", targetID))
+		replacementStateData(t, keyID, "CanonicalOwner", &repairStatus, targetID))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool {
 		_, getErr := index.predicateBucket.Get(ctx, predicateIndexKey("robotics.status.ready", keyID))
@@ -204,8 +288,28 @@ func TestIntegration_ReplacementAuthoritativeIdentityMismatchPoisonsAndCanonical
 	restarted := startReplacementIntegrationIndex(t, ctx, nc, 4)
 	defer restarted.Stop(5 * time.Second)
 	waitPublicWatermark(t, ctx, nc, repairRevision)
-	assertReplacementPublicState(t, ctx, nc, keyID, "CanonicalOwner", "robotics.status.ready", targetID)
-	assertPredicateEntitiesPublic(t, ctx, nc, "robotics.status.failed", nil)
+	assertReplacementPublicState(t, ctx, nc, keyID, "CanonicalOwner", replacementPredicateRequests{
+		exactOnly: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "ready"),
+		},
+		exactWithValue: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "ready"), "value": "true",
+		},
+		stats: map[string]any{
+			"predicate": semantictest.Predicate(t, "robotics", "status", "ready"), "sample_limit": 10,
+		},
+		compound: graph.CompoundPredicateQuery{
+			Predicates: []string{
+				vocabulary.DCTermsTitle,
+				semantictest.Predicate(t, "robotics", "status", "ready"),
+			},
+			Operator: "AND",
+		},
+		listWant: []string{semantictest.Predicate(t, "robotics", "status", "ready")},
+	}, targetID)
+	assertPredicateEntitiesPublic(t, ctx, nc, map[string]any{
+		"predicate": semantictest.Predicate(t, "robotics", "status", "failed"),
+	}, nil)
 }
 
 func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testing.T) {
@@ -232,7 +336,10 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 		{targetID, "Target", leafID},
 		{leafID, "Leaf", ""},
 	} {
-		_, err = states.Put(ctx, row.id, replacementStateData(t, row.id, row.name, "robotics.status.ready", row.target))
+		readyTriple := message.Triple{
+			Subject: row.id, Predicate: semantictest.Predicate(t, "robotics", "status", "ready"), Object: true,
+		}
+		_, err = states.Put(ctx, row.id, replacementStateData(t, row.id, row.name, &readyTriple, row.target))
 		require.NoError(t, err)
 	}
 	seedRevision, err := natsclient.BucketLastSeq(ctx, states)
@@ -385,14 +492,20 @@ func startReplacementIntegrationIndex(t *testing.T, ctx context.Context, nc *nat
 	return index
 }
 
-func replacementStateData(t *testing.T, entityID, name, statusPredicate, targetID string) []byte {
+func replacementStateData(
+	t *testing.T,
+	entityID string,
+	name string,
+	statusTriple *message.Triple,
+	targetID string,
+) []byte {
 	t.Helper()
 	triples := make([]message.Triple, 0, 3)
 	if name != "" {
 		triples = append(triples, message.Triple{Subject: entityID, Predicate: vocabulary.DCTermsTitle, Object: name})
 	}
-	if statusPredicate != "" {
-		triples = append(triples, message.Triple{Subject: entityID, Predicate: statusPredicate, Object: true})
+	if statusTriple != nil {
+		triples = append(triples, *statusTriple)
 	}
 	if targetID != "" {
 		triples = append(triples, message.Triple{
@@ -402,6 +515,14 @@ func replacementStateData(t *testing.T, entityID, name, statusPredicate, targetI
 	data, err := graph.MarshalEntityState(&graph.EntityState{ID: entityID, Triples: triples})
 	require.NoError(t, err)
 	return data
+}
+
+type replacementPredicateRequests struct {
+	exactOnly      map[string]any
+	exactWithValue map[string]any
+	stats          map[string]any
+	compound       graph.CompoundPredicateQuery
+	listWant       []string
 }
 
 // waitPublicWatermark blocks until the PUBLICLY observable readiness envelope shows the
@@ -432,11 +553,21 @@ func assertReplacementPublicState(
 	t *testing.T,
 	ctx context.Context,
 	nc *natsclient.Client,
-	entityID, name, statusPredicate, targetID string,
+	entityID, name string,
+	requests replacementPredicateRequests,
+	targetID string,
 ) {
 	t.Helper()
+	require.Len(t, requests.exactOnly, 1, "predicate-only coverage must remain a distinct request shape")
+	require.Contains(t, requests.exactOnly, "predicate")
+	require.NotContains(t, requests.exactOnly, "value")
+	require.Len(t, requests.exactWithValue, 2, "predicate+value coverage must remain a distinct request shape")
+	require.Equal(t, requests.exactOnly["predicate"], requests.exactWithValue["predicate"])
+	require.Equal(t, "true", requests.exactWithValue["value"])
+	require.NotEqual(t, requests.exactOnly, requests.exactWithValue)
+
 	assertNameEntitiesPublic(t, ctx, nc, name, []string{entityID})
-	assertPredicateEntitiesPublic(t, ctx, nc, statusPredicate, []string{entityID})
+	assertPredicateEntitiesPublic(t, ctx, nc, requests.exactOnly, []string{entityID})
 	assertIncomingPublic(t, ctx, nc, targetID, []graph.IncomingEntry{{
 		FromEntityID: entityID, Predicate: "robotics.assigned.mission",
 	}})
@@ -446,20 +577,20 @@ func assertReplacementPublicState(
 	require.Equal(t, []graph.OutgoingEntry{{ToEntityID: targetID, Predicate: "robotics.assigned.mission"}},
 		outgoing.Data.Relationships)
 
-	value := "true"
-	predicate := requestPublic[graph.PredicateQueryResponse](t, ctx, nc, "graph.index.query.predicate",
-		map[string]any{"predicate": statusPredicate, "value": value})
-	require.Equal(t, []string{entityID}, predicate.Data.Entities)
+	response := requestPublic[graph.PredicateQueryResponse](
+		t, ctx, nc, "graph.index.query.predicate", requests.exactWithValue,
+	)
+	require.Equal(t, []string{entityID}, response.Data.Entities)
 
 	stats := requestPublic[graph.PredicateStatsQueryResponse](t, ctx, nc, "graph.index.query.predicateStats",
-		map[string]any{"predicate": statusPredicate, "sample_limit": 10})
+		requests.stats)
 	require.Equal(t, 1, stats.Data.EntityCount)
 	require.Equal(t, []string{entityID}, stats.Data.SampleEntities)
 
 	compound := requestPublic[graph.CompoundPredicateQueryResponse](t, ctx, nc, "graph.index.query.predicateCompound",
-		graph.CompoundPredicateQuery{Predicates: []string{vocabulary.DCTermsTitle, statusPredicate}, Operator: "AND"})
+		requests.compound)
 	require.Equal(t, []string{entityID}, compound.Data.Entities)
-	assertPredicateListPublic(t, ctx, nc, "robotics.status", []string{statusPredicate})
+	assertPredicateListPublic(t, ctx, nc, "robotics.status", requests.listWant)
 }
 
 func assertReplacementPublicEmpty(
@@ -467,11 +598,12 @@ func assertReplacementPublicEmpty(
 	ctx context.Context,
 	nc *natsclient.Client,
 	entityID string,
-	predicates, names, targets []string,
+	exactRequests []map[string]any,
+	names, targets []string,
 ) {
 	t.Helper()
-	for _, predicate := range predicates {
-		assertPredicateEntitiesPublic(t, ctx, nc, predicate, nil)
+	for _, request := range exactRequests {
+		assertPredicateEntitiesPublic(t, ctx, nc, request, nil)
 	}
 	for _, name := range names {
 		assertNameEntitiesPublic(t, ctx, nc, name, nil)
@@ -486,11 +618,11 @@ func assertReplacementPublicEmpty(
 }
 
 func assertPredicateEntitiesPublic(
-	t *testing.T, ctx context.Context, nc *natsclient.Client, predicate string, want []string,
+	t *testing.T, ctx context.Context, nc *natsclient.Client, request map[string]any, want []string,
 ) {
 	t.Helper()
 	response := requestPublic[graph.PredicateQueryResponse](t, ctx, nc, "graph.index.query.predicate",
-		map[string]any{"predicate": predicate})
+		request)
 	require.Equal(t, emptyStrings(want), response.Data.Entities)
 }
 

@@ -76,7 +76,7 @@ func poisonPredicateState(id string) *graph.EntityState {
 			{Subject: id, Predicate: "test.valid.kind", Object: "sample", Timestamp: now, Confidence: 1.0},
 			// Intentionally noncanonical predicate (upper-case segments) —
 			// resident-poison fixture.
-			{Subject: id, Predicate: "Test.Poison.Predicate", Object: "resident", Timestamp: now, Confidence: 1.0},
+			{Subject: id, Predicate: "Test.Poison.Predicate", Object: "resident", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"Test.Poison.Predicate","reason":"segment_start"}
 		},
 		MessageType: message.Type{Domain: "test", Category: "poison", Version: "v1"},
 		Version:     1,

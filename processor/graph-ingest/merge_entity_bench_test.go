@@ -28,11 +28,13 @@ package graphingest
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/require"
@@ -86,59 +88,15 @@ func benchPredicates(n int) []string {
 	return out
 }
 
-// benchTriples builds one triple per predicate, all on the bench entity.
-func benchTriples(predicates []string) []message.Triple {
-	now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
-	triples := make([]message.Triple, 0, len(predicates))
-	for i, predicate := range predicates {
-		object := any(fmt.Sprintf("value-%d", i))
-		if predicate == "entity.indexing.profile" {
-			object = "signal"
-		}
-		triples = append(triples, message.Triple{
-			Subject:    benchEntityID,
-			Predicate:  predicate,
-			Object:     object,
-			Timestamp:  now,
-			Confidence: 1.0,
-		})
-	}
-	return triples
-}
-
-// benchEntityState builds an EntityState with n distinct-predicate triples.
-func benchEntityState(n int) *graph.EntityState {
+// benchEntityState wraps triples constructed authoritatively by the benchmark
+// entrypoint in the common entity envelope.
+func benchEntityState(triples []message.Triple, version uint64, updatedAt time.Time) *graph.EntityState {
 	return &graph.EntityState{
 		ID:          benchEntityID,
-		Triples:     benchTriples(benchPredicates(n)),
+		Triples:     triples,
 		MessageType: message.Type{Domain: "boid", Category: "telemetry", Version: "v1"},
-		Version:     42,
-		UpdatedAt:   time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
-	}
-}
-
-// benchDeltaEntity builds a delta arrival reusing the first n resident
-// predicates (steady-state re-arrival: MergeTriples replaces per
-// (subject,predicate), so the merged size stays constant across iterations).
-// The indexing profile predicate is excluded — it is create-time-immutable and
-// MergeEntity drops the incoming copy pre-merge on an already-profiled entity.
-func benchDeltaEntity(n int) *graph.EntityState {
-	predicates := make([]string, 0, n)
-	for _, p := range benchPredicates(n + 1) {
-		if p == "entity.indexing.profile" {
-			continue
-		}
-		predicates = append(predicates, p)
-		if len(predicates) == n {
-			break
-		}
-	}
-	return &graph.EntityState{
-		ID:          benchEntityID,
-		Triples:     benchTriples(predicates),
-		MessageType: message.Type{Domain: "boid", Category: "telemetry", Version: "v1"},
-		Version:     1,
-		UpdatedAt:   time.Date(2026, 7, 1, 12, 5, 0, 0, time.UTC),
+		Version:     version,
+		UpdatedAt:   updatedAt,
 	}
 }
 
@@ -187,10 +145,49 @@ func BenchmarkMergeEntityCycle(b *testing.B) {
 		{name: "update_200resident_15delta", resident: 200, delta: 15},
 	}
 	for _, tc := range cases {
+		residentValues := benchPredicates(tc.resident)
+		residentTriples := make([]message.Triple, 0, len(residentValues))
+		residentTime := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		for i, value := range residentValues {
+			parts := strings.Split(value, ".")
+			require.Len(b, parts, 3)
+			object := any(fmt.Sprintf("value-%d", i))
+			if value == "entity.indexing.profile" {
+				object = "signal"
+			}
+			residentTriples = append(residentTriples, message.Triple{
+				Subject:    benchEntityID,
+				Predicate:  semantictest.Predicate(b, parts[0], parts[1], parts[2]),
+				Object:     object,
+				Timestamp:  residentTime,
+				Confidence: 1.0,
+			})
+		}
+
+		deltaTriples := make([]message.Triple, 0, tc.delta)
+		deltaTime := time.Date(2026, 7, 1, 12, 5, 0, 0, time.UTC)
+		for _, value := range benchPredicates(tc.delta + 1) {
+			if value == "entity.indexing.profile" {
+				continue
+			}
+			parts := strings.Split(value, ".")
+			require.Len(b, parts, 3)
+			deltaTriples = append(deltaTriples, message.Triple{
+				Subject:    benchEntityID,
+				Predicate:  semantictest.Predicate(b, parts[0], parts[1], parts[2]),
+				Object:     fmt.Sprintf("value-%d", len(deltaTriples)),
+				Timestamp:  deltaTime,
+				Confidence: 1.0,
+			})
+			if len(deltaTriples) == tc.delta {
+				break
+			}
+		}
+
 		b.Run(tc.name, func(b *testing.B) {
 			c, bucket := newBenchComponent(b)
-			seedResidentEntity(b, bucket, benchEntityState(tc.resident))
-			delta := benchDeltaEntity(tc.delta)
+			seedResidentEntity(b, bucket, benchEntityState(residentTriples, 42, residentTime))
+			delta := benchEntityState(deltaTriples, 1, deltaTime)
 			ctx := context.Background()
 
 			b.ReportAllocs()
@@ -211,8 +208,28 @@ func BenchmarkMergeEntityCycle(b *testing.B) {
 // (ParsePredicate-per-triple) share alone; full_N minus predicates_N
 // approximates the entity-ID/subject share.
 func BenchmarkEntityContractValidation(b *testing.B) {
+	entities := make(map[int]*graph.EntityState)
 	for _, n := range []int{12, 15, 24, 200} {
-		entity := benchEntityState(n)
+		values := benchPredicates(n)
+		triples := make([]message.Triple, 0, len(values))
+		now := time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC)
+		for i, value := range values {
+			parts := strings.Split(value, ".")
+			require.Len(b, parts, 3)
+			object := any(fmt.Sprintf("value-%d", i))
+			if value == "entity.indexing.profile" {
+				object = "signal"
+			}
+			triples = append(triples, message.Triple{
+				Subject:    benchEntityID,
+				Predicate:  semantictest.Predicate(b, parts[0], parts[1], parts[2]),
+				Object:     object,
+				Timestamp:  now,
+				Confidence: 1.0,
+			})
+		}
+		entity := benchEntityState(triples, 42, now)
+		entities[n] = entity
 		b.Run(fmt.Sprintf("full_%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()
@@ -235,7 +252,7 @@ func BenchmarkEntityContractValidation(b *testing.B) {
 	// The write gate itself (validation + JSON encode) at merged sizes, so the
 	// encode-vs-validate split inside MarshalEntityState is visible.
 	for _, n := range []int{24, 200} {
-		entity := benchEntityState(n)
+		entity := entities[n]
 		b.Run(fmt.Sprintf("marshal_%d", n), func(b *testing.B) {
 			b.ReportAllocs()
 			b.ResetTimer()

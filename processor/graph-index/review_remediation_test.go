@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/revlag"
 	"github.com/nats-io/nats.go/jetstream"
@@ -30,7 +31,7 @@ func (s *lifecycleSpy) ReportCycleError(context.Context, error) error {
 func TestAuthoritativeCandidateSkipsUnsafeAliasWithoutWithholdingReadiness(t *testing.T) {
 	t.Parallel()
 	comp := createTestComponentWithMockKV(t)
-	comp.namePredicates = map[string]int{"dc.terms.title": 0}
+	comp.namePredicates = map[string]int{semantictest.Predicate(t, "dc", "terms", "title"): 0} // predicate-audit:unrelated {"column":24,"surface":"go-assignment:namePredicates","value":"","basis":"reviewed component test configuration map; contained predicate is runtime-authoritative"}
 	comp.watermark = revlag.New()
 	var logs bytes.Buffer
 	comp.logger = slog.New(slog.NewTextHandler(&logs, nil))

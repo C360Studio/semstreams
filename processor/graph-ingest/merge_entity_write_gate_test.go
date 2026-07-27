@@ -24,15 +24,14 @@ import (
 
 func TestMergeEntity_InvalidCandidateNeverCommits(t *testing.T) {
 	validID := "acme.ops.test.system.widget.001"
-	validPredicate := semantictest.Predicate(t, "test", "state", "value")
 
 	badPredicateTriples := []message.Triple{
-		{Subject: validID, Predicate: validPredicate, Object: "ok"},
-		{Subject: validID, Predicate: "not-canonical", Object: "x"}, // predicate-audit:invalid {"kind":"candidate-predicate","value":"not-canonical","reason":"arity"}
+		{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "ok"},
+		{Subject: validID, Predicate: "not-canonical", Object: "x"}, // predicate-audit:invalid {"kind":"stored-predicate","value":"not-canonical","reason":"arity"}
 	}
 	badSubjectTriples := []message.Triple{
-		{Subject: validID, Predicate: validPredicate, Object: "ok"},
-		{Subject: "bad", Predicate: validPredicate, Object: "x"},
+		{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "ok"},
+		{Subject: "bad", Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "x"},
 	}
 
 	cases := []struct {
@@ -47,7 +46,7 @@ func TestMergeEntity_InvalidCandidateNeverCommits(t *testing.T) {
 		t.Run("merge branch "+tc.name, func(t *testing.T) {
 			c, bucket := createTestComponentWithMockKVBucket(t)
 			resident := &graph.EntityState{ID: validID, Version: 1, Triples: []message.Triple{
-				{Subject: validID, Predicate: validPredicate, Object: "resident"},
+				{Subject: validID, Predicate: semantictest.Predicate(t, "test", "state", "value"), Object: "resident"},
 			}}
 			require.NoError(t, c.MergeEntity(context.Background(), resident))
 			storedBefore, ok := bucket.data[validID]

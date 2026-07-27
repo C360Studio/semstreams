@@ -44,7 +44,7 @@ func TestReconcileMetrics_RecordListPutDeleteOutcomes(t *testing.T) {
 func TestReconcileMetrics_SemanticUpdatesCountOnceAfterRetry(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	entityID := "acme.ops.robotics.gcs.drone.003"
-	predicate := predicateMock(comp)
+	predicate := predicateMock(comp) // predicate-audit:unrelated {"column":15,"surface":"go-assignment:predicate","value":"","basis":"reviewed mock predicate-index bucket returned for failure injection"}
 	remaining := 1
 	predicate.putFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
 		if remaining > 0 {

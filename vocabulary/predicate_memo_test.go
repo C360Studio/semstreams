@@ -60,15 +60,15 @@ func TestParsePredicate_InvalidNeverEntersMemo(t *testing.T) {
 		predicate string
 		reason    PredicateValidationReason
 	}{
-		{name: "empty", predicate: "", reason: PredicateReasonEmpty},
-		{name: "arity two", predicate: "memo.test", reason: PredicateReasonArity},
-		{name: "arity four", predicate: "memo.test.too.many", reason: PredicateReasonArity},
-		{name: "upper segment", predicate: "memo.Test.upper", reason: PredicateReasonSegmentStart},
-		{name: "forbidden char", predicate: "memo.te_st.underscore", reason: PredicateReasonSegmentCharacter},
-		{name: "trailing hyphen", predicate: "memo.test.tail-", reason: PredicateReasonSegmentHyphen},
-		{name: "empty segment", predicate: "memo..test", reason: PredicateReasonSegmentEmpty},
-		{name: "segment length", predicate: "memo.test." + strings.Repeat("a", MaxPredicateSegmentBytes+1), reason: PredicateReasonSegmentLength},
-		{name: "total length", predicate: strings.Repeat("a", MaxPredicateBytes) + ".b.c", reason: PredicateReasonLength},
+		{name: "empty", predicate: "", reason: PredicateReasonEmpty},                                                                              // predicate-audit:invalid {"kind":"stored-predicate","value":"","reason":"empty"}
+		{name: "arity two", predicate: "memo.test", reason: PredicateReasonArity},                                                                 // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.test","reason":"arity"}
+		{name: "arity four", predicate: "memo.test.too.many", reason: PredicateReasonArity},                                                       // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.test.too.many","reason":"arity"}
+		{name: "upper segment", predicate: "memo.Test.upper", reason: PredicateReasonSegmentStart},                                                // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.Test.upper","reason":"segment_start"}
+		{name: "forbidden char", predicate: "memo.te_st.underscore", reason: PredicateReasonSegmentCharacter},                                     // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.te_st.underscore","reason":"segment_character"}
+		{name: "trailing hyphen", predicate: "memo.test.tail-", reason: PredicateReasonSegmentHyphen},                                             // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.test.tail-","reason":"segment_hyphen"}
+		{name: "empty segment", predicate: "memo..test", reason: PredicateReasonSegmentEmpty},                                                     // predicate-audit:invalid {"kind":"stored-predicate","value":"memo..test","reason":"segment_empty"}
+		{name: "segment length", predicate: "memo.test." + strings.Repeat("a", MaxPredicateSegmentBytes+1), reason: PredicateReasonSegmentLength}, // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.test.aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","reason":"segment_length"}
+		{name: "total length", predicate: strings.Repeat("a", MaxPredicateBytes) + ".b.c", reason: PredicateReasonLength},                         // predicate-audit:invalid {"kind":"stored-predicate","value":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.b.c","reason":"length"}
 	}
 
 	for _, tt := range invalid {
@@ -158,7 +158,7 @@ func TestParsePredicate_MemoCapStopsInsertionNotValidation(t *testing.T) {
 	if _, cached := validParsedPredicates.Load(fresh); cached {
 		t.Fatalf("predicate admitted past the memo capacity cap")
 	}
-	if _, err := ParsePredicate("memo.Bad.at-cap"); err == nil {
+	if _, err := ParsePredicate("memo.Bad.at-cap"); err == nil { // predicate-audit:invalid {"kind":"stored-predicate","value":"memo.Bad.at-cap","reason":"segment_start"}
 		t.Fatal("invalid predicate accepted at memo capacity")
 	}
 }

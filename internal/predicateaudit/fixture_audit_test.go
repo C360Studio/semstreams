@@ -1524,3 +1524,46 @@ func unrelatedPredicateFieldLine(expression, value, surface, basis string) strin
 // predicate-audit:invalid {"location":"line:716:column:61:embedded-structured:inner-offset:50","kind":"stored-predicate","value":"other.state.bad_name","reason":"segment_character"}
 // predicate-audit:invalid {"location":"line:772:column:66:embedded-structured:inner-offset:14","kind":"stored-predicate","value":"legacy.state.bad_name","reason":"segment_character"}
 // predicate-audit:invalid {"location":"line:800:column:16:embedded-structured:inner-offset:107","kind":"stored-predicate","value":"agent.run.","reason":"segment_empty"}
+
+func TestAuditTestFixturesDisambiguatesValueSubstitutionSuffixAcrossFixtureSurfaces(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	writeAuditFixture(t, root, "embedded_test.go", `package fixture
+var _ = "$entity.triple.openspec.change.revision.value"
+var _ = "$entity.triple.metrics.sample.value"
+`)
+	writeAuditFixture(
+		t,
+		root,
+		"testdata/rule.txt",
+		"value: $entity.triple.openspec.change.revision.value\n"+
+			"literal: $entity.triple.metrics.sample.value",
+	)
+
+	result, err := AuditTestFixtures(writeFixtureManifest(t, root, `{"version":1,"entries":[]}`), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Findings) != 0 {
+		t.Fatalf("findings = %#v, want .value suffix excluded from predicate validation", result.Findings)
+	}
+
+	wants := map[string]bool{
+		"go-embedded-substitution:openspec.change.revision": false,
+		"go-embedded-substitution:metrics.sample.value":     false,
+		"structured-substitution:openspec.change.revision":  false,
+		"structured-substitution:metrics.sample.value":      false,
+	}
+	for _, candidate := range result.Candidates {
+		key := candidate.Surface + ":" + candidate.Predicate
+		if _, ok := wants[key]; !ok {
+			continue
+		}
+		wants[key] = true
+	}
+	for occurrence, found := range wants {
+		if !found {
+			t.Fatalf("candidates = %#v, missing %s candidate", result.Candidates, occurrence)
+		}
+	}
+}

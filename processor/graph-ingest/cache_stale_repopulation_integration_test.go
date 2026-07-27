@@ -10,6 +10,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 )
 
@@ -37,7 +38,6 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	c, _ := startPrefixTestComponent(t)
 
 	const id = "stalecache.ops.dom.sys.type.entity1"
-	const markerPred = "test.stale.marker"
 
 	// rev1: create the entity WITHOUT the marker. CreateEntity invalidates the
 	// cache, so the first read below is a guaranteed cache miss.
@@ -75,7 +75,7 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	// is the concurrent write W2 the paused reader's rev1 read did not see.
 	require.NoError(t, c.AddTriple(ctx, message.Triple{
 		Subject:    id,
-		Predicate:  markerPred,
+		Predicate:  semantictest.Predicate(t, "test", "stale", "marker"),
 		Object:     "committed",
 		Timestamp:  time.Now(),
 		Confidence: 1.0,
@@ -91,7 +91,7 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	got, _, err := c.fetchEntitiesConcurrent(ctx, []string{id}, 1)
 	require.NoError(t, err)
 	require.Len(t, got, 1)
-	require.NotNil(t, got[0].GetTriple(markerPred),
+	require.NotNil(t, got[0].GetTriple(semantictest.Predicate(t, "test", "stale", "marker")),
 		"fresh read must observe the rev2 marker — a slow reader must not resurrect "+
 			"pre-write rev1 into the cache past a concurrent invalidate")
 }

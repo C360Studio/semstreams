@@ -1199,7 +1199,7 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 		outgoing:  newMockKVBucket(),
 		incoming:  newMockKVBucket(),
 		alias:     newMockKVBucket(),
-		predicate: newMockKVBucket(), // predicate-audit:unrelated {"column":21,"surface":"go-field:predicate","value":"","basis":"reviewed mock KV bucket field, not predicate syntax"}
+		predicate: newMockKVBucket(), // predicate-audit:unrelated {"column":14,"surface":"go-field:predicate","value":"","basis":"reviewed mock KV bucket field, not predicate syntax"}
 		context:   newMockKVBucket(),
 		name:      newMockKVBucket(),
 	}
