@@ -9,6 +9,27 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **RECALL-CEILING FIX LANDED (2026-07-27, PR #702) — the newest state; supersedes the "next front"
+> framing in the B2 note below.** The owner's question "why don't communities resolve as expected?" is
+> answered: the 0.85 thematic-recall ceiling was NEVER a partition/community problem — it was
+> synthesis-projection lossiness. GraphRAG answer synthesis fed the LLM only {community summary + up to 5
+> PageRank (query-AGNOSTIC) rep titles + 5 keywords}; entity bodies never reach the prompt, and a theme
+> term on a relevant NON-rep member's title/tags could not appear. OpenSpec change
+> `thematic-synthesis-context` fixes it with two query-side levers: (A) select digest reps by QUERY
+> RELEVANCE (`semanticScores` handleStrategyGraphRAG already computes), full PageRank fallback preserved;
+> (B) a capped `Tags` channel from `content.classification.tag` triples in both the LLM prompt and the
+> template floor. Architect-designed, developer-built, reviewer-APPROVE (2 MEDIUM + 2 NIT fixed; MEDIUM-2
+> promoted the tag predicate to framework constant `vocabulary.ContentClassificationTag`). **Frontier e2e:
+> `thematic_theme_recall_mean` 0.85 → 0.95, `battery`+`door` recovered, ZERO regressions (known-answer
+> 7/7, partition determinism 1.0).** Additive/non-breaking. `evacuation` (fire) stays missing — its only
+> tag-bearing entity sits in a document-type community that doesn't reach the fire query's top synthesis
+> clusters (cross-community coverage, NOT a tags defect); owner chose LAND-THE-WIN + filed **#701**
+> (retrieval-side multi-community query expansion). **NEXT (fresh session): PR #702 is owner-gated — owner
+> runs Codex + merges (CI was UNSTABLE/pending at hand-off; verify `gh pr checks 702` green + Codex
+> addressed before merge), THEN `openspec archive thematic-synthesis-context`. Then the epic-level WIP-1
+> pick: B3 (ownership split, Tier-2, #607/#617) vs #701 vs Epic C vs deferred Epic A (#619/#633/#643).**
+> Full detail: memory `epic-b-recall-ceiling-synthesis-context.md`.
+
 > **B2 CLOSED (2026-07-26, honest negative) — SUPERSEDES the "B2 IS DECIDED ... HAS ROI" framing
 > immediately below.** The weight-tuning lever is exhausted: enabling the merged semantic-edge mechanism
 > raised `colocation_mean` 0.60→0.83, but a paired frontier decider (Gemini 2.5 Flash held constant,
@@ -290,7 +311,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 | **IN PROGRESS — B0/B1/B2 CLOSED (B2 honest negative, mechanism merged default-off, #698); B3 (ownership split, Tier-2) not started** |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix LANDED (PR #702, 0.85→0.95, pending owner Codex+merge); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -621,3 +642,27 @@ Append one line per session. Newest last.
   membership). Docs-only change; the mechanism spec deltas were left untouched (already accurate).
   **Next:** program manager reviews this closure, runs `openspec validate --strict` and `openspec
   archive`, then decides B3 (ownership split, Tier-2) vs. the next epic.
+- **2026-07-27 (session 13)** — **RECALL-CEILING FIX BUILT + LANDED (PR #702); the owner's "why don't
+  communities resolve as expected?" is answered.** Cheapest-win static trace (free, no e2e) first: the
+  0.85 ceiling is synthesis-projection lossiness, NOT partition. GraphRAG answer synthesis
+  (`answer.go:buildAnswerPrompt`) feeds only {community summary + ≤5 PageRank query-AGNOSTIC rep titles +
+  ≤5 keywords}; entity bodies never reach the prompt. The 3 missed terms split TWO ways (corrected the
+  standing memory, which said "descriptions not titles"): `battery`/`door` are in TITLES of non-rep
+  entities; `evacuation` is tag/description-only. Key unlock (architect): **tags ARE triples**
+  (`content.classification.tag`), bodies are ObjectStore-only — so a tags channel recovers all three with
+  zero fetches. Spec-driven change `thematic-synthesis-context`: Lever A (query-relevant rep selection via
+  `semanticScores`, PageRank fallback) + Lever B (capped tags in prompt + template floor). architect →
+  semstreams-developer → semstreams-reviewer APPROVE (2 MEDIUM + 2 NIT fixed; MEDIUM-2 = a 2nd architect
+  call promoting the predicate to `vocabulary.ContentClassificationTag`, fixing a product-boundary smell
+  via the dc.terms.title precedent). **Frontier e2e (single approved run, doubled as confirm-trace):
+  recall 0.85→0.95, `battery`+`door` recovered, ZERO regressions (known-answer 7/7, determinism 1.0,
+  validation_errors:0).** `evacuation` stays missing = cross-community coverage (tag-bearing doc in a
+  document community that doesn't reach the fire query's maintenance-dominated top clusters), NOT a tags
+  defect → owner chose LAND-THE-WIN + filed **#701** (multi-community query expansion). PR #702 pushed,
+  CI pending at hand-off; owner-gated Codex + merge, then archive. Lessons: (1) **cheapest-win static
+  trace before any paid e2e** paid off — it partially corrected the recorded diagnosis (terms in titles,
+  not just bodies) for free and reshaped the fix. (2) **fold confirm-trace into fix-validation** — one
+  frontier run instead of a confirm-only run + a validation run. (3) two stale gopls diagnostics
+  (undefined symbol, scratch-file) both dissolved on independent `go build` — status words lie, run the
+  command. **Next: owner Codex+merge #702 → archive → epic-level WIP-1 pick (B3 / #701 / Epic C / deferred
+  Epic A).**
