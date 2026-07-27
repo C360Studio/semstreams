@@ -49,6 +49,19 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 				IndexingProfile: "signal",
 			},
 		},
+		InlineRules: []Definition{{
+			ID:      "retire-drone",
+			Type:    "test_rule",
+			Name:    "retire drone",
+			Enabled: true,
+			OnEnter: []Action{{
+				Type:               ActionTypeReplaceOwned,
+				ProjectionContract: "drone.status",
+				ProjectionGroup:    "status",
+				Predicate:          "drone.status.state",
+				Object:             "retired",
+			}},
+		}},
 	}
 
 	data, err := json.Marshal(original)
@@ -72,6 +85,32 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 	if !reflect.DeepEqual(restored.ProjectionContracts, original.ProjectionContracts) {
 		t.Errorf("ProjectionContracts round-trip mismatch:\n got %#v\nwant %#v",
 			restored.ProjectionContracts, original.ProjectionContracts)
+	}
+	if !reflect.DeepEqual(restored.InlineRules, original.InlineRules) {
+		t.Errorf("InlineRules selector round-trip mismatch:\n got %#v\nwant %#v",
+			restored.InlineRules, original.InlineRules)
+	}
+}
+
+func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
+	t.Parallel()
+
+	inlineRules := schema.Properties["inline_rules"]
+	if inlineRules.Items == nil {
+		t.Fatal("inline_rules schema has no item shape")
+	}
+	onEnter := inlineRules.Items.Properties["on_enter"]
+	if onEnter.Items == nil {
+		t.Fatal("inline_rules.on_enter schema has no action item shape")
+	}
+	for _, selector := range []string{"projection_contract", "projection_group"} {
+		property, ok := onEnter.Items.Properties[selector]
+		if !ok {
+			t.Fatalf("replace_owned selector %q absent from action schema", selector)
+		}
+		if property.Type != "string" {
+			t.Fatalf("%s schema type = %q, want string", selector, property.Type)
+		}
 	}
 }
 

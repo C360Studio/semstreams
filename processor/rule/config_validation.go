@@ -15,10 +15,21 @@ import (
 
 // ValidateConfigUpdate validates proposed configuration changes
 func (rp *Processor) ValidateConfigUpdate(changes map[string]any) error {
-	if _, present := changes["pack_id"]; present {
-		return errs.WrapInvalid(
-			fmt.Errorf("pack_id is static and cannot be updated at runtime"),
-			"RuleProcessor", "ValidateConfigUpdate", "reject producer identity update")
+	for _, field := range []string{
+		"pack_id",
+		"projection_contracts",
+		"projection_targets",
+		"mutation_client",
+		"owned_replacer",
+	} {
+		if _, present := changes[field]; present {
+			return errs.WrapInvalid(
+				fmt.Errorf("%s is static and cannot be updated at runtime", field),
+				"RuleProcessor",
+				"ValidateConfigUpdate",
+				"reject mutation envelope update",
+			)
+		}
 	}
 	// Validate rule configurations if present
 	if rulesConfig, ok := changes["rules"]; ok {

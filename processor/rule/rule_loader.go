@@ -86,6 +86,60 @@ func (rp *Processor) loadRuleDefinitionsFromFiles() ([]Definition, error) {
 	return allDefinitions, nil
 }
 
+func cloneRuleDefinitions(definitions []Definition) ([]Definition, error) {
+	data, err := json.Marshal(definitions)
+	if err != nil {
+		return nil, fmt.Errorf("copy rule definitions: %w", err)
+	}
+	var copies []Definition
+	if err := json.Unmarshal(data, &copies); err != nil {
+		return nil, fmt.Errorf("copy rule definitions: %w", err)
+	}
+	return copies, nil
+}
+
+// prepareInitialRules parses, validates, and freezes the boot-time rules and
+// projection target index. Caller holds rp.mu when the processor is live.
+func (rp *Processor) prepareInitialRules() error {
+	if rp.initialRulesReady {
+		return nil
+	}
+	targets, err := buildProjectionTargetIndex(rp.config.ProjectionContracts)
+	if err != nil {
+		return err
+	}
+	fileDefinitions, err := rp.loadRuleDefinitionsFromFiles()
+	if err != nil {
+		return fmt.Errorf("failed to load rule definitions from files: %w", err)
+	}
+	inlineDefinitions, err := cloneRuleDefinitions(rp.config.InlineRules)
+	if err != nil {
+		return err
+	}
+	allDefinitions := append(append([]Definition(nil), fileDefinitions...), inlineDefinitions...)
+	for _, definition := range allDefinitions {
+		if err := ValidateDefinition(definition); err != nil {
+			return fmt.Errorf("rule authoring validation failed for %s: %w", definition.ID, err)
+		}
+		if err := validateRuleReplaceOwnedActions(targets, definition); err != nil {
+			return fmt.Errorf(
+				"replace_owned envelope validation failed for rule %s: %w",
+				definition.ID,
+				err,
+			)
+		}
+	}
+	snapshot, err := cloneRuleDefinitions(allDefinitions)
+	if err != nil {
+		return err
+	}
+	rp.config.ProjectionContracts = cloneProjectionContracts(rp.config.ProjectionContracts)
+	rp.initialRules = snapshot
+	rp.projectionTargets = targets
+	rp.initialRulesReady = true
+	return nil
+}
+
 // loadRules loads and configures rules based on configuration
 // IMPORTANT: This function must be called while holding rp.mu lock
 // as it modifies rp.rules directly
@@ -104,14 +158,13 @@ func (rp *Processor) loadRules() error {
 		rp.logger.Warn("Invalid alert cooldown period, using default", "default", alertCooldown, "error", err)
 	}
 
-	// Load rule definitions from files
-	fileDefinitions, err := rp.loadRuleDefinitionsFromFiles()
-	if err != nil {
-		return fmt.Errorf("failed to load rule definitions from files: %w", err)
+	if err := rp.prepareInitialRules(); err != nil {
+		return err
 	}
-
-	// Combine file definitions with inline definitions
-	allDefinitions := append(fileDefinitions, rp.config.InlineRules...)
+	allDefinitions, err := cloneRuleDefinitions(rp.initialRules)
+	if err != nil {
+		return err
+	}
 
 	// Create rules from definitions using factory pattern
 	ruleDeps := Dependencies{
@@ -121,11 +174,6 @@ func (rp *Processor) loadRules() error {
 	}
 
 	for _, def := range allDefinitions {
-		// Validate every artifact, including disabled rules, before any skip or
-		// persistence path can make an undeclared predicate look acceptable.
-		if err := ValidateDefinition(def); err != nil {
-			return fmt.Errorf("rule authoring validation failed for %s: %w", def.ID, err)
-		}
 		// Skip disabled rules
 		if !def.Enabled {
 			rp.logger.Debug("Skipping disabled rule", "rule_id", def.ID)
@@ -141,10 +189,6 @@ func (rp *Processor) loadRules() error {
 		// broken owned-write claim must NOT silently ship: return the error so
 		// boot aborts. Runs before the cron/expression split so it covers
 		// def.Actions (cron) and the transition lists (expression) uniformly.
-		if err := rp.validateRuleReplaceOwnedActions(def); err != nil {
-			return fmt.Errorf("replace_owned envelope validation failed for rule %s: %w", def.ID, err)
-		}
-
 		// Cron rules take a separate construction path: they don't go through
 		// the factory registry because CronRule does not implement the Rule
 		// interface (Subscribe/Evaluate/ExecuteEvents are message-driven and

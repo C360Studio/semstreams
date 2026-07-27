@@ -122,6 +122,14 @@
                   "type": "string",
                   "description": "predicate"
                 },
+                "projection_contract": {
+                  "type": "string",
+                  "description": "projection_contract"
+                },
+                "projection_group": {
+                  "type": "string",
+                  "description": "projection_group"
+                },
                 "prompt": {
                   "type": "string",
                   "description": "prompt"
@@ -416,6 +424,14 @@
                   "type": "string",
                   "description": "predicate"
                 },
+                "projection_contract": {
+                  "type": "string",
+                  "description": "projection_contract"
+                },
+                "projection_group": {
+                  "type": "string",
+                  "description": "projection_group"
+                },
                 "prompt": {
                   "type": "string",
                   "description": "prompt"
@@ -619,6 +635,14 @@
                   "type": "string",
                   "description": "predicate"
                 },
+                "projection_contract": {
+                  "type": "string",
+                  "description": "projection_contract"
+                },
+                "projection_group": {
+                  "type": "string",
+                  "description": "projection_group"
+                },
                 "prompt": {
                   "type": "string",
                   "description": "prompt"
@@ -821,6 +845,14 @@
                 "predicate": {
                   "type": "string",
                   "description": "predicate"
+                },
+                "projection_contract": {
+                  "type": "string",
+                  "description": "projection_contract"
+                },
+                "projection_group": {
+                  "type": "string",
+                  "description": "projection_group"
                 },
                 "prompt": {
                   "type": "string",
@@ -1043,6 +1075,14 @@
                 "predicate": {
                   "type": "string",
                   "description": "predicate"
+                },
+                "projection_contract": {
+                  "type": "string",
+                  "description": "projection_contract"
+                },
+                "projection_group": {
+                  "type": "string",
+                  "description": "projection_group"
                 },
                 "prompt": {
                   "type": "string",
