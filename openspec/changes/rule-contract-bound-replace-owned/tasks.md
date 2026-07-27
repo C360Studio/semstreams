@@ -113,7 +113,8 @@
 
 ## Checkpoints
 
-- Rebased dependency stack: PR #687 `7d643e30`; PR #696 `12fa1ea4`; PR2 implementation checkpoint `d644e926`.
+- Rebased dependency stack: PR #687 `7d643e30`; finalized PR #696 `66a44d13`; rebased PR2 implementation
+  `fbb79bdf`; evidence checkpoint `17e04b0e`.
 - Task 2.6 is verified at the checkpoint: both binaries already call the same helper before `StartAll`.
 - Architecture decision: option A scopes `ErrOwnerAlreadyBound` to non-empty registrations and uses one-time client
   injection failure for repeated claimless/birth-only composition; identical contract-bearing repeats are never
