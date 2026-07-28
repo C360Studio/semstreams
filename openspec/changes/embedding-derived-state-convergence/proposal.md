@@ -48,17 +48,23 @@ None.
 
 ## Impact
 
-- **Code**: `processor/graph-embedding/component.go` only (mutex field, `reconcileEntity`,
-  `markStranded`, `repairTargets`/`repairStranded`, repair ticker, three marking sites, `Stop`
-  ordering). `graph/embedding` storage APIs unchanged (no signature changes; #638 IdentityText
-  contract untouched; #614/#628 CAS lanes untouched — hop 2 does NOT take the seam).
+- **Code**: `processor/graph-embedding/component.go` (mutex field, `reconcileEntity`,
+  `markStranded`/`clearStranded`, `repairTargets`/`repairStranded`, repair ticker, marking sites,
+  coalescer-before-watcher `Start` ordering, `Stop` ordering) and `graph/embedding` (3 in-memory
+  reason consts; ONE additive storage method `SavePendingGuarded` — the guarded hop-1 create/update
+  lane, Codex #722 B2). Existing storage APIs unchanged (no signature changes; #638 IdentityText
+  contract untouched; #614/#628 hop-2 CAS lanes untouched — hop 2 does NOT take the seam).
 - **Complexity ledger (the owner's constraint)**: net durable-state delta ZERO — no bucket, no key
   space, no `Record` field/status, no predicate/vocab, no config knob, no metric. Added: 1 mutex,
-  1 goroutine, 1 interval const, 3 in-memory-only reason strings, 6 unexported methods
-  (applyEntityTombstone, reconcileEntity, markStranded, repairTargets, repairStranded, repairLoop).
-- **NOT BREAKING**: no exported API or record-shape change; changelog-worthy behavior changes are
-  (1) failed derived writes report `degraded` (previously `ready`), (2) coalesced flush now runs on
-  the watcher goroutine (quantified: cheaper than the shipped immediate mode when debounce dedup > 2).
+  1 goroutine, 1 interval const, 3 in-memory-only reason strings, 1 in-memory `failureInfo.strandedAt`
+  field (the causal-clear floor, Codex #722 B1), 1 additive exported storage method
+  (`SavePendingGuarded`), 8 unexported methods (applyEntityTombstone, reconcileEntity, markStranded,
+  clearStranded, repairTargets, repairStranded, repairLoop, closeCoalescerAfterFailedStart).
+- **NOT BREAKING**: no exported API signature or record-shape change; changelog-worthy behavior
+  changes are (1) failed derived writes report `degraded` (previously `ready`), (2) coalesced flush
+  now runs on the watcher goroutine (quantified: cheaper than the shipped immediate mode when
+  debounce dedup > 2), (3) a re-delivered already-generated revision (restart) is now a guarded skip
+  instead of a pending re-write + regeneration.
 - **sem\* consumers**: semsource is the beneficiary (its default-on coalesced lane is the racy one);
   no sister action required.
 

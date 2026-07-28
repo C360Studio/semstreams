@@ -47,15 +47,43 @@ protect two round-trips — the ratchet the owner forbade).
   The gap is one process lifetime → in-memory re-drive closes it completely. graph-index's precedent
   is likewise in-memory (`failedEntities sync.Map`). A durable marker would be self-defeating (writes
   to the bucket whose delete failed).
-- `markStranded(entityID, reason)` = `applyTerminalOutcome(entityID, 0, OutcomeFailed, reason)` —
-  **floor revision 0 is load-bearing**: the guard is `present && sourceRevision < held.rev`, so a
-  marker at the observed revision (or ^uint64(0)) would be unclearable — a silent permanent-degraded
-  trap. Comment this at the helper.
-- Three marking sites: watcher tombstone delete failure (complete at the TRUE revision R first —
-  watermark must drain, #624 — then mark at 0: two calls, different revisions, both load-bearing);
-  hop-1 `SavePending` failure (watermark stays uncompleted, #613 F2, plus mark); flush source-read
-  transient failure (keep drain, plus mark). Reasons (in-memory ONLY, never `SaveFailed`):
-  `ReasonDeleteFailed`, `ReasonPendingWriteFailed`, `ReasonEntityReadFailed`.
+- **Stranded marks clear ONLY by causal convergence** (Codex #722 round, replacing the original
+  floor-revision-0 rule — **FALSIFIED**: hop 2 is deliberately outside `hop1Mu`, so a worker already
+  in flight for an OLDER revision can reach its terminal AFTER a stranding; under floor 0 that
+  obsolete terminal cleared the mark — dead vector queryable, FailedCount 0, ready, repair no longer
+  targeting. An obsolete terminal must not count as convergence). The in-memory entry carries a
+  `strandedAt` revision (in-memory only — ledger still zero durable state);
+  `markStranded(entityID, reason, strandedAt)` writes it directly; `applyTerminalOutcome` keeps its
+  embedder-side semantics but refuses to clear (or overwrite-with-failure) a stranded entry when
+  `sourceRevision < strandedAt`. Clearing happens (a) explicitly via `clearStranded` on every hop-1
+  convergence — successful delete/skip/queue under the seam, plus reconcile's absence drain at
+  max-rev — or (b) by an external terminal with `sourceRevision >= strandedAt`. The explicit clear is
+  what prevents the unclearable-pin trap the floor-0 rule feared, while restoring causality.
+- Marking sites and their stranding revisions: watcher tombstone delete failure (complete at the TRUE
+  revision R first — watermark must drain, #624 — THEN mark at `strandedAt = R`: two calls,
+  drain-then-mark, both load-bearing); hop-1 pending-write failure, both lanes (watermark stays
+  uncompleted, #613 F2; `strandedAt =` the delivered revision); no-text-transition delete failure
+  (`strandedAt =` the delivered revision; reviewer round 1); reconcile source-read / absence-delete
+  failure (`strandedAt = ^uint64(0)` — a failed Get/absent key yields no authoritative revision, so
+  ONLY explicit convergence clears; repair's 30s cadence bounds the extra degraded window). Reasons
+  (in-memory ONLY, never `SaveFailed`): `ReasonDeleteFailed`, `ReasonPendingWriteFailed`,
+  `ReasonEntityReadFailed`.
+- **Guarded pending write** (Codex #722 B2): `repairTargets` snapshots then releases `failedMu`, so
+  hop 2 can generate and causally clear an entry before the dispatch loop reaches it; the stale
+  re-drive's unconditional `SavePending` Put then DOWNGRADED the fresh `StatusGenerated` record to
+  pending (vector dropped from the cache until regeneration, readiness already ready). A failed-map
+  recheck is insufficient (hop 2 can complete after it). Fixed at the SOLE hop-1 writer so all lanes
+  harden uniformly: ONE additive storage method `SavePendingGuarded(ctx, *Record) (saved bool, err)`
+  (both pending lanes) reads the current record inside the seam, SKIPS when
+  `StatusGenerated && SourceRevision >=` the authoritative revision being queued (also turns a
+  restart's re-delivered already-generated revision into a cheap skip), and writes conditionally —
+  CAS-create when absent, `Update` at the read revision when present — re-reading and re-deciding on
+  conflict. A guarded SKIP is terminal for the delivered revision (Skipped completion; discharge).
+- **Coalescer publication ordering** (Codex #722 H3): `Start` constructs and publishes
+  `entityCoalescer` BEFORE the watcher goroutine launches — assigning after launch was a data race on
+  the pointer, and with a preloaded ENTITY_STATES bucket the bootstrap replay took the immediate lane
+  despite `coalesce_ms > 0`. Every Start failure path after construction closes it
+  (`closeCoalescerAfterFailedStart`, after cancel so Close cannot block).
 - **Repair loop**: dedicated 12-line 30s ticker (mirrors `indexRepairInterval` + empty-set
   short-circuit), launched with the existing goroutines in `waitForDependenciesAndStartWatcher`
   region, `c.wg`-registered, ctx-cancelled, drained by existing `wg.Wait`. Piggybacking the ADR-083
@@ -74,9 +102,11 @@ protect two round-trips — the ratchet the owner forbade).
 ## Compose-check (condensed; full table in the architect analysis)
 
 ADR-066 watermark: preserved; intended change = failed derived writes report degraded (spec delta +
-changelog). #614/#628 CAS: untouched; hop 2 must NOT take `hop1Mu` (would serialize workers behind
-metadata ops); SaveGenerated racing a tombstone already safe via CAS + `ErrRecordGone`; the seam means
-hop 1 can never write a revision below one hop 2 committed. #719 boot transaction: repairLoop starts
+changelog). #614/#628 hop-2 CAS lanes: untouched; hop 2 must NOT take `hop1Mu` (would serialize
+workers behind metadata ops); SaveGenerated racing a tombstone already safe via CAS + `ErrRecordGone`;
+and the hop-1 create lane is now itself revision-guarded (`SavePendingGuarded`, Codex #722 B2), so
+hop 1 can neither interleave a delete (the seam) nor downgrade a committed generated vector (the
+guard). #719 boot transaction: repairLoop starts
 inside component Start post-dependency, returns no error, health-visible via degraded readiness —
 satisfies framework-composition spec. Epic C constraint: zero new buckets/keys/fields/vocab; guard
 test asserts the new reasons never reach `SaveFailed` (`normalizeFailureReason` NOT extended).

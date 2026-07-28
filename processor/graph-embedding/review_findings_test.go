@@ -112,7 +112,13 @@ func TestSavePendingFailure_IsNonTerminal(t *testing.T) {
 	index.putFunc = func(context.Context, string, []byte) (uint64, error) {
 		return 0, errors.New("kv write unavailable")
 	}
-	c := newFindingsTestComponent(t, index)
+	// The guarded writer (#722 B2) creates an absent key via KV Create, not Put,
+	// so the write-failure premise needs the create hook too.
+	hooked := &createHookKV{mockKVBucket: index}
+	hooked.createFunc = func(context.Context, string, []byte) (uint64, error) {
+		return 0, errors.New("kv write unavailable")
+	}
+	c := newFindingsTestComponent(t, hooked)
 
 	const entityID = "acme.ops.robotics.gcs.drone.savepend"
 	// A prior failure for this entity at revision 5 (in-memory), to prove it is not cleared.

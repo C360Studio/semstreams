@@ -96,8 +96,22 @@ func (m *memKV) GetRevision(_ context.Context, _ string, _ uint64) (jetstream.Ke
 	return nil, errNotImplemented
 }
 
-func (m *memKV) Create(_ context.Context, _ string, _ []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
-	return 0, errNotImplemented
+// Create implements CAS-create: it succeeds only when the key is absent,
+// returning jetstream.ErrKeyExists otherwise (the sentinel SavePendingGuarded's
+// conflict loop matches). A real jetstream Create also succeeds over a delete
+// marker; memKV removes deleted keys entirely, so absence models both cases.
+func (m *memKV) Create(_ context.Context, key string, value []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.data[key]; ok {
+		return 0, jetstream.ErrKeyExists
+	}
+	m.rev++
+	stored := make([]byte, len(value))
+	copy(stored, value)
+	m.data[key] = stored
+	m.revs[key] = m.rev
+	return m.rev, nil
 }
 
 // Update implements revision compare-and-set: it succeeds only if the key's current

@@ -205,3 +205,67 @@ fields from in-package tests — no production hooks; precedent `graph/embedding
   verified at the site by the orchestrator.**
 - [ ] 7.3 Owner-run Codex gate; merge on addressed + CI-green (`gh pr checks` + `mergeStateStatus`);
   archive + baton roll-forward (include the pending cache-class/e2e-ladder-comment baton notes).
+
+## 8. Codex review round (PR #722 — 2 BLOCKING + 1 HIGH, all addressed same-branch, no commits)
+
+- [x] 8.1 B1 — floor-0 marks cleared by SUPERSEDED hop-2 terminals (masking class, all stranding
+  sites); the design's floor-revision-0 rule itself FALSIFIED. Replaced with the causal-clear
+  invariant: `failureInfo.strandedAt` (in-memory only — ledger still zero durable state);
+  `markStranded(entityID, reason, strandedAt)` writes directly; `applyTerminalOutcome` refuses to
+  clear OR overwrite-with-failure a stranded entry below `strandedAt`; explicit `clearStranded` on
+  every hop-1 convergence (successful delete/skip/queue + tombstone-delete success; reconcile's
+  absence drain at max-rev is the absence branch's explicit clear). Per-site stranding revisions:
+  tombstone = tombstone revision; pending-write + no-text = delivered revision; reconcile
+  read/absence failures = `^uint64(0)` (no authoritative revision in hand → explicit-clear only;
+  repair's 30s cadence bounds the extra degraded window). TDD: RED observed pre-fix on BOTH sites —
+  `TestObsoleteTerminal_CannotClearStranding_TombstoneSite` and `_PendingWriteSite`, each
+  "expected: 0x1, actual: 0x0" on FailedCount after an obsolete (stranding-revision-minus-1)
+  OutcomeGenerated terminal through the production completeEmbedding path; the PendingWrite test
+  also pins the clearable-by-causal-terminal leg (the unclearable-pin trap the old rule feared).
+  GREEN + 3× stable post-fix.
+- [x] 8.2 B2 — stale repair snapshot downgrades a generated record (snapshot released before
+  dispatch; hop 2 generates + causally clears in between; unconditional SavePending Put then
+  overwrote StatusGenerated with StatusPending — vector gone until regeneration under `ready`).
+  Fixed at the SOLE hop-1 writer for ALL lanes: ONE additive storage method
+  `graph/embedding.SavePendingGuarded(ctx, *Record) (saved, err)` — reads under the seam, SKIPS when
+  `StatusGenerated && SourceRevision >=` the queued authoritative revision (also converts a
+  restart's re-delivered generated revision into a cheap skip — behavior change noted in the
+  proposal), CAS-create when absent / Update at the read revision when present, re-read-and-re-decide
+  on conflict; guarded SKIP is terminal (Skipped completion + discharge). Both component lanes
+  switched; `SavePending`/`SavePendingWithStorageRef` kept unchanged (additive only). TDD: RED
+  observed pre-fix — `TestStaleRepairSnapshot_CannotDowngradeGeneratedRecord` (drives
+  repairTargets + the exact repairStranded loop body with the hop-2 gate between them) and
+  `TestWatcherRedelivery_DoesNotDowngradeGeneratedRecord`, each `expected: "generated", actual:
+  "pending"`. Storage-boundary decision table in
+  `graph/embedding/storage_pending_guard_test.go` (absent/pending/failed/older-generated write;
+  same/newer-generated skip); memKV gained a CAS-Create. GREEN + 3× stable. Test-premise updates:
+  the guarded writer CREATES an absent key, so write-failure fakes gained a `createHookKV` Create
+  hook (T4, T6 site-2, B1-pending, and the pre-existing `TestSavePendingFailure_IsNonTerminal`,
+  whose failure premise would otherwise have silently decayed to a success-path test); T4's
+  post-repair expectation updated to the causal invariant (queue success discharges the stranding at
+  repair time; the watermark still stays open until hop 2's terminal — asserted).
+- [x] 8.3 H3 — coalescer publication race + bootstrap bypass: Start assigned `entityCoalescer`
+  AFTER launching the watcher (unsynchronized pointer read = data race; preloaded-bucket bootstrap
+  entries took the immediate lane despite coalesce_ms>0). Fixed: constructed + published BEFORE
+  `waitForDependenciesAndStartWatcher`; both post-construction Start failure paths close it via
+  `closeCoalescerAfterFailedStart` (after cancel, so Close cannot block).
+  `TestIntegration_PreloadedBootstrap_TakesCoalescedLane` (10 entities seeded pre-Start,
+  coalesce_ms=60000 → the pending set IS the lane evidence; EMBEDDING_INDEX asserted empty while the
+  window is open; exercises Stop's cancel-before-Close on the 60s window). HONESTY: red-first was
+  NOT observable — the test PASSED on the pre-fix ordering (the watcher's WatchAll network round-trip
+  orders the microseconds-later assignment first in practice; the sub-ms race window did not surface
+  under -race in this harness). Recorded in the test's comment: it is a tripwire pinning the fixed
+  ordering, not a fails-first proof; the coordinator's mandate attached red-first to B1/B2 only.
+  GREEN + 3× stable (with T8) under -race against real NATS.
+- [x] 8.4 Artifacts + gates: design.md floor-0 paragraph rewritten to the causal invariant with the
+  old rationale marked FALSIFIED (+ compose-check updated: the hop-1 create lane is now itself
+  revision-guarded); proposal ledger updated (strandedAt field, SavePendingGuarded, 8 unexported
+  methods); spec delta gains the two scenarios ("an obsolete in-flight terminal cannot clear a
+  repair obligation", "repair cannot downgrade a generated record"); `openspec validate --strict`
+  clean. Gates re-run for this round: go build; new + updated tests 3× under -race; FULL
+  `go test -race ./...` (exit 0, 135 ok, zero `^FAIL`); go vet plain/integration/live_llm; gofmt;
+  `task lint` (revive clean); `go test ./test/contract/...`; T8 + preloaded-bootstrap integration
+  3× green under -race against real NATS. The external go.mod/go.sum contamination recurred once
+  mid-round (same editor-tooling class as 6.1) — restored byte-clean from HEAD via `git show`
+  redirection and re-verified clean after every subsequent stage.
+

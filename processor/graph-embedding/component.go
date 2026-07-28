@@ -46,6 +46,22 @@ type failureInfo struct {
 	reason string
 	at     time.Time
 	rev    uint64
+
+	// strandedAt is the STRANDING revision of a derived-write/read failure
+	// (#625, in-memory only — Codex #722 B1). Non-zero exactly for stranded
+	// entries (the three embedding.Reason* consts). A stranded mark is cleared
+	// ONLY by causal convergence: explicitly by a hop-1 convergence
+	// (clearStranded on a successful delete/skip/queue), or by an external
+	// terminal whose sourceRevision >= strandedAt. Hop 2 is deliberately outside
+	// the hop-1 seam, so a worker already in flight for an OLDER revision can
+	// reach its terminal AFTER the stranding — an OBSOLETE terminal must not
+	// count as convergence (under the falsified floor-0 rule it cleared the
+	// mark, leaving a dead vector queryable with FailedCount 0 and repair no
+	// longer targeting it). Sites with no authoritative revision in hand
+	// (a failed reconcile read, a failed reconcile-absence delete) strand at
+	// ^uint64(0): only explicit convergence clears them, and repair's 30s
+	// cadence bounds the extra degraded window.
+	strandedAt uint64
 }
 
 // Ensure Component implements required interfaces
@@ -671,22 +687,32 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Wait for ENTITY_STATES bucket and start entity watcher
-	if err := c.waitForDependenciesAndStartWatcher(ctx); err != nil {
-		cancel()
-		return err
-	}
-
-	// Optionally wrap entity updates with coalescing to avoid redundant re-embedding
+	// Optionally wrap entity updates with coalescing to avoid redundant
+	// re-embedding. Constructed and PUBLISHED BEFORE the watcher goroutine
+	// launches (#722 HIGH 3): the watcher reads c.entityCoalescer unsynchronized,
+	// so assigning after launch is a data race, and with a preloaded
+	// ENTITY_STATES bucket the bootstrap replay would race past a nil pointer
+	// onto the immediate lane despite coalesce_ms > 0. Safe this early: no
+	// callback can fire with work before the watcher Adds entries (an empty
+	// pending set short-circuits the tick), and every Start failure path below
+	// closes it.
 	if c.config.CoalesceMs > 0 {
 		c.entityCoalescer = cache.NewCoalescingSet(ctx, time.Duration(c.config.CoalesceMs)*time.Millisecond, func(entityIDs []string) {
 			c.processEntityBatch(ctx, entityIDs)
 		})
 	}
 
+	// Wait for ENTITY_STATES bucket and start entity watcher
+	if err := c.waitForDependenciesAndStartWatcher(ctx); err != nil {
+		cancel()
+		c.closeCoalescerAfterFailedStart()
+		return err
+	}
+
 	// Set up query handlers
 	if err := c.setupQueryHandlers(ctx); err != nil {
 		cancel()
+		c.closeCoalescerAfterFailedStart()
 		return errs.Wrap(err, "Component", "Start", "setup query handlers")
 	}
 
@@ -777,6 +803,19 @@ func (c *Component) Stop(timeout time.Duration) error {
 	case <-time.After(timeout):
 		c.logger.Warn("component stop timed out", slog.String("component", "graph-embedding"))
 		return errs.WrapTransient(errs.ErrConnectionTimeout, "Component", "Stop", fmt.Sprintf("stop timeout after %v", timeout))
+	}
+}
+
+// closeCoalescerAfterFailedStart releases the coalescer on a Start that fails
+// AFTER constructing it (#722 HIGH 3): Stop never runs for a component that
+// never started, so the failure path owns the cleanup. Callers cancel the
+// component ctx first, which unblocks the coalescer's run goroutine so Close's
+// wait returns promptly (no entries can be pending — the watcher never
+// started or is being torn down by the same cancel).
+func (c *Component) closeCoalescerAfterFailedStart() {
+	if c.entityCoalescer != nil {
+		_ = c.entityCoalescer.Close()
+		c.entityCoalescer = nil
 	}
 }
 
@@ -1038,20 +1077,32 @@ func (c *Component) applyTerminalOutcome(entityID string, sourceRevision uint64,
 	}
 	held, present := c.failed[entityID]
 	if outcome == embedding.OutcomeFailed {
-		// Do not let an OLDER failure override a newer one already held.
-		if present && sourceRevision < held.rev {
+		// Do not let an OLDER failure override a newer one already held, and do
+		// not let an OBSOLETE in-flight failure (below the stranding revision)
+		// overwrite a stranded mark — that would silently drop the entity out of
+		// the repair scope (#722 B1, same masking class as the clear below).
+		if present && (sourceRevision < held.rev || sourceRevision < held.strandedAt) {
 			return
 		}
 		held.reason = reason
 		held.rev = sourceRevision
+		// A causally-newer embedder failure supersedes any stranding: the new
+		// authoritative revision's pipeline owns the entity now, and its recovery
+		// path is re-delivery, not repair.
+		held.strandedAt = 0
 		if held.at.IsZero() {
 			held.at = time.Now()
 		}
 		c.failed[entityID] = held
 	} else {
-		// A superseded older completion must NOT clear a newer failure; the durable record
-		// is still failed at held.rev.
-		if present && sourceRevision < held.rev {
+		// A superseded older completion must NOT clear a newer failure (the
+		// durable record is still failed at held.rev), and an OBSOLETE in-flight
+		// terminal must NOT clear a stranding (#722 B1): hop 2 runs outside the
+		// hop-1 seam, so a worker started before the stranding can complete after
+		// it — its terminal is not convergence. A stranded mark clears only
+		// causally: sourceRevision >= strandedAt, or explicitly via clearStranded
+		// on a hop-1 convergence.
+		if present && (sourceRevision < held.rev || sourceRevision < held.strandedAt) {
 			return
 		}
 		delete(c.failed, entityID)
@@ -1542,13 +1593,21 @@ func (c *Component) applyEntityTombstone(ctx context.Context, key string, revisi
 	}
 	// OutcomeDeleted: a tombstoned entity is not a current failure — clear it from the
 	// current-failed map so a previously-failed entity that is deleted stops holding
-	// the producer degraded (#613). Ordering matters: this clear runs BEFORE the
-	// failure mark below, so the mark lands at floor 0 rather than being guarded off
-	// by a stale higher-revision entry.
+	// the producer degraded (#613). Ordering matters: this drain runs BEFORE the
+	// failure mark below (drain-then-mark), so the mark is not clobbered by its own
+	// revision's completion.
 	c.completeEmbedding(key, revision, embedding.OutcomeDeleted, "")
 	if delErr != nil {
-		c.markStranded(key, embedding.ReasonDeleteFailed)
+		// Stranded at the tombstone's revision: only a terminal at/above it (or
+		// explicit repair convergence) clears — an in-flight hop-2 terminal for an
+		// older revision cannot mask the obligation (#722 B1).
+		c.markStranded(key, embedding.ReasonDeleteFailed, revision)
+		return
 	}
+	// Successful delete = hop-1 convergence: discharge any stranding whose
+	// causal floor sits above this tombstone's revision (a ^uint64(0)-stranded
+	// read/absence failure the revision-guarded drain above could not clear).
+	c.clearStranded(key)
 }
 
 // reconcileEntity converges the derived EMBEDDING_INDEX state for entityID on
@@ -1586,14 +1645,18 @@ func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
 			// source revisions, and revlag.Watermark.Complete drains only this key's
 			// CURRENTLY-PENDING revisions — it records no future floor, so ^uint64(0)
 			// is safe and is a no-op on a repair re-drive with nothing pending.
-			// OutcomeDeleted also clears any current-failed entry (revision-guard:
-			// max-rev ≥ any held revision), which is what decrements FailedCount when
-			// a repair converges — so on a FAILED delete the mark below must re-add,
-			// or one failed repair pass would permanently clear the mark and recreate
-			// the #625 leak.
+			// The max-rev OutcomeDeleted also clears ANY current-failed entry (no
+			// revision, stranding floor included, sits above ^uint64(0)) — this IS
+			// the explicit convergence clear for the absence branch, and it is what
+			// decrements FailedCount when a repair converges. So on a FAILED delete
+			// the mark below must re-add, or one failed repair pass would permanently
+			// clear the mark and recreate the #625 leak.
 			c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeDeleted, "")
 			if delErr != nil {
-				c.markStranded(entityID, embedding.ReasonDeleteFailed)
+				// No authoritative revision exists for an absent key: strand at
+				// ^uint64(0), cleared only by explicit convergence (#722 B1) —
+				// repair's 30s cadence bounds the extra degraded window.
+				c.markStranded(entityID, embedding.ReasonDeleteFailed, ^uint64(0))
 			}
 			return
 		}
@@ -1602,12 +1665,15 @@ func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
 		// §3; OutcomeSkipped: a drain is not a failure), THEN mark: the drain's
 		// map-clear runs at max-rev and would remove a mark made before it.
 		// Previously this branch only drained; now the entity also counts degraded
-		// and the repair loop re-reads until the source answers (#625).
+		// and the repair loop re-reads until the source answers (#625). A failed
+		// Get yields no authoritative revision, so the stranding floor is
+		// ^uint64(0): no external terminal can clear it — only a later reconcile
+		// convergence does (#722 B1).
 		c.logger.Debug("reconcile: authoritative entity read failed; will repair",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
 		c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeSkipped, "")
-		c.markStranded(entityID, embedding.ReasonEntityReadFailed)
+		c.markStranded(entityID, embedding.ReasonEntityReadFailed, ^uint64(0))
 		return
 	}
 
@@ -1620,18 +1686,53 @@ func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
 // in-memory-only Reason* constants — never persisted to a stored record, never
 // passed to SaveFailed.
 //
-// FLOOR REVISION 0 is load-bearing. applyTerminalOutcome's clear guard is
-// `sourceRevision < held.rev → no-op`, so a mark pinned at the observed
-// revision (or ^uint64(0)) could never be cleared by a later terminal at a
-// real revision — a silent permanent-degraded trap. At floor 0, ANY later
-// terminal (a repair convergence's max-rev drain, a re-delivery's real
-// revision) clears it.
+// strandedAt is the CAUSAL floor of the mark (#722 B1, replacing the falsified
+// floor-0 rule): an external terminal clears the mark only when its
+// sourceRevision >= strandedAt, so an OBSOLETE hop-2 terminal already in
+// flight for an older revision — hop 2 runs outside the hop-1 seam — cannot
+// masquerade as convergence. Sites pass the revision the stranding is causally
+// bound to (the tombstone revision, the delivered revision) or ^uint64(0) when
+// no authoritative revision is in hand (a failed reconcile read/absence
+// delete), which makes explicit clearStranded convergence the ONLY clear.
+// The mark is never a pin: every hop-1 convergence path (successful
+// delete/skip/queue, and reconcile's absence drain at max-rev) discharges it.
 //
-// If the entity already holds a failure at a real revision, the same guard
-// keeps that newer failure and this mark is a no-op — the entity is already
-// counted degraded; its recovery path (re-delivery) is unchanged.
-func (c *Component) markStranded(entityID, reason string) {
-	c.applyTerminalOutcome(entityID, 0, embedding.OutcomeFailed, reason)
+// Writes directly rather than through applyTerminalOutcome: a stranding at the
+// current delivery/tombstone revision must overwrite an older embedder-side
+// entry (delivery is monotonic, so the stranding is the newer fact), while
+// held.rev — the embedder-side revision-CAS baseline — is preserved.
+func (c *Component) markStranded(entityID, reason string, strandedAt uint64) {
+	c.failedMu.Lock()
+	defer c.failedMu.Unlock()
+	if c.failed == nil {
+		c.failed = make(map[string]failureInfo)
+	}
+	held := c.failed[entityID]
+	held.reason = reason
+	held.strandedAt = strandedAt
+	if held.at.IsZero() {
+		held.at = time.Now()
+	}
+	c.failed[entityID] = held
+	c.setFailedGauge(len(c.failed))
+}
+
+// clearStranded discharges a stranding obligation after a hop-1 convergence
+// (#722 B1): a successful delete, skip, or queue under the seam means the
+// derived record now reflects authoritative state, so the repair obligation is
+// complete regardless of revision arithmetic — this is the explicit half of
+// the causal-clear invariant (the half that keeps a ^uint64(0)-stranded mark
+// clearable). It never touches an embedder-side failure entry (strandedAt 0):
+// those clear only through applyTerminalOutcome's revision-guarded terminals.
+func (c *Component) clearStranded(entityID string) {
+	c.failedMu.Lock()
+	defer c.failedMu.Unlock()
+	held, present := c.failed[entityID]
+	if !present || held.strandedAt == 0 {
+		return
+	}
+	delete(c.failed, entityID)
+	c.setFailedGauge(len(c.failed))
 }
 
 func (c *Component) latchGraphStateReset(reason graph.StateResetReason) {
@@ -1740,8 +1841,12 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// preconditions. indexingEligible always returns true here, so this is a
 	// provable no-op (zero behavior change); it is the seam Phase 3 turns live.
 	if !c.indexingEligible(&entityState) {
-		// terminal: deliberately skipped (OutcomeSkipped — not a failure).
+		// terminal: deliberately skipped (OutcomeSkipped — not a failure). A
+		// deliberate skip is a hop-1 convergence, so it also discharges any
+		// stranding (the revision-guarded completion alone cannot clear a
+		// ^uint64(0)-stranded mark).
 		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
+		c.clearStranded(entityID)
 		return
 	}
 
@@ -1801,12 +1906,17 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 			// so a failure must strand like the tombstone site's, or (a) a live
 			// entity's stale GENERATED vector stays queryable while readiness reports
 			// ready, unrepaired because unmarked, and (b) on a repair re-drive the
-			// fresh-revision Skipped above CLEARS any prior floor-0 mark, so degraded
-			// would clear WITHOUT convergence (repair-masking). Drain-THEN-mark
-			// ordering is what lets this re-mark survive that clear; a later
-			// successful pass's Skipped clears it for real.
-			c.markStranded(entityID, embedding.ReasonDeleteFailed)
+			// fresh-revision Skipped above CLEARS any prior mark it causally covers,
+			// so degraded would clear WITHOUT convergence (repair-masking).
+			// Drain-THEN-mark ordering is what lets this re-mark survive that clear;
+			// stranded at the delivered revision, so an obsolete in-flight terminal
+			// cannot clear it (#722 B1) — a later successful pass discharges it.
+			c.markStranded(entityID, embedding.ReasonDeleteFailed, sourceRevision)
+			return
 		}
+		// Successful delete/skip = hop-1 convergence: discharge any stranding the
+		// revision-guarded completion above could not causally clear.
+		c.clearStranded(entityID)
 		return
 	}
 
@@ -1815,27 +1925,55 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// lanes identically and folds in the effective cap for free. The pending record is
 	// a reference, not a key, so its ContentHash is written empty.
 	//
-	// Queue for embedding generation. A transient SavePending failure wrote NO durable
-	// record — the entity is neither generated nor durably failed, just un-queued at this
-	// revision. Do NOT complete the watermark or touch the current-failed map here (#613
-	// F2): completing would report this revision done (and clear any older durable failed
-	// record for the entity) over work that never persisted. Leave the revision
-	// uncompleted; the ENTITY_STATES watcher re-delivers the entity on its next write, and
-	// a sustained KV outage degrades honestly via the completions-based stuck detector
-	// rather than reporting a false-ready. This is the SAME non-terminal treatment hop 2
-	// gives a SaveFailed/CAS persistence miss.
-	if err := c.storage.SavePending(ctx, entityID, "", text, sourceRevision); err != nil {
+	// Queue for embedding generation through the GUARDED writer (#722 B2): a
+	// generated record at a same-or-newer source revision must not be downgraded
+	// to pending by a stale repair re-drive or a restart's re-delivery — the
+	// guarded skip below is that lane's terminal.
+	//
+	// A transient save failure wrote NO durable record — the entity is neither
+	// generated nor durably failed, just un-queued at this revision. Do NOT
+	// complete the watermark here (#613 F2): completing would report this
+	// revision done over work that never persisted. Leave the revision
+	// uncompleted; the ENTITY_STATES watcher re-delivers the entity on its next
+	// write, and a sustained KV outage degrades honestly via the
+	// completions-based stuck detector rather than reporting a false-ready. This
+	// is the SAME non-terminal treatment hop 2 gives a SaveFailed/CAS
+	// persistence miss.
+	saved, err := c.storage.SavePendingGuarded(ctx, &embedding.Record{
+		EntityID:       entityID,
+		ContentHash:    "",
+		SourceText:     text,
+		SourceRevision: sourceRevision,
+	})
+	if err != nil {
 		c.logger.Error("failed to queue embedding; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
-		// #625: also enter the current-failed accounting (floor revision 0, see
-		// markStranded) so the failure surfaces as degraded immediately and the
-		// repair loop re-queues from authoritative state — recovery no longer
-		// waits on an incidental re-delivery. The watermark stays uncompleted
-		// above, unchanged.
-		c.markStranded(entityID, embedding.ReasonPendingWriteFailed)
+		// #625: also enter the current-failed accounting (stranded at the
+		// delivered revision — see markStranded) so the failure surfaces as
+		// degraded immediately and the repair loop re-queues from authoritative
+		// state. The watermark stays uncompleted above, unchanged.
+		c.markStranded(entityID, embedding.ReasonPendingWriteFailed, sourceRevision)
 		return
 	}
+	if !saved {
+		// Guarded skip: a generated vector at a same-or-newer source revision
+		// already stands (#722 B2 — a stale repair re-drive, or a restart's
+		// last-per-subject re-delivery). This delivered revision's work is
+		// already reflected, so it is TERMINAL here: complete it (the watermark
+		// drains; OutcomeSkipped — not a failure) and discharge any stranding
+		// (the skip is a hop-1 convergence).
+		c.logger.Debug("pending write skipped: generated record at same-or-newer revision stands",
+			slog.String("entity", entityID))
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
+		c.clearStranded(entityID)
+		return
+	}
+	// Queue success = hop-1 convergence: the pending record now reflects
+	// authoritative state and hop 2 owns the terminal. Discharge any stranding —
+	// FailedCount accounting returns to the ordinary pipeline semantics (a
+	// pending record is not a failure; readiness is carried by the watermark).
+	c.clearStranded(entityID)
 
 	c.logger.Debug("queued embedding for generation",
 		slog.String("entity", entityID),
@@ -1916,20 +2054,41 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 	// hop 2 embeds body-only, unchanged.
 	identityText := c.extractTextForEmbedding(state)
 
-	// Queue for embedding generation with storage reference. A transient SavePending
-	// failure wrote NO durable record, so leave the revision uncompleted and untouched in
-	// the current-failed map — the ENTITY_STATES watcher re-delivers on the next write
-	// (#613 F2, same non-terminal treatment as the inline path and hop 2's persistence
-	// miss). Completing here would report the revision done over work that never persisted.
-	if err := c.storage.SavePendingWithStorageRef(ctx, entityID, contentHash, identityText, storageRef, nil, sourceRevision); err != nil {
+	// Queue for embedding generation with storage reference, through the SAME
+	// guarded writer as the inline lane (#722 B2 — SourceText stays EMPTY on the
+	// offloaded record, the #635 rolling-upgrade contract; see Record.IdentityText).
+	// A transient save failure wrote NO durable record, so leave the revision
+	// uncompleted — the ENTITY_STATES watcher re-delivers on the next write
+	// (#613 F2, same non-terminal treatment as the inline path and hop 2's
+	// persistence miss). Completing here would report the revision done over work
+	// that never persisted.
+	saved, err := c.storage.SavePendingGuarded(ctx, &embedding.Record{
+		EntityID:       entityID,
+		ContentHash:    contentHash,
+		IdentityText:   identityText,
+		StorageRef:     storageRef,
+		SourceRevision: sourceRevision,
+	})
+	if err != nil {
 		c.logger.Error("failed to queue embedding with storage ref; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
 		// #625: same stranding as the inline lane — degraded now, repaired by the
 		// background loop; watermark untouched.
-		c.markStranded(entityID, embedding.ReasonPendingWriteFailed)
+		c.markStranded(entityID, embedding.ReasonPendingWriteFailed, sourceRevision)
 		return
 	}
+	if !saved {
+		// Guarded skip (#722 B2): a generated vector at a same-or-newer source
+		// revision stands. Terminal for this delivered revision; discharge any
+		// stranding (hop-1 convergence).
+		c.logger.Debug("offloaded pending write skipped: generated record at same-or-newer revision stands",
+			slog.String("entity", entityID))
+		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
+		c.clearStranded(entityID)
+		return
+	}
+	c.clearStranded(entityID) // queue success = hop-1 convergence (see inline lane)
 
 	c.logger.Debug("queued embedding with storage reference",
 		slog.String("entity", entityID),

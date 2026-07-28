@@ -113,7 +113,7 @@ func (s *entityStatesStub) recordedGets() []string {
 // newSeamTestComponent builds a Component wired for hop-1 seam tests: the
 // findings-test base (real Storage over the mock index, watermark, failed map)
 // plus an ENTITY_STATES stub on the unexported bucket field.
-func newSeamTestComponent(t *testing.T, index *mockKVBucket, states *entityStatesStub) *Component {
+func newSeamTestComponent(t *testing.T, index jetstream.KeyValue, states *entityStatesStub) *Component {
 	t.Helper()
 	c := newFindingsTestComponent(t, index)
 	c.entityStatesBucket = states
@@ -353,12 +353,21 @@ func TestSavePendingFailure_MarksStrandedForRepair(t *testing.T) {
 		index.data[key] = value
 		return 1, nil
 	}
+	// The guarded writer creates an absent key via KV Create (not Put), so the
+	// write-failure premise needs the create hook too (#722 B2).
+	hooked := &createHookKV{mockKVBucket: index}
+	hooked.createFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
+		if putFailing {
+			return 0, errors.New("kv write unavailable")
+		}
+		return hooked.mockKVBucket.Create(context.Background(), key, value)
+	}
 	states := newEntityStatesStub()
 	states.set(entityID, textEntityJSON(entityID), 7)
-	c := newSeamTestComponent(t, index, states)
+	c := newSeamTestComponent(t, hooked, states)
 
 	// The update is delivered through the production watcher path (immediate
-	// mode); its SavePending fails.
+	// mode); its pending write fails.
 	c.applyEntityWatchEntry(ctx, &stateEntry{key: entityID, value: textEntityJSON(entityID), rev: 7, op: jetstream.KeyValuePut})
 
 	require.Zero(t, c.embeddingCompletions.Load(),
@@ -383,13 +392,19 @@ func TestSavePendingFailure_MarksStrandedForRepair(t *testing.T) {
 	require.Equal(t, uint64(7), rec.SourceRevision,
 		"the re-queued record carries the authoritative revision read at repair time")
 
-	// The stranded mark clears at hop 2's terminal for the re-queued record —
-	// exactly the production onTerminal callback path (revision 7 ≥ floor 0).
-	c.completeEmbedding(entityID, 7, embedding.OutcomeGenerated, "")
+	// Queue success IS the hop-1 convergence: the stranding obligation is
+	// discharged at repair time (causal-clear invariant, #722 B1) — a pending
+	// record is not a failure; readiness is carried by the still-open watermark
+	// until hop 2's terminal.
 	count, _, _ = c.failedSnapshot()
-	require.Zero(t, count, "the pending-write stranding clears at the re-queued record's terminal")
+	require.Zero(t, count, "the pending-write stranding is discharged by the successful re-queue")
+	require.Equal(t, uint64(6), c.watermark.Indexed(),
+		"revision 7 stays PENDING until hop 2 completes it — readiness stays honest past the repair")
+
+	// Hop 2's terminal (the production onTerminal path) drains the watermark.
+	c.completeEmbedding(entityID, 7, embedding.OutcomeGenerated, "")
 	require.Equal(t, uint64(7), c.watermark.Indexed(),
-		"revision 7 completes at the true hop-2 terminal, not at repair time")
+		"revision 7 completes at the true hop-2 terminal")
 }
 
 // TestRepairScope_EmbedderSideReasonNotReDriven (T5): the repair set is scoped
@@ -452,8 +467,17 @@ func TestStrandedReasons_NeverPersistToStoredRecords(t *testing.T) {
 	index.deleteFunc = func(_ context.Context, _ string, _ ...jetstream.KVDeleteOpt) error {
 		return errors.New("kv delete unavailable")
 	}
+	// The guarded writer creates an absent key via KV Create (not Put): record
+	// and fail those payloads too, so the invariant scan covers the create lane.
+	hooked := &createHookKV{mockKVBucket: index}
+	hooked.createFunc = func(_ context.Context, _ string, value []byte) (uint64, error) {
+		writesMu.Lock()
+		writes = append(writes, append([]byte(nil), value...))
+		writesMu.Unlock()
+		return 0, errors.New("kv write unavailable")
+	}
 	states := newEntityStatesStub()
-	c := newSeamTestComponent(t, index, states)
+	c := newSeamTestComponent(t, hooked, states)
 
 	// Site 1: tombstone delete failure.
 	c.applyEntityWatchEntry(ctx, &stateEntry{key: "acme.ops.robotics.gcs.drone.t6a", rev: 3, op: jetstream.KeyValueDelete})
@@ -485,6 +509,232 @@ func TestStrandedReasons_NeverPersistToStoredRecords(t *testing.T) {
 				"a derived-write reason must never persist into a stored record")
 		}
 	}
+}
+
+// createHookKV decorates the shared mockKVBucket with a Create hook. The shared
+// mock predates the guarded pending-create lane (and is generated — DO NOT
+// EDIT), so the hook lives here: the guarded hop-1 writer creates an absent key
+// via KV Create, which mockKVBucket.putFunc cannot intercept.
+type createHookKV struct {
+	*mockKVBucket
+	createFunc func(ctx context.Context, key string, value []byte) (uint64, error)
+}
+
+func (k *createHookKV) Create(ctx context.Context, key string, value []byte, _ ...jetstream.KVCreateOpt) (uint64, error) {
+	if k.createFunc != nil {
+		return k.createFunc(ctx, key, value)
+	}
+	return k.mockKVBucket.Create(ctx, key, value)
+}
+
+// TestObsoleteTerminal_CannotClearStranding_TombstoneSite (Codex #722 B1): hop 2
+// is deliberately OUTSIDE the hop-1 seam, so a worker already in flight for an
+// OLDER revision can reach its terminal AFTER a stranding is recorded. An
+// obsolete terminal must not count as convergence: rev-6 tombstone's delete
+// fails (stranded), then an in-flight rev-5 Generated terminal lands through
+// the production completeEmbedding path — the mark MUST survive (under the old
+// floor-0 rule, 5 >= 0 cleared it: dead vector queryable, FailedCount 0,
+// ready, repair no longer targeting — the masking class). A causally NEWER
+// terminal or the repair convergence still clears it.
+func TestObsoleteTerminal_CannotClearStranding_TombstoneSite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const entityID = "acme.ops.robotics.gcs.drone.obs1"
+
+	index := newMockKVBucket()
+	deleteFailing := true
+	index.deleteFunc = func(_ context.Context, key string, _ ...jetstream.KVDeleteOpt) error {
+		if deleteFailing {
+			return errors.New("kv delete unavailable")
+		}
+		index.mu.Lock()
+		defer index.mu.Unlock()
+		delete(index.data, key)
+		return nil
+	}
+	states := newEntityStatesStub()
+	c := newSeamTestComponent(t, index, states)
+
+	// Record exists at revision 5; tombstone at revision 6, delete fails → stranded.
+	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "old text", 5))
+	c.applyEntityWatchEntry(ctx, &stateEntry{key: entityID, rev: 6, op: jetstream.KeyValueDelete})
+	count, reasons, _ := c.failedSnapshot()
+	require.Equal(t, uint64(1), count, "precondition: the failed delete stranded the entity")
+	require.Equal(t, uint64(1), reasons[embedding.ReasonDeleteFailed])
+
+	// An in-flight hop-2 worker for OLDER revision 5 reaches its terminal AFTER
+	// the stranding, via the production onTerminal path.
+	c.completeEmbedding(entityID, 5, embedding.OutcomeGenerated, "")
+
+	count, reasons, _ = c.failedSnapshot()
+	require.Equal(t, uint64(1), count,
+		"an OBSOLETE in-flight terminal (rev 5 < stranding rev 6) must not clear the repair obligation")
+	require.Equal(t, uint64(1), reasons[embedding.ReasonDeleteFailed], "the stranding reason survives")
+
+	// Repair convergence still clears it — the mark is causal, not unclearable.
+	deleteFailing = false
+	c.repairStranded(ctx)
+	rec, err := c.storage.GetEmbedding(ctx, entityID)
+	require.NoError(t, err)
+	require.Nil(t, rec)
+	count, _, _ = c.failedSnapshot()
+	require.Zero(t, count, "explicit reconcile convergence clears the stranding")
+}
+
+// TestObsoleteTerminal_CannotClearStranding_PendingWriteSite is the same B1
+// statement for the pending-write site, plus the clearable-by-causal-terminal
+// leg (the trap the old floor-0 rule feared): a terminal AT the stranding
+// revision or newer DOES clear.
+func TestObsoleteTerminal_CannotClearStranding_PendingWriteSite(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const entityID = "acme.ops.robotics.gcs.drone.obs2"
+
+	index := newMockKVBucket()
+	putFailing := true
+	index.putFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
+		if putFailing {
+			return 0, errors.New("kv write unavailable")
+		}
+		index.mu.Lock()
+		defer index.mu.Unlock()
+		index.data[key] = value
+		return 1, nil
+	}
+	hooked := &createHookKV{mockKVBucket: index}
+	hooked.createFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
+		if putFailing {
+			return 0, errors.New("kv write unavailable")
+		}
+		return hooked.mockKVBucket.Create(context.Background(), key, value)
+	}
+	states := newEntityStatesStub()
+	states.set(entityID, textEntityJSON(entityID), 7)
+	c := newSeamTestComponent(t, hooked, states)
+
+	// Delivery at revision 7; the pending write fails → stranded at 7.
+	c.applyEntityWatchEntry(ctx, &stateEntry{key: entityID, value: textEntityJSON(entityID), rev: 7, op: jetstream.KeyValuePut})
+	count, reasons, _ := c.failedSnapshot()
+	require.Equal(t, uint64(1), count, "precondition: the failed pending write stranded the entity")
+	require.Equal(t, uint64(1), reasons[embedding.ReasonPendingWriteFailed])
+
+	// Obsolete in-flight terminal (rev 6 < 7): the mark survives.
+	c.completeEmbedding(entityID, 6, embedding.OutcomeGenerated, "")
+	count, reasons, _ = c.failedSnapshot()
+	require.Equal(t, uint64(1), count,
+		"an obsolete terminal below the stranding revision must not clear the mark")
+	require.Equal(t, uint64(1), reasons[embedding.ReasonPendingWriteFailed])
+
+	// Causal terminal AT the stranding revision clears — the mark is not a pin.
+	c.completeEmbedding(entityID, 7, embedding.OutcomeGenerated, "")
+	count, _, _ = c.failedSnapshot()
+	require.Zero(t, count, "a terminal at/above the stranding revision clears causally")
+}
+
+// TestStaleRepairSnapshot_CannotDowngradeGeneratedRecord (Codex #722 B2):
+// repairTargets snapshots then RELEASES failedMu, so hop 2 can generate and
+// causally clear the stranding before the dispatch loop reaches the entity. The
+// stale re-drive then re-queues through the sole hop-1 writer — whose pending
+// write used to be an unconditional Put that DOWNGRADED the fresh
+// StatusGenerated record to StatusPending (vector dropped from the cache, no
+// new watermark obligation, FailedCount already 0 → ready with the vector gone
+// until regeneration). The guarded writer must SKIP when a generated record at
+// a same-or-newer source revision exists. The snapshot dispatch is driven
+// manually (repairTargets + the exact repairStranded loop body) so the
+// hop-2-between-snapshot-and-dispatch gate is deterministic.
+func TestStaleRepairSnapshot_CannotDowngradeGeneratedRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const entityID = "acme.ops.robotics.gcs.drone.snap1"
+
+	index := newMockKVBucket()
+	putFailing := true
+	index.putFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
+		if putFailing {
+			return 0, errors.New("kv write unavailable")
+		}
+		index.mu.Lock()
+		defer index.mu.Unlock()
+		index.data[key] = value
+		return 1, nil
+	}
+	hooked := &createHookKV{mockKVBucket: index}
+	hooked.createFunc = func(_ context.Context, key string, value []byte) (uint64, error) {
+		if putFailing {
+			return 0, errors.New("kv write unavailable")
+		}
+		return hooked.mockKVBucket.Create(context.Background(), key, value)
+	}
+	states := newEntityStatesStub()
+	states.set(entityID, textEntityJSON(entityID), 7)
+	c := newSeamTestComponent(t, hooked, states)
+
+	// Strand: delivery at 7, pending write fails.
+	c.applyEntityWatchEntry(ctx, &stateEntry{key: entityID, value: textEntityJSON(entityID), rev: 7, op: jetstream.KeyValuePut})
+	count, _, _ := c.failedSnapshot()
+	require.Equal(t, uint64(1), count, "precondition: stranded")
+
+	// The repair tick takes its snapshot FIRST...
+	targets := c.repairTargets()
+	require.Equal(t, []string{entityID}, targets)
+
+	// ...then hop 2 recovers, generates at revision 7, and its terminal clears
+	// the stranding causally — all BEFORE the dispatch loop runs.
+	putFailing = false
+	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "survey the north field", 7))
+	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7))
+	c.completeEmbedding(entityID, 7, embedding.OutcomeGenerated, "")
+	count, _, _ = c.failedSnapshot()
+	require.Zero(t, count, "precondition: hop 2 cleared the stranding causally")
+
+	// The STALE snapshot dispatches — the exact repairStranded loop body.
+	for _, id := range targets {
+		c.reconcileEntity(ctx, id)
+	}
+
+	rec, err := c.storage.GetEmbedding(ctx, entityID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, embedding.StatusGenerated, rec.Status,
+		"a stale repair re-drive must not downgrade a fresh generated record to pending")
+	require.Equal(t, uint64(7), rec.SourceRevision)
+	require.NotEmpty(t, rec.Vector, "the stored vector must be unchanged (cache eviction proxy)")
+	count, _, _ = c.failedSnapshot()
+	require.Zero(t, count)
+}
+
+// TestWatcherRedelivery_DoesNotDowngradeGeneratedRecord is B2's watcher-lane
+// corollary: after a restart, last-per-subject re-delivers the entity at a
+// revision whose vector is ALREADY generated. The guarded writer skips instead
+// of downgrading (previously: overwrite to pending + full hop-2 regeneration on
+// every restart), and the delivered revision completes as a skip so the
+// watermark still drains.
+func TestWatcherRedelivery_DoesNotDowngradeGeneratedRecord(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	const entityID = "acme.ops.robotics.gcs.drone.redeliver1"
+
+	index := newMockKVBucket()
+	states := newEntityStatesStub()
+	c := newSeamTestComponent(t, index, states)
+
+	// Generated vector at revision 7 exists from before the restart.
+	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "survey the north field", 7))
+	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7))
+
+	// Restart re-delivery of the same revision through the watcher path.
+	states.set(entityID, textEntityJSON(entityID), 7)
+	c.applyEntityWatchEntry(ctx, &stateEntry{key: entityID, value: textEntityJSON(entityID), rev: 7, op: jetstream.KeyValuePut})
+
+	rec, err := c.storage.GetEmbedding(ctx, entityID)
+	require.NoError(t, err)
+	require.NotNil(t, rec)
+	require.Equal(t, embedding.StatusGenerated, rec.Status,
+		"a re-delivered already-generated revision must skip, not downgrade to pending")
+	require.Equal(t, uint64(7), rec.SourceRevision)
+	require.NotEmpty(t, rec.Vector)
+	require.Equal(t, uint64(7), c.watermark.Indexed(),
+		"the skipped re-delivery still completes its revision (the watermark drains)")
 }
 
 // TestNoTextTransition_FailedDeleteMarksStrandedAndRepairs (reviewer round,
@@ -576,10 +826,10 @@ func TestNoTextTransition_FailedDeleteDoesNotMaskPriorStranding(t *testing.T) {
 	states := newEntityStatesStub()
 	c := newSeamTestComponent(t, index, states)
 
-	// A stale derived record, a floor-0 pending_write_failed stranding, and a
-	// live no-text entity — the state repairStranded would re-drive.
+	// A stale derived record, a pending_write_failed stranding at revision 8,
+	// and a live no-text entity — the state repairStranded would re-drive.
 	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "old text", 8))
-	c.markStranded(entityID, embedding.ReasonPendingWriteFailed)
+	c.markStranded(entityID, embedding.ReasonPendingWriteFailed, 8)
 	states.set(entityID, noTextEntityJSON(entityID), 9)
 
 	c.reconcileEntity(ctx, entityID)

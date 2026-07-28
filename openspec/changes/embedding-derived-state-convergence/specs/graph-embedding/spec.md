@@ -37,6 +37,23 @@ serializing workers behind hop-1 metadata operations is forbidden.
 - **THEN** the delete is retried until the derived key is absent, and the readiness watermark is
   unchanged by the repair
 
+#### Scenario: an obsolete in-flight terminal cannot clear a repair obligation
+
+- **GIVEN** an entity stranded by a failed derived write or delete at revision N
+- **WHEN** a hop-2 terminal already in flight for an OLDER revision (below N) completes after the
+  stranding — hop-2 persistence runs outside the seam, so this ordering is reachable
+- **THEN** the failed accounting retains the stranding (degraded persists and repair keeps
+  targeting the entity) until a terminal at or above the stranding revision, or an explicit
+  reconcile convergence, clears it
+
+#### Scenario: repair cannot downgrade a generated record
+
+- **GIVEN** a stranded entity whose embedding is generated — and whose stranding is causally
+  cleared — between a repair snapshot and that snapshot's re-drive reaching the entity
+- **WHEN** the stale re-drive re-queues the entity through the single hop-1 writer
+- **THEN** the pending write is skipped because a generated record at a same-or-newer source
+  revision exists, and the stored vector is unchanged
+
 ## RENAMED Requirements
 
 - FROM: `### Requirement: Embedding failures are reason-classified and recover on re-delivery`
