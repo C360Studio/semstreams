@@ -72,18 +72,29 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > `docs/operations/embeddings-cache-removal.md` = the sole sister migration channel — we do NOT edit
 > sister repos). The primitive is now REAL.**
 >
-> **NEXT (owner-sequenced 2026-07-28): (1) delete the graph/embedding library cache CLASS — owner
-> post-merge review: #719 deleted the cache INSTANCE but `graph/embedding` still ships `Cache` iface
-> (embedder.go:63), `NATSCache` (cache.go), `HTTPConfig.Cache` + caching branches (http_embedder.go:47,82,143,234),
-> and the doc.go:45 example advertising it; zero non-doc consumers, production never sets the field.
-> CAUTION: cache.go also holds LIVE `ContentHash`/`EmbedderIdentity`/`DedupKey`/`InProcessDedupKey` —
-> delete the Cache/NATSCache/HTTPConfig.Cache surface only, NOT the file. Small follow-up PR, no OpenSpec
-> change (unspecced library API, zero consumers), BREAKING-flagged, `e2e:statistical` gate.
-> (2) THEN the #625 + #629 graph-embedding pair — both CONSUME the primitive; #629 impl NOT blocked
-> (resurrection lane is graph-embedding, disjoint). Cadence: architect design (#629 ordering protocol) →
-> `/opsx:new` → semstreams-developer → semstreams-reviewer → Codex (owner-run) → CI → merge → archive.
-> (3) LATER Epic C structural increment: bucket descriptor catalog + `EnsureFrameworkBucket` acquisition-seam
-> enforcement (spec'd in framework-composition as the durable closure; boot sweeps demote to backstops).**
+> **SHIPPED 2026-07-28 (all three of the previously-sequenced items):
+> (1) cache-CLASS deletion — PR #721 `f7965f0e` (Cache iface/NATSCache/HTTPConfig.Cache + branches +
+> doc example gone; cache.go→dedup.go preserving the LIVE dedup-identity surface; `ContentHash` now
+> caller-less, retained pending owner word).
+> (2) #625 + #629 — change `embedding-derived-state-convergence`, PR #722 `2b532d76` (archived
+> 2026-07-28): hop-1 single-writer seam (`hop1Mu`) + reconcile-at-execution closes #629 structurally
+> (semsource defaults `coalesce_ms=200` — the issue's "dormant" framing was FALSIFIED); #625 =
+> markStranded into the #613 failed map + dedicated 30s repairLoop, zero durable evidence. ONE Codex
+> round: floor-0 marks were clearable by superseded hop-2 terminals → replaced by the CAUSAL
+> strandedAt invariant (design.md records the falsification); `SavePendingGuarded` (CAS decision
+> table) closes the stale-downgrade write side; coalescer now publishes before the watcher.
+> Net durable-state delta: ZERO. `configs/statistical.json` carries `coalesce_ms:100` — first-ever
+> e2e coverage of the coalesced lane. Lesson memo: convergence marks clear causally, never by
+> "any later event."**
+>
+> **NEXT: the last Epic C structural increment — bucket descriptor catalog (name · owner · class ·
+> retention · write-policy) + `EnsureFrameworkBucket` acquisition-seam enforcement (spec'd in
+> framework-composition as the durable closure for post-boot-cutoff bucket acquisition; boot sweeps
+> demote to legacy-drift backstops). Cadence: architect design → `/opsx:new` → dev → reviewer →
+> Codex (owner-run) → CI → merge → archive. QUEUED BEHIND IT: #712 (authoritative projection
+> quiescence for deterministic replay, semdragon ask) — the third consumer of the readiness
+> substrate; design should extend the ADR-083 producer pattern to inference stages + aggregate over
+> GRAPH_STATUS, not invent a new readiness system.**
 
 > **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
 > This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary

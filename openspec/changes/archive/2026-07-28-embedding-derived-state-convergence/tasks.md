@@ -203,8 +203,12 @@ fields from in-package tests — no production hooks; precedent `graph/embedding
   a prior mark without convergence); fixed per prescription with both legs red-first (task 3.7). All
   other lenses verified clean; ledger conforming; APPROVE per the reviewer's stated condition, fix
   verified at the site by the orchestrator.**
-- [ ] 7.3 Owner-run Codex gate; merge on addressed + CI-green (`gh pr checks` + `mergeStateStatus`);
+- [x] 7.3 Owner-run Codex gate; merge on addressed + CI-green (`gh pr checks` + `mergeStateStatus`);
   archive + baton roll-forward (include the pending cache-class/e2e-ladder-comment baton notes).
+  **MERGED `2b532d76` (2026-07-28) after ONE Codex round (2 BLOCKING + 1 HIGH: causal
+  strandedAt invariant replacing the falsified floor-0 rule; SavePendingGuarded; coalescer-before-
+  watcher), each fix red-first where orderable, reviewer round-7 APPROVE no-findings, all checks
+  pass + CLEAN verified at merge. #625 auto-closed; #629 closed with evidence.**
 
 ## 8. Codex review round (PR #722 — 2 BLOCKING + 1 HIGH, all addressed same-branch, no commits)
 

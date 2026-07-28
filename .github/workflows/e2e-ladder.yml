@@ -14,9 +14,9 @@ name: E2E Ladder
 # Epic D "automate a tier first" (ci.yml itself runs no e2e).
 #
 # NOT covered here (deliberately, for CI cost):
-#   - e2e:core (--scenario all: health/dataflow/federation) is a SEPARATE
-#     scenario, not part of the tiered/statistical variant. Cheap to add as a
-#     second job if the health/federation smoke is wanted per-PR.
+#   - e2e:core's coverage is subsumed by the statistical run (owner, 2026-07-28):
+#     the tiered/statistical variant boots the full stack and validates
+#     health/dataflow along the way, so a separate core job would be redundant.
 #   - e2e:semantic (neural embeddings + seminstruct, incl. the 8b thematic
 #     gate) is too heavy for per-PR. It stays the pre-tag HARD RULE
 #     (CLAUDE.md: a relevant e2e tier green before any BREAKING tag) + nightly.
