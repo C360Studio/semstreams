@@ -283,6 +283,68 @@ func (s *Storage) SavePendingWithStorageRef(
 	return nil
 }
 
+// SavePendingGuarded persists a hop-1 pending record under revision
+// compare-and-set with a generated-record guard (#722 Codex 2). It is the
+// write behind graph-embedding's SOLE hop-1 record writer, for BOTH pending
+// lanes (inline and storage-ref — the caller shapes the record; Status is
+// forced to StatusPending here).
+//
+// The guard: when the existing record is a GENERATED vector at a
+// same-or-newer source revision, the write is SKIPPED (returns saved=false,
+// nil). An unconditional Put here let a stale repair re-drive — whose
+// stranded entity hop 2 had generated and causally cleared between the repair
+// snapshot and its dispatch — DOWNGRADE the fresh StatusGenerated record to
+// StatusPending: the vector vanished from the cache until regeneration while
+// readiness reported ready. The same guard makes a restart's last-per-subject
+// re-delivery of an already-generated revision a cheap skip instead of a full
+// regeneration. A pending/failed existing record, or a generated record at an
+// OLDER revision (a genuinely newer source state being queued), is
+// overwritten as before.
+//
+// Writes are conditional on the revision the guard decision was read at: an
+// absent key uses CAS-create (which also succeeds over a delete marker), a
+// present key uses Update at the read revision; a conflict re-reads and
+// re-decides, so the guard can never be bypassed by a concurrent hop-2 commit.
+func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved bool, err error) {
+	if record == nil || record.EntityID == "" {
+		return false, errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SavePendingGuarded", "entity_id is empty")
+	}
+	record.Status = StatusPending
+
+	for attempt := 0; attempt < maxCASRetries; attempt++ {
+		existing, revision, err := s.getEmbeddingWithRevision(ctx, record.EntityID)
+		if err != nil {
+			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "get existing record")
+		}
+		if existing != nil && existing.Status == StatusGenerated && existing.SourceRevision >= record.SourceRevision {
+			return false, nil // a same-or-newer generated vector stands; do not downgrade
+		}
+
+		data, err := json.Marshal(record)
+		if err != nil {
+			return false, errs.WrapInvalid(err, "Storage", "SavePendingGuarded", "marshal embedding record")
+		}
+
+		if existing == nil {
+			if _, err := s.indexBucket.Create(ctx, record.EntityID, data); err != nil {
+				if errors.Is(err, jetstream.ErrKeyExists) {
+					continue // a concurrent writer created the key; re-read and re-decide
+				}
+				return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "create pending embedding")
+			}
+			return true, nil
+		}
+		if _, err := s.indexBucket.Update(ctx, record.EntityID, data, revision); err != nil {
+			if isRevisionMismatch(err) {
+				continue // the key moved since the guard decision; re-read and re-decide
+			}
+			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "update pending embedding")
+		}
+		return true, nil
+	}
+	return false, errs.WrapTransient(ErrCASExhausted, "Storage", "SavePendingGuarded", "revision CAS did not converge")
+}
+
 // SaveGenerated persists a generated embedding under revision compare-and-set,
 // ordered by source revision.
 //
