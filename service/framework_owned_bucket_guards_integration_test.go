@@ -70,26 +70,35 @@ func (h *bucketSweepRecordingHandler) warnMentioning(bucket string) bool {
 	return false
 }
 
+// recordIsSkipProbeFor reports whether the record is the sweep's
+// skip-if-absent Debug probe naming the bucket. Single source of the match
+// shape — it mirrors the Debug line in graph.AssertOwnedBucketsClean and is
+// shared by skipProbeMentioning and the sweepPassedAbsent gates.
+func recordIsSkipProbeFor(r slog.Record, bucket string) bool {
+	if !strings.Contains(r.Message, "bucket absent, skipping") {
+		return false
+	}
+	found := false
+	r.Attrs(func(a slog.Attr) bool {
+		if strings.Contains(a.Value.String(), bucket) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 // skipProbeMentioning reports whether the sweep's skip-if-absent Debug probe
-// fired naming the bucket. Its message match MUST stay aligned with the
-// sweepPassedAbsent gate's — both mirror the Debug line in
-// graph.AssertOwnedBucketsClean.
+// fired naming the bucket.
 func (h *bucketSweepRecordingHandler) skipProbeMentioning(bucket string) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for _, r := range h.records {
-		if r.Level != slog.LevelDebug || !strings.Contains(r.Message, "bucket absent, skipping") {
+		if r.Level != slog.LevelDebug {
 			continue
 		}
-		found := false
-		r.Attrs(func(a slog.Attr) bool {
-			if strings.Contains(a.Value.String(), bucket) {
-				found = true
-				return false
-			}
-			return true
-		})
-		if found {
+		if recordIsSkipProbeFor(r, bucket) {
 			return true
 		}
 	}
@@ -286,18 +295,7 @@ func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
 	sweepPassedAbsent := make(chan struct{})
 	var sweepOnce sync.Once
 	rec := &bucketSweepRecordingHandler{onRecord: func(r slog.Record) {
-		if !strings.Contains(r.Message, "bucket absent, skipping") {
-			return
-		}
-		matched := false
-		r.Attrs(func(a slog.Attr) bool {
-			if strings.Contains(a.Value.String(), graph.BucketEmbeddingIndex) {
-				matched = true
-				return false
-			}
-			return true
-		})
-		if matched {
+		if recordIsSkipProbeFor(r, graph.BucketEmbeddingIndex) {
 			sweepOnce.Do(func() { close(sweepPassedAbsent) })
 		}
 	}}

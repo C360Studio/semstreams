@@ -19,6 +19,43 @@ they record the component as failed with its error, and the component manager's 
 MUST report a failed component by name with its last error until it recovers. Health MUST NOT
 ignore the failed state.
 
+Configuration changes that become locally visible during boot join the **boot transaction**:
+after the component-start barrier and before returning, `ComponentManager.Start` synchronously
+drains pending configuration state against the LIVE local configuration (so a dropped
+bounded-buffer notification cannot lose a change) — new components are created and started
+under the same barrier semantics (their failures join the boot failure), edits to existing
+components are applied, removals are honored, and model-registry dependents are rebuilt when
+the live registry's content differs from what they were built against. A component whose
+CREATE (not `Start`) fails during boot-boundary reconciliation is logged and excluded from the
+boot set — matching Initialize's existing best-effort creation posture — while `Start`
+failures remain fail-closed; a rebuild failure applying an edit fails boot (the old instance
+is already stopped). The drain loops until quiescent (a pass that consumes no pending events
+and applies no change), bounded by the lifecycle context: cancellation fails boot with the
+context error. The **cutoff** is the final drain pass: updates whose local application lands
+after it — component ADDS and EDITS alike — are post-boot dynamic changes, microsecond-class
+identical to ones arriving just after `Start` returns, handled by the config watcher with the
+dynamic paths (an edit's restart releases and re-acquires its buckets after the sweep),
+outside the boot sweep's boot-time enforcement scope; the bucket acquisition seam is the
+durable closure for that whole class. A registry change landing between the final drain pass
+and the watcher starting MUST still be applied, not discarded: the watcher's entry backlog
+check applies the pending event when the registry content differs from the last-applied
+baseline.
+
+#### Scenario: a configuration update arriving during boot joins the boot transaction
+
+- **GIVEN** a configuration change — a new component, an edit to an existing component, or a
+  model-registry change — that becomes locally visible while boot-time component starts are
+  still in flight
+- **WHEN** `ComponentManager.Start` completes its cold-boot barrier
+- **THEN** it synchronously applies the pending configuration state before returning: created
+  components are started (or fail boot) under barrier semantics, edits are applied to their
+  components, and model-registry dependents are rebuilt against the new registry — so
+  post-start boot guards (the owned-bucket coverage pass) observe them before the HTTP surface
+  comes up
+- **AND** an update whose local application lands after the final drain pass — a component
+  ADD or EDIT alike — is a post-boot dynamic change, processed by the config watcher with
+  `started == true`
+
 #### Scenario: a boot-time component start failure fails StartAll
 
 - **GIVEN** a registered lifecycle component whose `Start` returns an error

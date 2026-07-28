@@ -91,6 +91,45 @@ production does not have. It is replaced, not kept alongside:
 All race-enabled, explicit synchronization (no sleeps). `service/` is a framework package ⇒ run the
 branch integration sweep (`go test -race -tags=integration ./...`).
 
+## Decision 5 — Boot-boundary config drain (Codex round on PR #719)
+
+Deferring the config watcher past the barrier closed the parked-StateInitialized hole but left two
+boot-integrity gaps: (1) a mid-boot update's component started on the watcher's DETACHED dynamic
+path after the post-start retention sweep — reopening the create-race for exactly that component —
+and (2) the cap-1 drop-on-full OnChange buffers could LOSE mid-boot changes outright (a dropped
+model_registry change stayed unapplied until the NEXT registry change; a dropped component edit
+until the next notification; the initial-snapshot bulk reconcile skips existing components, so it
+never healed an edit).
+
+Closure: a **synchronous coalesced boot-boundary transaction**. After the batch barrier,
+`ComponentManager.Start` runs a drain loop before returning: each pass consumes whatever the
+buffered channels hold and reconciles against the LIVE SafeConfig (state, not events — a dropped
+notification cannot hide a change), applying with barrier semantics:
+
+- components: an edit-aware bulk reconcile (shared core with the watcher's `reconcileComponents`,
+  extended with a boot mode rather than a parallel reconciler) — new components created and
+  barrier-started (failures join boot failure), edits applied by rebuild + barrier start (a rebuild
+  failure fails boot: the old instance is already stopped), removals honored as the watcher's
+  reconcile does; rule packs stay immutable in-process.
+- model_registry: apply-if-different against the baseline captured at Initialize (the registry
+  components were built against) — content drift rebuilds `DepModelRegistry` dependents against the
+  live registry, barrier-started. The watcher's entry backlog check and its per-event handling use
+  the same apply-if-different, so a change landing between the final drain pass and watcher start
+  is applied, never discarded, and the initial snapshot never causes a restart storm.
+- Quiescence: a pass that drains no events and applies no change terminates the loop. Pathological
+  churn is bounded by the lifecycle ctx (cancellation fails boot with the ctx error), not a silent
+  pass cap.
+
+**Cutoff honesty**: updates whose local application lands after the final drain pass — component
+ADDS and EDITS alike — are POST-BOOT dynamic changes, microsecond-class identical to ones arriving
+just after `Start` returns. An add's component starts, and an edit's component restarts (releasing
+and re-acquiring its buckets), through the dynamic path after the sweep — outside the boot sweep's
+boot-time enforcement scope; the acquisition-seam increment (`EnsureFrameworkBucket`, next Epic C
+increment) is the durable closure for that whole class. Boot-time CREATE failures in the drain are
+logged and excluded from the boot set (Initialize's best-effort creation posture); `Start`
+failures remain fail-closed, and an edit-rebuild failure fails boot (the old instance is already
+stopped).
+
 ## Risks
 
 - **Boot-time behavior change is intentionally breaking**: deployments with a component that fails

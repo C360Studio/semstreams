@@ -187,3 +187,35 @@
   original sweep filtered .json hits as scorecard noise — semspec's 12 checked-in configs and
   semsource's beta148 parity literal were missed); no sister edits from here — migration
   communicated via the adopter note, sisters handle it on their next bump.
+- [x] 9.5 Boot-boundary config drain (Codex round 2, blocker 1): synchronous coalesced drain loop in
+  `ComponentManager.Start` after the barrier — each pass consumes the buffered OnChange events and
+  reconciles against LIVE SafeConfig (edit-aware boot mode of the shared reconcile core; new
+  components barrier-started with failures joining boot failure; edits rebuilt + barrier-started,
+  rebuild failure fails boot; removals as the watcher's reconcile; rule packs immutable), loops
+  until quiescent, bounded by the lifecycle ctx (cancellation fails boot). Design.md Decision 5.
+- [x] 9.6 Registry apply-not-discard (Codex round 2, blocker 2): apply-if-different against the
+  built-with baseline (captured at Initialize) everywhere — the boot drain rebuilds
+  DepModelRegistry dependents on content drift (barrier-joined), the watcher's entry backlog check
+  APPLIES a pending event instead of blind-discarding it, and the per-event path is
+  content-gated (initial snapshot = no restart storm; identical events = no double restart). The
+  round-3 "freshness edge (not correctness)" comment was WRONG (it was a correctness bug — a lost
+  change stayed unapplied until the next change) and is removed with the fix.
+- [x] 9.7 Tests (all real config.Manager + production KV writes, driven through Manager.StartAll,
+  race-enabled, explicit sync): `TestIntegration_StartAll_MidBootComponentJoinsBootTransaction`
+  (mid-boot add starts BEFORE the sweep: no skip-if-absent probe for its bucket, TTL stripped, key
+  preserved, WARN — also the strip-before-HTTP end-to-end case),
+  `TestIntegration_StartAll_MidBootEditJoinsBootTransaction` (edit applied by Start-return; the
+  rebuilt instance started with the new value),
+  `TestIntegration_StartAll_MidBootRegistryChangeRebindsDependents` (dependent rebuilt against the
+  new registry by Start-return). ALL THREE revert-proven RED against the pre-drain code
+  (drain call disabled + entry blind-discard restored via cp/md5 backup): T1 red on
+  skip-probe-present + TTL-survives + no-WARN (the reopened create-race), T2 red with started
+  values [A] (edit lost to the dropped notification + skip-existing reconcile), T3 red with builds
+  [ep-a] (registry change lost to the blind discard). T1's red direction is forced by the
+  sweep-skip-record gate (deterministic whenever the ordering permits the race); T2/T3 are
+  deterministic by the cap-1 drop + skip-existing/blind-discard mechanics.
+- [x] 9.8 Spec/design/comment updates: framework-composition delta extended with the
+  boot-transaction paragraph + "a configuration update arriving during boot joins the boot
+  transaction" scenario (cutoff stated: post-final-drain-pass updates are post-boot dynamic;
+  acquisition seam is the durable closure); design.md Decision 5; Start doc comment states the
+  drain + cutoff; the obsolete round-3 freshness comment removed.
