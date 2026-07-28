@@ -1237,7 +1237,7 @@
     },
     "projection_contracts": {
       "type": "array",
-      "description": "projection_contracts",
+      "description": "Optional explicit projection authorization superset; omit to derive minimal replace-owned groups and statically provable entity scope from initial actions. Birth predicates foreign edges indexing profile and message type are explicit-only",
       "items": {
         "type": "object",
         "properties": {

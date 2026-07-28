@@ -65,6 +65,9 @@ func buildProjectionTargetIndex(contracts []projection.Contract) (*projectionTar
 }
 
 func cloneProjectionContracts(contracts []projection.Contract) []projection.Contract {
+	if contracts == nil {
+		return nil
+	}
 	copies := make([]projection.Contract, len(contracts))
 	for i, contract := range contracts {
 		copies[i] = contract
