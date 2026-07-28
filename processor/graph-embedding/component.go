@@ -248,6 +248,31 @@ type Component struct {
 	entityCoalescer    *cache.CoalescingSet
 	entityStatesBucket jetstream.KeyValue
 
+	// hop1Mu is the single-writer hop-1 seam (#629): every hop-1 EMBEDDING_INDEX
+	// mutation — the watcher's immediate-mode update, the watcher's tombstone
+	// delete, a coalesced flush, and a repair re-drive — serializes through it,
+	// and queued work re-reads authoritative ENTITY_STATES INSIDE the lock
+	// (reconcileEntity). Without it the coalesced flush's fresh Get and the
+	// watcher's tombstone delete interleave across two buckets, and the unguarded
+	// SavePending create lane resurrects a tombstoned entity's record after its
+	// delete (the create has no prior record to CAS against, so the #614 part-2
+	// revision guards cannot cover it).
+	//
+	// A MUTEX, deliberately not a channel into the watcher and not a keyed pool:
+	// CoalescingSet.Close blocks on the in-flight callback and Stop calls Close, so
+	// a callback blocked sending to an exited watcher would deadlock Close; and
+	// hop 1 is two KV metadata ops — a keyed pool's lanes/goroutines/lifecycle to
+	// protect two round-trips is unwarranted machinery. Hop 2 (the worker's
+	// SaveGenerated/SaveFailed) MUST NOT take this seam: its revision CAS +
+	// ErrRecordGone guards are sufficient, and serializing embedding workers
+	// behind hop-1 metadata operations would stall the pipeline.
+	//
+	// LOCK ORDER: hop1Mu → failedMu, never the reverse (repairTargets snapshots
+	// under failedMu and RELEASES before dispatching reconcileEntity). No path may
+	// take c.mu under hop1Mu: Stop holds c.mu across entityCoalescer.Close, whose
+	// in-flight flush holds hop1Mu — a c.mu acquisition there would deadlock Stop.
+	hop1Mu sync.Mutex
+
 	// Lifecycle state
 	mu          sync.RWMutex
 	running     bool
@@ -691,6 +716,14 @@ func (c *Component) Stop(timeout time.Duration) error {
 		return nil // Already stopped
 	}
 
+	// Cancel the component context BEFORE closing the coalescer: Close blocks on
+	// an in-flight flush callback, and with the ctx already dead that flush aborts
+	// promptly (processEntityBatch's ctx guard; KV ops fail fast) instead of
+	// finishing KV operations against live NATS while the component tears down.
+	if c.cancel != nil {
+		c.cancel()
+	}
+
 	// Stop coalescer so no new batch callbacks fire during teardown
 	if c.entityCoalescer != nil {
 		_ = c.entityCoalescer.Close()
@@ -725,11 +758,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		if err := c.embedder.Close(); err != nil {
 			c.logger.Warn("embedder close error", slog.Any("error", err))
 		}
-	}
-
-	// Cancel context
-	if c.cancel != nil {
-		c.cancel()
 	}
 
 	c.running = false
@@ -1176,11 +1204,95 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, entityBucket)
 
+	// Durable repair loop (#625, mirroring graph-index's gh#474 repairLoop):
+	// re-drives entities whose derived writes/reads failed so a transient KV
+	// outage self-heals without waiting for another entity event or a restart.
+	c.wg.Add(1)
+	go c.repairLoop(ctx)
+
 	// Readiness-envelope metrics loop (ADR-066 §3): republishes readiness/lag/watermark
 	// as scrapeable gauges independent of NATS status traffic (#579 at the source).
 	c.wg.Add(1)
 	go c.statusMetricsLoop(ctx)
 	return nil
+}
+
+// embeddingRepairInterval is how often the repair loop re-drives entities whose
+// derived writes/reads failed (#625; mirrors graph-index's indexRepairInterval,
+// gh#474).
+const embeddingRepairInterval = 30 * time.Second
+
+// repairLoop periodically re-drives the repair-scoped current-failed entities
+// through reconcileEntity so a failed derived delete/write converges instead of
+// leaking until restart (#625). Runs until ctx is cancelled (Stop); drained by
+// the existing wg.Wait.
+//
+// A DEDICATED ticker goroutine, deliberately not piggybacked on the ADR-083
+// status heartbeat: repair KV I/O on that goroutine would delay heartbeat
+// publication, whose freshness is a consumer-visible liveness contract
+// (FreshnessMultiplier × DefaultHeartbeat), and statusTickInterval is
+// test-overridable — a millisecond test override would hot-loop repair.
+// graph-index's own repairLoop makes the same call.
+//
+// Retry is unbounded and flat: the repair set is reason-scoped to KV-transport
+// faults on self-owned buckets (see repairTargets), so there is no poison class
+// to give up on — a bounded give-up would recreate the #625 leak. FailedCount>0
+// → degraded is the operator signal while any entity remains stranded.
+func (c *Component) repairLoop(ctx context.Context) {
+	defer c.wg.Done()
+	ticker := time.NewTicker(embeddingRepairInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			c.repairStranded(ctx)
+		}
+	}
+}
+
+// repairTargets snapshots the repair-scoped entity IDs under failedMu and
+// RELEASES the lock before the caller dispatches reconcileEntity. LOCK-ORDER
+// INVARIANT: hop1Mu → failedMu, never the reverse — reconcileEntity takes
+// hop1Mu and its terminal accounting takes failedMu inside it, so dispatching
+// while still holding failedMu would invert the order and deadlock.
+//
+// Scope: ONLY the three derived-write/read reasons. Embedder-side failure
+// reasons (connection_refused, timeout, …) stay OUT of the repair lane — their
+// recovery path is re-delivery (restart or a new revision), unchanged — so no
+// permanently-failing content can enter repair and hot-loop it.
+func (c *Component) repairTargets() []string {
+	c.failedMu.Lock()
+	defer c.failedMu.Unlock()
+	var targets []string
+	for entityID, info := range c.failed {
+		switch info.reason {
+		case embedding.ReasonDeleteFailed, embedding.ReasonPendingWriteFailed, embedding.ReasonEntityReadFailed:
+			targets = append(targets, entityID)
+		}
+	}
+	return targets
+}
+
+// repairStranded is the repair tick body: converge every repair-scoped stranded
+// entity through the hop-1 seam. The empty-set short-circuit keeps the healthy
+// steady state at one mutex-guarded map scan per tick with zero KV traffic
+// (graph-index precedent).
+func (c *Component) repairStranded(ctx context.Context) {
+	if c.entityStatesBucket == nil {
+		return
+	}
+	targets := c.repairTargets()
+	if len(targets) == 0 {
+		return
+	}
+	for _, entityID := range targets {
+		if ctx.Err() != nil {
+			return
+		}
+		c.reconcileEntity(ctx, entityID)
+	}
 }
 
 // statusMetricsInterval is the readiness heartbeat: how often the envelope (ADR-066 §3)
@@ -1383,35 +1495,143 @@ func (c *Component) applyEntityWatchEntry(ctx context.Context, entry jetstream.K
 		if c.entityCoalescer != nil {
 			c.entityCoalescer.Remove(entry.Key())
 		}
-		// The entity is gone, so its vector must go too (gh#614). Leaving it in
-		// EMBEDDING_INDEX keeps semantic search returning a dead entity ID that
-		// graph-query then cannot resolve, which drops the query onto its text
-		// fallback — deletions would silently degrade search AND push queries off
-		// the semantic path. The Storage vector cache only evicts on a KV delete of
-		// the embedding key, so this is also what makes that eviction path live.
-		//
-		// A delete failure is logged, never fatal, and never skips the completion
-		// below: the watermark must still drain or one failed delete pins embedding
-		// readiness forever (ADR-066 §3).
-		if c.storage != nil {
-			if err := c.storage.DeleteEmbedding(ctx, entry.Key()); err != nil {
-				c.logger.Warn("failed to delete embedding for tombstoned entity",
-					slog.String("entity", entry.Key()),
-					slog.Any("error", err))
-			}
-		}
-		// OutcomeDeleted: a tombstoned entity is not a current failure — clear it from the
-		// current-failed map so a previously-failed entity that is deleted stops holding
-		// the producer degraded (#613).
-		c.completeEmbedding(entry.Key(), entry.Revision(), embedding.OutcomeDeleted, "")
+		c.applyEntityTombstone(ctx, entry.Key(), entry.Revision())
 		return
 	}
 
 	if c.entityCoalescer != nil {
 		c.entityCoalescer.Add(entry.Key())
 	} else {
+		// Immediate mode: the watcher's own update is a hop-1 mutation and takes
+		// the seam, so it cannot interleave a concurrent repair re-drive (#629).
+		c.hop1Mu.Lock()
 		c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
+		c.hop1Mu.Unlock()
 	}
+}
+
+// applyEntityTombstone is the watcher's tombstone-delete hop-1 mutation, under
+// the single-writer seam (#629).
+//
+// The entity is gone, so its vector must go too (gh#614). Leaving it in
+// EMBEDDING_INDEX keeps semantic search returning a dead entity ID that
+// graph-query then cannot resolve, which drops the query onto its text
+// fallback — deletions would silently degrade search AND push queries off
+// the semantic path. The Storage vector cache only evicts on a KV delete of
+// the embedding key, so this is also what makes that eviction path live.
+//
+// A delete failure is logged, never fatal, and never skips the completion:
+// the watermark must still drain or one failed delete pins embedding
+// readiness forever (ADR-066 §3, #624). On failure this site makes TWO calls
+// at DIFFERENT revisions, both load-bearing: completeEmbedding at the TRUE
+// tombstone revision (the watermark drains exactly the revisions the tombstone
+// supersedes) and THEN markStranded at floor revision 0 (so the entity counts
+// degraded and the repair loop re-drives the delete until the key is absent —
+// previously the leak reported ready until restart, #625).
+func (c *Component) applyEntityTombstone(ctx context.Context, key string, revision uint64) {
+	c.hop1Mu.Lock()
+	defer c.hop1Mu.Unlock()
+
+	var delErr error
+	if c.storage != nil {
+		if delErr = c.storage.DeleteEmbedding(ctx, key); delErr != nil {
+			c.logger.Warn("failed to delete embedding for tombstoned entity",
+				slog.String("entity", key),
+				slog.Any("error", delErr))
+		}
+	}
+	// OutcomeDeleted: a tombstoned entity is not a current failure — clear it from the
+	// current-failed map so a previously-failed entity that is deleted stops holding
+	// the producer degraded (#613). Ordering matters: this clear runs BEFORE the
+	// failure mark below, so the mark lands at floor 0 rather than being guarded off
+	// by a stale higher-revision entry.
+	c.completeEmbedding(key, revision, embedding.OutcomeDeleted, "")
+	if delErr != nil {
+		c.markStranded(key, embedding.ReasonDeleteFailed)
+	}
+}
+
+// reconcileEntity converges the derived EMBEDDING_INDEX state for entityID on
+// the authoritative ENTITY_STATES value read at execution time, under the hop-1
+// seam. It is the ONE dispatch shared by the coalesced flush and the repair
+// loop (the graph-index "Durable recovery" contract, gh#474): authoritative
+// absence deletes the derived record; presence re-queues through
+// queueEntityForEmbedding, the sole hop-1 record writer. Reading INSIDE the
+// lock is the mechanism — whatever this Get returns, the watcher's tombstone
+// delete either already ran (the absence branch deletes) or serializes after
+// this reconcile and wins (#629); the between-Get-and-Put interleaving is
+// structurally removed.
+func (c *Component) reconcileEntity(ctx context.Context, entityID string) {
+	c.hop1Mu.Lock()
+	defer c.hop1Mu.Unlock()
+
+	entry, err := c.entityStatesBucket.Get(ctx, entityID)
+	if err != nil {
+		// Full JetStream absence sentinel set via errors.Is — ErrKeyNotFound AND
+		// ErrKeyDeleted, never `==` (natsclient.IsKVNotFoundError covers both;
+		// graph-index's reconcileEntity precedent).
+		if natsclient.IsKVNotFoundError(err) {
+			// Authoritative absence: converge the derived record to absent (not a
+			// silent drain — the pre-#629 batch path skipped the delete and left a
+			// dead vector queryable).
+			var delErr error
+			if c.storage != nil {
+				if delErr = c.storage.DeleteEmbedding(ctx, entityID); delErr != nil {
+					c.logger.Warn("reconcile: derived-record delete still failing",
+						slog.String("entity", entityID),
+						slog.Any("error", delErr))
+				}
+			}
+			// Max-rev drain (existing idiom): the coalescer discarded the exact
+			// source revisions, and revlag.Watermark.Complete drains only this key's
+			// CURRENTLY-PENDING revisions — it records no future floor, so ^uint64(0)
+			// is safe and is a no-op on a repair re-drive with nothing pending.
+			// OutcomeDeleted also clears any current-failed entry (revision-guard:
+			// max-rev ≥ any held revision), which is what decrements FailedCount when
+			// a repair converges — so on a FAILED delete the mark below must re-add,
+			// or one failed repair pass would permanently clear the mark and recreate
+			// the #625 leak.
+			c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeDeleted, "")
+			if delErr != nil {
+				c.markStranded(entityID, embedding.ReasonDeleteFailed)
+			}
+			return
+		}
+		// Transient authoritative-read failure. Drain FIRST (fails toward
+		// caught-up — a transient Get failure must not pin the watermark, ADR-066
+		// §3; OutcomeSkipped: a drain is not a failure), THEN mark: the drain's
+		// map-clear runs at max-rev and would remove a mark made before it.
+		// Previously this branch only drained; now the entity also counts degraded
+		// and the repair loop re-reads until the source answers (#625).
+		c.logger.Debug("reconcile: authoritative entity read failed; will repair",
+			slog.String("entity", entityID),
+			slog.Any("error", err))
+		c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeSkipped, "")
+		c.markStranded(entityID, embedding.ReasonEntityReadFailed)
+		return
+	}
+
+	c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
+}
+
+// markStranded records entityID as holding a failed DERIVED write/read (#625):
+// it enters the same current-failed accounting as embedder-side failures (so
+// the producer reports degraded, never ready, while stranded) under one of the
+// in-memory-only Reason* constants — never persisted to a stored record, never
+// passed to SaveFailed.
+//
+// FLOOR REVISION 0 is load-bearing. applyTerminalOutcome's clear guard is
+// `sourceRevision < held.rev → no-op`, so a mark pinned at the observed
+// revision (or ^uint64(0)) could never be cleared by a later terminal at a
+// real revision — a silent permanent-degraded trap. At floor 0, ANY later
+// terminal (a repair convergence's max-rev drain, a re-delivery's real
+// revision) clears it.
+//
+// If the entity already holds a failure at a real revision, the same guard
+// keeps that newer failure and this mark is a no-op — the entity is already
+// counted degraded; its recovery path (re-delivery) is unchanged.
+func (c *Component) markStranded(entityID, reason string) {
+	c.applyTerminalOutcome(entityID, 0, embedding.OutcomeFailed, reason)
 }
 
 func (c *Component) latchGraphStateReset(reason graph.StateResetReason) {
@@ -1441,8 +1661,11 @@ func (c *Component) ensureBootstrapReady() error {
 	return nil
 }
 
-// processEntityBatch re-fetches each entity from KV and queues it for embedding.
-// It is invoked by the CoalescingSet after the debounce window elapses.
+// processEntityBatch reconciles each coalesced entity against authoritative
+// ENTITY_STATES at execution time. It is invoked by the CoalescingSet after the
+// debounce window elapses; each entity converges through the hop-1 seam
+// (reconcileEntity), so a stale queued flush cannot clobber a newer write or
+// resurrect a tombstoned entity (#629).
 func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) {
 	c.logger.Debug("processing coalesced entity batch", slog.Int("count", len(entityIDs)))
 
@@ -1450,22 +1673,7 @@ func (c *Component) processEntityBatch(ctx context.Context, entityIDs []string) 
 		if ctx.Err() != nil {
 			return
 		}
-
-		entry, err := c.entityStatesBucket.Get(ctx, entityID)
-		if err != nil {
-			c.logger.Debug("entity not found during batch processing",
-				slog.String("entity", entityID),
-				slog.Any("error", err))
-			// The coalescer discarded the source revision(s), so there is no exact
-			// revision to complete. Max-rev-drain the key rather than strand it:
-			// a transient Get failure would otherwise pin the watermark forever
-			// (ADR-066 §3). Fails toward caught-up; the next update re-observes it.
-			// OutcomeSkipped: a drain is not a failure.
-			c.completeEmbedding(entityID, ^uint64(0), embedding.OutcomeSkipped, "")
-			continue
-		}
-
-		c.queueEntityForEmbedding(ctx, entry.Key(), entry.Revision(), entry.Value())
+		c.reconcileEntity(ctx, entityID)
 	}
 }
 
@@ -1500,6 +1708,12 @@ func (c *Component) indexingEligible(es *graph.EntityState) bool {
 // produced this entry (ADR-066 §3); every IMMEDIATE terminal here completes the
 // readiness watermark, and SavePending threads the revision so hop 2 completes it at
 // the true terminal.
+//
+// It is the SOLE hop-1 record writer, and every caller holds hop1Mu (#629): the
+// immediate-mode watcher update and reconcileEntity's presence branch. Keeping
+// creation behind this one writer is also what preserves the #638 IdentityText
+// rolling-upgrade contract by construction — no other path can shape a pending
+// record.
 func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string, sourceRevision uint64, data []byte) {
 	// Report embedding stage (throttled to avoid KV spam)
 	if err := c.lifecycleReporter.ReportStage(ctx, "embedding"); err != nil {
@@ -1560,17 +1774,20 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Debug("no text content found, skipping embedding", slog.String("entity", entityID))
 		// Remove any DURABLE record before clearing readiness (#613 F2): an entity that
 		// previously FAILED and now has no text still holds a StatusFailed record in
-		// EMBEDDING_INDEX. Clearing the in-memory failed map (via the Skipped completion
-		// below) without deleting that record leaves durable and in-memory state divergent —
-		// a restart's seed scan would re-add it as failed. Deleting it makes the no-text
-		// terminal consistent with the worker's own no-text path, which also deletes. A
-		// delete failure is logged, never fatal, and never skips the completion below (a
-		// stranded delete must not pin the watermark — ADR-066 §3); the residual durable
-		// record self-corrects on the next restart's seed scan.
+		// EMBEDDING_INDEX, and — the harmful case — an entity with a previously
+		// GENERATED vector that transitions to no-text still holds a served
+		// StatusGenerated record: leaving it makes semantic search keep returning a
+		// stale vector for a LIVE entity. Clearing the in-memory failed map (via the
+		// Skipped completion below) without deleting the record leaves durable and
+		// in-memory state divergent. Deleting makes the no-text terminal consistent
+		// with the worker's own no-text path, which also deletes. A delete failure is
+		// logged, never fatal, and never skips the completion below (a stranded delete
+		// must not pin the watermark — ADR-066 §3).
+		var delErr error
 		if c.storage != nil {
-			if err := c.storage.DeleteEmbedding(ctx, entityID); err != nil {
+			if delErr = c.storage.DeleteEmbedding(ctx, entityID); delErr != nil {
 				c.logger.Debug("failed to delete stale embedding for no-text entity",
-					slog.String("entity", entityID), slog.Any("error", err))
+					slog.String("entity", entityID), slog.Any("error", delErr))
 			}
 		}
 		// Terminal: telemetry-only / no-text entities never reach hop 2. Completing
@@ -1578,6 +1795,18 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		// on every text-less entity — ADR-066 §3). OutcomeSkipped: no-text is not a
 		// failure, and it clears any prior failed-map entry for this entity.
 		c.completeEmbedding(entityID, sourceRevision, embedding.OutcomeSkipped, "")
+		if delErr != nil {
+			// This delete is a MEMBER of the failed-derived-delete class (#625) —
+			// reached by the immediate watcher, the coalesced reconcile, AND repair —
+			// so a failure must strand like the tombstone site's, or (a) a live
+			// entity's stale GENERATED vector stays queryable while readiness reports
+			// ready, unrepaired because unmarked, and (b) on a repair re-drive the
+			// fresh-revision Skipped above CLEARS any prior floor-0 mark, so degraded
+			// would clear WITHOUT convergence (repair-masking). Drain-THEN-mark
+			// ordering is what lets this re-mark survive that clear; a later
+			// successful pass's Skipped clears it for real.
+			c.markStranded(entityID, embedding.ReasonDeleteFailed)
+		}
 		return
 	}
 
@@ -1599,6 +1828,12 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		c.logger.Error("failed to queue embedding; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		// #625: also enter the current-failed accounting (floor revision 0, see
+		// markStranded) so the failure surfaces as degraded immediately and the
+		// repair loop re-queues from authoritative state — recovery no longer
+		// waits on an incidental re-delivery. The watermark stays uncompleted
+		// above, unchanged.
+		c.markStranded(entityID, embedding.ReasonPendingWriteFailed)
 		return
 	}
 
@@ -1690,6 +1925,9 @@ func (c *Component) queueEmbeddingWithStorageRef(ctx context.Context, entityID s
 		c.logger.Error("failed to queue embedding with storage ref; leaving revision uncompleted for re-delivery",
 			slog.String("entity", entityID),
 			slog.Any("error", err))
+		// #625: same stranding as the inline lane — degraded now, repaired by the
+		// background loop; watermark untouched.
+		c.markStranded(entityID, embedding.ReasonPendingWriteFailed)
 		return
 	}
 

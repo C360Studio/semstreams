@@ -578,7 +578,8 @@
           ]
         },
         "embedder_type": "bm25",
-        "batch_size": 50
+        "batch_size": 50,
+        "coalesce_ms": 100
       }
     },
     "graph-clustering": {
