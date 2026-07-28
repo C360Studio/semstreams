@@ -55,6 +55,22 @@ func (f *fakeSummaryStore) PutSummary(_ context.Context, rec *CommunitySummaryRe
 	return nil
 }
 
+// PutFailedUnlessEnhanced mirrors the NATS store's contract: it never overwrites an
+// existing llm-enhanced record with a failure. (The fake is single-process, so it
+// enforces the guarantee with the same-mutex read+write; the CAS race-safety over
+// real NATS is proved by the store integration test.)
+func (f *fakeSummaryStore) PutFailedUnlessEnhanced(_ context.Context, rec *CommunitySummaryRecord) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if existing, ok := f.records[SummaryKey(rec.Level, rec.MembershipHash)]; ok && existing.Status == SummaryStatusEnhanced {
+		return nil // a success already won — never downgrade it to llm-failed
+	}
+	f.puts++
+	cp := *rec
+	f.records[SummaryKey(rec.Level, rec.MembershipHash)] = &cp
+	return nil
+}
+
 func (f *fakeSummaryStore) CountSummaries(_ context.Context) (int, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -200,6 +216,36 @@ func TestEnhanceCommunity_MissSummarizesAndWritesSummaryStoreOnly(t *testing.T) 
 	assert.Equal(t, "an autonomous drone fleet summary", got.LLMSummary)
 	assert.Equal(t, hash, got.MembershipHash)
 	assert.Equal(t, "test-model", got.Model)
+}
+
+// A late failure for a membership that ALREADY has an llm-enhanced record must not
+// downgrade it: markFailed routes through PutFailedUnlessEnhanced, so the enhanced
+// record wins. This is the worker-level guarantee; the CAS race-safety over real
+// NATS is proved by TestIntegration_SummaryStore_FailedNeverReplacesEnhanced.
+func TestMarkFailed_NeverDowngradesEnhanced(t *testing.T) {
+	t.Parallel()
+
+	comm := themedCommunity()
+	store := newFakeSummaryStore()
+	hash := MembershipHash(comm.Members)
+	store.records[SummaryKey(comm.Level, hash)] = &CommunitySummaryRecord{
+		MembershipHash: hash,
+		Level:          comm.Level,
+		LLMSummary:     "the winning enhanced prose",
+		Status:         SummaryStatusEnhanced,
+		GeneratedAt:    time.Now(),
+	}
+
+	w := newTestWorker(t, store, &countingLLMClient{})
+
+	// A late failure for the same membership must be a no-op on the enhanced record.
+	w.markFailed(comm, hash, comm.Level)
+
+	got, err := store.GetSummary(context.Background(), comm.Level, hash)
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, SummaryStatusEnhanced, got.Status, "a late failure must never downgrade an llm-enhanced record")
+	assert.Equal(t, "the winning enhanced prose", got.LLMSummary)
 }
 
 // A transient summary-store read error skips the trigger rather than stampeding

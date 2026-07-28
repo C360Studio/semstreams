@@ -126,6 +126,18 @@ type Component struct {
 	communityCache   *CommunityCache
 	communityWatcher *resource.Watcher
 
+	// summaryWatcher independently watches/retries the COMMUNITY_SUMMARIES bucket.
+	// It is SEPARATE from communityWatcher (which tracks COMMUNITY_INDEX) because on
+	// a rolling upgrade COMMUNITY_INDEX already exists (old version) while
+	// COMMUNITY_SUMMARIES is created later by the enhancement worker; a single
+	// attempt at GraphRAG-start would miss it and never re-attach, stranding the
+	// component on the statistical floor until restart. summaryWatchMu +
+	// summaryWatchStarted guarantee the WatchSummaries loop is started EXACTLY ONCE
+	// even if the resource watcher's OnAvailable fires more than once.
+	summaryWatcher      *resource.Watcher
+	summaryWatchMu      sync.Mutex
+	summaryWatchStarted bool
+
 	// Lifecycle state
 	mu          sync.RWMutex
 	wg          sync.WaitGroup
@@ -530,6 +542,11 @@ func (c *Component) Start(ctx context.Context) error {
 		}
 	}
 
+	// Independently watch/retry the OPTIONAL COMMUNITY_SUMMARIES bucket. Decoupled
+	// from the COMMUNITY_INDEX watcher above so a bucket created LATER (rolling
+	// upgrade) still attaches the summary join without a restart (finding 1).
+	c.startSummaryBucketWatcher(componentCtx)
+
 	c.started = true
 
 	// Report initial idle state
@@ -597,6 +614,11 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.communityWatcher.Stop()
 	}
 
+	// Stop the COMMUNITY_SUMMARIES resource watcher (background check goroutine)
+	if c.summaryWatcher != nil {
+		c.summaryWatcher.Stop()
+	}
+
 	// Stop community cache watcher
 	if c.communityCache != nil {
 		c.communityCache.Stop()
@@ -629,26 +651,11 @@ func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
 		}
 	}()
 
-	// Start the SECOND watcher on COMMUNITY_SUMMARIES so the read path can join LLM
-	// summaries by membership hash (ADR-087). This bucket is OPTIONAL and does NOT
-	// gate readiness: if it is absent (e.g. a statistical-tier deployment that never
-	// runs the enhancement worker), the read path degrades to the statistical floor.
-	// A missing bucket therefore logs and continues rather than failing GraphRAG.
-	summaryBucket, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunitySummaries)
-	if err != nil {
-		c.logger.Info("COMMUNITY_SUMMARIES bucket not available; community summaries degrade to the statistical floor",
-			"error", err)
-	} else {
-		c.wg.Add(1)
-		go func() {
-			defer c.wg.Done()
-			if err := c.communityCache.WatchSummaries(ctx, summaryBucket); err != nil {
-				if ctx.Err() == nil {
-					c.logger.Error("community summary cache watcher failed", "error", err)
-				}
-			}
-		}()
-	}
+	// The COMMUNITY_SUMMARIES second watcher is NOT started here. It is driven by an
+	// independent resource watcher set up in Start() (summaryWatcher) so that a
+	// bucket created AFTER GraphRAG starts (the rolling-upgrade case) is still picked
+	// up without a restart. That watcher is created once and outlives GraphRAG
+	// enable/disable flapping on COMMUNITY_INDEX.
 
 	// Register GraphRAG handlers
 	if err := c.setupGraphRAGHandlers(ctx); err != nil {
@@ -657,6 +664,85 @@ func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
 
 	c.logger.Info("GraphRAG enabled")
 	return nil
+}
+
+// startSummaryBucketWatcher sets up the independent resource watcher for the
+// OPTIONAL COMMUNITY_SUMMARIES bucket and attaches the cache's WatchSummaries loop
+// as soon as the bucket is available.
+//
+// It does a single non-blocking availability check (StartupAttempts=1) so an absent
+// bucket never delays component start — COMMUNITY_SUMMARIES is optional and often
+// absent (statistical-tier deployments). If the bucket is present it attaches
+// immediately; otherwise it starts a background recheck that attaches the moment the
+// enhancement worker creates the bucket later (the rolling-upgrade case, finding 1).
+// Readiness is NOT coupled to this bucket (ADR-087): a summary miss is a graceful
+// statistical fallback, so the watcher only ever adds summaries, never gates GraphRAG.
+func (c *Component) startSummaryBucketWatcher(ctx context.Context) {
+	cfg := resource.DefaultConfig()
+	cfg.StartupAttempts = 1 // one immediate probe; the background recheck does the retrying
+	cfg.StartupInterval = c.config.StartupInterval
+	cfg.RecheckInterval = c.config.RecheckInterval
+	cfg.Logger = c.logger
+	cfg.OnAvailable = func() { c.attachSummaryWatch(ctx) }
+
+	c.summaryWatcher = resource.NewWatcher(
+		graph.BucketCommunitySummaries,
+		func(checkCtx context.Context) error {
+			_, err := c.natsClient.GetKeyValueBucket(checkCtx, graph.BucketCommunitySummaries)
+			return err
+		},
+		cfg,
+	)
+
+	if c.summaryWatcher.WaitForStartup(ctx) {
+		// Present now — attach immediately (common semantic-tier case).
+		c.attachSummaryWatch(ctx)
+	} else {
+		// Absent now — retry in the background so a late-created bucket still attaches
+		// without a component restart.
+		c.logger.Info("COMMUNITY_SUMMARIES not yet available; community summaries degrade to the statistical floor until it appears")
+		c.summaryWatcher.StartBackgroundCheck(ctx)
+	}
+}
+
+// attachSummaryWatch opens COMMUNITY_SUMMARIES and starts the cache's WatchSummaries
+// loop EXACTLY ONCE. It is safe to call repeatedly (the resource watcher's
+// OnAvailable can fire more than once, and startup + background paths can both call
+// it): the once-guard is consumed ONLY on a successful attach, so a transient open
+// failure leaves the guard unset and a later OnAvailable retries.
+func (c *Component) attachSummaryWatch(ctx context.Context) {
+	if ctx.Err() != nil {
+		return // Component shutting down.
+	}
+
+	c.summaryWatchMu.Lock()
+	if c.summaryWatchStarted {
+		c.summaryWatchMu.Unlock()
+		return
+	}
+	// Open the bucket while holding the guard so two concurrent OnAvailable callers
+	// cannot both open + start a loop. The open is a cheap KV lookup.
+	summaryBucket, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunitySummaries)
+	if err != nil {
+		c.summaryWatchMu.Unlock()
+		// Do NOT set summaryWatchStarted: leave the guard unset so a subsequent
+		// OnAvailable (or the background recheck) retries the attach.
+		c.logger.Info("COMMUNITY_SUMMARIES became available but open failed; will retry", "error", err)
+		return
+	}
+	c.summaryWatchStarted = true
+	c.summaryWatchMu.Unlock()
+
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		if err := c.communityCache.WatchSummaries(ctx, summaryBucket); err != nil {
+			if ctx.Err() == nil {
+				c.logger.Error("community summary cache watcher failed", "error", err)
+			}
+		}
+	}()
+	c.logger.Info("COMMUNITY_SUMMARIES attached; LLM community summaries now surface via the membership-hash join")
 }
 
 // enableGraphRAG is called when COMMUNITY_INDEX bucket becomes available after being unavailable.

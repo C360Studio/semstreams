@@ -237,6 +237,15 @@ func (w *EnhancementWorker) Start(ctx context.Context) error {
 	}
 
 	w.started = true
+
+	// Initialize the summaries-size gauge from the store's current count. Without
+	// this, updateSizeGauge only runs after a write, so a restart onto a populated
+	// store where every trigger is a cache hit (no writes) would leave the gauge
+	// pinned at 0 forever — violating the "summary-store volume is observable"
+	// requirement. Seeding at Start makes the gauge reflect the real count on the
+	// no-write path.
+	w.updateSizeGauge()
+
 	w.logger.Info("Enhancement worker started", "workers", w.workers)
 	return nil
 }
@@ -434,6 +443,13 @@ func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string,
 // markFailed writes an llm-failed record to the summary store so the failed
 // membership is retried only after the backoff. It targets ONLY the summary
 // store — never COMMUNITY_INDEX.
+//
+// It goes through PutFailedUnlessEnhanced (NOT a blind PutSummary): the worker pool
+// is concurrent and COMMUNITY_INDEX re-Puts unchanged records, so two triggers for
+// the same membership hash can both miss the pre-work read and do LLM work; if one
+// succeeds and the other fails later, a blind failed write would overwrite the
+// llm-enhanced record. The CAS write guarantees a failure can never downgrade a
+// success (ADR-087 idempotency).
 func (w *EnhancementWorker) markFailed(community *Community, hash string, level int) {
 	rec := &CommunitySummaryRecord{
 		MembershipHash: hash,
@@ -442,7 +458,7 @@ func (w *EnhancementWorker) markFailed(community *Community, hash string, level 
 		MemberCount:    len(community.Members),
 		GeneratedAt:    time.Now(),
 	}
-	if err := w.summaries.PutSummary(w.ctx, rec); err != nil {
+	if err := w.summaries.PutFailedUnlessEnhanced(w.ctx, rec); err != nil {
 		w.logger.Error("Failed to write llm-failed record", "community_id", community.ID, "error", err)
 		return
 	}
