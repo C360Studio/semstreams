@@ -234,7 +234,6 @@ reads:  # Direct KV access (not ports, just dependencies)
   - INCOMING_INDEX
   - ALIAS_INDEX
   - PREDICATE_INDEX
-  - EMBEDDINGS_CACHE
   - COMMUNITY_INDEX
 ```
 

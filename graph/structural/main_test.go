@@ -27,7 +27,6 @@ func TestMain(m *testing.M) {
 			// Embedding buckets required for semantic search features
 			"EMBEDDING_INDEX",
 			"EMBEDDING_DEDUP",
-			"EMBEDDINGS_CACHE",
 		),
 		natsclient.WithTestTimeout(5*time.Second),
 		natsclient.WithStartTimeout(30*time.Second),

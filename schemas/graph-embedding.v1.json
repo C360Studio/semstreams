@@ -10,11 +10,6 @@
       "description": "Batch size for embedding generation",
       "category": "advanced"
     },
-    "cache_ttl": {
-      "type": "string",
-      "description": "Cache TTL for embeddings (e.g. 15m or 1h)",
-      "category": "advanced"
-    },
     "coalesce_ms": {
       "type": "integer",
       "description": "Debounce window for entity updates in ms. 0=immediate processing",

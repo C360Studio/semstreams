@@ -169,8 +169,8 @@ func TestComponentManager_RestartsDependentsOnModelRegistryChange(t *testing.T) 
 // Discoverable + LifecycleComponent interfaces so ComponentManager can
 // Start and Stop it during the test.
 //
-// startMu serializes access to startTime — Start runs on the
-// component-manager's startComponentAsync goroutine, while Health is
+// startMu serializes access to startTime — Start runs on a
+// component-manager launch goroutine (startComponent), while Health is
 // invoked from the publishHealthLoop goroutine. Without the mutex,
 // the race detector flags the unsynchronized read/write pair under
 // -race + -tags=integration.

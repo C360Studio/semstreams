@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -70,14 +71,19 @@ type ComponentManager struct {
 	configUpdates        <-chan config.Update // Channel for components.* updates
 	modelRegistryUpdates <-chan config.Update // Channel for model_registry KV key updates
 
+	// lastAppliedRegistry is the model registry the managed components were
+	// last (re)built against. It backs the apply-if-different registry logic:
+	// the boot drain and the watcher restart DepModelRegistry dependents only
+	// when the live registry's content differs from it, so a dropped cap-1
+	// notification can never lose a registry change (drift is re-detected from
+	// live state) and the initial OnChange snapshot never causes a boot-time
+	// restart storm. Ownership is sequential: Initialize sets it, the boot
+	// drain (Start goroutine) updates it, then the watcher goroutine owns it —
+	// each handoff is a goroutine-launch happens-before, so no lock is needed.
+	lastAppliedRegistry *model.Registry
+
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
-
-	// Lifecycle hooks for debugging and monitoring
-	onComponentStart func(ctx context.Context, name string, comp component.Discoverable)
-	onComponentStop  func(ctx context.Context, name string, reason string)
-	onComponentError func(ctx context.Context, name string, err error)
-	onHealthChange   func(ctx context.Context, name string, healthy bool, details string)
 
 	// Thread safety for component operations
 	mu          sync.RWMutex
@@ -223,6 +229,16 @@ func (cm *ComponentManager) Initialize() error {
 		return nil
 	}
 
+	// Baseline for the apply-if-different registry logic: the registry the
+	// components created below are built against. Any later change — including
+	// one whose cap-1 notification is dropped mid-boot — is detected as content
+	// drift against this baseline by the boot drain and the watcher.
+	if cm.configManager != nil {
+		if full := cm.configManager.GetConfig(); full != nil {
+			cm.lastAppliedRegistry = full.Get().ModelRegistry
+		}
+	}
+
 	if cm.componentConfigs == nil {
 		cm.logger.Debug("ComponentManager.Initialize: No component configs, marking as initialized")
 		cm.initialized.Store(true)
@@ -320,7 +336,31 @@ func (cm *ComponentManager) Initialize() error {
 	return nil
 }
 
-// Start starts all initialized components with proper context flow-through
+// Start starts all initialized components with proper context flow-through.
+//
+// A failed boot is not retryable in-process: Start marks the manager started
+// before returning the joined failure (so Stop tears down what did start), and
+// a second Start call returns nil by design — the StateFailed truth lives in
+// the health check, and the process is expected to exit on the boot error.
+//
+// Config reconciliation is serialized after the cold-boot transaction: after
+// the component-start barrier, Start synchronously drains pending configuration
+// state (drainBootConfigBacklog) — mid-boot component adds/edits/removals and
+// model-registry changes are applied with barrier semantics, their failures
+// joining the boot failure, BEFORE Start returns — so post-start boot guards
+// (the owned-bucket coverage pass) observe them. Only then does the config
+// watcher launch (never on a failed boot), and every dynamically applied
+// update observes started == true and takes the real dynamic start path.
+//
+// Cutoff: updates whose local application lands after the final drain pass —
+// component ADDS and EDITS alike — are POST-BOOT dynamic changes,
+// microsecond-class identical to ones arriving just after Start returns. They
+// go through the dynamic path (an edit's restart releases and re-acquires its
+// buckets) after the boot sweep, outside its boot-time enforcement scope; the
+// acquisition-seam increment (EnsureFrameworkBucket) is the durable closure
+// for that whole class. A component whose CREATE (not Start) fails during the
+// drain is logged and excluded from the boot set — Initialize's best-effort
+// creation posture — while Start failures remain fail-closed.
 func (cm *ComponentManager) Start(ctx context.Context) error {
 	cm.startMu.Lock()
 	defer cm.startMu.Unlock()
@@ -337,7 +377,49 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	cm.shutdown = make(chan struct{})
 	cm.done = make(chan struct{})
 
-	// Start watching for config updates if channel is available
+	cm.startOrder = make([]string, 0)
+
+	// Initialize NATS-backed capability discovery
+	cm.initCapabilityDiscovery(ctx)
+
+	// Start all components. startAllComponents is a component-start barrier:
+	// components launch in parallel but it returns only after every launched
+	// Start has returned, joining all failures. Mark started even on failure so
+	// a subsequent Stop tears down the components that DID start, then fail
+	// boot closed — the composition root must not proceed to the post-start
+	// bucket sweep or HTTP setup on a partially failed component set.
+	startErr := cm.startAllComponents(ctx)
+
+	cm.started.Store(true)
+
+	if startErr != nil {
+		return fmt.Errorf("start components: %w", startErr)
+	}
+
+	// Boot-boundary configuration drain: apply every configuration change that
+	// became locally visible during the barrier — synchronously, with barrier
+	// semantics — before the watcher exists and before Start returns. This
+	// closes two holes the deferred watcher alone left open: (1) a mid-boot
+	// update's component starting on the detached dynamic path AFTER the
+	// post-start owned-bucket sweep (reopening the create-race for it), and
+	// (2) outright LOSS of mid-boot changes to the cap-1 drop-on-full OnChange
+	// buffers (a dropped model_registry change previously stayed unapplied
+	// until the next change; a dropped component edit until the next
+	// notification). The drain re-reads LIVE config state each pass, so
+	// dropped notifications cannot hide a change.
+	if err := cm.drainBootConfigBacklog(ctx); err != nil {
+		return fmt.Errorf("boot config drain: %w", err)
+	}
+
+	// Start watching for config updates only AFTER the barrier + drain: an
+	// update processed mid-boot would hit the dynamic paths with
+	// started == false, which create but never start the component — parked
+	// StateInitialized, invisible to health, with no later start trigger.
+	// Updates landing after the final drain pass are post-boot dynamic updates
+	// (see the Start doc comment's cutoff); the watcher processes them with
+	// started == true, so the dynamic path starts them properly and failures
+	// land in StateFailed → health. On a failed boot the watcher never starts —
+	// the process is exiting.
 	if cm.configUpdates != nil {
 		cm.wg.Add(1)
 		go func() {
@@ -345,16 +427,6 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 			cm.watchConfigUpdates(ctx)
 		}()
 	}
-
-	cm.startOrder = make([]string, 0)
-
-	// Initialize NATS-backed capability discovery
-	cm.initCapabilityDiscovery(ctx)
-
-	// Start all components
-	cm.startAllComponents(ctx)
-
-	cm.started.Store(true)
 
 	// Start health publishing loop (publishes to health.component.{name})
 	cm.wg.Add(1)
@@ -390,18 +462,44 @@ func (cm *ComponentManager) initCapabilityDiscovery(ctx context.Context) {
 	cm.registry.StartHeartbeat(ctx, 30*time.Second)
 }
 
-// componentToStart holds component info for async startup.
+// componentToStart holds component info for the parallel launch batch.
 type componentToStart struct {
 	name      string
 	mc        *component.ManagedComponent
 	lifecycle component.LifecycleComponent
 }
 
-// startAllComponents prepares and starts all lifecycle components asynchronously.
-func (cm *ComponentManager) startAllComponents(ctx context.Context) {
+// startAllComponents starts all lifecycle components and acts as the
+// component-start barrier (framework-composition spec): Start calls launch in
+// parallel for startup latency, but this function returns only after every
+// launched Start has returned, and returns the joined errors of all that
+// failed — each naming its component.
+func (cm *ComponentManager) startAllComponents(ctx context.Context) error {
+	cm.mu.RLock()
+	names := make([]string, 0, len(cm.components))
+	for name := range cm.components {
+		names = append(names, name)
+	}
+	cm.mu.RUnlock()
+	return cm.startComponentsBarrier(ctx, names)
+}
+
+// startComponentsBarrier starts the named components with barrier semantics:
+// parallel launch, return only after every launched Start has returned,
+// errors.Join of all failures (each naming its component). It is the shared
+// core of the cold-boot batch AND the boot-boundary config drain, so
+// drain-created components get exactly the batch's fail-closed treatment. The
+// batch WaitGroup is deliberately scoped here rather than reusing cm.wg, which
+// tracks long-lived loops (watchConfigUpdates, publishHealthLoop) that outlive
+// a launch batch.
+func (cm *ComponentManager) startComponentsBarrier(ctx context.Context, names []string) error {
 	cm.mu.Lock()
-	componentsToStart := make([]componentToStart, 0, len(cm.components))
-	for name, mc := range cm.components {
+	componentsToStart := make([]componentToStart, 0, len(names))
+	for _, name := range names {
+		mc, exists := cm.components[name]
+		if !exists {
+			continue
+		}
 		if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
 			childCtx, cancel := context.WithCancel(ctx)
 			mc.Context = childCtx
@@ -413,34 +511,196 @@ func (cm *ComponentManager) startAllComponents(ctx context.Context) {
 	}
 	cm.mu.Unlock()
 
+	var (
+		batch     sync.WaitGroup
+		errMu     sync.Mutex
+		startErrs []error
+	)
 	for _, comp := range componentsToStart {
-		cm.wg.Add(1)
-		go cm.startComponentAsync(comp.name, comp.mc, comp.lifecycle)
+		batch.Add(1)
+		go func(c componentToStart) {
+			defer batch.Done()
+			if err := cm.startComponent(c.name, c.mc, c.lifecycle); err != nil {
+				errMu.Lock()
+				startErrs = append(startErrs, fmt.Errorf("component %q: %w", c.name, err))
+				errMu.Unlock()
+			}
+		}(comp)
 	}
+	batch.Wait()
+	return errors.Join(startErrs...)
 }
 
-// startComponentAsync starts a single component in a goroutine.
-func (cm *ComponentManager) startComponentAsync(name string, mc *component.ManagedComponent, lc component.LifecycleComponent) {
-	defer cm.wg.Done()
-
+// startComponent runs a single component's Start (on a launch goroutine) and
+// records the resulting state. The returned error propagates through the
+// startAllComponents barrier so boot fails closed on it.
+func (cm *ComponentManager) startComponent(name string, mc *component.ManagedComponent, lc component.LifecycleComponent) error {
 	cm.logger.Debug("Starting component", "name", name, "type", mc.Component.Meta().Type)
 
 	if err := lc.Start(mc.Context); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
 		cm.logger.Error("Component failed to start",
 			"name", name, "type", mc.Component.Meta().Type, "error", err)
-		if cm.onComponentError != nil {
-			cm.onComponentError(mc.Context, name, err)
-		}
-		return
+		return err
 	}
 
 	cm.updateComponentState(name, component.StateStarted, nil)
 	cm.registerProvidedStores(name, mc.Component)
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
-	if cm.onComponentStart != nil {
-		cm.onComponentStart(mc.Context, name, mc.Component)
+	return nil
+}
+
+// drainBootConfigBacklog is the synchronous boot-boundary configuration drain
+// (framework-composition spec): after the cold-boot barrier and before the
+// config watcher exists, it applies every configuration change that became
+// locally visible during boot — component adds, edits, removals, and
+// model-registry changes — with barrier semantics, so their components are
+// started (or fail boot) and hold their resources BEFORE Start returns and the
+// post-start boot guards run.
+//
+// Each pass drains whatever the buffered OnChange channels hold and then
+// reconciles against the LIVE SafeConfig, so a change whose cap-1 notification
+// was dropped is still detected as state drift. The loop runs until a pass
+// finds no pending events and applies no change (quiescent). Pathological
+// config churn is bounded by the lifecycle ctx: cancellation fails boot with
+// the ctx error rather than a silent pass cap.
+func (cm *ComponentManager) drainBootConfigBacklog(ctx context.Context) error {
+	if cm.configManager == nil {
+		return nil
 	}
+
+	drainPending := func(ch <-chan config.Update) int {
+		if ch == nil {
+			return 0
+		}
+		n := 0
+		for {
+			select {
+			case <-ch:
+				n++
+			default:
+				return n
+			}
+		}
+	}
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("interrupted: %w", err)
+		}
+
+		// Consume pending notifications first; their content is discarded
+		// because the pass below re-reads live state (notification follows
+		// state application in config.Manager, so live state is always at
+		// least as new as any drained event).
+		drained := drainPending(cm.configUpdates) + drainPending(cm.modelRegistryUpdates)
+
+		safeConfig := cm.configManager.GetConfig()
+		if safeConfig == nil {
+			return nil
+		}
+
+		pendingStart, mutated, err := cm.reconcileAgainstConfig(ctx, safeConfig, true)
+		if err != nil {
+			return err
+		}
+		if err := cm.startComponentsBarrier(ctx, pendingStart); err != nil {
+			return err
+		}
+
+		registryChanged, err := cm.bootApplyModelRegistry(ctx, safeConfig)
+		if err != nil {
+			return err
+		}
+
+		if drained == 0 && !mutated && len(pendingStart) == 0 && !registryChanged {
+			return nil
+		}
+	}
+}
+
+// bootApplyModelRegistry applies a mid-boot model-registry change with barrier
+// semantics: when the live registry's content differs from the baseline the
+// components were built against, every DepModelRegistry dependent is rebuilt
+// against the live registry and barrier-started; a rebuild or start failure
+// fails boot. Content comparison (not event receipt) is what makes a dropped
+// cap-1 notification unable to lose the change.
+func (cm *ComponentManager) bootApplyModelRegistry(ctx context.Context, safeConfig *config.SafeConfig) (bool, error) {
+	fullConfig := safeConfig.Get()
+	current := fullConfig.ModelRegistry
+	if registriesEqual(current, cm.lastAppliedRegistry) {
+		return false, nil
+	}
+
+	cm.mu.RLock()
+	targets := make([]string, 0)
+	for name := range cm.components {
+		if slicesContains(cm.registry.InstanceDependencies(name), component.DepModelRegistry) {
+			targets = append(targets, name)
+		}
+	}
+	cm.mu.RUnlock()
+
+	pending := make([]string, 0, len(targets))
+	for _, name := range targets {
+		cfg, exists := fullConfig.Components[name]
+		if !exists {
+			cm.logger.Warn("boot drain: model-registry dependent has no current config; skipping rebuild",
+				"component", name)
+			continue
+		}
+		cm.mu.RLock()
+		existing := cm.components[name]
+		cm.mu.RUnlock()
+		if existing == nil {
+			continue
+		}
+		if err := cm.recreateComponentWithNewConfig(ctx, name, cfg, existing); err != nil {
+			return true, fmt.Errorf("rebuild model-registry dependent %q: %w", name, err)
+		}
+		pending = append(pending, name)
+	}
+	if err := cm.startComponentsBarrier(ctx, pending); err != nil {
+		return true, err
+	}
+
+	cm.lastAppliedRegistry = current
+	if len(pending) > 0 {
+		cm.logger.Info("boot drain: rebuilt model-registry dependents against the mid-boot registry",
+			"components", pending)
+	}
+	return true, nil
+}
+
+// registriesEqual reports whether two registries have identical content. Nil
+// equals nil; nil never equals a populated registry. DeepEqual is sound here
+// ONLY because both sides are independent snapshots — SafeConfig.Get returns a
+// config.Clone() deep copy, so lastAppliedRegistry never aliases live state.
+// If Clone ever becomes shallow, baseline and live alias each other and
+// registry drift becomes permanently undetectable.
+func registriesEqual(a, b *model.Registry) bool {
+	return reflect.DeepEqual(a, b)
+}
+
+// applyModelRegistryIfChanged is the watcher-side registry application: it
+// restarts DepModelRegistry dependents only when the live registry's content
+// differs from what components were last built against. Called for the entry
+// backlog (a change landing between the boot drain's final pass and the
+// watcher starting must be APPLIED, not discarded — a blind discard loses it
+// until the NEXT registry change) and for every model_registry event, which
+// also makes the initial OnChange snapshot a no-op instead of a boot-time
+// restart storm.
+func (cm *ComponentManager) applyModelRegistryIfChanged(ctx context.Context, safeConfig *config.SafeConfig) {
+	if safeConfig == nil {
+		return
+	}
+	current := safeConfig.Get().ModelRegistry
+	if registriesEqual(current, cm.lastAppliedRegistry) {
+		cm.logger.Debug("model_registry content unchanged; skipping dependent restarts")
+		return
+	}
+	cm.restartDependentsOf(ctx, component.DepModelRegistry, safeConfig)
+	cm.lastAppliedRegistry = current
 }
 
 // Stop gracefully stops all components in reverse order of startup
@@ -579,18 +839,17 @@ func (cm *ComponentManager) stopSingleComponent(
 ) error {
 	// Try to stop component if it supports lifecycle
 	if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
-		return cm.stopLifecycleComponent(ctx, name, mc, lifecycle)
+		return cm.stopLifecycleComponent(ctx, name, lifecycle)
 	}
 
 	// Component doesn't support lifecycle, just mark as stopped
-	cm.markComponentStopped(ctx, name, mc, "no-lifecycle")
+	cm.updateComponentState(name, component.StateStopped, nil)
 	return nil
 }
 
 // stopLifecycleComponent stops a component that supports the lifecycle interface
 func (cm *ComponentManager) stopLifecycleComponent(
-	ctx context.Context, name string, mc *component.ManagedComponent,
-	lifecycle component.LifecycleComponent,
+	ctx context.Context, name string, lifecycle component.LifecycleComponent,
 ) error {
 	// Calculate timeout from context deadline
 	timeout := 30 * time.Second // Default timeout
@@ -608,34 +867,11 @@ func (cm *ComponentManager) stopLifecycleComponent(
 	// Call Stop with timeout - interface now supports it properly
 	if err := lifecycle.Stop(timeout); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
-
-		// Call error hook if registered
-		if cm.onComponentError != nil {
-			go cm.onComponentError(ctx, name, err)
-		}
-
 		return fmt.Errorf("component '%s': %w", name, err)
 	}
 
-	cm.markComponentStopped(ctx, name, mc, "graceful")
-	return nil
-}
-
-// markComponentStopped marks a component as stopped and calls the stop hook
-func (cm *ComponentManager) markComponentStopped(
-	ctx context.Context, name string, _ *component.ManagedComponent, reason string,
-) {
 	cm.updateComponentState(name, component.StateStopped, nil)
-
-	// Call stop hook if registered and context not cancelled
-	if cm.onComponentStop != nil {
-		select {
-		case <-ctx.Done():
-			cm.logger.Warn("Skipping stop hook due to context cancellation", "component", name)
-		default:
-			go cm.onComponentStop(ctx, name, reason)
-		}
-	}
+	return nil
 }
 
 // updateComponentState safely updates component state with proper locking
@@ -944,6 +1180,16 @@ func (cm *ComponentManager) performDetailedHealthCheck() error {
 			return fmt.Errorf("component %s has nil implementation", name)
 		}
 
+		// A failed lifecycle operation (post-boot dynamic start/restart, stop
+		// error) leaves the component in StateFailed with its context still
+		// live — health must report it, not silently skip it.
+		if comp.State == component.StateFailed {
+			if comp.LastError != nil {
+				return fmt.Errorf("component %s failed: %w", name, comp.LastError)
+			}
+			return fmt.Errorf("component %s failed", name)
+		}
+
 		// Check if component context is cancelled (indicates failure)
 		if comp.Context != nil && comp.Context.Err() != nil {
 			return fmt.Errorf("component %s context cancelled: %w", name, comp.Context.Err())
@@ -968,50 +1214,19 @@ func (cm *ComponentManager) shutdownCallback(ctx context.Context) error {
 	return cm.Stop(timeout)
 }
 
-// RegisterComponentStartHook registers a callback for component start events
-func (cm *ComponentManager) RegisterComponentStartHook(
-	hook func(ctx context.Context, name string, comp component.Discoverable),
-) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentStart = hook
-}
-
-// RegisterComponentStopHook registers a callback for component stop events
-func (cm *ComponentManager) RegisterComponentStopHook(hook func(ctx context.Context, name string, reason string)) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentStop = hook
-}
-
-// RegisterComponentErrorHook registers a callback for component error events
-func (cm *ComponentManager) RegisterComponentErrorHook(hook func(ctx context.Context, name string, err error)) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentError = hook
-}
-
-// WithNATSClient is a functional option to provide NATS client for config watching
-// WithNATSClient removed - NATS client now comes from Dependencies
-
-// RegisterHealthChangeHook registers a callback for health change events
-func (cm *ComponentManager) RegisterHealthChangeHook(
-	hook func(ctx context.Context, name string, healthy bool, details string),
-) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onHealthChange = hook
-}
-
 // handleComponentConfigChange handles dynamic component configuration changes
 // watchConfigUpdates monitors for configuration changes from Manager
 func (cm *ComponentManager) watchConfigUpdates(ctx context.Context) {
-	// First update on both channels is the initial config snapshot emitted
-	// by OnChange — we don't want a boot-time restart storm, so drain once
-	// per channel before the main loop.
+	// Entry backlog: the boot drain consumed the buffered events, but one may
+	// land between the drain's final pass and this goroutine starting. APPLY
+	// it if the registry content actually changed — a blind discard here would
+	// LOSE the change until the next registry event, leaving DepModelRegistry
+	// components bound to the old registry indefinitely. The content check
+	// also keeps a stale initial snapshot from causing a restart storm.
 	if cm.modelRegistryUpdates != nil {
 		select {
-		case <-cm.modelRegistryUpdates:
+		case update := <-cm.modelRegistryUpdates:
+			cm.applyModelRegistryIfChanged(ctx, update.Config)
 		default:
 		}
 	}
@@ -1065,9 +1280,9 @@ func (cm *ComponentManager) watchConfigUpdates(ctx context.Context) {
 				// Channel closed
 				return
 			}
-			cm.logger.Debug("model_registry changed, routing to declared dependents",
+			cm.logger.Debug("model_registry event, applying if content changed",
 				"path", update.Path)
-			cm.restartDependentsOf(ctx, component.DepModelRegistry, update.Config)
+			cm.applyModelRegistryIfChanged(ctx, update.Config)
 
 		case <-ctx.Done():
 			return
@@ -1400,8 +1615,33 @@ func cloneComponentConfig(cfg types.ComponentConfig) types.ComponentConfig {
 // The snapshot-then-operate pattern is safe because no concurrent individual
 // notifications can interleave within the same consumer goroutine.
 func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig *config.SafeConfig) {
+	_, _, _ = cm.reconcileAgainstConfig(ctx, safeConfig, false)
+}
+
+// reconcileAgainstConfig is the shared reconcile core.
+//
+// Watcher mode (boot=false) preserves reconcileComponents' conservative
+// contract: create+start missing enabled components via the dynamic path, stop
+// disabled/removed ones, and do NOT touch already-running components (per-key
+// notifications handle edits).
+//
+// Boot mode (boot=true, the boot-boundary drain) is edit-aware and
+// barrier-oriented: missing enabled components are CREATED but not started —
+// their names return in pendingStart for the caller's barrier — and an
+// existing enabled component whose retained effective config differs from the
+// live config is rebuilt (recreate, no start; name joins pendingStart), since
+// the per-key notification carrying the edit may have been dropped by the
+// cap-1 buffer. Rule packs stay immutable in-process (same rejection as the
+// dynamic path). A rebuild failure fails boot (the old instance is already
+// stopped — continuing would silently lose a running component); a plain
+// create failure keeps Initialize's best-effort cold-boot posture (logged,
+// skipped). mutated reports whether the pass changed anything, driving the
+// drain's quiescence check.
+func (cm *ComponentManager) reconcileAgainstConfig(
+	ctx context.Context, safeConfig *config.SafeConfig, boot bool,
+) (pendingStart []string, mutated bool, _ error) {
 	if safeConfig == nil {
-		return
+		return nil, false, nil
 	}
 
 	fullConfig := safeConfig.Get()
@@ -1409,44 +1649,94 @@ func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig 
 		cm.logger.Error("Rejected component reconciliation before lifecycle mutation",
 			"error", err,
 			"action", "process_restart_required")
-		return
+		return nil, false, nil
 	}
 	desiredComponents := fullConfig.Components
 
-	// Snapshot current running components under lock
+	// Snapshot current components + retained effective configs under lock (the
+	// config snapshot is needed for the boot-mode edit check; see gh#520 on why
+	// Config must not be read outside the lock).
 	cm.mu.RLock()
-	running := make(map[string]bool, len(cm.components))
-	for name := range cm.components {
-		running[name] = true
+	existingCfgs := make(map[string]types.ComponentConfig, len(cm.components))
+	for name, mc := range cm.components {
+		existingCfgs[name] = mc.Config
 	}
 	cm.mu.RUnlock()
 
-	var created, stopped int
+	var created, edited, stopped int
 
 	// Phase 1: Create missing enabled components
 	for name, cfg := range desiredComponents {
 		if !cfg.Enabled {
 			continue
 		}
-		if running[name] {
-			continue // Already running — don't restart
+		if _, running := existingCfgs[name]; running {
+			continue // Already running — edits handled below (boot) or by per-key notifications (watcher)
 		}
 
 		cm.logger.Debug("Reconcile: creating missing component",
 			"component", name)
 
-		if err := cm.createAndStartComponent(ctx, name, cfg); err != nil {
-			cm.logger.Error("Reconcile: failed to create component",
-				"component", name,
-				"error", err)
-			continue
+		if boot {
+			deps := cm.buildComponentDependencies()
+			if err := cm.CreateComponent(ctx, name, cfg, deps); err != nil {
+				cm.logger.Error("Reconcile: failed to create component",
+					"component", name,
+					"error", err)
+				continue
+			}
+			pendingStart = append(pendingStart, name)
+		} else {
+			if err := cm.createAndStartComponent(ctx, name, cfg); err != nil {
+				cm.logger.Error("Reconcile: failed to create component",
+					"component", name,
+					"error", err)
+				continue
+			}
 		}
 		cm.recordAcceptedComponentConfig(name, cfg)
 		created++
 	}
 
+	// Phase 1b (boot only): apply edits to existing enabled components whose
+	// retained effective config differs from the live config.
+	if boot {
+		for name, cfg := range desiredComponents {
+			if !cfg.Enabled {
+				continue
+			}
+			existingCfg, running := existingCfgs[name]
+			if !running || existingCfg.Equal(cfg) {
+				continue
+			}
+			if existingCfg.Name == "rule-processor" {
+				cm.logger.Error("Reconcile: rejecting mid-boot rule-pack config change",
+					"component", name,
+					"error", "rule processor config is static after pack ownership is bound",
+					"action", "process_restart_required")
+				continue
+			}
+
+			cm.mu.RLock()
+			existing := cm.components[name]
+			cm.mu.RUnlock()
+			if existing == nil {
+				continue
+			}
+
+			cm.logger.Info("Reconcile: applying mid-boot config edit",
+				"component", name)
+			if err := cm.recreateComponentWithNewConfig(ctx, name, cfg, existing); err != nil {
+				return pendingStart, true, fmt.Errorf("apply mid-boot edit to component %q: %w", name, err)
+			}
+			pendingStart = append(pendingStart, name)
+			cm.recordAcceptedComponentConfig(name, cfg)
+			edited++
+		}
+	}
+
 	// Phase 2: Stop components that are disabled or removed from config
-	for name := range running {
+	for name := range existingCfgs {
 		cfg, inConfig := desiredComponents[name]
 		if inConfig && cfg.Enabled {
 			continue // Should be running
@@ -1482,15 +1772,21 @@ func (cm *ComponentManager) reconcileComponents(ctx context.Context, safeConfig 
 		stopped++
 	}
 
-	if created > 0 || stopped > 0 {
+	if created > 0 || edited > 0 || stopped > 0 {
 		cm.logger.Info("Reconciliation complete",
 			"created", created,
+			"edited", edited,
 			"stopped", stopped)
 	}
+	return pendingStart, created+edited+stopped > 0, nil
 }
 
-// restartComponentWithNewConfig gracefully restarts a component with new configuration
-func (cm *ComponentManager) restartComponentWithNewConfig(
+// recreateComponentWithNewConfig stops, removes, and re-creates a component
+// with new configuration WITHOUT starting it. It is the shared teardown+rebuild
+// core of the dynamic restart path (which then starts via the detached
+// startSingleComponent) and the boot-boundary drain (which barrier-starts the
+// rebuilt component instead).
+func (cm *ComponentManager) recreateComponentWithNewConfig(
 	ctx context.Context, name string, cfg types.ComponentConfig, existingComp *component.ManagedComponent,
 ) error {
 	// Check for nil component
@@ -1537,15 +1833,25 @@ func (cm *ComponentManager) restartComponentWithNewConfig(
 		return fmt.Errorf("failed to create component with new config: %w", err)
 	}
 
-	// Step 5: Start the new component if the system is running
+	// Invalidate FlowGraph cache (always safe to do)
+	cm.invalidateFlowGraph()
+	return nil
+}
+
+// restartComponentWithNewConfig gracefully restarts a component with new configuration
+func (cm *ComponentManager) restartComponentWithNewConfig(
+	ctx context.Context, name string, cfg types.ComponentConfig, existingComp *component.ManagedComponent,
+) error {
+	if err := cm.recreateComponentWithNewConfig(ctx, name, cfg, existingComp); err != nil {
+		return err
+	}
+
+	// Start the new component if the system is running
 	if cm.started.Load() {
 		if err := cm.startSingleComponent(ctx, name); err != nil {
 			return fmt.Errorf("failed to start restarted component: %w", err)
 		}
 	}
-
-	// Step 6: Invalidate FlowGraph cache (always safe to do)
-	cm.invalidateFlowGraph()
 
 	cm.logger.Debug("Component successfully restarted with new config",
 		"component", name)
@@ -1701,14 +2007,10 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		})
 
 		if startErr != nil {
-			// Update component state but don't fail the entire system
+			// Post-boot dynamic start: record the failure but don't crash the
+			// process. The StateFailed + LastError pair is what makes the
+			// failure visible through performDetailedHealthCheck.
 			cm.updateComponentState(name, component.StateFailed, startErr)
-
-			// Call error hook if registered
-			if cm.onComponentError != nil {
-				cm.onComponentError(mc.Context, name, startErr)
-			}
-
 			cm.logger.Error("Component start failed after retries",
 				"component", name,
 				"error", startErr)
@@ -1718,11 +2020,6 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		// Update component state
 		cm.updateComponentState(name, component.StateStarted, nil)
 		cm.registerProvidedStores(name, mc.Component)
-
-		// Call start hook if registered
-		if cm.onComponentStart != nil {
-			cm.onComponentStart(mc.Context, name, mc.Component)
-		}
 
 		cm.logger.Debug("Component started successfully",
 			"component", name)

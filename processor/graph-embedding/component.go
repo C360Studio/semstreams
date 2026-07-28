@@ -59,7 +59,6 @@ type Config struct {
 	Ports        *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
 	EmbedderType string                `json:"embedder_type" schema:"type:string,description:Embedder type (bm25 or http). HTTP requires model registry with embedding capability,category:basic"`
 	BatchSize    int                   `json:"batch_size" schema:"type:int,description:Batch size for embedding generation,category:advanced"`
-	CacheTTLStr  string                `json:"cache_ttl" schema:"type:string,description:Cache TTL for embeddings (e.g. 15m or 1h),category:advanced"`
 
 	// Workers is the number of concurrent embedding worker goroutines.
 	//
@@ -86,9 +85,6 @@ type Config struct {
 	StartupAttempts int `json:"startup_attempts,omitempty" schema:"type:int,description:Max attempts to wait for dependencies at startup,category:advanced"`
 	StartupInterval int `json:"startup_interval_ms,omitempty" schema:"type:int,description:Interval between startup attempts in milliseconds,category:advanced"`
 	CoalesceMs      int `json:"coalesce_ms,omitempty" schema:"type:int,description:Debounce window for entity updates in ms. 0=immediate processing,category:advanced"`
-
-	// Parsed duration (set by ApplyDefaults)
-	cacheTTL time.Duration
 }
 
 // Validate implements component.Validatable interface
@@ -99,20 +95,14 @@ func (c *Config) Validate() error {
 	if len(c.Ports.Inputs) == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one input port required")
 	}
-	if len(c.Ports.Outputs) == 0 {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
-	}
-
-	// Validate EMBEDDINGS_CACHE output exists
-	hasEmbeddingsCache := false
-	for _, output := range c.Ports.Outputs {
-		if output.Subject == graph.BucketEmbeddingsCache {
-			hasEmbeddingsCache = true
-			break
-		}
-	}
-	if !hasEmbeddingsCache {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", fmt.Sprintf("%s output required", graph.BucketEmbeddingsCache))
+	// The component writes its durable results (EMBEDDING_INDEX,
+	// EMBEDDING_DEDUP) directly at Start, not through declared output ports. A
+	// configured output is a stale declaration (the EMBEDDINGS_CACHE surface
+	// was deleted) that would register false port topology — reject it loudly
+	// rather than advertise a write the component never performs.
+	if len(c.Ports.Outputs) > 0 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			"graph-embedding declares no output ports; remove ports.outputs (see docs/operations/embeddings-cache-removal.md)")
 	}
 
 	// Validate embedder type
@@ -153,17 +143,7 @@ func (c *Config) Validate() error {
 			fmt.Sprintf("max_text_len exceeds the maximum of %d characters", embedding.MaxSourceTextLenCeiling))
 	}
 
-	// Validate cache TTL (parsed duration must be positive)
-	if c.cacheTTL < 0 {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "cache_ttl cannot be negative")
-	}
-
 	return nil
-}
-
-// CacheTTL returns the parsed cache TTL duration
-func (c *Config) CacheTTL() time.Duration {
-	return c.cacheTTL
 }
 
 // ApplyDefaults sets default values for configuration
@@ -184,39 +164,19 @@ func (c *Config) ApplyDefaults() {
 		c.StartupInterval = 500 // 500ms
 	}
 
-	// Parse cache TTL from string
-	if c.CacheTTLStr != "" {
-		if d, err := time.ParseDuration(c.CacheTTLStr); err == nil {
-			c.cacheTTL = d
-		}
-	}
-	if c.cacheTTL == 0 {
-		c.cacheTTL = 15 * time.Minute
-	}
-
 	if c.Ports == nil {
 		// Apply full default port config
 		defaultConf := DefaultConfig()
 		c.Ports = defaultConf.Ports
-	} else {
-		// If ports exist but are empty, populate with defaults
-		if len(c.Ports.Inputs) == 0 {
-			c.Ports.Inputs = []component.PortDefinition{
-				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
-				},
-			}
-		}
-		if len(c.Ports.Outputs) == 0 {
-			c.Ports.Outputs = []component.PortDefinition{
-				{
-					Name:    "embeddings",
-					Type:    "kv-write",
-					Subject: graph.BucketEmbeddingsCache,
-				},
-			}
+	} else if len(c.Ports.Inputs) == 0 {
+		// If ports exist but inputs are empty, populate with defaults. Outputs
+		// stay as declared: the component requires none.
+		c.Ports.Inputs = []component.PortDefinition{
+			{
+				Name:    "entity_watch",
+				Type:    "kv-watch",
+				Subject: graph.BucketEntityStates,
+			},
 		}
 	}
 }
@@ -237,18 +197,10 @@ func DefaultConfig() Config {
 					Bucket: "MESSAGES",
 				},
 			},
-			Outputs: []component.PortDefinition{
-				{
-					Name:    "embeddings",
-					Type:    "kv-write",
-					Subject: graph.BucketEmbeddingsCache,
-				},
-			},
 		},
 		EmbedderType: "bm25",
 		BatchSize:    50,
 		Workers:      defaultWorkers,
-		cacheTTL:     15 * time.Minute,
 	}
 }
 
@@ -293,7 +245,6 @@ type Component struct {
 	// wired" warning exactly once (gh#414) — the per-entity metric carries the
 	// count; the log stays a single actionable line rather than a flood.
 	noContentStoreWarn sync.Once
-	embeddingBucket    jetstream.KeyValue
 	entityCoalescer    *cache.CoalescingSet
 	entityStatesBucket jetstream.KeyValue
 
@@ -393,6 +344,17 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config unmarshal")
+		}
+		// Targeted probe for the removed cache_ttl knob: plain json.Unmarshal
+		// silently ignores unknown fields, so a stale config carrying it would
+		// otherwise appear to work while the operator believes the knob is
+		// live. Reject loudly instead (targeted — NOT DisallowUnknownFields).
+		var removed struct {
+			CacheTTL *json.RawMessage `json:"cache_ttl"`
+		}
+		if err := json.Unmarshal(rawConfig, &removed); err == nil && removed.CacheTTL != nil {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory",
+				"cache_ttl was removed from graph-embedding; delete it from the config (see docs/operations/embeddings-cache-removal.md)")
 		}
 	} else {
 		config = DefaultConfig()
@@ -646,28 +608,13 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
-	// Create embedding bucket (we are the WRITER)
-	embeddingBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketEmbeddingsCache,
-		Description: "Entity embedding cache",
-	})
-	if err != nil {
-		cancel()
-		if ctx.Err() != nil {
-			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
-		}
-		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketEmbeddingsCache))
-	}
-	c.embeddingBucket = embeddingBucket
-
-	// Readiness status bucket (ADR-083). Created EAGERLY — right after the first
-	// bucket this component writes and long before the status tick loop — so a
-	// consumer that binds its watch the instant this component appears finds a bucket
-	// rather than permanent status_unknown. Fatal on failure, like every other bucket
-	// this component writes: it cannot Start without JetStream anyway (the
-	// EMBEDDINGS_CACHE create above already hard-requires it), and a silently absent
-	// status bucket would fail every downstream gate closed forever with no
-	// producer-side evidence.
+	// Readiness status bucket (ADR-083). Created EAGERLY — first bucket touched
+	// in Start, long before the status tick loop — so a consumer that binds its
+	// watch the instant this component appears finds a bucket rather than
+	// permanent status_unknown. Fatal on failure, like every other bucket this
+	// component writes: it cannot Start without JetStream anyway, and a silently
+	// absent status bucket would fail every downstream gate closed forever with
+	// no producer-side evidence.
 	if err := c.createStatusBucket(ctx); err != nil {
 		cancel()
 		return err

@@ -604,19 +604,10 @@
               "type": "kv-watch",
               "description": "Watch entity state changes"
             }
-          ],
-          "outputs": [
-            {
-              "name": "embeddings",
-              "subject": "EMBEDDINGS_CACHE",
-              "type": "kv",
-              "description": "Entity embeddings cache"
-            }
           ]
         },
         "embedder_type": "http",
-        "batch_size": 50,
-        "cache_ttl": "1h"
+        "batch_size": 50
       }
     },
     "graph-clustering": {

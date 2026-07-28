@@ -28,7 +28,6 @@
 //   - ENTITY_STATES: Entity data
 //   - OUTGOING_INDEX, INCOMING_INDEX: Graph traversal
 //   - ALIAS_INDEX, PREDICATE_INDEX: Lookups
-//   - EMBEDDINGS_CACHE: Vector similarity (semantic tier)
 //   - COMMUNITY_INDEX: Clustering results (semantic tier)
 //   - ANOMALY_INDEX: Structural anomalies for inference endpoints
 //

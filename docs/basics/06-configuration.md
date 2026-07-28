@@ -65,7 +65,7 @@ rather than a monolithic processor. Each tier requires a specific set of compone
 | **graph-query** | Core (All) | Query coordinator | N/A (read-only) |
 | **graph-gateway** | Core (All) | Query gateway | N/A (read-only) |
 | **graph-clustering** | Statistical (Tier 1+) | Community detection, structural analysis, anomaly detection | `COMMUNITY_INDEX`, `STRUCTURAL_INDEX`, `ANOMALY_INDEX` |
-| **graph-embedding** | Statistical/Semantic (Tier 1+) | Vector embeddings | `EMBEDDING_INDEX`, `EMBEDDINGS_CACHE`, `EMBEDDING_DEDUP` |
+| **graph-embedding** | Statistical/Semantic (Tier 1+) | Vector embeddings | `EMBEDDING_INDEX`, `EMBEDDING_DEDUP` |
 | **graph-index-spatial** | Core (All) | Geospatial indexing | `SPATIAL_INDEX` |
 | **graph-index-temporal** | Core (All) | Temporal indexing | `TEMPORAL_INDEX` |
 
@@ -267,20 +267,17 @@ Everything in Rules-Only, plus:
   "config": {
     "embedder_type": "bm25",
     "batch_size": 50,
-    "cache_ttl": "15m",
     "ports": {
       "inputs": [
         {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
-      ],
-      "outputs": [
-        {"name": "embeddings", "type": "kv-write", "subject": "EMBEDDINGS_CACHE"},
-        {"name": "embedding_index", "type": "kv-write", "subject": "EMBEDDING_INDEX"},
-        {"name": "embedding_dedup", "type": "kv-write", "subject": "EMBEDDING_DEDUP"}
       ]
     }
   }
 }
 ```
+
+graph-embedding declares no output ports — it writes `EMBEDDING_INDEX` and
+`EMBEDDING_DEDUP` directly, and config validation rejects any `outputs` entry.
 
 **graph-clustering component**:
 
@@ -359,15 +356,9 @@ Everything in Native, plus:
   "config": {
     "embedder_type": "http",
     "batch_size": 50,
-    "cache_ttl": "15m",
     "ports": {
       "inputs": [
         {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
-      ],
-      "outputs": [
-        {"name": "embeddings", "type": "kv-write", "subject": "EMBEDDINGS_CACHE"},
-        {"name": "embedding_index", "type": "kv-write", "subject": "EMBEDDING_INDEX"},
-        {"name": "embedding_dedup", "type": "kv-write", "subject": "EMBEDDING_DEDUP"}
       ]
     }
   }

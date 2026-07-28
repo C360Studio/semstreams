@@ -32,10 +32,9 @@ const (
 	BucketContextIndex         = "CONTEXT_INDEX"
 
 	// Semantic tier buckets
-	BucketEmbeddingsCache = "EMBEDDINGS_CACHE"
-	BucketEmbeddingIndex  = "EMBEDDING_INDEX"
-	BucketEmbeddingDedup  = "EMBEDDING_DEDUP"
-	BucketCommunityIndex  = "COMMUNITY_INDEX"
+	BucketEmbeddingIndex = "EMBEDDING_INDEX"
+	BucketEmbeddingDedup = "EMBEDDING_DEDUP"
+	BucketCommunityIndex = "COMMUNITY_INDEX"
 	// BucketCommunitySummaries holds LLM-generated community summaries, written
 	// ONLY by the graph-clustering enhancement worker and keyed by
 	// {level}.{membership_hash} (content-addressed). It is deliberately SEPARATE
@@ -89,7 +88,6 @@ func FrameworkOwnedBuckets() []string {
 		BucketTemporalIndex,
 		BucketTemporalIndexReverse,
 		BucketContextIndex,
-		BucketEmbeddingsCache,
 		BucketEmbeddingIndex,
 		BucketEmbeddingDedup,
 		BucketCommunityIndex,

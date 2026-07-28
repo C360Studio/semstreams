@@ -56,7 +56,7 @@ The graph system decomposes into 8 specialized components with clear responsibil
 | **graph-index** | Relationship indexing | OUTGOING_INDEX, INCOMING_INDEX, ALIAS_INDEX, PREDICATE_INDEX, CONTEXT_INDEX | ENTITY_STATES |
 | **graph-query** | Query coordinator, PathRAG | - | - (request/reply) |
 | **graph-clustering** | Community detection, structural analysis, anomaly detection | COMMUNITY_INDEX, STRUCTURAL_INDEX, ANOMALY_INDEX | ENTITY_STATES |
-| **graph-embedding** | Vector embeddings (BM25 or HTTP) | EMBEDDING_INDEX, EMBEDDINGS_CACHE | ENTITY_STATES |
+| **graph-embedding** | Vector embeddings (BM25 or HTTP) | EMBEDDING_INDEX, EMBEDDING_DEDUP | ENTITY_STATES |
 | **graph-index-spatial** | Geospatial indexing (geohash) | SPATIAL_INDEX | ENTITY_STATES |
 | **graph-index-temporal** | Time-based indexing | TEMPORAL_INDEX | ENTITY_STATES |
 | **graph-gateway** | HTTP/GraphQL/MCP query API | - | All indexes (reads only) |
@@ -208,8 +208,9 @@ The `graph-embedding` component watches `ENTITY_STATES` and generates vector emb
 - **BM25 embedder**: Statistical text similarity (384 dimensions, no external dependencies)
 - **HTTP embedder**: Neural embeddings via external service (e.g., all-MiniLM-L6-v2)
 
-Embeddings are stored in `EMBEDDING_INDEX` with caching in `EMBEDDINGS_CACHE`. This enables semantic search and
-detection of semantic-structural gaps (entities that are semantically similar but lack graph connections).
+Embeddings are stored in `EMBEDDING_INDEX` (with `EMBEDDING_DEDUP` tracking unchanged text so it is not
+re-embedded). This enables semantic search and detection of semantic-structural gaps (entities that are
+semantically similar but lack graph connections).
 
 ## State: NATS KV Buckets
 
@@ -236,7 +237,6 @@ All state lives in NATS JetStream KV buckets. Each bucket has exactly one writer
 | `STRUCTURAL_INDEX` | graph-clustering | K-core levels and pivot distances | Structural analysis |
 | `ANOMALY_INDEX` | graph-clustering | Anomaly detection results | Anomaly detection |
 | `EMBEDDING_INDEX` | graph-embedding | Entity ID → embedding vector | Semantic similarity |
-| `EMBEDDINGS_CACHE` | graph-embedding | Cached entity embeddings | Embedding performance |
 | `EMBEDDING_DEDUP` | graph-embedding | Deduplication tracking | Embedding efficiency |
 
 See [Graph Components Reference](../advanced/07-graph-components.md#kv-bucket-ownership-table) for complete
