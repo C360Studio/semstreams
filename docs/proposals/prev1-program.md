@@ -62,12 +62,28 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > `MaxBytes` policy), sequences FIRST on the `graph-retention` spec; the `DiscardNew` carve-out is deferred
 > entirely to `bounded-storage-operability`, which rebases its delta onto #622's broadened requirement.**
 >
-> **NEXT: inc-0 (#622) MERGED + ARCHIVED (PR #716 `d03c49f7`). The primitive is live. Next Epic C increment =
-> the #625 (embedding cleanup repair loop) + #629 (coalescer resurrection, revisioned delete-marker) graph-embedding
-> pair — both CONSUME this primitive (the owned + retention-free `EMBEDDING_INDEX` is now guaranteed). #629 impl is
-> NOT blocked (the graph-index-replacement-semantics collision premise was falsified — the resurrection lane is in
-> graph-embedding, disjoint). Cadence: architect design (#629 ordering protocol in terms of the primitive) →
-> `/opsx:new` → semstreams-developer → semstreams-reviewer → Codex (owner-run) → CI → merge → archive.**
+> **inc-0 (#622) MERGED + ARCHIVED (PR #716 `d03c49f7`) — then REOPENED same day on a Codex retrospective
+> (2 P0s: the "post-start" sweep raced async component start; component Start failures never failed
+> boot/health) and RE-CLOSED via `reopen-framework-owned-bucket-guards` (PR #719 `a4287869`, MERGED +
+> ARCHIVED 2026-07-28, THREE Codex rounds): component-start barrier + fail-closed boot + health StateFailed;
+> boot-boundary config drain (mid-boot adds/edits/registry changes join the boot transaction; cutoff
+> honesty: post-drain changes = dynamic class, durable closure = acquisition seam); EMBEDDINGS_CACHE +
+> cache_ttl + 4 unconsumed lifecycle hooks DELETED (loud rejection of stale configs; adopter note
+> `docs/operations/embeddings-cache-removal.md` = the sole sister migration channel — we do NOT edit
+> sister repos). The primitive is now REAL.**
+>
+> **NEXT (owner-sequenced 2026-07-28): (1) delete the graph/embedding library cache CLASS — owner
+> post-merge review: #719 deleted the cache INSTANCE but `graph/embedding` still ships `Cache` iface
+> (embedder.go:63), `NATSCache` (cache.go), `HTTPConfig.Cache` + caching branches (http_embedder.go:47,82,143,234),
+> and the doc.go:45 example advertising it; zero non-doc consumers, production never sets the field.
+> CAUTION: cache.go also holds LIVE `ContentHash`/`EmbedderIdentity`/`DedupKey`/`InProcessDedupKey` —
+> delete the Cache/NATSCache/HTTPConfig.Cache surface only, NOT the file. Small follow-up PR, no OpenSpec
+> change (unspecced library API, zero consumers), BREAKING-flagged, `e2e:statistical` gate.
+> (2) THEN the #625 + #629 graph-embedding pair — both CONSUME the primitive; #629 impl NOT blocked
+> (resurrection lane is graph-embedding, disjoint). Cadence: architect design (#629 ordering protocol) →
+> `/opsx:new` → semstreams-developer → semstreams-reviewer → Codex (owner-run) → CI → merge → archive.
+> (3) LATER Epic C structural increment: bucket descriptor catalog + `EnsureFrameworkBucket` acquisition-seam
+> enforcement (spec'd in framework-composition as the durable closure; boot sweeps demote to backstops).**
 
 > **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
 > This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
