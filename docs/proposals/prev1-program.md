@@ -62,11 +62,12 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > `MaxBytes` policy), sequences FIRST on the `graph-retention` spec; the `DiscardNew` carve-out is deferred
 > entirely to `bounded-storage-operability`, which rebases its delta onto #622's broadened requirement.**
 >
-> **NEXT: architect scope DONE (2026-07-28). Drive `/opsx:new` for #622 inc-0 (asks 1+2, reconcile-then-assert,
-> additive, no predicate/vocab surface stated, EMBEDDINGS_CACHE excluded from sweep, defer `DiscardNew` to the
-> storage-limits epic) + the #629 decision doc. Then semstreams-developer implements #622, then the #625+#629
-> graph-embedding pair. Cadence: architect scope ✓ → semstreams-developer → semstreams-reviewer → Codex
-> (owner-run) → CI green → merge → archive.**
+> **NEXT: inc-0 (#622) MERGED + ARCHIVED (PR #716 `d03c49f7`). The primitive is live. Next Epic C increment =
+> the #625 (embedding cleanup repair loop) + #629 (coalescer resurrection, revisioned delete-marker) graph-embedding
+> pair — both CONSUME this primitive (the owned + retention-free `EMBEDDING_INDEX` is now guaranteed). #629 impl is
+> NOT blocked (the graph-index-replacement-semantics collision premise was falsified — the resurrection lane is in
+> graph-embedding, disjoint). Cadence: architect design (#629 ordering protocol in terms of the primitive) →
+> `/opsx:new` → semstreams-developer → semstreams-reviewer → Codex (owner-run) → CI → merge → archive.**
 
 > **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
 > This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
@@ -397,7 +398,7 @@ two files three times. Start Epic A here.
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
 | **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | ~~#606–#618~~ · #607/#617 closed by B3 · follow-ups #701 #710 | **✅ COMPLETE — B0/B1/B2/B3 ALL CLOSED. Recall-ceiling fix MERGED (PR #702, 0.85→0.95); B3 ownership split MERGED (PR #709 `857988ef`, archive #711; closes #607/#617). Follow-ups: #701 (multi-community expansion), #710 (summary-store GC), #661 reframed** |
-| **C** — operational / derived-KV-plane state-ownership (REDRAWN 2026-07-28) | generalize B3's single-writer + content-addressing + guard-coverage pattern across the plane the projection-contract arc leaves ungoverned; extend the boot retention/write-owner guard to full bucket coverage (the primitive), then repair loops that CONSUME it | #622 (primitive, inc-0) #625 #629 · ~~#527~~ folded into `graph-index-replacement-semantics` | **in progress — #622 PR #716; Codex CHANGES-REQUESTED (3 BLOCKING, all verified real) → ALL FIXED. F1 create-race: post-start `AssertOwnedBucketsClean` pass at tail of `Manager.StartAll` (both mains funnel through it; pre-start `WireOwnership` sweep kept as early belt) + honest two-pass spec. F2 GRAPH_INGEST_APPLIED_SEQ + F3 GRAPH_STATUS: hoisted to `graph.Bucket*` constants (readiness re-exports), added to owned inventory + retention sweep, load+runtime rejection tests. COMPONENT_STATUS deferred → #717. Tree green + independently verified. Next: internal re-review + CI → merge (no 2nd Codex per once-through policy). Follow-ups #714/#715/#717** |
+| **C** — operational / derived-KV-plane state-ownership (REDRAWN 2026-07-28) | generalize B3's single-writer + content-addressing + guard-coverage pattern across the plane the projection-contract arc leaves ungoverned; extend the boot retention/write-owner guard to full bucket coverage (the primitive), then repair loops that CONSUME it | ~~#622~~ (primitive, inc-0) DONE #625 #629 · ~~#527~~ folded into `graph-index-replacement-semantics` | **inc-0 (#622) MERGED + ARCHIVED 2026-07-28 (PR #716 `d03c49f7`, archive `2026-07-28-framework-owned-bucket-guards`). Two-pass boot-time retention guard over full `FrameworkOwnedBuckets()` (reconcile-then-assert, ObjectStore-symmetric) + write-ownership registration of ENTITY_SUFFIX_INDEX/GRAPH_INGEST_APPLIED_SEQ/GRAPH_STATUS. Codex found 3 BLOCKING past a same-run reviewer APPROVE (create-race coverage hole; 2 more forge/drop write holes) — ALL fixed + re-reviewed APPROVE + CI green, once-through Codex gate held. #715 closed (F2). Follow-ups: #714 (reader-creates), #717 (COMPONENT_STATUS classify), F2 blind-decode hardening (optional). NEXT: #625+#629 graph-embedding pair (consume the primitive).** |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
 
