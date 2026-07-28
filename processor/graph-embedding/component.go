@@ -95,9 +95,15 @@ func (c *Config) Validate() error {
 	if len(c.Ports.Inputs) == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one input port required")
 	}
-	// No output port is required: the component writes its durable results
-	// (EMBEDDING_INDEX, EMBEDDING_DEDUP) directly at Start, not through a
-	// declared output port.
+	// The component writes its durable results (EMBEDDING_INDEX,
+	// EMBEDDING_DEDUP) directly at Start, not through declared output ports. A
+	// configured output is a stale declaration (the EMBEDDINGS_CACHE surface
+	// was deleted) that would register false port topology — reject it loudly
+	// rather than advertise a write the component never performs.
+	if len(c.Ports.Outputs) > 0 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			"graph-embedding declares no output ports; remove ports.outputs (see docs/operations/embeddings-cache-removal.md)")
+	}
 
 	// Validate embedder type
 	if c.EmbedderType == "" {
@@ -338,6 +344,17 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.Wrap(err, "CreateGraphEmbedding", "factory", "config unmarshal")
+		}
+		// Targeted probe for the removed cache_ttl knob: plain json.Unmarshal
+		// silently ignores unknown fields, so a stale config carrying it would
+		// otherwise appear to work while the operator believes the knob is
+		// live. Reject loudly instead (targeted — NOT DisallowUnknownFields).
+		var removed struct {
+			CacheTTL *json.RawMessage `json:"cache_ttl"`
+		}
+		if err := json.Unmarshal(rawConfig, &removed); err == nil && removed.CacheTTL != nil {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "CreateGraphEmbedding", "factory",
+				"cache_ttl was removed from graph-embedding; delete it from the config (see docs/operations/embeddings-cache-removal.md)")
 		}
 	} else {
 		config = DefaultConfig()

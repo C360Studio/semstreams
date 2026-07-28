@@ -69,7 +69,8 @@ success while components failed — and the sweep demotes to a legacy-drift back
   `EMBEDDINGS_CACHE`. A reader of a never-written bucket is vestigial by construction, but a hit must be
   surfaced, not silently broken (real consumers live in sister repos).
 - Bucket cleanup in running deployments: the orphaned `KV_EMBEDDINGS_CACHE` bucket is inert (nothing
-  reads or writes it); note manual `nats kv del` in the adopter note. No migration code (clean break).
+  reads or writes it); note manual `nats kv rm` in the adopter note (`rm` removes the bucket;
+  `del` deletes a key and requires a key argument). No migration code (clean break).
 - Generated schemas may change (output no longer required/emitted in defaults): run
   `task schema:generate`, commit drift.
 

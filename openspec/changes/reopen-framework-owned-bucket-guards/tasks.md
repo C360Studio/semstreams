@@ -6,9 +6,14 @@
   `EMBEDDINGS_CACHE` / `BucketEmbeddingsCache` — config declarations, direct KV reads/writes. Record
   findings in the PR. A real consumer ⇒ STOP and surface to owner before deleting (a reader of a
   never-written bucket is vestigial, but it gets surfaced, not silently broken).
-  **FINDING (2026-07-28): no reader/writer in any sister. One config declaration —
-  `semsource/cmd/semsource/run.go:847` (drop on lockstep bump) — plus semsource doc prose repeating
-  the stale "results land in EMBEDDINGS_CACHE" claim (sister-side doc drift; note in PR).**
+  **FINDING (2026-07-28, CORRECTED in the Codex round — the original sweep filtered .json hits as
+  scorecard noise and under-reported): no reader/writer of the bucket in any sister. Sister-facing
+  surface identified by the corrected sweep: semsource — `cmd/semsource/run.go` embeddings output
+  declaration, `test/e2e/beta148_cutover_test.go` framework-bucket parity literal,
+  `configs/tiers/README.md` stale prose; semspec — 12 checked-in configs under `configs/` carrying
+  both the EMBEDDINGS_CACHE output entry and `cache_ttl`. We do not touch sister repos: migration is
+  communicated via docs/operations/embeddings-cache-removal.md (the sole downstream migration
+  channel) and sisters handle it internally on their next semstreams bump.**
 - [x] 1.2 Grep semstreams + sisters for `RegisterComponentErrorHook` callers. No consumer ⇒ task 3.4
   deletes it; a consumer ⇒ keep it and wire boot propagation around it, document which.
   **FINDING (2026-07-28): zero callers anywhere (semstreams non-test + all sisters) for
@@ -83,7 +88,8 @@
   **Ran clean — no drift (Config struct fields unchanged; only validation/default behavior changed).**
 - [x] 4.5 Adopter note (`docs/operations/`): config migration (drop the output), and that an orphaned
   `KV_EMBEDDINGS_CACHE` bucket in an existing deployment is inert and may be manually deleted
-  (`nats kv del`). No migration code. **`docs/operations/embeddings-cache-removal.md`.**
+  (`nats kv rm` — bucket removal; `kv del` deletes a key, Codex round correction). No migration
+  code. **`docs/operations/embeddings-cache-removal.md`.**
 
 ## 5. Production-wire integration tests (replace the sync-mock test)
 
@@ -150,3 +156,34 @@
   durability canary requested and added (skipProbeMentioning ENTITY_STATES).**
 - [ ] 8.3 Merge gate: `gh pr checks` + `mergeStateStatus` verified at merge (no required checks on the
   repo); Codex review is owner-run/out-of-band — hand off, do not self-approve past it.
+
+## 9. Codex review round (PR #719)
+
+- [x] 9.1 Boot/config-update serialization: launch `watchConfigUpdates` only AFTER the component-start
+  barrier (and never on a failed boot), so no update is processed with `started == false` (which
+  created-but-never-started components, parked StateInitialized and invisible to health). Producer
+  side verified: `config.Manager.OnChange` channels are cap-1 buffered; per-key sends are
+  non-blocking drop-on-full; the bulk `notifySubscribers` drain-and-blocking-send holds only
+  config.Manager's own mu, which boot never acquires (`GetConfig` is lock-free) — deferring
+  consumption cannot deadlock boot. Both dynamic paths verified start-or-fail-loudly with
+  `started == true` (StateFailed + LastError → health). `watchConfigUpdates` confirmed the ONLY
+  consumer of `cm.configUpdates`. Test:
+  `TestComponentManagerStart_ConfigUpdatesSerializedAfterBarrier` — gate-held cold boot, buffered
+  mid-boot update, order-ledger proof; observed failing on pre-fix code ("never reached
+  StateStarted"), green on the fix.
+- [x] 9.2 Loud rejection of the removed surface: `Config.Validate` rejects ANY `ports.outputs` entry
+  ("graph-embedding declares no output ports; remove ports.outputs (see
+  docs/operations/embeddings-cache-removal.md)"); the factory probes raw JSON and rejects a present
+  `cache_ttl` key naming the migration note (targeted probe, NOT DisallowUnknownFields). Tests:
+  `TestConfig_Validate_RejectsDeclaredOutputs` (EMBEDDINGS_CACHE + arbitrary output),
+  `TestCreateGraphEmbedding_RejectsRemovedCacheTTL` — both observed failing pre-fix; clean configs
+  still pass. In-repo fixture re-sweep: only the four shipped configs/ reference graph-embedding and
+  all are already clean; no test/, docker/, cmd/, examples/ fixture trips the new rejections.
+  Adopter note updated to state both exact errors and rewritten as the complete standalone
+  migration checklist (sole downstream channel; sisters migrate internally).
+- [x] 9.3 `nats kv del` → `nats kv rm` corrected in docs/operations/embeddings-cache-removal.md,
+  tasks.md 4.5, and design.md Decision 3 (`rm` removes the bucket; `del` deletes a key).
+- [x] 9.4 Ledger correction: 1.1 finding rewritten to the corrected sister-surface truth (the
+  original sweep filtered .json hits as scorecard noise — semspec's 12 checked-in configs and
+  semsource's beta148 parity literal were missed); no sister edits from here — migration
+  communicated via the adopter note, sisters handle it on their next bump.

@@ -320,6 +320,11 @@ func (cm *ComponentManager) Initialize() error {
 // before returning the joined failure (so Stop tears down what did start), and
 // a second Start call returns nil by design — the StateFailed truth lives in
 // the health check, and the process is expected to exit on the boot error.
+//
+// Config reconciliation is serialized after the cold-boot transaction: the
+// config-update watcher launches only after the component-start barrier has
+// completed (and never on a failed boot), so every dynamically applied update
+// observes started == true and takes the real dynamic start path.
 func (cm *ComponentManager) Start(ctx context.Context) error {
 	cm.startMu.Lock()
 	defer cm.startMu.Unlock()
@@ -335,15 +340,6 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	// Create shutdown channels for coordinated shutdown
 	cm.shutdown = make(chan struct{})
 	cm.done = make(chan struct{})
-
-	// Start watching for config updates if channel is available
-	if cm.configUpdates != nil {
-		cm.wg.Add(1)
-		go func() {
-			defer cm.wg.Done()
-			cm.watchConfigUpdates(ctx)
-		}()
-	}
 
 	cm.startOrder = make([]string, 0)
 
@@ -362,6 +358,27 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 
 	if startErr != nil {
 		return fmt.Errorf("start components: %w", startErr)
+	}
+
+	// Start watching for config updates only AFTER the barrier: an update
+	// processed mid-boot would hit the dynamic paths with started == false,
+	// which create but never start the component — parked StateInitialized,
+	// invisible to health, with no later start trigger. Updates arriving during
+	// boot sit in the buffered OnChange channel (per-key sends are non-blocking
+	// drop-on-full; the bulk reconcile drain-and-resend guarantees eventual
+	// delivery) and are processed here with started == true, so the dynamic
+	// path starts them properly and failures land in StateFailed → health. On a
+	// failed boot the watcher never starts — the process is exiting. Known
+	// freshness edge (not correctness): a model_registry KV change landing
+	// mid-barrier can be dropped by the cap-1 per-key send and is healed only
+	// by the NEXT registry change — components read the registry at build time,
+	// so this widens a pre-existing microsecond window to barrier duration.
+	if cm.configUpdates != nil {
+		cm.wg.Add(1)
+		go func() {
+			defer cm.wg.Done()
+			cm.watchConfigUpdates(ctx)
+		}()
 	}
 
 	// Start health publishing loop (publishes to health.component.{name})

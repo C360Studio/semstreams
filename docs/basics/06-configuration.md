@@ -270,15 +270,14 @@ Everything in Rules-Only, plus:
     "ports": {
       "inputs": [
         {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
-      ],
-      "outputs": [
-        {"name": "embedding_index", "type": "kv-write", "subject": "EMBEDDING_INDEX"},
-        {"name": "embedding_dedup", "type": "kv-write", "subject": "EMBEDDING_DEDUP"}
       ]
     }
   }
 }
 ```
+
+graph-embedding declares no output ports — it writes `EMBEDDING_INDEX` and
+`EMBEDDING_DEDUP` directly, and config validation rejects any `outputs` entry.
 
 **graph-clustering component**:
 
@@ -360,10 +359,6 @@ Everything in Native, plus:
     "ports": {
       "inputs": [
         {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
-      ],
-      "outputs": [
-        {"name": "embedding_index", "type": "kv-write", "subject": "EMBEDDING_INDEX"},
-        {"name": "embedding_dedup", "type": "kv-write", "subject": "EMBEDDING_DEDUP"}
       ]
     }
   }

@@ -195,6 +195,76 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 	}
 }
 
+// TestConfig_Validate_RejectsDeclaredOutputs locks the loud-failure contract
+// for the deleted output surface: graph-embedding declares no output ports, so
+// ANY configured outputs entry (the stale EMBEDDINGS_CACHE declaration or any
+// other) must be rejected with an actionable error — not silently accepted and
+// advertised as false port topology through OutputPorts.
+func TestConfig_Validate_RejectsDeclaredOutputs(t *testing.T) {
+	tests := []struct {
+		name    string
+		outputs []component.PortDefinition
+	}{
+		{
+			name: "stale EMBEDDINGS_CACHE output",
+			outputs: []component.PortDefinition{
+				{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
+			},
+		},
+		{
+			name: "any other declared output",
+			outputs: []component.PortDefinition{
+				{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Config{
+				Ports: &component.PortConfig{
+					Inputs: []component.PortDefinition{
+						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+					},
+					Outputs: tt.outputs,
+				},
+				EmbedderType: "bm25",
+			}
+			err := cfg.Validate()
+			require.Error(t, err, "a declared output must be rejected loudly")
+			assert.Contains(t, err.Error(), "no output ports",
+				"the error must state the component declares no output ports")
+			assert.Contains(t, err.Error(), "embeddings-cache-removal",
+				"the error must point at the migration note")
+		})
+	}
+}
+
+// TestCreateGraphEmbedding_RejectsRemovedCacheTTL locks the loud-failure
+// contract for the deleted cache_ttl knob: plain json.Unmarshal ignores unknown
+// fields, so the factory probes the raw config and rejects a present cache_ttl
+// key with an error naming the migration note — a config carrying it is stale,
+// not merely verbose.
+func TestCreateGraphEmbedding_RejectsRemovedCacheTTL(t *testing.T) {
+	raw := []byte(`{
+		"ports": {
+			"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}]
+		},
+		"embedder_type": "bm25",
+		"cache_ttl": "1h"
+	}`)
+
+	natsClient, err := natsclient.NewClient("nats://localhost:4222")
+	require.NoError(t, err)
+
+	comp, err := CreateGraphEmbedding(raw, component.Dependencies{NATSClient: natsClient})
+	require.Error(t, err, "a config carrying the removed cache_ttl key must be rejected loudly")
+	assert.Nil(t, comp)
+	assert.Contains(t, err.Error(), "cache_ttl", "the error must name the removed field")
+	assert.Contains(t, err.Error(), "embeddings-cache-removal",
+		"the error must point at the migration note")
+}
+
 func TestConfig_Validate_MissingPorts(t *testing.T) {
 	tests := []struct {
 		name    string

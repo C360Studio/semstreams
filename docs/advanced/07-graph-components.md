@@ -235,10 +235,9 @@ enabling semantic similarity search.
 
 - `entity_states_watch` (kv-watch): Watches `ENTITY_STATES`
 
-**Output Ports**:
-
-- `embedding_index` (kv-bucket): Writes to `EMBEDDING_INDEX`
-- `embedding_dedup` (kv-bucket): Writes to `EMBEDDING_DEDUP`
+**Output Ports**: none — graph-embedding writes `EMBEDDING_INDEX` and `EMBEDDING_DEDUP`
+directly (durable bucket writes, not port-declared flows); config validation rejects any
+`outputs` entry.
 
 **Configuration**:
 
@@ -251,10 +250,6 @@ enabling semantic similarity search.
   "ports": {
     "inputs": [
       {"name": "entity_states_watch", "type": "kv-watch", "bucket": "ENTITY_STATES"}
-    ],
-    "outputs": [
-      {"name": "embedding_index", "type": "kv-bucket", "bucket": "EMBEDDING_INDEX"},
-      {"name": "embedding_dedup", "type": "kv-bucket", "bucket": "EMBEDDING_DEDUP"}
     ]
   }
 }
