@@ -238,7 +238,6 @@ enabling semantic similarity search.
 **Output Ports**:
 
 - `embedding_index` (kv-bucket): Writes to `EMBEDDING_INDEX`
-- `embeddings_cache` (kv-bucket): Writes to `EMBEDDINGS_CACHE`
 - `embedding_dedup` (kv-bucket): Writes to `EMBEDDING_DEDUP`
 
 **Configuration**:
@@ -255,7 +254,6 @@ enabling semantic similarity search.
     ],
     "outputs": [
       {"name": "embedding_index", "type": "kv-bucket", "bucket": "EMBEDDING_INDEX"},
-      {"name": "embeddings_cache", "type": "kv-bucket", "bucket": "EMBEDDINGS_CACHE"},
       {"name": "embedding_dedup", "type": "kv-bucket", "bucket": "EMBEDDING_DEDUP"}
     ]
   }
@@ -477,7 +475,6 @@ Each NATS KV bucket has exactly one writer component (single-owner pattern) and 
 | `STRUCTURAL_INDEX` | graph-clustering | graph-gateway | K-core levels and pivot distances |
 | `ANOMALY_INDEX` | graph-clustering | graph-query, graph-gateway | Anomaly detection results |
 | `EMBEDDING_INDEX` | graph-embedding | graph-clustering, graph-gateway | Entity ID → embedding vector |
-| `EMBEDDINGS_CACHE` | graph-embedding | graph-embedding | Cached entity embeddings |
 | `EMBEDDING_DEDUP` | graph-embedding | graph-embedding | Deduplication tracking |
 
 ---

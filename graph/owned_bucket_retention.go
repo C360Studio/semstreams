@@ -11,34 +11,12 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// retentionGuardedBuckets returns the framework-owned KV buckets the boot-time
-// retention sweep asserts carry no lifecycle eviction (ADR-068). It is
-// FrameworkOwnedBuckets() MINUS EMBEDDINGS_CACHE.
-//
-// EMBEDDINGS_CACHE is the one legitimately rebuildable cache in the owned set:
-// bounding its capacity (a MaxBytes/DiscardNew size cap) is a legitimate
-// operability policy owned by the separate bounded-storage-operability
-// capability, not by this reachability-blind-retention guard. It stays a member
-// of FrameworkOwnedBuckets() (still write-ownership-protected against a generic
-// update_kv) but is excluded here so the retention sweep never strips a size cap
-// its true owner may legitimately set.
-func retentionGuardedBuckets() []string {
-	owned := FrameworkOwnedBuckets()
-	guarded := make([]string, 0, len(owned))
-	for _, bucket := range owned {
-		if bucket == BucketEmbeddingsCache {
-			continue
-		}
-		guarded = append(guarded, bucket)
-	}
-	return guarded
-}
-
 // AssertOwnedBucketsClean is the boot-time sweep that keeps the framework-owned
 // KV plane free of NATS lifecycle retention (ADR-068 D1; #622). It ranges
-// retentionGuardedBuckets() and, for EACH bucket that exists WHEN IT RUNS, runs
-// the KV reconcile-then-assert atom (natsclient.ReconcileNoLifecycleRetention):
-// a foreign/legacy MaxAge or binding MaxBytes is stripped in place and WARNed; a
+// FrameworkOwnedBuckets() — the guard covers the full owned set with NO
+// exceptions — and, for EACH bucket that exists WHEN IT RUNS, runs the KV
+// reconcile-then-assert atom (natsclient.ReconcileNoLifecycleRetention): a
+// foreign/legacy MaxAge or binding MaxBytes is stripped in place and WARNed; a
 // genuinely unfixable retention aborts boot fast with the bucket named, rather
 // than proceeding to silently expire graph state.
 //
@@ -49,10 +27,13 @@ func retentionGuardedBuckets() []string {
 //   - PRE-START belt — from service.WireOwnership, before rule evaluation or the
 //     graph components' get-or-create can lean on a persisted-dirty bucket. It
 //     takes down prior-boot / out-of-band dirt early.
-//   - POST-START coverage — from the tail of Manager.StartAll, after every owner
-//     has created its bucket and before the HTTP surface reports healthy. This
-//     pass catches a bucket created dirty DURING this boot's service-start loop
-//     (a create-race) that the pre-start belt necessarily skipped as absent.
+//   - POST-START coverage — from the tail of Manager.StartAll. Its ordering is
+//     provided by the component-start barrier: ComponentManager.Start returns
+//     only after every lifecycle component's Start has returned (or failed
+//     boot), so every owner holds its bucket handle before this pass ranges the
+//     set, and it runs before the HTTP surface reports healthy. This pass
+//     catches a bucket created dirty DURING this boot's own startup (a
+//     create-race) that the pre-start belt necessarily skipped as absent.
 //
 // Each bucket is bound READ-ONLY / MUST-EXIST (never created) / SKIP-IF-ABSENT:
 // a guarded bucket that does not yet exist (a tier-gated deploy that has not
@@ -77,7 +58,7 @@ func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, log
 		return errs.WrapTransient(err, "graph", "AssertOwnedBucketsClean", "get JetStream context")
 	}
 
-	for _, bucket := range retentionGuardedBuckets() {
+	for _, bucket := range FrameworkOwnedBuckets() {
 		// Read-only / must-exist probe: GetKeyValueBucket never creates a bucket
 		// and returns jetstream.ErrBucketNotFound for an absent one (exempted from
 		// the shared circuit breaker). Skip-if-absent: a not-yet-provisioned

@@ -73,12 +73,6 @@ type ComponentManager struct {
 	// FlowGraph caching for thread-safe analysis
 	graphCache flowGraphCache
 
-	// Lifecycle hooks for debugging and monitoring
-	onComponentStart func(ctx context.Context, name string, comp component.Discoverable)
-	onComponentStop  func(ctx context.Context, name string, reason string)
-	onComponentError func(ctx context.Context, name string, err error)
-	onHealthChange   func(ctx context.Context, name string, healthy bool, details string)
-
 	// Thread safety for component operations
 	mu          sync.RWMutex
 	initialized atomic.Bool
@@ -320,7 +314,12 @@ func (cm *ComponentManager) Initialize() error {
 	return nil
 }
 
-// Start starts all initialized components with proper context flow-through
+// Start starts all initialized components with proper context flow-through.
+//
+// A failed boot is not retryable in-process: Start marks the manager started
+// before returning the joined failure (so Stop tears down what did start), and
+// a second Start call returns nil by design — the StateFailed truth lives in
+// the health check, and the process is expected to exit on the boot error.
 func (cm *ComponentManager) Start(ctx context.Context) error {
 	cm.startMu.Lock()
 	defer cm.startMu.Unlock()
@@ -351,10 +350,19 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	// Initialize NATS-backed capability discovery
 	cm.initCapabilityDiscovery(ctx)
 
-	// Start all components
-	cm.startAllComponents(ctx)
+	// Start all components. startAllComponents is a component-start barrier:
+	// components launch in parallel but it returns only after every launched
+	// Start has returned, joining all failures. Mark started even on failure so
+	// a subsequent Stop tears down the components that DID start, then fail
+	// boot closed — the composition root must not proceed to the post-start
+	// bucket sweep or HTTP setup on a partially failed component set.
+	startErr := cm.startAllComponents(ctx)
 
 	cm.started.Store(true)
+
+	if startErr != nil {
+		return fmt.Errorf("start components: %w", startErr)
+	}
 
 	// Start health publishing loop (publishes to health.component.{name})
 	cm.wg.Add(1)
@@ -390,15 +398,21 @@ func (cm *ComponentManager) initCapabilityDiscovery(ctx context.Context) {
 	cm.registry.StartHeartbeat(ctx, 30*time.Second)
 }
 
-// componentToStart holds component info for async startup.
+// componentToStart holds component info for the parallel launch batch.
 type componentToStart struct {
 	name      string
 	mc        *component.ManagedComponent
 	lifecycle component.LifecycleComponent
 }
 
-// startAllComponents prepares and starts all lifecycle components asynchronously.
-func (cm *ComponentManager) startAllComponents(ctx context.Context) {
+// startAllComponents starts all lifecycle components and acts as the
+// component-start barrier (framework-composition spec): Start calls launch in
+// parallel for startup latency, but this function returns only after every
+// launched Start has returned, and returns the joined errors of all that
+// failed — each naming its component. The batch WaitGroup is deliberately
+// scoped here rather than reusing cm.wg, which tracks long-lived loops
+// (watchConfigUpdates, publishHealthLoop) that outlive the launch batch.
+func (cm *ComponentManager) startAllComponents(ctx context.Context) error {
 	cm.mu.Lock()
 	componentsToStart := make([]componentToStart, 0, len(cm.components))
 	for name, mc := range cm.components {
@@ -413,34 +427,43 @@ func (cm *ComponentManager) startAllComponents(ctx context.Context) {
 	}
 	cm.mu.Unlock()
 
+	var (
+		batch     sync.WaitGroup
+		errMu     sync.Mutex
+		startErrs []error
+	)
 	for _, comp := range componentsToStart {
-		cm.wg.Add(1)
-		go cm.startComponentAsync(comp.name, comp.mc, comp.lifecycle)
+		batch.Add(1)
+		go func(c componentToStart) {
+			defer batch.Done()
+			if err := cm.startComponent(c.name, c.mc, c.lifecycle); err != nil {
+				errMu.Lock()
+				startErrs = append(startErrs, fmt.Errorf("component %q: %w", c.name, err))
+				errMu.Unlock()
+			}
+		}(comp)
 	}
+	batch.Wait()
+	return errors.Join(startErrs...)
 }
 
-// startComponentAsync starts a single component in a goroutine.
-func (cm *ComponentManager) startComponentAsync(name string, mc *component.ManagedComponent, lc component.LifecycleComponent) {
-	defer cm.wg.Done()
-
+// startComponent runs a single component's Start (on a launch goroutine) and
+// records the resulting state. The returned error propagates through the
+// startAllComponents barrier so boot fails closed on it.
+func (cm *ComponentManager) startComponent(name string, mc *component.ManagedComponent, lc component.LifecycleComponent) error {
 	cm.logger.Debug("Starting component", "name", name, "type", mc.Component.Meta().Type)
 
 	if err := lc.Start(mc.Context); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
 		cm.logger.Error("Component failed to start",
 			"name", name, "type", mc.Component.Meta().Type, "error", err)
-		if cm.onComponentError != nil {
-			cm.onComponentError(mc.Context, name, err)
-		}
-		return
+		return err
 	}
 
 	cm.updateComponentState(name, component.StateStarted, nil)
 	cm.registerProvidedStores(name, mc.Component)
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
-	if cm.onComponentStart != nil {
-		cm.onComponentStart(mc.Context, name, mc.Component)
-	}
+	return nil
 }
 
 // Stop gracefully stops all components in reverse order of startup
@@ -579,18 +602,17 @@ func (cm *ComponentManager) stopSingleComponent(
 ) error {
 	// Try to stop component if it supports lifecycle
 	if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
-		return cm.stopLifecycleComponent(ctx, name, mc, lifecycle)
+		return cm.stopLifecycleComponent(ctx, name, lifecycle)
 	}
 
 	// Component doesn't support lifecycle, just mark as stopped
-	cm.markComponentStopped(ctx, name, mc, "no-lifecycle")
+	cm.updateComponentState(name, component.StateStopped, nil)
 	return nil
 }
 
 // stopLifecycleComponent stops a component that supports the lifecycle interface
 func (cm *ComponentManager) stopLifecycleComponent(
-	ctx context.Context, name string, mc *component.ManagedComponent,
-	lifecycle component.LifecycleComponent,
+	ctx context.Context, name string, lifecycle component.LifecycleComponent,
 ) error {
 	// Calculate timeout from context deadline
 	timeout := 30 * time.Second // Default timeout
@@ -608,34 +630,11 @@ func (cm *ComponentManager) stopLifecycleComponent(
 	// Call Stop with timeout - interface now supports it properly
 	if err := lifecycle.Stop(timeout); err != nil {
 		cm.updateComponentState(name, component.StateFailed, err)
-
-		// Call error hook if registered
-		if cm.onComponentError != nil {
-			go cm.onComponentError(ctx, name, err)
-		}
-
 		return fmt.Errorf("component '%s': %w", name, err)
 	}
 
-	cm.markComponentStopped(ctx, name, mc, "graceful")
-	return nil
-}
-
-// markComponentStopped marks a component as stopped and calls the stop hook
-func (cm *ComponentManager) markComponentStopped(
-	ctx context.Context, name string, _ *component.ManagedComponent, reason string,
-) {
 	cm.updateComponentState(name, component.StateStopped, nil)
-
-	// Call stop hook if registered and context not cancelled
-	if cm.onComponentStop != nil {
-		select {
-		case <-ctx.Done():
-			cm.logger.Warn("Skipping stop hook due to context cancellation", "component", name)
-		default:
-			go cm.onComponentStop(ctx, name, reason)
-		}
-	}
+	return nil
 }
 
 // updateComponentState safely updates component state with proper locking
@@ -944,6 +943,16 @@ func (cm *ComponentManager) performDetailedHealthCheck() error {
 			return fmt.Errorf("component %s has nil implementation", name)
 		}
 
+		// A failed lifecycle operation (post-boot dynamic start/restart, stop
+		// error) leaves the component in StateFailed with its context still
+		// live — health must report it, not silently skip it.
+		if comp.State == component.StateFailed {
+			if comp.LastError != nil {
+				return fmt.Errorf("component %s failed: %w", name, comp.LastError)
+			}
+			return fmt.Errorf("component %s failed", name)
+		}
+
 		// Check if component context is cancelled (indicates failure)
 		if comp.Context != nil && comp.Context.Err() != nil {
 			return fmt.Errorf("component %s context cancelled: %w", name, comp.Context.Err())
@@ -966,41 +975,6 @@ func (cm *ComponentManager) shutdownCallback(ctx context.Context) error {
 		timeout = 5 * time.Second // Default fallback
 	}
 	return cm.Stop(timeout)
-}
-
-// RegisterComponentStartHook registers a callback for component start events
-func (cm *ComponentManager) RegisterComponentStartHook(
-	hook func(ctx context.Context, name string, comp component.Discoverable),
-) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentStart = hook
-}
-
-// RegisterComponentStopHook registers a callback for component stop events
-func (cm *ComponentManager) RegisterComponentStopHook(hook func(ctx context.Context, name string, reason string)) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentStop = hook
-}
-
-// RegisterComponentErrorHook registers a callback for component error events
-func (cm *ComponentManager) RegisterComponentErrorHook(hook func(ctx context.Context, name string, err error)) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onComponentError = hook
-}
-
-// WithNATSClient is a functional option to provide NATS client for config watching
-// WithNATSClient removed - NATS client now comes from Dependencies
-
-// RegisterHealthChangeHook registers a callback for health change events
-func (cm *ComponentManager) RegisterHealthChangeHook(
-	hook func(ctx context.Context, name string, healthy bool, details string),
-) {
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-	cm.onHealthChange = hook
 }
 
 // handleComponentConfigChange handles dynamic component configuration changes
@@ -1701,14 +1675,10 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		})
 
 		if startErr != nil {
-			// Update component state but don't fail the entire system
+			// Post-boot dynamic start: record the failure but don't crash the
+			// process. The StateFailed + LastError pair is what makes the
+			// failure visible through performDetailedHealthCheck.
 			cm.updateComponentState(name, component.StateFailed, startErr)
-
-			// Call error hook if registered
-			if cm.onComponentError != nil {
-				cm.onComponentError(mc.Context, name, startErr)
-			}
-
 			cm.logger.Error("Component start failed after retries",
 				"component", name,
 				"error", startErr)
@@ -1718,11 +1688,6 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 		// Update component state
 		cm.updateComponentState(name, component.StateStarted, nil)
 		cm.registerProvidedStores(name, mc.Component)
-
-		// Call start hook if registered
-		if cm.onComponentStart != nil {
-			cm.onComponentStart(mc.Context, name, mc.Component)
-		}
 
 		cm.logger.Debug("Component started successfully",
 			"component", name)

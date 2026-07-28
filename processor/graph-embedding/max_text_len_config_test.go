@@ -15,8 +15,7 @@ func TestMaxTextLenConfig_JSONRoundTrip(t *testing.T) {
 
 	raw := []byte(`{
 		"ports": {
-			"inputs":  [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
-			"outputs": [{"name":"embeddings","type":"kv-write","subject":"EMBEDDINGS_CACHE"}]
+			"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}]
 		},
 		"embedder_type": "bm25",
 		"max_text_len": 1234

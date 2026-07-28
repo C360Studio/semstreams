@@ -110,7 +110,7 @@ Tier 1+ Only:
         ENTITY_STATES
               │
               ▼ (kv-watch)
-        graph-embedding ──► EMBEDDINGS_CACHE
+        graph-embedding ──► EMBEDDING_INDEX / EMBEDDING_DEDUP
               │
               ▼ (reads KV)
         graph-clustering ──┬──► COMMUNITY_INDEX
@@ -186,14 +186,10 @@ Generates vector embeddings for entities.
     "ports": {
       "inputs": [
         {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
-      ],
-      "outputs": [
-        {"name": "embeddings", "subject": "EMBEDDINGS_CACHE", "type": "kv"}
       ]
     },
     "embedder_type": "bm25",
-    "batch_size": 50,
-    "cache_ttl": "1h"
+    "batch_size": 50
   }
 }
 ```
@@ -354,7 +350,8 @@ HTTP gateway for GraphQL and MCP access.
 | `INCOMING_INDEX` | graph-index | graph-clustering | All |
 | `ALIAS_INDEX` | graph-index | - | All |
 | `PREDICATE_INDEX` | graph-index | - | All |
-| `EMBEDDINGS_CACHE` | graph-embedding | graph-clustering | 1+ |
+| `EMBEDDING_INDEX` | graph-embedding | - | 1+ |
+| `EMBEDDING_DEDUP` | graph-embedding | - | 1+ |
 | `COMMUNITY_INDEX` | graph-clustering | - | 1+ |
 | `STRUCTURAL_INDEX` | graph-clustering | - | 1+ |
 | `ANOMALY_INDEX` | graph-clustering | - | 1+ |

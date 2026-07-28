@@ -168,9 +168,6 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "bm25",
 			},
@@ -182,13 +179,9 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "http",
 				BatchSize:    100,
-				CacheTTLStr:  "30m",
 			},
 		},
 	}
@@ -221,16 +214,16 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "bm25",
 			},
 			wantErr: true,
 		},
 		{
-			name: "empty outputs",
+			// Outputs are optional: the component writes its durable results
+			// (EMBEDDING_INDEX, EMBEDDING_DEDUP) directly, not through a
+			// declared output port (EMBEDDINGS_CACHE surface deleted).
+			name: "empty outputs valid",
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
@@ -240,22 +233,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				},
 				EmbedderType: "bm25",
 			},
-			wantErr: true,
-		},
-		{
-			name: "missing EMBEDDINGS_CACHE output",
-			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
-					},
-				},
-				EmbedderType: "bm25",
-			},
-			wantErr: true,
+			wantErr: false,
 		},
 	}
 
@@ -284,9 +262,6 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "",
 			},
@@ -298,9 +273,6 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
 					},
 				},
 				EmbedderType: "openai",
@@ -314,28 +286,9 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "bm25",
 				BatchSize:    -10,
-			},
-			wantErr: true,
-		},
-		{
-			name: "negative cache TTL",
-			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
-				},
-				EmbedderType: "bm25",
-				CacheTTLStr:  "-5m",
 			},
 			wantErr: true,
 		},
@@ -343,10 +296,6 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Only apply defaults for tests that need string parsing
-			if tt.name == "negative cache TTL" {
-				tt.config.ApplyDefaults()
-			}
 			err := tt.config.Validate()
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -363,9 +312,6 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 			},
-			Outputs: []component.PortDefinition{
-				{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-			},
 		},
 		EmbedderType: "bm25",
 	}
@@ -375,7 +321,6 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	// Verify defaults are applied
 	assert.Equal(t, "bm25", config.EmbedderType, "EmbedderType should remain bm25")
 	assert.Equal(t, 50, config.BatchSize, "BatchSize should default to 50")
-	assert.Equal(t, 15*time.Minute, config.CacheTTL(), "CacheTTL should default to 15 minutes")
 }
 
 func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
@@ -388,17 +333,16 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	// Verify expected defaults
 	assert.NotNil(t, config.Ports)
 	assert.NotEmpty(t, config.Ports.Inputs)
-	assert.NotEmpty(t, config.Ports.Outputs)
 	assert.Equal(t, "bm25", config.EmbedderType)
 	assert.Equal(t, 50, config.BatchSize)
-	assert.Equal(t, 15*time.Minute, config.CacheTTL())
 
 	// Verify required buckets
 	inputs := config.Ports.Inputs
 	assert.GreaterOrEqual(t, len(inputs), 1, "should have at least 1 input")
 
-	outputs := config.Ports.Outputs
-	assert.GreaterOrEqual(t, len(outputs), 1, "should have at least 1 output")
+	// No declared outputs: durable results (EMBEDDING_INDEX, EMBEDDING_DEDUP)
+	// are written directly at Start, not through an output port.
+	assert.Empty(t, config.Ports.Outputs, "default config must declare no outputs")
 
 	// Verify ENTITY_STATES input
 	hasEntityWatch := false
@@ -409,16 +353,6 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 		}
 	}
 	assert.True(t, hasEntityWatch, "should have ENTITY_STATES input")
-
-	// Verify EMBEDDINGS_CACHE output
-	hasEmbeddingsCache := false
-	for _, out := range outputs {
-		if out.Subject == "EMBEDDINGS_CACHE" {
-			hasEmbeddingsCache = true
-			break
-		}
-	}
-	assert.True(t, hasEmbeddingsCache, "should have EMBEDDINGS_CACHE output")
 }
 
 // ====================================================================================
@@ -460,28 +394,14 @@ func TestComponent_InputPorts_ReturnsKVWatchPort(t *testing.T) {
 	assert.True(t, hasKVWatch, "should have KV watch port for ENTITY_STATES")
 }
 
-func TestComponent_OutputPorts_ReturnsEmbeddingsCachePort(t *testing.T) {
+func TestComponent_OutputPorts_NoDeclaredOutputs(t *testing.T) {
 	comp := createTestComponent(t)
 	require.NoError(t, comp.Initialize()) // Ports are populated during Initialize
 
-	ports := comp.OutputPorts()
-
-	require.NotEmpty(t, ports, "should have at least 1 output port")
-
-	// Verify EMBEDDINGS_CACHE output bucket
-	hasEmbeddingsCache := false
-	for _, port := range ports {
-		assert.NotEmpty(t, port.Name)
-		assert.Equal(t, component.DirectionOutput, port.Direction)
-
-		if kvPort, ok := port.Config.(component.KVWritePort); ok {
-			if kvPort.Bucket == "EMBEDDINGS_CACHE" {
-				hasEmbeddingsCache = true
-			}
-		}
-	}
-
-	assert.True(t, hasEmbeddingsCache, "should have EMBEDDINGS_CACHE output")
+	// The default config declares no output ports: the component writes its
+	// durable results (EMBEDDING_INDEX, EMBEDDING_DEDUP) directly at Start.
+	// The dead EMBEDDINGS_CACHE output surface is deleted.
+	assert.Empty(t, comp.OutputPorts(), "graph-embedding must declare no default output ports")
 }
 
 func TestComponent_ConfigSchema_ReturnsValidSchema(t *testing.T) {
@@ -502,8 +422,10 @@ func TestComponent_ConfigSchema_ReturnsValidSchema(t *testing.T) {
 	_, hasBatchSizeProperty := schema.Properties["batch_size"]
 	assert.True(t, hasBatchSizeProperty, "schema should have 'batch_size' property")
 
+	// The cache_ttl knob is deleted (phantom operator knob: it was never
+	// consumed by any non-test code).
 	_, hasCacheTTLProperty := schema.Properties["cache_ttl"]
-	assert.True(t, hasCacheTTLProperty, "schema should have 'cache_ttl' property")
+	assert.False(t, hasCacheTTLProperty, "schema must not carry the deleted 'cache_ttl' property")
 }
 
 func TestComponent_Health_NotStarted(t *testing.T) {
@@ -558,9 +480,10 @@ func TestComponent_Initialize_Success(t *testing.T) {
 
 	assert.NoError(t, err)
 
-	// Verify ports are initialized
+	// Verify ports are initialized (outputs are legitimately empty: the
+	// component declares no output ports)
 	assert.NotEmpty(t, comp.InputPorts())
-	assert.NotEmpty(t, comp.OutputPorts())
+	assert.Empty(t, comp.OutputPorts())
 }
 
 func TestComponent_Initialize_InvalidConfig(t *testing.T) {
@@ -747,13 +670,9 @@ func TestCreateGraphEmbedding_HTTPEmbedderConfig(t *testing.T) {
 			Inputs: []component.PortDefinition{
 				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 			},
-			Outputs: []component.PortDefinition{
-				{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-			},
 		},
 		EmbedderType: "http",
 		BatchSize:    100,
-		CacheTTLStr:  "30m",
 	}
 
 	configJSON, err := json.Marshal(config)
@@ -775,7 +694,6 @@ func TestCreateGraphEmbedding_HTTPEmbedderConfig(t *testing.T) {
 	component := comp.(*Component)
 	assert.Equal(t, "http", component.config.EmbedderType)
 	assert.Equal(t, 100, component.config.BatchSize)
-	assert.Equal(t, 30*time.Minute, component.config.CacheTTL())
 }
 
 func TestRegister_AddsToRegistry(t *testing.T) {
@@ -816,19 +734,19 @@ func TestComponent_RespectsContext_Cancellation(t *testing.T) {
 
 func TestComponent_RespectsContext_Timeout(t *testing.T) {
 	comp := createTestComponent(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
+	// A pre-cancelled context makes the refusal deterministic: Start must
+	// reject it at entry with a context error, before touching NATS. (The old
+	// shape raced a 100ms deadline against bucket-create retries and only
+	// passed via the deleted EMBEDDINGS_CACHE create's retry timing.)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 
 	require.NoError(t, comp.Initialize())
 
-	// Start with timeout context
 	err := comp.Start(ctx)
 
-	// Should either succeed or handle timeout gracefully
-	if err != nil {
-		// If error, it should be context-related
-		assert.Contains(t, err.Error(), "context")
-	}
+	require.Error(t, err, "Start must refuse a cancelled context")
+	assert.Contains(t, err.Error(), "context")
 }
 
 // ====================================================================================
@@ -921,9 +839,6 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "bm25",
 			},
@@ -936,9 +851,6 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
 					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
-					},
 				},
 				EmbedderType: "http",
 			},
@@ -950,9 +862,6 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
 						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
 					},
 				},
 				EmbedderType: "unknown",

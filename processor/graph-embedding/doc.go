@@ -3,8 +3,10 @@
 // # Overview
 //
 // The graph-embedding component watches the ENTITY_STATES KV bucket and generates
-// vector embeddings for entities, storing them in the EMBEDDINGS_CACHE KV bucket.
-// These embeddings enable semantic similarity search and clustering.
+// vector embeddings for entities with text content, storing durable per-entity
+// embedding records in the EMBEDDING_INDEX KV bucket (with EMBEDDING_DEDUP
+// carrying the dedup keys). These embeddings enable semantic similarity search
+// and clustering.
 //
 // # Tier
 //
@@ -17,9 +19,9 @@
 // deployments but required for semantic search and community detection features.
 //
 //	                    ┌──────────────────┐
-//	ENTITY_STATES ─────►│                  │
-//	   (KV watch)       │  graph-embedding ├──► EMBEDDINGS_CACHE (KV)
-//	                    │                  │
+//	ENTITY_STATES ─────►│                  ├──► EMBEDDING_INDEX (KV)
+//	   (KV watch)       │  graph-embedding ├──► EMBEDDING_DEDUP (KV)
+//	                    │                  ├──► GRAPH_STATUS (KV, readiness)
 //	                    └────────┬─────────┘
 //	                             │
 //	                             ▼
@@ -34,7 +36,6 @@
 //   - HTTP embedding API integration (OpenAI-compatible)
 //   - BM25 fallback for offline/lightweight deployments
 //   - Batch processing for efficiency
-//   - Caching with configurable TTL
 //
 // # Configuration
 //
@@ -44,14 +45,10 @@
 //	  "ports": {
 //	    "inputs": [
 //	      {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
-//	    ],
-//	    "outputs": [
-//	      {"name": "embeddings", "subject": "EMBEDDINGS_CACHE", "type": "kv"}
 //	    ]
 //	  },
 //	  "embedder_type": "http",
-//	  "batch_size": 50,
-//	  "cache_ttl": "1h"
+//	  "batch_size": 50
 //	}
 //
 // # Port Definitions
@@ -59,8 +56,9 @@
 // Inputs:
 //   - KV watch: ENTITY_STATES - watches for entity state changes
 //
-// Outputs:
-//   - KV bucket: EMBEDDINGS_CACHE - stores vector embeddings keyed by entity ID
+// Outputs: none declared. The component writes its durable results
+// (EMBEDDING_INDEX, EMBEDDING_DEDUP) and its readiness envelope (GRAPH_STATUS)
+// directly at Start, not through output ports.
 //
 // # Embedder Types
 //
@@ -83,6 +81,8 @@
 //   - graph-ingest: produces ENTITY_STATES that this component watches
 //
 // Downstream:
-//   - graph-clustering: reads EMBEDDINGS_CACHE for semantic similarity in community detection
-//   - graph-gateway: reads EMBEDDINGS_CACHE for semantic search queries
+//   - semantic queries are served by this component over NATS
+//     (graph.embedding.query.similar / .search / .status); consumers such as
+//     graph-gateway and graph-clustering request them rather than reading the
+//     embedding buckets directly
 package graphembedding

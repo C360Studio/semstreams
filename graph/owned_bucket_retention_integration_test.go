@@ -112,17 +112,20 @@ func TestIntegration_AssertOwnedBucketsClean_StripsForeignTTL(t *testing.T) {
 	assert.Equal(t, []byte("survivor"), entry.Value())
 }
 
-// TestIntegration_AssertOwnedBucketsClean_ExcludesEmbeddingsCache proves the
-// rebuildable cache is excluded from the retention sweep: EMBEDDINGS_CACHE with a
-// TTL is NOT stripped by AssertOwnedBucketsClean (its capacity policy is owned by
-// bounded-storage-operability), while it remains write-ownership-protected.
-func TestIntegration_AssertOwnedBucketsClean_ExcludesEmbeddingsCache(t *testing.T) {
+// TestIntegration_AssertOwnedBucketsClean_IgnoresOrphanedEmbeddingsCache pins
+// the adopter-facing consequence of the EMBEDDINGS_CACHE deletion
+// (reopen-framework-owned-bucket-guards): an orphaned KV_EMBEDDINGS_CACHE
+// bucket left behind by a pre-deletion deployment is inert — no longer in the
+// owned set, so the sweep neither strips nor reports it, and operators may
+// delete it manually at leisure.
+func TestIntegration_AssertOwnedBucketsClean_IgnoresOrphanedEmbeddingsCache(t *testing.T) {
+	const orphanedCache = "EMBEDDINGS_CACHE"
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	client := testClient.Client
 
 	_, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: BucketEmbeddingsCache,
+		Bucket: orphanedCache,
 		TTL:    24 * time.Hour,
 	})
 	require.NoError(t, err)
@@ -130,18 +133,16 @@ func TestIntegration_AssertOwnedBucketsClean_ExcludesEmbeddingsCache(t *testing.
 	rec := &recordingHandler{}
 	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(rec)))
 
-	// The cache TTL is UNTOUCHED — it is excluded from the retention guard.
-	fresh, err := client.GetKeyValueBucket(ctx, BucketEmbeddingsCache)
+	// The orphan is untouched and unreported — it is outside the owned set.
+	fresh, err := client.GetKeyValueBucket(ctx, orphanedCache)
 	require.NoError(t, err)
 	maxAge, _, err := natsclient.BucketRetention(ctx, fresh)
 	require.NoError(t, err)
-	assert.Equal(t, 24*time.Hour, maxAge, "EMBEDDINGS_CACHE must NOT be stripped by the retention sweep")
-	assert.False(t, rec.warnMentioning(BucketEmbeddingsCache),
-		"the excluded cache must not be reported as stripped")
-
-	// Still write-ownership-protected.
-	assert.True(t, IsFrameworkOwnedBucket(BucketEmbeddingsCache),
-		"EMBEDDINGS_CACHE must remain framework-owned (write-protected)")
+	assert.Equal(t, 24*time.Hour, maxAge, "an orphaned EMBEDDINGS_CACHE bucket must be left untouched")
+	assert.False(t, rec.warnMentioning(orphanedCache),
+		"the orphaned cache must not be reported by the sweep")
+	assert.False(t, IsFrameworkOwnedBucket(orphanedCache),
+		"EMBEDDINGS_CACHE must no longer be framework-owned (surface deleted)")
 }
 
 // TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets proves the sweep is
@@ -157,7 +158,7 @@ func TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets(t *testing.T) {
 	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(&recordingHandler{})))
 
 	// The sweep must NOT have created any guarded bucket.
-	for _, bucket := range retentionGuardedBuckets() {
+	for _, bucket := range FrameworkOwnedBuckets() {
 		_, err := client.GetKeyValueBucket(ctx, bucket)
 		assert.ErrorIs(t, err, jetstream.ErrBucketNotFound,
 			"sweep must not create absent bucket %s", bucket)

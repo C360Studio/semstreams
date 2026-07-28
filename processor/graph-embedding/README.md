@@ -10,9 +10,9 @@ The `graph-embedding` component watches the `ENTITY_STATES` KV bucket and genera
 
 ```
                     ┌──────────────────┐
-ENTITY_STATES ─────►│                  │
-   (KV watch)       │  graph-embedding ├──► EMBEDDINGS_CACHE (KV)
-                    │                  │
+ENTITY_STATES ─────►│                  ├──► EMBEDDING_INDEX (KV)
+   (KV watch)       │  graph-embedding ├──► EMBEDDING_DEDUP (KV)
+                    │                  ├──► GRAPH_STATUS (KV, readiness)
                     └────────┬─────────┘
                              │
                              ▼
@@ -27,7 +27,7 @@ ENTITY_STATES ─────►│                  │
 - **Multiple Embedder Types**: HTTP API (OpenAI-compatible) or BM25 sparse vectors
 - **Batch Processing**: Efficient bulk embedding generation
 - **Configurable Text Extraction**: Extract text from multiple entity fields
-- **Caching**: Embeddings cached with configurable TTL
+- **Dedup**: unchanged entity text is not re-embedded (EMBEDDING_DEDUP)
 
 ## Configuration
 
@@ -44,18 +44,10 @@ ENTITY_STATES ─────►│                  │
           "subject": "ENTITY_STATES",
           "type": "kv-watch"
         }
-      ],
-      "outputs": [
-        {
-          "name": "embeddings",
-          "subject": "EMBEDDINGS_CACHE",
-          "type": "kv"
-        }
       ]
     },
     "embedder_type": "http",
-    "batch_size": 50,
-    "cache_ttl": "1h"
+    "batch_size": 50
   }
 }
 ```
@@ -67,7 +59,6 @@ ENTITY_STATES ─────►│                  │
 | `ports` | object | required | Port configuration for inputs and outputs |
 | `embedder_type` | string | "bm25" | Embedder type: "http" or "bm25". HTTP requires model registry with `embedding` capability |
 | `batch_size` | int | 50 | Batch size for embedding requests |
-| `cache_ttl` | duration | "1h" | Cache TTL for embeddings |
 
 ## Ports
 
@@ -79,9 +70,9 @@ ENTITY_STATES ─────►│                  │
 
 ### Outputs
 
-| Name | Type | Subject | Description |
-|------|------|---------|-------------|
-| embeddings | kv | EMBEDDINGS_CACHE | Entity embeddings storage |
+None declared. The component writes its durable results (`EMBEDDING_INDEX`,
+`EMBEDDING_DEDUP`) and its readiness envelope (`GRAPH_STATUS`) directly at
+Start, not through output ports.
 
 ## Embedder Types
 
@@ -119,7 +110,7 @@ No external service required. Suitable for:
 
 ## Embedding Storage
 
-Embeddings are stored in EMBEDDINGS_CACHE with entity ID as key:
+Durable per-entity embedding records are stored in EMBEDDING_INDEX with entity ID as key:
 
 ```json
 {
@@ -137,8 +128,10 @@ Embeddings are stored in EMBEDDINGS_CACHE with entity ID as key:
 - `graph-ingest` - produces ENTITY_STATES that this component watches
 
 ### Downstream
-- `graph-clustering` - reads embeddings for semantic similarity
-- `graph-gateway` - reads embeddings for semantic search
+- semantic queries are served by this component over NATS
+  (`graph.embedding.query.similar` / `.search` / `.status`); consumers such as
+  `graph-gateway` and `graph-clustering` request them rather than reading the
+  embedding buckets directly
 
 ### External
 - Embedding API service (if using HTTP embedder)
@@ -148,7 +141,7 @@ Embeddings are stored in EMBEDDINGS_CACHE with entity ID as key:
 | Metric | Type | Description |
 |--------|------|-------------|
 | `graph_embedding_generated_total` | counter | Total embeddings generated |
-| `graph_embedding_cache_hits_total` | counter | Cache hits (unchanged entities) |
+| `graph_embedding_dedup_hits_total` | counter | Dedup hits (unchanged entity text not re-embedded) |
 | `graph_embedding_api_latency_seconds` | histogram | Embedding API latency |
 | `graph_embedding_errors_total` | counter | Total embedding errors |
 

@@ -147,7 +147,6 @@ The gateway reads from multiple KV buckets via QueryManager:
 | `INCOMING_INDEX` | Backward relationship traversal |
 | `ALIAS_INDEX` | Entity lookup by alias |
 | `PREDICATE_INDEX` | Predicate-based queries |
-| `EMBEDDINGS_CACHE` | Vector similarity (semantic tier) |
 | `COMMUNITY_INDEX` | Clustering results (semantic tier) |
 | `SPATIAL_INDEX` | Geospatial queries (if enabled) |
 | `TEMPORAL_INDEX` | Time-based queries (if enabled) |

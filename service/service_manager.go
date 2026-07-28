@@ -300,15 +300,18 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// the pre-start WireOwnership belt only reconciles buckets that already exist
 	// when it runs — it necessarily SKIPS a guarded bucket a component (or a
 	// racing process) CREATES during the service-start loop above, which
-	// CreateKeyValueBucket then adopts UNCHANGED (foreign TTL and all). Re-run the
-	// authoritative owned-bucket sweep now that every owner holds its handle, so a
-	// create-race dirty bucket is stripped — or fails boot closed — BEFORE
-	// completeHTTPSetup brings the surface up and the process could briefly report
-	// healthy. This is the COVERAGE guarantee; the pre-start belt is the early
-	// takedown for prior-boot dirt. Both cmd/semstreams and cmd/e2e-semstreams
-	// funnel through StartAll, so this one call covers both binaries with no
-	// per-main edit. A NATS-less Manager (resourceless deploy) has no buckets to
-	// sweep — skip and debug-log rather than force-provision.
+	// CreateKeyValueBucket then adopts UNCHANGED (foreign TTL and all). The
+	// ordering that makes this pass a coverage guarantee is the component-start
+	// BARRIER: ComponentManager.Start returns only after every lifecycle
+	// component's Start has returned (or failed boot), so by the time the
+	// service-start loop above completes, every owner holds its bucket handle.
+	// The sweep then strips a create-race dirty bucket — or fails boot closed —
+	// BEFORE completeHTTPSetup brings the surface up and the process could
+	// briefly report healthy. The pre-start belt is the early takedown for
+	// prior-boot dirt. Both cmd/semstreams and cmd/e2e-semstreams funnel through
+	// StartAll, so this one call covers both binaries with no per-main edit. A
+	// NATS-less Manager (resourceless deploy) has no buckets to sweep — skip and
+	// debug-log rather than force-provision.
 	if m.natsClient != nil {
 		if err := graph.AssertOwnedBucketsClean(ctx, m.natsClient, logger); err != nil {
 			return fmt.Errorf("post-start framework-owned bucket retention sweep: %w", err)
