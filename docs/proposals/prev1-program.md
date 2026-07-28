@@ -9,7 +9,30 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **RECALL-CEILING FIX MERGED + ARCHIVED (2026-07-27, PR #702 `f9833ace` + archive #705 `669790d6`) — front CLOSED. The newest state; supersedes the "next front"
+> **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
+> This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
+> ownership split: LLM summaries moved from the shared `COMMUNITY_INDEX` record to a worker-exclusive,
+> content-addressed `COMMUNITY_SUMMARIES` store keyed `{level}.{membership_hash}` — structurally closing
+> the #607 clobber + #617 resurrection classes (no CAS: a content-keyed write can't touch the
+> detector-exclusive partition; an unchanged membership is a cache-hit skip). graph-query joins
+> partition+summary by membership hash with a statistical floor; readiness gated on `COMMUNITY_INDEX` only.
+> ADR-087 (ownership decision + the membership-vs-content staleness trade). BREAKING; frontier e2e gate
+> GREEN on the FINAL code (`llm_enhanced=14/pending=0`, determinism 1.00, known-answer 7/7, recall 0.95,
+> `validation_errors:0`). **Codex found 3 real issues the internal reviewer missed (2 HIGH):** late
+> summary-bucket attach on a rolling upgrade → stuck on the statistical floor forever (fixed: independent
+> retrying resource watcher); a lagging `llm-failed` write clobbering an `llm-enhanced` summary (fixed:
+> CAS `PutFailedUnlessEnhanced`); +MEDIUM gauge-init on restart — all fixed + integration-proven + a
+> confirming frontier re-run. Two frontier runs surfaced two observability PHANTOMS (an e2e stage + a
+> metric writer still reading the emptied old `COMMUNITY_INDEX` field) — both migrated to the new store.
+> Ship-time follow-ups filed: **#710** (worker-owned bounded-GC for the content-addressed store, gated on
+> the size gauge) + **#661 reframed** to re-measure-after-B3. Lesson (reinforced twice this arc): a same-run
+> reviewer APPROVE is NOT the last word — Codex caught real HIGH correctness bugs on both #702 and #709;
+> the once-through Codex gate earns its keep. **NEXT (fresh session): Epic B fully closed — pick the next
+> epic-level WIP-1 item: Epic C (derived-state ownership, #622/#527/#625/#629) vs deferred Epic A
+> (#619/#633/#643) vs #701 (multi-community query expansion) vs #710 (summary-store GC). Reconcile at
+> start: git HEAD + `gh issue list` + `openspec list`.**
+
+> **RECALL-CEILING FIX MERGED + ARCHIVED (2026-07-27, PR #702 `f9833ace` + archive #705 `669790d6`) — front CLOSED (history). Superseded the "next front"
 > framing in the B2 note below.** The owner's question "why don't communities resolve as expected?" is
 > answered: the 0.85 thematic-recall ceiling was NEVER a partition/community problem — it was
 > synthesis-projection lossiness. GraphRAG answer synthesis fed the LLM only {community summary + up to 5
@@ -314,7 +337,7 @@ two files three times. Start Epic A here.
 | Epic | Scope | Issues | State |
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
-| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | #606 #607 #608 #609 #617 #618 · #701 (evacuation follow-up) | **IN PROGRESS — B0/B1/B2 CLOSED; recall-ceiling synthesis-context fix MERGED+ARCHIVED (PR #702 `f9833ace`, archive #705; 0.85→0.95, zero regressions); `evacuation` residual → #701; B3 (ownership split, Tier-2) not started** |
+| **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | ~~#606–#618~~ · #607/#617 closed by B3 · follow-ups #701 #710 | **✅ COMPLETE — B0/B1/B2/B3 ALL CLOSED. Recall-ceiling fix MERGED (PR #702, 0.85→0.95); B3 ownership split MERGED (PR #709 `857988ef`, archive #711; closes #607/#617). Follow-ups: #701 (multi-community expansion), #710 (summary-store GC), #661 reframed** |
 | **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
@@ -677,3 +700,30 @@ Append one line per session. Newest last.
   stack (owner + sister session merge it bottom-up). Lesson (4): a same-run reviewer APPROVE is not the
   last word — Codex caught a real P1 the internal reviewer waved through; the once-through Codex gate earns
   its keep. Recall-ceiling front CLOSED. Next: epic-level WIP-1 pick (B3 / #701 / Epic C / deferred Epic A).**
+- **2026-07-28 (session 14)** — **EPIC B COMPLETE — B3 (community-summary ownership split) BUILT + MERGED
+  (PR #709 `857988ef`, archive #711).** Same session as the recall fix. The enhancement worker's blind
+  `Put` into the shared `COMMUNITY_INDEX` (clobber #607 + resurrection #617) is closed STRUCTURALLY by a
+  worker-exclusive, content-addressed `COMMUNITY_SUMMARIES` store keyed `{level}.{membership_hash}` — a
+  content-keyed write can't touch the detector-exclusive partition, so no CAS on the happy path; unchanged
+  membership = cache-hit skip. graph-query joins by membership hash with a statistical floor. ADR-087.
+  Architect-scoped → semstreams-developer built → semstreams-reviewer APPROVE. BREAKING gate: the 1.7b
+  `e2e:semantic` FAILED on the known LLM-saturation capacity artifact (NOT a defect — determinism still
+  1.00); frontier tier (Gemini) is the reliable gate → GREEN. Owner steered "belt-and-suspenders," which
+  PAID OFF: the confirming frontier runs surfaced **two observability PHANTOMS** (the `validate-llm-enhancement`
+  e2e stage + a second metric writer both still reading the emptied old `COMMUNITY_INDEX.SummaryStatus`
+  field → reported `enhanced=0` while the worker genuinely enhanced) — a $0 real-NATS wire integration test
+  gave the definitive measurement-gap-not-defect answer, both stages migrated to the new store. **Codex
+  then found 3 MORE real issues the internal reviewer missed (2 HIGH): late summary-bucket attach on
+  rolling upgrade → statistical floor forever (independent retrying watcher); a lagging `llm-failed` write
+  clobbering `llm-enhanced` (CAS `PutFailedUnlessEnhanced` — the "no CAS" premise held only success-vs-
+  success, not success-vs-late-failure); +MEDIUM gauge-init on restart — all fixed + integration-proven + a
+  final confirming frontier (self-consistent `llm_enhanced=14`). Follow-ups filed: **#710** (worker-owned
+  bounded-GC, gated on the size gauge B3 ships), **#661 reframed** to re-measure-after-B3 (its churn is now
+  a µs cache-hit skip). Lessons: (1) **the once-through Codex gate earned its keep TWICE this arc** — real
+  HIGH correctness bugs on both #702 and #709 past a same-run reviewer APPROVE; treat internal APPROVE as
+  necessary-not-sufficient on concurrency/startup code. (2) **a BREAKING migration must migrate its
+  OBSERVABILITY too** — moving a store while leaving the e2e/metric readers on the old field yields a
+  green-but-blind gate (the "warn-not-fail masks drift" class); the frontier runs caught it precisely
+  because we read the numbers, not the exit code. (3) **1.7b e2e is capacity-flaky for the LLM path; frontier
+  is the reliable BREAKING gate** — don't chase a 1.7b saturation failure as a code defect. **Next: Epic B
+  fully closed — pick Epic C / deferred Epic A / #701 / #710.**
