@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
@@ -38,7 +39,7 @@ func TestIntegration_IngestGuardBucket_RejectsTTLBucket(t *testing.T) {
 
 	// Pre-create the guard bucket WITH a TTL (a stale/foreign deploy).
 	_, err := testClient.Client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: graphIngestGuardBucket,
+		Bucket: graph.BucketGraphIngestAppliedSeq,
 		TTL:    24 * time.Hour,
 	})
 	require.NoError(t, err)

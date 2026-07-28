@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -127,6 +128,28 @@ func WireOwnership(
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// ADR-068 D1 pre-start EARLY BELT (framework-owned-bucket-guards; #622): the
+	// FIRST of the two-pass owned-bucket retention sweep. It asserts no NATS
+	// lifecycle retention on the framework-owned KV plane BEFORE rule evaluation
+	// or the graph components' get-or-create can lean on a persisted-dirty bucket,
+	// self-healing a foreign/legacy TTL a PRIOR boot (or an out-of-band edit) left
+	// on a derived index (the #610/#611 shape). This is a DISTINCT concern from
+	// ADR-058 ownership; it is folded into this one shared boot function ON PURPOSE
+	// — both cmd/semstreams and cmd/e2e-semstreams call WireOwnership exactly once
+	// before StartAll, so wiring it here covers both binaries with no
+	// half-migration drift (the beta.18 lesson). Skip-if-absent means a
+	// not-yet-provisioned bucket is passed over.
+	//
+	// This belt CANNOT see a bucket created dirty DURING this boot's own
+	// service-start loop (a create-race): it runs before the owners hold handles.
+	// The coverage guarantee for that window is the SECOND pass — a matching
+	// AssertOwnedBucketsClean at the tail of Manager.StartAll, after every owner
+	// has created its bucket and before the HTTP surface reports healthy (F1).
+	if err := graph.AssertOwnedBucketsClean(ctx, natsClient, logger); err != nil {
+		return nil, nil, nil, fmt.Errorf("assert framework-owned graph buckets retention-clean: %w", err)
+	}
+
 	reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("bootstrap ownership buckets: %w", err)

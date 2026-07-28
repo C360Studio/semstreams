@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/retry"
@@ -293,6 +294,27 @@ func (m *Manager) StartAll(ctx context.Context) error {
 			return fmt.Errorf("failed to start service %s: %w", name, err)
 		}
 		logger.Debug("Manager.StartAll: Service started successfully", "name", name)
+	}
+
+	// ADR-068 D1 post-start coverage (framework-owned-bucket-guards F1; #622):
+	// the pre-start WireOwnership belt only reconciles buckets that already exist
+	// when it runs — it necessarily SKIPS a guarded bucket a component (or a
+	// racing process) CREATES during the service-start loop above, which
+	// CreateKeyValueBucket then adopts UNCHANGED (foreign TTL and all). Re-run the
+	// authoritative owned-bucket sweep now that every owner holds its handle, so a
+	// create-race dirty bucket is stripped — or fails boot closed — BEFORE
+	// completeHTTPSetup brings the surface up and the process could briefly report
+	// healthy. This is the COVERAGE guarantee; the pre-start belt is the early
+	// takedown for prior-boot dirt. Both cmd/semstreams and cmd/e2e-semstreams
+	// funnel through StartAll, so this one call covers both binaries with no
+	// per-main edit. A NATS-less Manager (resourceless deploy) has no buckets to
+	// sweep — skip and debug-log rather than force-provision.
+	if m.natsClient != nil {
+		if err := graph.AssertOwnedBucketsClean(ctx, m.natsClient, logger); err != nil {
+			return fmt.Errorf("post-start framework-owned bucket retention sweep: %w", err)
+		}
+	} else {
+		logger.Debug("Manager.StartAll: no NATS client — skipping post-start owned-bucket retention sweep")
 	}
 
 	// Now that all services are started, register their HTTP handlers and start the server

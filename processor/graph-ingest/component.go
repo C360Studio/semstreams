@@ -485,9 +485,6 @@ const (
 	// costs a durable-tier read on the next access (ADR-072 B3). Sized to hold
 	// the working set of recently-active entities per lane under load.
 	ingestGuardMemMaxPerLane = 65536
-
-	// graphIngestGuardBucket is the durable redelivery-guard tier's KV bucket.
-	graphIngestGuardBucket = "GRAPH_INGEST_APPLIED_SEQ"
 )
 
 // schema defines the configuration schema for graph-ingest component
@@ -1151,7 +1148,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 
 	// Suffix index KV bucket for fast suffix→fullID resolution
 	suffixBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "ENTITY_SUFFIX_INDEX",
+		Bucket:      graph.BucketEntitySuffixIndex,
 		Description: "Suffix-to-full-ID reverse index for partial entity ID resolution",
 	})
 	if err != nil {
@@ -1179,7 +1176,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 	// (unlimited redelivery), and the key set is bounded by entity cardinality
 	// (same order as ENTITY_STATES).
 	guardBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graphIngestGuardBucket,
+		Bucket:      graph.BucketGraphIngestAppliedSeq,
 		Description: "graph-ingest redelivery guard: (entityID/streamName) -> last-applied stream sequence (ADR-072)",
 	})
 	if err != nil {
@@ -1192,7 +1189,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 	// cache-eviction overwrite this guard closes. CreateKeyValueBucket returns an
 	// existing bucket as-is, so a stale/foreign deploy could have created it with
 	// a retention policy — fail-closed at boot, exactly like ENTITY_STATES.
-	if err := c.ingestGuardBucket.AssertNoLifecycleRetention(ctx, graphIngestGuardBucket); err != nil {
+	if err := c.ingestGuardBucket.AssertNoLifecycleRetention(ctx, graph.BucketGraphIngestAppliedSeq); err != nil {
 		return errs.Wrap(err, "Component", "Start", "redelivery guard retention guardrail")
 	}
 
