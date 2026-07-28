@@ -86,9 +86,9 @@
   `git diff --check`.
 - [x] 7.6 Obtain independent architecture and Go review covering containment, snapshot immutability, fail-closed
   ordering, #700 posture, concurrency, schema compatibility, and deletion/scope audits.
-- [ ] 7.7 Obtain mandatory Fable review of the public rule-authoring contract and resolve every finding before
+- [x] 7.7 Obtain mandatory Fable review of the public rule-authoring contract and resolve every finding before
   implementation acceptance.
-- [ ] 7.8 Update issue #706 and the SemDragon #313 migration prerequisite with final evidence and compatibility
+- [x] 7.8 Update issue #706 and the SemDragon #313 migration prerequisite with final evidence and compatibility
   guidance.
 
 ## Evidence
@@ -153,4 +153,16 @@
   behavior, #700 posture, config compatibility, and public mutation-client/wire invariants.
 - Target strict OpenSpec validation and all 33/33 strict validations pass. Markdown lint, the 120-character audit,
   tracked-diff hygiene, and untracked-file diff hygiene are clean.
-- Mandatory Fable review and final issue/migration updates remain open under tasks 7.7 and 7.8.
+- Mandatory Fable review of PR #708 returned
+  [`VERDICT: APPROVE — no P1, no P2, earned`][fable-708].
+  Thread-aware GraphQL found zero review submissions and zero review threads. All CI checks, including Test and
+  statistical E2E, report `SUCCESS`; there are no Fable findings to resolve.
+- SemStreams issue #706 [delivery comment][issue-706-delivery] `5098327926` records the complete delivery, Fable,
+  CI, and E2E evidence.
+- SemDragon issue #313 [compatibility comment][semdragon-313-compatibility] `5098329563` records distinct atomic
+  group names, explicit reserve review, runtime fencing, and that no downstream framework is required. These
+  posted artifacts close task 7.8.
+
+[fable-708]: https://github.com/C360Studio/semstreams/pull/708#issuecomment-5098278703
+[issue-706-delivery]: https://github.com/C360Studio/semstreams/issues/706#issuecomment-5098327926
+[semdragon-313-compatibility]: https://github.com/C360Studio/semdragon/issues/313#issuecomment-5098329563
