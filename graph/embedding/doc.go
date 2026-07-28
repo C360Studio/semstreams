@@ -42,7 +42,6 @@
 //	embedder, err := embedding.NewHTTPEmbedder(embedding.HTTPConfig{
 //	    BaseURL: "http://tei:8082",
 //	    Model:   "all-MiniLM-L6-v2",
-//	    Cache:   embedding.NewNATSCache(cacheBucket),
 //	})
 //
 //	// Generate embeddings for batch of texts
@@ -79,8 +78,6 @@
 //   - Hugging Face TEI (Text Embeddings Inference) - recommended for local inference
 //   - OpenAI cloud API
 //   - LocalAI, Ollama, vLLM, and other compatible services
-//
-// Supports content-addressed caching to avoid redundant API calls.
 //
 // BM25Embedder ([BM25Embedder]):
 //

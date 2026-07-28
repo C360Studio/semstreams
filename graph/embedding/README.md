@@ -6,7 +6,7 @@ Vector embedding generation and semantic similarity utilities for the SemStreams
 
 This package provides interfaces and implementations for generating vector embeddings from text, enabling
 semantic similarity search across entities. Supports multiple embedding providers (HTTP APIs, BM25) with
-content-addressed caching for deduplication and performance.
+content-addressed deduplication (`EMBEDDING_DEDUP`, keyed via `DedupKey`).
 
 ## Key Interfaces
 
@@ -32,22 +32,6 @@ type Embedder interface {
 
 **Design note**: All providers natively support batch operations following OpenAI API patterns. For single
 text embedding, pass a slice with one element.
-
-### Cache
-
-Content-addressed caching for embeddings to avoid redundant computation:
-
-```go
-type Cache interface {
-    // Get retrieves cached embedding by content hash
-    Get(ctx context.Context, contentHash string) ([]float32, error)
-
-    // Put stores embedding with content hash as key
-    Put(ctx context.Context, contentHash string, embedding []float32) error
-}
-```
-
-Use cryptographic hashes (e.g., SHA-256) of text content as cache keys for deduplication.
 
 ## Available Implementations
 
@@ -108,19 +92,6 @@ if err != nil {
 for i, emb := range embeddings {
     log.Printf("Text %d: %d-dimensional embedding", i, len(emb))
 }
-
-// Use with cache for repeated queries
-hash := sha256.Sum256([]byte(texts[0]))
-hashStr := hex.EncodeToString(hash[:])
-
-// Try cache first
-cached, err := cache.Get(ctx, hashStr)
-if err == nil {
-    embeddings[0] = cached // Use cached version
-} else {
-    // Store for next time
-    cache.Put(ctx, hashStr, embeddings[0])
-}
 ```
 
 ## Similarity Functions
@@ -179,19 +150,6 @@ embeddings, _ := embedder.Generate(ctx, texts)
 for _, text := range texts {
     emb, _ := embedder.Generate(ctx, []string{text})
 }
-```
-
-### Caching Strategy
-
-Use content hashing for cache keys to enable:
-
-- **Deduplication**: Same text → same cache key
-- **Fast lookups**: O(1) cache retrieval
-- **No false hits**: Cryptographic hash prevents collisions
-
-```go
-hash := sha256.Sum256([]byte(text))
-key := hex.EncodeToString(hash[:])
 ```
 
 ### Resource Management

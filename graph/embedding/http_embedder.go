@@ -44,7 +44,6 @@ type HTTPEmbedder struct {
 	// its Start.
 	dimensions atomic.Int64
 
-	cache       Cache
 	logger      *slog.Logger
 	queryPrefix string // prepended to query-side text only (gh#438)
 }
@@ -78,9 +77,6 @@ type HTTPConfig struct {
 
 	// Timeout for HTTP requests (default: 30s).
 	Timeout time.Duration
-
-	// Cache for embedding results (optional but recommended).
-	Cache Cache
 
 	// Logger for error logging (optional, defaults to slog.Default()).
 	Logger *slog.Logger
@@ -140,24 +136,19 @@ func NewHTTPEmbedder(cfg HTTPConfig) (*HTTPEmbedder, error) {
 	return &HTTPEmbedder{
 		client:      client,
 		model:       cfg.Model,
-		cache:       cfg.Cache,
 		logger:      logger,
 		queryPrefix: cfg.QueryPrefix,
 	}, nil
 }
 
 // Generate creates DOCUMENT-side embeddings by calling the external HTTP service.
-//
-// This method checks the cache first (if configured), then calls the
-// embedding API for any cache misses.
 func (h *HTTPEmbedder) Generate(ctx context.Context, texts []string) ([][]float32, error) {
 	return h.embed(ctx, texts)
 }
 
 // GenerateQuery creates QUERY-side embeddings, prepending the configured query
 // instruction prefix to each text (asymmetric retrieval models, gh#438). With no
-// prefix configured it is identical to Generate. The cache keys on the prefixed
-// text, so query and document embeddings of the same string never collide.
+// prefix configured it is identical to Generate.
 func (h *HTTPEmbedder) GenerateQuery(ctx context.Context, texts []string) ([][]float32, error) {
 	if h.queryPrefix == "" {
 		return h.embed(ctx, texts)
@@ -169,75 +160,37 @@ func (h *HTTPEmbedder) GenerateQuery(ctx context.Context, texts []string) ([][]f
 	return h.embed(ctx, prefixed)
 }
 
-// embed is the shared cache-then-API path used by both Generate and GenerateQuery.
+// embed is the shared API path used by both Generate and GenerateQuery.
 func (h *HTTPEmbedder) embed(ctx context.Context, texts []string) ([][]float32, error) {
 	if len(texts) == 0 {
 		return [][]float32{}, nil
 	}
 
-	// Track which texts need API calls
-	embeddings := make([][]float32, len(texts))
-	uncachedIndexes := []int{}
-	uncachedTexts := []string{}
-
-	// Check cache for each text (if cache enabled)
-	if h.cache != nil {
-		for i, text := range texts {
-			hash := ContentHash(text)
-			if cached, err := h.cache.Get(ctx, hash); err == nil {
-				embeddings[i] = cached
-			} else {
-				uncachedIndexes = append(uncachedIndexes, i)
-				uncachedTexts = append(uncachedTexts, text)
-			}
-		}
-	} else {
-		// No cache - all texts need API call
-		uncachedIndexes = make([]int, len(texts))
-		for i := range texts {
-			uncachedIndexes[i] = i
-		}
-		uncachedTexts = texts
+	req := openai.EmbeddingRequest{
+		Input: texts,
+		Model: openai.EmbeddingModel(h.model),
 	}
 
-	// Call API for uncached texts
-	if len(uncachedTexts) > 0 {
-		req := openai.EmbeddingRequest{
-			Input: uncachedTexts,
-			Model: openai.EmbeddingModel(h.model),
-		}
+	resp, err := h.client.CreateEmbeddings(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("embedding API call failed: %w", err)
+	}
 
-		resp, err := h.client.CreateEmbeddings(ctx, req)
-		if err != nil {
-			return nil, fmt.Errorf("embedding API call failed: %w", err)
-		}
+	if len(resp.Data) != len(texts) {
+		return nil, fmt.Errorf("API returned %d embeddings for %d texts", len(resp.Data), len(texts))
+	}
 
-		if len(resp.Data) != len(uncachedTexts) {
-			return nil, fmt.Errorf("API returned %d embeddings for %d texts", len(resp.Data), len(uncachedTexts))
-		}
+	embeddings := make([][]float32, len(texts))
+	for i, data := range resp.Data {
+		embeddings[i] = data.Embedding
 
-		// Store results and update cache
-		for i, data := range resp.Data {
-			originalIndex := uncachedIndexes[i]
-			embeddings[originalIndex] = data.Embedding
-
-			// Latch the real vector width on the first response that carries one.
-			// CompareAndSwap makes this resolve-once: later responses cannot churn
-			// the value, so every dedup key derived after resolution is stable.
-			if len(data.Embedding) > 0 {
-				if h.dimensions.CompareAndSwap(0, int64(len(data.Embedding))) {
-					h.logger.Info("resolved embedding dimensions from endpoint",
-						"model", h.model, "dimensions", len(data.Embedding))
-				}
-			}
-
-			// Cache the embedding
-			if h.cache != nil {
-				hash := ContentHash(uncachedTexts[i])
-				if err := h.cache.Put(ctx, hash, data.Embedding); err != nil {
-					// Log but don't fail - cache is best-effort
-					h.logger.Warn("embedding cache put failed", "hash", hash, "error", err)
-				}
+		// Latch the real vector width on the first response that carries one.
+		// CompareAndSwap makes this resolve-once: later responses cannot churn
+		// the value, so every dedup key derived after resolution is stable.
+		if len(data.Embedding) > 0 {
+			if h.dimensions.CompareAndSwap(0, int64(len(data.Embedding))) {
+				h.logger.Info("resolved embedding dimensions from endpoint",
+					"model", h.model, "dimensions", len(data.Embedding))
 			}
 		}
 	}
