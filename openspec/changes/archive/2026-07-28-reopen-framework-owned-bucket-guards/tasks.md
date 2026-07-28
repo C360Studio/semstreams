@@ -154,8 +154,14 @@
   knob, README contradiction). Round 2 APPROVE: gate machinery judged sound (developer proved even
   the reviewer's smallest-fix was green under revert; sweep-record gate + revert-proven red);
   durability canary requested and added (skipProbeMentioning ENTITY_STATES).**
-- [ ] 8.3 Merge gate: `gh pr checks` + `mergeStateStatus` verified at merge (no required checks on the
+- [x] 8.3 Merge gate: `gh pr checks` + `mergeStateStatus` verified at merge (no required checks on the
   repo); Codex review is owner-run/out-of-band — hand off, do not self-approve past it.
+  **MERGED `a4287869` (2026-07-28) after THREE owner-run Codex rounds, each addressed and re-pushed
+  (round 1: boot ordering + loud rejection; round 2: boot-boundary drain; plus three parallel-review
+  checkpoints). All 5 checks pass + mergeStateStatus CLEAN verified immediately before merge.
+  Follow-up filed by owner review post-merge: delete the graph/embedding library cache CLASS
+  (Cache iface, NATSCache, HTTPConfig.Cache + branches, doc example) — the instance died in this
+  change, the class survived; scheduled BEFORE #625/#629.**
 
 ## 9. Codex review round (PR #719)
 
