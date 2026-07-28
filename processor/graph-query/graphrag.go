@@ -294,11 +294,8 @@ func (c *Component) handleLocalSearch(ctx context.Context, data []byte) ([]byte,
 	// Filter entities based on query
 	matchedEntities := filterEntitiesByQuery(entities, req.Query, c.minTextRelevance)
 
-	// Resolve community summary (prefer LLM, fallback to statistical)
-	commSummary := community.LLMSummary
-	if commSummary == "" {
-		commSummary = community.StatisticalSummary
-	}
+	// Resolve community summary via the tiered join (LLM summary store → statistical floor).
+	commSummary := c.resolveCommunitySummary(community)
 
 	// Synthesize answer from community context
 	// Level is carried alongside CommunityID: an ID identifies a community only
@@ -1227,8 +1224,8 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		return json.Marshal(response)
 	}
 
-	// Score communities based on their summaries
-	scoredCommunities := scoreCommunitySummaries(communities, req.Query)
+	// Score communities based on their summaries (tiered join → statistical floor).
+	scoredCommunities := scoreCommunitySummaries(communities, req.Query, c.resolveCommunitySummary)
 
 	// Select top-N communities
 	selectedCount := req.MaxCommunities
@@ -1272,11 +1269,8 @@ func (c *Component) globalSearchTextBased(ctx context.Context, req GlobalSearchR
 		// Calculate relevance from position
 		relevance := 1.0 - (float64(i) / float64(len(scoredCommunities)))
 
-		// Prefer LLM summary if available, fallback to statistical
-		summary := comm.LLMSummary
-		if summary == "" {
-			summary = comm.StatisticalSummary
-		}
+		// Resolve via the tiered join (LLM summary store → statistical floor).
+		summary := c.resolveCommunitySummary(comm)
 
 		summaries[i] = CommunitySummary{
 			CommunityID: comm.ID,
@@ -1514,11 +1508,8 @@ func (c *Component) findCommunitiesForEntities(entityIDs []string) []CommunitySu
 			}
 		}
 		if matchCount > 0 {
-			// Prefer LLM summary if available
-			summary := comm.LLMSummary
-			if summary == "" {
-				summary = comm.StatisticalSummary
-			}
+			// Resolve via the tiered join (LLM summary store → statistical floor).
+			summary := c.resolveCommunitySummary(comm)
 
 			// Calculate relevance based on match ratio
 			relevance := float64(matchCount) / float64(len(comm.Members))
@@ -2208,9 +2199,33 @@ func scoreEntityQuery(entity *gtypes.EntityState, queryTerms []string) float64 {
 	return totalScore / float64(len(queryTerms))
 }
 
+// resolveCommunitySummary is the ONE place the tiered community-summary fallback
+// lives: it returns the LLM summary joined from COMMUNITY_SUMMARIES by membership
+// hash when one exists, and otherwise the community's statistical summary. A
+// community without an LLM summary yet degrades to a non-empty statistical answer,
+// never an empty one (ADR-087). This governs only CommunitySummary.Summary; the
+// tag-enriched representative context on CommunitySummary.Entities is sourced
+// separately from ENTITY_STATES (#702) and is unaffected.
+func (c *Component) resolveCommunitySummary(comm *clustering.Community) string {
+	if comm == nil {
+		return ""
+	}
+	if c.communityCache != nil {
+		if summary, ok := c.communityCache.SummaryFor(comm); ok {
+			return summary
+		}
+	}
+	return comm.StatisticalSummary
+}
+
 // scoreCommunitySummaries scores communities based on query relevance
-// Returns communities sorted by relevance (highest first)
-func scoreCommunitySummaries(communities []*clustering.Community, query string) []*clustering.Community {
+// Returns communities sorted by relevance (highest first).
+//
+// summaryOf resolves each community's summary text through the tiered join (LLM
+// summary store → statistical floor); it is threaded in rather than read off the
+// community record because after the ownership split Community.LLMSummary is
+// always empty (ADR-087).
+func scoreCommunitySummaries(communities []*clustering.Community, query string, summaryOf func(*clustering.Community) string) []*clustering.Community {
 	type scoredCommunity struct {
 		community *clustering.Community
 		score     float64
@@ -2224,11 +2239,8 @@ func scoreCommunitySummaries(communities []*clustering.Community, query string) 
 	for _, comm := range communities {
 		score := 0.0
 
-		// Score based on summary text (prefer LLM if available)
-		summary := comm.LLMSummary
-		if summary == "" {
-			summary = comm.StatisticalSummary
-		}
+		// Score based on summary text (tiered join → statistical floor).
+		summary := summaryOf(comm)
 		if summary != "" {
 			summaryLower := strings.ToLower(summary)
 			for _, term := range queryTerms {

@@ -34,16 +34,25 @@ type EntityQuerier interface {
 	GetEntities(ctx context.Context, ids []string) ([]*gtypes.EntityState, error)
 }
 
-// EnhancementWorker handles asynchronous LLM enhancement of community summaries via KV watch
+// defaultSummaryFailedRetryBackoff is how long a community whose enhancement
+// failed (an llm-failed record) waits before a subsequent COMMUNITY_INDEX trigger
+// re-attempts it. It bounds retry pressure on a struggling LLM endpoint without a
+// dedicated backoff queue: the membership hash is the identity, so the failed
+// record self-serves as the retry timer.
+const defaultSummaryFailedRetryBackoff = 5 * time.Minute
+
+// EnhancementWorker consumes COMMUNITY_INDEX changes as a TRIGGER ONLY and writes
+// LLM summaries to the worker-exclusive, content-addressed COMMUNITY_SUMMARIES
+// store. It holds NO CommunityStorage — it structurally cannot write the partition
+// bucket, which is the single-writer invariant that closes #607/#617 (ADR-087).
 type EnhancementWorker struct {
 	mu sync.RWMutex
 
 	// Dependencies
-	storage         CommunityStorage
 	llm             *LLMSummarizer
-	provider        Provider
 	querier         EntityQuerier
-	communityBucket jetstream.KeyValue
+	communityBucket jetstream.KeyValue // COMMUNITY_INDEX — watched as a TRIGGER only, never written
+	summaries       SummaryStore       // COMMUNITY_SUMMARIES — the worker is its SOLE writer
 
 	// KV watching
 	watcher jetstream.KeyWatcher
@@ -62,8 +71,9 @@ type EnhancementWorker struct {
 	resumeCh chan struct{} // Closed when resume requested
 
 	// Configuration
-	workers    int           // Number of concurrent workers
-	llmTimeout time.Duration // Per-request LLM timeout (default 30s)
+	workers            int           // Number of concurrent workers
+	llmTimeout         time.Duration // Per-request LLM timeout (default 30s)
+	failedRetryBackoff time.Duration // Minimum age of an llm-failed record before retry
 
 	// Metrics
 	metrics *EnhancementMetrics
@@ -74,13 +84,14 @@ type EnhancementWorker struct {
 
 // EnhancementWorkerConfig holds configuration for the enhancement worker
 type EnhancementWorkerConfig struct {
-	LLMSummarizer   *LLMSummarizer
-	Storage         CommunityStorage
-	Provider        Provider
-	Querier         EntityQuerier
+	LLMSummarizer *LLMSummarizer
+	Querier       EntityQuerier
+	// CommunityBucket is the COMMUNITY_INDEX bucket, watched as a trigger ONLY.
 	CommunityBucket jetstream.KeyValue
-	Logger          *slog.Logger
-	Registry        *metric.MetricsRegistry // Optional: for LLM enhancement metrics
+	// SummaryBucket is the COMMUNITY_SUMMARIES bucket the worker owns and writes.
+	SummaryBucket jetstream.KeyValue
+	Logger        *slog.Logger
+	Registry      *metric.MetricsRegistry // Optional: for summary-worker metrics
 	// LLMTimeout caps the per-call inner sub-context that wraps each LLM
 	// summarization round-trip. Zero means use the 30s default. The HTTP
 	// client's transport-level timeout (set via the OpenAIClient) is the
@@ -96,14 +107,6 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
 			"New", "LLM summarizer is required")
 	}
-	if config.Storage == nil {
-		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
-			"New", "storage is required")
-	}
-	if config.Provider == nil {
-		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
-			"New", "graph provider is required")
-	}
 	if config.Querier == nil {
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
 			"New", "querier is required")
@@ -111,6 +114,10 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 	if config.CommunityBucket == nil {
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
 			"New", "community bucket is required")
+	}
+	if config.SummaryBucket == nil {
+		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
+			"New", "summary bucket is required")
 	}
 
 	logger := config.Logger
@@ -130,15 +137,15 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 	}
 
 	return &EnhancementWorker{
-		storage:         config.Storage,
-		llm:             config.LLMSummarizer,
-		provider:        config.Provider,
-		querier:         config.Querier,
-		communityBucket: config.CommunityBucket,
-		workers:         3, // Default concurrent workers
-		llmTimeout:      llmTimeout,
-		metrics:         metrics,
-		logger:          logger,
+		llm:                config.LLMSummarizer,
+		querier:            config.Querier,
+		communityBucket:    config.CommunityBucket,
+		summaries:          NewNATSSummaryStore(config.SummaryBucket),
+		workers:            3, // Default concurrent workers
+		llmTimeout:         llmTimeout,
+		failedRetryBackoff: defaultSummaryFailedRetryBackoff,
+		metrics:            metrics,
+		logger:             logger,
 	}, nil
 }
 
@@ -230,6 +237,15 @@ func (w *EnhancementWorker) Start(ctx context.Context) error {
 	}
 
 	w.started = true
+
+	// Initialize the summaries-size gauge from the store's current count. Without
+	// this, updateSizeGauge only runs after a write, so a restart onto a populated
+	// store where every trigger is a cache hit (no writes) would leave the gauge
+	// pinned at 0 forever — violating the "summary-store volume is observable"
+	// requirement. Seeding at Start makes the gauge reflect the real count on the
+	// no-write path.
+	w.updateSizeGauge()
+
 	w.logger.Info("Enhancement worker started", "workers", w.workers)
 	return nil
 }
@@ -292,9 +308,13 @@ func (w *EnhancementWorker) waitForResume() bool {
 	}
 }
 
-// handleKVEntry processes a KV entry to check if it needs LLM enhancement
+// handleKVEntry decodes a COMMUNITY_INDEX change and dispatches it to the
+// content-addressed enhancement decision. The partition bucket is a TRIGGER only:
+// what work happens is decided entirely by the summary store, not by the
+// COMMUNITY_INDEX record's status.
 func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerID int) {
-	// Skip entity mapping keys (format: entity.{level}.{entityID})
+	// Skip entity mapping keys (format: entity.{level}.{entityID}) — they carry a
+	// bare community ID string, not a Community record.
 	if strings.HasPrefix(entry.Key(), "entity.") {
 		return
 	}
@@ -306,87 +326,158 @@ func (w *EnhancementWorker) handleKVEntry(entry jetstream.KeyValueEntry, workerI
 		return
 	}
 
-	// Only process communities with status="statistical" (need LLM enhancement)
-	if community.SummaryStatus != "statistical" {
+	// A memberless community has no content to summarize (and no membership hash
+	// worth caching).
+	if len(community.Members) == 0 {
 		return
 	}
 
-	// Use community.ID from the record, not entry.Key() (which is the full KV path)
-	communityID := community.ID
-	w.logger.Debug("Processing community for LLM enhancement",
+	w.logger.Debug("Community trigger received",
 		"worker_id", workerID,
-		"community_id", communityID,
+		"community_id", community.ID,
 		"kv_key", entry.Key(),
 		"member_count", len(community.Members))
 
-	// Track metrics: start enhancement attempt
-	startTime := time.Now()
-	w.metrics.RecordEnhancementStart()
-	w.metrics.IncQueueDepth()
-	defer w.metrics.DecQueueDepth()
+	w.enhanceCommunity(&community)
+}
 
-	// Fetch entities for enhancement
+// enhanceCommunity applies the content-addressed enhancement decision for one
+// community: compute the membership hash, read the summary store, and skip on an
+// llm-enhanced hit / back off on a fresh llm-failed record / summarize on a miss.
+// It NEVER writes COMMUNITY_INDEX.
+func (w *EnhancementWorker) enhanceCommunity(community *Community) {
+	hash := MembershipHash(community.Members)
+	// Key the summary by the payload's level. The detector writes key-level ==
+	// payload-level, and the graph-query cache resolves by key-normalized level,
+	// so the two agree; if a future writer diverged them the join would miss and
+	// fall back to the statistical floor (degraded, never corrupt).
+	level := community.Level
+
+	existing, err := w.summaries.GetSummary(w.ctx, level, hash)
+	if err != nil {
+		// A transient read error skips this trigger rather than stampeding the LLM:
+		// the next COMMUNITY_INDEX change re-triggers and self-heals.
+		w.logger.Warn("summary store read failed; skipping trigger",
+			"community_id", community.ID, "level", level, "error", err)
+		return
+	}
+
+	if existing != nil {
+		switch existing.Status {
+		case SummaryStatusEnhanced:
+			// Same membership already summarized → serve it, no LLM call (#607).
+			w.metrics.RecordCacheHit()
+			return
+		case SummaryStatusFailed:
+			if time.Since(existing.GeneratedAt) < w.failedRetryBackoff {
+				// Recent failure: do not hammer the endpoint before the backoff.
+				return
+			}
+			// Backoff elapsed → fall through and retry.
+		}
+	}
+
+	w.summarizeAndStore(community, hash, level)
+}
+
+// summarizeAndStore performs the LLM work for a membership miss (or a failed
+// record past its backoff) and writes the result to the summary store. On any
+// failure it records an llm-failed record so the backoff timer starts.
+func (w *EnhancementWorker) summarizeAndStore(community *Community, hash string, level int) {
+	startTime := time.Now()
+
 	entities, err := w.fetchEntities(w.ctx, community.Members)
 	if err != nil {
 		latency := time.Since(startTime).Seconds()
-		w.metrics.RecordEnhancementFailed(latency)
-		w.logger.Error("Failed to fetch entities", "community_id", communityID, "error", err, "latency_s", latency)
-		w.markFailed(communityID, fmt.Sprintf("fetch entities failed: %v", err))
+		w.metrics.RecordFailed(latency)
+		w.logger.Error("Failed to fetch entities", "community_id", community.ID, "error", err, "latency_s", latency)
+		w.markFailed(community, hash, level)
 		return
 	}
 
 	// Generate LLM summary with per-request timeout (content fetching happens internally via ContentFetcher)
 	llmCtx, llmCancel := context.WithTimeout(w.ctx, w.llmTimeout)
-	enhanced, err := w.llm.SummarizeCommunity(llmCtx, &community, entities)
+	enhanced, err := w.llm.SummarizeCommunity(llmCtx, community, entities)
 	llmCancel()
-	if err != nil {
+	// Treat an error, a nil result, an empty summary, or a graceful
+	// statistical-fallback (SummaryStatus != "llm-enhanced") all as a failure: only
+	// real LLM prose is worth caching as an llm-enhanced record.
+	if err != nil || enhanced == nil || enhanced.LLMSummary == "" || enhanced.SummaryStatus != "llm-enhanced" {
 		latency := time.Since(startTime).Seconds()
-		w.metrics.RecordEnhancementFailed(latency)
-		w.logger.Error("Failed to generate LLM summary", "community_id", communityID, "error", err, "latency_s", latency)
-		w.markFailed(communityID, fmt.Sprintf("LLM generation failed: %v", err))
+		w.metrics.RecordFailed(latency)
+		w.logger.Error("Failed to generate LLM summary", "community_id", community.ID, "error", err, "latency_s", latency)
+		w.markFailed(community, hash, level)
 		return
 	}
 
-	// Preserve statistical summary, add LLM summary
-	community.LLMSummary = enhanced.LLMSummary
-	community.SummaryStatus = "llm-enhanced"
-	// Carry the truncation flag back from the summarizer's result — this worker
-	// saves its own `community`, not `enhanced`, so a field set only on `enhanced`
-	// would be dropped on save (B2 §8 dilution channel).
-	community.SummaryTruncated = enhanced.SummaryTruncated
-
-	// Save enhanced community
-	if err := w.storage.SaveCommunity(w.ctx, &community); err != nil {
+	rec := &CommunitySummaryRecord{
+		MembershipHash: hash,
+		Level:          level,
+		LLMSummary:     enhanced.LLMSummary,
+		Model:          w.llm.Client.Model(),
+		Status:         SummaryStatusEnhanced,
+		Truncated:      enhanced.SummaryTruncated,
+		MemberCount:    len(community.Members),
+		GeneratedAt:    time.Now(),
+	}
+	if err := w.summaries.PutSummary(w.ctx, rec); err != nil {
 		latency := time.Since(startTime).Seconds()
-		w.metrics.RecordEnhancementFailed(latency)
-		w.logger.Error("Failed to save enhanced community", "community_id", communityID, "error", err, "latency_s", latency)
-		w.markFailed(communityID, fmt.Sprintf("save failed: %v", err))
+		w.metrics.RecordFailed(latency)
+		w.logger.Error("Failed to write summary record", "community_id", community.ID, "error", err, "latency_s", latency)
+		// The write itself failed — nothing to record; the next trigger retries as a miss.
 		return
 	}
 
-	// Record successful enhancement
 	latency := time.Since(startTime).Seconds()
-	w.metrics.RecordEnhancementSuccess(latency)
+	w.metrics.RecordGenerated(latency)
+	w.updateSizeGauge()
 
-	w.logger.Debug("Community enhanced with LLM summary",
-		"community_id", communityID,
+	w.logger.Debug("Community summary generated",
+		"community_id", community.ID,
+		"level", level,
 		"statistical_len", len(community.StatisticalSummary),
-		"llm_len", len(community.LLMSummary),
+		"llm_len", len(enhanced.LLMSummary),
 		"latency_s", latency)
 }
 
-// markFailed marks a community enhancement as failed
-func (w *EnhancementWorker) markFailed(communityID, _ string) {
-	community, err := w.storage.GetCommunity(w.ctx, communityID)
-	if err != nil || community == nil {
-		w.logger.Error("Failed to fetch community for failed status", "community_id", communityID, "error", err)
+// markFailed writes an llm-failed record to the summary store so the failed
+// membership is retried only after the backoff. It targets ONLY the summary
+// store — never COMMUNITY_INDEX.
+//
+// It goes through PutFailedUnlessEnhanced (NOT a blind PutSummary): the worker pool
+// is concurrent and COMMUNITY_INDEX re-Puts unchanged records, so two triggers for
+// the same membership hash can both miss the pre-work read and do LLM work; if one
+// succeeds and the other fails later, a blind failed write would overwrite the
+// llm-enhanced record. The CAS write guarantees a failure can never downgrade a
+// success (ADR-087 idempotency).
+func (w *EnhancementWorker) markFailed(community *Community, hash string, level int) {
+	rec := &CommunitySummaryRecord{
+		MembershipHash: hash,
+		Level:          level,
+		Status:         SummaryStatusFailed,
+		MemberCount:    len(community.Members),
+		GeneratedAt:    time.Now(),
+	}
+	if err := w.summaries.PutFailedUnlessEnhanced(w.ctx, rec); err != nil {
+		w.logger.Error("Failed to write llm-failed record", "community_id", community.ID, "error", err)
 		return
 	}
+	w.updateSizeGauge()
+}
 
-	community.SummaryStatus = "llm-failed"
-	if err := w.storage.SaveCommunity(w.ctx, community); err != nil {
-		w.logger.Error("Failed to save llm-failed status", "community_id", communityID, "error", err)
+// updateSizeGauge refreshes the summaries-size gauge from the store. Called after
+// each write (writes are rare — only membership misses cost anything), so a steady
+// graph leaves the gauge at its last value, which is correct.
+func (w *EnhancementWorker) updateSizeGauge() {
+	if w.metrics == nil {
+		return
 	}
+	n, err := w.summaries.CountSummaries(w.ctx)
+	if err != nil {
+		w.logger.Debug("failed to count summaries for size gauge", "error", err)
+		return
+	}
+	w.metrics.SetSummariesSize(n)
 }
 
 // fetchEntities retrieves entities from the graph provider using QueryManager

@@ -393,6 +393,20 @@ func (s *TieredScenario) executeValidateCommunityStructure(ctx context.Context, 
 		return nil
 	}
 
+	// Enhancement status lives in COMMUNITY_SUMMARIES after the B3 ownership split
+	// (ADR-087); COMMUNITY_INDEX.SummaryStatus is no longer written by the worker.
+	// Join the store here — with the same membership-hash join the authoritative
+	// validate-llm-enhancement stage and GraphRAG use — so this stage's enhancement
+	// counts stay consistent with that stage in the semantic variant (both read the
+	// same store) and correctly report 0 in the statistical variant (its summary
+	// store is empty). A read failure degrades to the statistical floor rather than
+	// aborting; the partition structure below is still valid.
+	summaries, err := s.natsClient.GetCommunitySummaries(ctx)
+	if err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read community summaries: %v", err))
+		summaries = map[string]*clustering.CommunitySummaryRecord{}
+	}
+
 	totalCount := len(communities)
 	nonSingletonCount := 0
 	largestSize := 0
@@ -416,11 +430,14 @@ func (s *TieredScenario) executeValidateCommunityStructure(ctx context.Context, 
 			result.Warnings = append(result.Warnings,
 				fmt.Sprintf("Community %s has no keywords", comm.ID))
 		}
-		// Track summary status for visibility into LLM enhancement
-		switch comm.SummaryStatus {
-		case "llm-enhanced":
+		// Track LLM enhancement by JOINING the COMMUNITY_SUMMARIES store by membership
+		// hash (ADR-087) — mirroring validate-llm-enhancement's analyzeCommunities — not
+		// the post-split always-empty COMMUNITY_INDEX.SummaryStatus field. "Enhanced" =
+		// a usable llm-enhanced record exists; everything else (missing/failed/pending)
+		// serves the statistical floor.
+		if _, ok := joinedEnhancedSummary(comm, summaries); ok {
 			llmEnhancedCount++
-		case "statistical", "":
+		} else {
 			statisticalOnlyCount++
 		}
 	}

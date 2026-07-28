@@ -34,10 +34,19 @@ type CommunityCache struct {
 	// entityCommunity maps entityID → level → communityID for fast LocalSearch lookups
 	entityCommunity map[string]map[int]string
 
+	// summaries maps the COMMUNITY_SUMMARIES KV key ({level}.{membership_hash}) to
+	// its LLM summary record. It is populated by a SECOND watcher on the
+	// worker-owned summary bucket (ADR-087). After the ownership split
+	// Community.LLMSummary on COMMUNITY_INDEX is always empty, so the read path
+	// joins the partition to this map by the community's membership hash. Guarded by
+	// the same mu as the partition maps.
+	summaries map[string]*clustering.CommunitySummaryRecord
+
 	// Lifecycle
-	logger  *slog.Logger
-	ready   bool
-	watcher jetstream.KeyWatcher
+	logger         *slog.Logger
+	ready          bool
+	watcher        jetstream.KeyWatcher
+	summaryWatcher jetstream.KeyWatcher
 }
 
 // NewCommunityCache creates a new community cache.
@@ -45,6 +54,7 @@ func NewCommunityCache(logger *slog.Logger) *CommunityCache {
 	return &CommunityCache{
 		communities:     make(map[int]map[string]*clustering.Community),
 		entityCommunity: make(map[string]map[int]string),
+		summaries:       make(map[string]*clustering.CommunitySummaryRecord),
 		logger:          logger,
 	}
 }
@@ -176,6 +186,98 @@ func (c *CommunityCache) handleDelete(key string) {
 	}
 
 	c.logger.Debug("community cache deleted", "id", communityID, "level", level)
+}
+
+// WatchSummaries starts watching the COMMUNITY_SUMMARIES KV bucket and syncs LLM
+// summary records into the cache. It runs as a SECOND watcher alongside
+// WatchAndSync and blocks until the context is cancelled.
+//
+// It deliberately does NOT participate in readiness (IsReady): cache readiness is
+// gated on the PARTITION bucket only (ADR-087). A summary miss is a graceful
+// statistical fallback, not an unready state, so GraphRAG availability is
+// decoupled from the LLM summary pipeline — an empty COMMUNITY_SUMMARIES bucket
+// completes its (empty) initial sync immediately without blocking anything.
+func (c *CommunityCache) WatchSummaries(ctx context.Context, bucket jetstream.KeyValue) error {
+	watcher, err := bucket.WatchAll(ctx)
+	if err != nil {
+		return err
+	}
+	c.summaryWatcher = watcher
+
+	c.logger.Info("community summary cache watcher started")
+
+	for {
+		select {
+		case <-ctx.Done():
+			c.logger.Info("community summary cache watcher stopping", "reason", "context cancelled")
+			watcher.Stop()
+			return ctx.Err()
+
+		case entry := <-watcher.Updates():
+			if entry == nil {
+				// Initial summary-store enumeration complete. Does NOT flip readiness.
+				c.logger.Info("community summary cache initial sync complete",
+					"summaries", c.summaryCount())
+				continue
+			}
+
+			if entry.Operation() == jetstream.KeyValueDelete {
+				c.handleSummaryDelete(entry.Key())
+				continue
+			}
+
+			c.handleSummaryUpdate(entry.Key(), entry.Value())
+		}
+	}
+}
+
+// handleSummaryUpdate processes a summary create/update from the summary watch.
+// The map is keyed by the raw KV key ({level}.{membership_hash}), which is exactly
+// what SummaryFor reconstructs, so no key parsing is needed here.
+func (c *CommunityCache) handleSummaryUpdate(key string, data []byte) {
+	var rec clustering.CommunitySummaryRecord
+	if err := json.Unmarshal(data, &rec); err != nil {
+		c.logger.Warn("failed to unmarshal community summary", "key", key, "error", err)
+		return
+	}
+
+	c.mu.Lock()
+	c.summaries[key] = &rec
+	c.mu.Unlock()
+}
+
+// handleSummaryDelete removes a summary record from the cache.
+func (c *CommunityCache) handleSummaryDelete(key string) {
+	c.mu.Lock()
+	delete(c.summaries, key)
+	c.mu.Unlock()
+}
+
+// summaryCount returns the number of cached summary records.
+func (c *CommunityCache) summaryCount() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.summaries)
+}
+
+// SummaryFor returns the LLM summary joined to a community by its membership hash,
+// with ok=true only when an llm-enhanced, non-empty record exists for that exact
+// membership. A miss (no record, a failed record, or an empty summary) returns
+// ("", false) so the caller degrades to the statistical floor — the join never
+// yields an empty summary that masquerades as an answer.
+func (c *CommunityCache) SummaryFor(comm *clustering.Community) (string, bool) {
+	if comm == nil || len(comm.Members) == 0 {
+		return "", false
+	}
+	key := clustering.SummaryKey(comm.Level, clustering.MembershipHash(comm.Members))
+
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	rec, ok := c.summaries[key]
+	if !ok || rec.Status != clustering.SummaryStatusEnhanced || rec.LLMSummary == "" {
+		return "", false
+	}
+	return rec.LLMSummary, true
 }
 
 // parseCommunityKey splits a COMMUNITY_INDEX key into its level and community ID.
@@ -331,9 +433,12 @@ type CommunityStats struct {
 	Ready            bool        `json:"ready"`
 }
 
-// Stop stops the watcher if running.
+// Stop stops both watchers if running.
 func (c *CommunityCache) Stop() {
 	if c.watcher != nil {
 		c.watcher.Stop()
+	}
+	if c.summaryWatcher != nil {
+		c.summaryWatcher.Stop()
 	}
 }

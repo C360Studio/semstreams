@@ -31,7 +31,14 @@ const (
 	BucketEmbeddingIndex  = "EMBEDDING_INDEX"
 	BucketEmbeddingDedup  = "EMBEDDING_DEDUP"
 	BucketCommunityIndex  = "COMMUNITY_INDEX"
-	BucketAnomalyIndex    = "ANOMALY_INDEX"
+	// BucketCommunitySummaries holds LLM-generated community summaries, written
+	// ONLY by the graph-clustering enhancement worker and keyed by
+	// {level}.{membership_hash} (content-addressed). It is deliberately SEPARATE
+	// from COMMUNITY_INDEX: the detector owns the partition (COMMUNITY_INDEX),
+	// the worker owns the LLM prose (this bucket), so a lagging worker can never
+	// clobber a fresher partition or resurrect a Prune-deleted community (ADR-087).
+	BucketCommunitySummaries = "COMMUNITY_SUMMARIES"
+	BucketAnomalyIndex       = "ANOMALY_INDEX"
 
 	// Structural tier buckets
 	BucketStructuralIndex = "STRUCTURAL_INDEX"
@@ -59,6 +66,7 @@ func FrameworkOwnedBuckets() []string {
 		BucketEmbeddingIndex,
 		BucketEmbeddingDedup,
 		BucketCommunityIndex,
+		BucketCommunitySummaries,
 		BucketAnomalyIndex,
 		BucketStructuralIndex,
 	}

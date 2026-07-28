@@ -2,9 +2,12 @@ package clustering
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	stderrors "errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +28,24 @@ const (
 	// MaxCommunityLevels is the maximum hierarchy depth for scanning
 	MaxCommunityLevels = 10
 )
+
+// MembershipHash returns the content-address of a community's membership: the
+// hex-encoded sha256 of the lexically-sorted member IDs joined by "\n".
+//
+// This is the SINGLE shared definition of the membership hash. It keys the
+// worker-owned COMMUNITY_SUMMARIES store, is joined by the graph-query read path,
+// and is computed by the B0 thematic eval — all three MUST derive the hash through
+// this helper so the definition cannot drift into two subtly different hashes that
+// never join (ADR-087). The input slice is copied before sorting, so the hash is
+// sort-stable and independent of caller order or map-iteration order; the hash
+// carries no level (summarization has no level input) — level lives only in the
+// KV key prefix.
+func MembershipHash(members []string) string {
+	sorted := append([]string(nil), members...)
+	sort.Strings(sorted)
+	sum := sha256.Sum256([]byte(strings.Join(sorted, "\n")))
+	return hex.EncodeToString(sum[:])
+}
 
 // CommunityStorageConfig configures community storage behavior
 type CommunityStorageConfig struct {

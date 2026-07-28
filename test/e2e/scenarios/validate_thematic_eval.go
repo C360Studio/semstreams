@@ -3,14 +3,12 @@ package scenarios
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/c360studio/semstreams/graph/clustering"
 	"github.com/c360studio/semstreams/test/e2e/client"
 )
 
@@ -527,10 +525,10 @@ func (s *TieredScenario) level0MembershipHashes(ctx context.Context) (map[string
 		if c == nil || c.Level != 0 || len(c.Members) == 0 {
 			continue
 		}
-		members := append([]string(nil), c.Members...)
-		sort.Strings(members)
-		sum := sha256.Sum256([]byte(strings.Join(members, "\n")))
-		hashes[hex.EncodeToString(sum[:])]++
+		// Derive the membership hash through the ONE shared helper so the eval, the
+		// COMMUNITY_SUMMARIES store, and the graph-query read-join can never drift
+		// into two different hashes that never join (ADR-087).
+		hashes[clustering.MembershipHash(c.Members)]++
 	}
 	return hashes, nil
 }

@@ -182,22 +182,29 @@ func (s *TieredScenario) clusteringRunDiagnostic(ctx context.Context) string {
 	}
 }
 
-// waitForLLMEnhancement waits for LLM enhancement to complete for ML variant
+// waitForLLMEnhancement waits for LLM enhancement to complete for ML variant.
+//
+// After the B3 ownership split (ADR-087) enhancement status lives in the
+// worker-owned COMMUNITY_SUMMARIES store, joined to each community by membership
+// hash — NOT on COMMUNITY_INDEX.SummaryStatus, which the worker no longer writes.
+// The pre-split wait polled that dead field, never observed pending→0, and always
+// burned its full ceiling before reporting enhanced=0; this one terminates as soon
+// as the summary store is caught up.
 func (s *TieredScenario) waitForLLMEnhancement(
 	ctx context.Context,
-	communityCount int,
+	communities []*clustering.Community,
 	result *Result,
 ) llmWaitResult {
-	fmt.Printf("[LLM WAIT] Waiting for LLM enhancement to complete (ML variant, %d communities)...\n", communityCount)
+	fmt.Printf("[LLM WAIT] Waiting for LLM enhancement to complete (ML variant, %d communities)...\n", len(communities))
 
 	enhanceStart := time.Now()
 	// Default 2m is sized for the fast qwen3-1.7b summary tier. The heavy
 	// qwen3-8b run generates summaries far slower; SEMSTREAMS_E2E_LLM_ENHANCEMENT_WAIT
 	// raises the ceiling so B0 (which runs next) synthesizes over fully-populated
-	// Tier-2 summaries. WaitForCommunityEnhancement returns as soon as enhancement
-	// completes, so a larger ceiling never over-waits on the fast tier.
-	enhanced, failed, pending, waitErr := s.natsClient.WaitForCommunityEnhancement(
-		ctx, llmEnhancementWait(2*time.Minute), 2*time.Second,
+	// Tier-2 summaries. WaitForCommunitySummaryEnhancement returns as soon as
+	// enhancement completes, so a larger ceiling never over-waits on the fast tier.
+	enhanced, failed, pending, waitErr := s.natsClient.WaitForCommunitySummaryEnhancement(
+		ctx, communities, llmEnhancementWait(2*time.Minute), 2*time.Second,
 	)
 	waitResult := llmWaitResult{
 		durationMs:   time.Since(enhanceStart).Milliseconds(),
@@ -223,14 +230,49 @@ func (s *TieredScenario) waitForLLMEnhancement(
 	return waitResult
 }
 
-// analyzeCommunities computes statistics and comparisons for communities
-func (s *TieredScenario) analyzeCommunities(communities []*clustering.Community) communityStats {
+// joinedSummaryRecord returns the worker-written summary record for a community,
+// joined from COMMUNITY_SUMMARIES by membership hash (ADR-087), or nil when none
+// exists. It is the ONE place the e2e observability reconstructs the read-path key,
+// so it uses the shared clustering.SummaryKey/MembershipHash helpers — the same
+// pair graph-query's SummaryFor uses — and cannot drift into a key that never
+// joins.
+func joinedSummaryRecord(
+	comm *clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
+) *clustering.CommunitySummaryRecord {
+	if comm == nil || len(comm.Members) == 0 {
+		return nil
+	}
+	return summaries[clustering.SummaryKey(comm.Level, clustering.MembershipHash(comm.Members))]
+}
+
+// joinedEnhancedSummary returns a community's LLM summary text with ok=true only
+// when a usable llm-enhanced record exists for its exact membership — mirroring
+// graph-query's SummaryFor so the e2e view matches what GraphRAG reads.
+func joinedEnhancedSummary(
+	comm *clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
+) (string, bool) {
+	rec := joinedSummaryRecord(comm, summaries)
+	if rec == nil || rec.Status != clustering.SummaryStatusEnhanced || rec.LLMSummary == "" {
+		return "", false
+	}
+	return rec.LLMSummary, true
+}
+
+// analyzeCommunities computes statistics and comparisons for communities, joining
+// enhancement status and LLM text from the COMMUNITY_SUMMARIES store rather than
+// from the (post-split always-empty) COMMUNITY_INDEX fields.
+func (s *TieredScenario) analyzeCommunities(
+	communities []*clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
+) communityStats {
 	stats := communityStats{comparisons: make([]CommunityComparison, 0, len(communities))}
 	var totalLengthRatio, totalWordOverlap float64
 	var ratioCount, totalNonSingletonMembers int
 
 	for _, comm := range communities {
-		comparison := s.buildCommunityComparison(comm, &totalLengthRatio, &totalWordOverlap, &ratioCount)
+		comparison := s.buildCommunityComparison(comm, summaries, &totalLengthRatio, &totalWordOverlap, &ratioCount)
 
 		if len(comm.Members) > 1 {
 			stats.nonSingletonCount++
@@ -240,10 +282,13 @@ func (s *TieredScenario) analyzeCommunities(communities []*clustering.Community)
 			}
 		}
 
-		switch comm.SummaryStatus {
-		case "llm-enhanced":
+		// Enhanced = the summary store holds a usable llm-enhanced record for this
+		// membership; otherwise the community serves the statistical floor (a missing
+		// or failed record). This counts what GraphRAG actually reads, not a field the
+		// worker stopped writing.
+		if _, ok := joinedEnhancedSummary(comm, summaries); ok {
 			stats.llmEnhancedCount++
-		case "statistical", "":
+		} else {
 			stats.statisticalOnlyCount++
 		}
 
@@ -261,27 +306,42 @@ func (s *TieredScenario) analyzeCommunities(communities []*clustering.Community)
 	return stats
 }
 
-// buildCommunityComparison creates a comparison record for a single community
+// buildCommunityComparison creates a comparison record for a single community,
+// sourcing the LLM summary and its status from the joined COMMUNITY_SUMMARIES
+// record (ADR-087). SummaryStatus reflects the store: "llm-enhanced"/"llm-failed"
+// from the record, or "pending" when no record has landed yet.
 func (s *TieredScenario) buildCommunityComparison(
 	comm *clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
 	totalLengthRatio, totalWordOverlap *float64,
 	ratioCount *int,
 ) CommunityComparison {
+	rec := joinedSummaryRecord(comm, summaries)
+
+	status := "pending"
+	llmSummary := ""
+	if rec != nil {
+		status = rec.Status
+		if rec.Status == clustering.SummaryStatusEnhanced {
+			llmSummary = rec.LLMSummary
+		}
+	}
+
 	comparison := CommunityComparison{
 		CommunityID:        comm.ID,
 		Level:              comm.Level,
 		MemberCount:        len(comm.Members),
 		StatisticalSummary: comm.StatisticalSummary,
-		LLMSummary:         comm.LLMSummary,
-		SummaryStatus:      comm.SummaryStatus,
+		LLMSummary:         llmSummary,
+		SummaryStatus:      status,
 		Keywords:           comm.Keywords,
 	}
 
-	if comm.LLMSummary != "" && comm.StatisticalSummary != "" && len(comm.StatisticalSummary) > 0 {
-		comparison.SummaryLengthRatio = float64(len(comm.LLMSummary)) / float64(len(comm.StatisticalSummary))
+	if llmSummary != "" && comm.StatisticalSummary != "" {
+		comparison.SummaryLengthRatio = float64(len(llmSummary)) / float64(len(comm.StatisticalSummary))
 		*totalLengthRatio += comparison.SummaryLengthRatio
 		*ratioCount++
-		comparison.WordOverlap = wordJaccard(comm.StatisticalSummary, comm.LLMSummary)
+		comparison.WordOverlap = wordJaccard(comm.StatisticalSummary, llmSummary)
 		*totalWordOverlap += comparison.WordOverlap
 	}
 
@@ -294,27 +354,35 @@ type llmQualityIssue struct {
 	Issue       string
 }
 
-// validateLLMSummaryQuality validates quality of LLM-enhanced community summaries
-func (s *TieredScenario) validateLLMSummaryQuality(communities []*clustering.Community) []llmQualityIssue {
+// validateLLMSummaryQuality validates quality of LLM-enhanced community summaries.
+// Enhancement text is joined from the COMMUNITY_SUMMARIES store by membership hash
+// (ADR-087); communities without a usable enhanced record are skipped (they serve
+// the statistical floor, which is validated elsewhere). Keywords remain
+// detector-owned on COMMUNITY_INDEX and are read from the community record.
+func (s *TieredScenario) validateLLMSummaryQuality(
+	communities []*clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
+) []llmQualityIssue {
 	var issues []llmQualityIssue
 
 	for _, comm := range communities {
-		if comm.SummaryStatus != "llm-enhanced" {
+		llmSummary, ok := joinedEnhancedSummary(comm, summaries)
+		if !ok {
 			continue
 		}
 
 		// Check minimum summary length (50 chars)
-		if len(comm.LLMSummary) < 50 {
+		if len(llmSummary) < 50 {
 			issues = append(issues, llmQualityIssue{
 				CommunityID: comm.ID,
-				Issue:       fmt.Sprintf("LLM summary too short: %d chars (min 50)", len(comm.LLMSummary)),
+				Issue:       fmt.Sprintf("LLM summary too short: %d chars (min 50)", len(llmSummary)),
 			})
 			continue
 		}
 
 		// Check that at least one keyword appears in the summary
 		keywordFound := false
-		summaryLower := strings.ToLower(comm.LLMSummary)
+		summaryLower := strings.ToLower(llmSummary)
 		for _, kw := range comm.Keywords {
 			if strings.Contains(summaryLower, strings.ToLower(kw)) {
 				keywordFound = true
@@ -330,11 +398,11 @@ func (s *TieredScenario) validateLLMSummaryQuality(communities []*clustering.Com
 		}
 
 		// Check that LLM summary is more detailed (longer) than statistical summary
-		if comm.StatisticalSummary != "" && len(comm.LLMSummary) <= len(comm.StatisticalSummary) {
+		if comm.StatisticalSummary != "" && len(llmSummary) <= len(comm.StatisticalSummary) {
 			issues = append(issues, llmQualityIssue{
 				CommunityID: comm.ID,
 				Issue: fmt.Sprintf("LLM summary (%d chars) not longer than statistical (%d chars)",
-					len(comm.LLMSummary), len(comm.StatisticalSummary)),
+					len(llmSummary), len(comm.StatisticalSummary)),
 			})
 		}
 	}
@@ -421,18 +489,29 @@ func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, resu
 
 	fmt.Printf("[LLM ENHANCEMENT] Found %d communities, waiting for LLM enhancement...\n", len(communities))
 
-	// Wait for LLM enhancement to complete
-	llmWait := s.waitForLLMEnhancement(ctx, len(communities), result)
+	// Wait for LLM enhancement to complete (joins the COMMUNITY_SUMMARIES store by
+	// membership hash — the post-split source of truth for enhancement status).
+	llmWait := s.waitForLLMEnhancement(ctx, communities, result)
 
-	// Re-fetch communities after waiting (they may have been updated)
+	// Re-fetch the partition after waiting (the detector may have re-run).
 	communities, err = s.natsClient.GetAllCommunities(ctx)
 	if err != nil {
 		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to re-fetch communities after LLM wait: %v", err))
 		return nil
 	}
 
-	// Analyze communities for summary status
-	stats := s.analyzeCommunities(communities)
+	// Read the worker-owned summary store once and JOIN it to the communities: after
+	// the B3 split (ADR-087) enhancement status/text live here, not on COMMUNITY_INDEX.
+	summaries, err := s.natsClient.GetCommunitySummaries(ctx)
+	if err != nil {
+		// A summary-store read failure degrades the report to the statistical floor
+		// rather than aborting the stage — the partition itself is still valid.
+		result.Warnings = append(result.Warnings, fmt.Sprintf("Failed to read community summaries: %v", err))
+		summaries = map[string]*clustering.CommunitySummaryRecord{}
+	}
+
+	// Analyze communities for summary status (joined from the store)
+	stats := s.analyzeCommunities(communities, summaries)
 
 	// Record metrics
 	s.recordCommunityMetrics(stats, result)
@@ -444,8 +523,8 @@ func (s *TieredScenario) executeValidateLLMEnhancement(ctx context.Context, resu
 		fmt.Printf("[LLM ENHANCEMENT] Wrote community report to %s\n", reportFile)
 	}
 
-	// Validate LLM summary quality for enhanced communities
-	issues := s.validateLLMSummaryQuality(communities)
+	// Validate LLM summary quality for enhanced communities (joined from the store)
+	issues := s.validateLLMSummaryQuality(communities, summaries)
 	if len(issues) > 0 {
 		for _, issue := range issues {
 			result.Warnings = append(result.Warnings,

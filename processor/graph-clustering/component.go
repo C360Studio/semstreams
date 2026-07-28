@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -537,12 +538,14 @@ type Component struct {
 	config Config
 
 	// Dependencies
-	natsClient    *natsclient.Client
-	logger        *slog.Logger
-	modelRegistry model.RegistryReader
+	natsClient      *natsclient.Client
+	logger          *slog.Logger
+	modelRegistry   model.RegistryReader
+	metricsRegistry *metric.MetricsRegistry // retained to wire summary-worker metrics
 
 	// Domain resources
 	communityBucket jetstream.KeyValue
+	summaryBucket   jetstream.KeyValue // COMMUNITY_SUMMARIES — worker-owned summary store
 	entityBucket    jetstream.KeyValue
 	outgoingBucket  jetstream.KeyValue
 	incomingBucket  jetstream.KeyValue
@@ -699,12 +702,13 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 
 	// Create component
 	comp := &Component{
-		name:          "graph-clustering",
-		config:        config,
-		natsClient:    natsClient,
-		logger:        logger,
-		modelRegistry: deps.ModelRegistry,
-		metrics:       getMetrics(deps.MetricsRegistry),
+		name:            "graph-clustering",
+		config:          config,
+		natsClient:      natsClient,
+		logger:          logger,
+		modelRegistry:   deps.ModelRegistry,
+		metricsRegistry: deps.MetricsRegistry,
+		metrics:         getMetrics(deps.MetricsRegistry),
 	}
 
 	// Expose the semantic-tier series (semantic_edges_applied + the §7 refresh-cost
@@ -918,6 +922,27 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
+	// Create COMMUNITY_SUMMARIES bucket FIRST (the enhancement worker is the sole
+	// WRITER; graph-query opens it read-only for its cache's second watcher). It is
+	// created BEFORE COMMUNITY_INDEX deliberately: consumers wait on COMMUNITY_INDEX
+	// as the readiness signal, so having the summary bucket already present when
+	// COMMUNITY_INDEX becomes observable closes the startup window where a reader
+	// could see the partition bucket but not yet the summary bucket. ADR-068
+	// compliant: no TTL/MaxBytes/MaxAge — regenerable derived data whose keys are
+	// content-addressed, so it never carries reachability-blind eviction.
+	summaryBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketCommunitySummaries,
+		Description: "LLM community summaries (content-addressed by membership hash, ADR-087)",
+	})
+	if err != nil {
+		cancel()
+		if ctx.Err() != nil {
+			return errs.Wrap(ctx.Err(), "Component", "Start", "context cancelled during bucket creation")
+		}
+		return errs.Wrap(err, "Component", "Start", fmt.Sprintf("KV bucket creation: %s", graph.BucketCommunitySummaries))
+	}
+	c.summaryBucket = summaryBucket
+
 	// Create COMMUNITY_INDEX bucket (we are the WRITER)
 	communityBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      graph.BucketCommunityIndex,
@@ -989,7 +1014,7 @@ func (c *Component) Start(ctx context.Context) error {
 
 	// Start LLM enhancement worker if enabled
 	if !poisoned && c.config.EnableLLM {
-		if err := c.startEnhancementWorker(ctx, c.graphProvider); err != nil {
+		if err := c.startEnhancementWorker(ctx); err != nil {
 			c.logger.Warn("failed to start enhancement worker, continuing without LLM",
 				slog.Any("error", err))
 		}
@@ -2144,7 +2169,7 @@ func (p *kvProvider) GetEdgeWeight(ctx context.Context, fromID, toID string) (fl
 // ============================================================================
 
 // startEnhancementWorker initializes and starts the LLM enhancement worker
-func (c *Component) startEnhancementWorker(ctx context.Context, provider clustering.Provider) error {
+func (c *Component) startEnhancementWorker(ctx context.Context) error {
 	// Resolve endpoint AND full config — direct ResolveEndpoint silently strips
 	// the connection-hygiene fields (DisableKeepAlives, IdleConnTimeout,
 	// ResponseHeaderTimeout) and per-endpoint RequestTimeout that the LLM
@@ -2196,11 +2221,11 @@ func (c *Component) startEnhancementWorker(ctx context.Context, provider cluster
 	// caps the effective ceiling regardless of HTTP-client configuration.
 	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 		LLMSummarizer:   llmSummarizer,
-		Storage:         c.storage,
-		Provider:        provider,
 		Querier:         querier,
-		CommunityBucket: c.communityBucket,
+		CommunityBucket: c.communityBucket, // COMMUNITY_INDEX — trigger only
+		SummaryBucket:   c.summaryBucket,   // COMMUNITY_SUMMARIES — worker-owned
 		Logger:          c.logger,
+		Registry:        c.metricsRegistry,
 		LLMTimeout:      cfg.Timeout,
 	})
 	if err != nil {
