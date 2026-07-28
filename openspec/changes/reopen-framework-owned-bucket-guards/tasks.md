@@ -137,8 +137,10 @@
 
 ## 8. PR + review + merge
 
-- [ ] 8.1 Follow-up branch off main (retrospective-review workflow); PR references #622/#716 and the
-  Codex retrospective findings; conventional-commit, BREAKING flagged.
+- [x] 8.1 Follow-up branch off main (retrospective-review workflow); PR references #622/#716 and the
+  Codex retrospective findings; conventional-commit, BREAKING flagged. **PR #719, branch
+  `fix/reopen-framework-owned-bucket-guards` off `d03c49f7`. Merge #718 (archive) FIRST, then
+  trivial rebase — no file overlap.**
 - [x] 8.2 `semstreams-reviewer` pre-merge review — reviewer explicitly checks the production
   concurrency shape of every new test (the miss class that let #716 merge).
   **Round 1 CHANGES-REQUESTED: caught the rewritten create-race test as STILL non-discriminating
