@@ -55,20 +55,3 @@ type Embedder interface {
 	// this is typically a no-op, but for local ONNX models this releases GPU/CPU resources.
 	Close() error
 }
-
-// Cache provides content-addressed caching for embeddings.
-//
-// Implementations should use a hash of the text content as the key to enable
-// deduplication and fast lookups.
-type Cache interface {
-	// Get retrieves a cached embedding for the given content hash.
-	//
-	// Returns an error if the embedding is not found in the cache.
-	Get(ctx context.Context, contentHash string) ([]float32, error)
-
-	// Put stores an embedding in the cache with the given content hash.
-	//
-	// The cache should be content-addressed using a cryptographic hash
-	// (e.g., SHA-256) of the text content.
-	Put(ctx context.Context, contentHash string, embedding []float32) error
-}

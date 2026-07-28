@@ -95,3 +95,13 @@ Caveat on the `cache_ttl` hits: scope them to graph-embedding config blocks —
 same-named keys under other components belong to other surfaces and must stay.
 Every `EMBEDDINGS_CACHE` hit goes: config declarations, bucket-inventory
 literals, and doc prose alike.
+
+## 6. Drop the library cache API (Go adopters)
+
+The `graph/embedding` cache CLASS is deleted along with the bucket instance:
+the `Cache` interface, the `NATSCache` implementation, and the
+`HTTPConfig.Cache` field are gone, and `HTTPEmbedder` always calls the
+embedding API directly. An adopter who implemented `embedding.Cache` or set
+`HTTPConfig.Cache` must drop that code — the break is a compile error, so it
+is self-evident. Durable content-addressed dedup (`EMBEDDING_DEDUP` via
+`DedupKey`) is a different mechanism and is unaffected.
