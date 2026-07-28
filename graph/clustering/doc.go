@@ -99,15 +99,17 @@
 //
 // # Enhancement Worker
 //
-// The EnhancementWorker watches COMMUNITY_INDEX KV for communities with
-// status="statistical" and asynchronously generates LLM summaries:
+// The EnhancementWorker watches COMMUNITY_INDEX KV as a TRIGGER ONLY and writes
+// LLM summaries to the worker-owned, content-addressed COMMUNITY_SUMMARIES store
+// keyed by {level}.{membership_hash} (ADR-087). It never writes COMMUNITY_INDEX,
+// so a lagging worker can neither clobber a fresher partition nor resurrect a
+// pruned community:
 //
 //	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 //	    LLMSummarizer:   llmSummarizer,
-//	    Storage:         storage,
-//	    Provider:        graphProvider,
 //	    Querier:         queryManager,
-//	    CommunityBucket: communityBucket,
+//	    CommunityBucket: communityBucket, // COMMUNITY_INDEX — trigger only
+//	    SummaryBucket:   summaryBucket,   // COMMUNITY_SUMMARIES — worker-owned
 //	})
 //
 //	worker.Start(ctx)
@@ -136,9 +138,9 @@
 //	MaxIterations:    100       # Maximum iterations (limit: 10000)
 //	Levels:           3         # Hierarchical levels (limit: 10)
 //
-// LLM summary transfer between detection runs:
-//
-//	SummaryTransferThreshold: 0.8    # Jaccard overlap for preserving LLM summaries
+// LLM summaries survive rebuilds by content-addressing (membership hash), not by
+// a Jaccard-overlap transfer between runs — see the Enhancement Worker section
+// and ADR-087.
 //
 // Inference configuration for relationship generation:
 //
@@ -181,10 +183,11 @@
 // The clustering package exports Prometheus metrics under the semstreams_clustering namespace:
 //   - communities_detected_total: Communities detected by level
 //   - detection_duration_seconds: Detection run duration
-//   - enhancement_latency_seconds: LLM enhancement duration
-//   - enhancement_queue_depth: Pending enhancements
-//   - enhancement_success_total: Successful LLM enhancements
-//   - enhancement_failed_total: Failed LLM enhancements
+//   - llm_enhancement_latency_seconds: LLM summarization duration
+//   - community_summary_cache_hits_total: Triggers served from an existing summary (no LLM call)
+//   - community_summary_generated_total: Summaries produced by a fresh LLM call
+//   - community_summary_failed_total: Failed summary generations
+//   - community_summaries_size: Current count of stored community summaries
 //
 // # See Also
 //

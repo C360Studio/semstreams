@@ -25,10 +25,6 @@ const (
 	// MaxLevelsLimit is the maximum allowed hierarchical levels
 	MaxLevelsLimit = 10
 
-	// SummaryTransferThreshold is the minimum Jaccard overlap for transferring LLM summaries
-	// between archived and newly detected communities
-	SummaryTransferThreshold = 0.8
-
 	// detectionShuffleSeed seeds the per-DetectCommunities RNG that shuffles entity
 	// processing order (LPA oscillation reduction). Its exact value is arbitrary;
 	// what matters is that it is a FIXED CONSTANT, so the shuffle sequence is the
@@ -176,24 +172,12 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		r.ResetEdgeCache()
 	}
 
-	// PHASE 1: Archive LLM-enhanced communities before the rebuild
-	// This preserves expensive LLM summaries (typically 5-20s per community) that can be
-	// transferred to new communities with similar membership (≥80% overlap).
-	var archivedEnhanced []*Community
-	allComms, err := d.storage.GetAllCommunities(ctx)
-	if err != nil {
-		// Log warning but continue - archival failure shouldn't block detection
-		d.logger.Warn("Failed to archive communities for preservation", "error", err)
-	} else {
-		for _, c := range allComms {
-			if c.SummaryStatus == "llm-enhanced" && c.LLMSummary != "" {
-				archivedEnhanced = append(archivedEnhanced, c)
-			}
-		}
-		if len(archivedEnhanced) > 0 {
-			d.logger.Info("Archived LLM-enhanced communities for preservation", "count", len(archivedEnhanced))
-		}
-	}
+	// LLM summaries are no longer archived/transferred across rebuilds. They live in
+	// the worker-owned, content-addressed COMMUNITY_SUMMARIES store keyed by
+	// membership hash (ADR-087): a rebuild that reproduces a membership re-joins its
+	// summary for free by hash, and a changed membership correctly gets a fresh
+	// summary — so the Jaccard-overlap transfer this detector used to run is
+	// unnecessary. The detector writes ONLY the partition (COMMUNITY_INDEX).
 
 	// NOTE: the index is deliberately NOT cleared here. Detection has been
 	// measured from 4.4s to 23.7s, and on a 30s cycle a clear-then-rebuild leaves
@@ -256,34 +240,9 @@ func (d *LPADetector) DetectCommunities(ctx context.Context) (map[int][]*Communi
 		prevCommunities = communities
 	}
 
-	// PHASE 2: Transfer LLM summaries from archived communities to new ones
-	// This preserves expensive LLM work when community structure is stable
-	if len(archivedEnhanced) > 0 {
-		transferred := 0
-		failed := 0
-		for _, levelCommunities := range result {
-			for _, newComm := range levelCommunities {
-				if transferSummary(newComm, archivedEnhanced, SummaryTransferThreshold) {
-					// Re-save the community with transferred summary
-					if err := d.storage.SaveCommunity(ctx, newComm); err != nil {
-						d.logger.Warn("Failed to save community with transferred summary",
-							"community_id", newComm.ID, "error", err)
-						failed++
-					} else {
-						transferred++
-					}
-				}
-			}
-		}
-		if transferred > 0 || failed > 0 {
-			d.logger.Info("Transferred LLM summaries to new communities",
-				"transferred", transferred, "failed", failed, "archived", len(archivedEnhanced))
-		}
-	}
-
-	// PHASE 3: Drop whatever the previous partition left behind. Must run after
-	// every level has been saved — pruning earlier would reopen the empty window
-	// this design exists to close.
+	// Drop whatever the previous partition left behind. Must run after every level
+	// has been saved — pruning earlier would reopen the empty window this design
+	// exists to close.
 	keep := make([]*Community, 0, len(entityIDs))
 	for _, levelCommunities := range result {
 		keep = append(keep, levelCommunities...)
@@ -799,78 +758,4 @@ func (d *LPADetector) hasExplicitEdge(ctx context.Context, entityA, entityB stri
 	}
 	weightBA, _ := d.graphProvider.GetEdgeWeight(ctx, entityB, entityA)
 	return weightBA >= 0.8
-}
-
-// transferSummary transfers an LLM summary from an archived community to a new one
-// if their membership overlap exceeds the threshold (using Jaccard index).
-// Uses best-match logic: if multiple archived communities exceed threshold, picks the one
-// with highest overlap to ensure the most relevant summary is transferred.
-// Returns true if a summary was transferred.
-func transferSummary(newComm *Community, archived []*Community, threshold float64) bool {
-	var bestMatch *Community
-	var bestOverlap float64
-
-	for _, old := range archived {
-		// Must be same level
-		if old.Level != newComm.Level {
-			continue
-		}
-
-		overlap := jaccardIndex(newComm.Members, old.Members)
-		if overlap >= threshold && overlap > bestOverlap {
-			bestMatch = old
-			bestOverlap = overlap
-		}
-	}
-
-	if bestMatch == nil {
-		return false
-	}
-
-	// Transfer the LLM summary from best match
-	newComm.LLMSummary = bestMatch.LLMSummary
-	newComm.SummaryStatus = "llm-enhanced"
-	// The truncation flag travels with the summary text it describes, or the B2
-	// dilution channel under-counts truncation on any community that inherited its
-	// summary through a rebuild transfer rather than fresh enhancement.
-	newComm.SummaryTruncated = bestMatch.SummaryTruncated
-
-	// Initialize metadata if nil (atomic assignment pattern)
-	metadata := newComm.Metadata
-	if metadata == nil {
-		metadata = make(map[string]interface{})
-	}
-	metadata["summary_transferred_from"] = bestMatch.ID
-	metadata["membership_overlap"] = bestOverlap
-	newComm.Metadata = metadata
-
-	return true
-}
-
-// jaccardIndex computes the Jaccard similarity index between two sets of members.
-// Jaccard index = |A ∩ B| / |A ∪ B|
-// Returns 0.0 if both sets are empty, otherwise a value between 0.0 and 1.0.
-func jaccardIndex(a, b []string) float64 {
-	if len(a) == 0 && len(b) == 0 {
-		return 0.0
-	}
-
-	setA := make(map[string]bool, len(a))
-	for _, id := range a {
-		setA[id] = true
-	}
-
-	intersection := 0
-	for _, id := range b {
-		if setA[id] {
-			intersection++
-		}
-	}
-
-	union := len(setA) + len(b) - intersection
-	if union == 0 {
-		return 0.0
-	}
-
-	return float64(intersection) / float64(union)
 }

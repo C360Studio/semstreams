@@ -529,46 +529,119 @@ func (c *NATSValidationClient) GetAllCommunities(ctx context.Context) ([]*cluste
 	return communities, nil
 }
 
-// WaitForCommunityEnhancement polls communities until all reach terminal status
-// Terminal statuses: "llm-enhanced" or "llm-failed"
-// Returns counts of enhanced, failed, and pending communities
-func (c *NATSValidationClient) WaitForCommunityEnhancement(
+// GetCommunitySummaries retrieves every LLM community-summary record from the
+// COMMUNITY_SUMMARIES bucket (ADR-087), keyed by its raw {level}.{membership_hash}
+// KV key — exactly what clustering.SummaryKey builds and graph-query's read path
+// joins on.
+//
+// After the B3 ownership split the enhancement worker writes summaries HERE rather
+// than onto COMMUNITY_INDEX, so enhancement observability must JOIN each community
+// to this store by clustering.MembershipHash(members). A missing bucket (e.g. a
+// statistical-tier deployment that never runs the worker) is not an error: it
+// returns an empty map so callers degrade to the statistical floor, mirroring the
+// production read path.
+func (c *NATSValidationClient) GetCommunitySummaries(ctx context.Context) (map[string]*clustering.CommunitySummaryRecord, error) {
+	summaries := make(map[string]*clustering.CommunitySummaryRecord)
+
+	bucket, err := c.client.GetKeyValueBucket(ctx, graph.BucketCommunitySummaries)
+	if err != nil {
+		if isBucketNotFoundError(err) {
+			return summaries, nil
+		}
+		return nil, fmt.Errorf("failed to get community summaries bucket: %w", err)
+	}
+
+	keys, err := bucket.Keys(ctx)
+	if err != nil {
+		if isNoKeysError(err) {
+			return summaries, nil
+		}
+		return nil, fmt.Errorf("failed to list community summary keys: %w", err)
+	}
+
+	for _, key := range keys {
+		entry, err := bucket.Get(ctx, key)
+		if err != nil {
+			continue
+		}
+		var rec clustering.CommunitySummaryRecord
+		if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+			continue
+		}
+		summaries[key] = &rec
+	}
+
+	return summaries, nil
+}
+
+// classifyCommunitySummaryStatus joins each community to COMMUNITY_SUMMARIES by
+// membership hash (ADR-087) and buckets it: enhanced (a usable llm-enhanced
+// record), failed (an llm-failed marker), or pending (no record, or an unusable
+// empty enhanced record). It mirrors graph-query's SummaryFor join so the e2e
+// counts match what GraphRAG would actually read.
+func classifyCommunitySummaryStatus(
+	communities []*clustering.Community,
+	summaries map[string]*clustering.CommunitySummaryRecord,
+) (enhanced, failed, pending int) {
+	for _, comm := range communities {
+		if comm == nil || len(comm.Members) == 0 {
+			continue
+		}
+		key := clustering.SummaryKey(comm.Level, clustering.MembershipHash(comm.Members))
+		rec, ok := summaries[key]
+		switch {
+		case !ok:
+			pending++
+		case rec.Status == clustering.SummaryStatusEnhanced && rec.LLMSummary != "":
+			enhanced++
+		case rec.Status == clustering.SummaryStatusFailed:
+			failed++
+		default:
+			// A record exists but is neither a usable enhanced summary nor a failure
+			// marker — do not let it falsely terminate the wait.
+			pending++
+		}
+	}
+	return enhanced, failed, pending
+}
+
+// WaitForCommunitySummaryEnhancement polls COMMUNITY_SUMMARIES until every supplied
+// community has a terminal summary record (llm-enhanced or llm-failed), joining by
+// membership hash (ADR-087). Returns counts of enhanced, failed, and pending
+// communities.
+//
+// It replaces the pre-split poll over COMMUNITY_INDEX.SummaryStatus: after B3 the
+// worker no longer writes that field, so the old wait could never observe
+// pending→0 and always burned its full ceiling before reporting enhanced=0. This
+// wait terminates as soon as the summary store is caught up.
+func (c *NATSValidationClient) WaitForCommunitySummaryEnhancement(
 	ctx context.Context,
+	communities []*clustering.Community,
 	timeout time.Duration,
 	pollInterval time.Duration,
 ) (enhanced, failed, pending int, err error) {
+	// With no communities there is nothing to enhance; report a settled state.
+	if len(communities) == 0 {
+		return 0, 0, 0, nil
+	}
+
 	deadline := time.Now().Add(timeout)
 
-	for time.Now().Before(deadline) {
-		communities, err := c.GetAllCommunities(ctx)
-		if err != nil {
-			return 0, 0, 0, fmt.Errorf("failed to get communities: %w", err)
+	for {
+		summaries, serr := c.GetCommunitySummaries(ctx)
+		if serr != nil {
+			return 0, 0, 0, fmt.Errorf("failed to get community summaries: %w", serr)
 		}
 
-		// If no communities exist yet, wait and retry
-		if len(communities) == 0 {
-			select {
-			case <-ctx.Done():
-				return 0, 0, 0, ctx.Err()
-			case <-time.After(pollInterval):
-				continue
-			}
-		}
+		enhanced, failed, pending = classifyCommunitySummaryStatus(communities, summaries)
 
-		enhanced, failed, pending = 0, 0, 0
-		for _, comm := range communities {
-			switch comm.SummaryStatus {
-			case "llm-enhanced":
-				enhanced++
-			case "llm-failed":
-				failed++
-			default: // "statistical" or empty
-				pending++
-			}
-		}
-
-		// All communities reached terminal status
+		// Every community reached a terminal record.
 		if pending == 0 {
+			return enhanced, failed, pending, nil
+		}
+
+		if !time.Now().Before(deadline) {
+			// Timeout reached; return current state without error.
 			return enhanced, failed, pending, nil
 		}
 
@@ -578,9 +651,6 @@ func (c *NATSValidationClient) WaitForCommunityEnhancement(
 		case <-time.After(pollInterval):
 		}
 	}
-
-	// Timeout reached, return current state without error
-	return enhanced, failed, pending, nil
 }
 
 // StructuralIndexBucket is the KV bucket for structural indices

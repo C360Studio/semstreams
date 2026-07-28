@@ -629,6 +629,27 @@ func (c *Component) startGraphRAGWatcher(ctx context.Context) error {
 		}
 	}()
 
+	// Start the SECOND watcher on COMMUNITY_SUMMARIES so the read path can join LLM
+	// summaries by membership hash (ADR-087). This bucket is OPTIONAL and does NOT
+	// gate readiness: if it is absent (e.g. a statistical-tier deployment that never
+	// runs the enhancement worker), the read path degrades to the statistical floor.
+	// A missing bucket therefore logs and continues rather than failing GraphRAG.
+	summaryBucket, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunitySummaries)
+	if err != nil {
+		c.logger.Info("COMMUNITY_SUMMARIES bucket not available; community summaries degrade to the statistical floor",
+			"error", err)
+	} else {
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			if err := c.communityCache.WatchSummaries(ctx, summaryBucket); err != nil {
+				if ctx.Err() == nil {
+					c.logger.Error("community summary cache watcher failed", "error", err)
+				}
+			}
+		}()
+	}
+
 	// Register GraphRAG handlers
 	if err := c.setupGraphRAGHandlers(ctx); err != nil {
 		return fmt.Errorf("setup GraphRAG handlers: %w", err)
