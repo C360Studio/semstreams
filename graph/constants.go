@@ -16,9 +16,14 @@ const (
 	// to the entities carrying it, for deterministic name→ranked-IDs lookup
 	// (graph.query.byName, gh#376). Complements ALIAS_INDEX, which excludes
 	// display-name (AliasTypeLabel) predicates.
-	BucketNameIndex     = "NAME_INDEX"
-	BucketSpatialIndex  = "SPATIAL_INDEX"
-	BucketTemporalIndex = "TEMPORAL_INDEX"
+	BucketNameIndex = "NAME_INDEX"
+	// BucketEntitySuffixIndex maps an entity-ID suffix to the full 6-part ID(s)
+	// carrying it, for partial-ID resolution. Created and owned exclusively by
+	// graph-ingest (component.go); a member of FrameworkOwnedBuckets so a generic
+	// rule update_kv cannot mutate it (closed by framework-owned-bucket-guards).
+	BucketEntitySuffixIndex = "ENTITY_SUFFIX_INDEX"
+	BucketSpatialIndex      = "SPATIAL_INDEX"
+	BucketTemporalIndex     = "TEMPORAL_INDEX"
 	// BucketTemporalIndexReverse maps entityID -> current temporal bucket key.
 	// It lets graph-index-temporal remove an entity's stale event from its prior
 	// time bucket when the entity is re-indexed (observed-time changed) or deleted,
@@ -58,6 +63,7 @@ func FrameworkOwnedBuckets() []string {
 		BucketOutgoingIndex,
 		BucketAliasIndex,
 		BucketNameIndex,
+		BucketEntitySuffixIndex,
 		BucketSpatialIndex,
 		BucketTemporalIndex,
 		BucketTemporalIndexReverse,

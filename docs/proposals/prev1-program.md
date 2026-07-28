@@ -9,6 +9,65 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **EPIC C OPENED + REDRAWN (2026-07-28, owner-decided) — the next epic-level WIP-1 item. Epic C is now
+> "operational / derived-KV-plane state-ownership," NOT the original 2026-07-21 leftover-issues bucket.**
+> RATIONALE (owner): the split is by STATE CATEGORY, not by file. The Codex projection-contract arc
+> (#686→#687→#696→#704→#708) governs the AUTHORITATIVE entity-fact plane (contract-bound mutation client in
+> `pkg/projection` over ENTITY_STATES triples — verified: it has ZERO refs to `update_kv`/`ENTITY_SUFFIX`/
+> `FrameworkOwnedBucket`, a disjoint seam). NOBODY governs the operational/derived-KV plane — and #622 is the
+> indictment (retention guard covers 2 of 17 buckets). B3 proved the pattern on ONE instance (single-writer +
+> content-addressing killed a resurrection class structurally); Epic C GENERALIZES it. That's a real epic
+> identity.
+>
+> **SCOPE (verified against HEAD 2026-07-28):**
+> - **#622 = the PRIMITIVE, increment-0, START NOW.** Generic `update_kv` write-owner guard + FULL bucket
+>   coverage. Live bug confirmed: `ENTITY_SUFFIX_INDEX` created at `component.go:1154`, ABSENT from
+>   `FrameworkOwnedBuckets()`, so a rule can legally `update_kv` into it TODAY. **ARCHITECT SCOPE (verified HEAD):**
+>   inc-0 = asks 1 (write-ownership: add the bucket constant + list entry) + 2 (coverage). **Ask 3 (ObjectStore
+>   analogue) is ALREADY DONE** — `storage/objectstore/retention.go` (PR #632/#636) + `graph-retention` spec
+>   Requirement `:47` cover every store incl. AGENT_CONTENT/embedding-content; DROP from scope, verify+close.
+>   **Ask 4 already satisfied** — the KV guard already reads *existing* server config via `bucket.Status()`, not
+>   requested defaults. **Design = reconcile-then-assert** (mirror the ObjectStore precedent: strip a foreign TTL
+>   → self-heal+WARN → re-read → fail-closed on the shared `CheckNoLifecycleRetention` predicate) — NOT pure-assert,
+>   which would multiply graph-ingest's process-lifetime-sticky takedown blast radius 17×. Additive, not breaking
+>   (no shipped config writes the bucket). Exclude `EMBEDDINGS_CACHE` from the retention sweep (keep it
+>   write-protected) so #622 doesn't pre-empt the storage-limits epic's cache-bounding. Spec homes: `graph-retention`
+>   (broaden the ENTITY_STATES-specific requirement to the full owned set) + seed write-ownership into `nats-kv-keys`.
+> - **#625 = embedding cleanup repair loop, START NOW (pairs with #629).** graph-embedding plane, zero contact
+>   with any in-flight change (architect grepped all 7). Port graph-index's `repairLoop` precedent. Consumes the
+>   #622 primitive. Dependency: `#622 → #625`.
+> - **#629 = coalescer resurrection. IMPL-HOLD FALSIFIED (architect, verified HEAD) — owner: ship with #625.**
+>   The resurrection lane is **graph-embedding** (`cache.CoalescingSet` → `processEntityBatch` discards revisions →
+>   `SavePending` unconditional Put defeats the gh#614 drop-guard), NOT `graph-index/revision_coalescer.go` (which
+>   RETAINS greatest-revision by design → not vulnerable; the issue/baton conflated the two). NO active change
+>   touches graph-embedding, so under the mechanical rule #629 needs no hold. Design the ordering protocol (durable
+>   revisioned delete-marker + CAS-create, resting on #622's owned+retention-free `EMBEDDING_INDEX`) then implement
+>   with the #625 pair. Dependency: `#622 → #629`. Low urgency: opt-in-only (`coalesce_ms > 0`, no shipped config).
+> - **~~#527~~ DROPPED from Epic C** — it IS `graph-index-replacement-semantics` (15/19, in-flight sister/Codex:
+>   composite-key contract freeze + durable NAME/PREDICATE/source-owned-INCOMING reverse projection, co-activates
+>   with `predicate-raw-key-representation`/ADR-078). Pointer hygiene DONE: baton + MEMORY.md idx + rollout hub +
+>   retention hub + gh474 hub all updated so a fresh session can't resurrect #527 as orphaned "NEXT" work.
+>
+> **MECHANICAL COLLISION RULE (owner, replaces "hold until quiesce"): Epic C builds ONLY against merged main.**
+> The moment an item needs an in-flight surface, that item HOLDS automatically (the beta.135-pin move that made
+> the semdragon stack safe). **Predicate/vocabulary surface is OUT OF SCOPE BY WRITTEN CONSTRAINT** — the change
+> proposal must state Epic C touches no predicate/vocab surface, which makes the in-flight BREAKING
+> `predicate-contract-enforcement` (38/44) deterministically irrelevant to it.
+>
+> **CROSS-CHANGE COLLISION to coordinate (architect D3): `bounded-storage-operability` (0/35, BREAKING,
+> not-started) is a proposed retention epic that edits the SAME `graph-retention` spec file AND wants a
+> `DiscardNew` `MaxBytes` emergency ceiling, which #622's `CheckNoLifecycleRetention` predicate rejects
+> (`MaxBytes>0` forbidden). The "build vs merged main" rule doesn't catch it (it's a proposed SPEC, not merged
+> code). OWNER-DECIDED: #622 inc-0 lands the strict status-quo invariant ONLY (extends coverage, touches no
+> `MaxBytes` policy), sequences FIRST on the `graph-retention` spec; the `DiscardNew` carve-out is deferred
+> entirely to `bounded-storage-operability`, which rebases its delta onto #622's broadened requirement.**
+>
+> **NEXT: architect scope DONE (2026-07-28). Drive `/opsx:new` for #622 inc-0 (asks 1+2, reconcile-then-assert,
+> additive, no predicate/vocab surface stated, EMBEDDINGS_CACHE excluded from sweep, defer `DiscardNew` to the
+> storage-limits epic) + the #629 decision doc. Then semstreams-developer implements #622, then the #625+#629
+> graph-embedding pair. Cadence: architect scope ✓ → semstreams-developer → semstreams-reviewer → Codex
+> (owner-run) → CI green → merge → archive.**
+
 > **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
 > This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
 > ownership split: LLM summaries moved from the shared `COMMUNITY_INDEX` record to a worker-exclusive,
@@ -338,7 +397,7 @@ two files three times. Start Epic A here.
 |---|---|---|---|
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
 | **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | ~~#606–#618~~ · #607/#617 closed by B3 · follow-ups #701 #710 | **✅ COMPLETE — B0/B1/B2/B3 ALL CLOSED. Recall-ceiling fix MERGED (PR #702, 0.85→0.95); B3 ownership split MERGED (PR #709 `857988ef`, archive #711; closes #607/#617). Follow-ups: #701 (multi-community expansion), #710 (summary-store GC), #661 reframed** |
-| **C** — derived-state ownership | accept one retention ADR; owner ledger; extend the boot guard; cross-bucket repair loop + ordering protocol | #622 #527 #625 #629 | not started |
+| **C** — operational / derived-KV-plane state-ownership (REDRAWN 2026-07-28) | generalize B3's single-writer + content-addressing + guard-coverage pattern across the plane the projection-contract arc leaves ungoverned; extend the boot retention/write-owner guard to full bucket coverage (the primitive), then repair loops that CONSUME it | #622 (primitive, inc-0) #625 #629 · ~~#527~~ folded into `graph-index-replacement-semantics` | **in progress — #622 change `framework-owned-bucket-guards` BUILT + reviewed (semstreams-reviewer APPROVE-WITH-NITS, 3 nits folded), tree green; awaiting owner PR + Codex** |
 | **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
 

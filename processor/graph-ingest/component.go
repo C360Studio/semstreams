@@ -1151,7 +1151,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 
 	// Suffix index KV bucket for fast suffix→fullID resolution
 	suffixBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "ENTITY_SUFFIX_INDEX",
+		Bucket:      graph.BucketEntitySuffixIndex,
 		Description: "Suffix-to-full-ID reverse index for partial entity ID resolution",
 	})
 	if err != nil {

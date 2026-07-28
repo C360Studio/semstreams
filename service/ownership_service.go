@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/builtinprojection"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -127,6 +128,22 @@ func WireOwnership(
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	// ADR-068 D1 boot seam (framework-owned-bucket-guards; #622): a single
+	// authoritative sweep asserts no NATS lifecycle retention on the
+	// framework-owned KV plane, self-healing a foreign/legacy TTL a prior or
+	// racing process left on a derived index (the #610/#611 shape). This is a
+	// DISTINCT concern from ADR-058 ownership; it is folded into this one shared
+	// boot function ON PURPOSE — both cmd/semstreams and cmd/e2e-semstreams call
+	// WireOwnership exactly once before StartAll, so wiring it here covers both
+	// binaries with no half-migration drift (the beta.18 lesson). It runs before
+	// the graph components' get-or-create returns a persisted-dirty bucket as-is.
+	// Skip-if-absent means a not-yet-provisioned bucket is passed over. (Seam
+	// choice is reviewer-adjustable — OQ1.)
+	if err := graph.AssertOwnedBucketsClean(ctx, natsClient, logger); err != nil {
+		return nil, nil, nil, fmt.Errorf("assert framework-owned graph buckets retention-clean: %w", err)
+	}
+
 	reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("bootstrap ownership buckets: %w", err)
