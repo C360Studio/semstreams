@@ -64,10 +64,11 @@ func (f *fakeKVStream) Info(context.Context, ...jetstream.StreamInfoOpt) (*jetst
 // fail-closed assert) observes the strip, exactly as real NATS would.
 type fakeKVJS struct {
 	jetstream.JetStream
-	stream    *fakeKVStream
-	updated   *jetstream.StreamConfig // last config passed to UpdateStream
-	updateErr error                   // when set, UpdateStream is denied and config is left unchanged
-	streamErr error                   // when set, Stream() fails
+	stream      *fakeKVStream
+	updated     *jetstream.StreamConfig // last config passed to UpdateStream
+	updateErr   error                   // when set, UpdateStream is denied and config is left unchanged
+	noopSuccess bool                    // when set, UpdateStream REPORTS success but does not persist the strip (a lying/no-op update)
+	streamErr   error                   // when set, Stream() fails
 }
 
 func (f *fakeKVJS) Stream(context.Context, string) (jetstream.Stream, error) {
@@ -82,6 +83,12 @@ func (f *fakeKVJS) UpdateStream(_ context.Context, cfg jetstream.StreamConfig) (
 	f.updated = &cp
 	if f.updateErr != nil {
 		return nil, f.updateErr
+	}
+	if f.noopSuccess {
+		// Report success but DO NOT persist the strip — the stream's config stays
+		// binding, so the fresh re-read still sees the retention. Models a NATS
+		// that accepts the update yet leaves the value in place.
+		return f.stream, nil
 	}
 	f.stream.info.Config = cfg // reflect the strip so the re-read assert sees it
 	return f.stream, nil
@@ -151,5 +158,22 @@ func TestReconcileNoLifecycleRetention_KV(t *testing.T) {
 		require.Error(t, err)
 		assert.ErrorIs(t, err, ErrGraphBucketRetention, "an un-strippable retention config must fail boot closed")
 		assert.Contains(t, err.Error(), "SPATIAL_INDEX", "the fatal error must name the offending bucket")
+	})
+
+	t.Run("a no-op UpdateStream that leaves retention binding fails closed", func(t *testing.T) {
+		t.Parallel()
+		// UpdateStream REPORTS success but does not persist the strip, so the fresh
+		// re-read still observes the binding TTL. The fail-closed path must trip on
+		// the authoritative re-read, not on the update's reported success — this
+		// covers the "cannot strip" spec scenario deterministically without relying
+		// on a denied update.
+		js := newFakeKVJS("COMMUNITY_INDEX", 24*time.Hour, -1)
+		js.noopSuccess = true
+
+		err := ReconcileNoLifecycleRetention(context.Background(), js, "COMMUNITY_INDEX", logger)
+		require.Error(t, err)
+		assert.ErrorIs(t, err, ErrGraphBucketRetention, "a lying no-op update must still fail boot closed on the re-read")
+		assert.Contains(t, err.Error(), "COMMUNITY_INDEX", "the fatal error must name the offending bucket")
+		require.NotNil(t, js.updated, "the reconcile must have ATTEMPTED an UpdateStream")
 	})
 }

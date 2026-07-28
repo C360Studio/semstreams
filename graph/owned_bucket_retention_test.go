@@ -25,6 +25,27 @@ func TestFrameworkOwnedBuckets_IncludesEntitySuffixIndex(t *testing.T) {
 	}
 }
 
+// TestFrameworkOwnedBuckets_IncludesOperationalBuckets pins the F2/F3
+// write-ownership fixes: GRAPH_INGEST_APPLIED_SEQ (redelivery-guard stamps, #715)
+// and GRAPH_STATUS (readiness envelopes) are members of the owned set, so a
+// generic rule update_kv cannot forge a sequence stamp or readiness at either
+// guard site. Both are correctness-critical no-eviction state, so the retention
+// sweep covers them (they are NOT the excluded rebuildable cache).
+func TestFrameworkOwnedBuckets_IncludesOperationalBuckets(t *testing.T) {
+	t.Parallel()
+	for _, bucket := range []string{BucketGraphIngestAppliedSeq, BucketGraphStatus} {
+		if !IsFrameworkOwnedBucket(bucket) {
+			t.Errorf("%s must be reported as framework-owned", bucket)
+		}
+		if !contains(FrameworkOwnedBuckets(), bucket) {
+			t.Errorf("FrameworkOwnedBuckets() must include %s", bucket)
+		}
+		if !contains(retentionGuardedBuckets(), bucket) {
+			t.Errorf("retentionGuardedBuckets() must include %s (correctness-critical no-eviction state)", bucket)
+		}
+	}
+}
+
 // TestRetentionGuardedBuckets_ExcludesEmbeddingsCacheOnly proves the retention
 // sweep set is FrameworkOwnedBuckets() minus exactly EMBEDDINGS_CACHE: the cache
 // is excluded from the retention guard (its capacity policy is owned elsewhere)

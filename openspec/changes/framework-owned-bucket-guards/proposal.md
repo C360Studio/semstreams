@@ -24,8 +24,10 @@ pattern B3 proved on one store (content-addressed community summaries) to the de
 
 ## What Changes
 
-- **Extend the retention guard to the full owned-bucket set** via a single authoritative boot-time
-  sweep, replacing the two ad-hoc per-creator asserts as the coverage guarantee.
+- **Extend the retention guard to the full owned-bucket set** via a **two-pass boot-time sweep** — a
+  pre-start belt (before component start, self-healing prior-boot dirt) plus a post-start coverage
+  pass (after every owner holds its bucket handle, closing the create-race window) — replacing the
+  two ad-hoc per-creator asserts as the coverage guarantee.
 - **Adopt reconcile-then-assert** for the guard (mirroring the already-shipped ObjectStore
   precedent `storage/objectstore/retention.go`): strip a foreign binding TTL/`MaxBytes` →
   self-heal + WARN → re-read fresh → fail-closed on the shared `CheckNoLifecycleRetention`
@@ -35,6 +37,12 @@ pattern B3 proved on one store (content-addressed community summaries) to the de
 - **Register `ENTITY_SUFFIX_INDEX` as framework-owned**: add a `BucketEntitySuffixIndex` constant,
   replace the literal at its creation site, and add it to `FrameworkOwnedBuckets()` — closing the
   live `update_kv` write-ownership hole at both rule guard sites.
+- **Register two more owned operational buckets** the review found generically writable — add
+  `GRAPH_INGEST_APPLIED_SEQ` (the ADR-072 redelivery-guard stamps, a promoted private literal) and
+  `GRAPH_STATUS` (the ADR-083 readiness envelopes, with `graph` as the single source of truth and
+  `graph/readiness` re-exporting it) to `FrameworkOwnedBuckets()` and to the retention sweep, so a
+  rule cannot forge a redelivery sequence stamp or a readiness envelope. `COMPONENT_STATUS` is
+  deferred to a separate follow-up (#717).
 - **Exclude `EMBEDDINGS_CACHE` from the retention sweep** while keeping it write-protected: it is
   the one legitimately rebuildable cache, and bounding its capacity belongs to the separate
   storage-limits epic, not here.
@@ -79,12 +87,15 @@ pattern B3 proved on one store (content-addressed community summaries) to the de
 
 ## Impact
 
-- **Code:** `graph/constants.go` (new bucket constant + list entry), `natsclient/kv.go` (KV
-  reconcile-then-assert atom mirroring the ObjectStore predicate), a `graph`-level owned-bucket
-  sweep helper wired at one deterministic boot seam, `processor/graph-ingest/component.go:1154`
-  (literal → constant). The two `IsFrameworkOwnedBucket` guard sites
-  (`processor/rule/config_validation.go:363`, `processor/rule/actions.go:1941`) gain
-  `ENTITY_SUFFIX_INDEX` coverage automatically.
+- **Code:** `graph/constants.go` (new bucket constants + list entries), `natsclient/kv_retention.go`
+  (KV reconcile-then-assert atom mirroring the ObjectStore predicate), a `graph`-level owned-bucket
+  sweep helper (`graph/owned_bucket_retention.go`) wired at TWO shared boot seams — a pre-start belt
+  in `service.WireOwnership` and a post-start coverage pass at the tail of `service.(*Manager).StartAll`,
+  `processor/graph-ingest/component.go` (literal → constant for `ENTITY_SUFFIX_INDEX` and
+  `GRAPH_INGEST_APPLIED_SEQ`), `graph/readiness/watcher.go` (`GRAPH_STATUS` re-exported from `graph`).
+  The two `IsFrameworkOwnedBucket` guard sites (`processor/rule/config_validation.go:363`,
+  `processor/rule/actions.go:1941`) gain `ENTITY_SUFFIX_INDEX`, `GRAPH_INGEST_APPLIED_SEQ`, and
+  `GRAPH_STATUS` coverage automatically.
 - **APIs/format:** none. No wire, key-codec, or envelope change.
 - **Consumers:** all sem* products rely on the live graph not silently expiring; **semsource**
   (lead v1 product) is the primary consumer. No product-side change required (additive).

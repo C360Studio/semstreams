@@ -42,7 +42,12 @@ const (
 	// component status, NOT domain entity state: it never routes through
 	// graph-ingest, carries no ADR-055 semantic envelope, and is kept out of
 	// ENTITY_STATES so the sole-writer invariant and the graph itself stay clean.
-	BucketGraphStatus = "GRAPH_STATUS"
+	//
+	// Re-exported from graph.BucketGraphStatus (the single source of truth) so
+	// this name and the framework-owned-bucket set that write-protects it against
+	// a generic rule update_kv (framework-owned-bucket-guards F3) can never drift.
+	// Producers and consumers keep referring to readiness.BucketGraphStatus.
+	BucketGraphStatus = graph.BucketGraphStatus
 	// BucketHistory is the KV history depth for the bucket: enough replay to see
 	// the last few transitions after an incident, not enough to hoard.
 	BucketHistory = 3

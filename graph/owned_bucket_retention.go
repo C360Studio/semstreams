@@ -34,14 +34,25 @@ func retentionGuardedBuckets() []string {
 	return guarded
 }
 
-// AssertOwnedBucketsClean is the single authoritative boot-time sweep that keeps
-// the framework-owned KV plane free of NATS lifecycle retention (ADR-068 D1;
-// #622). It ranges retentionGuardedBuckets() and, for each bucket that already
-// exists, runs the KV reconcile-then-assert atom
-// (natsclient.ReconcileNoLifecycleRetention): a foreign/legacy MaxAge or binding
-// MaxBytes is stripped in place and WARNed; a genuinely unfixable retention
-// aborts boot fast with the bucket named, rather than proceeding to silently
-// expire graph state.
+// AssertOwnedBucketsClean is the boot-time sweep that keeps the framework-owned
+// KV plane free of NATS lifecycle retention (ADR-068 D1; #622). It ranges
+// retentionGuardedBuckets() and, for EACH bucket that exists WHEN IT RUNS, runs
+// the KV reconcile-then-assert atom (natsclient.ReconcileNoLifecycleRetention):
+// a foreign/legacy MaxAge or binding MaxBytes is stripped in place and WARNed; a
+// genuinely unfixable retention aborts boot fast with the bucket named, rather
+// than proceeding to silently expire graph state.
+//
+// It is invoked TWICE per boot, and the coverage guarantee is the pair, because
+// a single pass can only reconcile the buckets that happen to exist at the
+// moment it ranges the set:
+//
+//   - PRE-START belt — from service.WireOwnership, before rule evaluation or the
+//     graph components' get-or-create can lean on a persisted-dirty bucket. It
+//     takes down prior-boot / out-of-band dirt early.
+//   - POST-START coverage — from the tail of Manager.StartAll, after every owner
+//     has created its bucket and before the HTTP surface reports healthy. This
+//     pass catches a bucket created dirty DURING this boot's service-start loop
+//     (a create-race) that the pre-start belt necessarily skipped as absent.
 //
 // Each bucket is bound READ-ONLY / MUST-EXIST (never created) / SKIP-IF-ABSENT:
 // a guarded bucket that does not yet exist (a tier-gated deploy that has not
@@ -50,9 +61,8 @@ func retentionGuardedBuckets() []string {
 // imposes no bucket-creation ordering and never forces a resourceless deploy to
 // provision a bucket it does not use (feedback_unconditional_resource_wiring).
 //
-// This is the COVERAGE guarantee for the full owned set. graph-ingest keeps its
-// two at-creation asserts (ENTITY_STATES + redelivery guard) as belt-and-
-// suspenders for the create-time race this boot sweep cannot see.
+// graph-ingest additionally keeps its two at-creation asserts (ENTITY_STATES +
+// redelivery guard) as create-time belt-and-suspenders.
 func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()

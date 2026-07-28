@@ -164,6 +164,101 @@ func TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets(t *testing.T) {
 	}
 }
 
+// TestIntegration_AssertOwnedBucketsClean_StripsGraphStatusTTL_PreservesHistory
+// is the F3 coverage test: GRAPH_STATUS is now a framework-owned bucket the
+// retention sweep covers. A foreign TTL on it is stripped, but its History
+// (MaxMsgsPerSubject) — the readiness replay depth the producer sets to 3 — MUST
+// survive, because the reconcile strips ONLY MaxAge/MaxBytes. Clobbering History
+// would silently shorten readiness replay.
+func TestIntegration_AssertOwnedBucketsClean_StripsGraphStatusTTL_PreservesHistory(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	client := testClient.Client
+
+	// GRAPH_STATUS as the readiness producer creates it (History=3, per
+	// readiness.BucketHistory) but ALSO carrying a foreign TTL (the dirty shape).
+	const graphStatusHistory = 3
+	dirty, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket:  BucketGraphStatus,
+		History: graphStatusHistory,
+		TTL:     7 * 24 * time.Hour,
+	})
+	require.NoError(t, err)
+	_, err = dirty.Put(ctx, "graph-index", []byte("ready-envelope"))
+	require.NoError(t, err)
+
+	rec := &recordingHandler{}
+	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(rec)))
+
+	fresh, err := client.GetKeyValueBucket(ctx, BucketGraphStatus)
+	require.NoError(t, err)
+	maxAge, maxBytes, err := natsclient.BucketRetention(ctx, fresh)
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), maxAge, "the sweep must strip GRAPH_STATUS's foreign TTL")
+	assert.LessOrEqual(t, maxBytes, int64(0), "the sweep must leave MaxBytes non-binding")
+
+	// CRITICAL: History (MaxMsgsPerSubject) is UNTOUCHED — the reconcile mutates
+	// only MaxAge/MaxBytes; clobbering History would break readiness replay.
+	status, err := fresh.Status(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, int64(graphStatusHistory), status.History(),
+		"the sweep must NOT clobber GRAPH_STATUS History (readiness replay depth)")
+
+	assert.True(t, rec.warnMentioning(BucketGraphStatus),
+		"the sweep must WARN naming the stripped bucket %s", BucketGraphStatus)
+	entry, err := fresh.Get(ctx, "graph-index")
+	require.NoError(t, err, "the stored readiness envelope must survive the strip")
+	assert.Equal(t, []byte("ready-envelope"), entry.Value())
+}
+
+// TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace proves the two-pass
+// model closes the create-race coverage hole (F1) at the sweep level: pass 1
+// SKIPS an absent guarded bucket (no create), a competing process then wins the
+// create with a foreign TTL, the owner's get-or-create ADOPTS it unchanged, and
+// pass 2 (the post-start coverage pass) strips it — preserving the stored key.
+func TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	client := testClient.Client
+
+	// Pass 1: the guarded bucket is ABSENT — the sweep skips it (no create).
+	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(&recordingHandler{})))
+	_, err := client.GetKeyValueBucket(ctx, BucketCommunityIndex)
+	require.ErrorIs(t, err, jetstream.ErrBucketNotFound, "pass 1 must not create the absent bucket")
+
+	// A competing process wins the create with a foreign TTL (the create-race the
+	// pre-start belt cannot see), and stores a key.
+	rival, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket: BucketCommunityIndex,
+		TTL:    7 * 24 * time.Hour,
+	})
+	require.NoError(t, err)
+	_, err = rival.Put(ctx, "community.key", []byte("member"))
+	require.NoError(t, err)
+
+	// The owner's get-or-create ADOPTS the dirty bucket UNCHANGED (the gap F1 closes).
+	adopted, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: BucketCommunityIndex})
+	require.NoError(t, err)
+	maxAge, _, err := natsclient.BucketRetention(ctx, adopted)
+	require.NoError(t, err)
+	require.Equal(t, 7*24*time.Hour, maxAge, "owner's get-or-create must adopt the dirty config unchanged")
+
+	// Pass 2 (post-start coverage) strips it.
+	rec := &recordingHandler{}
+	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(rec)))
+
+	fresh, err := client.GetKeyValueBucket(ctx, BucketCommunityIndex)
+	require.NoError(t, err)
+	maxAge, _, err = natsclient.BucketRetention(ctx, fresh)
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), maxAge, "pass 2 must strip the create-race TTL")
+	assert.True(t, rec.warnMentioning(BucketCommunityIndex),
+		"pass 2 must WARN naming the stripped bucket %s", BucketCommunityIndex)
+	entry, err := fresh.Get(ctx, "community.key")
+	require.NoError(t, err, "the stored key must survive the strip")
+	assert.Equal(t, []byte("member"), entry.Value())
+}
+
 // NOTE on the "unstrippable retention fails boot fast with the bucket named"
 // scenario (tasks 4.3): a genuinely un-strippable retention state (a DENIED
 // UpdateStream leaving the config binding) is NOT deterministically reachable
