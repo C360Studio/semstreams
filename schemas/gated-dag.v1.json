@@ -47,10 +47,26 @@
       "default": "GATEDDAG_DISPATCH",
       "category": "advanced"
     },
+    "dispatch_stream_discard": {
+      "type": "string",
+      "description": "Behavior at the size ceiling: 'new' refuses the newest dispatch (default; the executor sees a publish error it can retry), 'old' evicts the oldest (which silently strands whichever unit's dispatch is dropped).",
+      "default": "new",
+      "enum": [
+        "new",
+        "old"
+      ],
+      "category": "advanced"
+    },
     "dispatch_stream_max_age": {
       "type": "string",
       "description": "Retention window for the dispatch stream; an unconsumed dispatch older than this is dropped.",
       "default": "24h",
+      "category": "advanced"
+    },
+    "dispatch_stream_max_bytes": {
+      "type": "integer",
+      "description": "Size ceiling for the dispatch stream, in bytes. Must be \u003e 0: 0 and -1 both mean unlimited to JetStream, and an unbounded work stream exhausts the account's whole storage tier rather than only itself.",
+      "default": 268435456,
       "category": "advanced"
     },
     "dispatch_subject": {

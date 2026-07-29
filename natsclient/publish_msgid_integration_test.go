@@ -34,6 +34,8 @@ func TestIntegration_PublishToStreamWithMsgID_Dedup(t *testing.T) {
 		Subjects:   []string{"msgid.>"},
 		Storage:    jetstream.MemoryStorage,
 		Duplicates: 2 * time.Minute,
+		MaxAge:     testStreamMaxAge,
+		MaxBytes:   testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 

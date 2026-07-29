@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
 )
@@ -26,6 +28,15 @@ const (
 	defaultDispatchStreamMaxAge = "24h"
 	defaultDispatchDedupeWindow = "2m" // >= default backstop (30s); bounds ack-timeout dedup + reset delay
 	defaultStrandedAfter        = "0"  // disabled by default (opt-in, back-compat)
+
+	// defaultDispatchStreamMaxBytes bounds a queue of small dispatch messages
+	// (a unit ID plus routing), so 256 MiB is a deep backlog and still a real
+	// ceiling rather than "whatever the account has left".
+	defaultDispatchStreamMaxBytes int64 = 256 << 20
+	// defaultDispatchStreamDiscard refuses the newest dispatch at the ceiling
+	// rather than evicting the oldest. See DispatchStreamDiscard: a dropped
+	// dispatch strands a claimed unit, which is what this stream exists to prevent.
+	defaultDispatchStreamDiscard = "new"
 
 	// FailurePolicyContinueOthers keeps independent branches flowing when a unit
 	// fails (its dependents stay Blocked; everything else proceeds). Default.
@@ -85,6 +96,22 @@ type Config struct {
 	// not the graph — ADR-068's no-TTL rule is about ENTITY_STATES). An unconsumed
 	// dispatch older than this is dropped. Duration string; must be > 0.
 	DispatchStreamMaxAge string `json:"dispatch_stream_max_age,omitempty"`
+	// DispatchStreamMaxBytes bounds the dispatch stream's SIZE. Required to be
+	// positive for the same reason MaxAge is: 0 and -1 both read as unlimited to
+	// JetStream, so leaving it unset lets a stalled consumer grow the stream until
+	// the account's storage tier is exhausted — which takes down every other
+	// stream in the tier, not just this one. Byte count; must be > 0.
+	DispatchStreamMaxBytes int64 `json:"dispatch_stream_max_bytes,omitempty"`
+	// DispatchStreamDiscard is what happens at the size ceiling: "old" evicts the
+	// oldest dispatches, "new" refuses the newest.
+	//
+	// The default is "new", which is the opposite of the framework default and is
+	// deliberate. A dispatch is a REQUEST to do work, and evicting the oldest
+	// silently drops a claimed unit's dispatch — the exact failure ADR-070 made
+	// this stream durable to prevent. Refusing the newest surfaces as a publish
+	// error the executor can see and retry (producer-side 503 err_code=10077),
+	// which is a loud failure instead of a lost unit.
+	DispatchStreamDiscard string `json:"dispatch_stream_discard,omitempty"`
 	// DispatchDedupeWindow is the stream's server-side duplicate-detection window
 	// (Nats-Msg-Id = unitID). It makes the B1 claim-rollback safe against an
 	// ack-timeout-after-persist: a re-dispatch of the same unit within the window
@@ -156,6 +183,9 @@ func DefaultConfig() Config {
 		DispatchStreamMaxAge: defaultDispatchStreamMaxAge,
 		DispatchDedupeWindow: defaultDispatchDedupeWindow,
 		StrandedAfter:        defaultStrandedAfter,
+
+		DispatchStreamMaxBytes: defaultDispatchStreamMaxBytes,
+		DispatchStreamDiscard:  defaultDispatchStreamDiscard,
 	}
 }
 
@@ -203,6 +233,16 @@ func (c Config) withDefaults() Config {
 	}
 	if c.DispatchStreamMaxAge == "" {
 		c.DispatchStreamMaxAge = d.DispatchStreamMaxAge
+	}
+	// A ZERO MaxBytes takes the default rather than being passed through. Zero
+	// means unlimited to JetStream, and an operator who omitted the field did not
+	// ask for that; an operator who wants a different ceiling states one, and a
+	// negative value is rejected by Validate rather than silently defaulted.
+	if c.DispatchStreamMaxBytes == 0 {
+		c.DispatchStreamMaxBytes = d.DispatchStreamMaxBytes
+	}
+	if c.DispatchStreamDiscard == "" {
+		c.DispatchStreamDiscard = d.DispatchStreamDiscard
 	}
 	if c.DispatchDedupeWindow == "" {
 		c.DispatchDedupeWindow = d.DispatchDedupeWindow
@@ -261,6 +301,15 @@ func (c Config) Validate() error {
 	}
 	if _, err := c.dispatchStreamMaxAge(); err != nil {
 		return fmt.Errorf("dispatch_stream_max_age: %w", err)
+	}
+	if c.DispatchStreamMaxBytes <= 0 {
+		return fmt.Errorf(
+			"dispatch_stream_max_bytes must be > 0 (got %d); 0 and -1 both mean unlimited to JetStream, "+
+				"and an unbounded work stream exhausts the account's storage tier rather than only itself",
+			c.DispatchStreamMaxBytes)
+	}
+	if _, err := c.dispatchStreamDiscard(); err != nil {
+		return fmt.Errorf("dispatch_stream_discard: %w", err)
 	}
 	dedupe, err := c.dispatchDedupeWindow()
 	if err != nil {
@@ -328,6 +377,24 @@ func (c Config) queryTimeout() (time.Duration, error) {
 		return 0, fmt.Errorf("must be > 0 (got %s)", d)
 	}
 	return d, nil
+}
+
+// dispatchStreamDiscard maps DispatchStreamDiscard to its JetStream policy. An
+// unrecognized spelling is an ERROR rather than a fallback: silently applying
+// delete-oldest to a work stream because a value was misspelled is precisely the
+// dropped-dispatch failure the explicit field exists to prevent.
+func (c Config) dispatchStreamDiscard() (jetstream.DiscardPolicy, error) {
+	switch c.DispatchStreamDiscard {
+	case "new":
+		return jetstream.DiscardNew, nil
+	case "old":
+		return jetstream.DiscardOld, nil
+	default:
+		return 0, fmt.Errorf(
+			`must be "new" (refuse the newest dispatch at the ceiling; default, and loud) or `+
+				`"old" (evict the oldest, which silently strands whichever unit's dispatch is dropped), got %q`,
+			c.DispatchStreamDiscard)
+	}
 }
 
 // dispatchStreamMaxAge parses DispatchStreamMaxAge; must be > 0.

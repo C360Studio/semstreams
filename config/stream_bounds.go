@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/c360studio/semstreams/natsclient"
 )
 
 // Discard-policy declaration values for StreamConfig.Discard. These are the
@@ -51,7 +53,12 @@ var (
 	// ErrStreamBoundsUndeclared is returned when an ordinary stream carries no
 	// explicitly declared finite MaxAge, finite MaxBytes, or discard policy and
 	// is not admitted by an archival declaration or an active migration override.
-	ErrStreamBoundsUndeclared = errors.New("ordinary stream bounds are not declared")
+	//
+	// It is natsclient's value rather than a second one of the same name. The same
+	// requirement is enforced at two seams — this declarative path and
+	// natsclient.Client.EnsureStream — and a caller testing for "bounds are not
+	// declared" should not have to know which door refused it.
+	ErrStreamBoundsUndeclared = natsclient.ErrStreamBoundsUndeclared
 
 	// ErrStreamMigrationOverrideInvalid is returned when a migration override is
 	// not a valid time-limited bridge — no owner, or no expiry. An open-ended

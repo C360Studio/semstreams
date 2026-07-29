@@ -124,6 +124,25 @@ func (c Config) Schema() component.ConfigSchema {
 				Default:     defaultDispatchStreamMaxAge,
 				Category:    "advanced",
 			},
+			"dispatch_stream_max_bytes": {
+				// "int", not "integer": the generator maps Go-style spellings and
+				// falls back to "string" for anything it does not recognize.
+				Type: "int",
+				Description: "Size ceiling for the dispatch stream, in bytes. Must be > 0: 0 and -1 both mean " +
+					"unlimited to JetStream, and an unbounded work stream exhausts the account's whole storage " +
+					"tier rather than only itself.",
+				Default:  defaultDispatchStreamMaxBytes,
+				Category: "advanced",
+			},
+			"dispatch_stream_discard": {
+				Type: "string",
+				Description: "Behavior at the size ceiling: 'new' refuses the newest dispatch (default; the " +
+					"executor sees a publish error it can retry), 'old' evicts the oldest (which silently " +
+					"strands whichever unit's dispatch is dropped).",
+				Default:  defaultDispatchStreamDiscard,
+				Enum:     []string{"new", "old"},
+				Category: "advanced",
+			},
 			"dispatch_dedupe_window": {
 				Type:        "string",
 				Description: "Server-side duplicate-detection window (Nats-Msg-Id=unitID). Must be >= backstop_interval; makes the claim-rollback safe against an ack-timeout-after-persist (ADR-070 B1).",

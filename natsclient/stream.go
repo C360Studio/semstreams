@@ -146,6 +146,16 @@ func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (
 
 	// If not found, create it
 	if errors.Is(err, jetstream.ErrStreamNotFound) {
+		// The bounds requirement applies HERE rather than at the top of the
+		// function, because that is the difference between "this caller is about
+		// to create an under-declared stream" and "this caller is binding a
+		// stream someone else already created". Refusing the second would make a
+		// non-owner unable to read an existing stream, which is not its call;
+		// see stream_bounds.go.
+		if err := CheckStreamBounds(cfg, "natsclient.Client.EnsureStream"); err != nil {
+			return nil, errs.WrapFatal(err, "Client", "EnsureStream",
+				"validate stream bounds for "+cfg.Name)
+		}
 		stream, err = js.CreateStream(ctx, cfg)
 		if err != nil {
 			c.recordFailure()

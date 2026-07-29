@@ -135,7 +135,7 @@
       limit of its own, so the account limit is its only ceiling; reporting it unevaluable would mean
       declaring a stream archival silently removes it from the surface that would warn about it —
       capacity matters MORE for a stream that can never evict, since it is the only lever left
-- [ ] 5.10 Follow the bounds requirement to `natsclient.Client.EnsureStream` at CREATION (#729/#730):
+- [x] 5.10 Follow the bounds requirement to `natsclient.Client.EnsureStream` at CREATION (#729/#730):
       section 1 already took the prefix refusal to that seam, and if bounds do not follow, a direct
       caller becomes the supported route around the requirement. LIVE IN-REPO INSTANCE, confirmed on a
       running stack: `component/registry.go:914-926` creates `COMPONENT_CAPABILITIES` through

@@ -947,3 +947,19 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+// TestStreamBoundsSentinel_IsOneIdentityAcrossBothSeams pins that the
+// declarative path and natsclient.Client.EnsureStream refuse with the SAME error
+// value. The requirement is one requirement; a caller testing for "bounds are not
+// declared" — including a sister repo — must not have to know which door caught
+// it. Two errors.New calls with identical text would read the same and fail
+// errors.Is across the boundary.
+func TestStreamBoundsSentinel_IsOneIdentityAcrossBothSeams(t *testing.T) {
+	require.Same(t, natsclient.ErrStreamBoundsUndeclared, ErrStreamBoundsUndeclared,
+		"config must alias natsclient's sentinel rather than defining a second one")
+
+	// And it holds through the errors.Is path both seams' callers actually use.
+	seamErr := natsclient.CheckStreamBounds(jetstream.StreamConfig{Name: "EVENTS"}, "test")
+	require.ErrorIs(t, seamErr, ErrStreamBoundsUndeclared,
+		"a programmatic refusal must satisfy a config-side errors.Is check")
+}

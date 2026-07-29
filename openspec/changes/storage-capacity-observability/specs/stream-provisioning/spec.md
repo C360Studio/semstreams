@@ -58,6 +58,44 @@ the client's ensure-stream seam is provisioning, and the backing-stream prefix r
 follows it there; bounds MUST follow to the same seam, or a direct caller becomes the one supported
 way to create the unbounded streams this requirement exists to prevent.
 
+Both seams MUST refuse with the SAME error identity, so a caller — including a sister repo — can test
+for the requirement without knowing which door refused it. One requirement enforced at two seams is
+still one requirement.
+
+At the programmatic seam the enforceable set is the two SIZE bounds, and the discard policy is
+asked for rather than required. This is a structural limit, not a relaxation: the seam takes the
+JetStream stream configuration type directly, whose discard field is an integer whose zero value IS
+delete-oldest, so a caller who chose that policy deliberately and one who never considered it produce
+byte-identical configuration and no check can separate them. The declarative path CAN require it,
+because its discard field is a string where empty is distinguishable from a choice — which is one of
+the reasons the declarative path is the one an operator should be given. The programmatic seam's
+diagnostic MUST still name the field and what it decides, so an author is told what the check cannot
+enforce.
+
+The framework MUST hold its own stream declarations to this requirement, and MUST keep them reachable
+by a test rather than buried in a boot path. A framework that exempts itself cannot ask a sister repo
+to comply, and the exemption is not hypothetical: `COMPONENT_CAPABILITIES` was created through the
+ensure-stream seam with a finite age, no byte bound, and no discard policy, so a running server chose
+both on the framework's behalf.
+
+Operator-reachable stream declarations MUST expose every required bound as operator configuration. A
+component that lets an operator name a stream while fixing its bounds in code has moved the
+declaration out of the operator's reach, which is the same invisibility this requirement removes.
+
+#### Scenario: Both seams refuse with one error identity
+
+- **GIVEN** an ordinary stream missing a required bound
+- **WHEN** it is refused by the configuration path, and again by the programmatic ensure-stream seam
+- **THEN** both refusals carry the same error identity
+- **AND** a caller can test for the requirement without knowing which seam refused
+
+#### Scenario: A framework-declared stream satisfies the requirement it enforces
+
+- **GIVEN** a stream the framework itself creates through the ensure-stream seam
+- **WHEN** its declaration is checked against the bounds requirement
+- **THEN** it declares a finite age and a finite size, and states its discard policy
+- **AND** the declaration is reachable by a test, so it cannot drift back to leaving fields unset
+
 Binding to an **existing** stream is a different act and MUST NOT re-assert bounds: a caller that is
 not the stream's owner silently restamping another owner's configuration is worse than the drift it
 would be correcting. Instead, a seam that returns an existing stream whose live configuration

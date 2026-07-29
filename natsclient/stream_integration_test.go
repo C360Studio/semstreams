@@ -29,6 +29,8 @@ func TestIntegration_ConsumeStreamWithConfigContexts_CancelledSetupDoesNotStartC
 		Name:     "CONTEXT_SPLIT_STREAM",
 		Subjects: []string{"context.split.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -80,6 +82,8 @@ func TestIntegration_EnsureStream(t *testing.T) {
 		Name:     "TEST_STREAM",
 		Subjects: []string{"test.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 
 	stream, err := client.EnsureStream(ctx, cfg)
@@ -112,6 +116,8 @@ func TestIntegration_EnsureStream_Existing(t *testing.T) {
 		Name:     "EXISTING_STREAM",
 		Subjects: []string{"existing.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 
 	// Create stream first time
@@ -137,6 +143,8 @@ func TestIntegration_EnsureStream_NotConnected(t *testing.T) {
 	cfg := jetstream.StreamConfig{
 		Name:     "TEST_STREAM",
 		Subjects: []string{"test.>"},
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 
 	_, err = client.EnsureStream(ctx, cfg)
@@ -163,6 +171,8 @@ func TestIntegration_ConsumeStreamWithConfig(t *testing.T) {
 		Name:     "CONSUME_STREAM",
 		Subjects: []string{"consume.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -326,6 +336,8 @@ func TestIntegration_ConsumeStreamWithConfig_DeliverPolicies(t *testing.T) {
 				Name:     streamName,
 				Subjects: []string{"policy." + tc.name + ".>"},
 				Storage:  jetstream.MemoryStorage,
+				MaxAge:   testStreamMaxAge,
+				MaxBytes: testStreamMaxBytes,
 			}
 			_, err = client.EnsureStream(ctx, streamCfg)
 			require.NoError(t, err)
@@ -394,6 +406,8 @@ func TestIntegration_ConsumeStreamWithConfig_AckPolicies(t *testing.T) {
 		Name:     "ACK_STREAM",
 		Subjects: []string{"ack.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -446,6 +460,8 @@ func TestIntegration_ConsumeStreamWithConfig_Nak(t *testing.T) {
 		Name:     "NAK_STREAM",
 		Subjects: []string{"nak.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -548,6 +564,8 @@ func TestIntegration_StopConsumer(t *testing.T) {
 		Name:     "STOP_STREAM",
 		Subjects: []string{"stop.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -593,6 +611,8 @@ func TestIntegration_StopAllConsumers(t *testing.T) {
 		Name:     "STOPALL_STREAM",
 		Subjects: []string{"stopall.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -640,6 +660,8 @@ func TestIntegration_PublishToStreamWithAck(t *testing.T) {
 		Name:     "PUBACK_STREAM",
 		Subjects: []string{"puback.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = client.EnsureStream(ctx, streamCfg)
 	require.NoError(t, err)

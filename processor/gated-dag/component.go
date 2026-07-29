@@ -123,10 +123,19 @@ func (c *Component) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	streamDiscard, err := c.cfg.dispatchStreamDiscard()
+	if err != nil {
+		return err
+	}
 	stream, err := c.natsClient.EnsureStream(ctx, jetstream.StreamConfig{
-		Name:       c.cfg.DispatchStream,
-		Subjects:   []string{c.cfg.DispatchSubject},
-		MaxAge:     streamMaxAge,
+		Name:     c.cfg.DispatchStream,
+		Subjects: []string{c.cfg.DispatchSubject},
+		MaxAge:   streamMaxAge,
+		// Both size bounds are DECLARED, not left to the server: EnsureStream
+		// refuses to create an ordinary stream without them, and an unbounded work
+		// stream exhausts the account's whole storage tier rather than only itself.
+		MaxBytes:   c.cfg.DispatchStreamMaxBytes,
+		Discard:    streamDiscard,
 		Duplicates: dedupeWindow, // server-side dedup on Nats-Msg-Id=unitID (ADR-070 B1)
 	})
 	if err != nil {

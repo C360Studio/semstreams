@@ -31,6 +31,8 @@ func TestIntegration_ConsumeDurable_ReceivesAndAcks(t *testing.T) {
 	const subject = "cd.test.recv"
 	_, err = client.EnsureStream(ctx, jetstream.StreamConfig{
 		Name: "CD_RECV", Subjects: []string{subject}, Duplicates: 2 * time.Minute,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -71,6 +73,8 @@ func TestIntegration_ConsumeDurable_MsgIDDedup(t *testing.T) {
 	const subject = "cd.test.dedup"
 	_, err = client.EnsureStream(ctx, jetstream.StreamConfig{
 		Name: "CD_DEDUP", Subjects: []string{subject}, Duplicates: 2 * time.Minute,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
