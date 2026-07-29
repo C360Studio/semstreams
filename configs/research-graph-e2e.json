@@ -87,12 +87,32 @@
       }
     }
   },
-  "_streams_doc": "agentic-dispatch consumes user.message.> from the USER stream (required input), but no component in this e2e produces user.message (the scenario injects directly to agent.task.*), so EnsureStreams — which derives streams from OUTPUT ports — never creates USER. Declare it explicitly (mirrors deep-research-test/ops-agent-test/crud-tools-test). AGENT/TOOL are auto-derived from their output-port producers. gh#390.",
+  "_streams_doc": "agentic-dispatch consumes user.message.> from the USER stream (required input), but no component in this e2e produces user.message (the scenario injects directly to agent.task.*), so EnsureStreams — which derives streams from OUTPUT ports — never creates USER. Declare it explicitly (mirrors deep-research-test/ops-agent-test/crud-tools-test). AGENT/TOOL take their subjects from their output-port producers, but every ordinary stream must declare finite max_age, finite max_bytes, and a discard policy, so they are declared here too. gh#390.",
   "streams": {
+    "AGENT": {
+      "subjects": [
+        "agent.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
+    "TOOL": {
+      "subjects": [
+        "tool.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
     "USER": {
-      "subjects": ["user.>"],
+      "subjects": [
+        "user.>"
+      ],
       "storage": "file",
-      "max_age": "1h"
+      "max_age": "1h",
+      "max_bytes": 16777216,
+      "discard": "old"
     }
   },
   "components": {

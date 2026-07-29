@@ -60,6 +60,24 @@
       "config": {}
     }
   },
+  "streams": {
+    "AGENT": {
+      "subjects": [
+        "agent.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
+    "TOOL": {
+      "subjects": [
+        "tool.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    }
+  },
   "components": {
     "agentic-dispatch": {
       "type": "processor",

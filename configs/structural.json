@@ -68,6 +68,48 @@
       }
     }
   },
+  "streams": {
+    "DOCUMENT": {
+      "subjects": [
+        "document.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
+    "OBJECTSTORE": {
+      "subjects": [
+        "objectstore.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 67108864,
+      "discard": "old"
+    },
+    "RAW": {
+      "subjects": [
+        "raw.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
+    "RULE": {
+      "subjects": [
+        "rule.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 67108864,
+      "discard": "old"
+    },
+    "SENSOR": {
+      "subjects": [
+        "sensor.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    }
+  },
   "components": {
     "file_sensors": {
       "type": "input",

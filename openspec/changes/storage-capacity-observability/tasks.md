@@ -105,17 +105,17 @@
 
 ## 5. Ordinary stream bounds
 
-- [ ] 5.1 Require explicitly declared finite `MaxAge`, finite `MaxBytes`, and discard policy on ordinary
+- [x] 5.1 Require explicitly declared finite `MaxAge`, finite `MaxBytes`, and discard policy on ordinary
       streams; fail readiness naming the stream, its declaration source, and the missing field. A silent
       framework default (today `MaxAge` 7d at `config/streams.go:387,390`) must NOT satisfy the
       requirement
-- [ ] 5.2 Name the owning component in the diagnostic where the declaration source records one; the
+- [x] 5.2 Name the owning component in the diagnostic where the declaration source records one; the
       framework-constant (`:242-249`) and operator-map (`:254`) paths carry no component attribution, so
       either plumb an owner through or report the declaration source instead of a guessed owner
-- [ ] 5.3 Make discard policy an explicit declaration field instead of the hardcoded
+- [x] 5.3 Make discard policy an explicit declaration field instead of the hardcoded
       `Discard: DiscardOld` (`config/streams.go:430`), and state in the declaration diagnostic what
       `DiscardNew` does at the ceiling (producer-side `503 err_code=10077`)
-- [ ] 5.4 Add the expiring migration override: names resource, owner, and expiry; readiness reports every
+- [x] 5.4 Add the expiring migration override: names resource, owner, and expiry; readiness reports every
       active override; readiness fails once an expiry passes; an override without an expiry is rejected
       at validation. Without this the bounds requirement is a flag day for every component-derived
       stream (`config/streams.go:303-306`) and every sister-repo config
@@ -125,7 +125,7 @@
       declared, instead of the current silent ignore
 - [ ] 5.7 Add real-NATS integration tests for drift repair, non-editable-drift readiness failure,
       declared-discard-policy creation, and override expiry behavior
-- [ ] 5.8 Add the ARCHIVAL classification (#729): permanent by declaration, naming stream + owner +
+- [x] 5.8 Add the ARCHIVAL classification (#729): permanent by declaration, naming stream + owner +
       why permanence is the contract; rejected if owner or reason is absent. Readiness reports it as a
       named permanent exception STRUCTURALLY distinct from a time-limited override — an archive whose
       override can only be renewed forever trains operators to renew without reading, which is what
@@ -137,7 +137,14 @@
       capacity matters MORE for a stream that can never evict, since it is the only lever left
 - [ ] 5.10 Follow the bounds requirement to `natsclient.Client.EnsureStream` at CREATION (#729/#730):
       section 1 already took the prefix refusal to that seam, and if bounds do not follow, a direct
-      caller becomes the supported route around the requirement
+      caller becomes the supported route around the requirement. LIVE IN-REPO INSTANCE, confirmed on a
+      running stack: `component/registry.go:914-926` creates `COMPONENT_CAPABILITIES` through
+      `EnsureStream` with `MaxAge: time.Hour`, no `MaxBytes`, and no `Discard` — an ordinary stream,
+      created by framework code, bypassing the contract section 5 just established. The live server
+      reports `max_bytes=-1 discard=old`, neither of which anyone chose. It carries
+      `MaxMsgsPerSubject: 1` so it is bounded per-subject in practice, but not by bytes and not by
+      declaration. Fix this one as part of the slice — a framework that exempts itself from its own
+      contract cannot ask sister repos to honor it
 - [ ] 5.11 Report declared-versus-observed divergence when `EnsureStream` binds an EXISTING stream
       (#730). Today `natsclient/stream.go:141-145` returns the existing stream and discards the
       caller's `cfg` in silence, so a stream two components declare has its limits set permanently by

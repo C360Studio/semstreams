@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"maps"
-	"slices"
 	"strings"
 	"time"
 
@@ -19,13 +17,28 @@ import (
 )
 
 // StreamConfig defines configuration for a JetStream stream.
+//
+// MaxAge, MaxBytes, and Discard are REQUIRED for an ordinary stream and are
+// never supplied by a framework default. A bound the operator never chose is
+// indistinguishable in the operator surface from one they did, which is the
+// condition the bounds contract exists to end. The two ways out are both
+// explicit declarations of their own: `archival_streams` for a stream whose
+// contract is permanence, and `stream_migration_overrides` for a time-limited
+// bridge. See ValidateStreamDeclarations.
 type StreamConfig struct {
 	Subjects  []string `json:"subjects"`            // Subjects captured by this stream
 	Storage   string   `json:"storage,omitempty"`   // "file" or "memory" (default: file)
-	MaxAge    string   `json:"max_age,omitempty"`   // TTL for messages (e.g., "168h", "7d")
-	MaxBytes  int64    `json:"max_bytes,omitempty"` // Max storage size in bytes (0 = unlimited)
+	MaxAge    string   `json:"max_age,omitempty"`   // Required: message TTL (e.g., "168h", "7d")
+	MaxBytes  int64    `json:"max_bytes,omitempty"` // Required: max storage in bytes; must be > 0
 	Retention string   `json:"retention,omitempty"` // "limits", "interest", "workqueue" (default: limits)
 	Replicas  int      `json:"replicas,omitempty"`  // Replication factor (default: 1)
+
+	// Discard is the operator's choice of what happens when the stream reaches
+	// MaxBytes or MaxAge: StreamDiscardOld evicts the oldest messages,
+	// StreamDiscardNew refuses the write (producers see NATS 503
+	// err_code=10077). Required for an ordinary stream — it was hardcoded to
+	// DiscardOld before, so the policy was never the operator's choice.
+	Discard string `json:"discard,omitempty"`
 
 	// Duplicates is the server-side duplicate-detection window for the
 	// Nats-Msg-Id header (e.g. "2m", "30m", "1h"). Producers using
@@ -100,6 +113,7 @@ var logsStreamConfig = StreamConfig{
 	Storage:  "file",
 	MaxAge:   "1h",              // TTL: expire after 1 hour
 	MaxBytes: 100 * 1024 * 1024, // 100MB max storage
+	Discard:  StreamDiscardOld,  // Oldest logs are the expendable ones
 	Replicas: 1,
 }
 
@@ -113,6 +127,7 @@ var healthStreamConfig = StreamConfig{
 	Storage:  "memory",         // No persistence needed for health
 	MaxAge:   "5m",             // Short TTL - only recent health matters
 	MaxBytes: 10 * 1024 * 1024, // 10MB max storage
+	Discard:  StreamDiscardOld, // Stale health is worthless; never refuse a fresh report
 	Replicas: 1,
 }
 
@@ -124,6 +139,7 @@ var metricsStreamConfig = StreamConfig{
 	Storage:  "memory",         // No persistence needed for metrics
 	MaxAge:   "5m",             // Short TTL - only recent metrics matter
 	MaxBytes: 50 * 1024 * 1024, // 50MB max storage
+	Discard:  StreamDiscardOld, // Stale metrics are worthless; never refuse a fresh sample
 	Replicas: 1,
 }
 
@@ -135,6 +151,7 @@ var flowsStreamConfig = StreamConfig{
 	Storage:  "memory",         // No persistence needed for status
 	MaxAge:   "5m",             // Short TTL - only recent status matters
 	MaxBytes: 10 * 1024 * 1024, // 10MB max storage
+	Discard:  StreamDiscardOld, // Stale status is worthless; never refuse a fresh one
 	Replicas: 1,
 }
 
@@ -147,13 +164,47 @@ var flowsStreamConfig = StreamConfig{
 // is a subject-safe hash of the rule ID, canonical rule_id in the payload).
 // File storage + a long MaxAge sized to the audit/compliance horizon — its own
 // knob, the reason for a dedicated stream rather than riding AGENT.
+// Discard is StreamDiscardOld, and that is a deliberate choice rather than an
+// inherited default. Under StreamDiscardNew a full audit stream would reject
+// every subsequent governance verdict with a producer-side 503 err_code=10077,
+// which fails the rule engine's publish path rather than the audit trail — a
+// storage limit taking a governance decision. The 90-day MaxAge is the intended
+// retention horizon; the 500MB cap is a backstop against a verdict storm, and
+// evicting the oldest verdicts is the correct behavior when it is reached.
 var governanceVerdictAuditStreamConfig = StreamConfig{
 	Subjects:  []string{"governance.verdict.>"},
 	Storage:   "file",            // Durable: an audit trail must survive restarts
 	MaxAge:    "2160h",           // ~90 days audit/compliance horizon
 	MaxBytes:  500 * 1024 * 1024, // 500MB cap
+	Discard:   StreamDiscardOld,  // See the note above — DiscardNew would break the verdict publish path
 	Retention: "limits",          // Append-only event log (NOT interest/workqueue)
 	Replicas:  1,
+}
+
+// frameworkStream pairs a framework-guaranteed stream with its name.
+type frameworkStream struct {
+	name string
+	cfg  StreamConfig
+}
+
+// frameworkStreams returns the streams SemStreams guarantees regardless of
+// operator configuration, in a deterministic order.
+//
+// These are explicit declarations at a named source, not silent defaults: each
+// value is written down above with its rationale, readiness names
+// "framework constant (config/streams.go)" when one is incomplete, and an
+// operator can still override any of them through config.streams.
+func frameworkStreams() []frameworkStream {
+	return []frameworkStream{
+		{"LOGS", logsStreamConfig},
+		{"HEALTH", healthStreamConfig},
+		{"METRICS", metricsStreamConfig},
+		{"FLOWS", flowsStreamConfig},
+		// GOVERNANCE_VERDICT_AUDIT is a framework guarantee (ADR-055 §3a): the
+		// append-only verdict audit must exist wherever the rule engine can issue
+		// deny/approve verdicts, independent of operator stream config.
+		{"GOVERNANCE_VERDICT_AUDIT", governanceVerdictAuditStreamConfig},
+	}
 }
 
 // VerifyJetStreamLimits reads the operator's MaxMemory / MaxFileStore
@@ -246,11 +297,14 @@ var ErrBackingStreamNotProvisionable = natsclient.ErrBackingStreamNotProvisionab
 // in one place and forgotten in another. This wrapper exists only to keep the
 // call sites below short and to pin the provisioner's own attribution string.
 //
-// The hazard this closes at THIS seam specifically: createStream defaults MaxAge
-// to 7 days and hardcodes Discard: DiscardOld, and cfg.Streams is an
-// operator-authored map with arbitrary keys — so one typo reconciles
+// The hazard this closes at THIS seam specifically: cfg.Streams is an
+// operator-authored map with arbitrary keys, and createStream stamps a declared
+// MaxAge/MaxBytes/Discard onto whatever it is handed — so one typo reconciles
 // reachability-blind age eviction onto authoritative graph state, or onto
-// out-of-line content the graph still references.
+// out-of-line content the graph still references. The bounds contract makes that
+// worse rather than better: every ordinary stream now MUST carry a finite MaxAge
+// and MaxBytes, so a mistyped backing-stream name that got past this guard would
+// be required to receive exactly the eviction policy that destroys it.
 func checkOrdinaryStream(name, source string) error {
 	return natsclient.CheckOrdinaryStreamName(name, source)
 }
@@ -259,112 +313,32 @@ func checkOrdinaryStream(name, source string) error {
 // 1. System streams (LOGS for out-of-band logging)
 // 2. Explicit streams defined in config.Streams (highest priority)
 // 3. Streams derived from component JetStream output ports
+//
+// Every resolved ordinary stream must carry an explicitly declared finite
+// MaxAge, a finite MaxBytes, and a discard policy, unless an archival
+// declaration or an active migration override admits it. That check runs BEFORE
+// any stream is created, so a configuration missing a bound fails closed with a
+// complete diagnostic rather than provisioning half its streams and then
+// stopping — a partially-provisioned account is harder to reason about than one
+// that never started.
 func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error {
-	streams := make(map[string]StreamConfig)
-
-	// 1. Always create system streams for observability
-	streams["LOGS"] = logsStreamConfig
-	streams["HEALTH"] = healthStreamConfig
-	streams["METRICS"] = metricsStreamConfig
-	streams["FLOWS"] = flowsStreamConfig
-	// GOVERNANCE_VERDICT_AUDIT is a framework guarantee (ADR-055 §3a): the
-	// append-only verdict audit must exist wherever the rule engine can issue
-	// deny/approve verdicts, independent of operator stream config.
-	streams["GOVERNANCE_VERDICT_AUDIT"] = governanceVerdictAuditStreamConfig
-	sm.logger.Debug("Adding system streams",
-		"streams", []string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT"})
-
-	// 2. Explicit streams from config (can override system streams).
-	// cfg.Streams is an operator-authored map with arbitrary keys, so this is
-	// the first place a KV/ObjectStore backing-stream name can enter the
-	// provisioner. Validate the declaration before it joins the create set, so
-	// no create, update, or reconcile call is issued against such a stream.
-	// Sorted so a config with several offenders always names the same one.
-	for _, name := range slices.Sorted(maps.Keys(cfg.Streams)) {
-		sc := cfg.Streams[name]
-		if err := checkOrdinaryStream(name, fmt.Sprintf("config.streams[%q]", name)); err != nil {
-			return errs.WrapFatal(err, "StreamsManager", "EnsureStreams",
-				fmt.Sprintf("validate stream declaration %q", name))
-		}
-		streams[name] = sc
-		sm.logger.Debug("Found explicit stream config", "stream", name, "subjects", sc.Subjects)
+	decls, exceptions, err := planStreams(cfg, time.Now(), sm.logger)
+	if err != nil {
+		return errs.WrapFatal(err, "StreamsManager", "EnsureStreams", "resolve stream declarations")
 	}
 
-	// 3. Derive streams from component JetStream output ports
-	for compName, compCfg := range cfg.Components {
-		if !compCfg.Enabled {
-			continue
-		}
+	logStreamExceptions(sm.logger, exceptions)
 
-		// Parse component config to extract port definitions
-		ports, err := sm.extractPortsFromConfig(compCfg.Config)
-		if err != nil {
-			sm.logger.Debug("Could not parse ports from component config",
-				"component", compName, "error", err)
-			continue
-		}
-
-		for _, port := range ports.Outputs {
-			if port.Type != "jetstream" {
-				continue
-			}
-
-			// Honor explicit stream_name from the port definition before
-			// falling back to subject-derived naming. The canonical port
-			// type carries stream_name (e.g. agentic-tools' tool.result
-			// port declares stream_name: "AGENT" so its publishes land on
-			// the existing AGENT stream rather than spawning a derived
-			// TOOL stream that would collide with AGENT's "tool.>"
-			// capture). This relies on the shadow struct having been
-			// retired in favour of component.PortDefinition; a previous
-			// shadow stripped this field on JSON unmarshal and silently
-			// swallowed every tool.result publish in semspec
-			// (project_open_work_2026_05_08.md, bug class 3).
-			streamName := port.StreamName
-			subjects := []string{strings.ToLower(streamName) + ".>"}
-			if streamName == "" {
-				streamName = DeriveStreamName(port.Subject)
-				subjects = DeriveStreamSubjects(port.Subject)
-			}
-			if streamName == "" {
-				sm.logger.Warn("Could not derive stream name from subject",
-					"component", compName, "subject", port.Subject)
-				continue
-			}
-
-			// Second entry point for a backing-stream name: an operator-authored
-			// port. Both shapes reach here — an explicit stream_name, and the
-			// subject fallback, since DeriveStreamName uppercases the first
-			// subject token ("kv_entity_states.stored" -> "KV_ENTITY_STATES").
-			if err := checkOrdinaryStream(streamName,
-				fmt.Sprintf("component %q port %q", compName, port.Name)); err != nil {
-				return errs.WrapFatal(err, "StreamsManager", "EnsureStreams",
-					fmt.Sprintf("validate stream declaration %q", streamName))
-			}
-
-			// Only add if not already explicitly configured
-			if _, exists := streams[streamName]; !exists {
-				streams[streamName] = StreamConfig{
-					Subjects: subjects,
-					// Defaults will be applied in createStream
-				}
-				sm.logger.Debug("Derived stream from component port",
-					"stream", streamName,
-					"component", compName,
-					"subject", port.Subject,
-					"stream_name_explicit", port.StreamName != "")
-			}
+	for _, decl := range decls {
+		if err := sm.createStream(ctx, decl); err != nil {
+			return fmt.Errorf("create stream %s: %w", decl.name, err)
 		}
 	}
 
-	// 4. Create all streams
-	for name, streamCfg := range streams {
-		if err := sm.createStream(ctx, name, streamCfg); err != nil {
-			return fmt.Errorf("create stream %s: %w", name, err)
-		}
-	}
-
-	sm.logger.Info("Ensured JetStream streams", "count", len(streams))
+	sm.logger.Info("Ensured JetStream streams",
+		"count", len(decls),
+		"migration_overrides", len(exceptions.MigrationOverrides),
+		"archival", len(exceptions.Archival))
 	return nil
 }
 
@@ -388,7 +362,10 @@ type (
 )
 
 // extractPortsFromConfig parses port definitions from raw component config.
-func (sm *StreamsManager) extractPortsFromConfig(rawConfig json.RawMessage) (*PortsConfig, error) {
+// A free function rather than a method because stream declaration resolution is
+// pure and I/O-free — it runs at config validation, where no StreamsManager (and
+// no NATS connection) exists.
+func extractPortsFromConfig(rawConfig json.RawMessage) (*PortsConfig, error) {
 	var cfg struct {
 		Ports PortsConfig `json:"ports"`
 	}
@@ -398,21 +375,22 @@ func (sm *StreamsManager) extractPortsFromConfig(rawConfig json.RawMessage) (*Po
 	return &cfg.Ports, nil
 }
 
-// createStream creates or updates a JetStream stream.
-func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg StreamConfig) error {
-	// Fail closed FIRST, before any JetStream access: EnsureStreams validates
-	// its declaration set, but createStream is the seam that actually issues
-	// CreateStream/UpdateStream, so guarding it too means no future caller path
-	// — a new derivation rule, a direct call, a test helper — can reach NATS
-	// with a KV or ObjectStore backing-stream name.
-	if err := checkOrdinaryStream(name, "stream provisioner"); err != nil {
-		return errs.WrapFatal(err, "StreamsManager", "createStream",
-			fmt.Sprintf("provision stream %q", name))
-	}
+// buildStreamConfig turns a resolved declaration into the JetStream config to
+// stamp. It is where the bounds contract becomes bytes, and it fails closed
+// rather than substituting anything: an ordinary stream reaching here without a
+// finite MaxAge, a finite MaxBytes, or a discard policy is a bug in the
+// resolution path, and inventing a value would recreate exactly the silent
+// default the contract removes.
+//
+// Pure except for warnings, so the stamped configuration is testable without a
+// NATS server. logger may be nil.
+func buildStreamConfig(decl streamDeclaration, logger *slog.Logger) (jetstream.StreamConfig, error) {
+	cfg := decl.cfg
 
-	js, err := sm.natsClient.JetStream()
-	if err != nil {
-		return fmt.Errorf("get JetStream context: %w", err)
+	if miss := missingBounds(decl); len(miss) > 0 {
+		return jetstream.StreamConfig{}, fmt.Errorf(
+			"%w: stream %q (declared by %s): missing %s\n\n%s",
+			ErrStreamBoundsUndeclared, decl.name, decl.source, strings.Join(miss, ", "), boundsRemedy)
 	}
 
 	// Parse storage type
@@ -430,18 +408,9 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		retention = jetstream.WorkQueuePolicy
 	}
 
-	// Parse max age
-	var maxAge time.Duration
-	if cfg.MaxAge != "" {
-		var err error
-		maxAge, err = parseDurationWithDays(cfg.MaxAge)
-		if err != nil {
-			sm.logger.Warn("Invalid max_age, using default",
-				"stream", name, "max_age", cfg.MaxAge, "error", err)
-			maxAge = 7 * 24 * time.Hour // Default: 7 days
-		}
-	} else {
-		maxAge = 7 * 24 * time.Hour // Default: 7 days
+	maxAge, maxBytes, discard, err := resolveBounds(decl, logger)
+	if err != nil {
+		return jetstream.StreamConfig{}, err
 	}
 
 	// Parse duplicate-detection window. Empty leaves Duplicates at zero so
@@ -453,18 +422,19 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		var dupErr error
 		duplicates, dupErr = parseDurationWithDays(cfg.Duplicates)
 		if dupErr != nil {
-			sm.logger.Warn("Invalid duplicates window, using server default",
-				"stream", name, "duplicates", cfg.Duplicates, "error", dupErr)
+			logAt(logger, slog.LevelWarn, "Invalid duplicates window, using server default",
+				"stream", decl.name, "duplicates", cfg.Duplicates, "error", dupErr)
 			duplicates = 0
 		}
 	}
 	// The NATS server rejects an explicit duplicate window larger than MaxAge
 	// (it does not clamp it). Clamp down to MaxAge with a warning so a
 	// misconfigured window degrades gracefully instead of aborting boot in
-	// EnsureStreams. maxAge is always > 0 here (defaulted to 7d above).
-	if duplicates > maxAge {
-		sm.logger.Warn("duplicates window exceeds max_age; clamping to max_age",
-			"stream", name, "duplicates", duplicates, "max_age", maxAge)
+	// EnsureStreams. Only when MaxAge is finite: an exempt stream may carry
+	// MaxAge 0, which means unlimited and constrains no window at all.
+	if maxAge > 0 && duplicates > maxAge {
+		logAt(logger, slog.LevelWarn, "duplicates window exceeds max_age; clamping to max_age",
+			"stream", decl.name, "duplicates", duplicates, "max_age", maxAge)
 		duplicates = maxAge
 	}
 
@@ -474,16 +444,111 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		replicas = 1
 	}
 
-	streamCfg := jetstream.StreamConfig{
-		Name:       name,
+	return jetstream.StreamConfig{
+		Name:       decl.name,
 		Subjects:   cfg.Subjects,
 		Storage:    storage,
 		Retention:  retention,
 		MaxAge:     maxAge,
-		MaxBytes:   cfg.MaxBytes, // 0 means unlimited
-		Discard:    jetstream.DiscardOld,
+		MaxBytes:   maxBytes,
+		Discard:    discard,
 		Replicas:   replicas,
 		Duplicates: duplicates,
+	}, nil
+}
+
+// resolveBounds returns the MaxAge, MaxBytes, and discard policy to stamp, per
+// the declaration's exemption class.
+func resolveBounds(decl streamDeclaration, logger *slog.Logger) (time.Duration, int64, jetstream.DiscardPolicy, error) {
+	cfg := decl.cfg
+
+	var maxAge time.Duration
+	if cfg.MaxAge != "" {
+		parsed, err := parseDurationWithDays(cfg.MaxAge)
+		if err != nil {
+			return 0, 0, jetstream.DiscardOld, fmt.Errorf(
+				"stream %q (declared by %s): max_age %q is not a duration: %w",
+				decl.name, decl.source, cfg.MaxAge, err)
+		}
+		maxAge = parsed
+	}
+
+	// MaxBytes 0 is what NATS reads as unlimited. For an ordinary stream that
+	// state is unreachable (missingBounds rejected it); for an exempt one it is
+	// the intended meaning.
+	maxBytes := cfg.MaxBytes
+	if maxBytes < 0 {
+		maxBytes = 0
+	}
+
+	switch decl.exemption {
+	case exemptArchival:
+		// Permanent by declaration: nothing may ever be evicted, so no limit is
+		// stamped. DiscardNew rather than the NATS zero value because it is the
+		// honest encoding of the contract — `nats stream info` on an archive
+		// should not read "discard: old". It is inert while no limit exists.
+		return 0, 0, jetstream.DiscardNew, nil
+	case exemptMigrationOverride:
+		// A bridge keeps the stream behaving as it did before this contract:
+		// whatever the operator declared is honored, the rest stays unlimited,
+		// and the discard policy falls back to the pre-contract DiscardOld.
+		// Nothing here is silent — readiness names the override, its owner, and
+		// its expiry every boot.
+		return maxAge, maxBytes, discardPolicy(cfg.Discard, jetstream.DiscardOld), nil
+	case exemptNone:
+	}
+
+	discard := discardPolicy(cfg.Discard, jetstream.DiscardOld)
+	if discard == jetstream.DiscardNew {
+		logAt(logger, slog.LevelWarn,
+			"Stream declares discard=new: at its ceiling this stream REFUSES writes rather than evicting",
+			"stream", decl.name,
+			"source", decl.source,
+			"max_bytes", maxBytes,
+			"max_age", maxAge,
+			"hint", discardPolicyGuidance)
+	}
+	return maxAge, maxBytes, discard, nil
+}
+
+// discardPolicy maps the declared spelling to the JetStream policy.
+func discardPolicy(declared string, fallback jetstream.DiscardPolicy) jetstream.DiscardPolicy {
+	switch declared {
+	case StreamDiscardNew:
+		return jetstream.DiscardNew
+	case StreamDiscardOld:
+		return jetstream.DiscardOld
+	}
+	return fallback
+}
+
+// createStream creates or updates a JetStream stream.
+func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclaration) error {
+	name := decl.name
+	cfg := decl.cfg
+
+	// Fail closed FIRST, before any JetStream access: EnsureStreams validates
+	// its declaration set, but createStream is the seam that actually issues
+	// CreateStream/UpdateStream, so guarding it too means no future caller path
+	// — a new derivation rule, a direct call, a test helper — can reach NATS
+	// with a KV or ObjectStore backing-stream name.
+	if err := checkOrdinaryStream(name, "stream provisioner"); err != nil {
+		return errs.WrapFatal(err, "StreamsManager", "createStream",
+			fmt.Sprintf("provision stream %q", name))
+	}
+
+	// Same reasoning for the bounds contract: this is the seam that stamps a
+	// configuration onto NATS, so an unbounded ordinary stream must not be able
+	// to reach it by a route that skipped declaration validation.
+	streamCfg, err := buildStreamConfig(decl, sm.logger)
+	if err != nil {
+		return errs.WrapFatal(err, "StreamsManager", "createStream",
+			fmt.Sprintf("provision stream %q", name))
+	}
+
+	js, err := sm.natsClient.JetStream()
+	if err != nil {
+		return fmt.Errorf("get JetStream context: %w", err)
 	}
 
 	// Try to get existing stream
@@ -532,8 +597,11 @@ func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg Str
 		"stream", name,
 		"subjects", cfg.Subjects,
 		"storage", cfg.Storage,
-		"max_age", maxAge,
-		"duplicates", duplicates)
+		"source", decl.source,
+		"max_age", streamCfg.MaxAge,
+		"max_bytes", streamCfg.MaxBytes,
+		"discard", streamCfg.Discard.String(),
+		"duplicates", streamCfg.Duplicates)
 
 	return nil
 }

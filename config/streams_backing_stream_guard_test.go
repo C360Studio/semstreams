@@ -89,9 +89,11 @@ func portComponent(t *testing.T, streamName, subject string) types.ComponentConf
 //
 // The hazard being guarded is NOT "these names skip a bounds requirement" — it
 // is the provisioner WRITING retention/config onto a graph or content backing
-// stream. createStream defaults MaxAge to 7 days and hardcodes DiscardOld, so a
-// single operator typo (`KV_ENTITY_STATES` in cfg.Streams) is reachability-blind
-// age eviction stamped onto authoritative graph state.
+// stream. createStream stamps the declared MaxAge/MaxBytes/Discard onto whatever
+// it is handed, and the bounds contract REQUIRES an ordinary stream to declare
+// them, so a single operator typo (`KV_ENTITY_STATES` in cfg.Streams) would be
+// reachability-blind age eviction stamped onto authoritative graph state — and
+// the operator would have been told to supply it.
 //
 // Both operator-authored entry points are covered: the arbitrary-key map at
 // cfg.Streams, and the port-derived stream name (explicit stream_name AND the
@@ -213,8 +215,11 @@ func TestCreateStream_RefusesBackingStreamBeforeAnyJetStreamCall(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := guardTestManager().createStream(context.Background(), tt.stream,
-				StreamConfig{Subjects: []string{"whatever.>"}})
+			// Fully bounded so the ordinary-name positive control fails on the
+			// absent JetStream context rather than on the bounds contract — the
+			// assertion here is about the PREFIX guard.
+			err := guardTestManager().createStream(context.Background(),
+				boundedDeclaration(tt.stream, "whatever.>"))
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tt.wantSubstring)
@@ -262,8 +267,8 @@ func TestStreamProvisioner_RefusalIsByPrefixNotCatalogMembership(t *testing.T) {
 	})
 
 	t.Run("createStream refuses a non-catalog KV backing stream", func(t *testing.T) {
-		err := guardTestManager().createStream(context.Background(), productBackingStream,
-			StreamConfig{Subjects: []string{"kv_semsource_documents.>"}})
+		err := guardTestManager().createStream(context.Background(),
+			boundedDeclaration(productBackingStream, "kv_semsource_documents.>"))
 
 		require.ErrorIs(t, err, ErrBackingStreamNotProvisionable)
 		assert.Contains(t, err.Error(), productBackingStream)
@@ -277,8 +282,8 @@ func TestStreamProvisioner_RefusalIsByPrefixNotCatalogMembership(t *testing.T) {
 	// bucket — so the message must also say a bucket outside the catalog is
 	// provisioned by the component that owns it.
 	t.Run("the non-catalog diagnostic does not dead-end the operator", func(t *testing.T) {
-		err := guardTestManager().createStream(context.Background(), productBackingStream,
-			StreamConfig{Subjects: []string{"kv_semsource_documents.>"}})
+		err := guardTestManager().createStream(context.Background(),
+			boundedDeclaration(productBackingStream, "kv_semsource_documents.>"))
 
 		require.Error(t, err)
 		for _, clause := range kvOwnerClauses {
@@ -303,7 +308,9 @@ func TestConfigValidate_RefusesBackingStreamDeclaration(t *testing.T) {
 
 	t.Run("ordinary stream declaration still passes", func(t *testing.T) {
 		cfg := guardTestConfig()
-		cfg.Streams["AGENT"] = StreamConfig{Subjects: []string{"agent.>"}}
+		// Bounded, because an ordinary stream now also owes the bounds contract;
+		// the assertion here is that the PREFIX guard does not refuse it.
+		cfg.Streams["AGENT"] = boundedStreamConfig("agent.>")
 		require.NoError(t, cfg.Validate(), "an ordinary stream must not be refused")
 	})
 

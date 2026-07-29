@@ -39,27 +39,34 @@ func TestCreateStream_DuplicatesWindow(t *testing.T) {
 		return info.Config.Duplicates
 	}
 
+	// Bounds are complete throughout: an ordinary stream owes a finite max_age,
+	// a finite max_bytes, and a discard policy, and this test is about the
+	// duplicate-detection window rather than that contract.
+	dupStream := func(window string) streamDeclaration {
+		return streamDeclaration{
+			name:   name,
+			source: "test",
+			cfg: StreamConfig{
+				Subjects:   []string{"dupwindow.>"},
+				Storage:    "memory",
+				MaxAge:     "24h",
+				MaxBytes:   1024 * 1024,
+				Discard:    StreamDiscardOld,
+				Duplicates: window,
+			},
+		}
+	}
+
 	// 1. Create with an explicit 30m window.
-	require.NoError(t, sm.createStream(ctx, name, StreamConfig{
-		Subjects:   []string{"dupwindow.>"},
-		Storage:    "memory",
-		Duplicates: "30m",
-	}))
+	require.NoError(t, sm.createStream(ctx, dupStream("30m")))
 	assert.Equal(t, 30*time.Minute, windowOf(), "explicit window must plumb through to the stream")
 
 	// 2. Re-create with a different explicit window → applied via UpdateStream.
-	require.NoError(t, sm.createStream(ctx, name, StreamConfig{
-		Subjects:   []string{"dupwindow.>"},
-		Storage:    "memory",
-		Duplicates: "1h",
-	}))
+	require.NoError(t, sm.createStream(ctx, dupStream("1h")))
 	assert.Equal(t, time.Hour, windowOf(), "explicit window drift must be applied")
 
 	// 3. Re-create with NO window set → existing window preserved, not reset.
-	require.NoError(t, sm.createStream(ctx, name, StreamConfig{
-		Subjects: []string{"dupwindow.>"},
-		Storage:  "memory",
-	}))
+	require.NoError(t, sm.createStream(ctx, dupStream("")))
 	assert.Equal(t, time.Hour, windowOf(),
 		"unset window must preserve the existing window, not reset to the server default")
 }
@@ -75,11 +82,17 @@ func TestCreateStream_DuplicatesWindow_ClampedToMaxAge(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	require.NoError(t, sm.createStream(ctx, "DUPCLAMP", StreamConfig{
-		Subjects:   []string{"dupclamp.>"},
-		Storage:    "memory",
-		MaxAge:     "5m",
-		Duplicates: "30m", // larger than MaxAge → must clamp, not reject
+	require.NoError(t, sm.createStream(ctx, streamDeclaration{
+		name:   "DUPCLAMP",
+		source: "test",
+		cfg: StreamConfig{
+			Subjects:   []string{"dupclamp.>"},
+			Storage:    "memory",
+			MaxAge:     "5m",
+			MaxBytes:   1024 * 1024,
+			Discard:    StreamDiscardOld,
+			Duplicates: "30m", // larger than MaxAge → must clamp, not reject
+		},
 	}), "a window larger than max_age must clamp, not fail stream creation")
 
 	js, err := client.Client.JetStream()
@@ -102,9 +115,16 @@ func TestCreateStream_DuplicatesWindow_InvalidFallsBackToDefault(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	require.NoError(t, sm.createStream(ctx, "DUPBAD", StreamConfig{
-		Subjects:   []string{"dupbad.>"},
-		Storage:    "memory",
-		Duplicates: "not-a-duration",
+	require.NoError(t, sm.createStream(ctx, streamDeclaration{
+		name:   "DUPBAD",
+		source: "test",
+		cfg: StreamConfig{
+			Subjects:   []string{"dupbad.>"},
+			Storage:    "memory",
+			MaxAge:     "24h",
+			MaxBytes:   1024 * 1024,
+			Discard:    StreamDiscardOld,
+			Duplicates: "not-a-duration",
+		},
 	}), "an invalid duplicates window must not fail stream creation")
 }

@@ -4,9 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"maps"
 	"os"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -14,7 +12,6 @@ import (
 	"unicode"
 
 	"github.com/c360studio/semstreams/model"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
@@ -53,8 +50,21 @@ type Config struct {
 	NATS          NATSConfig           `json:"nats"`
 	Services      types.ServiceConfigs `json:"services"`                 // Map of service configs
 	Components    ComponentConfigs     `json:"components"`               // Map of component instance configs
-	Streams       StreamConfigs        `json:"streams,omitempty"`        // Optional explicit JetStream stream definitions
+	Streams       StreamConfigs        `json:"streams,omitempty"`        // Explicit JetStream stream definitions
 	ModelRegistry *model.Registry      `json:"model_registry,omitempty"` // Unified model endpoint registry
+
+	// StreamMigrationOverrides admits named ordinary streams that predate the
+	// bounds contract, each for a declared period. Readiness reports every
+	// active override and FAILS once one expires; an override with no expiry is
+	// rejected at validation, so a bridge cannot become permanent.
+	StreamMigrationOverrides StreamMigrationOverrides `json:"stream_migration_overrides,omitempty"`
+
+	// ArchivalStreams declares ordinary streams whose contract is permanence.
+	// Structurally separate from StreamMigrationOverrides: an archive that could
+	// only be expressed as a renewed override would train operators to renew
+	// without reading, which is what makes genuinely time-limited overrides
+	// invisible.
+	ArchivalStreams ArchivalStreams `json:"archival_streams,omitempty"`
 }
 
 // SafeConfig provides thread-safe access to configuration
@@ -246,21 +256,17 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate explicit stream declarations against the backing-stream
-	// prohibition. This runs here, and not only in the provisioner, because
-	// `semstreams --validate` prints "✓ Configuration is valid" and exits BEFORE
-	// streams are ensured (cmd/semstreams/main.go) — so without this a config
-	// that hard-fails boot would be greenlit by the very tool an operator uses to
-	// avoid that. The guard is pure and I/O-free precisely so it can run here.
-	//
-	// Only the operator-authored map is checked: the port-derived path needs port
-	// extraction and stays provisioner-only, and the operator map is where a typo
-	// lives. Keys are sorted so a config with several offenders always reports
-	// the same one.
-	for _, name := range slices.Sorted(maps.Keys(c.Streams)) {
-		if err := natsclient.CheckOrdinaryStreamName(name, fmt.Sprintf("config.streams[%q]", name)); err != nil {
-			return fmt.Errorf("streams: %w", err)
-		}
+	// Validate stream declarations: the backing-stream prohibition, and the
+	// bounds contract every ordinary stream owes. This runs here, and not only
+	// in the provisioner, because `semstreams --validate` prints
+	// "✓ Configuration is valid" and exits BEFORE streams are ensured
+	// (cmd/semstreams/main.go) — so without it a config that hard-fails boot
+	// would be greenlit by the very tool an operator uses to avoid that.
+	// Resolution is pure and I/O-free precisely so it can run here, which is
+	// also what lets the port-derived lane be checked at validation rather than
+	// only at boot.
+	if _, err := ValidateStreamDeclarations(c); err != nil {
+		return fmt.Errorf("streams: %w", err)
 	}
 
 	// Validate model registry if present
