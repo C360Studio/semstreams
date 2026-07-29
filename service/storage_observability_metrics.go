@@ -46,6 +46,7 @@ package service
 
 import (
 	"sync"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -129,8 +130,40 @@ type storageObservabilityMetrics struct {
 	accountLimitState     *prometheus.GaugeVec
 	accountOvercommitment *prometheus.GaugeVec
 
+	// reportCollected carries the COLLECTION time of the freshest published
+	// row, as a unix timestamp, so an operator can alert on
+	// `time() - gauge > horizon`. It exists because a stopped collector is
+	// otherwise indistinguishable from a calm account: Prometheus stamps
+	// SCRAPE time, not data time, so every other series here keeps looking
+	// fresh forever while the data behind it ages. timestamp() cannot
+	// substitute for the same reason.
+	//
+	// The source is deliberately the row's CollectedAt and NOT the snapshot's
+	// UpdatedAt: UpdatedAt advances whenever the consumer applies a change,
+	// including a watch reconnect replaying rows it already held, which would
+	// refresh the gauge without any new collection having happened — masking
+	// exactly the failure this gauge exists to expose.
+	reportCollected prometheus.Gauge
+	lastCollected   time.Time
+
 	tracked      map[string]trackedResource
 	accountTiers map[natsclient.StorageTier]struct{}
+}
+
+// observeCollectedAt advances the freshness gauge monotonically. Monotonic
+// because a watch delivers rows in no guaranteed order and a replay may hand
+// back an older row after a newer one; letting the gauge move backwards would
+// manufacture staleness that never happened.
+// A zero timestamp needs no separate guard: the zero time is never After
+// anything, including the zero lastCollected, so an unstamped row is rejected
+// by the same comparison. Adding an IsZero arm here would be a dead defense
+// that no mutation could kill.
+func (m *storageObservabilityMetrics) observeCollectedAt(collectedAt time.Time) {
+	if !collectedAt.After(m.lastCollected) {
+		return
+	}
+	m.lastCollected = collectedAt
+	m.reportCollected.Set(float64(collectedAt.UnixNano()) / float64(time.Second))
 }
 
 func storageGauge(name, help string, labels []string) *prometheus.GaugeVec {
@@ -204,6 +237,16 @@ func newStorageObservabilityMetrics() *storageObservabilityMetrics {
 				"not-applicable, NEVER within-limit.",
 			tierStateLabel),
 
+		reportCollected: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "semstreams",
+			Subsystem: "storage",
+			Name:      "report_collected_timestamp_seconds",
+			Help: "Unix timestamp of the freshest published report row's COLLECTION time. " +
+				"Alert on `time() - this > horizon` to catch a collector that stopped: every other " +
+				"series here is stamped with SCRAPE time, so a stopped collector otherwise looks " +
+				"identical to a calm account. Absent until the first row is read.",
+		}),
+
 		tracked:      make(map[string]trackedResource, 32),
 		accountTiers: make(map[natsclient.StorageTier]struct{}, 3),
 	}
@@ -234,7 +277,8 @@ func (m *storageObservabilityMetrics) register(registrar metric.MetricsRegistrar
 			return err
 		}
 	}
-	return nil
+	return registrar.RegisterGauge(StorageObservabilityServiceName,
+		"report_collected_timestamp_seconds", m.reportCollected)
 }
 
 // ObserveResource publishes one row's series.
@@ -244,6 +288,8 @@ func (m *storageObservabilityMetrics) ObserveResource(row natsclient.ResourceRep
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.observeCollectedAt(row.CollectedAt)
 
 	// A label tuple that changed identifies DIFFERENT series. Retract the old
 	// ones first, or a bucket that gained a catalog owner reports under both
@@ -313,6 +359,8 @@ func (m *storageObservabilityMetrics) ForgetResource(row natsclient.ResourceRepo
 func (m *storageObservabilityMetrics) ObserveAccount(report natsclient.AccountReport) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	m.observeCollectedAt(report.CollectedAt)
 
 	seen := make(map[natsclient.StorageTier]struct{}, len(report.Tiers))
 	for _, comparison := range report.Tiers {

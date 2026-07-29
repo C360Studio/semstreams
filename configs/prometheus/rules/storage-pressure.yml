@@ -42,13 +42,13 @@
 #    grow forever invisible. StorageResourceUnbounded and
 #    StorageResourcesWithUnknownCapacity below are what keep them visible.
 #
-# Known gap: report STALENESS has no metric today. A gauge that stops being
-# updated is still scraped with a fresh timestamp, so a stale report is not
-# distinguishable from a calm one through these series. Freshness is reported in
-# the service's health message ("collected N ago by ...", "last collection did
-# not succeed") and in each row's `collected_at` on
-# GET /storage-observability/report. Do NOT approximate it with an absence
-# expression; see property 1.
+# Report STALENESS is alertable through
+# `semstreams_storage_report_collected_timestamp_seconds`, whose VALUE is the
+# collection time rather than the scrape time. That distinction is the whole
+# reason the gauge exists: every other series here is stamped by Prometheus at
+# scrape, so a collector that died keeps producing fresh-looking samples of
+# stale numbers forever, and `timestamp()` cannot tell the difference. Alert on
+# `time() - gauge`, never on absence — see property 1.
 
 groups:
   - name: semstreams-storage-pressure
@@ -201,3 +201,24 @@ groups:
             over-commitment comparison reports not-applicable rather than satisfied.
             Report-only. Distinct from a deliberately unlimited tier, which reports
             state="unbounded".
+
+      # The report stopped arriving. This is the ONE rule that can tell you the
+      # collector itself failed, and it is why the gauge carries collection time
+      # rather than relying on scrape time: a dead collector's other series keep
+      # being scraped, fresh-stamped, forever. Deliberately expressed on the
+      # gauge's VALUE and not as absent() — a row may transiently vanish under
+      # concurrent reclamation (property 1), but the freshness gauge going stale
+      # means nobody collected, which is a different and always-real fault.
+      - alert: StorageReportStale
+        expr: time() - semstreams_storage_report_collected_timestamp_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage report has not been collected for 15m"
+          description: >-
+            The storage report is {{ $value | humanizeDuration }} old. Every other
+            storage series is stamped at scrape time, so they will keep looking
+            current while the numbers behind them age — treat those as unreliable
+            until this clears. Check the storage-observability service's health
+            message for the last collection outcome.

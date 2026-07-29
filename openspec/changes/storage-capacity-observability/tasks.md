@@ -93,7 +93,7 @@
 - [x] 4.8 Do NOT key any alert on a row disappearing from the report bucket. Reclamation is eventually
       consistent under concurrent producers, so a row may transiently vanish and return; alert on the
       row's contents (pressure, staleness) instead
-- [ ] 4.9 Publish a report-collected timestamp gauge so 4.8's STALENESS axis is actually alertable.
+- [x] 4.9 Publish a report-collected timestamp gauge so 4.8's STALENESS axis is actually alertable.
       Without it, a collector that silently stops is indistinguishable from a calm account through the
       metrics: Prometheus stamps SCRAPE time, not data time, so `timestamp()` cannot substitute and the
       series keeps looking fresh forever. The gauge's VALUE must be the collection time, making

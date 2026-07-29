@@ -764,3 +764,61 @@ func TestStorageMetrics_RegisterIsIdempotent(t *testing.T) {
 	require.NoError(t, metrics.register(registry))
 	require.NoError(t, metrics.register(registry))
 }
+
+// TestStorageMetrics_FreshnessGaugeCarriesCollectionTime pins the one series
+// that can report the collector STOPPED. Every other series here is stamped
+// with scrape time, so a dead collector's numbers keep arriving looking fresh
+// forever; only a gauge whose VALUE is the collection time turns that into
+// `time() - gauge > horizon`.
+func TestStorageMetrics_FreshnessGaugeCarriesCollectionTime(t *testing.T) {
+	metrics, registry := newTestStorageMetrics(t)
+
+	collected := time.Now().UTC().Add(-90 * time.Second)
+	row := resourceRow("FRESH", natsclient.TierFile)
+	row.CollectedAt = collected
+	metrics.ObserveResource(row)
+
+	got := requireGauge(t, registry, "semstreams_storage_report_collected_timestamp_seconds", nil)
+	assert.InDelta(t, float64(collected.UnixNano())/float64(time.Second), got, 0.001,
+		"the gauge must carry COLLECTION time, not scrape time — that difference is the whole point")
+}
+
+// TestStorageMetrics_FreshnessGaugeNeverMovesBackwards is the replay interlock.
+// A watch delivers in no guaranteed order and a reconnect can hand back an
+// older row after a newer one; letting the gauge regress would manufacture
+// staleness that never happened and page someone for a healthy collector.
+func TestStorageMetrics_FreshnessGaugeNeverMovesBackwards(t *testing.T) {
+	metrics, registry := newTestStorageMetrics(t)
+
+	newest := time.Now().UTC()
+	fresh := resourceRow("A", natsclient.TierFile)
+	fresh.CollectedAt = newest
+	metrics.ObserveResource(fresh)
+
+	stale := resourceRow("B", natsclient.TierFile)
+	stale.CollectedAt = newest.Add(-10 * time.Minute)
+	metrics.ObserveResource(stale)
+
+	got := requireGauge(t, registry, "semstreams_storage_report_collected_timestamp_seconds", nil)
+	assert.InDelta(t, float64(newest.UnixNano())/float64(time.Second), got, 0.001,
+		"a replayed older row must not drag freshness backwards")
+}
+
+// TestStorageMetrics_FreshnessGaugeIgnoresAZeroTimestamp keeps an unstamped row
+// from reading as 1970 — which would render as ~56 years of staleness and fire
+// every horizon at once.
+func TestStorageMetrics_FreshnessGaugeIgnoresAZeroTimestamp(t *testing.T) {
+	metrics, registry := newTestStorageMetrics(t)
+
+	collected := time.Now().UTC()
+	row := resourceRow("A", natsclient.TierFile)
+	row.CollectedAt = collected
+	metrics.ObserveResource(row)
+
+	unstamped := resourceRow("B", natsclient.TierFile)
+	unstamped.CollectedAt = time.Time{}
+	metrics.ObserveResource(unstamped)
+
+	got := requireGauge(t, registry, "semstreams_storage_report_collected_timestamp_seconds", nil)
+	assert.InDelta(t, float64(collected.UnixNano())/float64(time.Second), got, 0.001)
+}
