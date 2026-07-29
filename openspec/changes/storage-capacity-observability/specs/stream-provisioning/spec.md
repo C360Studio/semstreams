@@ -44,13 +44,44 @@ retention-unmanaged, and it does not cover buckets outside the catalog.
 ### Requirement: Ordinary streams MUST declare their bounds and discard policy explicitly
 
 Every ordinary stream SemStreams provisions MUST carry an explicitly declared finite `MaxAge`, a
-finite `MaxBytes`, and a discard policy. None of the three may be supplied by a silent framework
-default: a bound the operator never chose is indistinguishable in the operator surface from one they
-did, which is the condition this capability exists to end. Production readiness MUST fail for an
-ordinary stream missing any of the three, naming the stream, its declaration source, and the missing
-field. Where the declaration source records an owning component, the diagnostic MUST name it;
-declarations that carry no component attribution MUST name the source instead of reporting an owner
-they do not know.
+finite `MaxBytes`, and a discard policy, unless it is declared archival (see the archival
+requirement). None of the three may be supplied by a silent framework default: a bound the operator
+never chose is indistinguishable in the operator surface from one they did, which is the condition
+this capability exists to end. Production readiness MUST fail for an ordinary stream missing any of
+the three, naming the stream, its declaration source, and the missing field. Where the declaration
+source records an owning component, the diagnostic MUST name it; declarations that carry no component
+attribution MUST name the source instead of reporting an owner they do not know.
+
+This requirement binds at **creation, through every provisioning seam** — not only declarations
+processed by the configuration-driven provisioner. A caller that creates a stream directly through
+the client's ensure-stream seam is provisioning, and the backing-stream prefix refusal already
+follows it there; bounds MUST follow to the same seam, or a direct caller becomes the one supported
+way to create the unbounded streams this requirement exists to prevent.
+
+Binding to an **existing** stream is a different act and MUST NOT re-assert bounds: a caller that is
+not the stream's owner silently restamping another owner's configuration is worse than the drift it
+would be correcting. Instead, a seam that returns an existing stream whose live configuration
+diverges from the caller's declaration MUST report that divergence — naming the stream and the
+declared-versus-observed fields — rather than discarding the declaration in silence. Without this,
+a stream two components declare has its limits decided permanently by boot order, with no diagnostic
+on either side.
+
+#### Scenario: A direct ensure-stream caller cannot create an unbounded stream
+
+- **GIVEN** a caller creating a new ordinary stream directly through the client's ensure-stream seam,
+  with no declared `MaxBytes`
+- **WHEN** the stream is created
+- **THEN** creation fails naming the missing bound, exactly as a configuration-declared stream would
+- **AND** the seam is not a supported route around the bounds requirement
+
+#### Scenario: Binding to an existing stream reports divergence instead of restamping it
+
+- **GIVEN** an existing stream whose live configuration differs from the declaration a non-owning
+  caller passes to the ensure-stream seam
+- **WHEN** the caller binds to it
+- **THEN** the caller receives the stream handle and the divergence is reported, naming the stream
+  and the declared-versus-observed fields
+- **AND** the existing stream's configuration is left unchanged, because the binder does not own it
 
 #### Scenario: A stream missing an explicit byte bound fails readiness
 
@@ -72,6 +103,49 @@ they do not know.
 - **WHEN** the stream is created
 - **THEN** the created stream's discard policy equals the declared value
 
+### Requirement: A stream whose contract is permanence MUST be declarable as archival
+
+An ordinary stream whose contract is that nothing may ever be evicted MUST be declarable as
+**archival** — a permanent classification naming the stream, its owner, and why permanence is the
+contract. An archival stream is exempt from the finite-bounds requirement by declaration, and
+readiness MUST report it as a named permanent exception that is structurally distinct from a
+time-limited migration override, so an operator surface never blurs "this is forever" with "this
+expires in March".
+
+An archival stream MUST NOT be expressible only as a renewed migration override. An override's value
+comes from being rare and alarming; an archive whose override can only be renewed forever trains an
+operator to renew without reading, which is precisely what makes the genuinely time-limited overrides
+invisible. Nor is the backing-stream prefix refusal the right instrument: that exempts resources
+whose retention contract belongs to another owner, and an archival stream has no other owner —
+refusing it would leave it unprovisioned rather than correctly classified.
+
+Archival streams MUST remain fully inventoried. Unbounded is not unmeasured, and capacity reporting
+matters MORE for a stream that can never evict, because capacity is then the only lever an operator
+has. Since such a stream has no limit of its own, its only ceiling is the account tier limit, so its
+pressure MUST be evaluated against that ceiling rather than reported as unevaluable — otherwise
+declaring a stream archival would silently remove it from the very surface that would warn about it.
+
+#### Scenario: An archival stream satisfies readiness without finite bounds
+
+- **GIVEN** an ordinary stream declared archival, naming its owner and the reason permanence is its
+  contract, with no finite `MaxAge` or `MaxBytes`
+- **WHEN** production configuration is validated
+- **THEN** readiness passes and the stream is reported as a named permanent exception
+- **AND** it is reported distinctly from any time-limited migration override
+
+#### Scenario: An archival declaration without a stated reason is rejected
+
+- **GIVEN** a stream declared archival with no owner or no stated reason for permanence
+- **WHEN** the configuration is validated
+- **THEN** validation fails, so archival cannot become a silent way to opt out of bounds
+
+#### Scenario: An archival stream is still measured against the account ceiling
+
+- **GIVEN** an archival stream growing against a known account tier limit
+- **WHEN** its pressure is evaluated
+- **THEN** headroom and projection are computed against the account tier ceiling
+- **AND** the stream is not reported as unevaluable merely because it declares no limit of its own
+
 ### Requirement: Unbounded existing streams MUST be admitted only by an expiring override
 
 An existing ordinary stream that predates this contract MUST be admissible through a migration
@@ -79,6 +153,8 @@ override that names the resource, its owner, and an expiry date. Readiness MUST 
 override as a named, time-limited exception, and MUST fail once an override's expiry has passed.
 Overrides MUST NOT be open-ended: an override with no expiry, or one whose expiry is absent from the
 declaration, MUST be rejected at validation, so a migration bridge cannot silently become permanent.
+An override is for a stream being migrated TO bounds; a stream whose contract is permanence is
+archival and MUST use that classification instead, so the two never share an instrument.
 
 #### Scenario: An expiring override admits a legacy stream
 

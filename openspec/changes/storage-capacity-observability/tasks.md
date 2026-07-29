@@ -116,6 +116,27 @@
       declared, instead of the current silent ignore
 - [ ] 5.7 Add real-NATS integration tests for drift repair, non-editable-drift readiness failure,
       declared-discard-policy creation, and override expiry behavior
+- [ ] 5.8 Add the ARCHIVAL classification (#729): permanent by declaration, naming stream + owner +
+      why permanence is the contract; rejected if owner or reason is absent. Readiness reports it as a
+      named permanent exception STRUCTURALLY distinct from a time-limited override — an archive whose
+      override can only be renewed forever trains operators to renew without reading, which is what
+      makes genuinely time-limited overrides invisible. SemMachina's `CAMPAIGN_LEDGER` is the live
+      consumer and its declaration was offered as a test fixture
+- [ ] 5.9 Evaluate an archival stream's pressure against the ACCOUNT TIER ceiling (#729). It has no
+      limit of its own, so the account limit is its only ceiling; reporting it unevaluable would mean
+      declaring a stream archival silently removes it from the surface that would warn about it —
+      capacity matters MORE for a stream that can never evict, since it is the only lever left
+- [ ] 5.10 Follow the bounds requirement to `natsclient.Client.EnsureStream` at CREATION (#729/#730):
+      section 1 already took the prefix refusal to that seam, and if bounds do not follow, a direct
+      caller becomes the supported route around the requirement
+- [ ] 5.11 Report declared-versus-observed divergence when `EnsureStream` binds an EXISTING stream
+      (#730). Today `natsclient/stream.go:141-145` returns the existing stream and discards the
+      caller's `cfg` in silence, so a stream two components declare has its limits set permanently by
+      boot order with no diagnostic on either side. Report only — do NOT restamp, since a non-owner
+      silently rewriting another owner's config is worse than the drift
+- [ ] 5.12 State who owns a shared stream's limits (#730). If the answer is "the declaring component,
+      consumers use GetStream", document that as the contract rather than leaving it inferred from the
+      single `agentic/agentrun/agentrun.go:697-718` precedent a sister repo had to reverse-engineer
 
 ## 6. Documentation and gates
 
