@@ -45,8 +45,17 @@
 
 ## 3. Growth and pressure
 
-- [ ] 3.1 Derive growth rate from server-retained stream state (first/last timestamps + byte count) so
-      it survives restart; report unknown rate where history is insufficient rather than extrapolating
+- [ ] 3.0 Declare the report bucket in the descriptor catalog (`graph/kvcatalog.go`) — operational class,
+      owner-only writes, no-lifecycle retention, bounded History following the `GRAPH_STATUS` precedent —
+      and publish one key per resource each collection, deleting the key for a resource that disappeared.
+      MOVED FORWARD from section 4: the per-key history IS the growth series 3.1 needs, so building a
+      separate sample store first would be building a mechanism to immediately replace
+- [ ] 3.1 Derive growth rate from SUCCESSIVE published observations (Δbytes over Δt across the report
+      bucket's per-key revisions), never from a single snapshot's `FirstTime`/`LastTime` span. A snapshot
+      cannot separate sustained growth from churn at stable size: a KV bucket under `History` 1 compacts
+      old revisions, so it holds roughly constant bytes while its timestamps span a long window, and
+      bytes-over-span would report growth — and project exhaustion — for a bucket that never grows.
+      Report unknown rate until at least two observations exist, rather than extrapolating from one
 - [ ] 3.2 Project headroom and time-to-threshold; suppress both for unknown-capacity resources
 - [ ] 3.3 Derive pressure as the worse of a proportional-headroom band and a time-to-threshold band,
       reporting which input raised it
@@ -64,15 +73,7 @@
       gauge has a consumer at merge time and does not become a phantom signal
 - [ ] 4.3 Expose pressure in component health STATUS without degrading readiness, and add a test that
       `critical` pressure fails no readiness or health gate
-- [ ] 4.4 Publish the report to a framework-owned KV bucket, ONE KEY PER RESOURCE (not one blob — a blob
-      is bounded by the NATS max payload on a large account, which is what would otherwise force
-      ObjectStore, and the framework has no bounded object lane since the `windowed` class was retired).
-      Delete the key for a resource absent from the current collection; never configure retention on the
-      bucket. Pin the per-key JSON shape in a round-trip test
-- [ ] 4.4b Declare the report bucket in the descriptor catalog (`graph/kvcatalog.go`) — operational class,
-      owner-only writes, no-lifecycle retention, bounded History following the `GRAPH_STATUS` precedent.
-      History depth is the per-resource growth series feeding 3.1, so choose it deliberately
-- [ ] 4.4c Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
+- [ ] 4.4 Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
       the alert rule from 4.2 driven by `Watch` — so there is one produced truth and no surface can
       disagree with another. Add a test that two surfaces cannot diverge because neither recomputes
 - [ ] 4.5 Report per-tier declared-versus-account-limit comparison via `js.AccountInfo`

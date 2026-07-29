@@ -148,10 +148,22 @@ Summing across tiers would produce a number that means nothing.
 An in-process sample window is the obvious implementation and it is self-defeating: every restart
 blanks the projection for a full window, and the longer the window needed to keep a burst from
 tripping `critical`, the longer the blackout. A deploy-loop or crash-loop — when the projection
-matters most — would guarantee there is never one. The rate is therefore derived from state the
-server itself retains across restarts, computable from a stream's own first/last timestamps and byte
-count, needing no local history. Where history is insufficient, the rate reports unknown rather than
-extrapolating from one observation.
+matters most — would guarantee there is never one.
+
+The tempting fix is to read a stream's own `FirstTime`/`LastTime` span and divide its byte count by
+it, needing no history at all. **That is wrong for most of the catalog and was corrected here rather
+than shipped.** It is defensible for a bounded stream at steady state, where the span is effectively
+the retention window — but a KV bucket under `History` 1 compacts superseded revisions, so an
+actively churning bucket holds roughly constant bytes while its timestamps span a long window.
+Bytes-over-span would report sustained growth, and project exhaustion, for a bucket whose size never
+changes. More fundamentally, a single snapshot cannot distinguish "grew to 100 MB over a year" from
+"grew to 100 MB yesterday," and those demand opposite operator responses.
+
+Growth is therefore Δbytes over Δt across **successive observations**, and the per-key history of the
+report bucket (decision 8) is where those observations already live — restart-surviving by
+construction, with no separate sample store to build. This is why the report bucket sequences ahead
+of the growth work rather than after it. Where fewer than two observations exist, the rate reports
+unknown rather than extrapolating from one.
 
 ### 8. The report is published to KV; HTTP and CLI are consumers, not the surface
 

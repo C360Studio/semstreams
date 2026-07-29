@@ -147,10 +147,20 @@ configuration at evaluation time so a post-boot configuration edit takes effect 
 
 Projected time-to-threshold MUST NOT depend on samples held only in process memory, because a
 restart, deploy, or crash-loop would blank the projection exactly when it is most needed, and a
-longer smoothing window makes that blackout longer. The growth rate MUST either be derived from
-resource state that the server itself retains across restarts, or be persisted so it survives one.
-Where insufficient history exists to compute a rate, the rate MUST report as unknown rather than be
-extrapolated from a single observation.
+longer smoothing window makes that blackout longer. The growth rate MUST be computed from the
+difference between successive observations of a resource's size, persisted so it survives a restart.
+It MUST NOT be derived by dividing a resource's current size by the span of its own retained
+timestamps: that cannot distinguish sustained growth from churn at a stable size, and would report
+growth for a compacting KV bucket whose size never changes. Where fewer than two observations exist,
+the rate MUST report as unknown rather than be extrapolated from a single observation.
+
+#### Scenario: A churning but stable-size resource reports no growth
+
+- **GIVEN** a resource whose contents are continuously replaced but whose total size is unchanged
+  between successive observations
+- **WHEN** its growth rate is computed
+- **THEN** the rate is zero and no exhaustion is projected
+- **AND** the rate is not inferred from the span of the resource's retained timestamps
 
 #### Scenario: Projection survives a restart
 
