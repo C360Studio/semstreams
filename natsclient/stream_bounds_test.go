@@ -131,6 +131,55 @@ func TestEnsureStream_BoundsRefusalIsFatal(t *testing.T) {
 	assert.ErrorIs(t, wrapped, ErrStreamBoundsUndeclared)
 }
 
+// TestCreateStream_RefusesUnboundedBeforeTheConnectionCheck covers the OTHER
+// provisioning seam, and the placement difference between the two.
+//
+// Client.CreateStream only ever creates, so there is no bind path to protect and
+// no reason to wait for the server to say which act this is: the refusal is
+// unconditional, exactly like the backing-stream prefix refusal beside it. This
+// seam was missed when bounds first came to EnsureStream — the two are siblings
+// and one of them was left as the supported route around the requirement — which
+// is what this test exists to prevent recurring.
+func TestCreateStream_RefusesUnboundedBeforeTheConnectionCheck(t *testing.T) {
+	c := &Client{}
+	require.NotEqual(t, StatusConnected, c.Status(),
+		"test premise: an unguarded call would be rejected as not-connected")
+
+	_, err := c.CreateStream(context.Background(), jetstream.StreamConfig{
+		Name:     "EVENTS",
+		Subjects: []string{"events.>"},
+	})
+
+	require.ErrorIs(t, err, ErrStreamBoundsUndeclared)
+	assert.True(t, errs.IsFatal(err), "an under-declared config is unrecoverable, not transient")
+	assert.NotErrorIs(t, err, ErrNotConnected,
+		"a create-only seam can judge bounds without a server, so it must not need one first")
+}
+
+// TestBothProvisioningSeams_EnforceTheSameRequirement pins the parity directly.
+// The prefix refusal is already on both seams with a comment saying the two must
+// not drift; bounds drifted anyway, because nothing asserted the pair.
+func TestBothProvisioningSeams_EnforceTheSameRequirement(t *testing.T) {
+	unbounded := jetstream.StreamConfig{Name: "EVENTS", Subjects: []string{"events.>"}}
+
+	// Neither seam is connected, so any refusal here is one that precedes I/O.
+	// EnsureStream's bounds check deliberately does NOT (see below), which is why
+	// this asserts the requirement's REACH rather than identical placement: both
+	// seams enforce it, on the paths where each of them can.
+	seams := map[string]func() error{
+		"CreateStream": func() error {
+			_, err := (&Client{}).CreateStream(context.Background(), unbounded)
+			return err
+		},
+		"CheckStreamBounds": func() error {
+			return CheckStreamBounds(unbounded, "test")
+		},
+	}
+	for name, call := range seams {
+		require.ErrorIs(t, call(), ErrStreamBoundsUndeclared, "seam %s", name)
+	}
+}
+
 // TestEnsureStream_BoundsCheckDoesNotPrecedeTheConnectionCheck is the deliberate
 // ORDERING, and it is the opposite of the prefix refusal's.
 //

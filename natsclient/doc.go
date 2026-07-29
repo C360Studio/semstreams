@@ -69,10 +69,18 @@
 //
 // Working with JetStream streams and consumers:
 //
-//	// Create a stream
+//	// Create a stream. An ordinary stream MUST declare a finite MaxAge and a
+//	// finite MaxBytes: 0 and -1 both mean unlimited to JetStream, so neither is a
+//	// declaration, and creation is refused without them. Set Discard explicitly
+//	// too — it cannot be required (DiscardOld is the field's zero value) but at a
+//	// finite MaxBytes it decides whether the oldest messages are evicted or the
+//	// newest are refused.
 //	stream, err := client.CreateStream(ctx, jetstream.StreamConfig{
 //	    Name:     "EVENTS",
 //	    Subjects: []string{"events.>"},
+//	    MaxAge:   24 * time.Hour,
+//	    MaxBytes: 1 << 30,
+//	    Discard:  jetstream.DiscardOld,
 //	})
 //
 //	// Publish to stream

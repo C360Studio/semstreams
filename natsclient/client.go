@@ -757,6 +757,15 @@ func (m *Client) CreateStream(ctx context.Context, cfg jetstream.StreamConfig) (
 			"validate stream name "+cfg.Name)
 	}
 
+	// Bounds are checked HERE, unconditionally, unlike on EnsureStream where the
+	// same check sits inside the not-found branch. This seam only ever CREATES, so
+	// there is no bind path to protect and no reason to wait for the server to
+	// tell us which act this is.
+	if err := CheckStreamBounds(cfg, "natsclient.Client.CreateStream"); err != nil {
+		return nil, errs.WrapFatal(err, "Client", "CreateStream",
+			"validate stream bounds for "+cfg.Name)
+	}
+
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
 		return nil, ErrCircuitOpen

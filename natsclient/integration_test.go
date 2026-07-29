@@ -191,6 +191,8 @@ func TestIntegration_JetStream(t *testing.T) {
 	streamCfg := jetstream.StreamConfig{
 		Name:     streamName,
 		Subjects: []string{"test.*"},
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	_, err = manager.CreateStream(ctx, streamCfg)
 	require.NoError(t, err)
@@ -350,6 +352,8 @@ func TestIntegration_JetStreamMetrics(t *testing.T) {
 	streamCfg := jetstream.StreamConfig{
 		Name:     "TEST_METRICS",
 		Subjects: []string{"test.metrics.>"},
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 	stream, err := client.CreateStream(ctx, streamCfg)
 	require.NoError(t, err)
