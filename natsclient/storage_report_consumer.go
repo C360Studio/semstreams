@@ -140,8 +140,14 @@ func NewStorageReportConsumer(
 ) (*StorageReportConsumer, error) {
 	if store == nil {
 		return nil, errs.WrapInvalid(
-			errors.New("a ReportWatchStore is required; bind the report bucket through the catalog "+
-				"reader seam (graph.OpenCatalogBucket with graph.BucketStorageReport)"),
+			// Seam guidance is deliberately conditional: the storage-observability
+			// service is the report bucket's DECLARED OWNER, so it binds through
+			// the owner seam (EnsureCatalogBucket). Any other consumer is a
+			// reader and must not create — pointing everyone at the reader seam
+			// would have misdirected the one caller that legitimately provisions.
+			errors.New("a ReportWatchStore is required; the bucket's declared owner binds it through "+
+				"graph.EnsureCatalogBucket, any other consumer through graph.OpenCatalogBucket "+
+				"(with graph.BucketStorageReport)"),
 			"StorageReportConsumer", "New", "validate configuration")
 	}
 	consumer := &StorageReportConsumer{

@@ -372,6 +372,28 @@ func TestStorageObservabilityHealth_ReportsWhenNothingHasBeenReadYet(t *testing.
 	assert.Contains(t, strings.ToLower(status.Message), "not been read")
 }
 
+// TestStorageObservabilityHealth_PreservesTheBaseVerdictsReason pins the one
+// axis the storage picture must never overwrite. BaseService carries the REASON
+// for a non-healthy lifecycle verdict only in Message ("Service is stopped",
+// "Service is unhealthy (failed checks: N)"), so replacing it would leave an
+// operator reading `status: unhealthy` next to a cheerful pressure line and no
+// explanation — this capability's own phantom-signal class, turned on its own
+// health report.
+func TestStorageObservabilityHealth_PreservesTheBaseVerdictsReason(t *testing.T) {
+	surface := &storageHealthSurface{
+		snapshotOf: staticSnapshot(natsclient.StorageReportSnapshot{Synced: true}),
+	}
+
+	base := health.NewUnhealthy(StorageObservabilityServiceName, "Service is stopped")
+	status := surface.describe(base)
+
+	assert.Contains(t, status.Message, "Service is stopped",
+		"the reason for the verdict must survive the storage picture")
+	assert.Contains(t, strings.ToLower(status.Message), "storage pressure",
+		"the storage picture is still appended, not dropped")
+	assert.False(t, status.Healthy, "describe must not touch the status axis")
+}
+
 // TestStorageObservabilityHealth_ReportsCollectionFreshness puts staleness on
 // the ANSWER rather than in a decision to withhold it. A readiness gate says
 // whether a view is sound to read; how far behind it is belongs on the report.

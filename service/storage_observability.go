@@ -468,8 +468,20 @@ func (s *storageHealthSurface) snapshot() natsclient.StorageReportSnapshot {
 	return s.snapshotOf()
 }
 
+// describe appends the storage picture to the base verdict WITHOUT replacing it.
+// The base Message is the only field carrying the REASON for a non-healthy
+// lifecycle verdict ("Service is stopped", "Service is unhealthy (failed
+// checks: N)" — service/base.go), so overwriting it would delete the
+// explanation from the exact surface an operator reads while leaving the status
+// axis saying something is wrong. That is this capability's own phantom-signal
+// class turned on its own health report.
 func (s *storageHealthSurface) describe(base health.Status) health.Status {
-	base.Message = s.message()
+	picture := s.message()
+	if base.Message == "" {
+		base.Message = picture
+		return base
+	}
+	base.Message = base.Message + "; " + picture
 	return base
 }
 
