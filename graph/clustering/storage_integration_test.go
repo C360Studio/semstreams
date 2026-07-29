@@ -6,6 +6,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,7 +19,7 @@ func TestIntegration_SaveAndGetCommunity(t *testing.T) {
 
 	// Create or get KV bucket
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -65,7 +66,7 @@ func TestIntegration_GetEntityCommunity(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -118,7 +119,7 @@ func TestIntegration_GetCommunitiesByLevel(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -174,7 +175,7 @@ func TestIntegration_DeleteCommunity(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -222,7 +223,7 @@ func TestIntegration_Clear(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -277,7 +278,7 @@ func TestIntegration_Prune(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -346,7 +347,7 @@ func TestIntegration_PruneEmptyKeepRemovesEverything(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -379,7 +380,7 @@ func TestIntegration_CommunityIDParsing(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -416,7 +417,7 @@ func TestIntegration_EmptyMembersCommunity(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -460,7 +461,7 @@ func TestIntegration_KeyFormatConsumerCompatibility(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 
@@ -539,7 +540,7 @@ func TestIntegration_CommunitySummaryFields(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: CommunityBucket,
+		Bucket: graph.BucketCommunityIndex,
 	})
 	require.NoError(t, err)
 

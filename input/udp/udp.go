@@ -19,7 +19,6 @@ import (
 	"github.com/c360studio/semstreams/pkg/buffer"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -506,22 +505,7 @@ func (u *Input) Start(ctx context.Context) error {
 	}
 
 	// Initialize lifecycle reporter (throttled for high-throughput receiving)
-	statusBucket, err := u.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		u.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		u.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		u.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-			KV:               statusBucket,
-			ComponentName:    "udp-input",
-			Logger:           u.logger,
-			EnableThrottling: true,
-		})
-	}
+	u.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, u.natsClient, "udp-input", u.logger)
 
 	u.running.Store(true)
 	u.startTime = time.Now()

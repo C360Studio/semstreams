@@ -22,10 +22,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// bucketSweepRecordingHandler captures emitted slog records so a test can assert
-// the post-start owned-bucket sweep WARNed naming a stripped bucket. onRecord,
-// when set, observes every record as it lands (under mu) so a test can react to
-// a specific sweep event.
+// bucketSweepRecordingHandler captures emitted slog records so a test can
+// assert on boot-time log evidence. onRecord, when set, observes every record
+// as it lands (under mu) so a test can react to a specific event.
 type bucketSweepRecordingHandler struct {
 	mu       sync.Mutex
 	records  []slog.Record
@@ -70,67 +69,21 @@ func (h *bucketSweepRecordingHandler) warnMentioning(bucket string) bool {
 	return false
 }
 
-// recordIsSkipProbeFor reports whether the record is the sweep's
-// skip-if-absent Debug probe naming the bucket. Single source of the match
-// shape — it mirrors the Debug line in graph.AssertOwnedBucketsClean and is
-// shared by skipProbeMentioning and the sweepPassedAbsent gates.
-func recordIsSkipProbeFor(r slog.Record, bucket string) bool {
-	if !strings.Contains(r.Message, "bucket absent, skipping") {
-		return false
-	}
-	found := false
-	r.Attrs(func(a slog.Attr) bool {
-		if strings.Contains(a.Value.String(), bucket) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
-}
-
-// skipProbeMentioning reports whether the sweep's skip-if-absent Debug probe
-// fired naming the bucket.
-func (h *bucketSweepRecordingHandler) skipProbeMentioning(bucket string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	for _, r := range h.records {
-		if r.Level != slog.LevelDebug {
-			continue
-		}
-		if recordIsSkipProbeFor(r, bucket) {
-			return true
-		}
-	}
-	return false
-}
-
-// bucketAdopterComponent is a real lifecycle component whose Start brings a
-// framework-owned bucket into existence DURING this boot's startup carrying a
-// foreign 7-day TTL and a stored key — the racing process's dirty create and
-// the owner's unchanged adoption (CreateKeyValueBucket never reconciles)
-// compressed into one boot-time step. It runs through the production
-// ComponentManager launch path — the asynchronous concurrency shape the
-// create-race guarantee must hold under. observedTTL records the retention
-// actually bound at create time, so the test can prove the dirty state
-// existed mid-boot before the sweep stripped it.
-//
-// sweepPassedAbsent forces the bad interleaving whenever the ordering permits
-// it: when the post-start sweep can run concurrently with this Start
-// (fire-and-forget), the channel fires on the sweep's skip-if-absent probe of
-// the still-absent bucket, and only THEN does Start create it dirty — the
-// sweep has already passed the bucket over and never reconciles it. Under the
-// barrier that probe cannot happen before Start returns, so the bounded
-// fallback fires instead; correctness there is guaranteed by the barrier's
-// synchronization, not timing, so the wait costs boot delay only, never flake.
+// bucketAdopterComponent is a real lifecycle component whose Start reproduces
+// the create-race shape INSIDE the boot transaction and then closes it the way
+// every real owner now does: a rival's dirty create (foreign 7-day TTL + a
+// stored key, raw CreateKeyValueBucket — no reconcile) followed by the owner's
+// acquisition through the catalog seam, which must reconcile the adopted-dirty
+// bucket AT ACQUISITION. observedDirtyTTL records the retention present after
+// the rival create, proving the dirty state really existed mid-boot before the
+// seam stripped it — there is no post-start sweep left to strip it later.
 type bucketAdopterComponent struct {
-	client            *natsclient.Client
-	bucket            string
-	sweepPassedAbsent <-chan struct{}
+	client *natsclient.Client
+	bucket string
 
-	mu          sync.Mutex
-	started     bool
-	observedTTL time.Duration
+	mu               sync.Mutex
+	started          bool
+	observedDirtyTTL time.Duration
 }
 
 func (c *bucketAdopterComponent) Meta() component.Metadata {
@@ -151,20 +104,7 @@ func (c *bucketAdopterComponent) DataFlow() component.FlowMetrics {
 }
 func (c *bucketAdopterComponent) Initialize() error { return nil }
 func (c *bucketAdopterComponent) Start(ctx context.Context) error {
-	// Wait for the sweep's skip-if-absent probe if concurrency permits one
-	// (fire-and-forget), else time out and proceed (barrier — the probe cannot
-	// precede this Start's return). Wall-clock rationale: 500ms is orders of
-	// magnitude past the sweep's few-ms arrival at the bucket, and in the
-	// barrier direction the timeout can only delay boot, never flip an
-	// assertion — ordering there is synchronization-guaranteed.
-	if c.sweepPassedAbsent != nil {
-		select {
-		case <-c.sweepPassedAbsent:
-		case <-time.After(500 * time.Millisecond):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	}
+	// The rival's dirty create: raw, unreconciled, foreign TTL, stored key.
 	kv, err := c.client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket: c.bucket,
 		TTL:    7 * 24 * time.Hour,
@@ -175,24 +115,28 @@ func (c *bucketAdopterComponent) Start(ctx context.Context) error {
 	if _, err := kv.Put(ctx, "entity.key.one", []byte("survivor")); err != nil {
 		return err
 	}
-	// Record the retention actually bound at create time: proof the bucket
-	// carried the foreign TTL mid-boot, before the post-start sweep ran.
-	maxAge, _, err := natsclient.BucketRetention(ctx, kv)
+	dirtyTTL, _, err := natsclient.BucketRetention(ctx, kv)
 	if err != nil {
 		return err
 	}
+
+	// The owner's acquisition through the catalog seam — the reconcile point.
+	if _, err := graph.EnsureCatalogBucket(ctx, c.client, c.bucket); err != nil {
+		return err
+	}
+
 	c.mu.Lock()
 	c.started = true
-	c.observedTTL = maxAge
+	c.observedDirtyTTL = dirtyTTL
 	c.mu.Unlock()
 	return nil
 }
 func (c *bucketAdopterComponent) Stop(_ time.Duration) error { return nil }
 
-func (c *bucketAdopterComponent) createTimeTTL() time.Duration {
+func (c *bucketAdopterComponent) dirtyTTLBeforeSeam() time.Duration {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.observedTTL
+	return c.observedDirtyTTL
 }
 
 var _ component.LifecycleComponent = (*bucketAdopterComponent)(nil)
@@ -260,49 +204,19 @@ func newGuardsTestComponentManager(
 	return cmService.(*ComponentManager)
 }
 
-// TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL is the F1
-// production-wire test: it drives the real Manager.StartAll seam with the REAL
-// asynchronous ComponentManager (not a synchronous stand-in — a sync mock
-// proves an ordering production does not have; that is how the original P0
-// shipped) and proves the post-start owned-bucket sweep closes the create-race
-// coverage hole the pre-start belt cannot reach.
-//
-// The guarded bucket does NOT exist before StartAll (the spec's GIVEN): the
-// adopting component's Start brings it into existence DURING this boot's own
-// startup, carrying the foreign 7-day TTL and a stored key. The component-start
-// barrier orders the post-start sweep after every component Start has returned,
-// so StartAll must strip the TTL in place, preserve the stored key, and WARN
-// naming the bucket — all BEFORE the HTTP surface comes up.
-//
-// This shape is DISCRIMINATING for the barrier: revert ComponentManager.Start
-// to fire-and-forget and this test goes red. The component's dirty create is
-// gated on the sweep's own skip-if-absent probe of the bucket, so whenever the
-// sweep CAN run concurrently with component Start (fire-and-forget), the bad
-// interleaving is forced — the sweep passes the not-yet-created bucket over,
-// the component then creates it dirty, and the TTL survives to fail the strip
-// assertion. A pre-boot dirty create (or an ungated mid-boot create, which
-// wins the race against the sweep's earlier bucket probes) would pass under
-// either ordering and prove nothing.
-func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
+// TestIntegration_StartAll_OwnerSeamReconcilesCreateRaceDirtInsideBoot drives
+// the real Manager.StartAll wire and proves the retired post-start sweep's
+// justified class — a bucket created dirty DURING this boot's own startup — is
+// now closed inside the owning component's Start by the acquisition seam: the
+// bucket demonstrably carried the foreign TTL mid-boot (after the rival's raw
+// create) and is clean the moment StartAll returns, with the stored key
+// preserved and NO sweep pass having run (StartAll no longer has one).
+func TestIntegration_StartAll_OwnerSeamReconcilesCreateRaceDirtInsideBoot(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer testClient.Terminate()
 	client := testClient.Client
 
-	// sweepPassedAbsent fires when the post-start sweep logs its skip-if-absent
-	// probe of the guarded bucket — the observable event proving the sweep
-	// already passed the bucket over (only possible under fire-and-forget).
-	sweepPassedAbsent := make(chan struct{})
-	var sweepOnce sync.Once
-	rec := &bucketSweepRecordingHandler{onRecord: func(r slog.Record) {
-		if recordIsSkipProbeFor(r, graph.BucketEmbeddingIndex) {
-			sweepOnce.Do(func() { close(sweepPassedAbsent) })
-		}
-	}}
-
-	// The adopting component, registered through the production factory path.
-	// The factory captures the instance so the test can read the retention it
-	// observed at create time.
 	var (
 		adopterMu sync.Mutex
 		adopter   *bucketAdopterComponent
@@ -313,9 +227,8 @@ func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
 		Type: string(types.ComponentTypeProcessor),
 		Factory: func(_ json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 			c := &bucketAdopterComponent{
-				client:            deps.NATSClient,
-				bucket:            graph.BucketEmbeddingIndex,
-				sweepPassedAbsent: sweepPassedAbsent,
+				client: deps.NATSClient,
+				bucket: graph.BucketEmbeddingIndex,
 			}
 			adopterMu.Lock()
 			adopter = c
@@ -333,15 +246,13 @@ func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
 	})
 
 	manager := NewServiceManager(NewServiceRegistry())
-	// Inject the recording logger so the sweep's WARN (and the skip-if-absent
-	// probe the adopter gates on) are observable, and the NATS client the
-	// post-start sweep reads. Both are in-package private fields.
-	manager.BaseService = NewBaseServiceWithOptions("service-manager-registry", nil, WithLogger(slog.New(rec)))
+	manager.BaseService = NewBaseServiceWithOptions("service-manager-registry", nil,
+		WithLogger(slog.New(&bucketSweepRecordingHandler{})))
 	manager.natsClient = client
 	manager.RegisterInstance("component-manager", cm)
 
-	// Precondition (the discriminating GIVEN): the guarded bucket must not
-	// exist yet — it is created dirty during the boot below.
+	// Precondition: the guarded bucket does not exist before boot — it is
+	// created dirty during the boot below.
 	_, err := client.GetKeyValueBucket(ctx, graph.BucketEmbeddingIndex)
 	require.ErrorIs(t, err, jetstream.ErrBucketNotFound,
 		"precondition: the guarded bucket must not exist before StartAll")
@@ -349,9 +260,8 @@ func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
 	require.NoError(t, manager.StartAll(ctx))
 	defer func() { _ = manager.StopAll(2 * time.Second) }()
 
-	// The adopting component started through the real ComponentManager wire,
-	// and the bucket really carried the foreign TTL when it was created
-	// mid-boot — so a clean post-StartAll state below is the sweep's doing.
+	// The component started through the real ComponentManager wire, and the
+	// bucket really carried the foreign TTL mid-boot before the seam ran.
 	status := cm.GetComponentStatus()
 	require.Contains(t, status, "embedding-index-adopter")
 	require.Equal(t, component.StateStarted, status["embedding-index-adopter"].State,
@@ -360,45 +270,30 @@ func TestIntegration_StartAll_PostStartSweepStripsCreateRaceTTL(t *testing.T) {
 	started := adopter
 	adopterMu.Unlock()
 	require.NotNil(t, started, "the factory must have built the adopting component")
-	require.Equal(t, 7*24*time.Hour, started.createTimeTTL(),
-		"the bucket must have carried the foreign TTL at its mid-boot creation")
+	require.Equal(t, 7*24*time.Hour, started.dirtyTTLBeforeSeam(),
+		"the bucket must have carried the foreign TTL mid-boot, before the seam acquisition")
 
-	// The post-start sweep stripped the create-race TTL in place.
+	// The seam stripped the create-race TTL inside the owner's Start.
 	fresh, err := client.GetKeyValueBucket(ctx, graph.BucketEmbeddingIndex)
 	require.NoError(t, err)
 	maxAge, maxBytes, err := natsclient.BucketRetention(ctx, fresh)
 	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), maxAge, "StartAll's post-start sweep must strip the create-race TTL")
-	assert.LessOrEqual(t, maxBytes, int64(0), "the sweep must leave MaxBytes non-binding")
+	assert.Equal(t, time.Duration(0), maxAge,
+		"the owner's seam acquisition must strip the create-race TTL before StartAll returns")
+	assert.LessOrEqual(t, maxBytes, int64(0), "the seam must leave MaxBytes non-binding")
 
 	// The stored key survived the strip.
 	entry, err := fresh.Get(ctx, "entity.key.one")
 	require.NoError(t, err, "the stored key must survive the strip")
 	assert.Equal(t, []byte("survivor"), entry.Value())
-
-	// A WARN naming the stripped bucket fired.
-	assert.True(t, rec.warnMentioning(graph.BucketEmbeddingIndex),
-		"the post-start sweep must WARN naming the stripped bucket %s", graph.BucketEmbeddingIndex)
-
-	// Log-drift canary: the sweepPassedAbsent gate substring-matches the sweep's
-	// skip-if-absent Debug line. If that line is ever reworded, the gate never
-	// fires and — under the barrier — nothing visibly changes (the bounded
-	// fallback keeps this test green) while the test silently degrades to the
-	// non-discriminating ungated shape. ENTITY_STATES is absent in this boot
-	// (no graph-ingest), so the sweep must emit its skip probe for it on every
-	// run under either ordering; a reword fails here immediately, forcing the
-	// gate's match string to be re-aligned in the same PR.
-	require.True(t, rec.skipProbeMentioning(graph.BucketEntityStates),
-		"log-drift canary: the sweep's skip-if-absent Debug probe for %s was not captured — "+
-			"if its message changed, update the sweepPassedAbsent gate's match string to keep "+
-			"this test discriminating", graph.BucketEntityStates)
 }
 
 // TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure locks the
 // framework-composition fail-closed scenario at the composition-root level: a
 // registered lifecycle component whose Start returns an error must fail
 // Manager.StartAll with an error naming the component, and the HTTP surface
-// must never be brought up.
+// must never be brought up. This barrier is what makes a seam failure inside
+// an owner's Start a process-level refusal.
 func TestIntegration_StartAll_BootFailsClosedOnComponentStartFailure(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())

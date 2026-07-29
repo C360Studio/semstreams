@@ -262,22 +262,7 @@ func (h *Output) Start(ctx context.Context) error {
 	}
 
 	// Initialize lifecycle reporter for observability
-	statusBucket, err := h.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		h.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		h.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		h.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-			KV:               statusBucket,
-			ComponentName:    h.name,
-			Logger:           h.logger,
-			EnableThrottling: true,
-		})
-	}
+	h.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, h.natsClient, h.name, h.logger)
 
 	h.mu.Lock()
 	h.running = true

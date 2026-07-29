@@ -7,14 +7,12 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/gateddag"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
-
-// entityStatesBucket is the KV bucket the unit-completion watch (GH #363) reads.
-const entityStatesBucket = "ENTITY_STATES"
 
 // dispatchJob is the bounded-dispatcher work item: one dispatchable unit.
 type dispatchJob struct {
@@ -364,7 +362,7 @@ func (e *executor) maybeCompleteFanOut(ctx context.Context) {
 // prefix and nudges the trigger on every unit write (#363). The goroutine owns
 // the watcher's lifetime via ctx.
 func (e *executor) startUnitWatch(ctx context.Context) error {
-	bucket, err := e.nc.GetKeyValueBucket(ctx, entityStatesBucket)
+	bucket, err := graph.OpenCatalogBucket(ctx, e.nc, graph.BucketEntityStates)
 	if err != nil {
 		return err
 	}

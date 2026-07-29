@@ -18,10 +18,8 @@ import (
 )
 
 const (
-	// CommunityBucket is the NATS KV bucket for storing communities
-	CommunityBucket = "COMMUNITY_INDEX"
-
-	// Key patterns (COMMUNITY_INDEX is a dedicated bucket, no prefix needed):
+	// Key patterns (COMMUNITY_INDEX — see graph.BucketCommunityIndex — is a
+	// dedicated bucket, no prefix needed):
 	// - {level}.{community_id} - Community data
 	// - entity.{level}.{entity_id} - Entity -> Community mapping
 

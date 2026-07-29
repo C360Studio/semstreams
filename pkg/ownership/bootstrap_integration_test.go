@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -47,8 +48,13 @@ func TestIntegration_EnsureBuckets_ConfigAndUsable(t *testing.T) {
 	if cStatus.TTL() != 0 {
 		t.Errorf("%s TTL = %v, want 0 (a TTL would age out the durable epoch)", BucketOwnerClaims, cStatus.TTL())
 	}
-	if cStatus.History() != ownerClaimsHistory {
-		t.Errorf("%s History = %d, want %d (registration audit trail)", BucketOwnerClaims, cStatus.History(), ownerClaimsHistory)
+	claimsSpec, ok := graph.SpecFor(BucketOwnerClaims)
+	if !ok {
+		t.Fatalf("%s must be a catalog bucket", BucketOwnerClaims)
+	}
+	if cStatus.History() != int64(claimsSpec.History) {
+		t.Errorf("%s History = %d, want %d (registration audit trail, catalog-declared)",
+			BucketOwnerClaims, cStatus.History(), claimsSpec.History)
 	}
 
 	// The returned Registry is usable.

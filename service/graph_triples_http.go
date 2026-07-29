@@ -29,10 +29,6 @@ const (
 	graphTriplesDefaultLimit = 100
 	graphTriplesMaxLimit     = 1000
 
-	// graphEntityStatesBucket is the KV bucket graph-ingest writes to.
-	// Same name the query_entity agent tool reads from — single source of truth.
-	graphEntityStatesBucket = "ENTITY_STATES"
-
 	// graphTriplesQueryTimeout is the per-request deadline for the NATS scan in
 	// queryGraphTriples. Low-throughput operator endpoint — 10 s is generous.
 	graphTriplesQueryTimeout = 10 * time.Second
@@ -179,9 +175,9 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 		return []message.Triple{}, nil
 	}
 
-	bucket, err := m.natsClient.GetKeyValueBucket(ctx, graphEntityStatesBucket)
+	bucket, err := graph.OpenCatalogBucket(ctx, m.natsClient, graph.BucketEntityStates)
 	if err != nil {
-		return nil, fmt.Errorf("open %s bucket: %w", graphEntityStatesBucket, err)
+		return nil, fmt.Errorf("open %s bucket: %w", graph.BucketEntityStates, err)
 	}
 
 	store := m.natsClient.NewKVStore(bucket)

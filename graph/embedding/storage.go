@@ -15,12 +15,6 @@ import (
 )
 
 const (
-	// EmbeddingIndexBucket stores entity embeddings with metadata
-	EmbeddingIndexBucket = "EMBEDDING_INDEX"
-
-	// EmbeddingDedupBucket stores content-addressed embeddings for deduplication
-	EmbeddingDedupBucket = "EMBEDDING_DEDUP"
-
 	// maxCASRetries bounds the revision compare-and-set loop on the two save lanes.
 	// The SourceRevision ordering guard guarantees a losing writer DROPS at the guard
 	// rather than spinning, so the loop converges quickly under same-entity churn; a

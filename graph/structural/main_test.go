@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -23,7 +24,7 @@ func TestMain(m *testing.M) {
 		natsclient.WithJetStream(),
 		natsclient.WithKV(),
 		natsclient.WithKVBuckets(
-			StructuralIndexBucket,
+			graph.BucketStructuralIndex,
 			// Embedding buckets required for semantic search features
 			"EMBEDDING_INDEX",
 			"EMBEDDING_DEDUP",

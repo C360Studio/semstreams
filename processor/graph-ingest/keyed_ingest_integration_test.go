@@ -24,24 +24,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegration_IngestGuardBucket_RejectsTTLBucket pins the ADR-072 B2/B3
-// durability guarantee at boot: the durable guard bucket is no-eviction
-// correctness state, so if a stale/foreign deploy pre-created
-// GRAPH_INGEST_APPLIED_SEQ with a TTL (CreateKeyValueBucket returns an existing
-// bucket as-is), Start MUST fail-closed rather than run with a bucket that can
-// silently evict sequence stamps and reopen the overwrite bug.
-func TestIntegration_IngestGuardBucket_RejectsTTLBucket(t *testing.T) {
+// TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition pins the
+// ADR-072 B2/B3 durability guarantee at boot, in its catalog-seam form: the
+// durable guard bucket is no-eviction correctness state, so if a stale/foreign
+// deploy pre-created GRAPH_INGEST_APPLIED_SEQ with a TTL, graph-ingest's seam
+// acquisition STRIPS the retention in place (self-heal, no stored stamp lost)
+// and Start proceeds on a clean bucket — a strictly stronger posture than the
+// retired at-creation assert, which could only fail boot and leave the dirt.
+// (An UNSTRIPPABLE retention still fails Start closed; that arm is pinned at
+// the seam's unit level in natsclient.)
+func TestIntegration_IngestGuardBucket_ReconcilesTTLBucketAtAcquisition(t *testing.T) {
 	ctx := context.Background()
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 
-	// Pre-create the guard bucket WITH a TTL (a stale/foreign deploy).
-	_, err := testClient.Client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+	// Pre-create the guard bucket WITH a TTL (a stale/foreign deploy) and a
+	// stored sequence stamp that must survive the reconcile.
+	dirty, err := testClient.Client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket: graph.BucketGraphIngestAppliedSeq,
 		TTL:    24 * time.Hour,
 	})
+	require.NoError(t, err)
+	_, err = dirty.Put(ctx, "some.entity.id/ENTITY", []byte("41"))
 	require.NoError(t, err)
 
 	cfg := DefaultConfig()
@@ -53,11 +59,21 @@ func TestIntegration_IngestGuardBucket_RejectsTTLBucket(t *testing.T) {
 	require.NoError(t, c.Initialize())
 	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
 
-	// Start must fail-closed on the guard bucket's retention policy.
-	err = c.Start(ctx)
-	require.Error(t, err, "Start must reject a TTL-configured guard bucket")
-	assert.ErrorIs(t, err, natsclient.ErrGraphBucketRetention,
-		"the failure must be the retention guardrail, not an unrelated error")
+	// Start succeeds — and the acquisition reconciled the bucket to its
+	// declared no-lifecycle policy.
+	require.NoError(t, c.Start(ctx),
+		"Start must self-heal a strippable TTL at the seam, not fail on it")
+
+	fresh, err := testClient.Client.GetKeyValueBucket(ctx, graph.BucketGraphIngestAppliedSeq)
+	require.NoError(t, err)
+	maxAge, maxBytes, err := natsclient.BucketRetention(ctx, fresh)
+	require.NoError(t, err)
+	assert.Equal(t, time.Duration(0), maxAge, "the seam must strip the foreign TTL")
+	assert.LessOrEqual(t, maxBytes, int64(0))
+
+	entry, err := fresh.Get(ctx, "some.entity.id/ENTITY")
+	require.NoError(t, err, "the stored sequence stamp must survive the strip")
+	assert.Equal(t, []byte("41"), entry.Value())
 }
 
 // TestIntegration_KeyedIngest_PublishedEntityIngestsThroughPool drives the

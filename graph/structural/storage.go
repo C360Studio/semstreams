@@ -13,16 +13,11 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-const (
-	// StructuralIndexBucket is the NATS KV bucket for storing structural indices.
-	StructuralIndexBucket = "STRUCTURAL_INDEX"
-
-	// Key patterns:
-	// - structural.kcore._meta           - KCore index metadata and global stats
-	// - structural.kcore.entity.{id}     - Per-entity core number
-	// - structural.pivot._meta           - Pivot index metadata (pivots list, computed_at)
-	// - structural.pivot.entity.{id}     - Per-entity distance vector
-)
+// Key patterns (in STRUCTURAL_INDEX — see graph.BucketStructuralIndex):
+// - structural.kcore._meta           - KCore index metadata and global stats
+// - structural.kcore.entity.{id}     - Per-entity core number
+// - structural.pivot._meta           - Pivot index metadata (pivots list, computed_at)
+// - structural.pivot.entity.{id}     - Per-entity distance vector
 
 // Storage defines the interface for persisting structural indices.
 type Storage interface {

@@ -1,23 +1,26 @@
 package ownership
 
-// KV bucket names for the ownership substrate (ADR-056 Decision 2/4). These
-// are framework-owned buckets, created at graph-ingest boot (a later W0
-// increment wires creation; the names are fixed here so the registry and the
-// boot wiring agree on one source of truth).
+import "github.com/c360studio/semstreams/graph"
+
+// KV bucket names for the ownership substrate (ADR-056 Decision 2/4). Both
+// live buckets are framework-owned catalog members; the names re-export
+// graph's constants (the catalog's single source of truth) so the registry,
+// the boot wiring, and the write guard can never drift.
 const (
 	// BucketOwnerClaims holds the single `_registry` epoch key — the union of
 	// every registered owner's claims, advanced under UpdateWithRetry CAS.
-	BucketOwnerClaims = "OWNER_CLAIMS"
+	BucketOwnerClaims = graph.BucketOwnerClaims
 
 	// BucketOwnerPresence holds `heartbeat.<owner>` keys only for registrations
 	// containing replace/CAS claims. Its bucket-level TTL lets the next
 	// registrant compact a crashed owner's whole atomic entry. Non-owning
 	// append/foreign-edge-only registrations have no key and persist.
-	BucketOwnerPresence = "OWNER_PRESENCE"
+	BucketOwnerPresence = graph.BucketOwnerPresence
 
 	// BucketPendingEdges buffers Conditional foreign edges whose target has not
 	// yet been born (Decision 4). Declared here for the boot wiring; the buffer
-	// itself lands in a later W0 increment.
+	// itself lands in a later W0 increment. NOT a catalog member: no consumer
+	// exists yet, so the framework guarantees nothing about it.
 	BucketPendingEdges = "PENDING_EDGES"
 )
 

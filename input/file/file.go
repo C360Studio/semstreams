@@ -18,7 +18,6 @@ import (
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -389,22 +388,7 @@ func (f *Input) Start(ctx context.Context) error {
 	}
 
 	// Initialize lifecycle reporter (throttled for high-throughput reading)
-	statusBucket, err := f.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		f.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		f.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		f.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-			KV:               statusBucket,
-			ComponentName:    "file-input",
-			Logger:           f.logger,
-			EnableThrottling: true,
-		})
-	}
+	f.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, f.natsClient, "file-input", f.logger)
 
 	// Create channels before starting goroutine
 	f.shutdown = make(chan struct{})

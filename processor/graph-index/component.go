@@ -725,13 +725,21 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 }
 
-// createOutputBuckets creates all output KV buckets for the indexes.
+// createOutputBuckets acquires every output KV bucket through the catalog
+// seam. A configuration-supplied output subject MUST resolve to a catalog
+// descriptor — an operator typo of OUTGOING_INDEX must fail boot naming the
+// subject, never silently create a stray bucket that no guard protects and no
+// reader consumes (framework-bucket-catalog F2).
 func (c *Component) createOutputBuckets(ctx context.Context) error {
 	for _, portDef := range c.config.Ports.Outputs {
-		bucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-			Bucket:      portDef.Subject,
-			Description: fmt.Sprintf("Graph index bucket: %s", portDef.Name),
-		})
+		spec, ok := graph.SpecFor(portDef.Subject)
+		if !ok {
+			return errs.WrapInvalid(
+				fmt.Errorf("output port %q subject %q does not resolve to a framework KV catalog bucket",
+					portDef.Name, portDef.Subject),
+				"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
+		}
+		bucket, err := natsclient.EnsureFrameworkBucket(ctx, c.natsClient, spec)
 		if err != nil {
 			if ctx.Err() != nil {
 				return errs.Wrap(ctx.Err(), "Component", "createOutputBuckets", "context cancelled")
@@ -741,23 +749,17 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		c.assignBucket(portDef.Subject, bucket)
 	}
 
-	// Create CONTEXT_INDEX bucket for triple provenance tracking
-	contextBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketContextIndex,
-		Description: "Triple context provenance index",
-	})
+	// CONTEXT_INDEX bucket for triple provenance tracking
+	contextBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketContextIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketContextIndex))
 	}
 	c.contextBucket = c.natsClient.NewKVStore(contextBucket)
 
-	// Create NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
+	// NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
 	// CONTEXT_INDEX — not a declared output port, so existing configs don't need
 	// to add it.
-	nameBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketNameIndex,
-		Description: "Name/title → entities index for deterministic name lookup",
-	})
+	nameBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketNameIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketNameIndex))
 	}
@@ -802,22 +804,7 @@ func (c *Component) assignBucket(subject string, bucket jetstream.KeyValue) {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-index",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-index", c.logger)
 }
 
 // ============================================================================

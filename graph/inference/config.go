@@ -165,11 +165,12 @@ type ReviewQueueConfig struct {
 	RequireLLMClassification bool `json:"require_llm_classification"`
 }
 
-// StorageConfig configures anomaly storage
+// StorageConfig configures anomaly storage. The bucket itself is NOT
+// configurable: anomalies live in ANOMALY_INDEX (graph.BucketAnomalyIndex),
+// whose handle the owner (graph-clustering) acquires through the framework KV
+// catalog and injects. (A former bucket_name knob here was a phantom — read by
+// validation and defaulting, consumed by nothing.)
 type StorageConfig struct {
-	// BucketName is the NATS KV bucket for storing anomalies
-	BucketName string `json:"bucket_name"`
-
 	// RetentionDays is how long to keep resolved anomalies (applied/rejected)
 	RetentionDays int `json:"retention_days"`
 
@@ -231,7 +232,6 @@ func DefaultConfig() Config {
 			},
 		},
 		Storage: StorageConfig{
-			BucketName:      "ANOMALY_INDEX",
 			RetentionDays:   30,
 			CleanupInterval: 24 * time.Hour,
 		},
@@ -524,19 +524,6 @@ func (c *Config) validateVirtualEdges() error {
 
 // validateStorage validates storage configuration
 func (c *Config) validateStorage() error {
-	if c.Storage.BucketName == "" {
-		msg := "storage.bucket_name cannot be empty"
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "inference", "Validate", msg)
-	}
-
-	if len(c.Storage.BucketName) > 64 {
-		msg := fmt.Sprintf(
-			"storage.bucket_name is too long (max 64 chars): %s",
-			c.Storage.BucketName,
-		)
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "inference", "Validate", msg)
-	}
-
 	if c.Storage.RetentionDays <= 0 {
 		msg := fmt.Sprintf("storage.retention_days must be positive, got %d", c.Storage.RetentionDays)
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "inference", "Validate", msg)
@@ -648,9 +635,6 @@ func (c *Config) applyVirtualEdgesDefaults(defaults Config) {
 }
 
 func (c *Config) applyStorageDefaults(defaults Config) {
-	if c.Storage.BucketName == "" {
-		c.Storage.BucketName = defaults.Storage.BucketName
-	}
 	if c.Storage.RetentionDays == 0 {
 		c.Storage.RetentionDays = defaults.Storage.RetentionDays
 	}

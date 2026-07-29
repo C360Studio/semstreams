@@ -61,8 +61,9 @@ type NATSValidationClient struct {
 	mu     sync.Mutex
 }
 
-// BucketEntityStates is the KV bucket name for entity states
-const BucketEntityStates = "ENTITY_STATES"
+// BucketEntityStates is the KV bucket name for entity states — re-exported
+// from the framework KV catalog's name constant so the harness cannot drift.
+const BucketEntityStates = graph.BucketEntityStates
 
 // NewNATSValidationClient creates a new NATS validation client
 func NewNATSValidationClient(ctx context.Context, natsURL string) (*NATSValidationClient, error) {
@@ -466,18 +467,18 @@ var IndexBuckets = struct {
 	Structural    string
 	Context       string
 }{
-	EntityStates:  "ENTITY_STATES",
-	Predicate:     "PREDICATE_INDEX",
-	Incoming:      "INCOMING_INDEX",
-	Outgoing:      "OUTGOING_INDEX",
-	Alias:         "ALIAS_INDEX",
-	Spatial:       "SPATIAL_INDEX",
-	Temporal:      "TEMPORAL_INDEX",
-	Embedding:     "EMBEDDING_INDEX",
-	EmbeddingDedp: "EMBEDDING_DEDUP",
-	Community:     "COMMUNITY_INDEX",
-	Structural:    "STRUCTURAL_INDEX",
-	Context:       "CONTEXT_INDEX",
+	EntityStates:  graph.BucketEntityStates,
+	Predicate:     graph.BucketPredicateIndex,
+	Incoming:      graph.BucketIncomingIndex,
+	Outgoing:      graph.BucketOutgoingIndex,
+	Alias:         graph.BucketAliasIndex,
+	Spatial:       graph.BucketSpatialIndex,
+	Temporal:      graph.BucketTemporalIndex,
+	Embedding:     graph.BucketEmbeddingIndex,
+	EmbeddingDedp: graph.BucketEmbeddingDedup,
+	Community:     graph.BucketCommunityIndex,
+	Structural:    graph.BucketStructuralIndex,
+	Context:       graph.BucketContextIndex,
 }
 
 // GetAllCommunities retrieves all communities from the COMMUNITY_INDEX bucket
@@ -653,8 +654,9 @@ func (c *NATSValidationClient) WaitForCommunitySummaryEnhancement(
 	}
 }
 
-// StructuralIndexBucket is the KV bucket for structural indices
-const StructuralIndexBucket = "STRUCTURAL_INDEX"
+// StructuralIndexBucket is the KV bucket for structural indices — re-exported
+// from the framework KV catalog's name constant.
+const StructuralIndexBucket = graph.BucketStructuralIndex
 
 // KCoreMetadata contains k-core index metadata
 type KCoreMetadata struct {
@@ -1612,8 +1614,9 @@ func (c *NATSValidationClient) waitForContainerGroupsPolling(
 // ADR-003: Component Lifecycle Status
 // ============================================================================
 
-// BucketComponentStatus is the KV bucket for component lifecycle status
-const BucketComponentStatus = "COMPONENT_STATUS"
+// BucketComponentStatus is the KV bucket for component lifecycle status —
+// re-exported from the framework KV catalog's name constant.
+const BucketComponentStatus = graph.BucketComponentStatus
 
 // ComponentStatus represents the current processing state of a component.
 // Matches component.Status from the core package.

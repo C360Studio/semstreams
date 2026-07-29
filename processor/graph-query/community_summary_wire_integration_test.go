@@ -72,7 +72,7 @@ func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testin
 	// COMMUNITY_INDEX = detector-owned trigger bucket; COMMUNITY_SUMMARIES =
 	// worker-owned content-addressed store. Two distinct buckets is the whole point
 	// of the split.
-	communityKV, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: clustering.CommunityBucket})
+	communityKV, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: gtypes.BucketCommunityIndex})
 	require.NoError(t, err)
 	summaryKV, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: gtypes.BucketCommunitySummaries})
 	require.NoError(t, err)

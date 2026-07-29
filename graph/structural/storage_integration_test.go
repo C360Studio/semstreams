@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,7 +20,7 @@ func TestIntegration_SaveAndGetKCoreIndex(t *testing.T) {
 
 	// Create or get KV bucket
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 
@@ -77,7 +78,7 @@ func TestIntegration_SaveAndGetPivotIndex(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 
@@ -126,7 +127,7 @@ func TestIntegration_ClearStructuralIndices(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 
@@ -183,7 +184,7 @@ func TestIntegration_OverwriteIndices(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 
@@ -240,7 +241,7 @@ func TestIntegration_LargeIndex(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 
@@ -294,7 +295,7 @@ func TestIntegration_EmptyBucketGet(t *testing.T) {
 	ctx := context.Background()
 
 	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket: StructuralIndexBucket,
+		Bucket: graph.BucketStructuralIndex,
 	})
 	require.NoError(t, err)
 

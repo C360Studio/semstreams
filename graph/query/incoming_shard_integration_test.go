@@ -23,6 +23,17 @@ import (
 // composite keys `target.source.predicate` and reconstructs the distinct source
 // IDs. This seeds real composite keys and asserts the CORRECT sources — the old
 // empty-return implementation fails this test.
+// provisionGraphBuckets provisions the three buckets the query client binds,
+// the way their owners do — through the catalog seam. The client is a READER
+// now: it never creates, so a standalone test must stand in for the owners.
+func provisionGraphBuckets(ctx context.Context, t *testing.T, nc *natsclient.Client) {
+	t.Helper()
+	for _, name := range []string{graph.BucketEntityStates, graph.BucketSpatialIndex, graph.BucketIncomingIndex} {
+		_, err := graph.EnsureCatalogBucket(ctx, nc, name)
+		require.NoError(t, err, "provision %s as its owner would", name)
+	}
+}
+
 func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -32,6 +43,7 @@ func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 	// (gh#474 Codex #4 — AllowUngatedReads is the explicit opt-out from fail-closed).
 	cfg := DefaultConfig()
 	cfg.AllowUngatedReads = true
+	provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, cfg)
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -73,6 +85,7 @@ func TestGetEntityConnections_PropagatesIncomingReadinessError(t *testing.T) {
 	defer func() { _ = tc.Terminate() }()
 
 	cfg := DefaultConfig() // fail closed: no graph-index status responder is running.
+	provisionGraphBuckets(context.Background(), t, tc.Client)
 	client, err := NewClient(context.Background(), tc.Client, cfg)
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -97,6 +110,7 @@ func TestGetEntityRejectsPredicatePoisonWithoutCachingPartialState(t *testing.T)
 	defer func() { _ = tc.Terminate() }()
 
 	ctx := context.Background()
+	provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -123,6 +137,7 @@ func TestDirectQueryClient_LivePoisonInvalidatesCachedViews(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -156,6 +171,7 @@ func TestGetEntitiesBatch_DoesNotReturnPartialSuccess(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)

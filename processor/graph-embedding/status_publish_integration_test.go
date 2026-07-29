@@ -89,8 +89,10 @@ func TestIntegration_GraphEmbeddingPublishesReadinessHeartbeat(t *testing.T) {
 
 	status, err := statusKV.Status(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(readiness.BucketHistory), status.History(),
-		"bucket history must be the shared contract value")
+	statusSpec, ok := graph.SpecFor(readiness.BucketGraphStatus)
+	require.True(t, ok, "GRAPH_STATUS must be a catalog bucket")
+	require.Equal(t, int64(statusSpec.History), status.History(),
+		"bucket history must be the shared catalog value")
 
 	// 2.2: graph-embedding writes its OWN key and heartbeats on it. Two successive
 	// entries with an advancing revision prove the write is unconditional.

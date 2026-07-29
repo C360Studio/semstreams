@@ -922,18 +922,15 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "context cancelled")
 	}
 
-	// Create COMMUNITY_SUMMARIES bucket FIRST (the enhancement worker is the sole
+	// Acquire COMMUNITY_SUMMARIES FIRST (the enhancement worker is the sole
 	// WRITER; graph-query opens it read-only for its cache's second watcher). It is
 	// created BEFORE COMMUNITY_INDEX deliberately: consumers wait on COMMUNITY_INDEX
 	// as the readiness signal, so having the summary bucket already present when
 	// COMMUNITY_INDEX becomes observable closes the startup window where a reader
-	// could see the partition bucket but not yet the summary bucket. ADR-068
-	// compliant: no TTL/MaxBytes/MaxAge — regenerable derived data whose keys are
+	// could see the partition bucket but not yet the summary bucket. The catalog
+	// declares it no-lifecycle (ADR-068): regenerable derived data whose keys are
 	// content-addressed, so it never carries reachability-blind eviction.
-	summaryBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketCommunitySummaries,
-		Description: "LLM community summaries (content-addressed by membership hash, ADR-087)",
-	})
+	summaryBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketCommunitySummaries)
 	if err != nil {
 		cancel()
 		if ctx.Err() != nil {
@@ -943,11 +940,8 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 	c.summaryBucket = summaryBucket
 
-	// Create COMMUNITY_INDEX bucket (we are the WRITER)
-	communityBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketCommunityIndex,
-		Description: "Community detection index",
-	})
+	// COMMUNITY_INDEX bucket (we are the WRITER)
+	communityBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketCommunityIndex)
 	if err != nil {
 		cancel()
 		if ctx.Err() != nil {
@@ -1138,17 +1132,7 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketComponentStatus,
-		Description: "Component lifecycle status",
-	})
-	if err != nil {
-		c.logger.Warn("failed to create status bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewKVLifecycleReporter(statusBucket, "graph-clustering", c.logger)
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-clustering", c.logger)
 }
 
 // waitForDependencies waits for all required KV buckets and stores references.

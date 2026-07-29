@@ -37,20 +37,11 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Minute, config.EntityCache.TTL)
 	assert.Equal(t, 1*time.Minute, config.EntityCache.CleanupInterval)
 
-	// Test bucket configurations. TTL is 0 on every live graph bucket — a TTL
-	// here can win the get-or-create race and silently expire ENTITY_STATES
-	// (ADR-068 D1). See TestDefaultConfig_NoLifecycleRetentionOnGraphBuckets.
-	assert.Equal(t, time.Duration(0), config.EntityStates.TTL)
-	assert.Equal(t, uint8(3), config.EntityStates.History)
-	assert.Equal(t, 1, config.EntityStates.Replicas)
-
-	assert.Equal(t, time.Duration(0), config.SpatialIndex.TTL)
-	assert.Equal(t, uint8(1), config.SpatialIndex.History)
-	assert.Equal(t, 1, config.SpatialIndex.Replicas)
-
-	assert.Equal(t, time.Duration(0), config.IncomingIndex.TTL)
-	assert.Equal(t, uint8(1), config.IncomingIndex.History)
-	assert.Equal(t, 1, config.IncomingIndex.Replicas)
+	// Readiness gate defaults FAIL-CLOSED. There is deliberately NO bucket
+	// configuration here: the client is a reader binding through the framework
+	// KV catalog, so it cannot race divergent bucket config (TTL/History) into
+	// an owner's get-or-create (the retired ADR-068 D1 landmine).
+	assert.False(t, config.AllowUngatedReads)
 }
 
 func TestPathQuery_Validation(t *testing.T) {

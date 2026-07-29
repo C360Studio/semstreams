@@ -17,15 +17,11 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-const (
-	// DefaultAnomalyBucket is the default NATS KV bucket for storing anomalies.
-	DefaultAnomalyBucket = "ANOMALY_INDEX"
-
-	// Key patterns:
-	// - anomaly.{id}                    - Full anomaly JSON
-	// - anomaly.idx.status.{status}.{id} - Status index (value is empty)
-	// - anomaly.idx.type.{type}.{id}    - Type index (value is empty)
-)
+// Key patterns (in ANOMALY_INDEX — see graph.BucketAnomalyIndex; the bucket
+// handle is injected by the owner, graph-clustering):
+// - anomaly.{id}                     - Full anomaly JSON
+// - anomaly.idx.status.{status}.{id} - Status index (value is empty)
+// - anomaly.idx.type.{type}.{id}     - Type index (value is empty)
 
 // ErrConcurrentModification is returned when an optimistic lock check fails.
 var ErrConcurrentModification = stderrors.New("concurrent modification detected")

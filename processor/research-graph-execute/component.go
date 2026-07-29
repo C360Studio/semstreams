@@ -188,22 +188,7 @@ func (c *Component) subscribeInputs(ctx context.Context) error {
 }
 
 func (c *Component) startLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.deps.NATSClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("COMPONENT_STATUS bucket unavailable; lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    ComponentName,
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.deps.NATSClient, ComponentName, c.logger)
 }
 
 // Stop drains subscriptions and flips started under c.mu.

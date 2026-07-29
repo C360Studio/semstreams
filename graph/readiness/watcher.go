@@ -48,9 +48,6 @@ const (
 	// a generic rule update_kv (framework-owned-bucket-guards F3) can never drift.
 	// Producers and consumers keep referring to readiness.BucketGraphStatus.
 	BucketGraphStatus = graph.BucketGraphStatus
-	// BucketHistory is the KV history depth for the bucket: enough replay to see
-	// the last few transitions after an incident, not enough to hoard.
-	BucketHistory = 3
 	// KeyGraphIndex is graph-index's status key (one key per producer).
 	KeyGraphIndex = "graph-index"
 	// KeyGraphEmbedding is graph-embedding's status key.
