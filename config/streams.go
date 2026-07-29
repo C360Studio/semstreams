@@ -393,20 +393,12 @@ func buildStreamConfig(decl streamDeclaration, logger *slog.Logger) (jetstream.S
 			ErrStreamBoundsUndeclared, decl.name, decl.source, strings.Join(miss, ", "), boundsRemedy)
 	}
 
-	// Parse storage type
-	storage := jetstream.FileStorage
-	if cfg.Storage == "memory" {
-		storage = jetstream.MemoryStorage
-	}
-
-	// Parse retention policy
-	retention := jetstream.LimitsPolicy
-	switch cfg.Retention {
-	case "interest":
-		retention = jetstream.InterestPolicy
-	case "workqueue":
-		retention = jetstream.WorkQueuePolicy
-	}
+	// Storage and retention resolve through the same helpers the drift check
+	// uses, so "what the declaration governs" cannot mean one thing at creation
+	// and another at reconciliation. An absent or unrecognized spelling resolves
+	// to the historical default here and governs nothing there.
+	storage, _ := declaredStorage(cfg)
+	retention, _ := declaredRetention(cfg)
 
 	maxAge, maxBytes, discard, err := resolveBounds(decl, logger)
 	if err != nil {
@@ -432,11 +424,7 @@ func buildStreamConfig(decl streamDeclaration, logger *slog.Logger) (jetstream.S
 	// misconfigured window degrades gracefully instead of aborting boot in
 	// EnsureStreams. Only when MaxAge is finite: an exempt stream may carry
 	// MaxAge 0, which means unlimited and constrains no window at all.
-	if maxAge > 0 && duplicates > maxAge {
-		logAt(logger, slog.LevelWarn, "duplicates window exceeds max_age; clamping to max_age",
-			"stream", decl.name, "duplicates", duplicates, "max_age", maxAge)
-		duplicates = maxAge
-	}
+	duplicates = clampDuplicates(decl.name, duplicates, maxAge, logger)
 
 	// Replicas default
 	replicas := cfg.Replicas
@@ -532,6 +520,16 @@ func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclarati
 	// CreateStream/UpdateStream, so guarding it too means no future caller path
 	// — a new derivation rule, a direct call, a test helper — can reach NATS
 	// with a KV or ObjectStore backing-stream name.
+	//
+	// This statement's POSITION is load-bearing, not incidental. Every
+	// reconciliation path below is downstream of it in control flow, which is the
+	// only reason widening the reconciler to write MaxAge/MaxBytes/Discard onto
+	// an EXISTING stream is safe: an unfiltered reconciler that learned to write
+	// those fields is exactly how one operator typo (`KV_ENTITY_STATES` in
+	// cfg.Streams) would stamp reachability-blind age eviction onto authoritative
+	// graph state. Do not move reconciliation anywhere this guard does not
+	// dominate, and do not demote the guard to a check that merely runs "nearby".
+	// TestCreateStream_BackingStreamIsRefusedBeforeReconciliation pins it.
 	if err := checkOrdinaryStream(name, "stream provisioner"); err != nil {
 		return errs.WrapFatal(err, "StreamsManager", "createStream",
 			fmt.Sprintf("provision stream %q", name))
@@ -551,38 +549,35 @@ func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclarati
 		return fmt.Errorf("get JetStream context: %w", err)
 	}
 
-	// Try to get existing stream
+	// The stream already exists: inspect its LIVE configuration rather than
+	// treating create-or-open success as proof it matches the declaration.
 	existingStream, err := js.Stream(ctx, name)
 	if err == nil {
-		// Stream exists - update on drift in subjects or the duplicate window.
-		existingCfg := existingStream.CachedInfo().Config
+		observed := existingStream.CachedInfo().Config
 
-		// When the framework config doesn't specify a window, preserve the
-		// server-assigned/operator-set one so a subjects-only update doesn't
-		// silently reset it to the server default — and so we never trigger an
-		// update purely because the server reports its default (2m) for our
-		// unset zero.
-		if cfg.Duplicates == "" {
-			streamCfg.Duplicates = existingCfg.Duplicates
+		// Fail closed before repairing anything. A stream whose storage tier or
+		// retention policy diverges cannot be brought into agreement in place, so
+		// repairing its capacity fields would leave it half-declared while
+		// reporting success — worse than the silent acceptance this replaces.
+		if drifts := nonEditableDrift(decl, observed); len(drifts) > 0 {
+			return errs.WrapFatal(fmt.Errorf("%w: stream %q (declared by %s): %s\n\n%s",
+				ErrStreamNonEditableDrift, name, decl.source,
+				strings.Join(driftLabels(drifts), "; "), nonEditableDriftRemedy),
+				"StreamsManager", "createStream", fmt.Sprintf("reconcile stream %q", name))
 		}
 
-		subjectsDrift := !subjectsEqual(existingCfg.Subjects, cfg.Subjects)
-		duplicatesDrift := cfg.Duplicates != "" && existingCfg.Duplicates != streamCfg.Duplicates
-		if subjectsDrift || duplicatesDrift {
-			sm.logger.Info("Updating stream config",
-				"stream", name,
-				"subjects_drift", subjectsDrift,
-				"duplicates_drift", duplicatesDrift,
-				"old_subjects", existingCfg.Subjects,
-				"new_subjects", cfg.Subjects,
-				"old_duplicates", existingCfg.Duplicates,
-				"new_duplicates", streamCfg.Duplicates)
-			_, err = js.UpdateStream(ctx, streamCfg)
-			if err != nil {
-				return fmt.Errorf("update stream: %w", err)
-			}
-		} else {
+		updateCfg, drifts := reconcileStreamConfig(decl, observed, streamCfg, sm.logger)
+		if len(drifts) == 0 {
 			sm.logger.Debug("Stream already exists with correct config", "stream", name)
+			return nil
+		}
+
+		sm.logger.Info("Reconciling stream configuration drift to the declaration",
+			"stream", name,
+			"source", decl.source,
+			"drift", driftLabels(drifts))
+		if _, err := js.UpdateStream(ctx, updateCfg); err != nil {
+			return fmt.Errorf("update stream: %w", err)
 		}
 		return nil
 	}

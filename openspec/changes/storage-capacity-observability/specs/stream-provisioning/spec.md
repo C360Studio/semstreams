@@ -181,8 +181,34 @@ The provisioner MUST inspect an existing ordinary stream's live configuration ra
 create-or-open success as sufficient, and MUST reconcile editable `MaxAge`, `MaxBytes`, and
 discard-policy drift to the declaration, logging both observed and declared values. Drift in fields
 JetStream cannot update in place — notably storage tier and retention policy — MUST fail readiness
-reporting both configurations rather than being silently ignored as it is today. Reconciliation MUST
-change only the fields the declaration governs, leaving other backing-stream configuration untouched.
+reporting both configurations rather than being silently ignored as it is today. Auto-repair of those
+fields is structurally impossible without delete-and-recreate, which is data loss; detect-and-report
+is therefore the ceiling of correct behavior, not a weaker fallback. Reconciliation MUST change only
+the fields the declaration governs, leaving other backing-stream configuration untouched.
+
+Reconciliation MUST never reach a KV or ObjectStore backing stream. The prefix refusal is what makes
+widening the reconciler safe at all: an unfiltered reconciler that learned to write retention fields
+is precisely how an operator typo would stamp age eviction onto authoritative graph state. The
+refusal therefore MUST be enforced upstream of reconciliation in control flow, not merely alongside
+it.
+
+**Every repair MUST be observable, because a repair that repeats is the only locally-available signal
+of contested ownership.** A provisioner sees its own declaration and the live configuration; it
+cannot see another process's declaration. So two processes declaring the same stream with different
+limits is indistinguishable, locally, from ordinary drift — and reconciliation would silently convert
+"first boot wins" into "last reconcile wins", flapping the stream between two intents forever. Since
+the framework cannot resolve that locally, it MUST make it visible: a stream repaired on every boot,
+with the observed value alternating, is contested rather than drifting. Ownership of a shared
+stream's limits MUST be stated (see the seam requirement) so the situation is avoidable by
+convention rather than only detectable after the fact.
+
+#### Scenario: A repair reports both configurations every time it fires
+
+- **GIVEN** an existing ordinary stream whose live retention differs from the declaration
+- **WHEN** the provisioner reconciles it
+- **THEN** the repair reports the observed and the declared values together
+- **AND** it does so on every occurrence rather than only the first, so a stream being repaired
+  repeatedly across boots is visible as contested rather than appearing as a one-time fix
 
 #### Scenario: Editable retention drift is repaired
 

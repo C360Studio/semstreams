@@ -119,11 +119,11 @@
       active override; readiness fails once an expiry passes; an override without an expiry is rejected
       at validation. Without this the bounds requirement is a flag day for every component-derived
       stream (`config/streams.go:303-306`) and every sister-repo config
-- [ ] 5.5 Extend the drift reconciler (`config/streams.go:435-471`, today subjects + duplicate window
+- [x] 5.5 Extend the drift reconciler (`config/streams.go:435-471`, today subjects + duplicate window
       only) to reconcile `MaxAge`, `MaxBytes`, and discard drift, touching no ungoverned field
-- [ ] 5.6 Fail readiness on non-editable drift (storage tier, retention policy) reporting observed and
+- [x] 5.6 Fail readiness on non-editable drift (storage tier, retention policy) reporting observed and
       declared, instead of the current silent ignore
-- [ ] 5.7 Add real-NATS integration tests for drift repair, non-editable-drift readiness failure,
+- [x] 5.7 Add real-NATS integration tests for drift repair, non-editable-drift readiness failure,
       declared-discard-policy creation, and override expiry behavior
 - [x] 5.8 Add the ARCHIVAL classification (#729): permanent by declaration, naming stream + owner +
       why permanence is the contract; rejected if owner or reason is absent. Readiness reports it as a
@@ -152,7 +152,13 @@
       silently rewriting another owner's config is worse than the drift
 - [ ] 5.12 State who owns a shared stream's limits (#730). If the answer is "the declaring component,
       consumers use GetStream", document that as the contract rather than leaving it inferred from the
-      single `agentic/agentrun/agentrun.go:697-718` precedent a sister repo had to reverse-engineer
+      single `agentic/agentrun/agentrun.go:697-718` precedent a sister repo had to reverse-engineer.
+      This is now load-bearing rather than documentation hygiene: 5.5 made the provisioner reconcile
+      retention, so two processes declaring the same stream differently no longer merely resolve by
+      first-boot — they FLAP, each repairing the other's value on every boot. A provisioner cannot
+      detect this locally (it sees its own declaration and the live config, never the other
+      declaration), so the ownership statement is the only thing that prevents it; the repeated-repair
+      log from 5.5 is the only thing that reveals it after the fact
 
 ## 6. Documentation and gates
 
