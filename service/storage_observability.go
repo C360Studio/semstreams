@@ -160,6 +160,7 @@ type StorageObservabilityService struct {
 	consumer  *natsclient.StorageReportConsumer
 	metrics   *storageObservabilityMetrics
 	surface   *storageHealthSurface
+	http      *storageReportHTTPSurface
 	logger    *slog.Logger
 
 	stopOnce sync.Once
@@ -207,6 +208,11 @@ func NewStorageObservabilityService(rawConfig json.RawMessage, deps *Dependencie
 	}
 	surface.snapshotOf = consumer.Snapshot
 
+	// The HTTP route reads the SAME consumer the metrics observer is fed from,
+	// so the two operator surfaces cannot disagree: neither recomputes, and
+	// both project the rows the collector published.
+	reportHTTP := &storageReportHTTPSurface{snapshotOf: consumer.Snapshot, logger: logger}
+
 	collector, err := natsclient.NewStorageInventoryCollector(
 		deps.NATSClient.AccountStreamLister,
 		natsclient.StorageInventoryConfig{
@@ -251,6 +257,7 @@ func NewStorageObservabilityService(rawConfig json.RawMessage, deps *Dependencie
 		consumer:    consumer,
 		metrics:     metrics,
 		surface:     surface,
+		http:        reportHTTP,
 		logger:      logger,
 		stopChan:    make(chan struct{}),
 	}, nil

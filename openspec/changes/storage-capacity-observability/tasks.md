@@ -73,11 +73,11 @@
 
 - [x] 4.1 Publish Prometheus metrics for usage, headroom, growth rate, time-to-threshold, and pressure
       state, labelled by resource and owner
-- [ ] 4.2 Ship an example alert rule (or health-status surface) alongside the metrics so the pressure
+- [x] 4.2 Ship an example alert rule (or health-status surface) alongside the metrics so the pressure
       gauge has a consumer at merge time and does not become a phantom signal
 - [x] 4.3 Expose pressure in component health STATUS without degrading readiness, and add a test that
       `critical` pressure fails no readiness or health gate
-- [ ] 4.4 Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
+- [x] 4.4 Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
       the alert rule from 4.2 driven by `Watch` — so there is one produced truth and no surface can
       disagree with another. Add a test that two surfaces cannot diverge because neither recomputes
 - [x] 4.5 Report per-tier declared-versus-account-limit comparison via `js.AccountInfo`
@@ -86,13 +86,22 @@
 - [x] 4.6 Report an unbounded account limit as unbounded and its over-commitment comparison as
       not-applicable — note testcontainers reports unlimited by default (`config/streams.go:220-223`),
       so this is the default integration-test path
-- [ ] 4.7 Name unbounded resources explicitly; never represent them as having headroom. Couple this with
+- [x] 4.7 Name unbounded resources explicitly; never represent them as having headroom. Couple this with
       rendering not-evaluated rows VISIBLY: an unbounded resource carries no pressure state (neither band
       has an input), so any surface that filters on `state != normal` would make exactly the unbounded
       resources invisible — the opposite of what 4.7 exists to do
-- [ ] 4.8 Do NOT key any alert on a row disappearing from the report bucket. Reclamation is eventually
+- [x] 4.8 Do NOT key any alert on a row disappearing from the report bucket. Reclamation is eventually
       consistent under concurrent producers, so a row may transiently vanish and return; alert on the
       row's contents (pressure, staleness) instead
+- [ ] 4.9 Publish a report-collected timestamp gauge so 4.8's STALENESS axis is actually alertable.
+      Without it, a collector that silently stops is indistinguishable from a calm account through the
+      metrics: Prometheus stamps SCRAPE time, not data time, so `timestamp()` cannot substitute and the
+      series keeps looking fresh forever. The gauge's VALUE must be the collection time, making
+      `time() - gauge > horizon` the alert. A monitoring surface that cannot report that it stopped
+      monitoring is this capability's own phantom-signal class. Note `metric.MetricsRegistrar` takes a
+      `prometheus.Gauge`, so a `GaugeFunc` does not fit the existing registrar — set it on the
+      collection path instead. The rule file currently documents the gap and forbids approximating it
+      with an absence expression; delete that caveat when this lands
 
 ## 5. Ordinary stream bounds
 

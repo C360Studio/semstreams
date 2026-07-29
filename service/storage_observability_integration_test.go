@@ -189,6 +189,67 @@ func TestIntegration_StorageObservability_CollectPublishConsume(t *testing.T) {
 		assert.False(t, ok, "no limit number exists, so no limit series is published")
 	})
 
+	t.Run("the HTTP route serves the published rows and recomputes nothing", func(t *testing.T) {
+		// Mounted at the prefix PRODUCTION computes, so the route this asserts
+		// on is the route an operator reaches (task 4.4).
+		manager := NewServiceManager(NewServiceRegistry())
+		prefix := "/" + manager.serviceNameToPrefix(StorageObservabilityServiceName)
+		require.Equal(t, "/storage-observability", prefix)
+
+		mux := http.NewServeMux()
+		storage.RegisterHTTPHandlers(prefix, mux)
+
+		recorder := httptest.NewRecorder()
+		mux.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, prefix+"/report", nil))
+		require.Equal(t, http.StatusOK, recorder.Code)
+
+		var response StorageReportResponse
+		require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+		assert.True(t, response.ReportOnly)
+		assert.True(t, response.Synced, "the route serves the CONSUMED bucket, not a fresh collection")
+		require.NotNil(t, response.Account, "the published account row reaches the route")
+		require.NotNil(t, response.UpdatedAt)
+
+		rows := make(map[string]natsclient.ResourceReport, len(response.Resources))
+		for _, row := range response.Resources {
+			rows[row.Resource.Name] = row
+		}
+
+		boundedRow, ok := rows[bounded]
+		require.True(t, ok, "the pre-existing bounded stream is served over HTTP")
+		limit, has := boundedRow.Resource.Bytes.Limit()
+		require.True(t, has)
+		assert.Equal(t, int64(16<<20), limit)
+		assert.True(t, boundedRow.Pressure.Evaluated)
+
+		// Task 4.7 against a real server: the unbounded stream is NAMED, and it
+		// is never represented as having headroom.
+		unboundedRow, ok := rows[unbounded]
+		require.True(t, ok, "an unbounded resource must stay visible, not be filtered out")
+		assert.Equal(t, natsclient.CapacityUnbounded, unboundedRow.Resource.Bytes.State)
+		assert.False(t, unboundedRow.Pressure.Evaluated, "no band has an input, so there is no state")
+		assert.Nil(t, unboundedRow.Projection.HeadroomBytes)
+		assert.Nil(t, unboundedRow.Projection.HeadroomFraction)
+		assert.Nil(t, unboundedRow.Projection.TimeToThreshold)
+		assert.GreaterOrEqual(t, response.Summary.NotEvaluated, 1,
+			"rows carrying no pressure state are counted rather than folded into normal")
+
+		// The two operator surfaces cannot disagree, on real data. Compared on
+		// facts that do not move between the two reads — a configured bound and
+		// whether a series exists at all — rather than on live byte counts,
+		// which the next collection legitimately advances.
+		assert.InDelta(t, float64(limit),
+			requireGauge(t, registry, "semstreams_storage_resource_limit_bytes",
+				map[string]string{"resource": bounded}), 1e-9)
+		assert.InDelta(t, float64(pressureSeverityValue(boundedRow.Pressure.State)),
+			requireGauge(t, registry, "semstreams_storage_resource_pressure",
+				map[string]string{"resource": bounded}), 1e-9)
+		_, hasUnboundedPressure := gaugeValue(t, registry, "semstreams_storage_resource_pressure",
+			map[string]string{"resource": unbounded})
+		assert.Equal(t, unboundedRow.Pressure.Evaluated, hasUnboundedPressure,
+			"a pressure series exists exactly when the served row was evaluated")
+	})
+
 	t.Run("health reports the picture and gates nothing", func(t *testing.T) {
 		// Driven explicitly rather than waited on: BaseService runs its FIRST
 		// health check 200ms after Start, so every service reports unhealthy in
