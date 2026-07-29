@@ -539,7 +539,11 @@ func (s *storageHealthSurface) worstResources(snapshot natsclient.StorageReportS
 	type named struct {
 		name     string
 		severity int
-		label    string
+		// inherited marks a state that came from the account tier rather than
+		// from this resource's own bound. It is a SORT KEY, not decoration; see
+		// the ordering below.
+		inherited bool
+		label     string
 	}
 	var candidates []named
 
@@ -550,13 +554,15 @@ func (s *storageHealthSurface) worstResources(snapshot natsclient.StorageReportS
 			// would read as this resource's own bound filling, sending an operator
 			// to raise a bound the resource does not have — and the two findings
 			// have different fixes.
+			inherited := row.Pressure.EvaluatedAgainst == natsclient.PressureBasisAccountTier
 			basis := ""
-			if row.Pressure.EvaluatedAgainst == natsclient.PressureBasisAccountTier {
+			if inherited {
 				basis = fmt.Sprintf(" vs %s account tier", row.Resource.Tier)
 			}
 			candidates = append(candidates, named{
-				name:     row.Resource.Name,
-				severity: pressureSeverityValue(row.Pressure.State),
+				name:      row.Resource.Name,
+				severity:  pressureSeverityValue(row.Pressure.State),
+				inherited: inherited,
 				label: fmt.Sprintf("%s %s (%s)%s",
 					row.Resource.Name, row.Pressure.State, row.Pressure.RaisedBy, basis),
 			})
@@ -572,9 +578,24 @@ func (s *storageHealthSurface) worstResources(snapshot natsclient.StorageReportS
 		return ""
 	}
 
+	// Worst first, then OWN-BOUND before inherited at equal severity, then by name.
+	//
+	// The middle key is load-bearing and this message is where its absence bites
+	// hardest. Every framework KV bucket is unbounded on bytes — BucketSpec has no
+	// byte bound to declare — so a single tier crossing a band makes twenty-odd
+	// resources inherit the same state in the same collection. Sorted on severity
+	// alone they tie with the genuinely actionable finding and win on alphabetical
+	// order, filling all five slots with copies of one tier fact and pushing the
+	// one resource whose bound an operator can actually raise into "and N more".
+	//
+	// Ordering own-bound first does not hide the inherited rows: they still appear,
+	// still carry their basis, and the tier itself is named by accountFindings.
 	sort.Slice(candidates, func(i, j int) bool {
 		if candidates[i].severity != candidates[j].severity {
 			return candidates[i].severity > candidates[j].severity
+		}
+		if candidates[i].inherited != candidates[j].inherited {
+			return !candidates[i].inherited
 		}
 		return candidates[i].name < candidates[j].name
 	})

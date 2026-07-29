@@ -73,8 +73,19 @@ groups:
       # 2=high, 3=critical) rather than as a label value, so the series is
       # label-stable across transitions and leaves no stale tuple behind on
       # every state change.
+      # Both are scoped to resources with a bound OF THEIR OWN, via
+      # `and on(...) resource_limit_bytes` — that series exists for exactly the
+      # bounded resources, so it is an exact discriminator for the two pressure
+      # bases (property 2). Do not drop the scope. A resource with no bound
+      # inherits its TIER's state verbatim, and every framework KV bucket is
+      # unbounded on bytes, so an unscoped rule turns one tier crossing a band
+      # into twenty-odd simultaneous critical pages for one fact — and the fix
+      # for all of them is the same single tier-level action.
+      # StorageAccountTierPressureHigh/Critical below are that class's alerts.
       - alert: StorageResourcePressureHigh
-        expr: semstreams_storage_resource_pressure >= 2
+        expr: >-
+          semstreams_storage_resource_pressure >= 2
+          and on(resource, owner, kind, tier) semstreams_storage_resource_limit_bytes
         for: 15m
         labels:
           severity: warning
@@ -82,14 +93,16 @@ groups:
           summary: "Storage resource {{ $labels.resource }} is under high pressure"
           description: >-
             {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
-            has reported pressure >= high for 15 minutes. This is report-only: nothing
-            has been rejected, throttled, or degraded. Read
+            has reported pressure >= high against its OWN declared bound for 15 minutes.
+            This is report-only: nothing has been rejected, throttled, or degraded. Read
             GET /storage-observability/report for the row — headroom, growth rate and
             projected time-to-threshold — and raise the bound or reduce the retention
             before the projection runs out.
 
       - alert: StorageResourcePressureCritical
-        expr: semstreams_storage_resource_pressure >= 3
+        expr: >-
+          semstreams_storage_resource_pressure >= 3
+          and on(resource, owner, kind, tier) semstreams_storage_resource_limit_bytes
         for: 5m
         labels:
           severity: critical
@@ -97,9 +110,10 @@ groups:
           summary: "Storage resource {{ $labels.resource }} is under critical pressure"
           description: >-
             {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
-            has reported critical pressure for 5 minutes. This is still report-only —
-            writes are NOT being refused by SemStreams — but the resource's own
-            JetStream limit will refuse them at the ceiling. Add capacity now.
+            has reported critical pressure against its OWN declared bound for 5 minutes.
+            This is still report-only — writes are NOT being refused by SemStreams — but
+            this resource's own JetStream limit will refuse or evict at the ceiling. Raise
+            the bound, reduce retention, or add capacity now.
 
       # --- rate, independent of proportional headroom ----------------------
       #
@@ -136,10 +150,13 @@ groups:
           summary: "Storage resource {{ $labels.resource }} has no configured bound"
           description: >-
             {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
-            carries no byte limit, so it has no headroom or projection of its own. Its
-            pressure is evaluated against the {{ $labels.tier }} account tier ceiling
-            instead — see semstreams_storage_account_pressure_state for that tier, and
-            StorageAccountTierPressureCritical below. Report-only, and informational: an
+            carries no byte limit, so it has no headroom or projection of its own. Where
+            the {{ $labels.tier }} account tier HAS a ceiling, this resource's pressure is
+            evaluated against that instead — see semstreams_storage_account_pressure_state
+            for the tier, and StorageAccountTierPressureHigh/Critical. Where the tier has
+            no ceiling either (a stock server reports none), nothing constrains this
+            resource anywhere and it carries no pressure state at all; that is the case
+            this alert exists for. Report-only, and informational: an
             unbounded resource is a legitimate choice (an archival stream declares
             permanence deliberately). It is alerted so the choice stays deliberate rather
             than becoming the thing nobody was looking at. Never read this as headroom.
@@ -227,19 +244,40 @@ groups:
       # They are also the alerts that cover every resource with no bound of its
       # own. Such a resource inherits this state (property 2), so a tier alerting
       # here IS the archival streams in it alerting.
+      # These are the alerts for the whole unbounded class, and their severities
+      # mirror the per-resource pair deliberately. The tier is the AUTHORITATIVE
+      # statement — the resource rows are copies of it — so a tier that only ever
+      # paged at warning while its own derived copies paged at critical would rank
+      # N restatements above the one fact an operator can act on.
       - alert: StorageAccountTierPressureHigh
-        expr: semstreams_storage_account_pressure_state{state=~"high|critical"} == 1
+        expr: semstreams_storage_account_pressure_state{state="high"} == 1
         for: 15m
         labels:
           severity: warning
         annotations:
           summary: "The {{ $labels.tier }} storage tier is under high pressure"
           description: >-
-            The {{ $labels.tier }} account tier has reported pressure >= high for 15
+            The {{ $labels.tier }} account tier has reported high pressure for 15
             minutes against the bytes it is actually storing. Every resource in the tier
             with no bound of its own inherits this state, and those resources cannot be
             relieved by retention — check GET /storage-observability/report for rows whose
             pressure reports evaluated_against="account-tier". Report-only.
+
+      - alert: StorageAccountTierPressureCritical
+        expr: semstreams_storage_account_pressure_state{state="critical"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier is under critical pressure"
+          description: >-
+            The {{ $labels.tier }} account tier is at critical pressure against the bytes
+            it is actually storing. This is the alert for every resource in the tier with
+            no bound of its own — an archival stream among them has no lever but account
+            capacity or deleting data, because it cannot evict. Report-only from
+            SemStreams; JetStream will refuse writes at the account ceiling. Read
+            semstreams_storage_account_headroom_bytes and
+            semstreams_storage_account_time_to_threshold_seconds for this tier.
 
       - alert: StorageAccountTierExhaustionProjected
         expr: semstreams_storage_account_time_to_threshold_seconds < 86400

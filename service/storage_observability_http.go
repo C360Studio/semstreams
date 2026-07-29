@@ -13,12 +13,19 @@
 //
 // # No filtering, deliberately
 //
-// The route serves EVERY published row and takes no filter parameter. An
-// unbounded resource carries no pressure state at all (neither band has an
-// input), so a `state != normal` filter would make exactly the unbounded
-// resources invisible — the opposite of what task 4.7 exists to do. The summary
-// therefore counts not-evaluated rows as their own bucket rather than folding
-// them into normal, and the rows themselves are served verbatim.
+// The route serves EVERY published row and takes no filter parameter. A row may
+// carry no pressure state at all — its capacity was unreadable, or it has no bound
+// of its own AND its storage tier offers no ceiling to inherit — so a
+// `state != normal` filter would make exactly those resources invisible, the
+// opposite of what task 4.7 exists to do. The summary therefore counts
+// not-evaluated rows as their own bucket rather than folding them into normal, and
+// the rows themselves are served verbatim.
+//
+// A row with no bound of its own that DOES have a tier ceiling is evaluated against
+// it and carries `pressure.evaluated_against: "account-tier"`. Read that field
+// before acting on such a row: the state is its tier's, shared with every other
+// unbounded resource in the tier, and it cannot be relieved by changing anything
+// about this resource.
 //
 // # Report-only
 //
@@ -88,10 +95,16 @@ type StorageReportSummary struct {
 	// Pressure counts the EVALUATED rows by state.
 	Pressure map[natsclient.PressureState]int `json:"pressure"`
 
-	// NotEvaluated counts the rows carrying no pressure state at all — unbounded
-	// or unknown capacity. Its own bucket rather than folded into normal:
-	// otherwise the resources with no bound would be the ones that disappear
-	// from the summary (task 4.7).
+	// NotEvaluated counts the rows carrying no pressure state at all. Its own
+	// bucket rather than folded into normal: otherwise the resources nothing can
+	// be said about would be the ones that disappear from the summary (task 4.7).
+	//
+	// The set CHANGED in task 5.9 and a consumer reading this field as "the
+	// unbounded resources" now undercounts. A resource with no bound of its own is
+	// evaluated against its storage tier's ceiling and counts under Pressure by
+	// that state; what remains here is a resource whose capacity could not be
+	// READ, plus an unbounded one whose tier offers no ceiling either. To count
+	// the unbounded set, read the rows' capacity state — not this field.
 	NotEvaluated int `json:"not_evaluated"`
 
 	// WorstPressure is the worst EVALUATED state, omitted when nothing was
@@ -220,9 +233,12 @@ func (s *StorageObservabilityService) OpenAPISpec() *OpenAPISpec {
 						"state, configured bound or its absence, usage, headroom, growth rate, " +
 						"projected time-to-threshold, and pressure state. This route is a CONSUMER " +
 						"of that bucket and recomputes nothing, so it cannot disagree with the " +
-						"Prometheus surface. Every row is served: resources with no bound carry no " +
-						"pressure state and would be the first to disappear under a filter, so the " +
-						"route takes none.",
+						"Prometheus surface. Every row is served and the route takes no filter: a " +
+						"row whose capacity could not be read carries no pressure state and would " +
+						"be the first to disappear under one. A resource with no bound of its own " +
+						"is evaluated against its storage TIER's account ceiling and says so in " +
+						"pressure.evaluated_against; that state is shared with every unbounded " +
+						"resource in the tier and is not relieved by changing this resource.",
 					Tags: []string{"StorageObservability"},
 					Responses: map[string]ResponseSpec{
 						"200": {

@@ -171,7 +171,7 @@
 - [ ] 6.3 Seed or correct the capability home — `openspec/specs/nats-streaming/spec.md` is a publish-path
       capability whose Purpose is still a `TBD` stub; stream provisioning is a separate capability and
       must not be filed under it
-- [ ] 6.4 Confirm no EXISTING catalog row's declared retention policy changed, no retention Kind was
+- [x] 6.4 Confirm no EXISTING catalog row's declared retention policy changed, no retention Kind was
       added, and `graph-retention`, the acquisition seam, and ADR-068/073 are untouched. Adding the 4.4b
       report-bucket row is in scope and expected; changing how any existing bucket is governed is not
 - [ ] 6.5 Run lint, `go test -race ./...`, tagged integration on touched packages, contract tests, and

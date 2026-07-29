@@ -343,6 +343,23 @@ func (c *StorageInventoryCollector) publish(ctx context.Context, inv StorageInve
 			slog.String("reason", result.SkipReason),
 			slog.String("produced_by", c.producer))
 	}
+
+	// The ACCOUNT row is called out separately, and not because one lost row
+	// matters more than another. Every resource with no bound of its own carries a
+	// pressure state INHERITED from its tier, and the numbers behind that state —
+	// the tier's headroom, rate and projection — live only on this row. When it is
+	// missing, those resource rows assert a verdict whose evidence no consumer can
+	// read, and every operator surface points the reader at exactly the row that is
+	// absent. Folded into the joined error above, that condition is
+	// indistinguishable from "one resource row was lost".
+	if err != nil && !result.Skipped && !result.AccountPublished {
+		c.logger.Warn(
+			"the account tier row was NOT published; resources with no bound of their own report a "+
+				"pressure state inherited from a tier whose headroom, rate and projection are now "+
+				"unreadable, and the previous revision (if any) describes an earlier collection",
+			slog.String("key", StorageAccountReportKey),
+			slog.String("produced_by", c.producer))
+	}
 }
 
 // enumerate walks both account listings, reconciles them, and compares the

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -168,6 +169,52 @@ func TestInheritedPressure_HealthMessageNamesTheCeilingItCameFrom(t *testing.T) 
 	assert.NotContains(t, status.Message, "EVENTS high (headroom) vs",
 		"a resource evaluated against its OWN bound must not be qualified as an account-tier finding")
 	assert.True(t, status.Healthy, "pressure remains report-only however it was derived")
+}
+
+// TestInheritedPressure_DoesNotEvictOwnBoundFindingsFromTheHealthMessage is the
+// amplification guard, and the numbers here are the real shape rather than a
+// contrived one.
+//
+// Every framework KV bucket is unbounded on bytes — BucketSpec has no byte bound
+// to declare — so one tier crossing a band makes twenty-odd resources inherit the
+// same state in the same collection. The health message names at most five. Sorted
+// on severity alone the inherited rows tie with the genuinely actionable finding
+// and win on alphabetical order, so the one resource whose bound an operator can
+// raise gets pushed into "and N more" by copies of a single tier fact.
+func TestInheritedPressure_DoesNotEvictOwnBoundFindingsFromTheHealthMessage(t *testing.T) {
+	rows := []natsclient.ResourceReport{
+		// Alphabetically ahead of the own-bound row, which is what makes name
+		// order the wrong tiebreak.
+		inheritedPressureRow("KV_AGENT_LOOPS", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_ENTITY_STATES", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_GRAPH_STATUS", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_OWNER_CLAIMS", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_OWNER_PRESENCE", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_STORAGE_REPORT", natsclient.TierFile, natsclient.PressureCritical),
+		withPressure(resourceRow("ZEBRA_EVENTS", natsclient.TierFile), natsclient.PressureCritical),
+	}
+	surface := &storageHealthSurface{snapshotOf: staticSnapshot(natsclient.StorageReportSnapshot{
+		Synced:         true,
+		Resources:      rows,
+		PressureCounts: map[natsclient.PressureState]int{natsclient.PressureCritical: len(rows)},
+		WorstPressure:  natsclient.PressureCritical,
+	})}
+
+	message := surface.describe(
+		health.NewHealthy(StorageObservabilityServiceName, "Service operating normally")).Message
+
+	assert.Contains(t, message, "ZEBRA_EVENTS critical",
+		"the finding with a bound an operator can raise must survive the five-slot budget")
+	zebra := strings.Index(message, "ZEBRA_EVENTS")
+	inherited := strings.Index(message, "KV_AGENT_LOOPS")
+	require.Positive(t, zebra)
+	require.Positive(t, inherited)
+	assert.Less(t, zebra, inherited,
+		"own-bound findings must precede states inherited from a shared tier ceiling")
+
+	// The inherited rows are not hidden — they are just not first, and each still
+	// says which ceiling it came from.
+	assert.Contains(t, message, "vs file account tier")
 }
 
 // TestInheritedPressure_ReachesThePressureGaugeWithoutFabricatingHeadroom is the

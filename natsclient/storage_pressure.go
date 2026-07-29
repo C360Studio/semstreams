@@ -400,11 +400,14 @@ const (
 	// Reporting normal here would manufacture confidence about a resource
 	// nobody can measure.
 	PressureUnavailableUnknownCapacity = "unknown-capacity"
-	// PressureUnavailableUnbounded means the resource declares no bound of its
-	// own, so neither band has an input FROM ITS OWN CAPACITY. It is not the
-	// final word on such a resource: PressureAgainstAccountTier re-evaluates it
-	// against the only ceiling it has. This reason survives for a resource whose
-	// tier offers no ceiling either.
+	// PressureUnavailableUnbounded means the capacity handed to AssessPressure
+	// declares no bound, so neither band has an input.
+	//
+	// For a RESOURCE it is not the final word: PressureAgainstAccountTier
+	// re-evaluates it against the only ceiling it has, and the more specific
+	// unbounded-* reasons below are what a resource ends up carrying. This value
+	// survives on a TIER row — AssessPressure over an unbounded account limit —
+	// and as the fallback when a bounded tier reports no reason of its own.
 	PressureUnavailableUnbounded = "unbounded"
 	// PressureUnavailableUnboundedNoTierCeiling means the resource declares no
 	// bound AND its storage tier's account limit is itself unbounded. Nothing
@@ -419,6 +422,12 @@ const (
 	// PressureUnavailableUnboundedTierUnfiled means the resource declares no
 	// bound and could not be filed under any tier, so no account ceiling applies
 	// to it that this process can name.
+	//
+	// NOT REACHABLE from the production collector: DeriveAccountReport emits a row
+	// for every tier any resource reports, creating the unknown-tier row on demand,
+	// so a collected resource always finds one. It exists as the fail-closed arm
+	// for a hand-built inventory, and reporting no state is the right answer there
+	// rather than borrowing an arbitrary tier's.
 	PressureUnavailableUnboundedTierUnfiled = "unbounded-account-tier-unfiled"
 )
 
@@ -464,6 +473,12 @@ type Pressure struct {
 	// FromHeadroom and FromTimeToThreshold are the individual bands, published
 	// so a consumer can see the input that did NOT win.
 	// FromTimeToThreshold is empty when no projection was available.
+	//
+	// They describe whichever ceiling EvaluatedAgainst names. On a row whose basis
+	// is the account tier these are the TIER's bands, not this resource's — the
+	// resource has no bound of its own to produce any — so they will not agree with
+	// the row's own Projection, which reports headroom unavailable. Read the basis
+	// first; the numbers behind these bands are on the account row.
 	FromHeadroom        PressureState `json:"from_headroom,omitempty"`
 	FromTimeToThreshold PressureState `json:"from_time_to_threshold,omitempty"`
 

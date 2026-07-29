@@ -572,9 +572,15 @@ func TestStorageAlertRules_KeyNothingOnRowDisappearance(t *testing.T) {
 }
 
 // TestStorageAlertRules_MakeUnboundedResourcesVisible is task 4.7 on the
-// alerting surface. An unbounded resource publishes no pressure series at all,
-// so a rule set built only on `resource_pressure >= N` would make exactly the
-// unbounded resources invisible.
+// alerting surface. An unbounded resource has no bound to have headroom against,
+// so a rule set built only on the per-resource headroom and projection series
+// would make exactly those resources invisible. It is named by its usage series
+// and counted in the not-evaluated aggregate instead.
+//
+// Since task 5.9 such a resource DOES carry a pressure severity, inherited from
+// its storage tier — but the per-resource pressure alerts deliberately scope
+// themselves to bounded resources, so this rule remains the thing that names an
+// unbounded resource, and the tier alerts are what page for its state.
 func TestStorageAlertRules_MakeUnboundedResourcesVisible(t *testing.T) {
 	var namesUnbounded, countsNotEvaluated bool
 	for _, rule := range loadStorageAlertRules(t) {

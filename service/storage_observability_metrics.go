@@ -79,9 +79,13 @@ var metricCapacityStates = []natsclient.CapacityState{
 }
 
 // pressureStateNotEvaluated is the aggregate bucket for a resource carrying no
-// pressure state at all. It is a real, counted value rather than an omission:
-// an unbounded resource has no pressure state, and a surface that only counted
-// states would make exactly those resources invisible.
+// pressure state at all. It is a real, counted value rather than an omission: a
+// surface that only counted states would make exactly those resources invisible.
+//
+// The set it counts is narrower than it once was. A resource with no bound of its
+// own is now evaluated against its storage tier's ceiling and counts under that
+// state, so this bucket holds the resources whose capacity could not be READ, plus
+// the unbounded ones whose tier offers no ceiling either.
 const pressureStateNotEvaluated = "not-evaluated"
 
 var metricPressureStates = []string{
@@ -224,7 +228,14 @@ func newStorageObservabilityMetrics() *storageObservabilityMetrics {
 		pressure: storageGauge("resource_pressure",
 			"Derived storage pressure (0=normal, 1=warning, 2=high, 3=critical). "+
 				"REPORT-ONLY: nothing is rejected, throttled, or degraded because of it. "+
-				"Absent for a resource with unbounded or unknown capacity, which carries no pressure state.",
+				"Published for a resource with a bound of its own AND for one with no bound, which "+
+				"inherits its storage tier's state verbatim. Join on resource_limit_bytes to tell them "+
+				"apart: that series exists for exactly the bounded resources, so "+
+				"`... and on(resource,owner,kind,tier) resource_limit_bytes` selects own-bound pressure "+
+				"and `... unless on(...)` selects inherited. They need different fixes, and one tier "+
+				"crossing a band makes every unbounded resource in it report the same state at once. "+
+				"Absent only for a resource whose capacity could not be read, or whose tier offers no "+
+				"ceiling to inherit.",
 			resourceLabels),
 
 		resourcesByCapacity: storageGauge("resources",

@@ -457,8 +457,20 @@ func (p *StorageReportPublisher) tierGrowth(ctx context.Context, inv StorageInve
 		used, ok := comparison.Limit.Usage()
 		if !ok {
 			// The tier's usage is unreadable — an unknown or unbounded-with-no-usage
-			// account limit. No baseline is retained, so a tier that becomes
-			// readable later seeds from the bucket rather than from a gap.
+			// account limit. There is nothing to difference, so this collection
+			// contributes no observation.
+			//
+			// Any baseline already held is KEPT, deliberately, and the consequence
+			// is worth stating: when the tier becomes readable again the rate is
+			// measured across the blind gap. Both endpoints are genuine account
+			// readings, so the number is real rather than fabricated, and
+			// Growth.ObservedOver publishes the span it was measured over — a
+			// five-hour average is distinguishable from a one-minute one by anyone
+			// reading the row. Dropping the baseline instead would make this path
+			// diverge from the resource path (growthFor returns early on the same
+			// condition and also retains), and two growth series that treat a
+			// degraded collection differently is worse than one that treats it
+			// visibly.
 			growth[comparison.Tier] = UnknownGrowth(GrowthUnavailableUnknownUsage)
 			continue
 		}

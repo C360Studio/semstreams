@@ -523,11 +523,12 @@ func TestDeriveAgainstBaseline(t *testing.T) {
 	})
 }
 
-// TestTierGrowth_UnreadableTierUsageRetainsNoBaseline keeps a degraded collection
-// from poisoning the series. A tier whose usage could not be read has nothing to
-// difference, and retaining a baseline for it would let a later collection measure
-// a rate across the gap.
-func TestTierGrowth_UnreadableTierUsageRetainsNoBaseline(t *testing.T) {
+// TestTierGrowth_ADegradedFirstCollectionIsNotAnObservation covers the case where
+// no baseline exists yet: a tier whose usage could not be read has nothing to
+// difference, so it contributes no observation and the next readable collection
+// still reports an unknown rate for want of a PRIOR one — not a rate measured
+// against the degraded collection.
+func TestTierGrowth_ADegradedFirstCollectionIsNotAnObservation(t *testing.T) {
 	store := newFakeReportStore(10)
 	publisher := newTestPublisher(t, store, defaultSource())
 	start := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
@@ -554,6 +555,58 @@ func TestTierGrowth_UnreadableTierUsageRetainsNoBaseline(t *testing.T) {
 	_, known := tier.Growth.Rate()
 	assert.False(t, known, "a collection with no readable usage is not an observation to measure against")
 	assert.Equal(t, GrowthUnavailableNoPriorObservation, tier.Growth.Unavailable)
+}
+
+// TestTierGrowth_AnExistingBaselineSurvivesABlindGap pins the OTHER half, which
+// the code comment describes and nothing exercised.
+//
+// A baseline already held is kept across collections whose usage could not be read,
+// so the rate is eventually measured ACROSS the gap. That is deliberate: both
+// endpoints are genuine account readings, the number is real rather than
+// fabricated, and ObservedOver publishes the span so a long average is
+// distinguishable from a short one. It also keeps this path consistent with the
+// resource path, which retains on the same condition.
+//
+// The test exists to make the choice explicit — if someone later decides a blind
+// gap should reset the series, this is the assertion they have to change on
+// purpose rather than a behavior they can flip unnoticed.
+func TestTierGrowth_AnExistingBaselineSurvivesABlindGap(t *testing.T) {
+	store := newFakeReportStore(10)
+	publisher := newTestPublisher(t, store, defaultSource())
+	start := time.Date(2026, 7, 29, 12, 0, 0, 0, time.UTC)
+
+	// A real observation establishes the baseline.
+	_, err := publisher.Publish(context.Background(), inventoryWithAccountAt(
+		start, fillingFileTier(mib(800)), archivalResource("CAMPAIGN_LEDGER", mib(50))))
+	require.NoError(t, err)
+
+	// Two collections where the account limits could not be read at all.
+	for i := 1; i <= 2; i++ {
+		_, err := publisher.Publish(context.Background(), inventoryWithAccountAt(
+			start.Add(time.Duration(i)*time.Hour),
+			UnknownAccountTierLimits("account info unavailable"),
+			archivalResource("CAMPAIGN_LEDGER", mib(50))))
+		require.NoError(t, err)
+
+		tier, ok := decodeAccountRow(t, store).TierFor(TierFile)
+		require.True(t, ok)
+		assert.Equal(t, GrowthUnavailableUnknownUsage, tier.Growth.Unavailable,
+			"a degraded collection reports no rate of its own")
+	}
+
+	// Readable again: the rate spans the gap, and says so.
+	_, err = publisher.Publish(context.Background(), inventoryWithAccountAt(
+		start.Add(3*time.Hour), fillingFileTier(mib(900)),
+		archivalResource("CAMPAIGN_LEDGER", mib(50))))
+	require.NoError(t, err)
+
+	tier, ok := decodeAccountRow(t, store).TierFor(TierFile)
+	require.True(t, ok)
+	rate, known := tier.Growth.Rate()
+	require.True(t, known, "the retained baseline is still a genuine account reading")
+	assert.InDelta(t, float64(mib(100))/(3*time.Hour).Seconds(), rate, 1.0)
+	assert.Equal(t, 3*time.Hour, tier.Growth.ObservedOver,
+		"the span MUST be published, or a three-hour average is indistinguishable from a fresh one")
 }
 
 // TestPublishAccount_StillReportsWhenAResourceRowFails guards the ordering the
