@@ -127,10 +127,16 @@ type BucketSpec struct {
 // cross-pin test in graph asserts the two can never drift.
 const ErrorCodeBucketNotReady = "index_not_ready"
 
-// Validate fails closed on a descriptor this binary cannot enforce. The
-// default arm is the load-bearing one: an unknown RetentionKind — a newer
-// catalog on an older binary — must be an invalid-policy error, never a
-// silently unapplied policy.
+// Validate fails closed on a descriptor this binary cannot enforce. EVERY
+// discriminated field is checked against its explicit allowed arms with a
+// fail-closed default: an unknown RetentionKind (a newer catalog on an older
+// binary) must be an invalid-policy error, never a silently unapplied policy —
+// and an empty or typoed Write policy must never validate, because the derived
+// owned-bucket write guard filters on it and a zero value would silently drop
+// the bucket OUT of the guard set (fail-open in the exact foundation meant to
+// replace review-maintained integrity). Class and Posture get the same
+// treatment: a descriptor grammar that tolerates zero values is a hand list
+// with extra steps.
 func (s BucketSpec) Validate() error {
 	if s.Name == "" {
 		return errs.WrapInvalid(errors.New("bucket spec has empty Name (not found in the catalog?)"),
@@ -138,6 +144,33 @@ func (s BucketSpec) Validate() error {
 	}
 	if s.Owner == "" {
 		return errs.WrapInvalid(fmt.Errorf("bucket spec %q has empty Owner", s.Name),
+			"KVSpec", "Validate", "validate framework bucket spec")
+	}
+	switch s.Class {
+	case ClassAuthoritative, ClassDerived, ClassOperational, ClassDiagnostic:
+		// known arm
+	default:
+		return errs.WrapInvalid(
+			fmt.Errorf("bucket spec %q carries unknown class %q", s.Name, s.Class),
+			"KVSpec", "Validate", "validate framework bucket spec")
+	}
+	switch s.Write {
+	case WriteOwnerOnly, WriteOpen:
+		// known arm
+	default:
+		// FAIL CLOSED: an empty/unknown write policy would silently exclude
+		// the bucket from the derived owned set, reopening generic update_kv
+		// writes on owner-only state.
+		return errs.WrapInvalid(
+			fmt.Errorf("bucket spec %q carries unknown write policy %q", s.Name, s.Write),
+			"KVSpec", "Validate", "validate framework bucket spec")
+	}
+	switch s.Posture {
+	case PostureOwnerCreates, PostureReaderMustExist:
+		// known arm
+	default:
+		return errs.WrapInvalid(
+			fmt.Errorf("bucket spec %q carries unknown create posture %q", s.Name, s.Posture),
 			"KVSpec", "Validate", "validate framework bucket spec")
 	}
 	switch s.Retention.Kind {
@@ -197,14 +230,17 @@ func EnsureFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jet
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	// Posture is enforced grammar, not decoration: a reader-must-exist
-	// descriptor may never be provisioned through the owner seam — its binders
-	// go through OpenFrameworkBucket, which cannot create.
-	if spec.Posture == PostureReaderMustExist {
+	// Posture is enforced grammar, not decoration: the owner seam may only run
+	// for a descriptor that declares an owner CREATES it — an EXACT match, not
+	// "anything that isn't reader-must-exist", so a future posture arm cannot
+	// silently become creatable here. Reader-must-exist binders go through
+	// OpenFrameworkBucket, which cannot create (and accepts both postures — a
+	// reader may bind an owner-creates bucket).
+	if spec.Posture != PostureOwnerCreates {
 		return nil, errs.WrapInvalid(
-			fmt.Errorf("bucket spec %q declares posture %q; only OpenFrameworkBucket may bind it",
-				spec.Name, spec.Posture),
-			"KVSpec", "EnsureFrameworkBucket", "acquire framework bucket")
+			fmt.Errorf("bucket spec %q declares posture %q; EnsureFrameworkBucket requires %q",
+				spec.Name, spec.Posture, PostureOwnerCreates),
+			"KVSpec", "EnsureFrameworkBucket", "enforce create posture")
 	}
 
 	// Create-or-open through the proven concurrent-create resolution: an

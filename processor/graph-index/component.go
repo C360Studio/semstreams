@@ -60,7 +60,14 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
 	}
 
-	// Validate required output buckets exist
+	// Validate output buckets: the four graph-index-OWNED subjects are all
+	// required AND the only ones permitted. An output outside the set is
+	// rejected whether it is off-catalog (an operator typo that would
+	// otherwise become a stray unguarded bucket, F2) or a catalog bucket
+	// owned by ANOTHER component (which would let a config string route
+	// graph-index through the OWNER seam — create + destructive History
+	// reconcile — for a bucket it does not own, defeating call-site-selection
+	// owner enforcement; assignBucket would silently drop the handle anyway).
 	requiredBuckets := map[string]bool{
 		graph.BucketOutgoingIndex:  false,
 		graph.BucketIncomingIndex:  false,
@@ -69,11 +76,20 @@ func (c *Config) Validate() error {
 	}
 
 	for _, output := range c.Ports.Outputs {
-		if output.Subject != "" {
-			if _, required := requiredBuckets[output.Subject]; required {
-				requiredBuckets[output.Subject] = true
-			}
+		if output.Subject == "" {
+			continue
 		}
+		if _, required := requiredBuckets[output.Subject]; !required {
+			if owner := graph.OwnerOf(output.Subject); owner != "" {
+				return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+					fmt.Sprintf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
+						output.Name, output.Subject, owner))
+			}
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+				fmt.Sprintf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
+					output.Name, output.Subject))
+		}
+		requiredBuckets[output.Subject] = true
 	}
 
 	for bucket, found := range requiredBuckets {
@@ -731,6 +747,33 @@ func (c *Component) Stop(timeout time.Duration) error {
 // subject, never silently create a stray bucket that no guard protects and no
 // reader consumes (framework-bucket-catalog F2).
 func (c *Component) createOutputBuckets(ctx context.Context) error {
+	// The exact set of buckets graph-index OWNS and may route through the
+	// owner seam. Config.Validate already rejects anything else; this belt
+	// re-checks at the acquisition point — as a PRE-PASS, before any seam
+	// call — so a config that reached Start without passing Validate (a
+	// dynamically-supplied Config literal) still cannot make graph-index
+	// Ensure another owner's bucket, and a rejection has zero side effects.
+	ownedOutputs := map[string]bool{
+		graph.BucketOutgoingIndex:  true,
+		graph.BucketIncomingIndex:  true,
+		graph.BucketAliasIndex:     true,
+		graph.BucketPredicateIndex: true,
+	}
+	for _, portDef := range c.config.Ports.Outputs {
+		if ownedOutputs[portDef.Subject] {
+			continue
+		}
+		if owner := graph.OwnerOf(portDef.Subject); owner != "" {
+			return errs.WrapInvalid(
+				fmt.Errorf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
+					portDef.Name, portDef.Subject, owner),
+				"Component", "createOutputBuckets", "enforce graph-index bucket ownership")
+		}
+		return errs.WrapInvalid(
+			fmt.Errorf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
+				portDef.Name, portDef.Subject),
+			"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
+	}
 	for _, portDef := range c.config.Ports.Outputs {
 		spec, ok := graph.SpecFor(portDef.Subject)
 		if !ok {

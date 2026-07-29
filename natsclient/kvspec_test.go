@@ -57,6 +57,32 @@ func TestEnsureFrameworkBucket_UnknownKindFailsClosed(t *testing.T) {
 // TestOpenFrameworkBucket_UnknownKindFailsClosed: the reader seam validates
 // the same way — a reader binding under an unenforceable descriptor is a
 // config error, not a lucky read.
+// TestEnsureFrameworkBucket_RequiresOwnerCreatesExactly: the owner seam
+// demands Posture == owner-creates by EXACT match — reader-must-exist is
+// rejected, and (belt, unreachable past Validate) so would any future arm.
+func TestEnsureFrameworkBucket_RequiresOwnerCreatesExactly(t *testing.T) {
+	client, err := NewClient("nats://127.0.0.1:4222") // never connected; must not be reached
+	require.NoError(t, err)
+	spec := validNoLifecycleSpec()
+	spec.Posture = PostureReaderMustExist
+
+	_, err = EnsureFrameworkBucket(context.Background(), client, spec)
+	require.Error(t, err)
+	assert.True(t, errs.IsInvalid(err))
+	assert.Contains(t, err.Error(), string(PostureOwnerCreates),
+		"the rejection must name the required posture")
+
+	// A reader may bind an owner-creates bucket: Open validates both postures.
+	// (No NATS here — Validate alone must not reject the combination; the
+	// unreachable-NATS Get error is fine, a Validate error is not.)
+	openSpec := validNoLifecycleSpec()
+	_, err = OpenFrameworkBucket(context.Background(), client, openSpec)
+	if err != nil {
+		assert.False(t, errs.IsInvalid(err),
+			"Open on an owner-creates spec must not fail validation (got: %v)", err)
+	}
+}
+
 func TestOpenFrameworkBucket_UnknownKindFailsClosed(t *testing.T) {
 	client, err := NewClient("nats://127.0.0.1:4222")
 	require.NoError(t, err)
@@ -113,6 +139,40 @@ func TestBucketSpec_Validate(t *testing.T) {
 			name:    "unknown kind fails closed",
 			mutate:  func(s *BucketSpec) { s.Retention.Kind = "not-a-kind" },
 			wantErr: "unknown retention kind",
+		},
+		// The descriptor grammar fails CLOSED on every discriminated field: a
+		// zero value is not a default, it is an invalid descriptor. An empty
+		// Write in particular would silently drop the bucket out of the
+		// derived owned set (fail-open on the write guard).
+		{
+			name:    "empty write policy fails closed",
+			mutate:  func(s *BucketSpec) { s.Write = "" },
+			wantErr: "unknown write policy",
+		},
+		{
+			name:    "typoed write policy fails closed",
+			mutate:  func(s *BucketSpec) { s.Write = "owner-onIy" },
+			wantErr: "unknown write policy",
+		},
+		{
+			name:    "empty class fails closed",
+			mutate:  func(s *BucketSpec) { s.Class = "" },
+			wantErr: "unknown class",
+		},
+		{
+			name:    "unknown class fails closed",
+			mutate:  func(s *BucketSpec) { s.Class = "derivative" },
+			wantErr: "unknown class",
+		},
+		{
+			name:    "empty posture fails closed",
+			mutate:  func(s *BucketSpec) { s.Posture = "" },
+			wantErr: "unknown create posture",
+		},
+		{
+			name:    "unknown posture fails closed",
+			mutate:  func(s *BucketSpec) { s.Posture = "owner-create" },
+			wantErr: "unknown create posture",
 		},
 	}
 	for _, tt := range tests {

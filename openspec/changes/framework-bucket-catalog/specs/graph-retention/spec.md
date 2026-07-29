@@ -15,7 +15,11 @@ bucket to the declared policy (retention per Kind; History to the declared value
 adopted bucket diverged), verifies by re-read, and fails the owner's start closed on an
 unreconcilable divergence or an unknown retention Kind. Readers bind must-exist through a seam that
 NEVER creates and never reconciles: an absent bucket yields a classified not-ready error naming the
-catalog owner. A configuration-supplied KV bucket name on a framework component's ports MUST
+catalog owner. A reader whose registration outlives the binding moment (e.g. a tool registry built
+once per process, before component start) registers its capability unconditionally and resolves the
+bucket LAZILY at use time through the same open seam — reporting not-ready until the owner has
+provisioned, never skipping itself permanently and never creating. A configuration-supplied KV
+bucket name on a framework component's ports MUST
 resolve to a catalog descriptor or fail boot naming the unresolved subject — an operator typo may
 not silently create a stray unguarded bucket. The catalog covers only buckets whose
 write-ownership or retention the framework guarantees; application/product buckets are outside it
@@ -33,11 +37,13 @@ identity at runtime; that boundary is review-enforced and stated here deliberate
 
 #### Scenario: reader acquisition never creates
 
-- **GIVEN** a reader (e.g. the graph-query client or a query-tool registration) binding a catalog
-  bucket whose owner has not yet provisioned it
-- **WHEN** the reader's open-seam bind runs
+- **GIVEN** a reader (e.g. the graph-query client, or a query tool resolving its bucket lazily at
+  execution time) binding a catalog bucket whose owner has not yet provisioned it
+- **WHEN** the reader's open-seam bind runs — at first use, not necessarily at registration
 - **THEN** it returns a classified not-ready error naming the catalog owner, and the bucket
-  remains absent afterwards — a reader can never become an emitter of divergent configuration
+  remains absent afterwards — a reader can never become an emitter of divergent configuration,
+  and a once-per-process registration remains registered (not-ready is a per-use outcome, never a
+  permanent registration-time skip)
 
 #### Scenario: retention policy is a per-descriptor fact, not a global rule
 

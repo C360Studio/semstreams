@@ -167,9 +167,13 @@
   `graph-query.v1.json` drift did NOT materialize — `graph/query.Config` was never part of the
   generated component schema (the processor's Config doesn't embed it); deviation recorded.
   `go test ./test/contract/...` green (incl. the new catalog-literal scan).
-- [ ] 8.4 **BREAKING ⇒ e2e before merge: `task e2e:structural` AND `task e2e:statistical`** green
-  (structural = F2 path + write guard + query; statistical = embedding/community owners + the
-  COMPONENT_STATUS mass migration); `e2e:core` free — run it.
+- [x] 8.4 **BREAKING ⇒ e2e before merge** — all three tiers run post-handoff (orchestrator-run):
+  `e2e:structural` `structural-20260728-194149.json` success:true errors:0 (F2 path exercised);
+  `e2e:statistical` `statistical-20260728-194246.json` success:true errors:0, known-answer 7/7;
+  `e2e:core` both scenarios PASSED (19:43:11 / 19:43:19). NOTE: these runs PREDATE the Codex
+  round in section 10 — finding 10.1's fix touches the BOOT path (tool registration order vs
+  StartAll), which the agentic tier (and any tier booting the full binary) exercises; the
+  orchestrator re-runs the tiers after the section-10 fixes.
 
 ## 9. PR + review + merge
 
@@ -180,3 +184,43 @@
   migrate → prove → delete); contract-test enforceability; derivation-not-snapshot.
 - [ ] 9.3 Owner-run Codex gate; merge on addressed + CI-green; archive + baton (record: Epic C
   structural leg COMPLETE; #712 next; bounded-storage rebases).
+
+## 10. Codex round 1 (PR #724 CHANGES-REQUESTED: 2 BLOCKING + 1 HIGH + 1 MEDIUM — all confirmed)
+
+- [x] 10.1 **BLOCKING — clean boot permanently lost all five graph-query tools.** Both mains call
+  RegisterBuiltins BEFORE Manager.StartAll; on first install ENTITY_STATES doesn't exist yet, so
+  the Open-at-registration exhausted retry.Quick and warn-and-skipped — and the once-per-process
+  registry made the skip PERMANENT. RED observed on committed code
+  (`TestIntegration_GraphQueryTools_LazyBindSurvivesCleanBoot`): `WARN graph query tools
+  disabled: could not open entity-states bucket after retries ... framework bucket
+  "ENTITY_STATES" is not ready: its owner (graph-ingest) has not provisioned it` then `Expected
+  value not to be nil ... query_entity must be registered on a clean boot`. FIX: registration is
+  unconditional; the KV adapter binds LAZILY at execution via OpenCatalogBucket (handle cached
+  on first success, mutex-guarded), surfacing the classified not-ready (naming graph-ingest)
+  until the owner provisions — reader non-creation preserved at execution time, zero boot-order
+  coupling. Clean-NATS production-order test added (registered → not-ready naming owner + bucket
+  still absent → owner seam-creates → same registration serves reads, no re-register);
+  NeverCreates test reshaped from skip-blessing to registered-and-not-ready. Bonus latent fix:
+  the adapter now maps natsclient.ErrKVKeyNotFound → executors.ErrKeyNotFound, so a missing
+  entity reports ToolErrorNotFound instead of a network failure (the sentinel mismatch predated
+  this change). Spec delta reader language extended (lazy resolution, never a permanent
+  registration-time skip).
+- [x] 10.2 **BLOCKING — graph-index could invoke the OWNER seam for a foreign bucket.** RED
+  observed on committed code (`TestIntegration_Start_ForeignOwnedOutputSubjectFailsBoot`): an
+  extra OWNER_CLAIMS output booted graph-index cleanly and seam-CREATED another owner's bucket.
+  FIX: Config.Validate now rejects ANY output subject outside graph-index's exact four owned
+  subjects (error names the foreign subject and its catalog owner via graph.OwnerOf); belt
+  re-check in createOutputBuckets as a side-effect-free PRE-PASS before any seam call (for
+  dynamically-supplied config), with its own direct test
+  (`TestIntegration_CreateOutputBuckets_BeltRejectsForeignSubject`). F2 test reshaped: the typo
+  now fails at factory validation (accepted factory-or-Start).
+- [x] 10.3 **HIGH — descriptor grammar failed OPEN for Write/Class/Posture.** RED observed on
+  committed code (probe test): `RED CONFIRMED: empty Write policy passes Validate (fails open
+  out of the derived owned set)`. FIX: Validate now enumerates explicit arms for Class, Write,
+  and Posture with fail-closed defaults (empty/typoed → invalid); EnsureFrameworkBucket requires
+  Posture == PostureOwnerCreates by EXACT match (not "not reader-must-exist"); Open accepts both
+  postures. Zero-value + unknown-value table tests for all three enums;
+  TestKVCatalog_EveryRowValidates now also proves every catalog row carries explicit values
+  (all 22 already did — no row relied on zero values).
+- [x] 10.4 **MEDIUM — ledger truth**: 8.4 marked with the orchestrator's e2e evidence + the
+  predates-this-round note (10.1 is boot-path; tiers to be re-run post-fix); this section added.
