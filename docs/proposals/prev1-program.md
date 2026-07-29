@@ -87,14 +87,30 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > e2e coverage of the coalesced lane. Lesson memo: convergence marks clear causally, never by
 > "any later event."**
 >
-> **NEXT: the last Epic C structural increment — bucket descriptor catalog (name · owner · class ·
-> retention · write-policy) + `EnsureFrameworkBucket` acquisition-seam enforcement (spec'd in
-> framework-composition as the durable closure for post-boot-cutoff bucket acquisition; boot sweeps
-> demote to legacy-drift backstops). Cadence: architect design → `/opsx:new` → dev → reviewer →
-> Codex (owner-run) → CI → merge → archive. QUEUED BEHIND IT: #712 (authoritative projection
-> quiescence for deterministic replay, semdragon ask) — the third consumer of the readiness
-> substrate; design should extend the ADR-083 producer pattern to inference stages + aggregate over
-> GRAPH_STATUS, not invent a new readiness system.**
+> **EPIC C STRUCTURAL LEG COMPLETE (2026-07-29): `framework-bucket-catalog` MERGED `eff3927f`
+> (PR #724, archived 2026-07-29).** The 22-row descriptor catalog (graph/kvcatalog.go) is the ONE
+> source; FrameworkOwnedBuckets() is a derived view (owned set 19→21: +OWNER_CLAIMS/+OWNER_PRESENCE);
+> Ensure/OpenFrameworkBucket is the acquisition seam (Kind+params retention, fail-closed on every
+> discriminated field); the post-start sweep pass is DELETED, the pre-start pass demoted to the
+> owner-absent-from-composition backstop; an AST contract test bans catalog-bucket literals outside
+> the catalog. Two live bugs died red-first (F1 ENTITY_STATES History boot-race, owner-decided
+> History=1; F2 operator-named framework buckets now fail boot off-catalog). #714 + #717 CLOSED by
+> design. ONE Codex round (clean-boot tool loss → lazy execution-time bind; cross-owner seam →
+> exact-four Validate+belt; fail-open enums → explicit arms). FOUR e2e tiers green incl. agentic.
+> BREAKING: graph/query.Config bucket fields deleted; readers fail not-ready naming the owner;
+> adopter note `docs/operations/framework-bucket-catalog.md`. Follow-ups: #725 (hello-world config,
+> pre-existing); sister-sweep before deleting caller-less `natsclient.AssertNoLifecycleRetention`;
+> graph-inference RetentionDays/CleanupInterval phantom pair; census-exempt constant-based readers →
+> Open (mechanical).
+>
+> **NEXT (owner to sequence): (1) `bounded-storage-operability` REBASES onto the catalog — its
+> graph-retention delta is stale pre-#622; its work becomes adding a `RetentionDiscardNewCeiling`
+> Kind + params and filling rows (no shape change). (2) #712 projection quiescence (semdragon ask) —
+> third consumer of the readiness substrate; extend the ADR-083 producer pattern to inference stages
+> + aggregate over GRAPH_STATUS, NOT a new readiness system. (3) Complexity-pivot remainder:
+> adopter module contract (one Register bundling payloads/vocab/factories/projections) + `--validate`
+> doing real registry composition + tutorial configs compiled in CI (#725 is the motivating case) +
+> docs rewrite LAST against the simplified surface.**
 
 > **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
 > This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
