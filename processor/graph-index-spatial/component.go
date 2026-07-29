@@ -466,11 +466,9 @@ func (c *Component) Start(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	c.cancel = cancel
 
-	// Create SPATIAL_INDEX bucket (we are the WRITER)
-	spatialBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketSpatialIndex,
-		Description: "Spatial index for geospatial queries",
-	})
+	// SPATIAL_INDEX bucket (we are the WRITER) — acquired through the catalog
+	// owner seam, which reconciles an adopted bucket to the declared policy.
+	spatialBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketSpatialIndex)
 	if err != nil {
 		cancel()
 		if ctx.Err() != nil {
@@ -571,22 +569,7 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketComponentStatus,
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-index-spatial",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-index-spatial", c.logger)
 }
 
 // ============================================================================

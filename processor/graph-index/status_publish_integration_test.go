@@ -89,8 +89,10 @@ func TestIntegration_GraphIndexPublishesReadinessHeartbeat(t *testing.T) {
 
 	status, err := statusKV.Status(ctx)
 	require.NoError(t, err)
-	require.Equal(t, int64(readiness.BucketHistory), status.History(),
-		"bucket history must be the shared contract value")
+	statusSpec, ok := graph.SpecFor(readiness.BucketGraphStatus)
+	require.True(t, ok, "GRAPH_STATUS must be a catalog bucket")
+	require.Equal(t, int64(statusSpec.History), status.History(),
+		"bucket history must be the shared catalog value")
 
 	// 2.2: the key appears AND heartbeats. Two successive entries with an advancing
 	// revision prove the write is unconditional (nothing about the index changes

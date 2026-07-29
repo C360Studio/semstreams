@@ -8,23 +8,9 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// fakeCreator records the bucket config both producers ask for. The whole point of
-// EnsureBucket is that graph-index and graph-embedding cannot ask for DIFFERENT
-// shapes of the same bucket, so the test asserts on the recorded config rather than
-// on a successful call.
-type fakeCreator struct {
-	configs []jetstream.KeyValueConfig
-	bucket  jetstream.KeyValue
-	err     error
-}
-
-func (c *fakeCreator) CreateKeyValueBucket(_ context.Context, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error) {
-	c.configs = append(c.configs, cfg)
-	return c.bucket, c.err
-}
 
 // fakeWriter captures Put calls. It is the narrow producer-side method set, so the
 // test needs neither a live NATS nor the other 19 jetstream.KeyValue methods.
@@ -46,58 +32,29 @@ func (w *fakeWriter) Put(_ context.Context, key string, value []byte) (uint64, e
 	return uint64(w.calls), nil
 }
 
-func TestEnsureBucket_BothProducersAskForOneShape(t *testing.T) {
-	creator := &fakeCreator{bucket: &fakeBucket{}}
-
-	// Two producers in one binary, as in cmd/semstreams: the second Start must ask
-	// for exactly what the first did, or the create is not idempotent.
-	for i := 0; i < 2; i++ {
-		if _, err := EnsureBucket(context.Background(), creator); err != nil {
-			t.Fatalf("EnsureBucket call %d: %v", i, err)
-		}
+// TestEnsureBucket_OneShapeIsTheCatalogRow: both producers (graph-index and
+// graph-embedding) route through EnsureBucket, which delegates to the ONE
+// catalog descriptor — so they structurally cannot ask for different shapes of
+// the same bucket. The test pins the descriptor both will acquire under.
+func TestEnsureBucket_OneShapeIsTheCatalogRow(t *testing.T) {
+	spec, ok := graph.SpecFor(BucketGraphStatus)
+	if !ok {
+		t.Fatalf("catalog must declare %s", BucketGraphStatus)
 	}
-
-	if len(creator.configs) != 2 {
-		t.Fatalf("want 2 create calls, got %d", len(creator.configs))
+	if spec.History != 3 {
+		t.Errorf("catalog History = %d, want 3 (enough replay to see recent transitions)", spec.History)
 	}
-	for i, cfg := range creator.configs {
-		if cfg.Bucket != BucketGraphStatus {
-			t.Errorf("call %d: bucket = %q, want %q", i, cfg.Bucket, BucketGraphStatus)
-		}
-		if cfg.History != BucketHistory {
-			t.Errorf("call %d: history = %d, want %d", i, cfg.History, BucketHistory)
-		}
-		// The readiness bucket is NOT the live graph, but ADR-068 discipline holds:
-		// no TTL, no size-based eviction. Freshness is judged consumer-side.
-		if cfg.TTL != 0 {
-			t.Errorf("call %d: TTL = %v, want 0 (freshness is consumer-side, ADR-083 D2)", i, cfg.TTL)
-		}
-	}
-	if !reflect.DeepEqual(creator.configs[0], creator.configs[1]) {
-		t.Errorf("producers asked for different configs:\n%+v\n%+v", creator.configs[0], creator.configs[1])
+	// The readiness bucket is NOT the live graph, but ADR-068 discipline holds:
+	// no TTL, no size-based eviction. Freshness is judged consumer-side.
+	if spec.Retention.Kind != natsclient.RetentionNoLifecycle {
+		t.Errorf("catalog retention = %q, want no-lifecycle (freshness is consumer-side, ADR-083 D2)",
+			spec.Retention.Kind)
 	}
 }
 
-func TestEnsureBucket_Errors(t *testing.T) {
-	boom := errors.New("jetstream unavailable")
-	tests := []struct {
-		name    string
-		creator BucketCreator
-		wantIs  error
-	}{
-		{name: "nil creator", creator: nil},
-		{name: "create fails", creator: &fakeCreator{err: boom}, wantIs: boom},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := EnsureBucket(context.Background(), tt.creator)
-			if err == nil {
-				t.Fatal("want error, got nil")
-			}
-			if tt.wantIs != nil && !errors.Is(err, tt.wantIs) {
-				t.Errorf("error does not wrap the cause: %v", err)
-			}
-		})
+func TestEnsureBucket_NilClientErrors(t *testing.T) {
+	if _, err := EnsureBucket(context.Background(), nil); err == nil {
+		t.Fatal("want error for nil client, got nil")
 	}
 }
 

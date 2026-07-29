@@ -229,22 +229,7 @@ func (c *Component) Start(ctx context.Context) error {
 	c.logger.Debug("ObjectStore created successfully", "name", c.instanceName, "bucket", c.config.BucketName)
 
 	// Initialize lifecycle reporter (throttled for high-throughput storing)
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-			KV:               statusBucket,
-			ComponentName:    "objectstore",
-			Logger:           c.logger,
-			EnableThrottling: true,
-		})
-	}
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "objectstore", c.logger)
 
 	// Get raw NATS connection for subscriptions
 	nc := c.natsClient.GetConnection()

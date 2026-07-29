@@ -161,11 +161,9 @@ func (q *kvRelationshipQuerier) GetIncomingRelationships(ctx context.Context, en
 // initAnomalyDetection initializes anomaly detection resources.
 // Called during Start() when EnableAnomalyDetection is true and structural is initialized.
 func (c *Component) initAnomalyDetection(ctx context.Context) error {
-	// Create ANOMALY_INDEX bucket (we are the WRITER)
-	anomalyBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketAnomalyIndex,
-		Description: "Anomaly detection index for structural gaps and inferences",
-	})
+	// ANOMALY_INDEX bucket (we are the WRITER) — acquired through the catalog
+	// owner seam.
+	anomalyBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketAnomalyIndex)
 	if err != nil {
 		if ctx.Err() != nil {
 			return errs.Wrap(ctx.Err(), "Component", "initAnomalyDetection", "context cancelled during bucket creation")

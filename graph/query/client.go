@@ -23,7 +23,14 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// Config contains configuration for the Client
+// Config contains configuration for the Client.
+//
+// The client is a READER: it binds the graph buckets must-exist through the
+// framework KV catalog seam and carries NO bucket configuration — bucket
+// shape (History, retention, replicas) is declared once in the catalog and
+// enforced by each bucket's owner. (The former EntityStates/SpatialIndex/
+// IncomingIndex fields let a reader race divergent config into a
+// get-or-create; they are gone with that bug class.)
 type Config struct {
 	// AllowUngatedReads permits direct INCOMING_INDEX reads to proceed when graph-index's
 	// readiness status endpoint is unreachable (gh#474 Codex #4). Default false =
@@ -36,25 +43,6 @@ type Config struct {
 
 	// EntityCache configuration
 	EntityCache cache.Config `json:"entity_cache"`
-
-	// KV Bucket configurations (should match GraphProcessor config)
-	EntityStates struct {
-		TTL      time.Duration `json:"ttl"`
-		History  uint8         `json:"history"`
-		Replicas int           `json:"replicas"`
-	} `json:"entity_states"`
-
-	SpatialIndex struct {
-		TTL      time.Duration `json:"ttl"`
-		History  uint8         `json:"history"`
-		Replicas int           `json:"replicas"`
-	} `json:"spatial_index"`
-
-	IncomingIndex struct {
-		TTL      time.Duration `json:"ttl"`
-		History  uint8         `json:"history"`
-		Replicas int           `json:"replicas"`
-	} `json:"incoming_index"`
 }
 
 // DefaultConfig returns a sensible default configuration
@@ -66,37 +54,6 @@ func DefaultConfig() *Config {
 			MaxSize:         1000,
 			TTL:             5 * time.Minute,
 			CleanupInterval: 1 * time.Minute,
-		},
-		EntityStates: struct {
-			TTL      time.Duration `json:"ttl"`
-			History  uint8         `json:"history"`
-			Replicas int           `json:"replicas"`
-		}{
-			// TTL MUST be 0 on the live graph: NATS age-eviction is
-			// reachability-blind and would silently expire entities with live
-			// inbound edges (ADR-068 D1). graph-ingest owns ENTITY_STATES
-			// retention; the query client is a reader and must not race in a TTL.
-			TTL:      0,
-			History:  3,
-			Replicas: 1,
-		},
-		SpatialIndex: struct {
-			TTL      time.Duration `json:"ttl"`
-			History  uint8         `json:"history"`
-			Replicas int           `json:"replicas"`
-		}{
-			TTL:      0, // no lifecycle retention on the live graph (ADR-068 D1)
-			History:  1,
-			Replicas: 1,
-		},
-		IncomingIndex: struct {
-			TTL      time.Duration `json:"ttl"`
-			History  uint8         `json:"history"`
-			Replicas int           `json:"replicas"`
-		}{
-			TTL:      0, // no lifecycle retention on the live graph (ADR-068 D1)
-			History:  1,
-			Replicas: 1,
 		},
 	}
 }
@@ -187,7 +144,12 @@ func NewClientWithMetrics(
 	return client, nil
 }
 
-// ensureBuckets initializes the KV buckets if they haven't been initialized yet
+// ensureBuckets binds the KV buckets if they haven't been bound yet. The
+// client is a READER: every bind goes through the catalog reader seam, which
+// NEVER creates and never reconciles — an absent bucket is a classified
+// not-ready error naming the owning component, and the bucket stays absent
+// (a reader that creates races divergent configuration into the owner's
+// get-or-create; that class is closed at this seam).
 func (qc *natsClient) ensureBuckets(ctx context.Context) error {
 	qc.initMu.Lock()
 	defer qc.initMu.Unlock()
@@ -196,40 +158,19 @@ func (qc *natsClient) ensureBuckets(ctx context.Context) error {
 		return nil
 	}
 
-	// Get or create ENTITY_STATES bucket
-	entityConfig := jetstream.KeyValueConfig{
-		Bucket:   "ENTITY_STATES",
-		TTL:      qc.config.EntityStates.TTL,
-		History:  qc.config.EntityStates.History,
-		Replicas: qc.config.EntityStates.Replicas,
-	}
-	entityBucket, err := qc.natsClient.CreateKeyValueBucket(ctx, entityConfig)
+	entityBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketEntityStates)
 	if err != nil {
 		return fmt.Errorf("failed to get ENTITY_STATES bucket: %w", err)
 	}
 	qc.entityBucket = entityBucket
 
-	// Get or create SPATIAL_INDEX bucket
-	spatialConfig := jetstream.KeyValueConfig{
-		Bucket:   "SPATIAL_INDEX",
-		TTL:      qc.config.SpatialIndex.TTL,
-		History:  qc.config.SpatialIndex.History,
-		Replicas: qc.config.SpatialIndex.Replicas,
-	}
-	spatialBucket, err := qc.natsClient.CreateKeyValueBucket(ctx, spatialConfig)
+	spatialBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketSpatialIndex)
 	if err != nil {
 		return fmt.Errorf("failed to get SPATIAL_INDEX bucket: %w", err)
 	}
 	qc.spatialBucket = spatialBucket
 
-	// Get or create INCOMING_INDEX bucket
-	incomingConfig := jetstream.KeyValueConfig{
-		Bucket:   "INCOMING_INDEX",
-		TTL:      qc.config.IncomingIndex.TTL,
-		History:  qc.config.IncomingIndex.History,
-		Replicas: qc.config.IncomingIndex.Replicas,
-	}
-	incomingBucket, err := qc.natsClient.CreateKeyValueBucket(ctx, incomingConfig)
+	incomingBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketIncomingIndex)
 	if err != nil {
 		return fmt.Errorf("failed to get INCOMING_INDEX bucket: %w", err)
 	}

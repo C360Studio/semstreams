@@ -121,35 +121,26 @@ func bootDrainPlatform() config.PlatformConfig {
 // TestIntegration_StartAll_MidBootComponentJoinsBootTransaction locks the
 // boot-boundary drain's core guarantee end-to-end through Manager.StartAll: a
 // component ADDED while a cold-boot component's Start is still in flight is
-// created, started, and holding its guarded bucket BEFORE the post-start
-// owned-bucket sweep runs — so the sweep reconciles its dirty bucket
-// (strip + WARN) instead of skipping it as absent and letting the create-race
-// reopen for mid-boot-update-created components.
+// created and started INSIDE the boot transaction — StartAll does not return
+// until the late owner's Start has run. Its Start reproduces the create-race
+// (a rival's raw dirty create with a foreign TTL) and closes it at the
+// acquisition seam, so by the time StartAll returns the guarded bucket is
+// clean with its stored key preserved — the post-cutoff class the retired
+// post-start sweep once covered, now held by the seam at each acquisition.
 //
-// REVERT-PROVEN discriminating: without the drain, the update-created adopter
-// starts on the watcher's detached dynamic path; its dirty create is gated on
-// the sweep's own skip-if-absent probe of the bucket, so whenever that probe
-// CAN fire (the sweep running before the late component holds its bucket),
-// the bad interleaving is forced — skip-record present, TTL survives, red.
-// Under the drain the probe can never fire (the bucket exists before the
-// sweep), the gate's bounded fallback elapses, and every assertion is
-// ordering-guaranteed green.
+// Discriminating for the drain: without it, the update-created adopter is
+// handled by the watcher's detached dynamic path AFTER StartAll returns, and
+// the started-state assertion at StartAll-return goes red. (The
+// deterministically-forced interleaving variants live in the Edit/Registry
+// drain tests below, whose cap-1-buffer drop is revert-provable without
+// timing.)
 func TestIntegration_StartAll_MidBootComponentJoinsBootTransaction(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	defer testClient.Terminate()
 	client := testClient.Client
 
-	// The sweep's skip-if-absent probe of the guarded bucket — the observable
-	// event proving the sweep passed the bucket over while absent (only
-	// possible when the late component starts after the sweep).
-	sweepPassedAbsent := make(chan struct{})
-	var sweepOnce sync.Once
-	rec := &bucketSweepRecordingHandler{onRecord: func(r slog.Record) {
-		if recordIsSkipProbeFor(r, graph.BucketEmbeddingIndex) {
-			sweepOnce.Do(func() { close(sweepPassedAbsent) })
-		}
-	}}
+	rec := &bucketSweepRecordingHandler{}
 
 	gated := newBarrierTestComponent("gate-comp")
 	gated.entered = make(chan struct{})
@@ -172,9 +163,8 @@ func TestIntegration_StartAll_MidBootComponentJoinsBootTransaction(t *testing.T)
 		Type: string(types.ComponentTypeProcessor),
 		Factory: func(_ json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 			c := &bucketAdopterComponent{
-				client:            deps.NATSClient,
-				bucket:            graph.BucketEmbeddingIndex,
-				sweepPassedAbsent: sweepPassedAbsent,
+				client: deps.NATSClient,
+				bucket: graph.BucketEmbeddingIndex,
 			}
 			adopterMu.Lock()
 			adopter = c
@@ -248,24 +238,22 @@ func TestIntegration_StartAll_MidBootComponentJoinsBootTransaction(t *testing.T)
 	started := adopter
 	adopterMu.Unlock()
 	require.NotNil(t, started, "the drain must have built the late owner through the factory path")
-	require.Equal(t, 7*24*time.Hour, started.createTimeTTL(),
-		"the bucket must have carried the foreign TTL at its mid-boot creation")
+	require.Equal(t, 7*24*time.Hour, started.dirtyTTLBeforeSeam(),
+		"the bucket must have carried the foreign TTL at its mid-boot creation, before the seam ran")
 
-	// ...so the post-start sweep saw its bucket (no skip-if-absent probe) and
-	// reconciled it: TTL stripped, key preserved, WARN naming the bucket.
-	assert.False(t, rec.skipProbeMentioning(graph.BucketEmbeddingIndex),
-		"the sweep must never have probed %s as absent — the mid-boot owner held it first", graph.BucketEmbeddingIndex)
+	// ...and its seam acquisition reconciled the dirty bucket inside that
+	// Start: TTL stripped, key preserved, before StartAll returned — no boot
+	// sweep involved (StartAll no longer has one).
 	fresh, err := client.GetKeyValueBucket(ctx, graph.BucketEmbeddingIndex)
 	require.NoError(t, err)
 	maxAge, maxBytes, err := natsclient.BucketRetention(ctx, fresh)
 	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), maxAge, "the post-start sweep must strip the mid-boot owner's dirty TTL")
-	assert.LessOrEqual(t, maxBytes, int64(0), "the sweep must leave MaxBytes non-binding")
+	assert.Equal(t, time.Duration(0), maxAge,
+		"the mid-boot owner's seam acquisition must strip its dirty TTL inside the boot transaction")
+	assert.LessOrEqual(t, maxBytes, int64(0), "the seam must leave MaxBytes non-binding")
 	entry, err := fresh.Get(ctx, "entity.key.one")
 	require.NoError(t, err, "the stored key must survive the strip")
 	assert.Equal(t, []byte("survivor"), entry.Value())
-	assert.True(t, rec.warnMentioning(graph.BucketEmbeddingIndex),
-		"the sweep must WARN naming the stripped bucket %s", graph.BucketEmbeddingIndex)
 }
 
 // valuedComponent records the config value its instance was built from and

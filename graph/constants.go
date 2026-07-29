@@ -60,52 +60,23 @@ const (
 	// BucketGraphStatus is the ADR-083 readiness distribution bucket. Producers
 	// (graph-index/graph-embedding) write their liveness envelope; consumers watch
 	// it to answer "(status, fresh|unknown)". It is the single source of truth for
-	// the bucket name — graph/readiness re-exports this constant. A member of
-	// FrameworkOwnedBuckets so a generic rule update_kv cannot forge readiness
-	// (framework-owned-bucket-guards F3). The retention sweep covers it (it is
-	// created clean with History=BucketHistory and no TTL, so a no-op in steady
-	// state); the sweep strips only MaxAge/MaxBytes and leaves History untouched.
+	// the bucket name — graph/readiness re-exports this constant. Its catalog
+	// descriptor declares History 3 (readiness replay depth) and no lifecycle
+	// retention; the acquisition seam and backstop strip only MaxAge/MaxBytes and
+	// leave History untouched.
 	BucketGraphStatus = "GRAPH_STATUS"
+
+	// BucketOwnerClaims is the ADR-056 owner-claim registry — the single
+	// `_registry` epoch key, written only through the ownership Registry. The
+	// epoch write IS the registration audit trail (the KV-twofer), so its
+	// catalog descriptor declares History 10 to answer "who registered what,
+	// when" across recent deploys — and NO TTL (a TTL would age out the durable
+	// epoch between deploys).
+	BucketOwnerClaims = "OWNER_CLAIMS"
+	// BucketOwnerPresence holds ADR-056 owner liveness heartbeats. Its catalog
+	// descriptor declares bounded-ttl retention (ownership.PresenceTTL): the
+	// TTL IS the liveness contract — a presence key not re-bumped within the
+	// window ages out so a crashed owning lease frees — and the acquisition
+	// seam converges to it rather than stripping it.
+	BucketOwnerPresence = "OWNER_PRESENCE"
 )
-
-// FrameworkOwnedBuckets returns the authoritative, derived, and framework
-// operational graph buckets whose writes are owned by graph components. Generic
-// KV writers (e.g. a rule update_kv) must not mutate these buckets. The set
-// includes two operational buckets alongside ENTITY_STATES and its derived
-// indexes: GRAPH_INGEST_APPLIED_SEQ (redelivery-guard stamps, #715) and
-// GRAPH_STATUS (readiness envelopes) — forging either subverts a framework
-// invariant, so both are write-protected.
-func FrameworkOwnedBuckets() []string {
-	return []string{
-		BucketEntityStates,
-		BucketPredicateIndex,
-		BucketIncomingIndex,
-		BucketOutgoingIndex,
-		BucketAliasIndex,
-		BucketNameIndex,
-		BucketEntitySuffixIndex,
-		BucketSpatialIndex,
-		BucketTemporalIndex,
-		BucketTemporalIndexReverse,
-		BucketContextIndex,
-		BucketEmbeddingIndex,
-		BucketEmbeddingDedup,
-		BucketCommunityIndex,
-		BucketCommunitySummaries,
-		BucketAnomalyIndex,
-		BucketStructuralIndex,
-		BucketGraphIngestAppliedSeq,
-		BucketGraphStatus,
-	}
-}
-
-// IsFrameworkOwnedBucket reports whether a bucket's writes belong exclusively
-// to an authoritative or derived graph component.
-func IsFrameworkOwnedBucket(bucket string) bool {
-	for _, owned := range FrameworkOwnedBuckets() {
-		if bucket == owned {
-			return true
-		}
-	}
-	return false
-}

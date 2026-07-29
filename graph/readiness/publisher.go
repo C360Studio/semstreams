@@ -8,30 +8,19 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
 // This file is the PRODUCER side of the ADR-083 contract; watcher.go is the consumer
-// side. Both live here so the bucket name, key names, history depth, heartbeat, and
-// value encoding cannot drift apart across two processors and four consumers.
-
-// bucketDescription is the operator-facing "what is this and who owns it" string on
-// the bucket itself, so `nats kv ls` explains the bucket without the spec.
-const bucketDescription = "ADR-083 readiness envelopes, one key per producer (operational component status, not graph data)"
+// side. Both live here so the key names, heartbeat, and value encoding cannot drift
+// apart across two processors and four consumers. The bucket's SHAPE (name, History,
+// retention) is declared once in the framework KV catalog (graph/kvcatalog.go).
 
 // publishTimeout bounds one heartbeat write. It is well under DefaultHeartbeat so a
 // wedged Put cannot eat the whole interval it exists to announce: the tick loop must
 // come back around and try again (and a Ticker drops, never queues, missed ticks).
 const publishTimeout = 2 * time.Second
-
-// BucketCreator creates-or-opens a KV bucket. *natsclient.Client satisfies it via
-// CreateKeyValueBucket — declared here as the narrow method set with the EXACT
-// signature (a divergent embedded signature silently fails the structural match and
-// no-ops the capability) rather than importing natsclient, which would make this
-// package non-leaf and drag a live NATS into its unit tests.
-type BucketCreator interface {
-	CreateKeyValueBucket(ctx context.Context, cfg jetstream.KeyValueConfig) (jetstream.KeyValue, error)
-}
 
 // StatusWriter writes one status value. jetstream.KeyValue satisfies it; taking the
 // one method the publisher needs keeps the seam narrow and the unit tests honest.
@@ -39,35 +28,23 @@ type StatusWriter interface {
 	Put(ctx context.Context, key string, value []byte) (uint64, error)
 }
 
-// EnsureBucket creates-or-opens the GRAPH_STATUS bucket and returns a handle. Every
-// producer calls it at Start, EAGERLY — before any consumer could bind — because a
-// consumer that binds a watch to a not-yet-existent bucket reads permanently unknown
-// (fail-closed) until it happens to rebind, and the whole point of this contract is
-// that unknown means something is wrong.
+// EnsureBucket acquires the GRAPH_STATUS bucket through the catalog owner seam
+// and returns a handle. Every producer calls it at Start, EAGERLY — before any
+// consumer could bind — because a consumer that binds a watch to a
+// not-yet-existent bucket reads permanently unknown (fail-closed) until it
+// happens to rebind, and the whole point of this contract is that unknown
+// means something is wrong.
 //
-// It is IDEMPOTENT across producers and restarts: graph-index and graph-embedding both
-// run in cmd/semstreams and both call it, in either order and possibly concurrently.
-// Idempotency comes from natsclient's CreateKeyValueBucket, which gets an existing
-// bucket before attempting a create and treats a concurrent create as success.
-//
-// That get-first behavior also means an existing bucket is adopted WITHOUT comparing
-// its config, so a pre-existing GRAPH_STATUS with a different History is used as-is
-// rather than rejected. Nothing depends on that today precisely because every caller
-// routes through THIS function and therefore asks for one shape — which is the reason
-// to keep it that way rather than hand-rolling a second bucket config elsewhere.
-//
-// The bucket carries no TTL and no size-based eviction: staleness is judged
-// consumer-side from arrival time (D2), so expiring the key server-side would only
-// destroy the last-known state a consumer needs to diagnose a dead producer.
-func EnsureBucket(ctx context.Context, creator BucketCreator) (jetstream.KeyValue, error) {
-	if creator == nil {
-		return nil, errors.New("readiness: nil bucket creator")
+// It is IDEMPOTENT across producers and restarts: graph-index and
+// graph-embedding both run in cmd/semstreams and both call it, in either order
+// and possibly concurrently; the seam's create-or-open resolves the race, and
+// an adopted bucket is RECONCILED to the catalog declaration (History,
+// no-lifecycle retention) rather than adopted config-unseen.
+func EnsureBucket(ctx context.Context, client *natsclient.Client) (jetstream.KeyValue, error) {
+	if client == nil {
+		return nil, errors.New("readiness: nil NATS client")
 	}
-	bucket, err := creator.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      BucketGraphStatus,
-		Description: bucketDescription,
-		History:     BucketHistory,
-	})
+	bucket, err := graph.EnsureCatalogBucket(ctx, client, BucketGraphStatus)
 	if err != nil {
 		return nil, fmt.Errorf("readiness: ensure bucket %s: %w", BucketGraphStatus, err)
 	}

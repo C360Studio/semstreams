@@ -350,6 +350,12 @@ func TestIntegration_ReplacementActivationTombstoneTraversalClustering(t *testin
 		{FromEntityID: liveSource, Predicate: "robotics.assigned.mission"},
 	})
 
+	// The query client is a must-exist READER now; provision the one bucket
+	// this composition's components don't own (SPATIAL_INDEX belongs to
+	// graph-index-spatial, which is not part of this test) the way its owner
+	// would — through the catalog seam.
+	_, err = graph.EnsureCatalogBucket(ctx, nc, graph.BucketSpatialIndex)
+	require.NoError(t, err)
 	queryClient, err := graphquery.NewClient(ctx, nc, nil)
 	require.NoError(t, err)
 	defer queryClient.Close()

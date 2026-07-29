@@ -109,18 +109,13 @@
 // Client configuration:
 //
 //	EntityCache:              # See cache.Config
-//	EntityStates:
-//	    TTL:      24h         # KV bucket TTL
-//	    History:  3           # Version history
-//	    Replicas: 1           # Replication factor
-//	SpatialIndex:
-//	    TTL:      1h          # Spatial data TTL
-//	    History:  1
-//	    Replicas: 1
-//	IncomingIndex:
-//	    TTL:      24h         # Incoming edge TTL
-//	    History:  1
-//	    Replicas: 1
+//	AllowUngatedReads: false  # Readiness-gate escape hatch (standalone deploys only)
+//
+// The client carries NO bucket configuration: it is a reader, binding
+// ENTITY_STATES / SPATIAL_INDEX / INCOMING_INDEX must-exist through the
+// framework KV catalog. An absent bucket yields a classified not-ready error
+// naming the owning component; bucket shape (History, retention) is declared
+// once in the catalog and enforced by each owner.
 //
 // # Thread Safety
 //

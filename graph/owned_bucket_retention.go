@@ -11,46 +11,38 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// AssertOwnedBucketsClean is the boot-time sweep that keeps the framework-owned
-// KV plane free of NATS lifecycle retention (ADR-068 D1; #622). It ranges
-// FrameworkOwnedBuckets() — the guard covers the full owned set with NO
-// exceptions — and, for EACH bucket that exists WHEN IT RUNS, runs the KV
-// reconcile-then-assert atom (natsclient.ReconcileNoLifecycleRetention): a
-// foreign/legacy MaxAge or binding MaxBytes is stripped in place and WARNed; a
-// genuinely unfixable retention aborts boot fast with the bucket named, rather
-// than proceeding to silently expire graph state.
+// AssertOwnedBucketsClean is the PRE-START LEGACY-DRIFT BACKSTOP for the
+// framework KV catalog's no-lifecycle buckets (ADR-068 D1). It has exactly ONE
+// honest job: a catalog bucket whose OWNER IS NOT DEPLOYED in this composition
+// never has its acquisition seam called — e.g. an EMBEDDING_INDEX left behind
+// by a prior semantic deploy when booting a statistical configuration — so one
+// boot-time pass over the catalog strips prior-boot/out-of-band retention dirt
+// (or fails boot closed) for those owner-absent buckets.
 //
-// It is invoked TWICE per boot, and the coverage guarantee is the pair, because
-// a single pass can only reconcile the buckets that happen to exist at the
-// moment it ranges the set:
+// Everything else is the seam's job, not this pass's: every deployed owner
+// acquires its buckets through natsclient.EnsureFrameworkBucket inside its own
+// Start — create-or-open, reconcile to the declared policy, verify, fail that
+// Start closed — which covers prior-boot dirt AND this boot's create-races AND
+// post-boot dynamic re-acquisition, at the moment of acquisition. There is no
+// post-start sweep pass anymore; deleting it is safe precisely because its
+// justified class (created-dirty during this boot) is reconciled at creation.
 //
-//   - PRE-START belt — from service.WireOwnership, before rule evaluation or the
-//     graph components' get-or-create can lean on a persisted-dirty bucket. It
-//     takes down prior-boot / out-of-band dirt early.
-//   - POST-START coverage — from the tail of Manager.StartAll. Its ordering is
-//     provided by the component-start barrier: ComponentManager.Start returns
-//     only after every lifecycle component's Start has returned (or failed
-//     boot), so every owner holds its bucket handle before this pass ranges the
-//     set, and it runs before the HTTP surface reports healthy. This pass
-//     catches a bucket created dirty DURING this boot's own startup (a
-//     create-race) that the pre-start belt necessarily skipped as absent.
+// Scope: only descriptors declared no-lifecycle. A bounded-ttl bucket's TTL is
+// its declared contract (the seam converges to it; this pass must not strip
+// it) and an unmanaged bucket carries no framework retention guarantee.
 //
 // Each bucket is bound READ-ONLY / MUST-EXIST (never created) / SKIP-IF-ABSENT:
-// a guarded bucket that does not yet exist (a tier-gated deploy that has not
-// provisioned, e.g., an embedding or community index) is passed over — it cannot
-// carry a foreign TTL, and its true owner creates it clean. The sweep therefore
-// imposes no bucket-creation ordering and never forces a resourceless deploy to
-// provision a bucket it does not use (feedback_unconditional_resource_wiring).
-//
-// graph-ingest additionally keeps its two at-creation asserts (ENTITY_STATES +
-// redelivery guard) as create-time belt-and-suspenders.
+// a guarded bucket that does not exist cannot carry a foreign TTL, and its true
+// owner creates it clean through the seam. The backstop therefore imposes no
+// bucket-creation ordering and never forces a resourceless deploy to provision
+// a bucket it does not use (feedback_unconditional_resource_wiring).
 func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if client == nil {
 		return errs.WrapInvalid(errors.New("nil NATS client"),
-			"graph", "AssertOwnedBucketsClean", "NATS client is required for the owned-bucket retention sweep")
+			"graph", "AssertOwnedBucketsClean", "NATS client is required for the owned-bucket retention backstop")
 	}
 
 	js, err := client.JetStream()
@@ -58,14 +50,21 @@ func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, log
 		return errs.WrapTransient(err, "graph", "AssertOwnedBucketsClean", "get JetStream context")
 	}
 
-	for _, bucket := range FrameworkOwnedBuckets() {
+	for _, spec := range KVCatalog() {
+		// The backstop covers exactly the catalog's no-lifecycle descriptors: a
+		// bounded-ttl bucket's TTL is its declared contract (never stripped),
+		// and an unmanaged bucket has no framework retention guarantee at all.
+		if spec.Retention.Kind != natsclient.RetentionNoLifecycle {
+			continue
+		}
+		bucket := spec.Name
 		// Read-only / must-exist probe: GetKeyValueBucket never creates a bucket
 		// and returns jetstream.ErrBucketNotFound for an absent one (exempted from
 		// the shared circuit breaker). Skip-if-absent: a not-yet-provisioned
 		// tier-gated bucket is passed over.
 		if _, err := client.GetKeyValueBucket(ctx, bucket); err != nil {
 			if errors.Is(err, jetstream.ErrBucketNotFound) {
-				logger.Debug("owned-bucket retention sweep: bucket absent, skipping",
+				logger.Debug("owned-bucket retention backstop: bucket absent, skipping",
 					slog.String("bucket", bucket))
 				continue
 			}

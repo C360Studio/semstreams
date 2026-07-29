@@ -60,7 +60,14 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
 	}
 
-	// Validate required output buckets exist
+	// Validate output buckets: the four graph-index-OWNED subjects are all
+	// required AND the only ones permitted. An output outside the set is
+	// rejected whether it is off-catalog (an operator typo that would
+	// otherwise become a stray unguarded bucket, F2) or a catalog bucket
+	// owned by ANOTHER component (which would let a config string route
+	// graph-index through the OWNER seam — create + destructive History
+	// reconcile — for a bucket it does not own, defeating call-site-selection
+	// owner enforcement; assignBucket would silently drop the handle anyway).
 	requiredBuckets := map[string]bool{
 		graph.BucketOutgoingIndex:  false,
 		graph.BucketIncomingIndex:  false,
@@ -69,11 +76,20 @@ func (c *Config) Validate() error {
 	}
 
 	for _, output := range c.Ports.Outputs {
-		if output.Subject != "" {
-			if _, required := requiredBuckets[output.Subject]; required {
-				requiredBuckets[output.Subject] = true
-			}
+		if output.Subject == "" {
+			continue
 		}
+		if _, required := requiredBuckets[output.Subject]; !required {
+			if owner := graph.OwnerOf(output.Subject); owner != "" {
+				return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+					fmt.Sprintf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
+						output.Name, output.Subject, owner))
+			}
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+				fmt.Sprintf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
+					output.Name, output.Subject))
+		}
+		requiredBuckets[output.Subject] = true
 	}
 
 	for bucket, found := range requiredBuckets {
@@ -725,13 +741,48 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 }
 
-// createOutputBuckets creates all output KV buckets for the indexes.
+// createOutputBuckets acquires every output KV bucket through the catalog
+// seam. A configuration-supplied output subject MUST resolve to a catalog
+// descriptor — an operator typo of OUTGOING_INDEX must fail boot naming the
+// subject, never silently create a stray bucket that no guard protects and no
+// reader consumes (framework-bucket-catalog F2).
 func (c *Component) createOutputBuckets(ctx context.Context) error {
+	// The exact set of buckets graph-index OWNS and may route through the
+	// owner seam. Config.Validate already rejects anything else; this belt
+	// re-checks at the acquisition point — as a PRE-PASS, before any seam
+	// call — so a config that reached Start without passing Validate (a
+	// dynamically-supplied Config literal) still cannot make graph-index
+	// Ensure another owner's bucket, and a rejection has zero side effects.
+	ownedOutputs := map[string]bool{
+		graph.BucketOutgoingIndex:  true,
+		graph.BucketIncomingIndex:  true,
+		graph.BucketAliasIndex:     true,
+		graph.BucketPredicateIndex: true,
+	}
 	for _, portDef := range c.config.Ports.Outputs {
-		bucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-			Bucket:      portDef.Subject,
-			Description: fmt.Sprintf("Graph index bucket: %s", portDef.Name),
-		})
+		if ownedOutputs[portDef.Subject] {
+			continue
+		}
+		if owner := graph.OwnerOf(portDef.Subject); owner != "" {
+			return errs.WrapInvalid(
+				fmt.Errorf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
+					portDef.Name, portDef.Subject, owner),
+				"Component", "createOutputBuckets", "enforce graph-index bucket ownership")
+		}
+		return errs.WrapInvalid(
+			fmt.Errorf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
+				portDef.Name, portDef.Subject),
+			"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
+	}
+	for _, portDef := range c.config.Ports.Outputs {
+		spec, ok := graph.SpecFor(portDef.Subject)
+		if !ok {
+			return errs.WrapInvalid(
+				fmt.Errorf("output port %q subject %q does not resolve to a framework KV catalog bucket",
+					portDef.Name, portDef.Subject),
+				"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
+		}
+		bucket, err := natsclient.EnsureFrameworkBucket(ctx, c.natsClient, spec)
 		if err != nil {
 			if ctx.Err() != nil {
 				return errs.Wrap(ctx.Err(), "Component", "createOutputBuckets", "context cancelled")
@@ -741,23 +792,17 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		c.assignBucket(portDef.Subject, bucket)
 	}
 
-	// Create CONTEXT_INDEX bucket for triple provenance tracking
-	contextBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketContextIndex,
-		Description: "Triple context provenance index",
-	})
+	// CONTEXT_INDEX bucket for triple provenance tracking
+	contextBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketContextIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketContextIndex))
 	}
 	c.contextBucket = c.natsClient.NewKVStore(contextBucket)
 
-	// Create NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
+	// NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
 	// CONTEXT_INDEX — not a declared output port, so existing configs don't need
 	// to add it.
-	nameBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketNameIndex,
-		Description: "Name/title → entities index for deterministic name lookup",
-	})
+	nameBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketNameIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketNameIndex))
 	}
@@ -802,22 +847,7 @@ func (c *Component) assignBucket(subject string, bucket jetstream.KeyValue) {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-index",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-index", c.logger)
 }
 
 // ============================================================================

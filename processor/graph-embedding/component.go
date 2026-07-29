@@ -874,21 +874,17 @@ func (c *Component) createEmbedder() error {
 	return nil
 }
 
-// createEmbeddingBuckets creates the embedding index and dedup buckets.
+// createEmbeddingBuckets acquires the embedding index and dedup buckets
+// through the catalog owner seam, which reconciles an adopted bucket to the
+// declared policy (a foreign TTL is stripped or this Start fails closed).
 func (c *Component) createEmbeddingBuckets(ctx context.Context) (jetstream.KeyValue, jetstream.KeyValue, error) {
-	indexBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketEmbeddingIndex,
-		Description: "Entity embedding index",
-	})
+	indexBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketEmbeddingIndex)
 	if err != nil {
 		return nil, nil, errs.Wrap(err, "Component", "createEmbeddingBuckets",
 			fmt.Sprintf("KV bucket: %s", graph.BucketEmbeddingIndex))
 	}
 
-	dedupBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketEmbeddingDedup,
-		Description: "Entity embedding deduplication",
-	})
+	dedupBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketEmbeddingDedup)
 	if err != nil {
 		return nil, nil, errs.Wrap(err, "Component", "createEmbeddingBuckets",
 			fmt.Sprintf("KV bucket: %s", graph.BucketEmbeddingDedup))
@@ -917,22 +913,7 @@ func (c *Component) createStatusBucket(ctx context.Context) error {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-embedding",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-embedding", c.logger)
 }
 
 // initStorageAndWorker initializes storage and starts the embedding worker.

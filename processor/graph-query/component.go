@@ -105,8 +105,12 @@ func DefaultConfig() Config {
 
 // Component implements the graph query coordinator
 type Component struct {
-	config        Config
-	natsClient    natsRequester
+	config     Config
+	natsClient natsRequester
+	// rawNATSClient is the concrete client for the catalog bucket seam
+	// (lifecycle reporting); nil in interface-faked unit tests, in which case
+	// the reporter degrades to the no-op.
+	rawNATSClient *natsclient.Client
 	pathSearcher  *PathSearcher
 	router        *StaticRouter
 	logger        *slog.Logger
@@ -201,6 +205,7 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 	comp := &Component{
 		config:               config,
 		natsClient:           deps.NATSClient, // Assign to interface field
+		rawNATSClient:        deps.NATSClient,
 		pathSearcher:         NewPathSearcher(deps.NATSClient, config.QueryTimeout, config.MaxDepth, logger),
 		logger:               logger,
 		modelRegistry:        deps.ModelRegistry,
@@ -352,32 +357,12 @@ func (c *Component) Initialize() error {
 	return nil
 }
 
-// initLifecycleReporter initializes the lifecycle reporter for status tracking
+// initLifecycleReporter initializes the lifecycle reporter for status
+// tracking. It routes through the catalog helper — the former raw
+// js.CreateOrUpdateKeyValue here bypassed both the natsclient wrapper (and
+// its circuit breaker) and the shared bucket shape.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	js, err := c.natsClient.JetStream()
-	if err != nil {
-		c.logger.Warn("Failed to get JetStream, lifecycle reporting disabled", slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-
-	statusBucket, err := js.CreateOrUpdateKeyValue(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-query",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.rawNATSClient, "graph-query", c.logger)
 }
 
 // initLLMClassifier wires the LLM query classifier if the model registry
@@ -513,7 +498,7 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	c.communityWatcher = resource.NewWatcher(
-		"COMMUNITY_INDEX",
+		graph.BucketCommunityIndex,
 		func(ctx context.Context) error {
 			_, err := c.natsClient.GetKeyValueBucket(ctx, graph.BucketCommunityIndex)
 			return err

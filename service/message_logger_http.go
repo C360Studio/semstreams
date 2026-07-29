@@ -475,9 +475,9 @@ func (ml *MessageLogger) queryKVBucket(
 	//      SPATIAL_INDEX/COMMUNITY_INDEX/EMBEDDING_INDEX on a cluster where the
 	//      owner had not started yet left that index silently expiring forever
 	//      after — live graph state and required current indexes never carry
-	//      TTL or lifecycle eviction (ADR-068 D1). For ENTITY_STATES it also
-	//      trips graph-ingest's AssertNoLifecycleRetention, wedging its next
-	//      restart.
+	//      TTL or lifecycle eviction (ADR-068 D1). Today the owner's
+	//      catalog-seam acquisition strips such a foreign TTL at its next
+	//      restart, but a reader still must never be the emitter.
 	//   2. A typo'd bucket name must 404, not materialize a permanent bucket.
 	//
 	// Mirrors getKVBucketForWatch in message_logger_kv_watch.go.

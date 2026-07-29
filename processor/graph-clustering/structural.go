@@ -9,17 +9,14 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/structural"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // initStructural initializes structural analysis resources.
 // Called during Start() when EnableStructural is true.
 func (c *Component) initStructural(ctx context.Context) error {
-	// Create STRUCTURAL_INDEX bucket (we are the WRITER)
-	structuralBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketStructuralIndex,
-		Description: "Structural index for k-core and pivot distances",
-	})
+	// STRUCTURAL_INDEX bucket (we are the WRITER) — acquired through the
+	// catalog owner seam.
+	structuralBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketStructuralIndex)
 	if err != nil {
 		if ctx.Err() != nil {
 			return errs.Wrap(ctx.Err(), "Component", "initStructural", "context cancelled during bucket creation")

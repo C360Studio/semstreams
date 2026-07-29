@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/config"
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/retry"
@@ -296,29 +295,15 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		logger.Debug("Manager.StartAll: Service started successfully", "name", name)
 	}
 
-	// ADR-068 D1 post-start coverage (framework-owned-bucket-guards F1; #622):
-	// the pre-start WireOwnership belt only reconciles buckets that already exist
-	// when it runs — it necessarily SKIPS a guarded bucket a component (or a
-	// racing process) CREATES during the service-start loop above, which
-	// CreateKeyValueBucket then adopts UNCHANGED (foreign TTL and all). The
-	// ordering that makes this pass a coverage guarantee is the component-start
-	// BARRIER: ComponentManager.Start returns only after every lifecycle
-	// component's Start has returned (or failed boot), so by the time the
-	// service-start loop above completes, every owner holds its bucket handle.
-	// The sweep then strips a create-race dirty bucket — or fails boot closed —
-	// BEFORE completeHTTPSetup brings the surface up and the process could
-	// briefly report healthy. The pre-start belt is the early takedown for
-	// prior-boot dirt. Both cmd/semstreams and cmd/e2e-semstreams funnel through
-	// StartAll, so this one call covers both binaries with no per-main edit. A
-	// NATS-less Manager (resourceless deploy) has no buckets to sweep — skip and
-	// debug-log rather than force-provision.
-	if m.natsClient != nil {
-		if err := graph.AssertOwnedBucketsClean(ctx, m.natsClient, logger); err != nil {
-			return fmt.Errorf("post-start framework-owned bucket retention sweep: %w", err)
-		}
-	} else {
-		logger.Debug("Manager.StartAll: no NATS client — skipping post-start owned-bucket retention sweep")
-	}
+	// There is deliberately NO post-start owned-bucket retention pass here. Its
+	// entire justified class — a bucket created dirty during this boot's own
+	// startup — is reconciled AT CREATION inside each owner's Start by the
+	// bucket acquisition seam (natsclient.EnsureFrameworkBucket), earlier and
+	// more precisely than a sweep could; a seam failure fails that component's
+	// Start, which the component-start barrier turns into a failed boot before
+	// completeHTTPSetup brings the surface up. The one class the seam cannot
+	// reach (a catalog bucket whose owner is absent from this composition) is
+	// covered by the pre-start legacy-drift backstop in WireOwnership.
 
 	// Now that all services are started, register their HTTP handlers and start the server
 	logger.Debug("Manager.StartAll: Completing HTTP setup with service handlers")

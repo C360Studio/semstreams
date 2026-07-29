@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -38,7 +39,7 @@ func NewClaimReader(ctx context.Context, client *natsclient.Client, logger *slog
 	if logger == nil {
 		logger = slog.Default()
 	}
-	bucket, err := client.GetKeyValueBucket(ctx, BucketOwnerClaims)
+	bucket, err := graph.OpenCatalogBucket(ctx, client, BucketOwnerClaims)
 	if err != nil {
 		return nil, fmt.Errorf("ownership: open %s read-only: %w", BucketOwnerClaims, err)
 	}

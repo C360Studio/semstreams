@@ -5,15 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/nats-io/nats.go/jetstream"
 )
-
-// ownerClaimsHistory is how many past epoch revisions OWNER_CLAIMS retains.
-// The epoch write IS the registration audit trail (the KV-twofer), so a modest
-// history depth answers "who registered what, when" across the last several
-// deploys without unbounded growth on a single small key.
-const ownerClaimsHistory = 10
 
 // EnsureBuckets idempotently creates the framework-owned ownership buckets and
 // returns a Registry over them.
@@ -27,15 +21,17 @@ const ownerClaimsHistory = 10
 // registration a silent no-op (the buckets would not yet exist). That is why
 // this is a standalone eager call, not graph-ingest work.
 //
-// Bucket layout (ADR-056 Decision 2):
+// Bucket layout (ADR-056 Decision 2; both shapes are declared in the framework
+// KV catalog, graph/kvcatalog.go, and acquired through the owner seam):
 //   - OWNER_CLAIMS — the single `_registry` epoch key; History for audit, NO
 //     TTL (a TTL would age out the durable epoch between deploys).
 //   - OWNER_PRESENCE — heartbeat keys only for atomic registrations containing
-//     replace/CAS claims; a bucket-level TTL = PresenceTTL IS their staleness
-//     backstop. An absent key means that owning entry is compactable. Non-owning
-//     append/foreign-edge-only entries intentionally have no key and persist.
-//     Without this TTL a crashed owning lease is never reaped and its stale
-//     claim blocks every future registrant forever — so the TTL is not optional.
+//     replace/CAS claims; the catalog's bounded-ttl (= PresenceTTL) IS their
+//     staleness backstop. An absent key means that owning entry is compactable.
+//     Non-owning append/foreign-edge-only entries intentionally have no key and
+//     persist. Without this TTL a crashed owning lease is never reaped and its
+//     stale claim blocks every future registrant forever — so the TTL is not
+//     optional, and the seam CONVERGES to it rather than stripping it.
 //
 // PENDING_EDGES (BucketPendingEdges) is deliberately NOT created here: its
 // consumer (the Decision-4 foreign-edge buffer) is a later increment, and a
@@ -54,20 +50,12 @@ func EnsureBuckets(ctx context.Context, client *natsclient.Client, logger *slog.
 		logger = slog.Default()
 	}
 
-	claims, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      BucketOwnerClaims,
-		Description: "ADR-056 owner-claim registry — single _registry epoch key (no TTL)",
-		History:     ownerClaimsHistory,
-	})
+	claims, err := graph.EnsureCatalogBucket(ctx, client, BucketOwnerClaims)
 	if err != nil {
 		return nil, fmt.Errorf("ownership: create %s bucket: %w", BucketOwnerClaims, err)
 	}
 
-	presence, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      BucketOwnerPresence,
-		Description: "ADR-056 owner liveness heartbeats — bucket-TTL staleness backstop",
-		TTL:         PresenceTTL,
-	})
+	presence, err := graph.EnsureCatalogBucket(ctx, client, BucketOwnerPresence)
 	if err != nil {
 		return nil, fmt.Errorf("ownership: create %s bucket: %w", BucketOwnerPresence, err)
 	}

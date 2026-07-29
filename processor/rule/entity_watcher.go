@@ -90,10 +90,12 @@ func (rp *Processor) getEffectiveBucketPatterns() map[string][]string {
 // the owner (component_manager starts components concurrently from a map
 // iteration, so the winner is re-rolled every boot) and imposes its own config
 // on the live graph. This path previously created with TTL: 7*24h, which either
-// tripped graph-ingest's AssertNoLifecycleRetention — taking the whole graph
-// pipeline down nondeterministically — or, in a split deploy where no guard
-// runs, silently expired the live graph on a rolling 7-day window (ADR-068 D1,
-// missed emitter of gh#484).
+// tripped graph-ingest's fail-closed retention check at its next acquisition —
+// taking the whole graph pipeline down nondeterministically — or, in a split
+// deploy where no guard runs, silently expired the live graph on a rolling
+// 7-day window (ADR-068 D1, missed emitter of gh#484). Today graph-ingest's
+// catalog-seam acquisition would strip such a TTL, but a reader still must
+// never be the emitter.
 //
 // Because the owner may not have created the bucket yet on a cold cluster, wait
 // for it rather than failing on first miss: watchEntityStates latches
@@ -957,7 +959,7 @@ type entitySnapshot struct {
 // ENTITY_STATES KV bucket. A missing entity returns a DELETED snapshot with
 // nil State rather than an error.
 func (rp *Processor) fetchCurrentEntityState(ctx context.Context, entityID string) (entitySnapshot, error) {
-	entityBucket, err := rp.natsClient.GetKeyValueBucket(ctx, "ENTITY_STATES")
+	entityBucket, err := gtypes.OpenCatalogBucket(ctx, rp.natsClient, gtypes.BucketEntityStates)
 	if err != nil {
 		return entitySnapshot{}, errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get ENTITY_STATES bucket")
 	}

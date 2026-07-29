@@ -773,10 +773,17 @@ func (cm *ComponentManager) Stop(timeout time.Duration) error {
 // goroutines need to re-acquire the lock (via updateComponentState) to
 // mark state transitions, so holding it across them would deadlock.
 func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
-	// Snapshot state under the lock so the parallel goroutines below can
+	// Snapshot state under the WRITE lock so the parallel goroutines below can
 	// operate against an immutable view while re-acquiring the lock for
 	// per-component state updates.
-	cm.mu.RLock()
+	//
+	// The context-cancel pass runs under the same write lock: it nils
+	// mc.Cancel/mc.Context, and the periodic health check reads mc.Context
+	// under RLock until BaseService.Stop tears the health loop down — a cancel
+	// outside the lock is a data race with that reader (surfaced by the
+	// post-boot seam-reconcile integration test). Cancel() itself is cheap and
+	// non-blocking, so holding the lock across the loop cannot deadlock.
+	cm.mu.Lock()
 	type target struct {
 		name string
 		mc   *component.ManagedComponent
@@ -788,14 +795,12 @@ func (cm *ComponentManager) stopAllComponents(ctx context.Context) []error {
 			targets = append(targets, target{name: name, mc: mc})
 		}
 	}
-	cm.mu.RUnlock()
-
-	// Cancel all component contexts first to signal shutdown intent. This
-	// walks the snapshot; concurrent state changes are irrelevant because
-	// cancel is idempotent and mc pointers stay valid until removal.
+	// Cancel all component contexts first to signal shutdown intent; mc
+	// pointers stay valid until removal.
 	for _, t := range targets {
 		cm.cancelComponentContext(t.mc)
 	}
+	cm.mu.Unlock()
 
 	errorChan := make(chan error, len(targets))
 	var wg sync.WaitGroup

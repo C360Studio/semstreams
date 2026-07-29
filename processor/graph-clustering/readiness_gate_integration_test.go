@@ -48,11 +48,9 @@ type statusFixture struct {
 
 func newStatusFixture(ctx context.Context, t *testing.T, nc *natsclient.Client) *statusFixture {
 	t.Helper()
-	bucket, err := nc.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      readiness.BucketGraphStatus,
-		Description: "ADR-083 readiness envelopes",
-		History:     readiness.BucketHistory,
-	})
+	// Simulate the producer's acquisition through the catalog seam, so the
+	// fixture bucket carries the exact declared shape.
+	bucket, err := graph.EnsureCatalogBucket(ctx, nc, readiness.BucketGraphStatus)
 	require.NoError(t, err, "GRAPH_STATUS bucket")
 	return &statusFixture{t: t, bucket: bucket}
 }

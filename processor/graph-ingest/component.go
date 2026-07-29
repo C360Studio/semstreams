@@ -1112,26 +1112,20 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 }
 
-// initStorage initializes KV buckets and query caches.
+// initStorage initializes KV buckets and query caches. Every bucket this
+// component owns is acquired through the catalog seam
+// (natsclient.EnsureFrameworkBucket): create-or-open, reconcile to the
+// declared policy (a foreign TTL is stripped, an adopted divergent History is
+// converged), verify, or fail this Start closed — which the composition
+// root's component-start barrier turns into a failed boot.
 func (c *Component) initStorage(ctx context.Context) error {
-	// Entity states KV bucket (create if not exists) - we are the WRITER
-	bucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketEntityStates,
-		Description: "Entity state storage for graph-ingest",
-	})
+	// Entity states KV bucket - we are the WRITER (catalog owner).
+	bucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketEntityStates)
 	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "KV bucket creation")
 	}
 	c.entityBucket = c.natsClient.NewKVStore(bucket)
 	c.entityStateBucket = bucket
-
-	// D1 guardrail (ADR-068): ENTITY_STATES is get-or-create, so another process
-	// could have won the race with a TTL/size cap (e.g. a stale graph-query TTL
-	// default). Age/size eviction is reachability-blind and would silently expire
-	// entities with live inbound edges. Fail-closed at boot rather than proceed.
-	if err := c.entityBucket.AssertNoLifecycleRetention(ctx, graph.BucketEntityStates); err != nil {
-		return errs.Wrap(err, "Component", "Start", "graph retention guardrail")
-	}
 
 	// Entity query cache (HybridCache: LRU capacity + TTL freshness)
 	entityCache, err := cache.NewFromConfig[graph.EntityState](ctx, cache.Config{
@@ -1147,10 +1141,7 @@ func (c *Component) initStorage(ctx context.Context) error {
 	c.entityCache = entityCache
 
 	// Suffix index KV bucket for fast suffix→fullID resolution
-	suffixBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketEntitySuffixIndex,
-		Description: "Suffix-to-full-ID reverse index for partial entity ID resolution",
-	})
+	suffixBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketEntitySuffixIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "suffix index bucket creation")
 	}
@@ -1175,23 +1166,11 @@ func (c *Component) initStorage(ctx context.Context) error {
 	// cross-repo/EntityState schema change. No TTL: correct for MaxDeliver=0
 	// (unlimited redelivery), and the key set is bounded by entity cardinality
 	// (same order as ENTITY_STATES).
-	guardBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      graph.BucketGraphIngestAppliedSeq,
-		Description: "graph-ingest redelivery guard: (entityID/streamName) -> last-applied stream sequence (ADR-072)",
-	})
+	guardBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketGraphIngestAppliedSeq)
 	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "redelivery guard bucket creation")
 	}
 	c.ingestGuardBucket = c.natsClient.NewKVStore(guardBucket)
-
-	// The guard bucket is correctness-critical no-eviction state (ADR-072 B2/B3):
-	// TTL or size-eviction of a sequence stamp silently reopens the restart/
-	// cache-eviction overwrite this guard closes. CreateKeyValueBucket returns an
-	// existing bucket as-is, so a stale/foreign deploy could have created it with
-	// a retention policy — fail-closed at boot, exactly like ENTITY_STATES.
-	if err := c.ingestGuardBucket.AssertNoLifecycleRetention(ctx, graph.BucketGraphIngestAppliedSeq); err != nil {
-		return errs.Wrap(err, "Component", "Start", "redelivery guard retention guardrail")
-	}
 
 	// ADR-056 Decision-4 T2-seam: open OWNER_CLAIMS read-only to classify
 	// foreign-subject edges against registered ForeignEdgeClaims. graph-ingest
@@ -1379,22 +1358,7 @@ func (c *Component) markEntityWatchLost() {
 
 // initLifecycleReporter initializes the lifecycle reporter for component status tracking.
 func (c *Component) initLifecycleReporter(ctx context.Context) {
-	statusBucket, err := c.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		c.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		return
-	}
-	c.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-		KV:               statusBucket,
-		ComponentName:    "graph-ingest",
-		Logger:           c.logger,
-		EnableThrottling: true,
-	})
+	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-ingest", c.logger)
 }
 
 // initHierarchyInference initializes hierarchy inference if enabled.

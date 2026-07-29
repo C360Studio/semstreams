@@ -62,9 +62,10 @@ func (h *recordingHandler) warnMentioning(bucket string) bool {
 }
 
 // TestIntegration_AssertOwnedBucketsClean_StripsForeignTTL reproduces the
-// #610/#611 shape end-to-end through the real sweep: a derived owned bucket
-// (EMBEDDING_INDEX) is pre-created with a foreign 7-day TTL and a stored key,
-// then AssertOwnedBucketsClean strips the TTL in place, WARNs naming the bucket,
+// #610/#611 shape end-to-end through the real backstop: a derived owned bucket
+// (EMBEDDING_INDEX) is pre-created with a foreign 7-day TTL and a stored key —
+// the owner-absent-from-this-composition class the backstop exists for — then
+// AssertOwnedBucketsClean strips the TTL in place, WARNs naming the bucket,
 // and loses no key — proving boot self-heals a persisted-dirty bucket rather
 // than silently honoring its eviction.
 func TestIntegration_AssertOwnedBucketsClean_StripsForeignTTL(t *testing.T) {
@@ -99,12 +100,12 @@ func TestIntegration_AssertOwnedBucketsClean_StripsForeignTTL(t *testing.T) {
 	var maxBytes int64
 	maxAge, maxBytes, err = natsclient.BucketRetention(ctx, fresh)
 	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), maxAge, "the sweep must strip the foreign TTL")
-	assert.LessOrEqual(t, maxBytes, int64(0), "the sweep must leave MaxBytes non-binding")
+	assert.Equal(t, time.Duration(0), maxAge, "the backstop must strip the foreign TTL")
+	assert.LessOrEqual(t, maxBytes, int64(0), "the backstop must leave MaxBytes non-binding")
 
 	// A WARN was logged naming the bucket.
 	assert.True(t, rec.warnMentioning(BucketEmbeddingIndex),
-		"the sweep must WARN naming the stripped bucket %s", BucketEmbeddingIndex)
+		"the backstop must WARN naming the stripped bucket %s", BucketEmbeddingIndex)
 
 	// No stored key was deleted by the reconciliation.
 	entry, err := fresh.Get(ctx, "entity.key.one")
@@ -116,7 +117,7 @@ func TestIntegration_AssertOwnedBucketsClean_StripsForeignTTL(t *testing.T) {
 // the adopter-facing consequence of the EMBEDDINGS_CACHE deletion
 // (reopen-framework-owned-bucket-guards): an orphaned KV_EMBEDDINGS_CACHE
 // bucket left behind by a pre-deletion deployment is inert — no longer in the
-// owned set, so the sweep neither strips nor reports it, and operators may
+// owned set, so the backstop neither strips nor reports it, and operators may
 // delete it manually at leisure.
 func TestIntegration_AssertOwnedBucketsClean_IgnoresOrphanedEmbeddingsCache(t *testing.T) {
 	const orphanedCache = "EMBEDDINGS_CACHE"
@@ -140,12 +141,12 @@ func TestIntegration_AssertOwnedBucketsClean_IgnoresOrphanedEmbeddingsCache(t *t
 	require.NoError(t, err)
 	assert.Equal(t, 24*time.Hour, maxAge, "an orphaned EMBEDDINGS_CACHE bucket must be left untouched")
 	assert.False(t, rec.warnMentioning(orphanedCache),
-		"the orphaned cache must not be reported by the sweep")
+		"the orphaned cache must not be reported by the backstop")
 	assert.False(t, IsFrameworkOwnedBucket(orphanedCache),
 		"EMBEDDINGS_CACHE must no longer be framework-owned (surface deleted)")
 }
 
-// TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets proves the sweep is
+// TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets proves the backstop is
 // resourceless-deploy safe: with NO framework buckets provisioned, the sweep is
 // a clean no-op (skip-if-absent) and never creates a bucket — so a tier-gated
 // deploy that omits, e.g., the embedding/community indexes is not forced to
@@ -157,17 +158,17 @@ func TestIntegration_AssertOwnedBucketsClean_SkipsAbsentBuckets(t *testing.T) {
 
 	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(&recordingHandler{})))
 
-	// The sweep must NOT have created any guarded bucket.
+	// The backstop must NOT have created any guarded bucket.
 	for _, bucket := range FrameworkOwnedBuckets() {
 		_, err := client.GetKeyValueBucket(ctx, bucket)
 		assert.ErrorIs(t, err, jetstream.ErrBucketNotFound,
-			"sweep must not create absent bucket %s", bucket)
+			"backstop must not create absent bucket %s", bucket)
 	}
 }
 
 // TestIntegration_AssertOwnedBucketsClean_StripsGraphStatusTTL_PreservesHistory
-// is the F3 coverage test: GRAPH_STATUS is now a framework-owned bucket the
-// retention sweep covers. A foreign TTL on it is stripped, but its History
+// is the F3 coverage test: GRAPH_STATUS is a framework-owned no-lifecycle
+// catalog bucket the retention backstop covers. A foreign TTL on it is stripped, but its History
 // (MaxMsgsPerSubject) — the readiness replay depth the producer sets to 3 — MUST
 // survive, because the reconcile strips ONLY MaxAge/MaxBytes. Clobbering History
 // would silently shorten readiness replay.
@@ -195,40 +196,42 @@ func TestIntegration_AssertOwnedBucketsClean_StripsGraphStatusTTL_PreservesHisto
 	require.NoError(t, err)
 	maxAge, maxBytes, err := natsclient.BucketRetention(ctx, fresh)
 	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), maxAge, "the sweep must strip GRAPH_STATUS's foreign TTL")
-	assert.LessOrEqual(t, maxBytes, int64(0), "the sweep must leave MaxBytes non-binding")
+	assert.Equal(t, time.Duration(0), maxAge, "the backstop must strip GRAPH_STATUS's foreign TTL")
+	assert.LessOrEqual(t, maxBytes, int64(0), "the backstop must leave MaxBytes non-binding")
 
 	// CRITICAL: History (MaxMsgsPerSubject) is UNTOUCHED — the reconcile mutates
 	// only MaxAge/MaxBytes; clobbering History would break readiness replay.
 	status, err := fresh.Status(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, int64(graphStatusHistory), status.History(),
-		"the sweep must NOT clobber GRAPH_STATUS History (readiness replay depth)")
+		"the backstop must NOT clobber GRAPH_STATUS History (readiness replay depth)")
 
 	assert.True(t, rec.warnMentioning(BucketGraphStatus),
-		"the sweep must WARN naming the stripped bucket %s", BucketGraphStatus)
+		"the backstop must WARN naming the stripped bucket %s", BucketGraphStatus)
 	entry, err := fresh.Get(ctx, "graph-index")
 	require.NoError(t, err, "the stored readiness envelope must survive the strip")
 	assert.Equal(t, []byte("ready-envelope"), entry.Value())
 }
 
-// TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace proves the two-pass
-// model closes the create-race coverage hole (F1) at the sweep level: pass 1
-// SKIPS an absent guarded bucket (no create), a competing process then wins the
-// create with a foreign TTL, the owner's get-or-create ADOPTS it unchanged, and
-// pass 2 (the post-start coverage pass) strips it — preserving the stored key.
-func TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace(t *testing.T) {
+// TestIntegration_OrderedCreateRace_SeamReconcilesAtAcquisition proves the
+// create-race class the retired post-start sweep pass existed for is closed by
+// the acquisition SEAM, earlier and more precisely: the pre-start backstop
+// SKIPS the absent guarded bucket (no create), a competing process then wins
+// the create with a foreign TTL, and the owner's seam acquisition reconciles
+// the adopted-dirty bucket AT ACQUISITION — TTL stripped in place, WARN naming
+// the bucket, stored key preserved — with no second boot pass involved.
+func TestIntegration_OrderedCreateRace_SeamReconcilesAtAcquisition(t *testing.T) {
 	ctx := context.Background()
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	client := testClient.Client
 
-	// Pass 1: the guarded bucket is ABSENT — the sweep skips it (no create).
+	// The pre-start backstop: the guarded bucket is ABSENT — skipped, not created.
 	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(&recordingHandler{})))
 	_, err := client.GetKeyValueBucket(ctx, BucketCommunityIndex)
-	require.ErrorIs(t, err, jetstream.ErrBucketNotFound, "pass 1 must not create the absent bucket")
+	require.ErrorIs(t, err, jetstream.ErrBucketNotFound, "the backstop must not create the absent bucket")
 
-	// A competing process wins the create with a foreign TTL (the create-race the
-	// pre-start belt cannot see), and stores a key.
+	// A competing process wins the create with a foreign TTL (the create-race
+	// the pre-start backstop cannot see), and stores a key.
 	rival, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket: BucketCommunityIndex,
 		TTL:    7 * 24 * time.Hour,
@@ -237,25 +240,18 @@ func TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace(t *testing.T) {
 	_, err = rival.Put(ctx, "community.key", []byte("member"))
 	require.NoError(t, err)
 
-	// The owner's get-or-create ADOPTS the dirty bucket UNCHANGED (the gap F1 closes).
-	adopted, err := client.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: BucketCommunityIndex})
+	// The OWNER acquires through the seam (as graph-clustering's Start does):
+	// the dirty adopt is reconciled right there — no sweep pass runs after.
+	// (The seam's WARN-naming-the-bucket behavior is pinned at the seam's own
+	// integration tests in natsclient, where the client logger is injectable.)
+	adopted, err := EnsureCatalogBucket(ctx, client, BucketCommunityIndex)
 	require.NoError(t, err)
+
 	maxAge, _, err := natsclient.BucketRetention(ctx, adopted)
 	require.NoError(t, err)
-	require.Equal(t, 7*24*time.Hour, maxAge, "owner's get-or-create must adopt the dirty config unchanged")
-
-	// Pass 2 (post-start coverage) strips it.
-	rec := &recordingHandler{}
-	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(rec)))
-
-	fresh, err := client.GetKeyValueBucket(ctx, BucketCommunityIndex)
-	require.NoError(t, err)
-	maxAge, _, err = natsclient.BucketRetention(ctx, fresh)
-	require.NoError(t, err)
-	assert.Equal(t, time.Duration(0), maxAge, "pass 2 must strip the create-race TTL")
-	assert.True(t, rec.warnMentioning(BucketCommunityIndex),
-		"pass 2 must WARN naming the stripped bucket %s", BucketCommunityIndex)
-	entry, err := fresh.Get(ctx, "community.key")
+	assert.Equal(t, time.Duration(0), maxAge,
+		"the owner's seam acquisition must strip the create-race TTL — no post-start pass exists to catch it later")
+	entry, err := adopted.Get(ctx, "community.key")
 	require.NoError(t, err, "the stored key must survive the strip")
 	assert.Equal(t, []byte("member"), entry.Value())
 }
@@ -269,3 +265,37 @@ func TestIntegration_AssertOwnedBucketsClean_OrderedCreateRace(t *testing.T) {
 // naming the bucket"), which drives the exact function AssertOwnedBucketsClean
 // calls. This mirrors the ObjectStore precedent's identical, documented decision
 // (storage/objectstore/retention_test.go).
+
+// TestIntegration_AssertOwnedBucketsClean_PreservesBoundedTTL pins the
+// backstop's bounded-ttl exclusion: OWNER_PRESENCE's declared TTL IS the
+// liveness contract (dead owners must expire, ADR-056), and the backstop
+// ranges only the catalog's no-lifecycle descriptors. The historically obvious
+// "simplification" — iterating FrameworkOwnedBuckets(), exactly what this
+// function did before the catalog — would silently strip the TTL now that the
+// derived owned set contains OWNER_PRESENCE: presence keys stop expiring, dead
+// owners appear alive forever, with zero error or WARN. This test is the only
+// thing that makes that regression loud.
+func TestIntegration_AssertOwnedBucketsClean_PreservesBoundedTTL(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	client := testClient.Client
+
+	spec, ok := SpecFor(BucketOwnerPresence)
+	require.True(t, ok, "OWNER_PRESENCE must be a catalog descriptor")
+	require.Equal(t, natsclient.RetentionBoundedTTL, spec.Retention.Kind)
+	bucket, err := natsclient.EnsureFrameworkBucket(ctx, client, spec)
+	require.NoError(t, err)
+	_ = bucket
+
+	rec := &recordingHandler{}
+	require.NoError(t, AssertOwnedBucketsClean(ctx, client, slog.New(rec)))
+
+	fresh, err := client.GetKeyValueBucket(ctx, BucketOwnerPresence)
+	require.NoError(t, err)
+	maxAge, _, err := natsclient.BucketRetention(ctx, fresh)
+	require.NoError(t, err)
+	assert.Equal(t, spec.Retention.TTL, maxAge,
+		"the backstop must NOT strip a bounded-ttl descriptor's declared TTL — it is the liveness contract")
+	assert.False(t, rec.warnMentioning(BucketOwnerPresence),
+		"the backstop must not report the bounded-ttl bucket at all")
+}

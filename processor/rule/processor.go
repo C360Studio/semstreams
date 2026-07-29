@@ -871,27 +871,9 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// Note: entityCoalescer is initialized in run() before spawning watchers
 	// to avoid race between Start() setting it and watcher goroutines reading it
 
-	// Initialize lifecycle reporter for observability
-	if rp.natsClient != nil {
-		statusBucket, err := rp.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-			Bucket:      "COMPONENT_STATUS",
-			Description: "Component lifecycle status tracking",
-		})
-		if err != nil {
-			rp.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-				slog.Any("error", err))
-			rp.lifecycleReporter = component.NewNoOpLifecycleReporter()
-		} else {
-			rp.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-				KV:               statusBucket,
-				ComponentName:    rp.metadata.Name,
-				Logger:           rp.logger,
-				EnableThrottling: true,
-			})
-		}
-	} else {
-		rp.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	}
+	// Initialize lifecycle reporter for observability (nil-client-safe: the
+	// catalog helper degrades to the no-op reporter).
+	rp.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, rp.natsClient, rp.metadata.Name, rp.logger)
 
 	// Create shutdown, done, and ready channels for coordination
 	rp.shutdown = make(chan struct{})

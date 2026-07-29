@@ -37,7 +37,7 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 	defer cancel()
 
 	// COMMUNITY_INDEX present at start; COMMUNITY_SUMMARIES intentionally ABSENT.
-	communityKV, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: clustering.CommunityBucket})
+	communityKV, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{Bucket: gtypes.BucketCommunityIndex})
 	require.NoError(t, err)
 
 	comm := &clustering.Community{

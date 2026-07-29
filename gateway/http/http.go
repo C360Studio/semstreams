@@ -22,7 +22,6 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 // httpGatewaySchema defines the configuration schema for HTTP gateway component
@@ -123,22 +122,7 @@ func (g *Gateway) Start(ctx context.Context) error {
 	}
 
 	// Initialize lifecycle reporter (throttled for high-throughput serving)
-	statusBucket, err := g.natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
-		Bucket:      "COMPONENT_STATUS",
-		Description: "Component lifecycle status tracking",
-	})
-	if err != nil {
-		g.logger.Warn("Failed to create COMPONENT_STATUS bucket, lifecycle reporting disabled",
-			slog.Any("error", err))
-		g.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		g.lifecycleReporter = component.NewLifecycleReporterFromConfig(component.LifecycleReporterConfig{
-			KV:               statusBucket,
-			ComponentName:    "http-gateway",
-			Logger:           g.logger,
-			EnableThrottling: true,
-		})
-	}
+	g.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, g.natsClient, "http-gateway", g.logger)
 
 	g.mu.Lock()
 	g.running.Store(true)
