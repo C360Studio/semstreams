@@ -156,6 +156,26 @@ type TierComparison struct {
 
 	// Unavailable names why State is not applicable. Empty otherwise.
 	Unavailable string `json:"unavailable,omitempty"`
+
+	// Growth, Projection and Pressure are the tier ceiling's own capacity
+	// picture, measured against the account's usage of this tier rather than
+	// against any resource's declaration.
+	//
+	// They are here because a tier limit is a CEILING like any other, and an
+	// unbounded resource has no other one. Over-commitment answers a different
+	// question — "do the declarations filed against this tier fit inside it" —
+	// and answers it about declared bounds, so a tier can be comfortably
+	// within-limit while the bytes actually stored are about to exhaust it. Both
+	// are published because they fail independently.
+	//
+	// The rate is measured across the account row's own retained history, which
+	// carries this tier's usage at every past collection (storage_report.go). It
+	// is the tier's rate, not the sum of any subset of resource rates: resources
+	// appear and disappear between collections, and a sum over the ones that
+	// happen to be present would move for reasons that are not growth.
+	Growth     Growth     `json:"growth"`
+	Projection Projection `json:"projection"`
+	Pressure   Pressure   `json:"pressure"`
 }
 
 // AccountReport is the account-level half of the storage report: what each

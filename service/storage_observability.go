@@ -546,10 +546,19 @@ func (s *storageHealthSurface) worstResources(snapshot natsclient.StorageReportS
 	for _, row := range snapshot.Resources {
 		switch {
 		case row.Pressure.Evaluated && row.Pressure.State != natsclient.PressureNormal:
+			// A state inherited from the account tier says so. Left unqualified it
+			// would read as this resource's own bound filling, sending an operator
+			// to raise a bound the resource does not have — and the two findings
+			// have different fixes.
+			basis := ""
+			if row.Pressure.EvaluatedAgainst == natsclient.PressureBasisAccountTier {
+				basis = fmt.Sprintf(" vs %s account tier", row.Resource.Tier)
+			}
 			candidates = append(candidates, named{
 				name:     row.Resource.Name,
 				severity: pressureSeverityValue(row.Pressure.State),
-				label:    fmt.Sprintf("%s %s (%s)", row.Resource.Name, row.Pressure.State, row.Pressure.RaisedBy),
+				label: fmt.Sprintf("%s %s (%s)%s",
+					row.Resource.Name, row.Pressure.State, row.Pressure.RaisedBy, basis),
 			})
 		case !row.Pressure.Evaluated:
 			candidates = append(candidates, named{

@@ -400,11 +400,49 @@ const (
 	// Reporting normal here would manufacture confidence about a resource
 	// nobody can measure.
 	PressureUnavailableUnknownCapacity = "unknown-capacity"
-	// PressureUnavailableUnbounded means the resource declares no bound, so
-	// neither band has an input. The resource is NAMED as unbounded in the
-	// report instead; its risk is against the account limit, which is a
-	// per-tier comparison rather than a per-resource state.
+	// PressureUnavailableUnbounded means the resource declares no bound of its
+	// own, so neither band has an input FROM ITS OWN CAPACITY. It is not the
+	// final word on such a resource: PressureAgainstAccountTier re-evaluates it
+	// against the only ceiling it has. This reason survives for a resource whose
+	// tier offers no ceiling either.
 	PressureUnavailableUnbounded = "unbounded"
+	// PressureUnavailableUnboundedNoTierCeiling means the resource declares no
+	// bound AND its storage tier's account limit is itself unbounded. Nothing
+	// anywhere constrains it, so there is genuinely nothing to project — as
+	// distinct from a ceiling that exists and could not be read.
+	PressureUnavailableUnboundedNoTierCeiling = "unbounded-no-account-tier-ceiling"
+	// PressureUnavailableUnboundedTierUnknown means the resource declares no
+	// bound and its tier's account limit could not be read. The ceiling may well
+	// exist; this process cannot see it, which is a gap rather than a licence to
+	// report the resource as fine.
+	PressureUnavailableUnboundedTierUnknown = "unbounded-account-tier-unknown"
+	// PressureUnavailableUnboundedTierUnfiled means the resource declares no
+	// bound and could not be filed under any tier, so no account ceiling applies
+	// to it that this process can name.
+	PressureUnavailableUnboundedTierUnfiled = "unbounded-account-tier-unfiled"
+)
+
+// PressureBasis names WHICH CEILING a pressure state was evaluated against.
+//
+// It exists because this capability now evaluates two different ceilings and an
+// operator acts on them differently. A resource at high pressure against its own
+// declared bound is fixed by raising that bound or letting retention do its job.
+// A resource at high pressure against its ACCOUNT TIER has no bound of its own to
+// raise: the tier is filling, the finding is about every resource sharing it, and
+// the levers are account capacity or deleting data. Publishing the state without
+// the basis would leave those indistinguishable in the one field every alert rule
+// reads.
+type PressureBasis string
+
+// Pressure bases.
+const (
+	// PressureBasisOwnBound means the state came from the resource's own
+	// declared limit.
+	PressureBasisOwnBound PressureBasis = "own-bound"
+	// PressureBasisAccountTier means the state came from the account limit of
+	// the storage tier the resource lives in. For an unbounded resource that is
+	// the only ceiling there is; for a tier row it is the tier's own limit.
+	PressureBasisAccountTier PressureBasis = "account-tier"
 )
 
 // Pressure is one resource's derived pressure state.
@@ -429,8 +467,74 @@ type Pressure struct {
 	FromHeadroom        PressureState `json:"from_headroom,omitempty"`
 	FromTimeToThreshold PressureState `json:"from_time_to_threshold,omitempty"`
 
+	// EvaluatedAgainst names the ceiling State was derived from. Set whenever
+	// Evaluated, so no consumer has to infer the basis from the resource's
+	// capacity state.
+	EvaluatedAgainst PressureBasis `json:"evaluated_against,omitempty"`
+
 	// Unavailable names why no state was derived. Empty when Evaluated.
 	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// AgainstAccountTier restates an evaluated pressure as having come from an
+// account tier ceiling rather than a resource's own bound.
+//
+// It only relabels the basis. The bands are whatever the comparison produced, and
+// an unevaluated pressure passes through untouched: there is no state to
+// attribute to any ceiling.
+func (p Pressure) AgainstAccountTier() Pressure {
+	if !p.Evaluated {
+		return p
+	}
+	p.EvaluatedAgainst = PressureBasisAccountTier
+	return p
+}
+
+// PressureAgainstAccountTier evaluates an UNBOUNDED resource against the only
+// ceiling it has: the account limit of the storage tier it lives in.
+//
+// This exists so that declaring a stream archival cannot remove it from the
+// surface that would warn about it. Capacity matters MORE for a resource that can
+// never evict — capacity is then the only lever an operator has — so reporting it
+// permanently unevaluable would put the least recoverable resources in the account
+// behind the one field every alert rule keys on.
+//
+// The state is the TIER's, unmodified and deliberately so. The ceiling is shared,
+// the usage measured against it is the account's own, and the rate is the tier's:
+// every resource sharing a filling tier is genuinely in the same trouble. Scaling
+// the tier's verdict by this resource's share would be a fabrication — it would
+// report a stream as calm because it is individually small, while the ceiling that
+// governs it fills from elsewhere.
+//
+// found reports whether the resource could be filed under a tier at all. It is a
+// parameter rather than a zero-value check because an absent tier row and a tier
+// row with no ceiling are different findings.
+func PressureAgainstAccountTier(tier TierComparison, found bool) Pressure {
+	if !found {
+		return Pressure{Unavailable: PressureUnavailableUnboundedTierUnfiled}
+	}
+	if tier.Pressure.Evaluated {
+		return tier.Pressure.AgainstAccountTier()
+	}
+
+	// The tier could not be evaluated either. Report why in the RESOURCE's terms:
+	// "unbounded, and the ceiling that would have governed it is unbounded too" is
+	// a different operator conversation from "unbounded, and nobody can read the
+	// ceiling".
+	switch tier.Limit.State {
+	case CapacityUnbounded:
+		return Pressure{Unavailable: PressureUnavailableUnboundedNoTierCeiling}
+	case CapacityUnknown:
+		return Pressure{Unavailable: PressureUnavailableUnboundedTierUnknown}
+	default:
+		// A bounded tier limit whose pressure still did not evaluate: the tier's
+		// own reason is the accurate one, and inventing a different one here would
+		// disagree with the account row a consumer can read alongside this.
+		if tier.Pressure.Unavailable != "" {
+			return Pressure{Unavailable: tier.Pressure.Unavailable}
+		}
+		return Pressure{Unavailable: PressureUnavailableUnbounded}
+	}
 }
 
 // AssessPressure derives the pressure state from a resource's projection.
@@ -454,10 +558,11 @@ func AssessPressure(
 
 	headroomBand := headroomBandFor(*projection.HeadroomFraction, thresholds)
 	pressure := Pressure{
-		Evaluated:    true,
-		State:        headroomBand,
-		RaisedBy:     PressureInputNone,
-		FromHeadroom: headroomBand,
+		Evaluated:        true,
+		State:            headroomBand,
+		RaisedBy:         PressureInputNone,
+		FromHeadroom:     headroomBand,
+		EvaluatedAgainst: PressureBasisOwnBound,
 	}
 	if headroomBand != PressureNormal {
 		pressure.RaisedBy = PressureInputHeadroom

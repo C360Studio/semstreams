@@ -169,6 +169,16 @@ type StorageReportPublisher struct {
 	// publication in this process, which is what makes the projection survive a
 	// restart.
 	baseline map[string]Observation
+
+	// tierBaseline is the same thing for each STORAGE TIER's account usage,
+	// seeded from the account row's history.
+	//
+	// It is a separate map rather than synthetic entries in baseline because
+	// baseline is keyed by published KV key and reclaim() deletes from it by key.
+	// A synthetic tier key would be a key no listing can return, so it would sit
+	// in a map whose invariant is "every entry is a live published row" and
+	// quietly falsify it.
+	tierBaseline map[StorageTier]Observation
 }
 
 // NewStorageReportPublisher builds a publisher. It fails closed on a missing
@@ -193,10 +203,11 @@ func NewStorageReportPublisher(store ReportStore, cfg StorageReportConfig) (*Sto
 		logger = slog.Default()
 	}
 	return &StorageReportPublisher{
-		store:      store,
-		thresholds: cfg.Thresholds,
-		logger:     logger,
-		baseline:   make(map[string]Observation, 32),
+		store:        store,
+		thresholds:   cfg.Thresholds,
+		logger:       logger,
+		baseline:     make(map[string]Observation, 32),
+		tierBaseline: make(map[StorageTier]Observation, 3),
 	}, nil
 }
 
@@ -236,6 +247,16 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 	// ever addresses it.
 	published[StorageAccountReportKey] = struct{}{}
 
+	// The tier ceilings are derived FIRST even though the account row is written
+	// LAST. An unbounded resource has no ceiling but its tier's, so its row cannot
+	// be built until that verdict exists — and deriving it once here is what
+	// guarantees the resource rows and the account row state the same thing about
+	// the same tier in the same collection.
+	account := inv.Account
+	account.CollectedAt = inv.CollectedAt
+	account.ProducedBy = inv.ProducedBy
+	account.Tiers = p.deriveTiers(ctx, inv, thresholds, thresholdErr)
+
 	for _, resource := range inv.Resources {
 		key, err := StorageReportKey(resource.Name)
 		if err != nil {
@@ -255,7 +276,7 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 		// seedFromHistory correctly refuses to difference across).
 		published[key] = struct{}{}
 
-		row := p.derive(ctx, key, resource, inv, thresholds, thresholdErr)
+		row := p.derive(ctx, key, resource, inv, account, thresholds, thresholdErr)
 		value, err := json.Marshal(row)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("encode report row for %q: %w", resource.Name, err))
@@ -272,7 +293,7 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 	// The account row goes LAST, after every resource row this collection could
 	// write. It summarizes them, so publishing it first would briefly advertise
 	// a comparison over rows a consumer cannot yet see.
-	if err := p.publishAccount(ctx, inv); err != nil {
+	if err := p.publishAccount(ctx, account); err != nil {
 		failures = append(failures, err)
 	} else {
 		result.AccountPublished = true
@@ -292,7 +313,8 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 }
 
 // publishAccount writes the per-tier account row: what each storage tier's
-// ceiling is, and whether the bounds declared against it fit.
+// ceiling is, whether the bounds declared against it fit, and how that ceiling is
+// filling.
 //
 // It is PUBLISHED rather than left for each surface to compute because the
 // comparison needs two inputs — the account limits and every resource's declared
@@ -300,13 +322,12 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 // from the rows it happens to have read would disagree with another consumer
 // that read a different mix of revisions, which is the divergence this bucket
 // exists to make impossible.
-func (p *StorageReportPublisher) publishAccount(ctx context.Context, inv StorageInventory) error {
-	row := inv.Account
-	// Stamped from the inventory, exactly as the resource rows are, so the
-	// account row and the rows it summarizes always name the same collection.
-	row.CollectedAt = inv.CollectedAt
-	row.ProducedBy = inv.ProducedBy
-
+//
+// It takes the FINISHED row rather than the inventory: the tier verdicts were
+// derived before the resource rows, because unbounded resources carry them, and
+// re-deriving them here could publish an account row that disagrees with the rows
+// that inherited it.
+func (p *StorageReportPublisher) publishAccount(ctx context.Context, row AccountReport) error {
 	value, err := json.Marshal(row)
 	if err != nil {
 		return fmt.Errorf("encode the account tier report: %w", err)
@@ -323,6 +344,7 @@ func (p *StorageReportPublisher) derive(
 	key string,
 	resource StorageResource,
 	inv StorageInventory,
+	account AccountReport,
 	thresholds ResolvedPressureThresholds,
 	thresholdErr error,
 ) ResourceReport {
@@ -336,24 +358,64 @@ func (p *StorageReportPublisher) derive(
 		// No thresholds means no band to compare against and no level to
 		// project toward. Both are suppressed together HERE, naming the
 		// configuration, rather than being computed against a default.
-		reason := fmt.Sprintf("unusable pressure threshold configuration: %v", thresholdErr)
+		reason := unusableThresholdReason(thresholdErr)
 		row.Projection = Projection{HeadroomUnavailable: reason, TimeToThresholdUnavailable: reason}
 		row.Pressure = Pressure{Unavailable: reason}
 		return row
 	}
 	row.Projection = Project(resource.Bytes, row.Growth, thresholds)
 	row.Pressure = AssessPressure(resource.Bytes, row.Projection, thresholds)
+
+	// A resource with NO BOUND OF ITS OWN is re-evaluated against its storage
+	// tier's account ceiling, which is the only ceiling it has.
+	//
+	// The PROJECTION is deliberately left suppressed as "unbounded". Headroom
+	// against a bound this resource does not have would be a fabricated
+	// per-resource number, and the tier's headroom is not that number — it is
+	// shared with every other resource in the tier and is published on the account
+	// row, where it belongs. So the row says "no headroom of my own" and "here is
+	// the pressure I inherit from my ceiling", which are both true, in two fields
+	// that cannot be confused for one another.
+	if resource.Bytes.State == CapacityUnbounded {
+		tier, found := account.TierFor(resource.Tier)
+		row.Pressure = PressureAgainstAccountTier(tier, found)
+	}
 	return row
 }
 
-// growthFor measures this resource's rate and advances its baseline.
+// deriveAgainstBaseline measures a rate and decides where the next measuring
+// interval starts. advance reports whether the caller should move its retained
+// baseline to next.
 //
-// The baseline advance is the subtle part. It moves to the current observation
-// only when the pair was USABLE (or when there was nothing to compare against
-// at all, which starts the series). An observation too close to the baseline to
-// measure leaves the baseline where it is: advancing it every time would keep
-// resetting the target, and a process publishing faster than
+// The baseline advance is the subtle part, and it is shared by the resource and
+// tier series so the two cannot diverge on it. The baseline moves to the current
+// observation only when the pair was USABLE (or when there was nothing to compare
+// against at all, which starts the series). An observation too close to the
+// baseline to measure leaves the baseline where it is: advancing it every time
+// would keep resetting the target, and a process publishing faster than
 // MinGrowthSampleInterval would report an unknown rate forever.
+func deriveAgainstBaseline(
+	current Observation, priors []Observation, seeded bool,
+) (growth Growth, next Observation, advance bool) {
+	growth = DeriveGrowth(current, priors)
+	switch {
+	case growth.State == GrowthKnown, len(priors) == 0:
+		// The pair was consumed (or there was no pair at all): the next
+		// interval starts here.
+		return growth, current, true
+	case !seeded:
+		// Unusable, and the baseline is already the fixed target this process
+		// has been holding. Leave it exactly where it is.
+		return growth, Observation{}, false
+	default:
+		// Unusable, seeded from the bucket. Retain the OLDEST observation that
+		// is not newer than this one: it is the furthest from the current
+		// moment, so it becomes measurable soonest and over the longest span.
+		return growth, oldestUsableTarget(current, priors), true
+	}
+}
+
+// growthFor measures this resource's rate and advances its baseline.
 func (p *StorageReportPublisher) growthFor(
 	ctx context.Context, key string, resource StorageResource, collectedAt time.Time,
 ) Growth {
@@ -370,23 +432,95 @@ func (p *StorageReportPublisher) growthFor(
 	defer p.mu.Unlock()
 
 	priors, seeded := p.priorsLocked(ctx, key)
-	growth := DeriveGrowth(current, priors)
-
-	switch {
-	case growth.State == GrowthKnown, len(priors) == 0:
-		// The pair was consumed (or there was no pair at all): the next
-		// interval starts here.
-		p.baseline[key] = current
-	case !seeded:
-		// Unusable, and the baseline is already the fixed target this process
-		// has been holding. Leave it exactly where it is.
-	default:
-		// Unusable, seeded from the bucket. Retain the OLDEST observation that
-		// is not newer than this one: it is the furthest from the current
-		// moment, so it becomes measurable soonest and over the longest span.
-		p.baseline[key] = oldestUsableTarget(current, priors)
+	growth, next, advance := deriveAgainstBaseline(current, priors, seeded)
+	if advance {
+		p.baseline[key] = next
 	}
 	return growth
+}
+
+// tierGrowth measures every tier's rate for this collection and advances the tier
+// baselines.
+//
+// It seeds from the account row's history AT MOST ONCE per call, however many
+// tiers need it: the tiers share one key, so a per-tier seed would re-read the
+// same history two or three times for one collection.
+func (p *StorageReportPublisher) tierGrowth(ctx context.Context, inv StorageInventory) map[StorageTier]Growth {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	growth := make(map[StorageTier]Growth, len(inv.Account.Tiers))
+	var seeded map[StorageTier][]Observation
+	didSeed := false
+
+	for _, comparison := range inv.Account.Tiers {
+		used, ok := comparison.Limit.Usage()
+		if !ok {
+			// The tier's usage is unreadable — an unknown or unbounded-with-no-usage
+			// account limit. No baseline is retained, so a tier that becomes
+			// readable later seeds from the bucket rather than from a gap.
+			growth[comparison.Tier] = UnknownGrowth(GrowthUnavailableUnknownUsage)
+			continue
+		}
+		current := Observation{At: inv.CollectedAt, Bytes: used}
+
+		var priors []Observation
+		fromBucket := false
+		if baseline, have := p.tierBaseline[comparison.Tier]; have {
+			priors = []Observation{baseline}
+		} else {
+			if !didSeed {
+				seeded = p.seedTiersFromHistory(ctx)
+				didSeed = true
+			}
+			priors, fromBucket = seeded[comparison.Tier], true
+		}
+
+		measured, next, advance := deriveAgainstBaseline(current, priors, fromBucket)
+		if advance {
+			p.tierBaseline[comparison.Tier] = next
+		}
+		growth[comparison.Tier] = measured
+	}
+	return growth
+}
+
+// deriveTiers fills in each tier ceiling's own capacity picture: its rate, its
+// projection toward exhaustion, and its pressure state.
+//
+// This is what makes an unbounded resource evaluable at all — its row carries the
+// verdict from here — so it is computed BEFORE any resource row even though the
+// account row is published last.
+func (p *StorageReportPublisher) deriveTiers(
+	ctx context.Context,
+	inv StorageInventory,
+	thresholds ResolvedPressureThresholds,
+	thresholdErr error,
+) []TierComparison {
+	growth := p.tierGrowth(ctx, inv)
+
+	tiers := make([]TierComparison, 0, len(inv.Account.Tiers))
+	for _, comparison := range inv.Account.Tiers {
+		comparison.Growth = growth[comparison.Tier]
+		if thresholdErr != nil {
+			reason := unusableThresholdReason(thresholdErr)
+			comparison.Projection = Projection{HeadroomUnavailable: reason, TimeToThresholdUnavailable: reason}
+			comparison.Pressure = Pressure{Unavailable: reason}
+		} else {
+			comparison.Projection = Project(comparison.Limit, comparison.Growth, thresholds)
+			comparison.Pressure = AssessPressure(comparison.Limit, comparison.Projection, thresholds).
+				AgainstAccountTier()
+		}
+		tiers = append(tiers, comparison)
+	}
+	return tiers
+}
+
+// unusableThresholdReason is the suppression reason shared by every row when the
+// operator's threshold configuration cannot be resolved. One string, so a resource
+// row and the account row never explain the same failure differently.
+func unusableThresholdReason(err error) string {
+	return fmt.Sprintf("unusable pressure threshold configuration: %v", err)
 }
 
 // priorsLocked returns the observations this key's rate can be measured
@@ -403,12 +537,15 @@ func (p *StorageReportPublisher) priorsLocked(ctx context.Context, key string) (
 	return p.seedFromHistory(ctx, key), true
 }
 
-// seedFromHistory reads the published observations retained for one key.
+// retainedPuts reads one key's retained history and returns its consecutive PUT
+// entries, NEWEST FIRST.
 //
-// It walks NEWEST FIRST and stops at a delete marker: observations from before
-// a resource disappeared are not successive observations of the resource that
-// came back, and differencing across that gap would report a phantom rate.
-func (p *StorageReportPublisher) seedFromHistory(ctx context.Context, key string) []Observation {
+// It stops at a delete marker: observations from before a resource disappeared
+// are not successive observations of the resource that came back, and
+// differencing across that gap would report a phantom rate. Both row kinds in
+// this bucket read their series through here, so that rule cannot come to mean
+// one thing for a resource and another for a tier.
+func (p *StorageReportPublisher) retainedPuts(ctx context.Context, key string) []jetstream.KeyValueEntry {
 	entries, err := p.store.History(ctx, key)
 	if err != nil {
 		if !errors.Is(err, jetstream.ErrKeyNotFound) && !errors.Is(err, jetstream.ErrNoKeysFound) {
@@ -422,12 +559,21 @@ func (p *StorageReportPublisher) seedFromHistory(ctx context.Context, key string
 		return nil
 	}
 
-	observations := make([]Observation, 0, len(entries))
+	puts := make([]jetstream.KeyValueEntry, 0, len(entries))
 	for i := len(entries) - 1; i >= 0; i-- {
-		entry := entries[i]
-		if entry.Operation() != jetstream.KeyValuePut {
+		if entries[i].Operation() != jetstream.KeyValuePut {
 			break
 		}
+		puts = append(puts, entries[i])
+	}
+	return puts
+}
+
+// seedFromHistory reads the published observations retained for one resource key.
+func (p *StorageReportPublisher) seedFromHistory(ctx context.Context, key string) []Observation {
+	entries := p.retainedPuts(ctx, key)
+	observations := make([]Observation, 0, len(entries))
+	for _, entry := range entries {
 		var row ResourceReport
 		if err := json.Unmarshal(entry.Value(), &row); err != nil {
 			p.logger.Warn("skipping an undecodable published report row in the growth series",
@@ -442,6 +588,37 @@ func (p *StorageReportPublisher) seedFromHistory(ctx context.Context, key string
 		observations = append(observations, Observation{At: row.CollectedAt, Bytes: bytes})
 	}
 	return observations
+}
+
+// seedTiersFromHistory reads the per-tier usage series from the ACCOUNT row's own
+// retained history, in ONE read covering every tier.
+//
+// The series is already there: every collection publishes each tier's
+// account-measured usage, so the observations a tier projection needs are
+// restart-surviving on exactly the same terms as a resource's — no second sample
+// store, and no separate key per tier.
+func (p *StorageReportPublisher) seedTiersFromHistory(ctx context.Context) map[StorageTier][]Observation {
+	entries := p.retainedPuts(ctx, StorageAccountReportKey)
+	priors := make(map[StorageTier][]Observation, 3)
+	for _, entry := range entries {
+		var row AccountReport
+		if err := json.Unmarshal(entry.Value(), &row); err != nil {
+			p.logger.Warn("skipping an undecodable published account row in the tier growth series",
+				slog.Uint64("revision", entry.Revision()), slog.String("error", err.Error()))
+			continue
+		}
+		if row.CollectedAt.IsZero() {
+			continue
+		}
+		for _, tier := range row.Tiers {
+			used, ok := tier.Limit.Usage()
+			if !ok {
+				continue
+			}
+			priors[tier.Tier] = append(priors[tier.Tier], Observation{At: row.CollectedAt, Bytes: used})
+		}
+	}
+	return priors
 }
 
 // reclaim deletes the key of every resource the current collection did not

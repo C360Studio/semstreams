@@ -131,7 +131,7 @@
       override can only be renewed forever trains operators to renew without reading, which is what
       makes genuinely time-limited overrides invisible. SemMachina's `CAMPAIGN_LEDGER` is the live
       consumer and its declaration was offered as a test fixture
-- [ ] 5.9 Evaluate an archival stream's pressure against the ACCOUNT TIER ceiling (#729). It has no
+- [x] 5.9 Evaluate an archival stream's pressure against the ACCOUNT TIER ceiling (#729). It has no
       limit of its own, so the account limit is its only ceiling; reporting it unevaluable would mean
       declaring a stream archival silently removes it from the surface that would warn about it —
       capacity matters MORE for a stream that can never evict, since it is the only lever left

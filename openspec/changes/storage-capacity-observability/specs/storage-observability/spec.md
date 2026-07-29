@@ -232,7 +232,20 @@ tier, rather than treating the absence as a zero or omitting the comparison sile
 - **GIVEN** an account containing at least one resource with no configured bound
 - **WHEN** the operator requests the storage report
 - **THEN** that resource is named as unbounded together with its owner
-- **AND** it is not represented as having capacity headroom
+- **AND** it is not represented as having capacity headroom of its own, though it MAY carry a pressure
+  state inherited from its storage tier's ceiling (see stream-provisioning), labelled with the basis
+  it was evaluated against
+
+#### Scenario: A tier ceiling carries its own growth and projection
+
+- **GIVEN** a bounded storage tier whose account usage has been observed across two collections
+- **WHEN** the report is published
+- **THEN** the tier row carries the tier's own growth rate, headroom, projected time-to-threshold and
+  pressure state, measured against the account's usage of that tier
+- **AND** those are reported independently of the over-commitment verdict, which compares DECLARED
+  bounds and can report within-limit while the bytes actually stored are near exhaustion
+- **AND** the tier's rate is measured across the account row's own retained history, so it survives a
+  restart on the same terms as a resource's rate
 
 #### Scenario: Over-commitment is reported per storage tier
 

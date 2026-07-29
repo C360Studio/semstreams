@@ -125,6 +125,46 @@ has. Since such a stream has no limit of its own, its only ceiling is the accoun
 pressure MUST be evaluated against that ceiling rather than reported as unevaluable — otherwise
 declaring a stream archival would silently remove it from the very surface that would warn about it.
 
+This is a property of the HOLE CLASS, not of the archival classification. Archival is a configuration
+concept the reporting surface never sees; what it sees is a resource with no bound of its own, whether
+declared archival, admitted by a migration override, or created by another process entirely. The
+evaluation MUST therefore key on the absent bound, since a rule keyed on the classification would be
+satisfiable by every other route to the same shape.
+
+The evaluation MUST keep the two ceilings structurally distinct, and this is what reconciles it with
+the storage-observability requirement that an unbounded resource is not represented as having capacity
+headroom. Those are the same rule stated from two sides: no per-resource headroom or projection may be
+synthesized for a resource that declares no bound, because the tier's headroom is shared with every
+resource in the tier and is not any one of theirs. What the resource carries is the tier's PRESSURE
+STATE, labelled with the ceiling it was evaluated against; the headroom and projection numbers behind
+it are published once, on the account tier row. A consumer MUST be able to tell the two bases apart,
+because they have different fixes: own-bound pressure is relieved by raising that bound or by
+retention, and account-tier pressure can be relieved by neither.
+
+The inherited state MUST NOT be scaled by the resource's share of the tier, and the tier's projection
+MUST NOT be computed from any single resource's growth rate. Both would read as calm for a small
+resource in a tier that is about to exhaust, which is the false-confidence class this capability
+exists to remove: an archive is precisely the resource for which exhaustion is unrecoverable.
+
+#### Scenario: An unbounded resource inherits its tier's pressure state, not a fabricated headroom
+
+- **GIVEN** an archival stream holding a small fraction of a file tier whose account ceiling is
+  nearly exhausted and still filling
+- **WHEN** the report is published
+- **THEN** the stream reports an evaluated pressure state equal to its tier's, naming the account
+  tier as the basis it was evaluated against
+- **AND** it reports no headroom or time-to-threshold of its own, because it declares no bound to
+  have them against
+- **AND** the state is not reduced to normal on the grounds that the stream is individually small
+
+#### Scenario: A tier that offers no ceiling either is reported as such
+
+- **GIVEN** an unbounded stream whose storage tier's account limit is itself unbounded or unreadable
+- **WHEN** its pressure is evaluated
+- **THEN** it reports no pressure state, naming which of the two cases applies
+- **AND** an unreadable ceiling is distinguished from an absent one, since only one of them is a gap
+  in what the process can see
+
 #### Scenario: An archival stream satisfies readiness without finite bounds
 
 - **GIVEN** an ordinary stream declared archival, naming its owner and the reason permanence is its
@@ -143,7 +183,7 @@ declaring a stream archival would silently remove it from the very surface that 
 
 - **GIVEN** an archival stream growing against a known account tier limit
 - **WHEN** its pressure is evaluated
-- **THEN** headroom and projection are computed against the account tier ceiling
+- **THEN** headroom and projection for that ceiling are computed and published on the account tier row
 - **AND** the stream is not reported as unevaluable merely because it declares no limit of its own
 
 ### Requirement: Unbounded existing streams MUST be admitted only by an expiring override

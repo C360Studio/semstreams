@@ -31,6 +31,17 @@
 // Per-resource pressure is therefore a NUMERIC severity (0..3), which is
 // label-stable across transitions and alertable as `>= 2`.
 //
+// # Two ceilings, two sets of series
+//
+// A resource with no bound of its own is evaluated against its storage tier's
+// account limit, because that is the only ceiling it has. Its pressure severity
+// IS published — an archival stream must not be invisible to the gauge every
+// alert reads — while its headroom and projection series stay ABSENT, because the
+// tier's headroom is shared with every other resource in the tier and is not this
+// resource's number to publish. The tier's own headroom, rate and projection are
+// published per tier instead, which is where an operator can read them without
+// mistaking them for one stream's.
+//
 // # Absence is a measurement
 //
 // A gauge is published only when the underlying value exists. An unmeasured
@@ -129,6 +140,16 @@ type storageObservabilityMetrics struct {
 	accountDeclared       *prometheus.GaugeVec
 	accountLimitState     *prometheus.GaugeVec
 	accountOvercommitment *prometheus.GaugeVec
+
+	// The tier ceiling's own capacity picture. These exist because the ceiling is
+	// the ONLY one an unbounded resource has: such a resource's pressure state is
+	// inherited from its tier, so without these an operator can see that an
+	// archive is critical without being able to see the number that makes it
+	// critical — or how long they have.
+	accountGrowth          *prometheus.GaugeVec
+	accountHeadroomBytes   *prometheus.GaugeVec
+	accountTimeToThreshold *prometheus.GaugeVec
+	accountPressureState   *prometheus.GaugeVec
 
 	// reportCollected carries the COLLECTION time of the freshest published
 	// row, as a unix timestamp, so an operator can alert on
@@ -236,6 +257,24 @@ func newStorageObservabilityMetrics() *storageObservabilityMetrics {
 				"(1 for the current state). An unbounded or unreadable account limit reports "+
 				"not-applicable, NEVER within-limit.",
 			tierStateLabel),
+		accountGrowth: storageGauge("account_growth_bytes_per_second",
+			"Observed rate of change of a storage tier's account usage. Absent when no rate has been "+
+				"measured. This is the tier's own rate, not a sum over resource rates.",
+			tierLabel),
+		accountHeadroomBytes: storageGauge("account_headroom_bytes",
+			"Distance from a storage tier's account usage to its account limit. Absent when the tier "+
+				"limit is unbounded or unreadable. This is the ONLY headroom an unbounded resource has.",
+			tierLabel),
+		accountTimeToThreshold: storageGauge("account_time_to_threshold_seconds",
+			"Projected seconds until a storage tier's account usage reaches its critical-headroom level. "+
+				"Absent when the limit is unbounded or unreadable, or when no rate has been measured. "+
+				"For a resource that can never evict, this is the operator's whole lead time.",
+			tierLabel),
+		accountPressureState: storageGauge("account_pressure_state",
+			"A storage tier's own pressure state against its account limit (1 for the current state). "+
+				"Every state is emitted, including not-evaluated, so an unevaluable ceiling is explicit "+
+				"rather than an absent series. Resources with no bound of their own inherit this state.",
+			tierStateLabel),
 
 		reportCollected: prometheus.NewGauge(prometheus.GaugeOpts{
 			Namespace: "semstreams",
@@ -272,6 +311,10 @@ func (m *storageObservabilityMetrics) register(registrar metric.MetricsRegistrar
 		"account_declared_bytes":             m.accountDeclared,
 		"account_limit_state":                m.accountLimitState,
 		"account_overcommitment":             m.accountOvercommitment,
+		"account_growth_bytes_per_second":    m.accountGrowth,
+		"account_headroom_bytes":             m.accountHeadroomBytes,
+		"account_time_to_threshold_seconds":  m.accountTimeToThreshold,
+		"account_pressure_state":             m.accountPressureState,
 	} {
 		if err := registrar.RegisterGaugeVec(StorageObservabilityServiceName, name, vec); err != nil {
 			return err
@@ -380,6 +423,25 @@ func (m *storageObservabilityMetrics) ObserveAccount(report natsclient.AccountRe
 		for _, state := range metricOvercommitmentStates {
 			m.accountOvercommitment.WithLabelValues(tier, string(state)).Set(boolGauge(comparison.State == state))
 		}
+
+		// The tier ceiling's own picture. Each number is retracted rather than
+		// zeroed when absent, on the same rule as every other measurement here: a
+		// zero headroom would read as an exhausted tier.
+		m.setOrDeleteFloatPtr(m.accountGrowth, []string{tier}, comparison.Growth.BytesPerSecond)
+		m.setOrDeletePtr(m.accountHeadroomBytes, []string{tier}, comparison.Projection.HeadroomBytes)
+		if comparison.Projection.TimeToThreshold != nil {
+			m.accountTimeToThreshold.WithLabelValues(tier).Set(comparison.Projection.TimeToThreshold.Seconds())
+		} else {
+			m.accountTimeToThreshold.DeleteLabelValues(tier)
+		}
+
+		tierPressure := pressureStateNotEvaluated
+		if comparison.Pressure.Evaluated {
+			tierPressure = string(comparison.Pressure.State)
+		}
+		for _, state := range metricPressureStates {
+			m.accountPressureState.WithLabelValues(tier, state).Set(boolGauge(tierPressure == state))
+		}
 	}
 
 	// A tier the report no longer carries — the unknown tier, once every
@@ -407,11 +469,17 @@ func (m *storageObservabilityMetrics) deleteAccountTierSeries(tier string) {
 	m.accountLimit.DeleteLabelValues(tier)
 	m.accountUsed.DeleteLabelValues(tier)
 	m.accountDeclared.DeleteLabelValues(tier)
+	m.accountGrowth.DeleteLabelValues(tier)
+	m.accountHeadroomBytes.DeleteLabelValues(tier)
+	m.accountTimeToThreshold.DeleteLabelValues(tier)
 	for _, state := range metricLimitStates {
 		m.accountLimitState.DeleteLabelValues(tier, string(state))
 	}
 	for _, state := range metricOvercommitmentStates {
 		m.accountOvercommitment.DeleteLabelValues(tier, string(state))
+	}
+	for _, state := range metricPressureStates {
+		m.accountPressureState.DeleteLabelValues(tier, state)
 	}
 }
 

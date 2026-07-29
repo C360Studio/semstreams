@@ -64,6 +64,11 @@ type fakeReportStore struct {
 	rev     uint64
 	depth   int
 
+	// historyReadCount counts History calls per key. The tiers all read their
+	// series from one key, so "how many times was that key read" is a real
+	// property rather than an implementation detail.
+	historyReadCount map[string]int
+
 	putErr    error
 	deleteErr error
 	listErr   error
@@ -75,7 +80,18 @@ type fakeReportStore struct {
 }
 
 func newFakeReportStore(depth int) *fakeReportStore {
-	return &fakeReportStore{history: map[string][]fakeEntry{}, depth: depth}
+	return &fakeReportStore{
+		history:          map[string][]fakeEntry{},
+		historyReadCount: map[string]int{},
+		depth:            depth,
+	}
+}
+
+// historyReads reports how many times a key's history has been read.
+func (s *fakeReportStore) historyReads(key string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.historyReadCount[key]
 }
 
 func (s *fakeReportStore) Put(_ context.Context, key string, value []byte) (uint64, error) {
@@ -125,6 +141,7 @@ func (s *fakeReportStore) append(key string, entry fakeEntry) {
 func (s *fakeReportStore) History(_ context.Context, key string, _ ...jetstream.WatchOpt) ([]jetstream.KeyValueEntry, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.historyReadCount[key]++
 	entries, ok := s.history[key]
 	if !ok || len(entries) == 0 {
 		return nil, jetstream.ErrKeyNotFound
@@ -204,11 +221,29 @@ func boundedResource(name string, limit, used int64) StorageResource {
 	}
 }
 
+// inventoryAt builds a collection against a STOCK SERVER's account limits, which
+// report no ceiling for either tier — the documented default reality, and what
+// testcontainers reports.
+//
+// The account report is DERIVED rather than left zero, because production always
+// derives it (StorageInventoryCollector) and a resource's tier row is what an
+// unbounded resource's pressure is now evaluated against. A fixture with no tier
+// rows would put every unbounded resource in these tests on a code path
+// production cannot reach.
 func inventoryAt(at time.Time, resources ...StorageResource) StorageInventory {
+	return inventoryWithAccountAt(at, AccountTierLimits{Known: true, MaxMemory: -1, MaxStore: -1}, resources...)
+}
+
+// inventoryWithAccountAt is inventoryAt with the account limits stated, for the
+// cases where the tier ceiling is the thing under test.
+func inventoryWithAccountAt(
+	at time.Time, limits AccountTierLimits, resources ...StorageResource,
+) StorageInventory {
 	return StorageInventory{
 		ProducedBy:  "unit-test",
 		CollectedAt: at,
 		Resources:   resources,
+		Account:     DeriveAccountReport(resources, limits),
 	}
 }
 
@@ -276,8 +311,14 @@ func TestStorageReportPublisher_OneKeyPerResource(t *testing.T) {
 	kvRow := store.liveRow(t, KVStreamPrefix+"ENTITY_STATES_FAKE")
 	assert.Equal(t, "graph-ingest", kvRow.Resource.Owner)
 	assert.Equal(t, AttributionAttributed, kvRow.Resource.Attribution)
-	assert.False(t, kvRow.Pressure.Evaluated, "an unbounded resource has no pressure state")
-	assert.Equal(t, PressureUnavailableUnbounded, kvRow.Pressure.Unavailable)
+	// This account's tiers carry no ceiling either (a stock server), so the one
+	// ceiling an unbounded resource could have been evaluated against does not
+	// exist. The reason says exactly that rather than the bare "unbounded": an
+	// operator who cannot see a state needs to know whether the ceiling is absent
+	// or merely unreadable.
+	assert.False(t, kvRow.Pressure.Evaluated,
+		"an unbounded resource in a tier with no ceiling has nothing to be evaluated against")
+	assert.Equal(t, PressureUnavailableUnboundedNoTierCeiling, kvRow.Pressure.Unavailable)
 }
 
 // TestStorageReportPublisher_DisappearedResourceIsDeletedNotExpired is the

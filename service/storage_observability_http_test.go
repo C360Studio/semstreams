@@ -499,12 +499,35 @@ func TestStorageAlertRules_ReferenceOnlyPublishedMetrics(t *testing.T) {
 		1024, 30*time.Minute))
 	metrics.ObserveResource(unboundedRow("UNBOUNDED", natsclient.TierFile))
 	metrics.ObserveResource(unknownRow("OFFLINE"))
+	// The file tier carries its OWN growth, projection and pressure as well as the
+	// over-commitment verdict. Those series exist only for a bounded tier with a
+	// measured rate, and they are what every unbounded resource's state is
+	// inherited from — so a fixture without them would let a rule reading them
+	// look covered while publishing nothing.
+	tierRate := 4096.0
+	tierHeadroom := int64(1 << 20)
+	tierToThreshold := 90 * time.Minute
 	metrics.ObserveAccount(natsclient.AccountReport{
 		Tiers: []natsclient.TierComparison{
 			{
 				Tier:  natsclient.TierFile,
 				Limit: natsclient.NewCapacity(1<<30, 1<<20, true),
 				State: natsclient.OvercommitmentOver,
+				Growth: natsclient.Growth{
+					State:          natsclient.GrowthKnown,
+					BytesPerSecond: &tierRate,
+					ObservedOver:   30 * time.Minute,
+				},
+				Projection: natsclient.Projection{
+					HeadroomBytes:   &tierHeadroom,
+					TimeToThreshold: &tierToThreshold,
+				},
+				Pressure: natsclient.Pressure{
+					Evaluated:        true,
+					State:            natsclient.PressureHigh,
+					RaisedBy:         natsclient.PressureInputHeadroom,
+					EvaluatedAgainst: natsclient.PressureBasisAccountTier,
+				},
 			},
 			{
 				Tier:  natsclient.TierMemory,

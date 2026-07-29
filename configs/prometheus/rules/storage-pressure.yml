@@ -32,15 +32,28 @@
 #    there. A test enforces this: service/storage_observability_http_test.go,
 #    TestStorageAlertRules_KeyNothingOnRowDisappearance.
 #
-# 2. THE RESOURCES WITH NO BOUND HAVE NO PRESSURE SERIES.
+# 2. A RESOURCE WITH NO BOUND IS EVALUATED AGAINST ITS ACCOUNT TIER, AND STILL
+#    HAS NO HEADROOM SERIES OF ITS OWN.
 #
-#    An unbounded resource has no headroom to be a fraction of and no threshold
-#    to project toward, so `semstreams_storage_resource_pressure` is not
-#    published for it at all — deliberately, because publishing `normal` would
-#    assert a verdict the model never produced. A rule set built only on
-#    `resource_pressure >= N` would therefore make exactly the resources that can
-#    grow forever invisible. StorageResourceUnbounded and
-#    StorageResourcesWithUnknownCapacity below are what keep them visible.
+#    An unbounded resource — an archival stream, or one admitted by a migration
+#    override — has no bound to have headroom against, so
+#    `semstreams_storage_resource_headroom_bytes` and
+#    `resource_time_to_threshold_seconds` are NOT published for it. Fabricating a
+#    per-resource number there would be a verdict the model never produced.
+#
+#    Its `resource_pressure` series IS published, inherited from the account limit
+#    of its storage tier, because that ceiling is the only one it has. Capacity
+#    matters MORE for a stream that can never evict: eviction is not available, so
+#    capacity is the only lever left. Read `resource_pressure` together with the
+#    row's `pressure.evaluated_against` field (`own-bound` or `account-tier`) —
+#    they demand different fixes. Own-bound pressure is resolved by raising that
+#    bound or letting retention work; account-tier pressure cannot be, and the
+#    finding is about every resource sharing the tier.
+#
+#    A resource whose TIER has no ceiling either (a stock server reports none) has
+#    no pressure state at all, and neither does one whose capacity could not be
+#    read. StorageResourceUnbounded and StorageResourcesWithUnknownCapacity below
+#    are what keep those visible.
 #
 # Report STALENESS is alertable through
 # `semstreams_storage_report_collected_timestamp_seconds`, whose VALUE is the
@@ -123,11 +136,13 @@ groups:
           summary: "Storage resource {{ $labels.resource }} has no configured bound"
           description: >-
             {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
-            carries no byte limit, so it has no headroom, no projection, and no pressure
-            state — it can only be caught by the account tier limit. Report-only, and
-            informational: an unbounded resource is a legitimate choice. It is alerted so
-            the choice stays deliberate rather than becoming the thing nobody was looking
-            at. Never read this as headroom.
+            carries no byte limit, so it has no headroom or projection of its own. Its
+            pressure is evaluated against the {{ $labels.tier }} account tier ceiling
+            instead — see semstreams_storage_account_pressure_state for that tier, and
+            StorageAccountTierPressureCritical below. Report-only, and informational: an
+            unbounded resource is a legitimate choice (an archival stream declares
+            permanence deliberately). It is alerted so the choice stays deliberate rather
+            than becoming the thing nobody was looking at. Never read this as headroom.
 
       - alert: StorageResourcesWithUnknownCapacity
         expr: sum(semstreams_storage_resources{capacity_state="unknown"}) > 0
@@ -201,6 +216,46 @@ groups:
             over-commitment comparison reports not-applicable rather than satisfied.
             Report-only. Distinct from a deliberately unlimited tier, which reports
             state="unbounded".
+
+      # --- the tier ceiling's own capacity, not its declarations -------------
+      #
+      # Over-commitment above compares DECLARED bounds against the tier limit. A
+      # tier can pass that comparison and still be about to exhaust: declarations
+      # are not usage, an unbounded resource declares nothing, and the declared sum
+      # is only a floor. These two rules are on the bytes actually stored.
+      #
+      # They are also the alerts that cover every resource with no bound of its
+      # own. Such a resource inherits this state (property 2), so a tier alerting
+      # here IS the archival streams in it alerting.
+      - alert: StorageAccountTierPressureHigh
+        expr: semstreams_storage_account_pressure_state{state=~"high|critical"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier is under high pressure"
+          description: >-
+            The {{ $labels.tier }} account tier has reported pressure >= high for 15
+            minutes against the bytes it is actually storing. Every resource in the tier
+            with no bound of its own inherits this state, and those resources cannot be
+            relieved by retention — check GET /storage-observability/report for rows whose
+            pressure reports evaluated_against="account-tier". Report-only.
+
+      - alert: StorageAccountTierExhaustionProjected
+        expr: semstreams_storage_account_time_to_threshold_seconds < 86400
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier projects exhaustion within a day"
+          description: >-
+            At the tier's observed growth rate, the {{ $labels.tier }} account limit
+            reaches its critical headroom level in under 24 hours. This is the lead time
+            for every unbounded resource in the tier: when the tier fills, a stream that
+            can never evict has no lever but account capacity or deleting data. The rate
+            is the tier's own, measured across successive published collections, so it
+            survives a restart and reflects a sustained trend. Report-only — SemStreams
+            refuses nothing — but JetStream will refuse writes at the ceiling.
 
       # The report stopped arriving. This is the ONE rule that can tell you the
       # collector itself failed, and it is why the gauge carries collection time
