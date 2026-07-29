@@ -59,8 +59,12 @@
 - [x] 3.2 Project headroom and time-to-threshold; suppress both for unknown-capacity resources
 - [x] 3.3 Derive pressure as the worse of a proportional-headroom band and a time-to-threshold band,
       reporting which input raised it
-- [x] 3.4 Read thresholds from live configuration at evaluation time — never captured at construction —
-      and add a test proving a post-boot threshold edit applies without a restart
+- [x] 3.4 Resolve thresholds through a supplier seam rather than a value frozen at construction. NOTE
+      (revised): a RESTART is the supported way to apply a threshold change — a stale threshold only
+      evaluates old numbers visibly and destroys nothing, unlike a stale value driving a durable
+      resource. The seam is retained because it already exists and costs one function type (an operator
+      can retune mid-incident without restarting their monitoring), but nothing depends on it and no
+      further work should extend it
 - [x] 3.5 Add a JSON round-trip test for the operator-facing threshold configuration
 - [x] 3.6 Add unit tests for pressure transitions, the rate-raised-before-headroom case, the
       no-pressure-for-unknown-capacity case, and restart-survival of the projection

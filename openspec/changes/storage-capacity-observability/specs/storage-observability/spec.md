@@ -112,9 +112,12 @@ and projected time-to-threshold, taking the worse of the two and reporting which
 that a slowly-filling large resource and a rapidly-filling small one are both surfaced before
 exhaustion. Pressure MUST be report-only in this capability: no write is rejected, no component is
 throttled, no readiness gate is failed, and no retention is applied as a consequence of pressure.
-Pressure MUST be observable through Prometheus metrics, component health status, and logs — health
-may report the state, and MUST NOT degrade readiness because of it. Thresholds MUST be read from live
-configuration at evaluation time so a post-boot configuration edit takes effect without a restart.
+Pressure MUST be observable through Prometheus metrics, health status, and logs — health may report
+the state, and MUST NOT degrade readiness because of it. Thresholds MUST NOT be captured in a form
+that outlives a configuration change without being reapplied; a restart is a supported way to apply
+a threshold change, since a stale threshold only evaluates old numbers visibly and destroys nothing.
+This is deliberately weaker than the rule governing values that drive durable resources, where a
+stale capture would silently reconcile a resource to the wrong policy.
 
 #### Scenario: Projected exhaustion raises pressure before headroom does
 
@@ -131,11 +134,13 @@ configuration at evaluation time so a post-boot configuration edit takes effect 
 - **THEN** none are rejected, throttled, degraded, or failed as a consequence of the pressure state
 - **AND** the state is visible in metrics, health status, and logs
 
-#### Scenario: A threshold edit applies without a restart
+#### Scenario: A restarted collector evaluates with the edited thresholds
 
-- **GIVEN** a running process whose pressure thresholds are edited in configuration after boot
+- **GIVEN** a collector whose pressure thresholds are edited in configuration and which is then
+  restarted
 - **WHEN** pressure is next evaluated
 - **THEN** the evaluation uses the edited thresholds
+- **AND** the growth series survives the restart, so the restart costs no observability
 
 #### Scenario: A resource with unknown capacity has no pressure state
 

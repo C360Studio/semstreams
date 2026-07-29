@@ -206,7 +206,41 @@ The bucket is declared in the descriptor catalog like every other framework-guar
 bucket. That is honest and correct — the observer is a real storage resource — and bounded History
 keeps it from being the thing that fills the account.
 
-### 9. Report-only, and the gate future enforcement must clear
+### 9. The collector is a Service, not a Component
+
+Storage observability watches the **substrate**, not the flow. Its peers are already services —
+`flow_runtime_health`, `flow_runtime_metrics`, `metrics_forwarder`, `log_forwarder`, `heartbeat`,
+`pprof` — and every one of them is infrastructure observability. A component is a flow participant
+with ports that processes messages; the collector has no ports and never receives or emits one.
+Filing it as a component would place substrate monitoring in the data-flow graph as though it were a
+pipeline stage.
+
+The `Service` interface (`service/base.go:486`) settles it independently: it declares
+`Health() health.Status` and `RegisterMetrics(metric.MetricsRegistrar) error`. Tasks 4.3 and 4.1 are
+exactly those two methods, so the component route would mean reimplementing inside a component what
+the service contract already requires.
+
+**A restart is the supported way to change this service's configuration**, and that is a deliberate
+narrowing of an earlier position. Hot reconfiguration matters when a stale value silently drives a
+durable resource to the wrong policy — the capacity-ceiling case, where the damage is invisible and
+persistent. A stale threshold is not that: it evaluates pressure with old numbers until restart,
+visibly, destroying nothing. Restarting the collector is cheap precisely because section 3 put the
+report and its growth series in KV, where they survive the restart. The service constructor signature
+(`Constructor func(rawConfig json.RawMessage, deps *Dependencies) (Service, error)`) also makes
+build-from-config the natural service shape, so requiring live re-reads would be swimming upstream
+for a knob a reboot handles.
+
+The `ThresholdSource` seam from section 3 stays because it already exists and costs one function
+type — an operator who wants to retune during an incident can, without restarting the monitoring they
+are relying on. But nothing depends on it, and no work should be spent extending it.
+
+One cost is accepted knowingly rather than discovered later: **no service has a generated schema** —
+all 34 entries in `schemas/` are components. The operator surface is protected by a JSON round-trip
+test, which is the project's stated bar, but the asymmetry is a real framework gap and is filed as
+such rather than absorbed silently. (The `isHTTPManager` gating on service config-change watching,
+`service/service_manager.go:864`, is moot under the restart posture above.)
+
+### 10. Report-only, and the gate future enforcement must clear
 
 Nothing here rejects, throttles, degrades, or evicts. This is sequencing, not timidity: pressure-driven
 enforcement built on an unmeasured, untrusted signal is how the predecessor went wrong.
