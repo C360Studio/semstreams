@@ -1,7 +1,7 @@
 // kvspec.go is the MECHANISM half of the framework KV bucket catalog
 // (framework-bucket-catalog): a name-free descriptor type (BucketSpec) plus the
 // two-function acquisition seam every framework bucket goes through. The
-// POPULATION half — the one literal catalog of 22 descriptors — lives in
+// POPULATION half — the one literal catalog of 23 descriptors — lives in
 // graph/kvcatalog.go, which is deliberately NOT here: product bucket names do
 // not belong in the transport layer.
 //

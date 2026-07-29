@@ -261,5 +261,6 @@ func TestIntegration_StorageInventory_DegradesToLastGoodWhenNATSGoesAway(t *test
 	assert.Equal(t, collectedAt, degraded.CollectedAt, "the timestamp stays the one the data came from")
 	assert.True(t, degraded.Stale)
 	assert.NotEmpty(t, degraded.StaleReason)
+	require.NotNil(t, degraded.StaleSince)
 	assert.False(t, degraded.StaleSince.IsZero())
 }

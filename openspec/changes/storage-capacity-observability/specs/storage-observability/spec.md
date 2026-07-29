@@ -183,7 +183,16 @@ collected. Every operator-facing surface — HTTP route, CLI, alerting, metrics 
 CONSUMER of that bucket rather than a separate report-producing path, so there is one produced truth
 and no surface can disagree with another. A resource absent from the current collection MUST be
 removed by deleting its key, never by expiring it under a retention policy: reclamation here is a
-semantic decision the collector makes, on the same principle that governs the rest of the graph.
+semantic decision the collector makes, on the same principle that governs the rest of the graph. A
+resource that is still present but whose row could not be written MUST retain its previous row rather
+than being reclaimed — failing to write a row is not a decision that the resource is gone, and
+conflating the two reintroduces the silent omission this capability exists to end.
+
+Under concurrent producers reclamation is eventually consistent: a row one producer reclaims on a
+timing skew MAY transiently disappear and reappear on a later collection. Consumers MUST NOT treat a
+row's disappearance as proof a resource is gone. This is a stronger caveat than the mixed-revision
+one above — a vanishing key is not the same as a stale one — and it means a disappearance-triggered
+alert would be unsound.
 Ranging the bucket MUST reconstruct the whole report; consumers MAY observe a mix of revisions
 across keys, which is why each key carries its own collection timestamp. The report MUST name resources carrying no
 bound at all. The report MUST compare declared bounds against the account limit **within each storage
@@ -198,6 +207,13 @@ tier, rather than treating the absence as a zero or omitting the comparison sile
 - **WHEN** both responses are compared
 - **THEN** both are derived from the same published KV state
 - **AND** neither surface recomputes the inventory independently
+
+#### Scenario: A row that failed to write is not reclaimed
+
+- **GIVEN** a resource that is present in the current collection but whose row write fails
+- **WHEN** reclamation runs for that collection
+- **THEN** the resource's previous row is retained
+- **AND** it is not deleted as though the collector had decided the resource was gone
 
 #### Scenario: A disappeared resource is deleted, not expired
 

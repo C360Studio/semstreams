@@ -80,6 +80,34 @@ func KVCatalog() []natsclient.BucketSpec {
 	// recent envelopes (was readiness.BucketHistory before the catalog owned it).
 	graphStatus.History = 3
 
+	storageReport := owned(BucketStorageReport, "storage inventory collector",
+		"Account storage report, one key per inventoried resource (capacity, growth, pressure)",
+		natsclient.ClassOperational)
+	// History 10, and the depth is a CONTRACT rather than a log preference: the
+	// per-key history IS the growth series. The rate is Δbytes over Δt across
+	// successive published observations, and this is where those observations
+	// live — restart-surviving by construction, with no separate sample store.
+	//
+	// Why 10 and not the bare floor of 2
+	// (natsclient.StorageReportGrowthObservations, cross-pinned by a test in
+	// this package): depth 2 covers only the benign restart. It does NOT cover
+	// the cases the design says the projection matters most in. A crash loop or
+	// deploy loop restarting faster than natsclient.MinGrowthSampleInterval
+	// publishes rows too close together to measure against, and several
+	// processes polling account-wide interleave the same way; the derivation
+	// then has to reach back PAST those rows for an observation separated by a
+	// usable interval. At depth 1 or 2 there is nothing to reach back to and
+	// every rate in the account reports unknown for as long as the loop lasts.
+	// Ten rows also give an operator a recent trend to eyeball
+	// (`nats kv history`), which is why OWNER_CLAIMS carries the same depth for
+	// its own audit trail.
+	//
+	// The cost is bounded and self-referential: this bucket appears in the
+	// inventory it publishes, so the depth is also what keeps the observer from
+	// becoming the growth problem it exists to detect — ten small rows per
+	// account resource, and no retention needed to hold that line.
+	storageReport.History = 10
+
 	ownerClaims := owned(BucketOwnerClaims, "ownership registry (composition root)",
 		"ADR-056 owner-claim registry — single _registry epoch key (no TTL)",
 		natsclient.ClassOperational)
@@ -159,6 +187,7 @@ func KVCatalog() []natsclient.BucketSpec {
 		graphStatus,
 		ownerClaims,
 		ownerPresence,
+		storageReport,
 
 		// Diagnostic plane.
 		componentStatus,

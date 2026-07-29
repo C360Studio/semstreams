@@ -232,8 +232,11 @@ type StorageInventory struct {
 	// empty but the account is NOT known to be empty.
 	Stale bool `json:"stale"`
 
-	// StaleSince is when the most recent failed attempt happened.
-	StaleSince time.Time `json:"stale_since,omitempty"`
+	// StaleSince is when the most recent failed attempt happened. A POINTER for
+	// the same reason the capacity numbers are: `omitempty` is a no-op on a
+	// time.Time, so a value field would publish a zero timestamp on a healthy
+	// inventory and invite a consumer to read it as a real failure time.
+	StaleSince *time.Time `json:"stale_since,omitempty"`
 
 	// StaleReason explains the failure in operator terms.
 	StaleReason string `json:"stale_reason,omitempty"`

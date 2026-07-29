@@ -135,8 +135,25 @@ type StorageInventoryConfig struct {
 	// constructor fails closed instead of defaulting.
 	OwnerResolver OwnerResolver
 
+	// Publisher writes the report after each SUCCESSFUL collection Run makes.
+	// Optional: a collector without one keeps its in-process inventory and
+	// publishes nothing, which is what the attribution unit tests want.
+	//
+	// It hangs off the collector rather than running its own timer because the
+	// publication cadence IS the observation cadence — the growth series is
+	// Δbytes over Δt across published observations, and a second timer could
+	// drift from the interval the operator configured.
+	Publisher InventoryPublisher
+
 	// Logger receives collection-failure warnings. Defaults to slog.Default().
 	Logger *slog.Logger
+}
+
+// InventoryPublisher publishes one collection's inventory.
+// *StorageReportPublisher satisfies it; the interface keeps the collector from
+// depending on the report's whole surface.
+type InventoryPublisher interface {
+	Publish(ctx context.Context, inv StorageInventory) (PublishResult, error)
 }
 
 // StorageInventoryCollector enumerates account storage on an interval and
@@ -146,12 +163,13 @@ type StorageInventoryConfig struct {
 // write lock only to swap the finished snapshot, so Latest never waits behind a
 // collection. Nothing here belongs on a component's Start or health path.
 type StorageInventoryCollector struct {
-	source   StreamListerSource
-	interval time.Duration
-	timeout  time.Duration
-	producer string
-	ownerOf  OwnerResolver
-	logger   *slog.Logger
+	source    StreamListerSource
+	interval  time.Duration
+	timeout   time.Duration
+	producer  string
+	ownerOf   OwnerResolver
+	publisher InventoryPublisher
+	logger    *slog.Logger
 
 	// collectMu serializes collections so two overlapping calls cannot publish
 	// out of order and walk CollectedAt backwards. It is NOT the publication
@@ -183,12 +201,13 @@ func NewStorageInventoryCollector(
 	}
 
 	c := &StorageInventoryCollector{
-		source:   source,
-		interval: cfg.Interval,
-		timeout:  cfg.Timeout,
-		producer: cfg.ProducedBy,
-		ownerOf:  cfg.OwnerResolver,
-		logger:   cfg.Logger,
+		source:    source,
+		interval:  cfg.Interval,
+		timeout:   cfg.Timeout,
+		producer:  cfg.ProducedBy,
+		ownerOf:   cfg.OwnerResolver,
+		publisher: cfg.Publisher,
+		logger:    cfg.Logger,
 	}
 	if c.interval <= 0 {
 		c.interval = DefaultStorageInventoryInterval
@@ -205,10 +224,11 @@ func NewStorageInventoryCollector(
 
 	// The pre-collection window is stale by construction: an empty inventory
 	// reported as fresh would claim the account holds nothing.
+	startedAt := time.Now()
 	c.latest = StorageInventory{
 		ProducedBy:  c.producer,
 		Stale:       true,
-		StaleSince:  time.Now(),
+		StaleSince:  &startedAt,
 		StaleReason: "no successful collection yet",
 	}
 	return c, nil
@@ -289,9 +309,37 @@ func (c *StorageInventoryCollector) Run(ctx context.Context) {
 }
 
 func (c *StorageInventoryCollector) collectAndLog(ctx context.Context) {
-	if _, err := c.Collect(ctx); err != nil && ctx.Err() == nil {
-		c.logger.Warn("storage inventory collection failed; serving last known result",
+	inv, err := c.Collect(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.logger.Warn("storage inventory collection failed; serving last known result",
+				slog.String("error", err.Error()),
+				slog.String("produced_by", c.producer))
+		}
+		// The publisher declines a stale inventory anyway; not calling it at all
+		// keeps the failure to one log line.
+		return
+	}
+	c.publish(ctx, inv)
+}
+
+// publish writes the report for one collection. A publication failure is
+// LOGGED, never returned into the loop: the report is observability, the next
+// tick is the recovery, and a monitoring surface that can stop its own
+// collection loop is a worse bug than the blindness it fixes.
+func (c *StorageInventoryCollector) publish(ctx context.Context, inv StorageInventory) {
+	if c.publisher == nil {
+		return
+	}
+	result, err := c.publisher.Publish(ctx, inv)
+	switch {
+	case err != nil && ctx.Err() == nil:
+		c.logger.Warn("storage report publication failed; the report is stale until the next collection",
 			slog.String("error", err.Error()),
+			slog.String("produced_by", c.producer))
+	case result.Skipped:
+		c.logger.Warn("storage report publication skipped",
+			slog.String("reason", result.SkipReason),
 			slog.String("produced_by", c.producer))
 	}
 }
@@ -489,8 +537,9 @@ func (c *StorageInventoryCollector) attribute(kind ResourceKind, bucket string) 
 func (c *StorageInventoryCollector) markStale(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	failedAt := time.Now()
 	c.latest.Stale = true
-	c.latest.StaleSince = time.Now()
+	c.latest.StaleSince = &failedAt
 	c.latest.StaleReason = err.Error()
 }
 

@@ -45,24 +45,24 @@
 
 ## 3. Growth and pressure
 
-- [ ] 3.0 Declare the report bucket in the descriptor catalog (`graph/kvcatalog.go`) — operational class,
+- [x] 3.0 Declare the report bucket in the descriptor catalog (`graph/kvcatalog.go`) — operational class,
       owner-only writes, no-lifecycle retention, bounded History following the `GRAPH_STATUS` precedent —
       and publish one key per resource each collection, deleting the key for a resource that disappeared.
       MOVED FORWARD from section 4: the per-key history IS the growth series 3.1 needs, so building a
       separate sample store first would be building a mechanism to immediately replace
-- [ ] 3.1 Derive growth rate from SUCCESSIVE published observations (Δbytes over Δt across the report
+- [x] 3.1 Derive growth rate from SUCCESSIVE published observations (Δbytes over Δt across the report
       bucket's per-key revisions), never from a single snapshot's `FirstTime`/`LastTime` span. A snapshot
       cannot separate sustained growth from churn at stable size: a KV bucket under `History` 1 compacts
       old revisions, so it holds roughly constant bytes while its timestamps span a long window, and
       bytes-over-span would report growth — and project exhaustion — for a bucket that never grows.
       Report unknown rate until at least two observations exist, rather than extrapolating from one
-- [ ] 3.2 Project headroom and time-to-threshold; suppress both for unknown-capacity resources
-- [ ] 3.3 Derive pressure as the worse of a proportional-headroom band and a time-to-threshold band,
+- [x] 3.2 Project headroom and time-to-threshold; suppress both for unknown-capacity resources
+- [x] 3.3 Derive pressure as the worse of a proportional-headroom band and a time-to-threshold band,
       reporting which input raised it
-- [ ] 3.4 Read thresholds from live configuration at evaluation time — never captured at construction —
+- [x] 3.4 Read thresholds from live configuration at evaluation time — never captured at construction —
       and add a test proving a post-boot threshold edit applies without a restart
-- [ ] 3.5 Add a JSON round-trip test for the operator-facing threshold configuration
-- [ ] 3.6 Add unit tests for pressure transitions, the rate-raised-before-headroom case, the
+- [x] 3.5 Add a JSON round-trip test for the operator-facing threshold configuration
+- [x] 3.6 Add unit tests for pressure transitions, the rate-raised-before-headroom case, the
       no-pressure-for-unknown-capacity case, and restart-survival of the projection
 
 ## 4. Operator surface
@@ -82,7 +82,13 @@
 - [ ] 4.6 Report an unbounded account limit as unbounded and its over-commitment comparison as
       not-applicable — note testcontainers reports unlimited by default (`config/streams.go:220-223`),
       so this is the default integration-test path
-- [ ] 4.7 Name unbounded resources explicitly; never represent them as having headroom
+- [ ] 4.7 Name unbounded resources explicitly; never represent them as having headroom. Couple this with
+      rendering not-evaluated rows VISIBLY: an unbounded resource carries no pressure state (neither band
+      has an input), so any surface that filters on `state != normal` would make exactly the unbounded
+      resources invisible — the opposite of what 4.7 exists to do
+- [ ] 4.8 Do NOT key any alert on a row disappearing from the report bucket. Reclamation is eventually
+      consistent under concurrent producers, so a row may transiently vanish and return; alert on the
+      row's contents (pressure, staleness) instead
 
 ## 5. Ordinary stream bounds
 

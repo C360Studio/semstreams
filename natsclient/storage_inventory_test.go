@@ -763,6 +763,7 @@ func TestStorageInventory_DegradesToLastGoodWithTimestamp(t *testing.T) {
 	assert.Equal(t, collectedAt, degraded.CollectedAt, "the timestamp stays the one the data was collected at")
 	assert.True(t, degraded.Stale)
 	assert.Contains(t, degraded.StaleReason, failing.Error())
+	require.NotNil(t, degraded.StaleSince, "a stale inventory carries the moment it went stale")
 	assert.False(t, degraded.StaleSince.IsZero(), "the failure has its own timestamp")
 	assert.Equal(t, "unit-test", degraded.ProducedBy)
 

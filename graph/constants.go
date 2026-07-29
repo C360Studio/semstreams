@@ -79,4 +79,17 @@ const (
 	// window ages out so a crashed owning lease frees — and the acquisition
 	// seam converges to it rather than stripping it.
 	BucketOwnerPresence = "OWNER_PRESENCE"
+
+	// BucketStorageReport is the account storage report
+	// (storage-observability): ONE KEY PER INVENTORIED RESOURCE, carrying that
+	// resource's attribution, capacity, growth rate, projection, and pressure
+	// state, written by the storage collector each collection. Every
+	// operator-facing surface reads it rather than recomputing an inventory, so
+	// there is one produced truth and no two surfaces can disagree.
+	//
+	// A resource that disappears from the account has its key DELETED by the
+	// collector — a semantic decision, never an expiry — which is why its
+	// catalog descriptor declares no-lifecycle retention like the rest of the
+	// graph. Its bounded History is the restart-surviving growth series.
+	BucketStorageReport = "STORAGE_REPORT"
 )
