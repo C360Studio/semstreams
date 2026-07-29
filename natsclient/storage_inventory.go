@@ -269,7 +269,7 @@ func (c *StorageInventoryCollector) Collect(parent context.Context) (StorageInve
 	ctx, cancel := context.WithTimeout(parent, c.timeout)
 	defer cancel()
 
-	resources, err := c.enumerate(ctx)
+	resources, account, err := c.enumerate(ctx)
 	if err != nil {
 		if parent.Err() == nil {
 			c.markStale(err)
@@ -282,6 +282,7 @@ func (c *StorageInventoryCollector) Collect(parent context.Context) (StorageInve
 		ProducedBy:  c.producer,
 		CollectedAt: time.Now(),
 		Resources:   resources,
+		Account:     account,
 	}
 	c.mu.Unlock()
 	return c.Latest(), nil
@@ -344,7 +345,8 @@ func (c *StorageInventoryCollector) publish(ctx context.Context, inv StorageInve
 	}
 }
 
-// enumerate walks both account listings and reconciles them. All I/O happens
+// enumerate walks both account listings, reconciles them, and compares the
+// declarations it found against the account's per-tier limits. All I/O happens
 // here, outside the publication lock.
 //
 // The NAME listing runs FIRST on purpose. The two listings are not a consistent
@@ -353,21 +355,23 @@ func (c *StorageInventoryCollector) publish(ctx context.Context, inv StorageInve
 // and yields a complete row, while a stream DELETED between them yields one
 // unknown row that resolves on the next collection. Reversing the order would
 // turn every newly created stream into a transient phantom instead.
-func (c *StorageInventoryCollector) enumerate(ctx context.Context) ([]StorageResource, error) {
+func (c *StorageInventoryCollector) enumerate(
+	ctx context.Context,
+) ([]StorageResource, AccountReport, error) {
 	lister, err := c.source()
 	if err != nil {
-		return nil, errs.WrapTransient(err, "StorageInventoryCollector", "Collect",
+		return nil, AccountReport{}, errs.WrapTransient(err, "StorageInventoryCollector", "Collect",
 			"resolve the account stream lister")
 	}
 
 	names, err := c.listNames(ctx, lister)
 	if err != nil {
-		return nil, err
+		return nil, AccountReport{}, err
 	}
 
 	described, err := c.listInfos(ctx, lister)
 	if err != nil {
-		return nil, err
+		return nil, AccountReport{}, err
 	}
 
 	// Names the info listing did not describe are the resources the server
@@ -385,7 +389,13 @@ func (c *StorageInventoryCollector) enumerate(ctx context.Context) ([]StorageRes
 		resources = append(resources, res)
 	}
 	sort.Slice(resources, func(i, j int) bool { return resources[i].Name < resources[j].Name })
-	return resources, nil
+
+	// The account limits are an ENRICHMENT, read after the listings and never
+	// able to fail the collection: readAccountTierLimits returns unknown limits
+	// rather than an error, so a client that cannot answer costs the
+	// over-commitment comparison and nothing else. One call per collection —
+	// the same cost bound the listings respect.
+	return resources, DeriveAccountReport(resources, readAccountTierLimits(ctx, lister)), nil
 }
 
 // listNames walks the account name listing. The server does NOT exclude offline

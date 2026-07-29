@@ -226,6 +226,14 @@ type StorageInventory struct {
 	// subset of the account as if it were all of it.
 	Resources []StorageResource `json:"resources"`
 
+	// Account is the per-tier declared-versus-account-limit comparison over
+	// exactly these Resources. It travels WITH them rather than being computed
+	// by each consumer, so no operator surface can disagree with another about
+	// whether a tier is over-committed. An account whose limits could not be
+	// read still yields a report — with every tier's limit unknown, which is
+	// distinct from unbounded and from satisfied.
+	Account AccountReport `json:"account"`
+
 	// Stale reports that the most recent collection attempt did not succeed, so
 	// Resources and CollectedAt describe an earlier moment. It is also true
 	// before the first successful collection, when Resources is legitimately

@@ -176,6 +176,21 @@ func (s *fakeReportStore) liveKeys() []string {
 	return keys
 }
 
+// liveResourceKeys is liveKeys minus the reserved per-tier account row, for the
+// assertions that mean "one key per RESOURCE". The exclusion is explicit rather
+// than folded into liveKeys so a test asserting the bucket is entirely empty
+// still sees the account row if one was wrongly written.
+func (s *fakeReportStore) liveResourceKeys() []string {
+	var keys []string
+	for _, key := range s.liveKeys() {
+		if key == StorageAccountReportKey {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	return keys
+}
+
 // --- helpers -----------------------------------------------------------------
 
 func boundedResource(name string, limit, used int64) StorageResource {
@@ -243,7 +258,7 @@ func TestStorageReportPublisher_OneKeyPerResource(t *testing.T) {
 
 	assert.ElementsMatch(t,
 		[]string{"EVENTS", "LOGS", KVStreamPrefix + "ENTITY_STATES_FAKE"},
-		store.liveKeys(),
+		store.liveResourceKeys(),
 		"ranging the bucket reconstructs the whole report")
 
 	row := store.liveRow(t, "LOGS")
@@ -281,7 +296,7 @@ func TestStorageReportPublisher_DisappearedResourceIsDeletedNotExpired(t *testin
 		boundedResource("GOES", mib(1000), mib(100)),
 	))
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"STAYS", "GOES"}, store.liveKeys())
+	require.ElementsMatch(t, []string{"STAYS", "GOES"}, store.liveResourceKeys())
 
 	result, err := publisher.Publish(context.Background(), inventoryAt(first.Add(time.Minute),
 		boundedResource("STAYS", mib(1000), mib(110)),
@@ -291,7 +306,7 @@ func TestStorageReportPublisher_DisappearedResourceIsDeletedNotExpired(t *testin
 	assert.Equal(t, 1, result.Deleted)
 	assert.Equal(t, []string{"GOES"}, store.deletes,
 		"the collector deletes the key of a resource it no longer sees")
-	assert.Equal(t, []string{"STAYS"}, store.liveKeys())
+	assert.Equal(t, []string{"STAYS"}, store.liveResourceKeys())
 }
 
 // TestStorageReportPublisher_GrowthComesFromSuccessivePublications is task 3.1
@@ -633,7 +648,7 @@ func TestStorageReportPublisher_IllegalNameIsPublishedNotDropped(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, result.Published)
 
-	keys := store.liveKeys()
+	keys := store.liveResourceKeys()
 	require.Len(t, keys, 1)
 	row := store.liveRow(t, keys[0])
 	assert.Equal(t, "legacy$stream", row.Resource.Name,
@@ -918,7 +933,7 @@ func TestStorageReportPublisher_AFailedRowWriteKeepsItsLastGoodRow(t *testing.T)
 
 	_, err := publisher.Publish(context.Background(), inventory(first, mib(100)))
 	require.NoError(t, err)
-	require.ElementsMatch(t, []string{"ALPHA", "BRAVO", "CHARLIE"}, store.liveKeys())
+	require.ElementsMatch(t, []string{"ALPHA", "BRAVO", "CHARLIE"}, store.liveResourceKeys())
 	goodRow := store.liveRow(t, "BRAVO")
 
 	// One row's write fails; the collection still names all three resources and
@@ -932,7 +947,7 @@ func TestStorageReportPublisher_AFailedRowWriteKeepsItsLastGoodRow(t *testing.T)
 	assert.Equal(t, 0, result.Deleted,
 		"a write failure is not the collector deciding a resource is gone")
 
-	assert.ElementsMatch(t, []string{"ALPHA", "BRAVO", "CHARLIE"}, store.liveKeys(),
+	assert.ElementsMatch(t, []string{"ALPHA", "BRAVO", "CHARLIE"}, store.liveResourceKeys(),
 		"an operator ranging the bucket must still see every resource the account holds")
 	assert.Empty(t, store.deletes)
 

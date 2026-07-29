@@ -126,6 +126,11 @@ type PublishResult struct {
 	Published int
 	Deleted   int
 
+	// AccountPublished reports that the per-tier account row was written. It is
+	// a separate field rather than part of Published so that count keeps meaning
+	// "resources", which is what every caller logging it reads it as.
+	AccountPublished bool
+
 	// Skipped reports that nothing was written at all, with SkipReason saying
 	// why. It is not an error: declining to republish a stale inventory is the
 	// correct behavior, not a failure.
@@ -221,8 +226,15 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 	}
 
 	var result PublishResult
-	published := make(map[string]struct{}, len(inv.Resources))
+	published := make(map[string]struct{}, len(inv.Resources)+1)
 	var failures []error
+
+	// Claimed BEFORE anything is written, for the same reason a resource key is:
+	// the claim answers "does this collection still name this row", and the
+	// account row is named by every collection. Without the claim, reclamation
+	// would delete it on the very publication that wrote it, because no resource
+	// ever addresses it.
+	published[StorageAccountReportKey] = struct{}{}
 
 	for _, resource := range inv.Resources {
 		key, err := StorageReportKey(resource.Name)
@@ -257,6 +269,15 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 		result.Published++
 	}
 
+	// The account row goes LAST, after every resource row this collection could
+	// write. It summarizes them, so publishing it first would briefly advertise
+	// a comparison over rows a consumer cannot yet see.
+	if err := p.publishAccount(ctx, inv); err != nil {
+		failures = append(failures, err)
+	} else {
+		result.AccountPublished = true
+	}
+
 	deleted, err := p.reclaim(ctx, published)
 	result.Deleted = deleted
 	if err != nil {
@@ -268,6 +289,32 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 			"StorageReportPublisher", "Publish", "publish the account storage report")
 	}
 	return result, nil
+}
+
+// publishAccount writes the per-tier account row: what each storage tier's
+// ceiling is, and whether the bounds declared against it fit.
+//
+// It is PUBLISHED rather than left for each surface to compute because the
+// comparison needs two inputs — the account limits and every resource's declared
+// bound — and only the collection holds both at once. A consumer recomputing it
+// from the rows it happens to have read would disagree with another consumer
+// that read a different mix of revisions, which is the divergence this bucket
+// exists to make impossible.
+func (p *StorageReportPublisher) publishAccount(ctx context.Context, inv StorageInventory) error {
+	row := inv.Account
+	// Stamped from the inventory, exactly as the resource rows are, so the
+	// account row and the rows it summarizes always name the same collection.
+	row.CollectedAt = inv.CollectedAt
+	row.ProducedBy = inv.ProducedBy
+
+	value, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Errorf("encode the account tier report: %w", err)
+	}
+	if _, err := p.store.Put(ctx, StorageAccountReportKey, value); err != nil {
+		return fmt.Errorf("publish the account tier report: %w", err)
+	}
+	return nil
 }
 
 // derive builds one row and advances that key's growth baseline.
@@ -443,6 +490,17 @@ func (p *StorageReportPublisher) reclaim(ctx context.Context, published map[stri
 	}
 	return deleted, errors.Join(failures...)
 }
+
+// StorageAccountReportKey is the reserved key carrying the per-tier account
+// report (AccountReport) rather than a resource row.
+//
+// It is RESERVED by construction, not by convention. Every resource key is
+// exactly ONE key token: a JetStream stream name may not contain a dot, and
+// StorageReportKey's fallback opaque token is a single token too. A key
+// containing a dot is therefore unreachable from any resource name, however
+// hostile — which is what lets one bucket carry two row kinds with no
+// possibility of one addressing the other. A consumer discriminates on the key.
+const StorageAccountReportKey = "_account.tiers"
 
 // StorageReportKey is the report bucket key for one resource name.
 //

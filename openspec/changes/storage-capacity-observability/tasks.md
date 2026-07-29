@@ -20,7 +20,7 @@
       that no two collapse
 - [x] 2.4 Bound collection: interval-driven with a timeout, never on the component-start or health path,
       degrading to last-good-with-timestamp, naming the producing process in the report
-- [ ] 2.4b Expose the collection interval as operator configuration with a schema entry and a JSON
+- [x] 2.4b Expose the collection interval as operator configuration with a schema entry and a JSON
       round-trip test (a Go struct field reachable only from a composition root is not operator
       configuration) — may move to section 4 with the rest of the operator surface
 - [x] 2.5 Add unit tests for attribution, the doubled-prefix case (`KV_KV_FOO` → `KV_FOO`, unattributed),
@@ -71,19 +71,19 @@
 
 ## 4. Operator surface
 
-- [ ] 4.1 Publish Prometheus metrics for usage, headroom, growth rate, time-to-threshold, and pressure
+- [x] 4.1 Publish Prometheus metrics for usage, headroom, growth rate, time-to-threshold, and pressure
       state, labelled by resource and owner
 - [ ] 4.2 Ship an example alert rule (or health-status surface) alongside the metrics so the pressure
       gauge has a consumer at merge time and does not become a phantom signal
-- [ ] 4.3 Expose pressure in component health STATUS without degrading readiness, and add a test that
+- [x] 4.3 Expose pressure in component health STATUS without degrading readiness, and add a test that
       `critical` pressure fails no readiness or health gate
 - [ ] 4.4 Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
       the alert rule from 4.2 driven by `Watch` — so there is one produced truth and no surface can
       disagree with another. Add a test that two surfaces cannot diverge because neither recomputes
-- [ ] 4.5 Report per-tier declared-versus-account-limit comparison via `js.AccountInfo`
+- [x] 4.5 Report per-tier declared-versus-account-limit comparison via `js.AccountInfo`
       (`config/streams.go:192`), honoring the `-1`-means-unlimited sentinel (`:227`); never sum memory
       and file tiers together
-- [ ] 4.6 Report an unbounded account limit as unbounded and its over-commitment comparison as
+- [x] 4.6 Report an unbounded account limit as unbounded and its over-commitment comparison as
       not-applicable — note testcontainers reports unlimited by default (`config/streams.go:220-223`),
       so this is the default integration-test path
 - [ ] 4.7 Name unbounded resources explicitly; never represent them as having headroom. Couple this with

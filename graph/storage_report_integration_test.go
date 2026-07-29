@@ -18,6 +18,12 @@ import (
 // storageReportRows ranges the published bucket the way an operator surface
 // would — every live key, decoded — so the assertions run against what a
 // consumer can actually see rather than against the publisher's return value.
+//
+// The reserved per-tier account key is skipped, exactly as a real consumer
+// discriminates it: it carries an AccountReport rather than a resource row, and
+// decoding it as one would add a nameless entry to every surface. The key is
+// unreachable from any resource name because it contains a dot and a resource
+// key is always one token.
 func storageReportRows(
 	ctx context.Context, t *testing.T, bucket jetstream.KeyValue,
 ) map[string]natsclient.ResourceReport {
@@ -29,6 +35,9 @@ func storageReportRows(
 
 	rows := make(map[string]natsclient.ResourceReport)
 	for key := range lister.Keys() {
+		if key == natsclient.StorageAccountReportKey {
+			continue
+		}
 		entry, gerr := bucket.Get(ctx, key)
 		require.NoError(t, gerr)
 		var row natsclient.ResourceReport
@@ -36,6 +45,19 @@ func storageReportRows(
 		rows[row.Resource.Name] = row
 	}
 	return rows
+}
+
+// storageAccountRow decodes the reserved per-tier account row.
+func storageAccountRow(
+	ctx context.Context, t *testing.T, bucket jetstream.KeyValue,
+) natsclient.AccountReport {
+	t.Helper()
+
+	entry, err := bucket.Get(ctx, natsclient.StorageAccountReportKey)
+	require.NoError(t, err, "the per-tier account row must be published")
+	var report natsclient.AccountReport
+	require.NoError(t, json.Unmarshal(entry.Value(), &report))
+	return report
 }
 
 // TestIntegration_StorageReport_PublishesThroughTheCatalogSeam drives the whole
@@ -139,6 +161,27 @@ func TestIntegration_StorageReport_PublishesThroughTheCatalogSeam(t *testing.T) 
 		declared, ok := SpecFor(BucketStorageReport)
 		require.True(t, ok)
 		assert.Equal(t, declared.Owner, row.Resource.Owner)
+	})
+
+	t.Run("the account row compares declared bounds per tier", func(t *testing.T) {
+		account := storageAccountRow(ctx, t, bucket)
+		assert.Equal(t, "integration-test", account.ProducedBy)
+
+		file, ok := account.TierFor(natsclient.TierFile)
+		require.True(t, ok)
+		assert.GreaterOrEqual(t, file.DeclaredBytes, int64(8<<20),
+			"the bounded stream created above declared against the file tier")
+
+		// testcontainers reports -1 for both tiers, so not-applicable is the
+		// DEFAULT integration path rather than an edge case.
+		assert.Equal(t, natsclient.CapacityUnbounded, file.Limit.State)
+		assert.Equal(t, natsclient.OvercommitmentNotApplicable, file.State)
+		assert.NotEqual(t, natsclient.OvercommitmentWithin, file.State,
+			"an unbounded account limit must never read as a comparison that passed")
+
+		memory, ok := account.TierFor(natsclient.TierMemory)
+		require.True(t, ok, "both tiers are always reported; they are never summed")
+		assert.Equal(t, natsclient.OvercommitmentNotApplicable, memory.State)
 	})
 
 	t.Run("the first observation of a resource projects no rate", func(t *testing.T) {
