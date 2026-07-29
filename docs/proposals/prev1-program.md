@@ -103,9 +103,33 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > graph-inference RetentionDays/CleanupInterval phantom pair; census-exempt constant-based readers →
 > Open (mechanical).
 >
-> **NEXT (owner to sequence): (1) `bounded-storage-operability` REBASES onto the catalog — its
-> graph-retention delta is stale pre-#622; its work becomes adding a `RetentionDiscardNewCeiling`
-> Kind + params and filling rows (no shape change). (2) #712 projection quiescence (semdragon ask) —
+> **(1) RESOLVED 2026-07-29 — NOT a rebase. `bounded-storage-operability` is RETIRED (deleted, 0/35,
+> never started) and SUPERSEDED by `storage-capacity-observability` (4/4 artifacts, validates
+> `--strict`, 0/35 tasks).** The planned "add a `RetentionDiscardNewCeiling` Kind + fill rows" was
+> FALSIFIED by direct measurement, not by staleness: against real NATS 2.12 (KV `MaxBytes` 128 KiB,
+> `History` 1), at the ceiling NATS **rejects replacing an existing key** (`code=503 err_code=10077`)
+> while still accepting deletes and purges — a same-size replacement is net-zero bytes under History 1,
+> but the append is checked against `MaxBytes` BEFORE the superseded revision compacts away. So (a)
+> "reserve replacement headroom" is not expressible against a single append-checked limit — replacement
+> is the FIRST thing to fail; (b) graph-ingest writes one entity across many independently-ceilinged
+> buckets with no cross-bucket transaction, so a ceiling doesn't stop growth, it TEARS authoritative
+> state against derived indexes at a nondeterministic point; (c) it inverts ADR-068 — delete (the
+> semantic op we reserve) still works while update is denied by storage policy. **ADR-073:77-79's ban
+> on all `MaxBytes>0` on the identity tier STANDS, now independently confirmed; the retired change's
+> task to "update ADR-068/073 wording" would have re-opened it.** Owner steer that shaped the
+> replacement: *observability with prior warning first — "we do not want to turn off new writes unless
+> we have given them the chance to correct resources."* New change = inventory + growth/headroom/
+> time-to-threshold + pressure states, REPORT-ONLY; explicit bounds on ordinary time-shaped streams
+> ONLY; a **provisioner prefix guard refusing `KV_*`/`OBJ_*`** (the load-bearing safety boundary —
+> `createStream` has no name filter today and extending the reconciler to retention fields is what
+> would make an operator typo stamp age eviction onto graph state); expiring migration overrides.
+> Application-level admission in graph-ingest (entity-atomic, cross-bucket-coherent — the thing NATS
+> `MaxBytes` structurally cannot be) is DEFERRED behind a checkable 3-condition gate. Architect
+> adversarial review returned 3 BLOCKERS (all on the exclusion boundary) + 2 HIGH + 8 MEDIUM — all
+> folded in before validate. Probe preserved at scratchpad `ceiling_probe_test.go.txt`. Also filed
+> **#727** (objectstore JetStream handler acks unconditionally after a store call that cannot report
+> failure → transient failure = silent permanent loss; independent of capacity, split out so it
+> wasn't lost with the retired change). **(2) #712 projection quiescence (semdragon ask) —
 > third consumer of the readiness substrate; extend the ADR-083 producer pattern to inference stages
 > + aggregate over GRAPH_STATUS, NOT a new readiness system. (3) Complexity-pivot remainder:
 > adopter module contract (one Register bundling payloads/vocab/factories/projections) + `--validate`
@@ -830,3 +854,38 @@ Append one line per session. Newest last.
   because we read the numbers, not the exit code. (3) **1.7b e2e is capacity-flaky for the LLM path; frontier
   is the reliable BREAKING gate** — don't chase a 1.7b saturation failure as a code defect. **Next: Epic B
   fully closed — pick Epic C / deferred Epic A / #701 / #710.**
+- **2026-07-29 (session 16)** — **Baton item (1) resolved by FALSIFICATION, not by the planned rebase.**
+  Picked up `bounded-storage-operability` (0/35, BREAKING, 11 days old) to rebase onto the
+  `framework-bucket-catalog` seam. Two parallel agents (architect ruling + staleness sweep) found the
+  delta would REVERT the catalog requirement (12 buckets of coverage, per-descriptor policy —
+  `OWNER_PRESENCE`'s declared TTL would become a violation — seam-primary enforcement, and strip-and-warn
+  self-heal reverted to hard boot failure), plus a cross-capability contradiction `openspec validate
+  --strict` structurally cannot see (its `object-storage` delta mandates a `windowed` TTL knob that merged
+  `graph-retention` forbids outright). **Then the owner asked the question that killed the rebase: "are we
+  really in a position to say we can safely handle a ttl or maxbytes in storage?"** — the ban exists because
+  NATS has no context for atomic, consistent deletes in our system. Ran a real-NATS probe instead of
+  arguing: at a `DiscardNew` ceiling, **replacing an existing key is REJECTED** while deletes and purges
+  succeed. My own "one-way trap" hypothesis was FALSIFIED (deletes get in — tombstones are small), but the
+  finding that matters is worse for the change's premise: reserve-replacement-headroom is not expressible,
+  per-bucket ceilings tear cross-bucket consistency with no transaction to make them atomic, and the
+  ceiling inverts ADR-068 by denying update while permitting delete. Retired the change; wrote
+  `storage-capacity-observability` (proposal/design/2 deltas/tasks, valid `--strict`) scoped to the
+  operationally useful half per the owner's steer. Architect adversarial review: **3 BLOCKERS, all on the
+  KV/OBJ exclusion boundary** — the delta said those streams were "not *required* to declare bounds"
+  (a permission, satisfiable while still letting the reconciler WRITE retention onto them), "ordinary
+  stream" had zero representation in `config/streams.go`, and the three downstream safety nets each have a
+  hole (`ReconcileNoLifecycleRetention` never clears a discard policy; `RetentionUnmanaged` reconciles
+  nothing; non-catalog buckets have no seam). Rewrote as a MUST-NOT prefix guard at the provisioner with a
+  POSITIVE guard test. Also folded: restored the dropped migration override (H4 — without it the bounds
+  rule is a flag day for every component-derived stream), `SpecFor(b).Owner` doesn't compile → `OwnerOf`,
+  per-storage-tier account limits (memory vs file must not be summed), restart-surviving growth rate,
+  named report transport, and re-homed provisioning OUT of `nats-streaming` (a publish-path capability)
+  into its own `stream-provisioning`. Filed **#727**. Lessons: (1) **a spec can be wrong in premise, not
+  just stale in detail** — the ledger-driven rebase would have produced a well-formed change built on a
+  falsified foundation; the owner's intent question caught what two agents' file-level analysis did not
+  (same shape as session 8's shrink→invest reversal). (2) **Measure the primitive, don't reason about it** —
+  a 40-line testcontainer probe settled in one run what the spec, two ADRs, and three agents had been
+  arguing from prose; it also falsified MY hypothesis, which is why it was worth running. (3) **"not
+  required to X" is not "must not X"** — a negative permission is satisfiable by an implementation that
+  still does the dangerous thing. **Next: owner sequences (2) #712 projection quiescence or (3) the
+  complexity-pivot remainder; `storage-capacity-observability` is scoped and unstarted.**
