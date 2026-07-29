@@ -1,13 +1,13 @@
 ## 1. Provisioner guard (do this first — it is the data-loss boundary)
 
-- [ ] 1.1 Add a name guard in the stream provisioner that refuses any stream whose name carries the
+- [x] 1.1 Add a name guard in the stream provisioner that refuses any stream whose name carries the
       `KV_` or `OBJ_` prefix, failing closed and naming the resource plus the owner that legitimately
       provisions it. Guard at `createStream` (`config/streams.go:358`) and at declaration validation,
       so neither the operator map (`:254`) nor a port-derived name (`:289`) can reach it
-- [ ] 1.2 Add a POSITIVE guard test: declaring `KV_ENTITY_STATES` and an `OBJ_*` name in `cfg.Streams`
+- [x] 1.2 Add a POSITIVE guard test: declaring `KV_ENTITY_STATES` and an `OBJ_*` name in `cfg.Streams`
       and as a port stream name must each fail, loudly. A test that merely proves they are exempt from
       the bounds requirement does NOT cover this — the hazard is the reconciler writing to them
-- [ ] 1.3 Add a test proving the refusal is by prefix and NOT by catalog membership, using a `KV_*`
+- [x] 1.3 Add a test proving the refusal is by prefix and NOT by catalog membership, using a `KV_*`
       name outside the descriptor catalog
 
 ## 2. Inventory

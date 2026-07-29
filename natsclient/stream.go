@@ -113,6 +113,18 @@ func DefaultStreamConfig() *StreamAutoCreateConfig {
 
 // EnsureStream creates a stream if it doesn't exist, or returns the existing one.
 func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
+	// Fail closed on a KV/ObjectStore backing-stream name before anything else,
+	// so the refusal does not depend on connection or circuit state. This seam is
+	// operator-reachable — processor/gated-dag exposes dispatch_stream as config
+	// JSON and passes it straight through with a MaxAge — and while get-or-create
+	// cannot restamp a LIVE bucket, on a fresh deployment it would name-squat the
+	// bucket's reserved stream with a foreign TTL and the wrong subjects, which
+	// the bucket's later catalog acquisition then collides with.
+	if err := CheckOrdinaryStreamName(cfg.Name, "natsclient.Client.EnsureStream"); err != nil {
+		return nil, errs.WrapFatal(err, "Client", "EnsureStream",
+			"validate stream name "+cfg.Name)
+	}
+
 	if c.Status() == StatusCircuitOpen {
 		return nil, ErrCircuitOpen
 	}

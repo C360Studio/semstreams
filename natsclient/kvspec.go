@@ -339,7 +339,7 @@ func reconcileBoundedTTL(
 		return nil
 	}
 
-	stream, gerr := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, gerr := js.Stream(ctx, KVStreamPrefix+bucket)
 	if gerr != nil {
 		return errs.WrapTransient(gerr, "KVSpec", "reconcileBoundedTTL",
 			fmt.Sprintf("get backing stream to reconcile KV bucket %q", bucket))
@@ -396,7 +396,7 @@ func reconcileHistory(
 		declared = 1 // KV semantics: History 0 means depth 1
 	}
 
-	stream, gerr := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, gerr := js.Stream(ctx, KVStreamPrefix+bucket)
 	if gerr != nil {
 		return errs.WrapTransient(gerr, "KVSpec", "reconcileHistory",
 			fmt.Sprintf("get backing stream for KV bucket %q", bucket))

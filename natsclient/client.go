@@ -750,6 +750,13 @@ func (m *Client) JetStream() (jetstream.JetStream, error) {
 
 // CreateStream creates a JetStream stream
 func (m *Client) CreateStream(ctx context.Context, cfg jetstream.StreamConfig) (jetstream.Stream, error) {
+	// Fail closed on a KV/ObjectStore backing-stream name before anything else,
+	// so the refusal does not depend on connection or circuit state.
+	if err := CheckOrdinaryStreamName(cfg.Name, "natsclient.Client.CreateStream"); err != nil {
+		return nil, errs.WrapFatal(err, "Client", "CreateStream",
+			"validate stream name "+cfg.Name)
+	}
+
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
 		return nil, ErrCircuitOpen

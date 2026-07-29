@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // StreamConfig defines configuration for a JetStream stream.
@@ -231,6 +234,27 @@ func jetStreamLimitExceeds(configured, serverLimit int64) bool {
 	return configured > serverLimit
 }
 
+// ErrBackingStreamNotProvisionable is the refusal sentinel, re-exported from
+// natsclient so config callers and tests need not reach across for it. It is the
+// SAME error value, so errors.Is matches a refusal raised at any provisioning
+// seam — this provisioner, Client.EnsureStream, or Client.CreateStream.
+var ErrBackingStreamNotProvisionable = natsclient.ErrBackingStreamNotProvisionable
+
+// checkOrdinaryStream is the config provisioner's view of the shared fail-closed
+// name guard. One definition lives in natsclient.CheckOrdinaryStreamName, which
+// every provisioning seam calls, so a bypass cannot open by a guard being added
+// in one place and forgotten in another. This wrapper exists only to keep the
+// call sites below short and to pin the provisioner's own attribution string.
+//
+// The hazard this closes at THIS seam specifically: createStream defaults MaxAge
+// to 7 days and hardcodes Discard: DiscardOld, and cfg.Streams is an
+// operator-authored map with arbitrary keys — so one typo reconciles
+// reachability-blind age eviction onto authoritative graph state, or onto
+// out-of-line content the graph still references.
+func checkOrdinaryStream(name, source string) error {
+	return natsclient.CheckOrdinaryStreamName(name, source)
+}
+
 // EnsureStreams creates all required JetStream streams based on:
 // 1. System streams (LOGS for out-of-band logging)
 // 2. Explicit streams defined in config.Streams (highest priority)
@@ -250,8 +274,18 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 	sm.logger.Debug("Adding system streams",
 		"streams", []string{"LOGS", "HEALTH", "METRICS", "FLOWS", "GOVERNANCE_VERDICT_AUDIT"})
 
-	// 2. Explicit streams from config (can override system streams)
-	for name, sc := range cfg.Streams {
+	// 2. Explicit streams from config (can override system streams).
+	// cfg.Streams is an operator-authored map with arbitrary keys, so this is
+	// the first place a KV/ObjectStore backing-stream name can enter the
+	// provisioner. Validate the declaration before it joins the create set, so
+	// no create, update, or reconcile call is issued against such a stream.
+	// Sorted so a config with several offenders always names the same one.
+	for _, name := range slices.Sorted(maps.Keys(cfg.Streams)) {
+		sc := cfg.Streams[name]
+		if err := checkOrdinaryStream(name, fmt.Sprintf("config.streams[%q]", name)); err != nil {
+			return errs.WrapFatal(err, "StreamsManager", "EnsureStreams",
+				fmt.Sprintf("validate stream declaration %q", name))
+		}
 		streams[name] = sc
 		sm.logger.Debug("Found explicit stream config", "stream", name, "subjects", sc.Subjects)
 	}
@@ -296,6 +330,16 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 				sm.logger.Warn("Could not derive stream name from subject",
 					"component", compName, "subject", port.Subject)
 				continue
+			}
+
+			// Second entry point for a backing-stream name: an operator-authored
+			// port. Both shapes reach here — an explicit stream_name, and the
+			// subject fallback, since DeriveStreamName uppercases the first
+			// subject token ("kv_entity_states.stored" -> "KV_ENTITY_STATES").
+			if err := checkOrdinaryStream(streamName,
+				fmt.Sprintf("component %q port %q", compName, port.Name)); err != nil {
+				return errs.WrapFatal(err, "StreamsManager", "EnsureStreams",
+					fmt.Sprintf("validate stream declaration %q", streamName))
 			}
 
 			// Only add if not already explicitly configured
@@ -356,6 +400,16 @@ func (sm *StreamsManager) extractPortsFromConfig(rawConfig json.RawMessage) (*Po
 
 // createStream creates or updates a JetStream stream.
 func (sm *StreamsManager) createStream(ctx context.Context, name string, cfg StreamConfig) error {
+	// Fail closed FIRST, before any JetStream access: EnsureStreams validates
+	// its declaration set, but createStream is the seam that actually issues
+	// CreateStream/UpdateStream, so guarding it too means no future caller path
+	// — a new derivation rule, a direct call, a test helper — can reach NATS
+	// with a KV or ObjectStore backing-stream name.
+	if err := checkOrdinaryStream(name, "stream provisioner"); err != nil {
+		return errs.WrapFatal(err, "StreamsManager", "createStream",
+			fmt.Sprintf("provision stream %q", name))
+	}
+
 	js, err := sm.natsClient.JetStream()
 	if err != nil {
 		return fmt.Errorf("get JetStream context: %w", err)

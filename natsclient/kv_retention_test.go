@@ -99,7 +99,7 @@ func newFakeKVJS(bucket string, maxAge time.Duration, maxBytes int64) *fakeKVJS 
 		stream: &fakeKVStream{
 			info: jetstream.StreamInfo{
 				Config: jetstream.StreamConfig{
-					Name:     kvStreamPrefix + bucket,
+					Name:     KVStreamPrefix + bucket,
 					MaxAge:   maxAge,
 					MaxBytes: maxBytes,
 				},

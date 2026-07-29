@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,6 +14,7 @@ import (
 	"unicode"
 
 	"github.com/c360studio/semstreams/model"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/platform"
 	"github.com/c360studio/semstreams/pkg/security"
 	"github.com/c360studio/semstreams/types"
@@ -240,6 +243,23 @@ func (c *Config) Validate() error {
 		}
 		if err := config.Validate(); err != nil {
 			return fmt.Errorf("component %s: %w", instanceName, err)
+		}
+	}
+
+	// Validate explicit stream declarations against the backing-stream
+	// prohibition. This runs here, and not only in the provisioner, because
+	// `semstreams --validate` prints "✓ Configuration is valid" and exits BEFORE
+	// streams are ensured (cmd/semstreams/main.go) — so without this a config
+	// that hard-fails boot would be greenlit by the very tool an operator uses to
+	// avoid that. The guard is pure and I/O-free precisely so it can run here.
+	//
+	// Only the operator-authored map is checked: the port-derived path needs port
+	// extraction and stays provisioner-only, and the operator map is where a typo
+	// lives. Keys are sorted so a config with several offenders always reports
+	// the same one.
+	for _, name := range slices.Sorted(maps.Keys(c.Streams)) {
+		if err := natsclient.CheckOrdinaryStreamName(name, fmt.Sprintf("config.streams[%q]", name)); err != nil {
+			return fmt.Errorf("streams: %w", err)
 		}
 	}
 
