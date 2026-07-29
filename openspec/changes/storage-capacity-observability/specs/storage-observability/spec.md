@@ -5,10 +5,25 @@
 SemStreams MUST expose a single inventory covering every JetStream-backed storage resource in the
 account — ordinary streams, `KV_*` bucket backing streams, and `OBJ_*` ObjectStore backing streams —
 regardless of whether this process created or has otherwise touched the resource. Each entry MUST
-carry the physical resource name, its logical owner, its storage tier, its configured limits, its
-actual usage, and its observed growth rate. Enumeration MUST read each resource's configuration and
-state from the listing itself rather than issuing a follow-up describe call per resource, so
-inventory cost stays proportional to one paged listing.
+carry the physical resource name, its storage tier, its configured limits, its actual usage, and its
+observed growth rate. Enumeration MUST read each resource's configuration and state from the listing
+that returns both together, never from a follow-up describe call per resource; the cost bound
+forbids per-resource round-trips, not a second paged listing.
+
+A resource the server declines to describe — one carrying an offline reason, which the info listing
+omits entirely rather than reporting — MUST still appear in the inventory, named, with unknown tier
+and unknown capacity. An inventory that silently omits the resources nobody can read is worse than
+no inventory, because it manufactures the appearance of completeness. Detecting them requires
+reconciling the info listing against the name listing, which is not a consistent snapshot: a resource
+deleted between the two MAY appear once as unknown and MUST resolve on a later collection.
+
+Logical owner attribution is defined for `KV_*` resources only (see the attribution requirement).
+There is no owner registry for ordinary streams or ObjectStore backing streams, and the inventory
+enumerates the account — so a resource another process declared has no declaration this process can
+read. Those kinds MUST therefore report attribution as **not-applicable**, which MUST be distinct
+from the **unattributed** state a `KV_*` resource carries when the catalog does not declare its
+bucket. Collapsing the two would report "the framework has no owner concept here" and "this bucket
+escaped the catalog" as the same fact, and only the second is a finding.
 
 #### Scenario: A resource this process never touched still appears
 
@@ -16,6 +31,16 @@ inventory cost stays proportional to one paged listing.
   process has never created, opened, or published to
 - **WHEN** the storage inventory is collected
 - **THEN** the resource appears in the inventory with its configured limits and actual usage
+
+#### Scenario: A resource the server declines to describe is still named
+
+- **GIVEN** an account containing a stream the server excludes from the info listing because it
+  carries an offline reason (e.g. a persisted config requiring a higher API level than the running
+  binary, after a server rollback)
+- **WHEN** the inventory is collected
+- **THEN** the resource appears with its real name, its kind derived from the name, unknown tier, and
+  unknown capacity
+- **AND** the inventory does not report itself as complete while omitting it
 
 #### Scenario: Collection never blocks start or health
 
@@ -141,13 +166,35 @@ extrapolated from a single observation.
 
 ### Requirement: Operators MUST get an actionable storage report
 
-SemStreams MUST provide an operator-facing storage report, reachable over a named transport, that
-lists every inventoried resource with its owner, configured bound or its absence, current usage,
-headroom, pressure state, and projected time-to-threshold. The report MUST name resources carrying no
+SemStreams MUST publish the storage report to a framework-owned KV bucket, one key per inventoried
+resource, carrying that resource's owner or attribution state, configured bound or its absence,
+current usage, headroom, pressure state, projected time-to-threshold, and the timestamp it was
+collected. Every operator-facing surface — HTTP route, CLI, alerting, metrics exporter — MUST be a
+CONSUMER of that bucket rather than a separate report-producing path, so there is one produced truth
+and no surface can disagree with another. A resource absent from the current collection MUST be
+removed by deleting its key, never by expiring it under a retention policy: reclamation here is a
+semantic decision the collector makes, on the same principle that governs the rest of the graph.
+Ranging the bucket MUST reconstruct the whole report; consumers MAY observe a mix of revisions
+across keys, which is why each key carries its own collection timestamp. The report MUST name resources carrying no
 bound at all. The report MUST compare declared bounds against the account limit **within each storage
 tier** — memory-backed and file-backed resources have separate account limits and MUST NOT be summed
 together — and MUST report the account limit as unbounded when the server reports no limit for that
 tier, rather than treating the absence as a zero or omitting the comparison silently.
+
+#### Scenario: Every operator surface reads the published report
+
+- **GIVEN** the collector has published a report and an operator queries it through the HTTP route
+  and again through the CLI
+- **WHEN** both responses are compared
+- **THEN** both are derived from the same published KV state
+- **AND** neither surface recomputes the inventory independently
+
+#### Scenario: A disappeared resource is deleted, not expired
+
+- **GIVEN** a resource that was present in a previous collection and is absent from the current one
+- **WHEN** the report is published
+- **THEN** that resource's key is deleted
+- **AND** no retention policy is configured on the report bucket to expire it
 
 #### Scenario: The report names unbounded resources
 

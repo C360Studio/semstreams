@@ -28,6 +28,49 @@ const (
 	ObjectStoreStreamPrefix = "OBJ_"
 )
 
+// ResourceKind classifies a physical JetStream stream name by the reserved
+// backing-stream namespace it occupies. It is the naming convention read two
+// ways: the provisioning guard refuses everything that is not an ordinary
+// stream, and the storage inventory reports every kind.
+type ResourceKind string
+
+// Resource kinds.
+const (
+	// ResourceOrdinaryStream is a stream SemStreams provisions to carry
+	// time-shaped events — the only kind stream provisioning governs.
+	ResourceOrdinaryStream ResourceKind = "stream"
+	// ResourceKeyValue is a KV bucket's backing stream (KVStreamPrefix).
+	ResourceKeyValue ResourceKind = "kv"
+	// ResourceObjectStore is an ObjectStore's backing stream
+	// (ObjectStoreStreamPrefix).
+	ResourceObjectStore ResourceKind = "objectstore"
+)
+
+// ClassifyBackingStream maps a physical JetStream stream name to the logical
+// resource it backs: the kind, and for a backing stream the bucket name behind
+// it (empty for an ordinary stream, which has no bucket).
+//
+// EXACTLY ONE leading prefix is stripped. A product bucket may legitimately be
+// named "KV_FOO", whose backing stream is then "KV_KV_FOO" and whose real name
+// is "KV_FOO" — not "FOO". Stripping greedily would attribute that resource to
+// a different bucket entirely, which is why the recovery lives here, once, and
+// is read by both the provisioning guard's diagnostic and the inventory's owner
+// attribution: the two can disagree about a bucket's name only if they compute
+// it separately, so they do not.
+//
+// The rule is the prefix and nothing else — no catalog lookup, no membership
+// test — so a product or sister-repo bucket outside the framework catalog
+// classifies identically to a framework one.
+func ClassifyBackingStream(stream string) (ResourceKind, string) {
+	switch {
+	case strings.HasPrefix(stream, KVStreamPrefix):
+		return ResourceKeyValue, strings.TrimPrefix(stream, KVStreamPrefix)
+	case strings.HasPrefix(stream, ObjectStoreStreamPrefix):
+		return ResourceObjectStore, strings.TrimPrefix(stream, ObjectStoreStreamPrefix)
+	}
+	return ResourceOrdinaryStream, ""
+}
+
 // ErrBackingStreamNotProvisionable is returned when a stream-provisioning seam
 // is handed a KV or ObjectStore backing-stream name. Sentinel so a boot path (or
 // a test) can classify the refusal distinctly from a NATS-side create failure.
@@ -68,24 +111,24 @@ var ErrBackingStreamNotProvisionable = errors.New(
 // validation, before any JetStream call, and before any connection or
 // circuit-breaker check.
 func CheckOrdinaryStreamName(name, source string) error {
-	switch {
-	case strings.HasPrefix(name, KVStreamPrefix):
+	kind, bucket := ClassifyBackingStream(name)
+	switch kind {
+	case ResourceKeyValue:
 		return fmt.Errorf(
 			"%w: %q (declared by %s) is the backing stream for KV bucket %q — a framework-owned KV bucket is "+
 				"acquired through the bucket descriptor catalog's acquisition seam (graph.EnsureCatalogBucket "+
 				"/ natsclient.EnsureFrameworkBucket); a product bucket outside that catalog is provisioned by "+
 				"the component that owns it. Either way its retention contract belongs to graph-retention "+
 				"(ADR-068/073), not to stream provisioning; remove this stream declaration",
-			ErrBackingStreamNotProvisionable, name, source,
-			strings.TrimPrefix(name, KVStreamPrefix))
-	case strings.HasPrefix(name, ObjectStoreStreamPrefix):
+			ErrBackingStreamNotProvisionable, name, source, bucket)
+	case ResourceObjectStore:
 		return fmt.Errorf(
 			"%w: %q (declared by %s) is the backing stream for ObjectStore bucket %q — content stores are "+
 				"provisioned by the content-store constructor (storage/objectstore.NewStoreWithConfig), and "+
 				"their retention contract belongs to graph-retention (ADR-068/073), not to stream "+
 				"provisioning; remove this stream declaration",
-			ErrBackingStreamNotProvisionable, name, source,
-			strings.TrimPrefix(name, ObjectStoreStreamPrefix))
+			ErrBackingStreamNotProvisionable, name, source, bucket)
+	case ResourceOrdinaryStream:
 	}
 	return nil
 }

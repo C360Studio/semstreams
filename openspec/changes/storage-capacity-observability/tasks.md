@@ -12,19 +12,36 @@
 
 ## 2. Inventory
 
-- [ ] 2.1 Add an account-scoped inventory enumerating JetStream via the paged listing that returns full
+- [x] 2.1 Add an account-scoped inventory enumerating JetStream via the paged listing that returns full
       stream info (config + state together), not a names listing plus a describe per resource
-- [ ] 2.2 Attribute `KV_*` resources via `graph.OwnerOf(bucket)` (`graph/kvcatalog.go:213`) after
+- [x] 2.2 Attribute `KV_*` resources via `graph.OwnerOf(bucket)` (`graph/kvcatalog.go:213`) after
       stripping exactly ONE leading `KV_`; report non-catalog resources as unattributed
-- [ ] 2.3 Model capacity as three distinct states — bounded, unbounded, unknown — and prove in tests
+- [x] 2.3 Model capacity as three distinct states — bounded, unbounded, unknown — and prove in tests
       that no two collapse
-- [ ] 2.4 Bound collection: interval-driven with a timeout, never on the component-start or health path,
-      degrading to last-good-with-timestamp; make the interval configuration and name the producing
-      process in the report
-- [ ] 2.5 Add unit tests for attribution, the doubled-prefix case (`KV_KV_FOO` → `KV_FOO`, unattributed),
+- [x] 2.4 Bound collection: interval-driven with a timeout, never on the component-start or health path,
+      degrading to last-good-with-timestamp, naming the producing process in the report
+- [ ] 2.4b Expose the collection interval as operator configuration with a schema entry and a JSON
+      round-trip test (a Go struct field reachable only from a composition root is not operator
+      configuration) — may move to section 4 with the rest of the operator surface
+- [x] 2.5 Add unit tests for attribution, the doubled-prefix case (`KV_KV_FOO` → `KV_FOO`, unattributed),
       catalog-removal reporting unattributed, and unknown capacity
-- [ ] 2.6 Add a real-NATS integration test proving a resource this process never created or touched is
+- [x] 2.6 Add a real-NATS integration test proving a resource this process never created or touched is
       still enumerated
+
+- [x] 2.7 Reconcile the info listing against the name listing and publish names-minus-infos as
+      real-named unknown-tier/unknown-capacity rows. The server excludes offline streams from the info
+      listing (`Missing`/`Offline`, dropped by nats.go) but NOT from the name listing, so without this
+      the inventory silently omits exactly the resources nobody can read. Dedupe resources by name
+      before sorting: nats.go advances its page offset by `len(resp.Streams)` while the server's cursor
+      also passed the excluded entries, so >256 streams plus one offline stream yields overlapping
+      pages and duplicate rows
+
+- [ ] 2.8 Prove the undescribable-resource path against a genuinely offline stream. Unit tests cover the
+      reconciliation against a fake and integration pins the assumption it rests on (name listing ⊇ info
+      listing on a healthy server), but no test produces a real offline stream — that needs a two-image
+      run: write state under a newer `nats:` tag, restart on an older one so a persisted config requires
+      a higher API level than the running binary. Feasible but its own piece of work; do not fold it in
+      silently, and do not claim the offline path is end-to-end proven until this exists
 
 ## 3. Growth and pressure
 
@@ -47,9 +64,17 @@
       gauge has a consumer at merge time and does not become a phantom signal
 - [ ] 4.3 Expose pressure in component health STATUS without degrading readiness, and add a test that
       `critical` pressure fails no readiness or health gate
-- [ ] 4.4 Choose and implement a named transport for the storage report (HTTP route, CLI subcommand, or
-      NATS subject) and pin its JSON shape in a round-trip test — no `doctor` surface exists in the repo
-      today, so this is net-new and must be decided, not implied
+- [ ] 4.4 Publish the report to a framework-owned KV bucket, ONE KEY PER RESOURCE (not one blob — a blob
+      is bounded by the NATS max payload on a large account, which is what would otherwise force
+      ObjectStore, and the framework has no bounded object lane since the `windowed` class was retired).
+      Delete the key for a resource absent from the current collection; never configure retention on the
+      bucket. Pin the per-key JSON shape in a round-trip test
+- [ ] 4.4b Declare the report bucket in the descriptor catalog (`graph/kvcatalog.go`) — operational class,
+      owner-only writes, no-lifecycle retention, bounded History following the `GRAPH_STATUS` precedent.
+      History depth is the per-resource growth series feeding 3.1, so choose it deliberately
+- [ ] 4.4c Implement the operator surfaces as CONSUMERS of that bucket — an HTTP route reading it, and
+      the alert rule from 4.2 driven by `Watch` — so there is one produced truth and no surface can
+      disagree with another. Add a test that two surfaces cannot diverge because neither recomputes
 - [ ] 4.5 Report per-tier declared-versus-account-limit comparison via `js.AccountInfo`
       (`config/streams.go:192`), honoring the `-1`-means-unlimited sentinel (`:227`); never sum memory
       and file tiers together
@@ -92,8 +117,9 @@
 - [ ] 6.3 Seed or correct the capability home — `openspec/specs/nats-streaming/spec.md` is a publish-path
       capability whose Purpose is still a `TBD` stub; stream provisioning is a separate capability and
       must not be filed under it
-- [ ] 6.4 Confirm no catalog row's declared retention policy changed, no retention Kind was added, and
-      `graph-retention`, the acquisition seam, and ADR-068/073 are untouched
+- [ ] 6.4 Confirm no EXISTING catalog row's declared retention policy changed, no retention Kind was
+      added, and `graph-retention`, the acquisition seam, and ADR-068/073 are untouched. Adding the 4.4b
+      report-bucket row is in scope and expected; changing how any existing bucket is governed is not
 - [ ] 6.5 Run lint, `go test -race ./...`, tagged integration on touched packages, contract tests, and
       `task schema:generate` with no uncommitted drift
 - [ ] 6.6 Run a relevant e2e tier before merge. This is REQUIRED, not conditional: tasks 1.1 and 5.1
