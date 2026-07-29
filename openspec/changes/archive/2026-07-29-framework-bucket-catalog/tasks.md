@@ -177,12 +177,12 @@
 
 ## 9. PR + review + merge
 
-- [ ] 9.1 Branch off main; conventional commit, BREAKING flagged; PR body carries F1/F2, the
+- [x] 9.1 Branch off main; conventional commit, BREAKING flagged; PR body carries F1/F2, the
   #717 answer, the net-deletion ledger, and the bounded-storage rebase note.
-- [ ] 9.2 `semstreams-reviewer` pre-merge — explicit lenses: catalog census completeness
+- [x] 9.2 `semstreams-reviewer` pre-merge — explicit lenses: catalog census completeness
   (guarantee-defines-hole-class); seam failure postures; the sweep-deletion sequencing (seam →
   migrate → prove → delete); contract-test enforceability; derivation-not-snapshot.
-- [ ] 9.3 Owner-run Codex gate; merge on addressed + CI-green; archive + baton (record: Epic C
+- [x] 9.3 Owner-run Codex gate; merge on addressed + CI-green; archive + baton (record: Epic C
   structural leg COMPLETE; #712 next; bounded-storage rebases).
 
 ## 10. Codex round 1 (PR #724 CHANGES-REQUESTED: 2 BLOCKING + 1 HIGH + 1 MEDIUM — all confirmed)
@@ -224,3 +224,8 @@
   (all 22 already did — no row relied on zero values).
 - [x] 10.4 **MEDIUM — ledger truth**: 8.4 marked with the orchestrator's e2e evidence + the
   predates-this-round note (10.1 is boot-path; tiers to be re-run post-fix); this section added.
+  **MERGED `eff3927f` (2026-07-29) after ONE Codex round (B1 clean-boot tool loss → lazy
+  execution-time bind; B2 cross-owner seam → exact-four Validate + belt; H3 fail-open enums →
+  explicit arms; M4 ledger truth), reviewer rounds 1+2 APPROVE, FOUR e2e tiers green on the final
+  tree (structural/statistical/core/agentic). All checks pass + CLEAN verified at merge.
+  Follow-up #725 filed (hello-world config, pre-existing).**

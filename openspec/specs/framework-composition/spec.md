@@ -133,9 +133,12 @@ absorbed — when the failure occurs after boot. `ComponentManager.Start` is a
 **component-start barrier**: it launches component `Start` calls concurrently but returns only
 after every launched `Start` has returned, and returns the joined errors of all that failed.
 There is no fire-and-forget component launch at boot, and no compatibility variant that
-preserves one. A component-level fail-closed assertion (e.g. graph-ingest's create-time
-retention refusal) is thereby a process-level refusal: the process MUST NOT bring up its HTTP
-surface or report service health while boot-time component starts are outstanding or failed.
+preserves one. A component-level fail-closed assertion (e.g. the bucket acquisition seam
+refusing an unreconcilable retention divergence inside an owner's `Start`) is thereby a
+process-level refusal: the process MUST NOT bring up its HTTP surface or report service health
+while boot-time component starts are outstanding or failed. The barrier exists for fail-closed
+boot; retention coverage is held by the bucket acquisition seam at each acquisition, not by
+boot ordering.
 
 Post-boot component starts (dynamic configuration add or restart) MUST NOT crash the process;
 they record the component as failed with its error, and the component manager's health check
@@ -157,12 +160,13 @@ and applies no change), bounded by the lifecycle context: cancellation fails boo
 context error. The **cutoff** is the final drain pass: updates whose local application lands
 after it — component ADDS and EDITS alike — are post-boot dynamic changes, microsecond-class
 identical to ones arriving just after `Start` returns, handled by the config watcher with the
-dynamic paths (an edit's restart releases and re-acquires its buckets after the sweep),
-outside the boot sweep's boot-time enforcement scope; the bucket acquisition seam is the
-durable closure for that whole class. A registry change landing between the final drain pass
-and the watcher starting MUST still be applied, not discarded: the watcher's entry backlog
-check applies the pending event when the registry content differs from the last-applied
-baseline.
+dynamic paths. Post-cutoff bucket acquisition is CLOSED by the acquisition seam: a dynamic
+add or edit that re-acquires framework buckets reconciles them to their declared catalog
+policy at that acquisition — the class formerly named here as a forward reference is
+discharged, and no boot sweep is involved. A registry change landing between the final drain
+pass and the watcher starting MUST still be applied, not discarded: the watcher's entry
+backlog check applies the pending event when the registry content differs from the
+last-applied baseline.
 
 #### Scenario: a configuration update arriving during boot joins the boot transaction
 
@@ -173,11 +177,21 @@ baseline.
 - **THEN** it synchronously applies the pending configuration state before returning: created
   components are started (or fail boot) under barrier semantics, edits are applied to their
   components, and model-registry dependents are rebuilt against the new registry — so
-  post-start boot guards (the owned-bucket coverage pass) observe them before the HTTP surface
-  comes up
+  post-start boot steps (the legacy-drift backstop having already run pre-start, and HTTP
+  setup) observe them before the HTTP surface comes up
 - **AND** an update whose local application lands after the final drain pass — a component
   ADD or EDIT alike — is a post-boot dynamic change, processed by the config watcher with
   `started == true`
+
+#### Scenario: a post-boot acquisition reconciles bucket policy at the seam
+
+- **GIVEN** a fully booted process and a framework bucket dirtied out-of-band (a foreign
+  `MaxAge` applied to its backing stream after boot)
+- **WHEN** a post-boot dynamic configuration edit restarts the owning component, whose `Start`
+  re-acquires the bucket through the ensure seam
+- **THEN** the divergence is reconciled to the declared catalog policy (stripped, with a WARN
+  naming the bucket) at that acquisition — with no boot sweep involved — proving the seam
+  closes the post-cutoff class the boot transaction defers
 
 #### Scenario: a boot-time component start failure fails StartAll
 
@@ -191,8 +205,7 @@ baseline.
 - **GIVEN** lifecycle components whose `Start` calls are launched concurrently
 - **WHEN** `ComponentManager.Start` returns
 - **THEN** every launched component `Start` call has already returned (successfully or not),
-  so post-start boot steps (owned-bucket coverage pass, HTTP setup) observe the final
-  boot-time component state, never a mid-start race
+  so post-start boot steps observe the final boot-time component state, never a mid-start race
 
 #### Scenario: multiple boot-time failures are all reported
 
