@@ -65,6 +65,33 @@
 //	    }),
 //	)
 //
+// # Who owns a stream's limits
+//
+// A stream's limits belong to the component that DECLARES it. If you only READ a
+// stream, bind it by name with GetStream and declare nothing:
+//
+//	if _, err := client.GetStream(ctx, streamName); err != nil {
+//	    if errors.Is(err, jetstream.ErrStreamNotFound) {
+//	        // A real answer: the declaring component is not deployed here.
+//	        // Handle it — do not create the stream to make the error go away.
+//	        return nil
+//	    }
+//	    return err
+//	}
+//
+// This is not style. EnsureStream is get-or-create: a reader that calls it with
+// its own configuration either creates the stream with limits it does not own, or
+// binds an existing one and has its declaration silently discarded — after which
+// the stream's limits are decided permanently by boot order. Since the framework's
+// provisioner reconciles retention drift, two components declaring one stream
+// differently is worse than that: each repairs the other's value on every boot,
+// forever. Neither can detect it locally, because a caller sees its own
+// declaration and the live stream, never the other declaration.
+//
+// EnsureStream reports a divergence between what you declared and what a bound
+// stream actually carries (see DiffDeclaredStream). A report that returns on every
+// boot, with the observed value alternating, is that flap.
+//
 // # JetStream Operations
 //
 // Working with JetStream streams and consumers:

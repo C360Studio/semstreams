@@ -145,12 +145,12 @@
       `MaxMsgsPerSubject: 1` so it is bounded per-subject in practice, but not by bytes and not by
       declaration. Fix this one as part of the slice — a framework that exempts itself from its own
       contract cannot ask sister repos to honor it
-- [ ] 5.11 Report declared-versus-observed divergence when `EnsureStream` binds an EXISTING stream
+- [x] 5.11 Report declared-versus-observed divergence when `EnsureStream` binds an EXISTING stream
       (#730). Today `natsclient/stream.go:141-145` returns the existing stream and discards the
       caller's `cfg` in silence, so a stream two components declare has its limits set permanently by
       boot order with no diagnostic on either side. Report only — do NOT restamp, since a non-owner
       silently rewriting another owner's config is worse than the drift
-- [ ] 5.12 State who owns a shared stream's limits (#730). If the answer is "the declaring component,
+- [x] 5.12 State who owns a shared stream's limits (#730). If the answer is "the declaring component,
       consumers use GetStream", document that as the contract rather than leaving it inferred from the
       single `agentic/agentrun/agentrun.go:697-718` precedent a sister repo had to reverse-engineer.
       This is now load-bearing rather than documentation hygiene: 5.5 made the provisioner reconcile

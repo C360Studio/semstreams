@@ -141,6 +141,11 @@ func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (
 	// Try to get existing stream first
 	stream, err := js.Stream(ctx, cfg.Name)
 	if err == nil {
+		// The caller's configuration is about to be discarded, which is correct —
+		// a non-owner must not restamp another owner's stream — but doing it in
+		// silence is how a stream two components declare has its limits decided
+		// permanently by boot order with no diagnostic on either side.
+		c.reportBindDivergence(cfg, stream)
 		return stream, nil
 	}
 
@@ -169,6 +174,46 @@ func (c *Client) EnsureStream(ctx context.Context, cfg jetstream.StreamConfig) (
 
 	c.recordFailure()
 	return nil, errs.WrapTransient(err, "Client", "EnsureStream", "failed to get stream "+cfg.Name)
+}
+
+// reportBindDivergence logs what binding an existing stream discarded.
+//
+// WARN rather than Info, and on EVERY bind rather than once. The condition is not
+// an error — the call succeeded and returning the existing stream is correct — but
+// it means a declaration in this process's code or configuration is not in effect,
+// and nothing else will ever say so. Repetition is part of the signal for the same
+// reason it is on the provisioner's repair path: a divergence that reappears on
+// every boot, with the observed value alternating between two processes' values, is
+// contested ownership rather than one stale stream.
+//
+// It reports and returns. No field is written, no error is produced, and the
+// caller receives the same stream it would have received before.
+func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream jetstream.Stream) {
+	if c.logger == nil || stream == nil {
+		return
+	}
+	info := stream.CachedInfo()
+	if info == nil {
+		// Nothing to compare against. Silence is right here: claiming a divergence
+		// we could not measure would be worse than not measuring it.
+		return
+	}
+
+	divergences := DiffDeclaredStream(declared, info.Config)
+	if len(divergences) == 0 {
+		return
+	}
+
+	c.logger.Warn(
+		"bound an existing stream whose live configuration diverges from this caller's declaration; "+
+			"the declaration is NOT in effect and nothing restamped the stream",
+		slog.String("stream", declared.Name),
+		slog.Any("divergence", DivergenceLabels(divergences)),
+		slog.String("remedy",
+			"the stream's limits belong to whichever process declared it first. Give this caller its own "+
+				"stream name, or agree one owner for the shared one and have every other caller bind by "+
+				"name without declaring limits it does not own"),
+	)
 }
 
 // ConsumeStreamWithConfig creates a JetStream consumer with full configuration.

@@ -104,6 +104,50 @@ declared-versus-observed fields — rather than discarding the declaration in si
 a stream two components declare has its limits decided permanently by boot order, with no diagnostic
 on either side.
 
+The comparison MUST cover only the fields the caller actually DECLARED. A zero field is silence, not
+a declaration of zero: a caller that omits a retention window is not asking for unlimited retention,
+so reporting its absent value against a live one would report a divergence the caller never expressed
+— and would fire on nearly every bind, which is how a real signal gets tuned out. This matters most
+for exactly the callers the create-versus-bind split sends down this path: an under-declared caller
+legitimately binds an existing stream, and reporting each of its unset fields as drift would make the
+report useless where it is needed.
+
+Where a configuration field's zero value is itself a meaningful value, the divergence is reportable in
+ONE direction only, and this MUST be stated rather than left to look exhaustive. Declaring the
+non-default value is observable; declaring the default is indistinguishable from declaring nothing.
+It is the same limit that stops the creation check from requiring a discard policy, and it has the
+same cause.
+
+The report MUST fire on EVERY bind rather than only the first. A divergence suppressed after its first
+occurrence erases the only locally available evidence that two processes are contesting one stream: a
+report that reappears on every boot with the observed value alternating between two callers' values is
+contested ownership, not one stale stream. A seam cannot distinguish the two from its own side — it
+sees its declaration and the live configuration, never another process's declaration — so making the
+repetition visible is the whole of what it can do.
+
+#### Scenario: A bind that discards a declaration reports what it discarded
+
+- **GIVEN** an existing ordinary stream whose live retention and size differ from a second caller's
+  declaration
+- **WHEN** that caller binds the stream through the ensure-stream seam
+- **THEN** the bind succeeds and returns the existing stream unchanged
+- **AND** the divergence is reported naming the stream and each field's declared and observed values
+- **AND** no field of the live stream is rewritten
+
+#### Scenario: An undeclared field is not reported as divergence
+
+- **GIVEN** an existing stream carrying limits a binding caller says nothing about
+- **WHEN** that caller binds it
+- **THEN** nothing is reported, because omitting a field is not declaring its zero value
+
+#### Scenario: A contested stream reports on every bind
+
+- **GIVEN** two processes declaring one stream with different limits, each binding it in turn
+- **WHEN** each of them binds
+- **THEN** every bind reports the divergence it sees
+- **AND** the reports are not suppressed after the first, so the alternating observed value is visible
+  as contention rather than as a single stale stream
+
 #### Scenario: A direct ensure-stream caller cannot create an unbounded stream
 
 - **GIVEN** a caller creating a new ordinary stream directly through the client's ensure-stream seam,
@@ -140,6 +184,39 @@ on either side.
 - **GIVEN** an ordinary stream declaration carrying an explicit discard policy
 - **WHEN** the stream is created
 - **THEN** the created stream's discard policy equals the declared value
+
+### Requirement: A shared stream's limits MUST have one stated owner
+
+A stream's limits MUST belong to the component that DECLARES it. A component that only reads a stream
+MUST bind it by name without declaring limits — through the get-stream seam, not the get-or-create one
+— and MUST treat the stream's absence as a real answer it handles rather than as a reason to create
+the stream itself.
+
+This is load-bearing rather than documentation hygiene, and it became so when the provisioner learned
+to reconcile retention. Two processes declaring one stream differently no longer merely resolve by
+first boot: they FLAP, each repairing the other's value on every boot, forever. No provisioner can
+detect that from its own side — it sees its own declaration and the live configuration, never the
+other declaration — so the ownership statement is the only thing that PREVENTS the situation, and the
+repeated-repair and repeated-divergence reports are the only things that reveal it afterwards.
+
+The statement MUST be discoverable where a stream is provisioned, not only in a specification. It was
+previously inferrable only from a single in-repo precedent that a sister repo had to reverse-engineer,
+which is how a convention becomes something each consumer guesses at separately.
+
+#### Scenario: A read-only consumer does not declare a stream's limits
+
+- **GIVEN** a component that only consumes from a stream another component declares
+- **WHEN** it starts
+- **THEN** it binds the stream by name without declaring limits
+- **AND** an absent stream is handled as a real condition rather than created by the consumer
+
+#### Scenario: Two declarers of one stream are diagnosable
+
+- **GIVEN** two components that both declare the same stream with different limits
+- **WHEN** each boots and reconciles or binds
+- **THEN** each occurrence is reported with observed and declared values
+- **AND** the repetition across boots is what identifies the situation as contested ownership, since
+  neither process can observe the other's declaration
 
 ### Requirement: A stream whose contract is permanence MUST be declarable as archival
 
