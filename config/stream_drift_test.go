@@ -398,3 +398,70 @@ func TestDeclaredStorageAndRetention_ResolveTheSameWayCreationDoes(t *testing.T)
 		assert.False(t, governed, "retention %q must not govern an existing stream", spelling)
 	}
 }
+
+// TestReconcileStreamConfig_MarksNarrowingRepairs covers the log-level decision.
+//
+// NATS applies a tightened bound by evicting immediately, so shrinking MaxAge or
+// MaxBytes deletes messages when the update lands — at boot, on the framework's
+// initiative. Reducing GOVERNANCE_VERDICT_AUDIT from 90 days to 24 hours discards
+// 89 days of audit trail. The repair is still correct (the narrower bound IS the
+// declaration), but announcing it at the same level as a harmless widening is not.
+func TestReconcileStreamConfig_MarksNarrowingRepairs(t *testing.T) {
+	const mib = 1 << 20
+
+	cases := []struct {
+		name         string
+		observedAge  time.Duration
+		declaredAge  string
+		observedByte int64
+		declaredByte int64
+		wantNarrowed []string
+	}{
+		{
+			name:        "a shorter declared window evicts",
+			observedAge: 90 * 24 * time.Hour, declaredAge: "24h",
+			observedByte: 4 * mib, declaredByte: 4 * mib,
+			wantNarrowed: []string{"max_age"},
+		},
+		{
+			name:        "a smaller declared size evicts",
+			observedAge: 24 * time.Hour, declaredAge: "24h",
+			observedByte: 64 * mib, declaredByte: 4 * mib,
+			wantNarrowed: []string{"max_bytes"},
+		},
+		{
+			// Unlimited observes as 0 for age and -1 for bytes; declaring a finite
+			// bound over either one evicts everything outside it.
+			name:        "a finite bound over an unlimited one evicts",
+			observedAge: 0, declaredAge: "24h",
+			observedByte: -1, declaredByte: 4 * mib,
+			wantNarrowed: []string{"max_age", "max_bytes"},
+		},
+		{
+			name:        "a wider declaration evicts nothing",
+			observedAge: time.Hour, declaredAge: "24h",
+			observedByte: 4 * mib, declaredByte: 64 * mib,
+			wantNarrowed: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			decl := observedDeclaration()
+			decl.cfg.MaxAge = tc.declaredAge
+			decl.cfg.MaxBytes = tc.declaredByte
+
+			observed := observedStream()
+			observed.MaxAge = tc.observedAge
+			observed.MaxBytes = tc.observedByte
+
+			_, drifts := reconcileStreamConfig(decl, observed, declaredFor(t, decl), nil)
+
+			var narrowed []string
+			for _, d := range narrowingDrifts(drifts) {
+				narrowed = append(narrowed, d.field)
+			}
+			assert.ElementsMatch(t, tc.wantNarrowed, narrowed)
+		})
+	}
+}

@@ -963,3 +963,43 @@ func TestStreamBoundsSentinel_IsOneIdentityAcrossBothSeams(t *testing.T) {
 	require.ErrorIs(t, seamErr, ErrStreamBoundsUndeclared,
 		"a programmatic refusal must satisfy a config-side errors.Is check")
 }
+
+// TestFrameworkStreamAutoCreate_CarriesTheDeclaredBounds pins the accessor the
+// dashboard streamers recreate framework streams through.
+//
+// Those streamers used to hand the consumer auto-create path a config naming only
+// subjects and a storage tier, which produced no age limit and no size limit at
+// all. HEALTH, METRICS and FLOWS are memory-backed, so a NATS restart destroys
+// them and the next websocket reconnect recreated them — replacing the declared
+// bounds with none. Reading the declaration is what removes the second place to
+// keep in step.
+func TestFrameworkStreamAutoCreate_CarriesTheDeclaredBounds(t *testing.T) {
+	for _, stream := range frameworkStreams() {
+		t.Run(stream.name, func(t *testing.T) {
+			got, ok := FrameworkStreamAutoCreate(stream.name)
+			require.True(t, ok, "every framework-guaranteed stream must be reachable")
+
+			// Bounded, so the provisioning seam admits the creation.
+			require.NoError(t,
+				natsclient.CheckStreamBounds(jetstream.StreamConfig{
+					Name: stream.name, MaxAge: got.MaxAge, MaxBytes: got.MaxBytes,
+				}, "framework auto-create"),
+				"a recreated framework stream must satisfy the requirement the framework enforces")
+
+			// And equal to the declaration rather than a second opinion about it.
+			declaredAge, err := parseDurationWithDays(stream.cfg.MaxAge)
+			require.NoError(t, err)
+			assert.Equal(t, declaredAge, got.MaxAge)
+			assert.Equal(t, stream.cfg.MaxBytes, got.MaxBytes)
+			assert.Equal(t, stream.cfg.Subjects, got.Subjects)
+			assert.Equal(t, stream.cfg.Storage, got.Storage)
+		})
+	}
+}
+
+func TestFrameworkStreamAutoCreate_UnknownStreamIsNotOK(t *testing.T) {
+	_, ok := FrameworkStreamAutoCreate("NOT_A_FRAMEWORK_STREAM")
+	assert.False(t, ok,
+		"returning not-ok makes the caller declare nothing and be refused at the seam, "+
+			"which is better than inventing bounds for a stream nobody declared")
+}

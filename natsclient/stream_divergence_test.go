@@ -86,7 +86,11 @@ func TestDiffDeclaredStream(t *testing.T) {
 		assert.Equal(t, "unlimited (-1)", byField["MaxBytes"].Observed)
 	})
 
-	t.Run("every declared limit is covered", func(t *testing.T) {
+	// NOTE: this asserts the compared set is what the implementation INTENDS, not
+	// that it is exhaustive over jetstream.StreamConfig — it cannot, since it lists
+	// the same names the implementation does. The fields deliberately left out are
+	// named in DiffDeclaredStream's doc comment; widening the set means editing both.
+	t.Run("every field in the compared set is reported", func(t *testing.T) {
 		declared := jetstream.StreamConfig{
 			Name:              "S",
 			MaxAge:            time.Hour,

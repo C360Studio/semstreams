@@ -82,7 +82,11 @@ type StreamAutoCreateConfig struct {
 	// Retention policy: "limits" (default), "interest", "work_queue"
 	Retention string
 
-	// MaxAge is the maximum age of messages (default 7 days).
+	// MaxAge is the maximum age of messages. REQUIRED and must be positive:
+	// auto-create is stream provisioning, and an ordinary stream declares finite
+	// bounds (see CheckStreamBounds). There is no framework default — one would be
+	// a bound nobody chose, indistinguishable in the operator surface from one
+	// somebody did, which is what the bounds requirement exists to end.
 	MaxAge time.Duration
 
 	// Duplicates is the server-side duplicate-detection window for the
@@ -91,7 +95,9 @@ type StreamAutoCreateConfig struct {
 	// ensureStreamForConsumer clamps it down to MaxAge when it exceeds it.
 	Duplicates time.Duration
 
-	// MaxBytes is the maximum total size (0 = unlimited).
+	// MaxBytes is the maximum total size. REQUIRED and must be positive, for the
+	// same reason as MaxAge: JetStream reads 0 and -1 alike as unlimited, so
+	// neither is a declaration.
 	MaxBytes int64
 
 	// MaxMsgs is the maximum number of messages (0 = unlimited).
@@ -101,12 +107,18 @@ type StreamAutoCreateConfig struct {
 	Replicas int
 }
 
-// DefaultStreamConfig returns default auto-create configuration.
+// DefaultStreamConfig returns the auto-create defaults for the fields that HAVE
+// defaults: storage tier, retention policy and replica count.
+//
+// It deliberately declares NO bounds. It used to return MaxAge 7 days with
+// MaxBytes unset — the exact silent framework default the bounds requirement
+// removed from the configuration path, still handing out a retention window
+// nobody chose and no size ceiling at all. A caller that auto-creates must state
+// its own bounds; CheckStreamBounds refuses the creation otherwise.
 func DefaultStreamConfig() *StreamAutoCreateConfig {
 	return &StreamAutoCreateConfig{
 		Storage:   "file",
 		Retention: "limits",
-		MaxAge:    7 * 24 * time.Hour, // 7 days
 		Replicas:  1,
 	}
 }
@@ -199,6 +211,29 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 		return
 	}
 
+	// An UNBOUNDED live stream is reported on its own terms, because the
+	// declared-versus-observed comparison cannot see this case. That comparison
+	// comes from the caller's declaration, and an under-declared caller — the one
+	// the create-versus-bind split sends down this path — declares nothing to
+	// compare. This fires on a property of the LIVE STREAM instead, so it has none
+	// of the false-positive problem, and it is the migration signal for a stream
+	// that predates the bounds requirement: creation would have been refused, and
+	// binding leaves it exactly as unbounded as it was.
+	if info.Config.MaxAge <= 0 || info.Config.MaxBytes <= 0 {
+		c.logger.Warn(
+			"bound an existing ORDINARY stream that declares no finite bounds; creating it today would be "+
+				"refused, and binding it does not repair it",
+			slog.String("stream", declared.Name),
+			slog.String("observed_max_age", unlimitedOr(info.Config.MaxAge)),
+			slog.String("observed_max_bytes", unlimitedOrBytes(info.Config.MaxBytes)),
+			slog.String("remedy",
+				"this is a migration condition, not contested ownership: the stream's owner should set "+
+					"finite limits on it (`nats stream edit`), or declare it in configuration so the stream "+
+					"provisioner reconciles it. An archive whose contract is permanence belongs in "+
+					"archival_streams instead"),
+		)
+	}
+
 	divergences := DiffDeclaredStream(declared, info.Config)
 	if len(divergences) == 0 {
 		return
@@ -210,9 +245,11 @@ func (c *Client) reportBindDivergence(declared jetstream.StreamConfig, stream je
 		slog.String("stream", declared.Name),
 		slog.Any("divergence", DivergenceLabels(divergences)),
 		slog.String("remedy",
-			"the stream's limits belong to whichever process declared it first. Give this caller its own "+
-				"stream name, or agree one owner for the shared one and have every other caller bind by "+
-				"name without declaring limits it does not own"),
+			"if the live stream declares no bound at all this is a MIGRATION condition — its owner sets "+
+				"finite limits on it, or declares it in configuration so the provisioner reconciles it. If "+
+				"it declares a DIFFERENT bound, two owners are declaring one stream: give this caller its "+
+				"own stream name, or agree one owner and have the others bind by name without declaring "+
+				"limits they do not own"),
 	)
 }
 
@@ -507,6 +544,27 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 			dup = streamCfg.MaxAge
 		}
 		streamCfg.Duplicates = dup
+	}
+
+	// THE SAME TWO GUARDS AS EVERY OTHER PROVISIONING SEAM. This is a third one:
+	// consumer auto-create is stream CREATION, whatever it is called, and it was
+	// the last unguarded route to an unbounded ordinary stream.
+	//
+	// The bounds guard matters most on the path that reaches here. When a caller
+	// supplies an AutoCreateConfig, DefaultStreamConfig is skipped entirely, so a
+	// config naming only Subjects and Storage produced MaxAge 0 and MaxBytes 0 —
+	// unlimited on both. The framework's own HEALTH, METRICS and FLOWS streams are
+	// memory-backed, so a NATS restart destroys them, and the next reconnect used
+	// to recreate them through here with no bounds at all — silently replacing the
+	// 5m/10MB the framework declares for them. The contract's own observability
+	// streams were its counterexample.
+	if err := CheckOrdinaryStreamName(streamCfg.Name, "natsclient consumer auto-create"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream name "+streamCfg.Name)
+	}
+	if err := CheckStreamBounds(streamCfg, "natsclient consumer auto-create (StreamConsumerConfig.AutoCreate)"); err != nil {
+		return errs.WrapFatal(err, "Client", "ensureStreamForConsumer",
+			"validate stream bounds for "+streamCfg.Name)
 	}
 
 	// Create the stream

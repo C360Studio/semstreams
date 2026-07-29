@@ -201,3 +201,31 @@ func TestEnsureStream_BoundsCheckDoesNotPrecedeTheConnectionCheck(t *testing.T) 
 	assert.NotErrorIs(t, err, ErrStreamBoundsUndeclared,
 		"bounds cannot be judged before we know whether this call creates or binds")
 }
+
+// TestAutoCreate_IsAProvisioningSeamAndIsGuarded covers the THIRD creation seam.
+//
+// Consumer auto-create is stream creation whatever it is called, and it was the
+// last unguarded route to an unbounded ordinary stream — reachable from four
+// in-repo callers and exported for sister repos through
+// StreamConsumerConfig.AutoCreate. It is pinned here because the pattern has now
+// repeated twice: a comment asserting two seams cannot drift is not a mechanism,
+// and both times the missing seam was found by looking rather than by a test
+// failing.
+func TestAutoCreate_IsAProvisioningSeamAndIsGuarded(t *testing.T) {
+	// The shape the four in-repo callers used to pass: subjects and a storage tier,
+	// no bounds. Because an AutoCreateConfig is supplied, DefaultStreamConfig is
+	// skipped entirely, so nothing filled them in.
+	underDeclared := jetstream.StreamConfig{
+		Name:     "HEALTH",
+		Subjects: []string{"health.>"},
+		Storage:  jetstream.MemoryStorage,
+	}
+	require.ErrorIs(t, CheckStreamBounds(underDeclared, "test"), ErrStreamBoundsUndeclared,
+		"the config the auto-create path used to build declares no bounds at all")
+
+	// And the silent default it falls back to when no AutoCreateConfig is given
+	// declares none either, on purpose.
+	fallback := DefaultStreamConfig()
+	assert.Zero(t, fallback.MaxAge, "no framework default retention window")
+	assert.Zero(t, fallback.MaxBytes, "no framework default size ceiling")
+}

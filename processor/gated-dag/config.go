@@ -37,6 +37,10 @@ const (
 	// rather than evicting the oldest. See DispatchStreamDiscard: a dropped
 	// dispatch strands a claimed unit, which is what this stream exists to prevent.
 	defaultDispatchStreamDiscard = "new"
+	// defaultDispatchStreamRetention deletes each dispatch once it is acked, so the
+	// size ceiling is reached by genuine backlog rather than by successfully
+	// processed history. See DispatchStreamRetention.
+	defaultDispatchStreamRetention = "workqueue"
 
 	// FailurePolicyContinueOthers keeps independent branches flowing when a unit
 	// fails (its dependents stay Blocked; everything else proceeds). Default.
@@ -101,17 +105,50 @@ type Config struct {
 	// JetStream, so leaving it unset lets a stalled consumer grow the stream until
 	// the account's storage tier is exhausted — which takes down every other
 	// stream in the tier, not just this one. Byte count; must be > 0.
+	//
+	// An explicit 0 is treated as OMITTED and takes the default. The field is a
+	// plain int64, so after JSON decoding an omitted key and a written 0 are the
+	// same value and no check can separate them — an operator who means unlimited
+	// cannot express it here, and should not: this requirement exists to end
+	// unbounded work streams. A negative value IS distinguishable and is rejected.
 	DispatchStreamMaxBytes int64 `json:"dispatch_stream_max_bytes,omitempty"`
 	// DispatchStreamDiscard is what happens at the size ceiling: "old" evicts the
 	// oldest dispatches, "new" refuses the newest.
 	//
 	// The default is "new", which is the opposite of the framework default and is
-	// deliberate. A dispatch is a REQUEST to do work, and evicting the oldest
-	// silently drops a claimed unit's dispatch — the exact failure ADR-070 made
-	// this stream durable to prevent. Refusing the newest surfaces as a publish
-	// error the executor can see and retry (producer-side 503 err_code=10077),
-	// which is a loud failure instead of a lost unit.
+	// deliberate. A dispatch is a REQUEST to do work, and the two failures are not
+	// symmetric. A REFUSED publish returns an error the executor sees: it rolls the
+	// durable claim back and the unit re-selects on the next eval (ADR-070 B1). An
+	// EVICTED dispatch was already acked, so the claim stands while the message is
+	// silently deleted — the unit is stranded until the stranded-unit detector
+	// alerts or someone resets it. Loud and recoverable beats silent and wedged.
+	//
+	// This default is only safe because DispatchStreamRetention deletes on ack; see
+	// there. Validate refuses the combination that is not.
 	DispatchStreamDiscard string `json:"dispatch_stream_discard,omitempty"`
+	// DispatchStreamRetention is the stream's retention policy: "workqueue"
+	// (default) deletes each dispatch once it is acked, "limits" retains it until
+	// MaxAge or MaxBytes.
+	//
+	// "workqueue" is the default because a dispatch is a REQUEST, and it is what
+	// makes the size ceiling mean what the discard policy assumes it means. Under
+	// "limits" the stream retains SUCCESSFULLY PROCESSED dispatches for the full
+	// MaxAge, so the ceiling is reached by acked history rather than by backlog —
+	// and paired with discard "new" that refuses all new work on a perfectly
+	// healthy system, drained by nothing but time. Under "workqueue" the bytes only
+	// accumulate when the consumer is genuinely behind, which is the condition the
+	// ceiling is supposed to describe.
+	//
+	// Choose "limits" only if the consumer topology needs it. A workqueue stream
+	// delivers each message once, so its consumers must not have overlapping filter
+	// subjects — one durable consumer per dispatch subject, which is the documented
+	// pattern. Several independent consumers of the same subject need "limits", and
+	// then the discard policy must be "old".
+	//
+	// Retention cannot be changed on an existing stream: JetStream refuses the
+	// update, so a deployment that already has a dispatch stream keeps the policy it
+	// was created with. The bind-path divergence report names the difference.
+	DispatchStreamRetention string `json:"dispatch_stream_retention,omitempty"`
 	// DispatchDedupeWindow is the stream's server-side duplicate-detection window
 	// (Nats-Msg-Id = unitID). It makes the B1 claim-rollback safe against an
 	// ack-timeout-after-persist: a re-dispatch of the same unit within the window
@@ -184,8 +221,9 @@ func DefaultConfig() Config {
 		DispatchDedupeWindow: defaultDispatchDedupeWindow,
 		StrandedAfter:        defaultStrandedAfter,
 
-		DispatchStreamMaxBytes: defaultDispatchStreamMaxBytes,
-		DispatchStreamDiscard:  defaultDispatchStreamDiscard,
+		DispatchStreamMaxBytes:  defaultDispatchStreamMaxBytes,
+		DispatchStreamDiscard:   defaultDispatchStreamDiscard,
+		DispatchStreamRetention: defaultDispatchStreamRetention,
 	}
 }
 
@@ -243,6 +281,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.DispatchStreamDiscard == "" {
 		c.DispatchStreamDiscard = d.DispatchStreamDiscard
+	}
+	if c.DispatchStreamRetention == "" {
+		c.DispatchStreamRetention = d.DispatchStreamRetention
 	}
 	if c.DispatchDedupeWindow == "" {
 		c.DispatchDedupeWindow = d.DispatchDedupeWindow
@@ -308,8 +349,27 @@ func (c Config) Validate() error {
 				"and an unbounded work stream exhausts the account's storage tier rather than only itself",
 			c.DispatchStreamMaxBytes)
 	}
-	if _, err := c.dispatchStreamDiscard(); err != nil {
+	discard, err := c.dispatchStreamDiscard()
+	if err != nil {
 		return fmt.Errorf("dispatch_stream_discard: %w", err)
+	}
+	retention, err := c.dispatchStreamRetention()
+	if err != nil {
+		return fmt.Errorf("dispatch_stream_retention: %w", err)
+	}
+	// The one combination that stops a HEALTHY system. Under "limits" the stream
+	// retains acked dispatches for the full MaxAge, so the finite MaxBytes is
+	// reached by successfully processed history; "new" then refuses every further
+	// publish, and nothing drains it but time. Refused at validation rather than
+	// documented, because the symptom (all dispatch stops while the consumer is
+	// idle and healthy) points nowhere near the cause.
+	if retention == jetstream.LimitsPolicy && discard == jetstream.DiscardNew {
+		return fmt.Errorf(
+			`dispatch_stream_retention "limits" cannot be combined with dispatch_stream_discard "new": ` +
+				`"limits" retains dispatches after they are acked, so dispatch_stream_max_bytes is reached by ` +
+				`processed history rather than by backlog, and "new" then refuses all new dispatch on a ` +
+				`healthy system until max_age expires. Use the default "workqueue" retention (deletes on ` +
+				`ack), or set dispatch_stream_discard to "old" if the consumer topology requires "limits"`)
 	}
 	dedupe, err := c.dispatchDedupeWindow()
 	if err != nil {
@@ -394,6 +454,32 @@ func (c Config) dispatchStreamDiscard() (jetstream.DiscardPolicy, error) {
 			`must be "new" (refuse the newest dispatch at the ceiling; default, and loud) or `+
 				`"old" (evict the oldest, which silently strands whichever unit's dispatch is dropped), got %q`,
 			c.DispatchStreamDiscard)
+	}
+}
+
+// dispatchStreamRetention maps DispatchStreamRetention to its JetStream policy.
+// An unrecognized spelling is an ERROR rather than a fallback, on the same
+// principle as the discard policy: silently applying one retention model because a
+// value was misspelled is how the ceiling comes to mean something the discard
+// policy does not expect.
+//
+// "interest" is deliberately NOT offered. It deletes a message once every
+// interested consumer has acked, which for a stream whose consumers are wired by
+// the adopter makes durability depend on whether anyone happened to be subscribed
+// when the dispatch was published — the opposite of what ADR-070 made this stream
+// durable for.
+func (c Config) dispatchStreamRetention() (jetstream.RetentionPolicy, error) {
+	switch c.DispatchStreamRetention {
+	case "workqueue":
+		return jetstream.WorkQueuePolicy, nil
+	case "limits":
+		return jetstream.LimitsPolicy, nil
+	default:
+		return 0, fmt.Errorf(
+			`must be "workqueue" (delete each dispatch on ack; default, and what makes the size ceiling `+
+				`mean backlog) or "limits" (retain until max_age/max_bytes; needed only when several `+
+				`independent consumers read the same dispatch subject), got %q`,
+			c.DispatchStreamRetention)
 	}
 }
 

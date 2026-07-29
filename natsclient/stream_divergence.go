@@ -57,13 +57,26 @@ func (d StreamFieldDivergence) String() string {
 	return fmt.Sprintf("%s: declared=%s observed=%s", d.Field, d.Declared, d.Observed)
 }
 
-// DiffDeclaredStream reports every field the caller DECLARED whose live value
-// differs.
+// DiffDeclaredStream reports the DECLARED fields, of those it compares, whose live
+// value differs.
 //
-// It is exported because a caller may need to do more than have it logged.
-// gated-dag, for instance, treats a subject divergence as fatal — a dispatch
-// stream that does not capture its subject makes every publish fail — and that is
-// a decision only the caller can make. The framework reports; the owner decides.
+// The compared set is the limits and the routing — the fields whose divergence
+// changes what the stream does with messages. It is NOT every field of
+// jetstream.StreamConfig: Description, AllowDirect, DenyDelete, DenyPurge,
+// AllowRollup, Compression, Metadata, SubjectTransform, RePublish, Placement,
+// Mirror, Sources, ConsumerLimits and FirstSeq are not compared, so a caller that
+// declares one of those and binds a stream without it is not told. AllowDirect is
+// the one with real operational weight (a bound stream without it silently refuses
+// direct gets); the rest are descriptive or advanced-topology fields whose
+// divergence does not change delivery. Widen the set rather than assuming it is
+// already complete.
+//
+// It is exported so a caller CAN do more than have it logged — treating a subject
+// divergence as fatal, say, since a stream that does not capture the caller's
+// subject makes every publish fail. Nothing in this repository does yet: gated-dag
+// makes exactly that check, but through its own wildcard-aware subjectCovered
+// rather than this set comparison. The framework reports; an owner that needs to
+// act has the values to act on.
 func DiffDeclaredStream(declared, observed jetstream.StreamConfig) []StreamFieldDivergence {
 	var out []StreamFieldDivergence
 	add := func(field, want, got string) {
@@ -95,7 +108,7 @@ func DiffDeclaredStream(declared, observed jetstream.StreamConfig) []StreamField
 		add("MaxMsgsPerSubject", fmt.Sprint(declared.MaxMsgsPerSubject), unlimitedOrBytes(observed.MaxMsgsPerSubject))
 	}
 	if declared.MaxMsgSize > 0 && declared.MaxMsgSize != observed.MaxMsgSize {
-		add("MaxMsgSize", fmt.Sprint(declared.MaxMsgSize), fmt.Sprint(observed.MaxMsgSize))
+		add("MaxMsgSize", fmt.Sprint(declared.MaxMsgSize), unlimitedOrBytes(int64(observed.MaxMsgSize)))
 	}
 	if declared.Replicas > 0 && declared.Replicas != observed.Replicas {
 		add("Replicas", fmt.Sprint(declared.Replicas), fmt.Sprint(observed.Replicas))

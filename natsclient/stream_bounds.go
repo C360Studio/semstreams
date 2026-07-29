@@ -36,10 +36,20 @@
 // `EnsureStream` is get-or-create. Gating the whole call would refuse to BIND a
 // pre-existing unbounded stream, which is neither this caller's stream nor its
 // decision to make — a non-owner silently refusing to read someone else's stream
-// is worse than the drift. Divergence on the bind path is REPORTED instead. The
-// consequence is deliberate and worth stating: an under-declared caller fails on
-// a fresh deployment and binds silently on an existing one, so the report is what
-// makes the second case visible.
+// is worse than the drift.
+//
+// So an under-declared caller fails on a fresh deployment and BINDS on an existing
+// one. That asymmetry is deliberate, and what makes the second case visible is
+// narrower than it first appears: the declared-versus-observed report is silent for
+// this caller BY CONSTRUCTION, because it compares only the fields the caller
+// declared and an under-declared caller declared none of them. Reporting its
+// silence as drift is exactly what that rule exists to prevent.
+//
+// What covers the bind path is a separate observation about the LIVE stream: it is
+// itself unbounded (see reportBindDivergence). That fires on a property of the
+// stream rather than on the caller's silence, so it has none of the false-positive
+// problem, and it is the migration signal for a stream that predates this
+// requirement.
 
 package natsclient
 

@@ -135,6 +135,37 @@ func TestEnsureStream_BindDivergence(t *testing.T) {
 			"omitting a field is not declaring zero, and reporting it would drown the real signal")
 	})
 
+	// The bind path's OTHER report, which exists because the one above cannot see
+	// this case. An under-declared caller — the shape the create-versus-bind split
+	// sends here — declares nothing to compare, so the declared-versus-observed
+	// comparison is silent for it by construction. This fires on a property of the
+	// LIVE stream instead.
+	t.Run("an unbounded live stream is reported on its own terms", func(t *testing.T) {
+		_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+			Name:     "LEGACY_UNBOUNDED",
+			Subjects: []string{"legacyunbounded.>"},
+			Storage:  jetstream.MemoryStorage,
+		})
+		require.NoError(t, err)
+		logs.Reset()
+
+		// Declares nothing but its subject, so DiffDeclaredStream finds no divergence.
+		_, err = client.EnsureStream(ctx, jetstream.StreamConfig{
+			Name:     "LEGACY_UNBOUNDED",
+			Subjects: []string{"legacyunbounded.>"},
+		})
+		require.NoError(t, err, "binding is still not the moment to enforce a declaration")
+
+		logged := logs.String()
+		assert.Contains(t, logged, "declares no finite bounds")
+		assert.Contains(t, logged, "LEGACY_UNBOUNDED")
+		assert.Contains(t, logged, "unlimited")
+		assert.Contains(t, logged, "migration condition",
+			"the remedy for an unbounded stream is editing it, not renaming this caller's")
+		assert.NotContains(t, logged, "diverges from this caller's declaration",
+			"nothing was declared, so nothing diverged; the two reports must stay distinct")
+	})
+
 	// The divergence with the loudest downstream consequence: a stream that does not
 	// capture the caller's subject makes every publish fail with "no stream matches
 	// subject", and before this the bind that caused it said nothing.

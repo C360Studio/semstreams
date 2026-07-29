@@ -127,10 +127,20 @@ func (c *Component) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	streamRetention, err := c.cfg.dispatchStreamRetention()
+	if err != nil {
+		return err
+	}
 	stream, err := c.natsClient.EnsureStream(ctx, jetstream.StreamConfig{
 		Name:     c.cfg.DispatchStream,
 		Subjects: []string{c.cfg.DispatchSubject},
 		MaxAge:   streamMaxAge,
+		// Work-queue by default: a dispatch is deleted once acked, so MaxBytes below
+		// is reached by genuine backlog rather than by processed history. Under
+		// "limits" retention the ceiling would fill with acked dispatches and the
+		// discard policy would refuse all new work on a healthy system — Validate
+		// refuses that combination.
+		Retention: streamRetention,
 		// Both size bounds are DECLARED, not left to the server: EnsureStream
 		// refuses to create an ordinary stream without them, and an unbounded work
 		// stream exhausts the account's whole storage tier rather than only itself.

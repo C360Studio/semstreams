@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go/jetstream"
@@ -322,15 +323,12 @@ func healthStreamer(
 ) {
 	// Configure JetStream consumer for HEALTH stream
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:    "HEALTH",
-		FilterSubject: "health.>",
-		DeliverPolicy: "last_per_subject", // Last message per subject on connect, then new
-		AckPolicy:     "none",             // Fire-and-forget to browser
-		AutoCreate:    true,               // Create stream if it doesn't exist
-		AutoCreateConfig: &natsclient.StreamAutoCreateConfig{
-			Subjects: []string{"health.>"},
-			Storage:  "memory",
-		},
+		StreamName:       "HEALTH",
+		FilterSubject:    "health.>",
+		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
+		AckPolicy:        "none",             // Fire-and-forget to browser
+		AutoCreate:       true,               // Recreate the stream if the server lost it
+		AutoCreateConfig: frameworkAutoCreate("HEALTH"),
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -374,15 +372,12 @@ func flowStatusStreamer(
 	// Configure JetStream consumer for FLOWS stream, filtered to this specific flow
 	subject := "flows." + flowID + ".status"
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:    "FLOWS",
-		FilterSubject: subject,
-		DeliverPolicy: "last_per_subject", // Last message per subject on connect, then new
-		AckPolicy:     "none",             // Fire-and-forget to browser
-		AutoCreate:    true,               // Create stream if it doesn't exist
-		AutoCreateConfig: &natsclient.StreamAutoCreateConfig{
-			Subjects: []string{"flows.>"},
-			Storage:  "memory",
-		},
+		StreamName:       "FLOWS",
+		FilterSubject:    subject,
+		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
+		AckPolicy:        "none",             // Fire-and-forget to browser
+		AutoCreate:       true,               // Recreate the stream if the server lost it
+		AutoCreateConfig: frameworkAutoCreate("FLOWS"),
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -424,15 +419,12 @@ func logStreamer(
 ) {
 	// Configure JetStream consumer for LOGS stream
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:    "LOGS",
-		FilterSubject: "logs.>",
-		DeliverPolicy: "last_per_subject", // Last message per subject on connect, then new
-		AckPolicy:     "none",             // Fire-and-forget to browser
-		AutoCreate:    true,               // Create stream if it doesn't exist
-		AutoCreateConfig: &natsclient.StreamAutoCreateConfig{
-			Subjects: []string{"logs.>"},
-			Storage:  "file", // Logs should persist
-		},
+		StreamName:       "LOGS",
+		FilterSubject:    "logs.>",
+		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
+		AckPolicy:        "none",             // Fire-and-forget to browser
+		AutoCreate:       true,               // Recreate the stream if the server lost it
+		AutoCreateConfig: frameworkAutoCreate("LOGS"),
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -497,15 +489,12 @@ func metricsStreamer(
 ) {
 	// Configure JetStream consumer for METRICS stream
 	cfg := natsclient.StreamConsumerConfig{
-		StreamName:    "METRICS",
-		FilterSubject: "metrics.>",
-		DeliverPolicy: "last_per_subject", // Last message per subject on connect, then new
-		AckPolicy:     "none",             // Fire-and-forget to browser
-		AutoCreate:    true,               // Create stream if it doesn't exist
-		AutoCreateConfig: &natsclient.StreamAutoCreateConfig{
-			Subjects: []string{"metrics.>"},
-			Storage:  "memory",
-		},
+		StreamName:       "METRICS",
+		FilterSubject:    "metrics.>",
+		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
+		AckPolicy:        "none",             // Fire-and-forget to browser
+		AutoCreate:       true,               // Recreate the stream if the server lost it
+		AutoCreateConfig: frameworkAutoCreate("METRICS"),
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -732,4 +721,29 @@ func (fs *FlowService) handleWebSocketCommand(message []byte, clientState *Clien
 		Message: "Unknown command: " + cmd.Command,
 	})
 	fs.logger.Debug("WebSocket received unknown command", "command", cmd.Command)
+}
+
+// frameworkAutoCreate returns the DECLARED auto-create configuration for one of
+// the framework's guaranteed streams.
+//
+// These dashboard streamers read HEALTH, METRICS, FLOWS and LOGS, all of which the
+// framework provisioner declares with reasoned bounds (config/streams.go). They
+// used to hand the auto-create path a config naming only subjects and storage,
+// which produced no age limit and no size limit — so on the path that actually
+// runs, a NATS restart destroying the memory-backed streams followed by a
+// websocket reconnect replaced the declared 5m/10MB with an unbounded stream. The
+// framework's own observability streams were the counterexample to the bounds
+// requirement the framework enforces.
+//
+// Reading the declaration means there is no second place to keep in step. A nil
+// return is deliberate rather than a fallback: auto-create then declares nothing,
+// the seam's bounds check refuses the creation, and the failure names the stream —
+// which is the correct outcome for a framework stream the framework does not
+// declare, and is far better than inventing bounds here.
+func frameworkAutoCreate(stream string) *natsclient.StreamAutoCreateConfig {
+	declared, ok := config.FrameworkStreamAutoCreate(stream)
+	if !ok {
+		return nil
+	}
+	return declared
 }

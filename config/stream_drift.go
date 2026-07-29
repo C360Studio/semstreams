@@ -49,10 +49,29 @@ type streamFieldDrift struct {
 	field    string
 	observed string
 	declared string
+
+	// narrowed marks a repair that TIGHTENS a bound, which NATS applies by
+	// evicting immediately: messages outside the new bound are deleted when the
+	// update lands. Recorded at the point of comparison, where the values are still
+	// numbers, so the caller can raise the log level rather than announcing a
+	// data-deleting repair at the same level as a harmless widening.
+	narrowed bool
 }
 
 func (d streamFieldDrift) String() string {
 	return fmt.Sprintf("%s: observed=%s declared=%s", d.field, d.observed, d.declared)
+}
+
+// narrowingDrifts returns the subset of repairs that tighten a bound, and so
+// delete data when applied.
+func narrowingDrifts(drifts []streamFieldDrift) []streamFieldDrift {
+	var out []streamFieldDrift
+	for _, d := range drifts {
+		if d.narrowed {
+			out = append(out, d)
+		}
+	}
+	return out
 }
 
 // driftLabels renders a drift set for a log attribute or an error message.
@@ -199,6 +218,9 @@ func reconcileStreamConfig(
 	if gov.maxAge && observed.MaxAge != declared.MaxAge {
 		drifts = append(drifts, streamFieldDrift{
 			field: "max_age", observed: maxAgeLabel(observed.MaxAge), declared: maxAgeLabel(declared.MaxAge),
+			// A finite declaration below a wider observed window (or below an
+			// unlimited one, which observes as 0) evicts on apply.
+			narrowed: declared.MaxAge > 0 && (observed.MaxAge <= 0 || declared.MaxAge < observed.MaxAge),
 		})
 		update.MaxAge = declared.MaxAge
 	}
@@ -210,6 +232,8 @@ func reconcileStreamConfig(
 			field:    "max_bytes",
 			observed: maxBytesLabel(observed.MaxBytes),
 			declared: maxBytesLabel(declared.MaxBytes),
+			narrowed: declared.MaxBytes > 0 &&
+				(unlimitedAsNegativeOne(observed.MaxBytes) < 0 || declared.MaxBytes < observed.MaxBytes),
 		})
 		update.MaxBytes = declared.MaxBytes
 	}

@@ -137,10 +137,22 @@ func (c Config) Schema() component.ConfigSchema {
 			"dispatch_stream_discard": {
 				Type: "string",
 				Description: "Behavior at the size ceiling: 'new' refuses the newest dispatch (default; the " +
-					"executor sees a publish error it can retry), 'old' evicts the oldest (which silently " +
-					"strands whichever unit's dispatch is dropped).",
+					"executor rolls the claim back and the unit re-selects), 'old' evicts the oldest (which " +
+					"silently strands whichever unit's dispatch is dropped). Only safe as 'new' when " +
+					"dispatch_stream_retention deletes on ack; 'limits' + 'new' is rejected.",
 				Default:  defaultDispatchStreamDiscard,
 				Enum:     []string{"new", "old"},
+				Category: "advanced",
+			},
+			"dispatch_stream_retention": {
+				Type: "string",
+				Description: "Retention policy for the dispatch stream: 'workqueue' (default) deletes each " +
+					"dispatch once it is acked, so dispatch_stream_max_bytes is reached by genuine backlog; " +
+					"'limits' retains processed dispatches until max_age, so the ceiling fills with acked " +
+					"history. Choose 'limits' only when several independent consumers read the same dispatch " +
+					"subject, and pair it with discard 'old'. Cannot be changed on an existing stream.",
+				Default:  defaultDispatchStreamRetention,
+				Enum:     []string{"workqueue", "limits"},
 				Category: "advanced",
 			},
 			"dispatch_dedupe_window": {

@@ -187,6 +187,48 @@ type frameworkStream struct {
 	cfg  StreamConfig
 }
 
+// FrameworkStreamAutoCreate returns the DECLARED configuration for a
+// framework-guaranteed stream, in the form a consumer's auto-create path takes.
+// ok is false for a name the framework does not declare.
+//
+// It exists so a consumer that auto-creates one of these streams recreates it
+// with the bounds declared above rather than inventing its own — or, as was the
+// case, inventing none. The framework's HEALTH, METRICS and FLOWS streams are
+// memory-backed: a NATS restart destroys them, and the reconnect that recreates
+// them must not be the moment their declaration is quietly replaced.
+//
+// A consumer would ideally not provision at all (a reader binds by name — see the
+// ownership contract in natsclient's package doc). Auto-create stays because it
+// is what recovers these streams mid-process after the server restarts, and
+// recovering them WITH their declared bounds is the point of this accessor.
+func FrameworkStreamAutoCreate(name string) (*natsclient.StreamAutoCreateConfig, bool) {
+	for _, stream := range frameworkStreams() {
+		if stream.name != name {
+			continue
+		}
+		// The declaration is the source of truth for every field, so a bound edited
+		// above reaches this path with no second place to update. MaxAge is parsed
+		// here rather than stored parsed because the declaration is operator-facing
+		// and carries the duration as a string.
+		maxAge, err := parseDurationWithDays(stream.cfg.MaxAge)
+		if err != nil || maxAge <= 0 {
+			// A malformed framework constant is a programming error, and returning
+			// not-ok is the honest answer: the caller then fails the bounds check at
+			// the seam rather than creating a stream with a zero window.
+			return nil, false
+		}
+		return &natsclient.StreamAutoCreateConfig{
+			Subjects:  stream.cfg.Subjects,
+			Storage:   stream.cfg.Storage,
+			Retention: stream.cfg.Retention,
+			MaxAge:    maxAge,
+			MaxBytes:  stream.cfg.MaxBytes,
+			Replicas:  stream.cfg.Replicas,
+		}, true
+	}
+	return nil, false
+}
+
 // frameworkStreams returns the streams SemStreams guarantees regardless of
 // operator configuration, in a deterministic order.
 //
@@ -553,7 +595,17 @@ func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclarati
 	// treating create-or-open success as proof it matches the declaration.
 	existingStream, err := js.Stream(ctx, name)
 	if err == nil {
-		observed := existingStream.CachedInfo().Config
+		// Nil-checked like the same call on natsclient's seam. js.Stream populates it
+		// in practice, so this is defensive — but one path panicking at boot where the
+		// other fails closed is not a difference worth having.
+		info := existingStream.CachedInfo()
+		if info == nil {
+			return errs.WrapTransient(
+				fmt.Errorf("stream %q (declared by %s) returned no cached configuration to compare against",
+					name, decl.source),
+				"StreamsManager", "createStream", fmt.Sprintf("inspect stream %q", name))
+		}
+		observed := info.Config
 
 		// Fail closed before repairing anything. A stream whose storage tier or
 		// retention policy diverges cannot be brought into agreement in place, so
@@ -572,10 +624,28 @@ func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclarati
 			return nil
 		}
 
-		sm.logger.Info("Reconciling stream configuration drift to the declaration",
+		// A NARROWING repair is logged at Warn, because NATS applies it by evicting
+		// immediately: shrinking MaxAge or MaxBytes deletes messages, at boot, on the
+		// framework's initiative. That is the same class of act this file refuses to
+		// perform for the retention policy — where switching to interest "starts
+		// deleting acknowledged messages, and that is an eviction decision an operator
+		// takes deliberately". The difference is that a narrower bound IS the
+		// operator's declaration, so the repair is correct; what was wrong was
+		// announcing it at the same level as a no-op widening. Reducing
+		// GOVERNANCE_VERDICT_AUDIT from 90 days to 24 hours discards 89 days of audit
+		// trail, and an operator should not have to find that at Info.
+		level := slog.LevelInfo
+		message := "Reconciling stream configuration drift to the declaration"
+		if narrowed := narrowingDrifts(drifts); len(narrowed) > 0 {
+			level = slog.LevelWarn
+			message = "Reconciling stream configuration drift to the declaration; " +
+				"a NARROWED bound evicts immediately — data outside the new bound is deleted now"
+		}
+		logAt(sm.logger, level, message,
 			"stream", name,
 			"source", decl.source,
-			"drift", driftLabels(drifts))
+			"drift", driftLabels(drifts),
+			"narrowed", driftLabels(narrowingDrifts(drifts)))
 		if _, err := js.UpdateStream(ctx, updateCfg); err != nil {
 			return fmt.Errorf("update stream: %w", err)
 		}

@@ -250,6 +250,10 @@ func TestIntegration_ConsumeStreamWithConfig_AutoCreate(t *testing.T) {
 			Subjects:  []string{"auto.test.>"},
 			Storage:   "memory",
 			Retention: "limits",
+			// Auto-create is stream PROVISIONING, so it declares bounds like every
+			// other creation seam. Without these the seam refuses the creation.
+			MaxAge:   testStreamMaxAge,
+			MaxBytes: testStreamMaxBytes,
 		},
 	}
 
@@ -684,12 +688,19 @@ func TestIntegration_PublishToStreamWithAck_NotConnected(t *testing.T) {
 	assert.Equal(t, ErrNotConnected, err)
 }
 
-// TestIntegration_DefaultStreamConfig tests default configuration values
+// TestIntegration_DefaultStreamConfig tests default configuration values.
+//
+// The bounds are asserted ABSENT deliberately. This used to return MaxAge 7 days
+// with MaxBytes unset — the exact silent framework default the bounds requirement
+// removed from the configuration path, handing out a retention window nobody chose
+// and no size ceiling at all. A caller that auto-creates now states its own bounds
+// or the seam refuses the creation.
 func TestIntegration_DefaultStreamConfig(t *testing.T) {
 	cfg := DefaultStreamConfig()
 
 	assert.Equal(t, "file", cfg.Storage)
 	assert.Equal(t, "limits", cfg.Retention)
-	assert.Equal(t, 7*24*time.Hour, cfg.MaxAge)
 	assert.Equal(t, 1, cfg.Replicas)
+	assert.Zero(t, cfg.MaxAge, "no default retention window: a bound nobody chose is what this requirement ends")
+	assert.Zero(t, cfg.MaxBytes, "and no default size ceiling")
 }
