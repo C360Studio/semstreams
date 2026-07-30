@@ -50,28 +50,40 @@ func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.Tes
 	// production cadence.
 	c.statusInterval = 200 * time.Millisecond
 	require.NoError(t, c.Initialize())
+	// Register the test payload decoder BEFORE Start. Without it every published
+	// message fails decode and is ack-DROPPED as poison — the backlog "drains"
+	// without one entity reaching ENTITY_STATES, and a readiness assertion passes
+	// vacuously.
+	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
 	t.Cleanup(func() { _ = c.Stop(5 * time.Second) })
 	return tc, c
 }
 
+// publishEntity publishes an entity graph-ingest can actually DECODE.
+//
+// It wraps a Graphable in a BaseMessage, because that is what the consume closure's
+// decodeEntity expects. Publishing a bare graph.EntityState — which an earlier version
+// of this helper did — is not decodable: every message is ack-DROPPED as poison, so the
+// backlog "drains" without a single entity ever reaching ENTITY_STATES. That made a
+// readiness test pass vacuously (caught-up was true because everything was discarded),
+// which is exactly the "a green new gate may have skipped everything" failure. The
+// durability test below is what caught it.
 func publishEntity(ctx context.Context, t *testing.T, tc *natsclient.TestClient, id string) {
 	t.Helper()
-	entity := &graph.EntityState{
-		ID: id,
-		Triples: []message.Triple{{
+	payload := &mergeTestGraphable{
+		entityID: id,
+		triples: []message.Triple{{
 			Subject:    id,
 			Predicate:  "core.identity.type",
 			Object:     "drone",
 			Timestamp:  time.Now(),
 			Confidence: 1.0,
 		}},
-		Version:   1,
-		UpdatedAt: time.Now(),
 	}
-	payload, err := json.Marshal(entity)
+	data, err := json.Marshal(message.NewBaseMessage(payload.Schema(), payload, "readiness-test"))
 	require.NoError(t, err)
-	_, err = tc.Client.PublishToStreamWithAck(ctx, "entity."+id, payload)
+	_, err = tc.Client.PublishToStreamWithAck(ctx, "entity."+id, data)
 	require.NoError(t, err)
 }
 
@@ -133,6 +145,7 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	c := comp.(*Component)
 	c.statusInterval = 100 * time.Millisecond
 	require.NoError(t, c.Initialize())
+	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
 	defer func() { _ = c.Stop(5 * time.Second) }()
 
@@ -182,6 +195,7 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	c := comp.(*Component)
 	c.statusInterval = 100 * time.Millisecond
 	require.NoError(t, c.Initialize())
+	registerMergeTestPayload(t, c)
 	require.NoError(t, c.Start(ctx))
 	defer func() { _ = c.Stop(5 * time.Second) }()
 
@@ -208,4 +222,79 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(b)
+}
+
+// TestIntegration_ReadyImpliesTheWritesAreDurable is task 8.1: the durability
+// guarantee, asserted on the quantity production actually consults.
+//
+// The envelope's soundness rests on acknowledgement being the TERMINAL step of the
+// ingest success path — the graph write, its derived writes, and the durable guard
+// stamp all complete before Ack, and every failure path Naks or Terms without acking.
+// The observable consequence is this: at the instant the producer first reports
+// caught-up, every published entity must already be readable in ENTITY_STATES.
+//
+// DEVIATION FROM THE TASK TEXT, with its reason MEASURED. Task 8.1 asked to "force a
+// write failure and assert NumPending + NumAckPending stays > 0 while it fails". That
+// assumes write failures are RETRYABLE. They are mostly not: probed 2026-07-30 with
+// poisoned resident state and with the RMW target deleted, both produce TERMINAL
+// dispositions (Term), so the message leaves both counters within milliseconds and
+// outstanding work correctly returns to zero. Asserting "stays > 0" would assert
+// something false about this component. It also observes the documented honesty
+// boundary live: lag == 0 means no outstanding work, NOT that every message was
+// applied — a terminated message is simply gone (gh#742 owns that visibility).
+//
+// IT DELIBERATELY DOES NOT ASSERT ON THE ACK FLOOR. §D0 measured it unusable, nothing
+// here reads it, and it would pass for the wrong reason under MaxDeliver exhaustion.
+func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	streams := []natsclient.TestStreamConfig{
+		{Name: "ENTITY", Subjects: []string{"entity.>"}},
+	}
+	tc := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+	defer func() { _ = tc.Terminate() }()
+
+	// Publish BEFORE start so the consumer binds onto a real backlog: a single
+	// message is applied faster than any status tick can sample, so only a backlog
+	// makes the not-ready window observable at all.
+	const published = 150
+	ids := make([]string, 0, published)
+	for i := 0; i < published; i++ {
+		id := "c360.test.durable.sensor.unit." + itoa(i)
+		ids = append(ids, id)
+		publishEntity(ctx, t, tc, id)
+	}
+
+	cfg := DefaultConfig()
+	configJSON, err := json.Marshal(cfg)
+	require.NoError(t, err)
+	comp, err := CreateGraphIngest(configJSON, component.Dependencies{NATSClient: tc.Client})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	c.statusInterval = 50 * time.Millisecond
+	require.NoError(t, c.Initialize())
+	registerMergeTestPayload(t, c)
+	require.NoError(t, c.Start(ctx))
+	defer func() { _ = c.Stop(5 * time.Second) }()
+
+	bucket, err := tc.GetKVBucket(ctx, graph.BucketEntityStates)
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		status, _ := readEnvelope(ctx, t, tc)
+		return status.Ready && status.BootstrapComplete
+	}, 60*time.Second, 50*time.Millisecond, "producer must reach caught-up")
+
+	// THE ASSERTION: caught-up was reported, so every write must already be durable.
+	// If ack ran before the write, or before a derived write, some of these are absent.
+	missing := 0
+	for _, id := range ids {
+		if _, gerr := bucket.Get(ctx, id); gerr != nil {
+			missing++
+		}
+	}
+	require.Zero(t, missing,
+		"producer reported caught-up with %d of %d entities not yet durable — "+
+			"acknowledgement is not the terminal step of the success path", missing, published)
 }

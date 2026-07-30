@@ -590,6 +590,38 @@ type consumerBinding struct {
 	consumer   jetstream.Consumer
 }
 
+// guardedConsumer serializes Info() on one consumer handle.
+//
+// jetstream.Consumer.Info() is NOT safe for concurrent use on the same handle: it
+// assigns the fetched ConsumerInfo to the consumer's own cache field with no
+// synchronization (nats.go jetstream/consumer.go — `p.info = resp.ConsumerInfo`). Two
+// callers reading the same bound consumer at once race inside the library, and the
+// detector reports it against OUR call site. Confirmed by the graph-ingest lifecycle
+// stress test the moment a second reader existed.
+//
+// THE GUARD IS ON THE HANDLE, NOT ON A CALL SITE, and that is the point. This client
+// hands the same *jetstream.Consumer to two independent maps — the consumer
+// bookkeeping and the metrics registry — under DIFFERENT keys (ConsumerName vs
+// Durable), so any scheme that locks per map entry protects one reader and leaves the
+// other racing the identical object. Wrapping once at creation means every present and
+// future caller in this package is covered by construction.
+//
+// Embedding keeps it a jetstream.Consumer; only Info is overridden, and its signature
+// must stay EXACTLY `Info(context.Context) (*jetstream.ConsumerInfo, error)` — a
+// divergent signature would silently stop overriding and reopen the race.
+type guardedConsumer struct {
+	jetstream.Consumer
+	infoMu sync.Mutex
+}
+
+// Info serializes the underlying call. The lock is held across the network round trip
+// because the unsynchronized write happens at the END of the library's Info().
+func (g *guardedConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+	g.infoMu.Lock()
+	defer g.infoMu.Unlock()
+	return g.Consumer.Info(ctx)
+}
+
 // OutstandingWork returns the bound consumer's TOTAL outstanding messages —
 // undelivered (pending) plus delivered-but-unacknowledged.
 //
@@ -638,6 +670,7 @@ func (m *Client) OutstandingWork(
 			"Client", "OutstandingWork", "look up bound consumer")
 	}
 
+	// Info() is serialized by guardedConsumer, which wraps the handle at creation.
 	info, err := binding.consumer.Info(ctx)
 	if err != nil {
 		return 0, errs.WrapTransient(err, "Client", "OutstandingWork",
@@ -1202,10 +1235,14 @@ func (m *Client) ConsumeStream(ctx context.Context, streamName, subject string, 
 		return err
 	}
 
+	// Wrap ONCE, then share the wrapper with every holder — the metrics registry and
+	// the consumer bookkeeping below both get the same guarded handle.
+	guarded := &guardedConsumer{Consumer: consumer}
+
 	// Track consumer for metrics collection
-	consumerInfo, err := consumer.Info(ctx)
+	consumerInfo, err := guarded.Info(ctx)
 	if err == nil {
-		m.jsMetrics.trackConsumer(streamName, consumerInfo.Name, consumer)
+		m.jsMetrics.trackConsumer(streamName, consumerInfo.Name, guarded)
 	}
 
 	// Start consuming messages
@@ -1242,7 +1279,7 @@ func (m *Client) ConsumeStream(ctx context.Context, streamName, subject string, 
 		m.logger.Debug("Replaced existing consumer", slog.String("consumer_key", consumerKey))
 	}
 
-	m.consumers[consumerKey] = consumerBinding{consumeCtx: consumeContext, consumer: consumer}
+	m.consumers[consumerKey] = consumerBinding{consumeCtx: consumeContext, consumer: guarded}
 
 	m.resetCircuit()
 	return nil

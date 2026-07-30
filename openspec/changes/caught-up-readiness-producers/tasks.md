@@ -155,18 +155,29 @@
 
 ## 8. Tests
 
-- [ ] 8.1 Ack-is-terminal: assert `Ack()` is the last statement of the success path, and force a
-      write failure and assert **`NumPending + NumAckPending` stays > 0** (⇒ `Ready` false) while it
-      fails. **Do NOT assert on the ack floor** — §D0 measured it unusable, nothing here reads it, and
-      that assertion passes for the wrong reason once the failure hits `MaxDeliver` exhaustion (floor
-      also does not advance there, but the message is dropped)
-- [ ] 8.2 `BootstrapComplete` false → true → false-on-new-generation
-- [ ] 8.3 Absent declared key ⇒ `DeferStatusUnknown`
-- [ ] 8.4 Backlog counts delivered-but-unacked (would fail if only pending were counted)
-- [ ] 8.5 Revision fields absent for the backlog producer
-- [ ] 8.6 Gate verdict identical across differing `BootstrapScope`
-- [ ] 8.7 Count the assertions that ran, then break an input — a green new gate may have skipped
-      everything
+- [x] 8.1 Ack-is-terminal. **DEVIATION, measured:** the prescribed "force a write failure and assert
+      `NumPending + NumAckPending` stays > 0 while it fails" assumes write failures are RETRYABLE.
+      Probed 2026-07-30 — poisoned resident state AND a deleted RMW target both produce TERMINAL
+      dispositions (Term), so the message leaves both counters in milliseconds and outstanding work
+      correctly returns to 0. Asserting "stays > 0" would assert something FALSE about this component.
+      Implemented as `TestIntegration_ReadyImpliesTheWritesAreDurable`: at the instant the producer
+      first reports caught-up, all 150 published entities must already be readable in ENTITY_STATES —
+      the observable consequence of ack being terminal. Still no ack-floor assertion (§D0).
+      **This test caught a vacuous-green in my OWN earlier tests**: `publishEntity` published a bare
+      `graph.EntityState`, which `decodeEntity` cannot decode, so every message was ack-DROPPED as
+      poison and the backlog "drained" with ENTITY_STATES empty. Fixed by wrapping in `BaseMessage`
+      AND registering the decoder before `Start` (`registerMergeTestPayload`).
+- [x] 8.2 `BootstrapComplete` false → true → false-on-new-generation
+- [x] 8.3 Absent declared key ⇒ `DeferStatusUnknown`
+- [x] 8.4 Backlog counts delivered-but-unacked (would fail if only pending were counted)
+- [x] 8.5 Revision fields absent for the backlog producer
+- [x] 8.6 Gate verdict identical across differing `BootstrapScope`
+- [x] 8.7 Count the assertions that ran, then break an input — a green new gate may have skipped
+      everything. **Counted: 70 unit PASS / 0 SKIP, 9 integration PASS / 0 SKIP.** Inputs broken and
+      confirmed failing for 8 guards: the consumer accessor, the pending+ack sum, the bind-time scope
+      capture, the rule replay counter, the gate's BootstrapScope invariance, the e2e config-drift
+      guard, the `Info()` race guard, and — the one that mattered — the durability test, which
+      exposed that three earlier readiness tests had been passing over an EMPTY graph.
 
 ## 9. Spec + docs
 

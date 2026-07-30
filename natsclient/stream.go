@@ -376,9 +376,14 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 			"setup context ended while starting consumer")
 	}
 
+	// Wrap ONCE and share the wrapper: the metrics registry and the consumer
+	// bookkeeping below hold the same handle under different keys, so the Info()
+	// guard has to live on the handle itself (see guardedConsumer).
+	guarded := &guardedConsumer{Consumer: consumer}
+
 	// Track consumer for JetStream metrics only after setup committed.
 	if c.jsMetrics != nil {
-		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, consumer)
+		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, guarded)
 	}
 
 	// Track consumer for cleanup
@@ -386,7 +391,7 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 	if c.consumers == nil {
 		c.consumers = make(map[string]consumerBinding)
 	}
-	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: consumer}
+	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: guarded}
 	c.consumersMu.Unlock()
 
 	c.resetCircuit()
