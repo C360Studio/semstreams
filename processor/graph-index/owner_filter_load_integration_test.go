@@ -54,7 +54,16 @@ func ownerLoadCIProfile() ownerLoadProfile {
 	return ownerLoadProfile{
 		name: "ci", entities: 5_000, nameContext: 5_000, spread: 20,
 		repetitions: 5, churnPerWriter: 50, workerShapes: []int{4},
-		operationBudget: 3 * time.Second, p95Budget: 3 * time.Second, p99Budget: 3 * time.Second,
+		// operationBudget is the per-repetition CEILING — a "something is deeply wrong" gate on the
+		// SLOWEST sample, not a regression detector. It is deliberately loose, and matches the full
+		// profile's 10s for the same reason (gh#750): at repetitions=5 the percentile gates below
+		// compute p95 = p99 = durations[(5-1)*p/100] = durations[3], the second-largest of five, so
+		// NEITHER percentile ever examines the max. This budget is the only tail coverage there is.
+		// It was 3s against a healthy-run observed max of 2.24s — a 1.34x margin, well under the 3x
+		// that feedback_substrate_flake_discipline requires for a wall-clock assertion — and it
+		// flaked CI on a runner-contention tail while p50 sat at 99ms.
+		// Regressions are caught by p95Budget/p99Budget, which stay tight at 3s.
+		operationBudget: 10 * time.Second, p95Budget: 3 * time.Second, p99Budget: 3 * time.Second,
 		maxServerRSSBytes: 1 << 30,
 	}
 }
