@@ -1,7 +1,10 @@
 package rule
 
 import (
+	"context"
 	"testing"
+
+	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/graph"
 )
@@ -207,4 +210,61 @@ func TestHealth_ContradictsNeitherLatch(t *testing.T) {
 			t.Error("Health must stay true when neither latch has tripped")
 		}
 	})
+}
+
+// TestEntityBootstrapProgress_CountsReplayThroughTheRealHandler closes a gap the
+// reviewer found by mutation: deleting the production replay counter
+// (`progress.replayed.Add(1)` in handleEntityUpdatesForKey) left `go test
+// ./processor/rule/` GREEN. Every unit test hand-built entityDispatchRecords, so no
+// unit test ever ran the increment.
+//
+// My FIRST attempt at this test was also mutation-green — it registered a watcher and
+// then called progress.replayed.Add(1) itself, exercising the plumbing while never
+// touching the mutated line. This drives the REAL handler with a real watcher channel:
+// two values, then the nil sentinel that ends replay, then a post-bootstrap value that
+// must NOT be counted as replay.
+func TestEntityBootstrapProgress_CountsReplayThroughTheRealHandler(t *testing.T) {
+	processor := newAtomicBootstrapProcessor(t)
+	watcher := newAtomicBootstrapWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	const key = "ENTITY_STATES:readiness.>"
+	processor.entityDispatchGate.Lock()
+	processor.mu.Lock()
+	if processor.entityWatcherMap == nil {
+		processor.entityWatcherMap = map[string]jetstream.KeyWatcher{}
+	}
+	watcherCtx, generation := processor.registerEntityWatcherLocked(ctx, key, watcher)
+	processor.mu.Unlock()
+	processor.entityDispatchGate.Unlock()
+
+	go processor.handleEntityUpdatesForKey(watcherCtx, watcher, key, generation)
+
+	// Two values BEFORE the sentinel: this generation's replay.
+	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.one", 1)
+	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.two", 2)
+	watcher.updates <- nil // end-of-replay sentinel
+	// One value AFTER: live traffic, must not inflate the initial-build size.
+	watcher.updates <- validRuleEntityEntry(t, "acme.ops.rule.gcs.mission.three", 3)
+
+	waitForRuleWatcher(t, func() bool {
+		complete, _ := processor.entityBootstrapState()
+		return complete
+	})
+
+	complete, scope := processor.entityBootstrapState()
+	if !complete {
+		t.Fatal("sentinel observed: expected bootstrap complete")
+	}
+	if scope != 2 {
+		t.Errorf("scope = %d, want 2 — values replayed BEFORE the sentinel only; "+
+			"post-bootstrap traffic must not enlarge the initial build", scope)
+	}
+
+	// A superseded generation must not resolve, so a retired watcher cannot keep
+	// writing into the authoritative record.
+	if stale := processor.entityBootstrapProgressFor(key, generation+1); stale != nil {
+		t.Error("a non-authoritative generation resolved a progress record")
+	}
 }

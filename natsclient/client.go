@@ -627,6 +627,19 @@ func (g *guardedConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, er
 	return g.Consumer.Info(ctx)
 }
 
+// CachedInfo serializes the READ of the same field Info writes.
+//
+// Overriding it is not optional. jetstream.Consumer includes CachedInfo, implemented as
+// a bare `return p.info` — the exact field Info assigns. Guarding only Info would leave
+// the promoted CachedInfo racing the guarded writer, so the "every caller is covered"
+// claim above would be false for it. No caller in this repo uses Consumer.CachedInfo
+// today; this closes the hole rather than waiting for one to open it.
+func (g *guardedConsumer) CachedInfo() *jetstream.ConsumerInfo {
+	g.infoMu.Lock()
+	defer g.infoMu.Unlock()
+	return g.Consumer.CachedInfo()
+}
+
 // OutstandingWork returns the bound consumer's TOTAL outstanding messages —
 // undelivered (pending) plus delivered-but-unacknowledged.
 //

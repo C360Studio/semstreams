@@ -834,7 +834,7 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 	// Readiness gauges: the scrapeable half of the ADR-066 envelope. Registered at
 	// construction (not Start) so the series exist before the first status tick,
 	// matching every other metric on this component.
-	comp.initReadinessGauges(deps.MetricsRegistry)
+	comp.readinessGauges = initReadinessGauges(deps.MetricsRegistry)
 
 	return comp, nil
 }
@@ -1083,6 +1083,19 @@ func (c *Component) Start(ctx context.Context) error {
 	// Initialize hierarchy inference if enabled (synchronous - no Start/Stop)
 	c.initHierarchyInference()
 
+	// Readiness bucket BEFORE any consumer binds. It is fatal to Start, and the
+	// teardown available after setupSubscriptions does NOT stop bound JetStream
+	// consumers — teardownIngestPool only cancels contexts, so every delivered
+	// message would Nak on a cancelled submit ctx until MaxDeliver exhausted it, and
+	// this change's own D0 measurement shows a parked message leaves BOTH counters
+	// invisibly. Provisioning first means a failure costs nothing on the live stream.
+	// It needs nothing from the consumers: boundConsumers is read only by the tick,
+	// which starts below. Matches graph-index, which also provisions before binding.
+	if err := c.createStatusBucket(ctx); err != nil {
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "readiness status bucket")
+	}
+
 	// Build the keyed-concurrent ingest pool BEFORE subscriptions start (ADR-072
 	// M3: else the first delivered message submits to a nil pool).
 	if err := c.buildIngestPool(); err != nil {
@@ -1113,13 +1126,6 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "mutation handler setup")
 	}
 
-	// Readiness publisher, AFTER subscriptions so the first tick sees the bound
-	// consumer set rather than reporting a vacuous caught-up on an empty set.
-	if err := c.createStatusBucket(ctx); err != nil {
-		c.teardownIngestPool()
-		cancel()
-		return errs.Wrap(err, "Component", "Start", "readiness status bucket")
-	}
 	c.wg.Add(1)
 	go c.statusMetricsLoop(ctx)
 

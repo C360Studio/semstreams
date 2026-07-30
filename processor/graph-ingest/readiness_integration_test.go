@@ -149,7 +149,28 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	require.NoError(t, c.Start(ctx))
 	defer func() { _ = c.Stop(5 * time.Second) }()
 
-	// It must eventually catch up...
+	// FIRST assert the not-ready window this test is named for. Without it the test
+	// only proved eventual readiness plus a non-zero scope — the gh#732 case — while
+	// its name promised gh#712's "nonempty and healthy read as settled". A backlog
+	// of 200 pre-bind messages cannot be drained instantly, so an envelope reporting
+	// caught-up before any work was applied is the defect this must catch.
+	sawNotReady := false
+	notReadyDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(notReadyDeadline) {
+		status, _ := readEnvelope(ctx, t, tc)
+		if status.Lag > 0 && !status.Ready {
+			sawNotReady = true
+			break
+		}
+		if status.Ready {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	require.True(t, sawNotReady,
+		"producer never reported outstanding work while draining a %d-message backlog", backlog)
+
+	// ...and it must eventually catch up.
 	require.Eventually(t, func() bool {
 		status, _ := readEnvelope(ctx, t, tc)
 		return status.Ready && status.BootstrapComplete

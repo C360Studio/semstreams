@@ -45,11 +45,13 @@ func (c *Component) startReadinessSet(ctx context.Context) error {
 	}
 	set := readiness.NewSet(c.natsClient, c.config.ReadinessKeys,
 		readiness.WithLogger(c.logger))
-	if err := set.Start(ctx); err != nil {
-		return err
-	}
+	// ASSIGN BEFORE checking the error. Watcher.Read reports Known=false/Fresh=false
+	// for a key that never bound, so an un-started Set produces honest UNKNOWN rows —
+	// which is what the caller's log promises and what the spec's
+	// quiet-feed-vs-not-ready scenario needs. Dropping the Set on error would instead
+	// serve an EMPTY list, defeating the one distinction the surface exists to make.
 	c.readinessSet = set
-	return nil
+	return set.Start(ctx)
 }
 
 // stopReadinessSet tears the watchers down.
@@ -86,14 +88,21 @@ func (c *Component) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if c.readinessSet == nil {
-		// No keys configured: the surface exists but watches nothing. An empty list
+	// Snapshot ONCE under the lock. c.readinessSet is written by Start and cleared by
+	// Stop; re-reading the field would both race those writers and open a nil-deref
+	// window between the nil check and the Dumps call (Stop can land in between).
+	c.mu.RLock()
+	set := c.readinessSet
+	c.mu.RUnlock()
+
+	if set == nil {
+		// Watches nothing: either no keys configured, or Stop has run. An empty list
 		// is the honest answer — NOT an error, and NOT an implied "all ready".
 		writeReadinessJSON(w, c.logger, readinessSurfaceResponse{Producers: []readiness.Dump{}})
 		return
 	}
 
-	writeReadinessJSON(w, c.logger, readinessSurfaceResponse{Producers: c.readinessSet.Dumps()})
+	writeReadinessJSON(w, c.logger, readinessSurfaceResponse{Producers: set.Dumps()})
 }
 
 func writeReadinessJSON(w http.ResponseWriter, logger *slog.Logger, body readinessSurfaceResponse) {

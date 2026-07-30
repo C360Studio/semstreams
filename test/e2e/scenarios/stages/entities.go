@@ -117,9 +117,15 @@ func (v *EntityVerifier) VerifyEntityCount(ctx context.Context) (*EntityCountRes
 	// explicitly deferring the non-read case to the consumer's evidence. gh#712 is
 	// that evidence.
 	pollCount := 0
-	coverageErr := v.awaitProducersCaughtUp(ctx, &pollCount)
-	if coverageErr != nil {
-		lastErr = coverageErr
+	// UNCONDITIONAL. A coverage failure must be able to turn the tier red on its own.
+	// This previously assigned to lastErr, which is read only under
+	// `actualCount < minRequired` — so a stack where no producer ever caught up still
+	// passed as long as enough entities happened to be present. That is the exact
+	// failure mode of the count-threshold poll this replaced: the count decides, and
+	// the new signal proves nothing. Returning here is what makes the fold a real
+	// consumer rather than a decorative one.
+	if err := v.awaitProducersCaughtUp(ctx, &pollCount); err != nil {
+		return &EntityCountResult{PollCount: pollCount}, err
 	}
 
 	// The counts are still verified — the signal says the producers are done, and

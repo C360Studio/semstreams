@@ -125,6 +125,9 @@ type Processor struct {
 	// not per process, because the watcher set is runtime-mutable.
 	statusPublisher *readiness.Publisher
 	readinessGauges *readiness.Gauges
+	// statusLoopDone closes when the readiness tick has exited, so Stop can join it
+	// before tearing down the state the tick reads.
+	statusLoopDone chan struct{}
 	// statusInterval is a TEST SEAM only, so an integration test can observe
 	// successive heartbeats without sleeping through production cadence.
 	statusInterval time.Duration
@@ -316,7 +319,7 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 
 	// Readiness gauges: the scrapeable half of the ADR-066 envelope. Built at
 	// construction so the series exist before the first status tick.
-	rp.initReadinessGauges(metricsRegistry)
+	rp.readinessGauges = initReadinessGauges(metricsRegistry)
 
 	// Set up input and output ports
 	rp.setupPorts()
@@ -589,6 +592,7 @@ func (rp *Processor) run(ctx context.Context) {
 		rp.logger.Warn("rule readiness publisher unavailable; "+
 			"consumers will read this producer as unknown", "error", err)
 	} else {
+		rp.statusLoopDone = make(chan struct{})
 		go rp.statusMetricsLoop(ctx)
 	}
 
@@ -1209,6 +1213,19 @@ func (rp *Processor) Stop(_ time.Duration) error {
 	// dispatch gate prevents callbacks that already decoded an entry from
 	// evaluating after shutdown retirement, while NATS Stop runs without the
 	// processor config mutex held.
+	// Join the readiness tick BEFORE tearing down the records it reads. An in-flight
+	// tick would otherwise see the nil'd entityDispatchRecords as "zero configured
+	// patterns" and publish a vacuously-complete envelope from a processor stopped
+	// mid-replay — a fail-open that stays Fresh at consumers for three heartbeats.
+	if rp.statusLoopDone != nil {
+		select {
+		case <-rp.statusLoopDone:
+		case <-time.After(2 * time.Second):
+			rp.logger.Warn("readiness tick did not exit before teardown; " +
+				"a late publish could report a stale envelope")
+		}
+	}
+
 	rp.entityWatcherUpdateMu.Lock()
 	rp.entityDispatchGate.Lock()
 	rp.mu.Lock()

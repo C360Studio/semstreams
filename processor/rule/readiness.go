@@ -3,6 +3,7 @@ package rule
 import (
 	"context"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -106,6 +107,14 @@ func (rp *Processor) computeReadinessStatus() graph.IndexStatusResponse {
 // statusMetricsLoop republishes the readiness envelope on the shared heartbeat, so the
 // write doubles as a liveness signal.
 func (rp *Processor) statusMetricsLoop(ctx context.Context) {
+	// Signals Stop that no further tick can publish. Without this, Stop could nil
+	// entityDispatchRecords while a tick was mid-flight, and entityBootstrapState
+	// would read the empty map as VACUOUSLY COMPLETE — publishing
+	// {ready:true, bootstrap_complete:true, scope:0} from a processor stopped
+	// mid-replay. That entry stays Fresh at every consumer for three heartbeats, so
+	// the fold PROCEEDS: a fail-open on the exact field this change asks consumers to
+	// trust. Found in review.
+	defer close(rp.statusLoopDone)
 	rp.refreshReadinessStatus(ctx)
 	ticker := time.NewTicker(rp.statusTickInterval())
 	defer ticker.Stop()
@@ -174,14 +183,30 @@ func (rp *Processor) createStatusBucket(ctx context.Context) error {
 	return nil
 }
 
-// initReadinessGauges builds the scrapeable half of the envelope.
+// Readiness gauges are a PACKAGE-LEVEL SINGLETON.
+//
+// metric.MetricsRegistry.RegisterGauge is idempotent BY KEY and keeps the FIRST
+// collector (metric/registry.go:102-104), so a second instance's registration is a
+// silent no-op and that instance would write to unregistered collectors while the
+// exported series stayed frozen at the previous instance's last sample. A per-instance
+// set is therefore only safe for a component that is never rebuilt — not a property
+// worth depending on. Found in review, measured against the real registry.
+var (
+	readinessGaugesOnce sync.Once
+	readinessGauges     *readiness.Gauges
+)
+
+// initReadinessGauges returns the process-wide gauge set for this producer.
 //
 // NO revision gauges: the rule processor's readiness is bootstrap-replay completion,
 // not a revision watermark, so indexed_revision / target_revision would be
 // synthesized values it does not have.
-func (rp *Processor) initReadinessGauges(registry *metric.MetricsRegistry) {
-	rp.readinessGauges = readiness.NewGauges(
-		readiness.ProducerNames{Service: "rule-processor", Subsystem: "rule_processor"},
-	)
-	rp.readinessGauges.Register(registry)
+func initReadinessGauges(registry *metric.MetricsRegistry) *readiness.Gauges {
+	readinessGaugesOnce.Do(func() {
+		readinessGauges = readiness.NewGauges(
+			readiness.ProducerNames{Service: "rule-processor", Subsystem: "rule_processor"},
+		)
+		readinessGauges.Register(registry)
+	})
+	return readinessGauges
 }

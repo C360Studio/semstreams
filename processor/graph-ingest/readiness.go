@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -325,14 +326,33 @@ func (c *Component) createStatusBucket(ctx context.Context) error {
 	return nil
 }
 
-// initReadinessGauges builds the scrapeable half of the envelope.
+// Readiness gauges are a PACKAGE-LEVEL SINGLETON, matching every other metric in this
+// component (metricsOnce, ingestLagOnce, casRetriesOnce, ...).
+//
+// This is not stylistic. metric.MetricsRegistry.RegisterGauge is idempotent BY KEY and
+// keeps the FIRST collector (metric/registry.go:102-104), so a second instance's
+// registration is a silent no-op. graph-ingest is rebuilt on a config-driven restart
+// (service/component_manager.go recreateComponentWithNewConfig), and a per-instance
+// gauge set would leave the NEW component writing to unregistered collectors while the
+// exported series stayed frozen at the STOPPED instance's last sample — in practice
+// readiness=0/state=building forever on a healthy component. Found in review, measured
+// against the real registry.
+var (
+	readinessGaugesOnce sync.Once
+	readinessGauges     *readiness.Gauges
+)
+
+// initReadinessGauges returns the process-wide gauge set for this producer.
 //
 // NO revision gauges: graph-ingest is a BACKLOG producer, and the spec states such a
 // producer SHALL NOT expose indexed_revision / target_revision and SHALL NOT
 // synthesize a value — a fabricated revision is worse than an absent one.
-func (c *Component) initReadinessGauges(registry *metric.MetricsRegistry) {
-	c.readinessGauges = readiness.NewGauges(
-		readiness.ProducerNames{Service: "graph-ingest", Subsystem: "graph_ingest"},
-	)
-	c.readinessGauges.Register(registry)
+func initReadinessGauges(registry *metric.MetricsRegistry) *readiness.Gauges {
+	readinessGaugesOnce.Do(func() {
+		readinessGauges = readiness.NewGauges(
+			readiness.ProducerNames{Service: "graph-ingest", Subsystem: "graph_ingest"},
+		)
+		readinessGauges.Register(registry)
+	})
+	return readinessGauges
 }

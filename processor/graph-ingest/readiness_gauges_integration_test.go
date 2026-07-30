@@ -18,6 +18,23 @@ import (
 // TestIntegration_ReadinessGaugesAreEmitted closes the #763 requirement for this
 // producer on the WIRE: the spec's minimum gauge set must actually be scrapeable, not
 // merely constructed. A field-level check would pass even if registration were skipped.
+func gatheredValue(t *testing.T, name string) float64 {
+	t.Helper()
+	fams, err := prometheus.DefaultGatherer.Gather()
+	require.NoError(t, err)
+	for _, f := range fams {
+		if f.GetName() != name {
+			continue
+		}
+		for _, m := range f.GetMetric() {
+			if g := m.GetGauge(); g != nil {
+				return g.GetValue()
+			}
+		}
+	}
+	return -1
+}
+
 func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -38,19 +55,16 @@ func TestIntegration_ReadinessGaugesAreEmitted(t *testing.T) {
 	require.NoError(t, c.Start(ctx))
 	defer func() { _ = c.Stop(5 * time.Second) }()
 
+	// Assert a VALUE this component drove, not mere presence. Presence alone is
+	// satisfied by any earlier test's collectors, because DefaultRegisterer swallows
+	// AlreadyRegistered — so the original form could pass before Start even ran.
+	// bootstrap_complete going to 1 can only come from a real Set on a caught-up
+	// producer.
 	require.Eventually(t, func() bool {
-		fams, gerr := prometheus.DefaultGatherer.Gather()
-		if gerr != nil {
-			return false
-		}
-		for _, f := range fams {
-			if f.GetName() == "semstreams_graph_ingest_bootstrap_complete" {
-				return true
-			}
-		}
-		return false
+		return gatheredValue(t, "semstreams_graph_ingest_bootstrap_complete") == 1
 	}, 20*time.Second, 100*time.Millisecond,
-		"graph-ingest must emit bootstrap_complete — the field #763 exists to close")
+		"bootstrap_complete must reach 1 — presence alone proves only that some "+
+			"instance registered, not that this one projected")
 
 	fams, err := prometheus.DefaultGatherer.Gather()
 	require.NoError(t, err)
