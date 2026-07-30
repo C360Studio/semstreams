@@ -222,14 +222,33 @@
       concurrency/startup code
 - [ ] 11.2 Fable review — cross-plane ownership + a cross-repo contract
 - [ ] 11.3 Owner-run Codex gate
-- [ ] 11.4 Re-run `openspec list` and re-check HOLDs. **Verified 2026-07-30 at `87d7e0fc`: four
-      changes in flight, none touching `graph-index-readiness`; `rule-entity-watcher-hardening` is
-      ARCHIVED and `openspec/specs/rule-entity-watching/` exists, so the generation-scoped authority
-      this design relies on IS spec'd truth.** Counts move — re-verify
-- [ ] 11.5 File the follow-ups: GraphQL `graph.query.*` double-nesting
-      (`gateway/graph-gateway/component.go:1688` prefix gate — gh#712 named it) ·
-      `bootstrap_complete`/`staleness_ms` gauges missing on the two EXISTING producers (current spec
-      requirement already not fully satisfied) · `pkg/dispatch.KeyedPool.Stats()`
-      (`keyed_pool.go:430`) computed and never read — phantom by this repo's own rule ·
-      stale docs describing a removed `WatchAll` guard in
-      `processor/rule/docs/entity-watching.md:113-120`
+- [x] 11.4 Re-run `openspec list` and re-check HOLDs. **RE-VERIFIED 2026-07-30 at PR-head (counts
+      moved since the earlier check — #761 landed mid-session and the archive sweep changed the
+      queue).** Four other changes in flight: `predicate-raw-key-representation` 10/14,
+      `predicate-contract-enforcement` 42/44, `graph-index-replacement-semantics` 15/19,
+      `poison-response-scoping` complete. **NONE of the four carries a `graph-index-readiness`
+      delta** (checked per change, not assumed), so no HOLD applies to this change's capability.
+      `openspec/specs/rule-entity-watching/` still exists, so the generation-scoped watcher authority
+      §4 relies on remains spec'd truth rather than in-flight surface.
+- [x] 11.5 File the follow-ups. **FILED 2026-07-30, each VERIFIED against code before filing rather
+      than copied from this list — and one was wrong:**
+      · **#762** GraphQL `graph.query.*` keeps its `QueryResponse` envelope → `data.<field>.data.*`.
+        Mechanism located: the unwrap gate at `gateway/graph-gateway/component.go:1720` matches only
+        `graph.index.query.`, so `graph.query.summary` (GraphQL `graphSummary`) is never unwrapped.
+        The line reference in this task's original text had gone stale; the gate had moved.
+      · **#763** `graph-index` / `graph-embedding` expose no `bootstrap_complete` / `staleness_ms`
+        gauges — a requirement the CURRENT spec already states and the code does not satisfy. The
+        two producers this change adds have the same gap, so they are folded into the same issue.
+      · **#764** `BoundedDispatcher.Stats()` chain dead-ends. **CORRECTED:** this list said
+        "`KeyedPool.Stats()` computed and never read", which is FALSE — it has a caller at
+        `pkg/dispatch/dispatcher.go:235`. The phantom is one level up: `BoundedDispatcher.Stats()`
+        has no caller outside the package. Filing the assumed shape would have sent someone to the
+        wrong function.
+      · **#765** `processor/rule/docs/entity-watching.md:113-120` describes an "Authoritative
+        `WatchAll` guard" the code no longer has, and asserts a bootstrap ordering guarantee that
+        does not exist — actively reinforcing the wrong model gh#732 was filed to correct.
+      **NOT filed, by owner decision: the upstream nats.go `Consumer.Info()` race.** Noted LOCALLY
+      instead, on `guardedConsumer` in `natsclient/client.go`, including the load-bearing fact that
+      it is **still present in v1.52.0** (we pin v1.48.0; the unsynchronized `p.info = resp.ConsumerInfo`
+      is byte-identical across four releases). The note exists because the likeliest way that guard
+      dies is someone bumping the dependency and assuming upstream fixed it.
