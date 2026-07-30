@@ -353,11 +353,11 @@ trip. Regenerate the table with:
 | 2026-W30 | 73 | 23 | +50 | deliberate: pre-v1 audit filing + Codex projection-arc asks |
 | 2026-W31* | 24 | 11 | +13 | partial week; #737 merge closes 2 more |
 
-Composition 2026-07-30 (post-triage, post-confirm-close): 114 open = **33 bug / 77
+Composition 2026-07-30 (post-triage, post-confirm-close): 113 open = **32 bug / 77
 enhancement / 4 docs-class** (56 previously unlabeled triaged; owner CONFIRM-CLOSE executed
 same day: #622/#615/#617/#666/#654 closed with evidence comments against the merged epic
 ledgers, #729/#730 auto-closed by the #737 merge, and 6 partially-fixed issues retitled to
-their verified remainders — #621/#609/#608/#606/#618/#619). Closure speed: days-to-close
+their verified remainders — #621/#609/#608/#606/#618/#619; #199 folded into #736). Closure speed: days-to-close
 median **1d**, p75 5d; open-backlog median age 10d.
 
 **Dry criterion (program-exit gate):** two consecutive hardening increments surfacing
