@@ -105,6 +105,10 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > (2026-07-30, no bypass actors) requires `CI Status Check` + `e2e statistical` and blocks
 > direct pushes to main: `gh pr merge --auto` is now the correct default (it fires only on
 > green). Red merges are platform-impossible; the escape hatch is editing the ruleset itself.
+> · **Task-list residency:** a change's tasks.md may only contain work completable from THIS
+> repo — cross-repo adoption lives in the adopter note + gh#753; a change whose remaining tasks
+> are all external is DONE: archive it. (Five changes sat mislabeled at 80–95% for 12–20 days
+> because sister-adoption gates could never clear from here — 2026-07-30 cleanup.)
 >
 > **Ordering caveat on `--auto` (added from the #747 run — the ruleset does NOT enforce the Codex
 > gate).** Arm `--auto` only AFTER the owner-run Codex round closes and its findings are fixed.
@@ -140,6 +144,8 @@ git status --porcelain                        # whether the tree is actually cle
 ## Session protocol
 
 1. **Start** — read this file, then run the four commands above and reconcile.
+   **Staleness tripwire:** any OpenSpec change stalled >7 days gets one line of explanation
+   here or gets rescoped — silent stalls are how finished work hid as 80–95% in-progress.
 2. **Work** — the Next Action. One thing.
 3. **End** — update the table from checkable state, then rewrite Next Action.
 
