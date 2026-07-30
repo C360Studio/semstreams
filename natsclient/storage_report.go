@@ -255,7 +255,8 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 	account := inv.Account
 	account.CollectedAt = inv.CollectedAt
 	account.ProducedBy = inv.ProducedBy
-	account.Tiers = p.deriveTiers(ctx, inv, thresholds, thresholdErr)
+	tiers, stagedTiers := p.deriveTiers(ctx, inv, thresholds, thresholdErr)
+	account.Tiers = tiers
 
 	for _, resource := range inv.Resources {
 		key, err := StorageReportKey(resource.Name)
@@ -276,7 +277,7 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 		// seedFromHistory correctly refuses to difference across).
 		published[key] = struct{}{}
 
-		row := p.derive(ctx, key, resource, inv, account, thresholds, thresholdErr)
+		row, staged := p.derive(ctx, key, resource, inv, account, thresholds, thresholdErr)
 		value, err := json.Marshal(row)
 		if err != nil {
 			failures = append(failures, fmt.Errorf("encode report row for %q: %w", resource.Name, err))
@@ -287,6 +288,11 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 			continue
 		}
 
+		// The baseline advances HERE, and only here: this observation is now in the
+		// bucket, so the in-memory cache and the published series agree. A failed
+		// write above leaves the baseline where it was, which is what a restarted
+		// process would seed from.
+		p.commitBaseline(key, staged)
 		result.Published++
 	}
 
@@ -296,6 +302,10 @@ func (p *StorageReportPublisher) Publish(ctx context.Context, inv StorageInvento
 	if err := p.publishAccount(ctx, account); err != nil {
 		failures = append(failures, err)
 	} else {
+		// Same rule as the resource baselines: the tier series lives in the account
+		// row's history, so a tier baseline may only advance once that row is in the
+		// bucket.
+		p.commitTierBaselines(stagedTiers)
 		result.AccountPublished = true
 	}
 
@@ -347,12 +357,13 @@ func (p *StorageReportPublisher) derive(
 	account AccountReport,
 	thresholds ResolvedPressureThresholds,
 	thresholdErr error,
-) ResourceReport {
+) (ResourceReport, *Observation) {
+	growth, staged := p.growthFor(ctx, key, resource, inv.CollectedAt)
 	row := ResourceReport{
 		Resource:    resource,
 		CollectedAt: inv.CollectedAt,
 		ProducedBy:  inv.ProducedBy,
-		Growth:      p.growthFor(ctx, key, resource, inv.CollectedAt),
+		Growth:      growth,
 	}
 	if thresholdErr != nil {
 		// No thresholds means no band to compare against and no level to
@@ -361,7 +372,7 @@ func (p *StorageReportPublisher) derive(
 		reason := unusableThresholdReason(thresholdErr)
 		row.Projection = Projection{HeadroomUnavailable: reason, TimeToThresholdUnavailable: reason}
 		row.Pressure = Pressure{Unavailable: reason}
-		return row
+		return row, staged
 	}
 	row.Projection = Project(resource.Bytes, row.Growth, thresholds)
 	row.Pressure = AssessPressure(resource.Bytes, row.Projection, thresholds)
@@ -380,7 +391,7 @@ func (p *StorageReportPublisher) derive(
 		tier, found := account.TierFor(resource.Tier)
 		row.Pressure = PressureAgainstAccountTier(tier, found)
 	}
-	return row
+	return row, staged
 }
 
 // deriveAgainstBaseline measures a rate and decides where the next measuring
@@ -416,15 +427,26 @@ func deriveAgainstBaseline(
 }
 
 // growthFor measures this resource's rate and advances its baseline.
+// It STAGES the baseline rather than committing it: the returned observation is
+// applied by commitBaseline only after this row's Put succeeds.
+//
+// The staging is not bookkeeping tidiness. The rate is defined as Δbytes over Δt
+// across successive PUBLISHED observations, and the in-memory baseline is a cache
+// of exactly that. Advancing it for a row whose write FAILED puts an observation in
+// the cache that is in no history, so the running process measures the next rate
+// against a sample nobody can see — while a restarted process, seeding from the
+// bucket, measures against the last published one and gets a different answer. The
+// projection would then change because a process restarted, which is the one thing
+// the published-series design exists to prevent.
 func (p *StorageReportPublisher) growthFor(
 	ctx context.Context, key string, resource StorageResource, collectedAt time.Time,
-) Growth {
+) (Growth, *Observation) {
 	used, ok := resource.Bytes.Usage()
 	if !ok {
 		// Nothing to difference. Distinct from "no prior sample": this resource
 		// has no readable size at all, so no number of collections will help
 		// until the server describes it again.
-		return UnknownGrowth(GrowthUnavailableUnknownUsage)
+		return UnknownGrowth(GrowthUnavailableUnknownUsage), nil
 	}
 	current := Observation{At: collectedAt, Bytes: used}
 
@@ -433,10 +455,36 @@ func (p *StorageReportPublisher) growthFor(
 
 	priors, seeded := p.priorsLocked(ctx, key)
 	growth, next, advance := deriveAgainstBaseline(current, priors, seeded)
-	if advance {
-		p.baseline[key] = next
+	if !advance {
+		return growth, nil
 	}
-	return growth
+	return growth, &next
+}
+
+// commitBaseline applies a staged resource baseline. Called ONLY after the row it
+// was derived for has been published.
+func (p *StorageReportPublisher) commitBaseline(key string, staged *Observation) {
+	if staged == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.baseline[key] = *staged
+}
+
+// commitTierBaselines applies staged tier baselines. Called ONLY after the account
+// row has been published, for the same reason as commitBaseline: the account row's
+// history is the tier series, so a tier baseline advanced past a failed write is an
+// observation the bucket does not contain.
+func (p *StorageReportPublisher) commitTierBaselines(staged map[StorageTier]Observation) {
+	if len(staged) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for tier, observation := range staged {
+		p.tierBaseline[tier] = observation
+	}
 }
 
 // tierGrowth measures every tier's rate for this collection and advances the tier
@@ -445,11 +493,14 @@ func (p *StorageReportPublisher) growthFor(
 // It seeds from the account row's history AT MOST ONCE per call, however many
 // tiers need it: the tiers share one key, so a per-tier seed would re-read the
 // same history two or three times for one collection.
-func (p *StorageReportPublisher) tierGrowth(ctx context.Context, inv StorageInventory) map[StorageTier]Growth {
+func (p *StorageReportPublisher) tierGrowth(
+	ctx context.Context, inv StorageInventory,
+) (map[StorageTier]Growth, map[StorageTier]Observation) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	growth := make(map[StorageTier]Growth, len(inv.Account.Tiers))
+	staged := make(map[StorageTier]Observation, len(inv.Account.Tiers))
 	var seeded map[StorageTier][]Observation
 	didSeed := false
 
@@ -490,11 +541,11 @@ func (p *StorageReportPublisher) tierGrowth(ctx context.Context, inv StorageInve
 
 		measured, next, advance := deriveAgainstBaseline(current, priors, fromBucket)
 		if advance {
-			p.tierBaseline[comparison.Tier] = next
+			staged[comparison.Tier] = next
 		}
 		growth[comparison.Tier] = measured
 	}
-	return growth
+	return growth, staged
 }
 
 // deriveTiers fills in each tier ceiling's own capacity picture: its rate, its
@@ -508,8 +559,8 @@ func (p *StorageReportPublisher) deriveTiers(
 	inv StorageInventory,
 	thresholds ResolvedPressureThresholds,
 	thresholdErr error,
-) []TierComparison {
-	growth := p.tierGrowth(ctx, inv)
+) ([]TierComparison, map[StorageTier]Observation) {
+	growth, staged := p.tierGrowth(ctx, inv)
 
 	tiers := make([]TierComparison, 0, len(inv.Account.Tiers))
 	for _, comparison := range inv.Account.Tiers {
@@ -525,7 +576,7 @@ func (p *StorageReportPublisher) deriveTiers(
 		}
 		tiers = append(tiers, comparison)
 	}
-	return tiers
+	return tiers, staged
 }
 
 // unusableThresholdReason is the suppression reason shared by every row when the

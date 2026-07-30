@@ -295,6 +295,28 @@ groups:
             survives a restart and reflects a sustained trend. Report-only — SemStreams
             refuses nothing — but JetStream will refuse writes at the ceiling.
 
+      # A migration override is a time-limited bridge admitting an unbounded stream
+      # that predates the bounds contract. Its expiry is enforced at validation and
+      # provisioning — the NEXT boot refuses to start — so a running instance keeps
+      # serving past the deadline. That is deliberate (the admitted stream still
+      # works; a fleet leaving the load balancer over a calendar date would be a
+      # self-inflicted outage), which makes this alert the only thing standing
+      # between a lapsed bridge and a deploy that fails for reasons nobody expected.
+      - alert: StorageStreamMigrationOverrideExpired
+        expr: semstreams_streams_migration_override_expired == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Migration override for {{ $labels.stream }} has expired"
+          description: >-
+            The stream_migration_overrides bridge admitting {{ $labels.stream }} (owner
+            {{ $labels.owner }}) passed its expiry. The stream is still unbounded and this instance
+            is still serving — but the next boot or deploy will REFUSE to start until it is resolved.
+            Bound the stream (max_age, max_bytes, discard), or move it to archival_streams with an
+            owner and a reason if permanence is genuinely its contract. Do this before the next
+            deploy, not during it.
+
       # The report stopped arriving. This is the ONE rule that can tell you the
       # collector itself failed, and it is why the gauge carries collection time
       # rather than relying on scrape time: a dead collector's other series keep

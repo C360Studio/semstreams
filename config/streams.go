@@ -187,43 +187,67 @@ type frameworkStream struct {
 	cfg  StreamConfig
 }
 
-// FrameworkStreamAutoCreate returns the DECLARED configuration for a
+// FrameworkStreamAutoCreate returns the EFFECTIVE declaration for a
 // framework-guaranteed stream, in the form a consumer's auto-create path takes.
-// ok is false for a name the framework does not declare.
+// ok is false for a name this configuration does not declare, or for one whose
+// declaration does not resolve.
 //
-// It exists so a consumer that auto-creates one of these streams recreates it
-// with the bounds declared above rather than inventing its own — or, as was the
-// case, inventing none. The framework's HEALTH, METRICS and FLOWS streams are
+// It exists so a consumer that auto-creates one of these streams recreates it with
+// the bounds that are actually in force rather than inventing its own — or, as was
+// the case, inventing none. The framework's HEALTH, METRICS and FLOWS streams are
 // memory-backed: a NATS restart destroys them, and the reconnect that recreates
 // them must not be the moment their declaration is quietly replaced.
 //
+// It resolves through planStreams — the SAME path boot provisioning uses — rather
+// than reading the framework constants directly. That distinction is the whole
+// point of taking a *Config: `cfg.streams` is the highest-priority declaration and
+// an operator may override any framework stream's storage, bounds or discard
+// policy there. Reading the constants would recreate the stream with the built-in
+// values and silently discard the operator's, which is the same class of quiet
+// replacement this accessor was introduced to stop.
+//
 // A consumer would ideally not provision at all (a reader binds by name — see the
-// ownership contract in natsclient's package doc). Auto-create stays because it
-// is what recovers these streams mid-process after the server restarts, and
-// recovering them WITH their declared bounds is the point of this accessor.
-func FrameworkStreamAutoCreate(name string) (*natsclient.StreamAutoCreateConfig, bool) {
-	for _, stream := range frameworkStreams() {
-		if stream.name != name {
+// ownership contract in natsclient's package doc). Auto-create stays because it is
+// what recovers these streams mid-process after the server restarts, and recovering
+// them WITH the declaration in force is the point.
+func FrameworkStreamAutoCreate(cfg *Config, name string) (*natsclient.StreamAutoCreateConfig, bool) {
+	if cfg == nil {
+		// No operator configuration is not "no declaration" — it is the framework
+		// declaration, unmodified. planStreams over an empty config yields exactly
+		// the framework constants, so this path resolves through the same code
+		// rather than reaching for them directly. Returning not-ok here instead
+		// would silently disable the dashboard's stream recovery in any deployment
+		// without a configuration manager.
+		cfg = &Config{}
+	}
+	decls, _, err := planStreams(cfg, time.Now(), nil)
+	if err != nil {
+		// The configuration does not currently resolve — an expired override, a
+		// stream that lost its bounds. Declaring nothing is the honest answer: the
+		// auto-create seam then refuses and names the stream, which is better than
+		// recreating it from values nobody validated.
+		return nil, false
+	}
+
+	for _, decl := range decls {
+		if decl.name != name {
 			continue
 		}
-		// The declaration is the source of truth for every field, so a bound edited
-		// above reaches this path with no second place to update. MaxAge is parsed
-		// here rather than stored parsed because the declaration is operator-facing
-		// and carries the duration as a string.
-		maxAge, err := parseDurationWithDays(stream.cfg.MaxAge)
-		if err != nil || maxAge <= 0 {
-			// A malformed framework constant is a programming error, and returning
-			// not-ok is the honest answer: the caller then fails the bounds check at
-			// the seam rather than creating a stream with a zero window.
+		// resolveBounds applies the exemptions too, so an operator who declared a
+		// framework stream archival gets an archival recreate rather than a bounded
+		// one stamped over their intent.
+		maxAge, maxBytes, discard, err := resolveBounds(decl, nil)
+		if err != nil {
 			return nil, false
 		}
 		return &natsclient.StreamAutoCreateConfig{
-			Subjects:  stream.cfg.Subjects,
-			Storage:   stream.cfg.Storage,
-			Retention: stream.cfg.Retention,
+			Subjects:  decl.cfg.Subjects,
+			Storage:   decl.cfg.Storage,
+			Retention: decl.cfg.Retention,
 			MaxAge:    maxAge,
-			MaxBytes:  stream.cfg.MaxBytes,
-			Replicas:  stream.cfg.Replicas,
+			MaxBytes:  maxBytes,
+			Discard:   discard,
+			Replicas:  decl.cfg.Replicas,
 		}, true
 	}
 	return nil, false
@@ -652,7 +676,27 @@ func (sm *StreamsManager) createStream(ctx context.Context, decl streamDeclarati
 		return nil
 	}
 
-	// Stream doesn't exist - create it
+	// Stream doesn't exist. A MIGRATION OVERRIDE cannot create one.
+	//
+	// The override admits an EXISTING unbounded stream that predates the bounds
+	// contract — a bridge, with an owner and a deadline, for something already
+	// running. It is not a way to provision a NEW unbounded stream, and letting it
+	// create one makes it exactly the supported route around the requirement that
+	// the whole of section 5 exists to close: declare the stream, name it in
+	// stream_migration_overrides, and the framework builds you an unbounded stream
+	// on a fresh deployment.
+	//
+	// An ARCHIVAL stream is different and is still created here: permanence is its
+	// declared contract, it names an owner and a reason, and it has no deadline
+	// because it is not migrating anywhere.
+	if decl.exemption == exemptMigrationOverride {
+		return errs.WrapFatal(
+			fmt.Errorf("%w: stream %q (declared by %s) does not exist, and a migration override cannot "+
+				"create one\n\n%s",
+				ErrStreamMigrationOverrideInvalid, name, decl.source, missingOverriddenStreamRemedy),
+			"StreamsManager", "createStream", fmt.Sprintf("provision stream %q", name))
+	}
+
 	_, err = js.CreateStream(ctx, streamCfg)
 	if err != nil {
 		return fmt.Errorf("create stream: %w", err)

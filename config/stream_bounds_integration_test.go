@@ -155,11 +155,22 @@ func TestEnsureStreams_ArchivalStreamIsCreatedWithNoLimit(t *testing.T) {
 		`an archive's stream info must not read "discard: old"`)
 }
 
-// TestEnsureStreams_MigrationOverrideAdmitsAnUnboundedStream proves the bridge
-// works against a real server, and that it stamps nothing the operator did not
-// declare: a stream being migrated TO bounds keeps behaving exactly as it did.
-func TestEnsureStreams_MigrationOverrideAdmitsAnUnboundedStream(t *testing.T) {
+// TestEnsureStreams_MigrationOverrideAdmitsAnExistingUnboundedStream proves the
+// bridge works against a real server, and that it stamps nothing the operator did
+// not declare: a stream being migrated TO bounds keeps behaving exactly as it did.
+//
+// The stream is created OUT OF BAND first, because that is the only situation an
+// override describes — see the refusal test below.
+func TestEnsureStreams_MigrationOverrideAdmitsAnExistingUnboundedStream(t *testing.T) {
 	sm, js, ctx := boundsTestManager(t)
+
+	// The legacy stream, as it exists on a deployment that predates the contract.
+	_, err := js.CreateStream(ctx, jetstream.StreamConfig{
+		Name:     "LEGACY",
+		Subjects: []string{"legacy.>"},
+		Storage:  jetstream.MemoryStorage,
+	})
+	require.NoError(t, err)
 
 	future := time.Now().AddDate(1, 0, 0).Format(time.DateOnly)
 	cfg := &Config{
@@ -185,4 +196,65 @@ func TestEnsureStreams_MigrationOverrideAdmitsAnUnboundedStream(t *testing.T) {
 	}
 	require.ErrorIs(t, sm.EnsureStreams(ctx, cfg), ErrStreamMigrationOverrideExpired,
 		"an expired bridge must fail readiness, not quietly keep working")
+}
+
+// TestEnsureStreams_MigrationOverrideCannotCreateAStream is the other half, and it
+// closes what the previous version of the test above CODIFIED.
+//
+// An override is a time-limited bridge for a stream that already exists and
+// predates the bounds contract. Letting it CREATE one makes it precisely the
+// supported route around the requirement that section 5 exists to close: declare a
+// stream, name it in stream_migration_overrides, and the framework builds you a
+// brand-new unbounded stream on a fresh deployment — with a deadline attached to
+// something that never needed migrating.
+func TestEnsureStreams_MigrationOverrideCannotCreateAStream(t *testing.T) {
+	sm, js, ctx := boundsTestManager(t)
+
+	future := time.Now().AddDate(1, 0, 0).Format(time.DateOnly)
+	cfg := &Config{
+		Version:  "1.0.0",
+		Platform: PlatformConfig{Org: "acme", ID: "test"},
+		Streams: StreamConfigs{
+			"NEVER_EXISTED": {Subjects: []string{"neverexisted.>"}, Storage: "memory"},
+		},
+		StreamMigrationOverrides: StreamMigrationOverrides{
+			"NEVER_EXISTED": {Owner: "team-legacy", Expires: future, Reason: "there is nothing to bridge"},
+		},
+	}
+
+	err := sm.EnsureStreams(ctx, cfg)
+
+	require.ErrorIs(t, err, ErrStreamMigrationOverrideInvalid)
+	assert.Contains(t, err.Error(), "NEVER_EXISTED")
+	assert.Contains(t, err.Error(), "archival_streams",
+		"an operator reaching for an override on a fresh deployment wants the permanence classification")
+
+	_, getErr := js.Stream(ctx, "NEVER_EXISTED")
+	assert.ErrorIs(t, getErr, jetstream.ErrStreamNotFound,
+		"the refusal must not have created the stream it refused")
+}
+
+// TestEnsureStreams_ArchivalStreamIsStillCreated keeps the distinction sharp. An
+// archive declares permanence as its contract, names an owner and a reason, and has
+// no deadline because it is not migrating anywhere — so provisioning one is
+// legitimate where provisioning a bridged stream is not.
+func TestEnsureStreams_ArchivalStreamIsStillCreated(t *testing.T) {
+	sm, js, ctx := boundsTestManager(t)
+
+	cfg := &Config{
+		Version:  "1.0.0",
+		Platform: PlatformConfig{Org: "acme", ID: "test"},
+		Streams: StreamConfigs{
+			"CAMPAIGN_LEDGER": {Subjects: []string{"campaignledger.>"}, Storage: "memory"},
+		},
+		ArchivalStreams: ArchivalStreams{
+			"CAMPAIGN_LEDGER": {Owner: "team-machina", Reason: "regulatory ledger; nothing may be evicted"},
+		},
+	}
+
+	require.NoError(t, sm.EnsureStreams(ctx, cfg))
+
+	live := liveStreamConfig(t, js, ctx, "CAMPAIGN_LEDGER")
+	assert.Zero(t, live.MaxAge)
+	assert.Equal(t, int64(-1), live.MaxBytes)
 }

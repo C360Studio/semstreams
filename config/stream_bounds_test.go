@@ -974,9 +974,10 @@ func TestStreamBoundsSentinel_IsOneIdentityAcrossBothSeams(t *testing.T) {
 // bounds with none. Reading the declaration is what removes the second place to
 // keep in step.
 func TestFrameworkStreamAutoCreate_CarriesTheDeclaredBounds(t *testing.T) {
+	base := guardTestConfig()
 	for _, stream := range frameworkStreams() {
 		t.Run(stream.name, func(t *testing.T) {
-			got, ok := FrameworkStreamAutoCreate(stream.name)
+			got, ok := FrameworkStreamAutoCreate(base, stream.name)
 			require.True(t, ok, "every framework-guaranteed stream must be reachable")
 
 			// Bounded, so the provisioning seam admits the creation.
@@ -997,9 +998,162 @@ func TestFrameworkStreamAutoCreate_CarriesTheDeclaredBounds(t *testing.T) {
 	}
 }
 
+// TestFrameworkStreamAutoCreate_NilConfigIsTheFrameworkDeclaration covers the
+// regression this accessor caused when it first took a *Config.
+//
+// Returning not-ok for a nil configuration silently disabled stream recovery in
+// every deployment without a configuration manager — the dashboard's four streamers
+// declared nothing, the seam refused the creation, and the websocket surface went
+// dark. "No operator configuration" is not "no declaration": it is the framework
+// declaration, unmodified.
+func TestFrameworkStreamAutoCreate_NilConfigIsTheFrameworkDeclaration(t *testing.T) {
+	got, ok := FrameworkStreamAutoCreate(nil, "HEALTH")
+
+	require.True(t, ok, "a nil config must resolve to the framework declaration, not to nothing")
+	require.NoError(t,
+		natsclient.CheckStreamBounds(jetstream.StreamConfig{
+			Name: "HEALTH", MaxAge: got.MaxAge, MaxBytes: got.MaxBytes,
+		}, "framework auto-create"),
+		"and it must satisfy the bounds requirement, or auto-create is refused")
+
+	declared, err := parseDurationWithDays(healthStreamConfig.MaxAge)
+	require.NoError(t, err)
+	assert.Equal(t, declared, got.MaxAge)
+	assert.Equal(t, healthStreamConfig.MaxBytes, got.MaxBytes)
+}
+
 func TestFrameworkStreamAutoCreate_UnknownStreamIsNotOK(t *testing.T) {
-	_, ok := FrameworkStreamAutoCreate("NOT_A_FRAMEWORK_STREAM")
+	_, ok := FrameworkStreamAutoCreate(guardTestConfig(), "NOT_A_FRAMEWORK_STREAM")
 	assert.False(t, ok,
 		"returning not-ok makes the caller declare nothing and be refused at the seam, "+
 			"which is better than inventing bounds for a stream nobody declared")
+}
+
+// TestFrameworkStreamAutoCreate_HonorsAnOperatorOverride is the property that made
+// this accessor take a *Config rather than read the framework constants.
+//
+// `cfg.streams` is the highest-priority declaration, so an operator may retune any
+// framework stream. HEALTH, METRICS and FLOWS are memory-backed: a NATS restart
+// destroys them and a websocket reconnect recreates them through this path. Reading
+// the constants would rebuild the stream with the built-in 5m/10MB and discard the
+// operator's values at exactly the moment the stream is being rebuilt.
+func TestFrameworkStreamAutoCreate_HonorsAnOperatorOverride(t *testing.T) {
+	cfg := guardTestConfig()
+	cfg.Streams["HEALTH"] = StreamConfig{
+		Subjects: []string{"health.>"},
+		Storage:  "file",
+		MaxAge:   "30m",
+		MaxBytes: 256 * 1024 * 1024,
+		Discard:  StreamDiscardNew,
+	}
+
+	got, ok := FrameworkStreamAutoCreate(cfg, "HEALTH")
+
+	require.True(t, ok)
+	assert.Equal(t, 30*time.Minute, got.MaxAge, "the operator's window, not the framework constant's 5m")
+	assert.Equal(t, int64(256*1024*1024), got.MaxBytes)
+	assert.Equal(t, "file", got.Storage, "an overridden storage tier must survive a reconnect recreate")
+	assert.Equal(t, jetstream.DiscardNew, got.Discard,
+		"the discard policy is part of the declaration; recreating with DiscardOld would substitute a choice")
+}
+
+// TestFrameworkStreamAutoCreate_DeclinesWhenTheConfigDoesNotResolve keeps the
+// recreate path from inventing values nobody validated. An expired override means
+// the configuration does not currently resolve; declaring nothing makes the
+// auto-create seam refuse and name the stream, which is the honest outcome.
+func TestFrameworkStreamAutoCreate_DeclinesWhenTheConfigDoesNotResolve(t *testing.T) {
+	cfg := guardTestConfig()
+	cfg.Streams["AGENT"] = StreamConfig{Subjects: []string{"agent.>"}}
+	cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+		"AGENT": {Owner: "team-agentic", Expires: "2020-01-01"},
+	}
+
+	_, ok := FrameworkStreamAutoCreate(cfg, "HEALTH")
+
+	assert.False(t, ok,
+		"a configuration that would fail readiness must not silently supply a recreate declaration")
+}
+
+// TestExpiredMigrationOverrides is the RUNTIME half of the bridge's deadline.
+//
+// Expiry was evaluated only at configuration validation and at provisioning, both
+// boot-time, so an instance that started before the deadline ran indefinitely past
+// it with nothing saying so. Enforcement stays at boot deliberately — the admitted
+// stream still works, and a fleet leaving the load balancer at midnight over a
+// hygiene failure is a worse outcome than the failure — but a running instance now
+// has something to report.
+func TestExpiredMigrationOverrides(t *testing.T) {
+	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a bridge that ended while the instance was up is reported", func(t *testing.T) {
+		cfg := guardTestConfig()
+		cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+			"LEGACY": {Owner: "team-legacy", Expires: "2026-09-30", Reason: "sizing study"},
+		}
+
+		got := ExpiredMigrationOverrides(cfg, now)
+
+		require.Len(t, got, 1)
+		assert.Equal(t, "LEGACY", got[0].Stream)
+		assert.Equal(t, "team-legacy", got[0].Owner)
+		assert.Equal(t, "sizing study", got[0].Reason)
+		assert.Negative(t, got[0].Remaining,
+			"a lapsed bridge has less than no time left; zero would read as expiring this instant")
+	})
+
+	// The property the whole function exists for: the same configuration, evaluated
+	// at two different moments by a process that never restarted.
+	t.Run("crossing the expiry without a restart changes the answer", func(t *testing.T) {
+		cfg := guardTestConfig()
+		cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+			"LEGACY": {Owner: "team-legacy", Expires: "2026-09-30"},
+		}
+
+		before := time.Date(2026, 9, 30, 23, 59, 59, 0, time.UTC)
+		assert.Empty(t, ExpiredMigrationOverrides(cfg, before),
+			"the declared day is inclusive; the bridge is still open")
+
+		after := time.Date(2026, 10, 1, 0, 0, 1, 0, time.UTC)
+		assert.Len(t, ExpiredMigrationOverrides(cfg, after), 1,
+			"one second later the same config, same process, reports the lapse")
+	})
+
+	t.Run("an active bridge reports nothing", func(t *testing.T) {
+		cfg := guardTestConfig()
+		cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+			"LEGACY": {Owner: "team-legacy", Expires: "2027-01-01"},
+		}
+
+		assert.Empty(t, ExpiredMigrationOverrides(cfg, now))
+	})
+
+	t.Run("a malformed override is not a runtime finding", func(t *testing.T) {
+		cfg := guardTestConfig()
+		cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+			"NOEXPIRY":    {Owner: "team"},
+			"UNPARSEABLE": {Owner: "team", Expires: "next tuesday"},
+		}
+
+		assert.Empty(t, ExpiredMigrationOverrides(cfg, now),
+			"both are rejected at validation and can never reach a running instance")
+	})
+
+	t.Run("several lapsed bridges are reported in a stable order", func(t *testing.T) {
+		cfg := guardTestConfig()
+		cfg.StreamMigrationOverrides = StreamMigrationOverrides{
+			"ZULU":  {Owner: "team", Expires: "2026-09-01"},
+			"ALPHA": {Owner: "team", Expires: "2026-09-02"},
+		}
+
+		got := ExpiredMigrationOverrides(cfg, now)
+
+		require.Len(t, got, 2)
+		assert.Equal(t, "ALPHA", got[0].Stream, "sorted by stream, so a log line is diffable between ticks")
+		assert.Equal(t, "ZULU", got[1].Stream)
+	})
+
+	t.Run("no overrides at all", func(t *testing.T) {
+		assert.Empty(t, ExpiredMigrationOverrides(guardTestConfig(), now))
+		assert.Empty(t, ExpiredMigrationOverrides(nil, now))
+	})
 }

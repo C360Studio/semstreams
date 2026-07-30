@@ -100,6 +100,17 @@ type StreamAutoCreateConfig struct {
 	// neither is a declaration.
 	MaxBytes int64
 
+	// Discard is what happens at the ceiling: jetstream.DiscardOld evicts the
+	// oldest, jetstream.DiscardNew refuses the write.
+	//
+	// It exists here so an auto-create path can carry a declaration's discard
+	// policy. Without it this struct could express a bound but not what happens
+	// when the bound is reached, so a caller recreating a stream from an operator's
+	// declaration silently substituted DiscardOld — the zero value — for whatever
+	// they chose. It cannot be REQUIRED (DiscardOld being the zero value is exactly
+	// why), but it can at least be expressible.
+	Discard jetstream.DiscardPolicy
+
 	// MaxMsgs is the maximum number of messages (0 = unlimited).
 	MaxMsgs int64
 
@@ -523,6 +534,8 @@ func (c *Client) ensureStreamForConsumer(ctx context.Context, js jetstream.JetSt
 	default:
 		streamCfg.Retention = jetstream.LimitsPolicy
 	}
+
+	streamCfg.Discard = autoConfig.Discard
 
 	// Set optional limits
 	if autoConfig.MaxBytes > 0 {

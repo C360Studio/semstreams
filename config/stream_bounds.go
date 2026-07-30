@@ -559,3 +559,62 @@ func logStreamExceptions(logger *slog.Logger, report StreamExceptionReport) {
 			"hint", "permanent by contract, not a countdown; its only ceiling is the account tier limit")
 	}
 }
+
+// missingOverriddenStreamRemedy is returned when a migration override names a
+// stream that does not exist. It states the distinction the override rests on,
+// because an operator who reaches for one on a fresh deployment has almost
+// certainly mistaken it for a way to declare "unbounded".
+var missingOverriddenStreamRemedy = strings.Join([]string{
+	`a stream_migration_overrides entry is a time-limited BRIDGE for a stream that already exists and ` +
+		`predates the bounds requirement. There is nothing to bridge here.`,
+	`If this stream should be permanently unbounded, declare it in archival_streams (owner + reason) — ` +
+		`that is the classification for permanence. If it should be bounded, declare max_age, max_bytes ` +
+		`and discard on it. If you expected it to exist already, the override is masking that it is gone.`,
+}, "\n")
+
+// ExpiredMigrationOverrides returns every migration override whose expiry has
+// passed as of now, so a RUNNING instance can report a bridge that ended while it
+// was up.
+//
+// It exists because expiry is otherwise evaluated only at configuration validation
+// and at provisioning — both boot-time. An instance that started before the
+// deadline would otherwise run indefinitely past it with nothing saying so, and the
+// whole value of a bridge is that it ends.
+//
+// Enforcement stays at boot. This function REPORTS, and that split is deliberate:
+// the stream a lapsed override admits is still working, and taking a healthy fleet
+// out of service simultaneously because a calendar date passed would be a
+// self-inflicted outage over a hygiene failure. The refusal lands at the next boot,
+// which is when an operator can act on it anyway.
+//
+// A malformed override (no expiry, unparseable date) is NOT returned here: it is
+// rejected at validation and never reaches a running instance.
+func ExpiredMigrationOverrides(cfg *Config, now time.Time) []StreamMigrationOverrideStatus {
+	if cfg == nil || len(cfg.StreamMigrationOverrides) == 0 {
+		return nil
+	}
+
+	var expired []StreamMigrationOverrideStatus
+	for _, name := range slices.Sorted(maps.Keys(cfg.StreamMigrationOverrides)) {
+		override := cfg.StreamMigrationOverrides[name]
+		expires, err := parseOverrideExpiry(override.Expires)
+		if err != nil {
+			continue
+		}
+		if now.Before(expires) {
+			continue
+		}
+		expired = append(expired, StreamMigrationOverrideStatus{
+			Stream:  name,
+			Owner:   override.Owner,
+			Reason:  override.Reason,
+			Expires: expires,
+			// Negative: the bridge ended this long ago. The field is "time left", and
+			// a lapsed bridge has less than none — rendering it as zero would make an
+			// override that expired an hour ago indistinguishable from one expiring
+			// this instant.
+			Remaining: expires.Sub(now),
+		})
+	}
+	return expired
+}

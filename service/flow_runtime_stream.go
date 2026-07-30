@@ -320,6 +320,7 @@ func healthStreamer(
 	flowID string,
 	sendFn func(StatusStreamEnvelope) error,
 	logger *slog.Logger,
+	autoCreate *natsclient.StreamAutoCreateConfig,
 ) {
 	// Configure JetStream consumer for HEALTH stream
 	cfg := natsclient.StreamConsumerConfig{
@@ -328,7 +329,7 @@ func healthStreamer(
 		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
 		AckPolicy:        "none",             // Fire-and-forget to browser
 		AutoCreate:       true,               // Recreate the stream if the server lost it
-		AutoCreateConfig: frameworkAutoCreate("HEALTH"),
+		AutoCreateConfig: autoCreate,
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -368,6 +369,7 @@ func flowStatusStreamer(
 	flowID string,
 	sendFn func(StatusStreamEnvelope) error,
 	logger *slog.Logger,
+	autoCreate *natsclient.StreamAutoCreateConfig,
 ) {
 	// Configure JetStream consumer for FLOWS stream, filtered to this specific flow
 	subject := "flows." + flowID + ".status"
@@ -377,7 +379,7 @@ func flowStatusStreamer(
 		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
 		AckPolicy:        "none",             // Fire-and-forget to browser
 		AutoCreate:       true,               // Recreate the stream if the server lost it
-		AutoCreateConfig: frameworkAutoCreate("FLOWS"),
+		AutoCreateConfig: autoCreate,
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -416,6 +418,7 @@ func logStreamer(
 	flowID string,
 	sendFn func(StatusStreamEnvelope) error,
 	logger *slog.Logger,
+	autoCreate *natsclient.StreamAutoCreateConfig,
 ) {
 	// Configure JetStream consumer for LOGS stream
 	cfg := natsclient.StreamConsumerConfig{
@@ -424,7 +427,7 @@ func logStreamer(
 		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
 		AckPolicy:        "none",             // Fire-and-forget to browser
 		AutoCreate:       true,               // Recreate the stream if the server lost it
-		AutoCreateConfig: frameworkAutoCreate("LOGS"),
+		AutoCreateConfig: autoCreate,
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -486,6 +489,7 @@ func metricsStreamer(
 	flowID string,
 	sendFn func(StatusStreamEnvelope) error,
 	logger *slog.Logger,
+	autoCreate *natsclient.StreamAutoCreateConfig,
 ) {
 	// Configure JetStream consumer for METRICS stream
 	cfg := natsclient.StreamConsumerConfig{
@@ -494,7 +498,7 @@ func metricsStreamer(
 		DeliverPolicy:    "last_per_subject", // Last message per subject on connect, then new
 		AckPolicy:        "none",             // Fire-and-forget to browser
 		AutoCreate:       true,               // Recreate the stream if the server lost it
-		AutoCreateConfig: frameworkAutoCreate("METRICS"),
+		AutoCreateConfig: autoCreate,
 	}
 
 	err := natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
@@ -562,28 +566,28 @@ func (fs *FlowService) startWebSocketWorkers(
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		healthStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger)
+		healthStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger, fs.frameworkAutoCreate("HEALTH"))
 	}()
 
 	// Flow status streamer - subscribes to NATS flows.{flowId}.status
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		flowStatusStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger)
+		flowStatusStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger, fs.frameworkAutoCreate("FLOWS"))
 	}()
 
 	// Log streamer - subscribes to NATS logs.>
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger)
+		logStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger, fs.frameworkAutoCreate("LOGS"))
 	}()
 
 	// Metrics streamer - subscribes to NATS metrics.>
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		metricsStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger)
+		metricsStreamer(ctx, clientState, fs.natsClient, flowID, sendFn, wsLogger, fs.frameworkAutoCreate("METRICS"))
 	}()
 }
 
@@ -723,8 +727,8 @@ func (fs *FlowService) handleWebSocketCommand(message []byte, clientState *Clien
 	fs.logger.Debug("WebSocket received unknown command", "command", cmd.Command)
 }
 
-// frameworkAutoCreate returns the DECLARED auto-create configuration for one of
-// the framework's guaranteed streams.
+// frameworkAutoCreate returns the EFFECTIVE auto-create configuration for one of
+// the framework's guaranteed streams, read from the LIVE configuration.
 //
 // These dashboard streamers read HEALTH, METRICS, FLOWS and LOGS, all of which the
 // framework provisioner declares with reasoned bounds (config/streams.go). They
@@ -735,13 +739,29 @@ func (fs *FlowService) handleWebSocketCommand(message []byte, clientState *Clien
 // framework's own observability streams were the counterexample to the bounds
 // requirement the framework enforces.
 //
-// Reading the declaration means there is no second place to keep in step. A nil
-// return is deliberate rather than a fallback: auto-create then declares nothing,
-// the seam's bounds check refuses the creation, and the failure names the stream —
-// which is the correct outcome for a framework stream the framework does not
-// declare, and is far better than inventing bounds here.
-func frameworkAutoCreate(stream string) *natsclient.StreamAutoCreateConfig {
-	declared, ok := config.FrameworkStreamAutoCreate(stream)
+// It reads the live configuration rather than the framework constants because
+// `cfg.streams` is the highest-priority declaration: an operator may override any
+// of these streams' storage, bounds or discard policy there, and recreating one
+// from the built-in values would discard their override at exactly the moment the
+// stream is being rebuilt. That is the same quiet replacement this helper exists to
+// stop, arrived at from the other direction.
+//
+// A nil return is deliberate rather than a fallback: auto-create then declares
+// nothing, the seam's bounds check refuses the creation, and the failure names the
+// stream — which is the correct outcome for a stream the configuration does not
+// declare or does not currently resolve, and is far better than inventing bounds.
+func (fs *FlowService) frameworkAutoCreate(stream string) *natsclient.StreamAutoCreateConfig {
+	// A nil configuration manager passes nil through deliberately: the accessor
+	// reads that as "the framework declaration, unmodified", which is what a
+	// deployment without operator configuration actually has. Declining here would
+	// disable stream recovery for the dashboard entirely.
+	var live *config.Config
+	if fs.configMgr != nil {
+		if safe := fs.configMgr.GetConfig(); safe != nil {
+			live = safe.Get()
+		}
+	}
+	declared, ok := config.FrameworkStreamAutoCreate(live, stream)
 	if !ok {
 		return nil
 	}

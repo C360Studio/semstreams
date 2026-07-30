@@ -303,13 +303,29 @@ exists to remove: an archive is precisely the resource for which exhaustion is u
 
 ### Requirement: Unbounded existing streams MUST be admitted only by an expiring override
 
-An existing ordinary stream that predates this contract MUST be admissible through a migration
+An EXISTING ordinary stream that predates this contract MUST be admissible through a migration
 override that names the resource, its owner, and an expiry date. Readiness MUST report every active
-override as a named, time-limited exception, and MUST fail once an override's expiry has passed.
-Overrides MUST NOT be open-ended: an override with no expiry, or one whose expiry is absent from the
-declaration, MUST be rejected at validation, so a migration bridge cannot silently become permanent.
-An override is for a stream being migrated TO bounds; a stream whose contract is permanence is
-archival and MUST use that classification instead, so the two never share an instrument.
+override as a named, time-limited exception. Overrides MUST NOT be open-ended: an override with no
+expiry, or one whose expiry is absent from the declaration, MUST be rejected at validation, so a
+migration bridge cannot silently become permanent. An override is for a stream being migrated TO
+bounds; a stream whose contract is permanence is archival and MUST use that classification instead,
+so the two never share an instrument.
+
+An override MUST NOT create a stream. It admits something that already exists and predates the
+contract, and a bridge that provisions is not a bridge — it is the supported route to a brand-new
+unbounded stream, with a deadline attached to something that never needed migrating. Provisioning
+MUST fail when an override names a stream that is absent, naming the stream and pointing at the
+archival classification, which is what an operator reaching for an override on a fresh deployment
+actually wants.
+
+Expiry MUST fail validation and provisioning once the deadline has passed, and a RUNNING instance
+MUST report a bridge that lapsed while it was up — continuously, and through a surface an alert can
+key on, naming the stream and its owner. Enforcement is deliberately at validation and provisioning
+rather than at runtime readiness: the stream a lapsed override admits keeps working, so it is a
+hygiene failure, and taking a healthy fleet out of service simultaneously because a calendar date
+passed would convert that into a self-inflicted outage. The refusal lands at the next boot, which is
+when an operator can act on it in any case. Operator messaging MUST say where enforcement lands
+rather than implying a running instance will stop serving.
 
 #### Scenario: An expiring override admits a legacy stream
 
@@ -318,11 +334,28 @@ archival and MUST use that classification instead, so the two never share an ins
 - **WHEN** production configuration is validated
 - **THEN** readiness passes and the override is reported as a named, time-limited exception
 
-#### Scenario: An expired override fails readiness
+#### Scenario: An expired override fails validation and provisioning
 
 - **GIVEN** a migration override whose expiry has passed
-- **WHEN** production configuration is validated
-- **THEN** readiness fails naming the override, its resource, and its owner
+- **WHEN** production configuration is validated, or streams are provisioned
+- **THEN** it fails naming the override, its resource, and its owner
+
+#### Scenario: A bridge that lapses while an instance is running is reported
+
+- **GIVEN** an instance that started while an override was still active
+- **WHEN** the expiry passes without the process restarting
+- **THEN** the instance reports the lapse continuously, naming the stream and its owner, through a
+  surface an alert can key on
+- **AND** it keeps serving, because the admitted stream still works and the refusal lands at the next
+  boot
+
+#### Scenario: An override cannot provision a stream that does not exist
+
+- **GIVEN** a migration override naming a stream absent from the account
+- **WHEN** streams are provisioned
+- **THEN** provisioning fails naming the stream, and no stream is created
+- **AND** the diagnostic points at the archival classification, which is the declaration for a stream
+  that is permanently unbounded by contract
 
 #### Scenario: An override without an expiry is rejected
 

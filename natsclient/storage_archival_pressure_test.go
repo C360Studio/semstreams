@@ -628,3 +628,93 @@ func TestPublishAccount_StillReportsWhenAResourceRowFails(t *testing.T) {
 	require.True(t, ok)
 	assert.True(t, tier.Pressure.Evaluated)
 }
+
+// TestPublishFailure_DoesNotAdvanceTheBaselinePastAnUnpublishedRow is the
+// restart-parity property, and it is the one a failed write used to break.
+//
+// The rate is defined as Δbytes over Δt across successive PUBLISHED observations,
+// and the in-memory baseline is a cache of exactly that. If it advanced for a row
+// whose Put failed, the running process would measure the next rate against a
+// sample that is in no history — while a restarted process, seeding from the
+// bucket, measures against the last published one. The projection would then differ
+// solely because a process restarted, which is what the published-series design
+// exists to prevent.
+//
+// A=100 MiB publishes, B=110 MiB fails, C=160 MiB publishes. The correct answer is
+// C-A over the full span. C-B over the short span is the bug.
+func TestPublishFailure_DoesNotAdvanceTheBaselinePastAnUnpublishedRow(t *testing.T) {
+	store := newFakeReportStore(10)
+	publisher := newTestPublisher(t, store, defaultSource())
+	start := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+	publish := func(at time.Time, used int64) error {
+		_, err := publisher.Publish(context.Background(), inventoryWithAccountAt(
+			at, fillingFileTier(mib(900)), archivalResource("CAMPAIGN_LEDGER", used)))
+		return err
+	}
+
+	require.NoError(t, publish(start, mib(100)))
+
+	// The middle collection's row write fails. The observation is real; it is just
+	// not in the bucket, so it must not become anyone's baseline.
+	store.putErrForKey = map[string]error{"CAMPAIGN_LEDGER": errors.New("transient")}
+	require.Error(t, publish(start.Add(time.Minute), mib(110)))
+	store.putErrForKey = nil
+
+	require.NoError(t, publish(start.Add(2*time.Minute), mib(160)))
+
+	row := store.liveRow(t, "CAMPAIGN_LEDGER")
+	rate, known := row.Growth.Rate()
+	require.True(t, known)
+
+	// C-A: 60 MiB over 120s. NOT C-B (50 MiB over 60s), which is what advancing
+	// past the unpublished row would produce.
+	assert.InDelta(t, float64(mib(60))/120.0, rate, 1.0,
+		"the rate must be measured against the last PUBLISHED observation, not one whose write failed")
+	assert.Equal(t, 2*time.Minute, row.Growth.ObservedOver,
+		"and the span must be the published one")
+
+	// A restarted process seeds from the bucket and must reach the same answer.
+	// Before the fix these diverged, so the projection depended on restart.
+	restarted := newTestPublisher(t, store, defaultSource())
+	_, err := restarted.Publish(context.Background(), inventoryWithAccountAt(
+		start.Add(3*time.Minute), fillingFileTier(mib(900)),
+		archivalResource("CAMPAIGN_LEDGER", mib(190))))
+	require.NoError(t, err)
+
+	restartedRow := store.liveRow(t, "CAMPAIGN_LEDGER")
+	restartedRate, known := restartedRow.Growth.Rate()
+	require.True(t, known)
+	assert.InDelta(t, float64(mib(30))/60.0, restartedRate, 1.0,
+		"a restarted process measures against the same published series the running one did")
+}
+
+// TestAccountRowFailure_DoesNotAdvanceTheTierBaseline is the same property for the
+// tier series, whose observations live in the account row's history.
+func TestAccountRowFailure_DoesNotAdvanceTheTierBaseline(t *testing.T) {
+	store := newFakeReportStore(10)
+	publisher := newTestPublisher(t, store, defaultSource())
+	start := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+
+	publish := func(at time.Time, tierUsed int64) error {
+		_, err := publisher.Publish(context.Background(), inventoryWithAccountAt(
+			at, fillingFileTier(tierUsed), archivalResource("CAMPAIGN_LEDGER", mib(50))))
+		return err
+	}
+
+	require.NoError(t, publish(start, mib(700)))
+
+	store.putErrForKey = map[string]error{StorageAccountReportKey: errors.New("transient")}
+	require.Error(t, publish(start.Add(time.Minute), mib(750)))
+	store.putErrForKey = nil
+
+	require.NoError(t, publish(start.Add(2*time.Minute), mib(820)))
+
+	tier, ok := decodeAccountRow(t, store).TierFor(TierFile)
+	require.True(t, ok)
+	rate, known := tier.Growth.Rate()
+	require.True(t, known)
+	assert.InDelta(t, float64(mib(120))/120.0, rate, 1.0,
+		"the tier rate must span from the last PUBLISHED account row, not the one that failed to write")
+	assert.Equal(t, 2*time.Minute, tier.Growth.ObservedOver)
+}

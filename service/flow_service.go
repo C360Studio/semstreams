@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/config"
 	flowengine "github.com/c360studio/semstreams/engine"
 	"github.com/c360studio/semstreams/flowstore"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/google/uuid"
 )
 
@@ -44,9 +45,13 @@ type FlowService struct {
 	flowStore  *flowstore.Manager
 	flowEngine *flowengine.Engine
 	configMgr  *config.Manager
-	serviceMgr *Manager // Access to other services (for health API, message-logger)
-	natsClient natsSubscriber
-	config     FlowServiceConfig
+
+	// overrideExpiry re-evaluates migration-override expiry on an interval, because
+	// boot-time evaluation cannot see a bridge that lapses while the process runs.
+	overrideExpiry *streamOverrideExpiryReporter
+	serviceMgr     *Manager // Access to other services (for health API, message-logger)
+	natsClient     natsSubscriber
+	config         FlowServiceConfig
 
 	mu sync.RWMutex
 }
@@ -128,6 +133,11 @@ func (fs *FlowService) Start(ctx context.Context) error {
 
 	// Start flow status publisher (watches KV and publishes to NATS for WebSocket consumption)
 	fs.startFlowStatusPublisher(ctx)
+
+	// A migration override's expiry is otherwise evaluated only at boot, so an
+	// instance that started before the deadline would run past it in silence. This
+	// REPORTS; the refusal stays at the next boot. See stream_override_expiry.go.
+	fs.startOverrideExpiryReporter(ctx)
 
 	fs.logger.Info("Flow service started")
 	return nil
@@ -952,4 +962,52 @@ func (fs *FlowService) publishFlowStatus(ctx context.Context, flowID string, sta
 		return
 	}
 	_ = fs.natsClient.PublishToStream(ctx, "flows."+flowID+".status", data)
+}
+
+// startOverrideExpiryReporter runs the migration-override expiry reporter for this
+// instance's lifetime. It is best-effort: a deployment with no configuration
+// manager has no overrides to evaluate, and a reporter that could not start must
+// never keep the service from running — it reports a hygiene condition, and taking
+// the service down over the inability to report one would invert the whole reason
+// enforcement was left at boot.
+func (fs *FlowService) startOverrideExpiryReporter(ctx context.Context) {
+	if fs.configMgr == nil {
+		return
+	}
+	fs.ensureOverrideExpiryReporter()
+	go fs.overrideExpiry.run(ctx)
+}
+
+// ensureOverrideExpiryReporter builds the reporter once. It is called from both
+// RegisterMetrics and Start because the service manager may invoke them in either
+// order, and a gauge registered from a nil reporter would silently never update.
+func (fs *FlowService) ensureOverrideExpiryReporter() {
+	if fs.configMgr == nil || fs.overrideExpiry != nil {
+		return
+	}
+	{
+		fs.overrideExpiry = newStreamOverrideExpiryReporter(
+			func() *config.Config {
+				safe := fs.configMgr.GetConfig()
+				if safe == nil {
+					return nil
+				}
+				return safe.Get()
+			},
+			fs.logger.With("source", "flow-service.stream-overrides"),
+		)
+	}
+}
+
+// RegisterMetrics exposes the migration-override expiry gauge.
+//
+// The gauge is the alertable half of reporting a lapsed bridge — the WARN log is
+// what someone greps after the fact, this is what pages them. Registration failing
+// is not fatal: it costs the alert, not the service.
+func (fs *FlowService) RegisterMetrics(registrar metric.MetricsRegistrar) error {
+	fs.ensureOverrideExpiryReporter()
+	if fs.overrideExpiry == nil {
+		return nil
+	}
+	return fs.overrideExpiry.register(registrar)
 }

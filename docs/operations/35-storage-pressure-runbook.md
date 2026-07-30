@@ -159,6 +159,32 @@ check the storage-observability service's health message for the last collection
 | `StorageResourceUnbounded` | A resource with no bound at all, so the choice stays deliberate |
 | `StorageResourcesWithUnknownCapacity` | Resources the server will not describe |
 | `StorageReportStale` | The collector stopped |
+| `StorageStreamMigrationOverrideExpired` | A time-limited bridge lapsed; the next deploy will refuse to boot |
+
+## An expired migration override
+
+A `stream_migration_overrides` entry admits an existing unbounded stream that predates the bounds
+contract. It carries an owner and a deadline, and the deadline is the point.
+
+**Enforcement is at validation and provisioning, not at runtime readiness.** A running instance that
+crosses the deadline keeps serving and reports the lapse — a WARN per tick and
+`semstreams_streams_migration_override_expired{stream,owner} == 1`. The **next boot refuses to
+start**. That split is deliberate: the admitted stream still works, so a lapsed bridge is a hygiene
+failure, and taking a healthy fleet out of the load balancer simultaneously because a calendar date
+passed would turn it into an outage. The refusal lands where an operator can act on it anyway.
+
+The practical consequence: **resolve it before your next deploy, not during one.** The failure mode
+this alert exists to prevent is a routine deploy failing at boot for a reason nobody connected to a
+date set months earlier.
+
+Two ways out, and they are not interchangeable:
+
+- The stream should be bounded → declare `max_age`, `max_bytes` and `discard` on it and delete the
+  override.
+- The stream is permanently unbounded by contract → move it to `archival_streams` with an owner and a
+  reason. Archival is permanent by declaration and has no deadline, which is why an archive must never
+  be expressed as a renewed override: renewing on autopilot is what makes genuinely time-limited
+  bridges invisible.
 
 ## What this capability does not do
 
