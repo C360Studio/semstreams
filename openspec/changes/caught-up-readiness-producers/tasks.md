@@ -1,22 +1,37 @@
 ## 1. MEASURE THE MECHANISM FIRST — do not write producer code before this
 
-- [ ] 1.1 **Throwaway real-NATS probe: does the consumer ack floor advance past terminal outcomes?**
+- [x] 1.1 **Throwaway real-NATS probe: does the consumer ack floor advance past terminal outcomes?**
       graph-ingest sets `MaxDeliver: 3` (`processor/graph-ingest/component.go:1510-1521`) and has
       five Nak/Term paths. Answer two questions against a live nats-server via testcontainers:
       (a) does `AckFloor.Stream` advance past a message that exhausts `MaxDeliver`?
       (b) does `Term()` advance it?
-      **If either is NO, the floor stalls forever on one poison message and the readiness signal
-      inverts into permanently-not-caught-up — wrong in the dangerous direction.**
-      Precedent: a 40-line probe settled the `DiscardNew` question in one run and falsified the
-      author's own hypothesis where prose argument had not.
-- [ ] 1.2 Record the measured answer in `design.md` §D0 and delete the probe. If the floor stalls,
-      fall back to `NumPending + NumAckPending` with NO ack-floor claim — the outstanding-work
-      number still works; only the "contiguous high-water" framing must go, and the proposal's Why
-      section must be corrected rather than left asserting something measurement disproved.
-- [ ] 1.3 Confirm a `jetstream.Consumer` handle is reachable for `Info()`.
-      `ConsumeStreamWithConfig` stores only the `ConsumeContext` (`natsclient/stream.go:388-393`)
-      and hands the `Consumer` to `trackConsumer` (`:381`). Either add a narrow accessor or have
-      graph-ingest retain its own handle — decide which is cleaner and say why in the task.
+      **MEASURED 2026-07-30 on both deployed server versions (2.10-alpine, 2.12-alpine), identical
+      results: (a) NO. (b) YES.** And worse than "stalls": with no traffic the floor sits behind the
+      poison message indefinitely (verified +5s/+10s), then on the next unrelated ack **jumps past
+      the never-applied message entirely**. Wrong in BOTH directions — permanently-not-caught-up
+      while idle, falsely-covered under traffic. Full table in `design.md` §D0.
+- [x] 1.2 Record the measured answer in `design.md` §D0 and delete the probe. **Done: §D0 rewritten
+      with the measurement table, `proposal.md`'s "What makes it computable" corrected (it asserted
+      the contiguous high-water the probe disproved), probe deleted.** Fallback TAKEN:
+      `NumPending + NumAckPending`, no ack-floor claim anywhere — that sum measured 0 in all 12
+      observations, including both cases where the floor was wrong. New constraint the spec must
+      carry: the sum means *no outstanding work*, NOT *everything was applied* — a `MaxDeliver`-parked
+      message leaves both counters (gh#742 owns operator visibility for it).
+- [x] 1.3 Confirm a `jetstream.Consumer` handle is reachable for `Info()`.
+      **Verified: today the ONLY retained handle is `jetstreamMetrics.consumers`
+      (`jetstream_metrics.go:147-155`), and `c.jsMetrics` is nil unless `WithMetrics` was called with
+      a non-nil registry (`options.go:209-223`). Reading readiness from there would make the signal
+      silently degrade when metrics are off — a phantom by this repo's own rule.**
+      **DECISION: narrow accessor on `natsclient.Client`, backed by the ALREADY-UNCONDITIONAL
+      `c.consumers` bookkeeping (`client.go:80-81`, populated `stream.go:385-390`) — store the
+      `jetstream.Consumer` beside the `ConsumeContext` it already keeps and expose a lookup.**
+      Rejected "graph-ingest retains its own handle": `ConsumeStreamWithConfig` does not return the
+      consumer and has **20+ non-test callers**, so that route needs a signature change or a parallel
+      API for one caller's benefit. Rejected reusing the metrics map: conditional, and string-keyed
+      by `stream:consumer` so a miss is silent.
+      Note `updateStats` (`jetstream_metrics.go:196-211`) already calls `consumer.Info()` on a poll —
+      precedent for the call, and a reason to keep the readiness tick's own cadence separate rather
+      than piggybacking on metrics collection.
 
 ## 2. Shared envelope + projection
 
@@ -104,8 +119,11 @@
 
 ## 8. Tests
 
-- [ ] 8.1 Ack-is-terminal: assert `Ack()` is the last statement of the success path, or force a
-      write failure and assert the ack floor does not advance
+- [ ] 8.1 Ack-is-terminal: assert `Ack()` is the last statement of the success path, and force a
+      write failure and assert **`NumPending + NumAckPending` stays > 0** (⇒ `Ready` false) while it
+      fails. **Do NOT assert on the ack floor** — §D0 measured it unusable, nothing here reads it, and
+      that assertion passes for the wrong reason once the failure hits `MaxDeliver` exhaustion (floor
+      also does not advance there, but the message is dropped)
 - [ ] 8.2 `BootstrapComplete` false → true → false-on-new-generation
 - [ ] 8.3 Absent declared key ⇒ `DeferStatusUnknown`
 - [ ] 8.4 Backlog counts delivered-but-unacked (would fail if only pending were counted)
