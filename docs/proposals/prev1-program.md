@@ -66,8 +66,10 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > **Standing rules (unchanged):** build only against merged main (in-flight surface ⇒ automatic
 > HOLD) · no predicate/vocabulary surface changes · when a new issue lands on an UNSTARTED
 > change, amend the spec before implementation starts · owner CONFIRM-CLOSE gate on issue
-> closes · owner merge gate on PRs — this repo has NO required checks: verify green explicitly,
-> never `--auto`.
+> closes · owner merge gate on PRs — ruleset `main-required-checks`
+> (2026-07-30, no bypass actors) requires `CI Status Check` + `e2e statistical` and blocks
+> direct pushes to main: `gh pr merge --auto` is now the correct default (it fires only on
+> green). Red merges are platform-impossible; the escape hatch is editing the ruleset itself.
 
 ---
 
