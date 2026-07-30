@@ -9,303 +9,59 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **EPIC C OPENED + REDRAWN (2026-07-28, owner-decided) — the next epic-level WIP-1 item. Epic C is now
-> "operational / derived-KV-plane state-ownership," NOT the original 2026-07-21 leftover-issues bucket.**
-> RATIONALE (owner): the split is by STATE CATEGORY, not by file. The Codex projection-contract arc
-> (#686→#687→#696→#704→#708) governs the AUTHORITATIVE entity-fact plane (contract-bound mutation client in
-> `pkg/projection` over ENTITY_STATES triples — verified: it has ZERO refs to `update_kv`/`ENTITY_SUFFIX`/
-> `FrameworkOwnedBucket`, a disjoint seam). NOBODY governs the operational/derived-KV plane — and #622 is the
-> indictment (retention guard covers 2 of 17 buckets). B3 proved the pattern on ONE instance (single-writer +
-> content-addressing killed a resurrection class structurally); Epic C GENERALIZES it. That's a real epic
-> identity.
+> **STATE 2026-07-30 (post-triage checkpoint; queue: 113 open = 32 bug / 77 enh / 4 docs — see
+> Issue flow below). Recently completed — verify with `git log --oneline -15` + `gh issue list`,
+> detail lives in the archives and the Epics table, do NOT re-derive:**
+> Epic C FULL ARC merged + archived (#716→#719→#721→#722→#724: 22-row bucket catalog, acquisition
+> seam, component-start barrier, fail-closed boot, boot-boundary config drain, EMBEDDINGS_CACHE
+> class deleted). `storage-capacity-observability` IMPLEMENTED + MERGED (PR #737 `552a1647`,
+> 46/47 — task 2.8 deliberately open → gh#739; closed #729/#730). #727 objectstore
+> ack-on-store-failure FIXED + MERGED (PR #743 `185411d7`: NAK/Term decision table, emit gates
+> ack, at-least-once documented; follow-ups #741/#742 filed). Owner-confirmed triage executed:
+> #622/#615/#617/#666/#654 closed on evidence, #199 folded into #736, and
+> #621/#609/#608/#606/#618/#619 retitled to their verified remainders.
 >
-> **SCOPE (verified against HEAD 2026-07-28):**
-> - **#622 = the PRIMITIVE, increment-0, START NOW.** Generic `update_kv` write-owner guard + FULL bucket
->   coverage. Live bug confirmed: `ENTITY_SUFFIX_INDEX` created at `component.go:1154`, ABSENT from
->   `FrameworkOwnedBuckets()`, so a rule can legally `update_kv` into it TODAY. **ARCHITECT SCOPE (verified HEAD):**
->   inc-0 = asks 1 (write-ownership: add the bucket constant + list entry) + 2 (coverage). **Ask 3 (ObjectStore
->   analogue) is ALREADY DONE** — `storage/objectstore/retention.go` (PR #632/#636) + `graph-retention` spec
->   Requirement `:47` cover every store incl. AGENT_CONTENT/embedding-content; DROP from scope, verify+close.
->   **Ask 4 already satisfied** — the KV guard already reads *existing* server config via `bucket.Status()`, not
->   requested defaults. **Design = reconcile-then-assert** (mirror the ObjectStore precedent: strip a foreign TTL
->   → self-heal+WARN → re-read → fail-closed on the shared `CheckNoLifecycleRetention` predicate) — NOT pure-assert,
->   which would multiply graph-ingest's process-lifetime-sticky takedown blast radius 17×. Additive, not breaking
->   (no shipped config writes the bucket). Exclude `EMBEDDINGS_CACHE` from the retention sweep (keep it
->   write-protected) so #622 doesn't pre-empt the storage-limits epic's cache-bounding. Spec homes: `graph-retention`
->   (broaden the ENTITY_STATES-specific requirement to the full owned set) + seed write-ownership into `nats-kv-keys`.
-> - **#625 = embedding cleanup repair loop, START NOW (pairs with #629).** graph-embedding plane, zero contact
->   with any in-flight change (architect grepped all 7). Port graph-index's `repairLoop` precedent. Consumes the
->   #622 primitive. Dependency: `#622 → #625`.
-> - **#629 = coalescer resurrection. IMPL-HOLD FALSIFIED (architect, verified HEAD) — owner: ship with #625.**
->   The resurrection lane is **graph-embedding** (`cache.CoalescingSet` → `processEntityBatch` discards revisions →
->   `SavePending` unconditional Put defeats the gh#614 drop-guard), NOT `graph-index/revision_coalescer.go` (which
->   RETAINS greatest-revision by design → not vulnerable; the issue/baton conflated the two). NO active change
->   touches graph-embedding, so under the mechanical rule #629 needs no hold. Design the ordering protocol (durable
->   revisioned delete-marker + CAS-create, resting on #622's owned+retention-free `EMBEDDING_INDEX`) then implement
->   with the #625 pair. Dependency: `#622 → #629`. Low urgency: opt-in-only (`coalesce_ms > 0`, no shipped config).
-> - **~~#527~~ DROPPED from Epic C** — it IS `graph-index-replacement-semantics` (15/19, in-flight sister/Codex:
->   composite-key contract freeze + durable NAME/PREDICATE/source-owned-INCOMING reverse projection, co-activates
->   with `predicate-raw-key-representation`/ADR-078). Pointer hygiene DONE: baton + MEMORY.md idx + rollout hub +
->   retention hub + gh474 hub all updated so a fresh session can't resurrect #527 as orphaned "NEXT" work.
+> **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> **MECHANICAL COLLISION RULE (owner, replaces "hold until quiesce"): Epic C builds ONLY against merged main.**
-> The moment an item needs an in-flight surface, that item HOLDS automatically (the beta.135-pin move that made
-> the semdragon stack safe). **Predicate/vocabulary surface is OUT OF SCOPE BY WRITTEN CONSTRAINT** — the change
-> proposal must state Epic C touches no predicate/vocab surface, which makes the in-flight BREAKING
-> `predicate-contract-enforcement` (38/44) deterministically irrelevant to it.
+> 0. **Archive `storage-capacity-observability`** (`openspec archive`; task 2.8 stays tracked as
+>    gh#739 — do not mark it done, do not fold it silently). Small close-out; do first.
+> 1. **EPIC SLOT — readiness increment: #712 + #732 as ONE change.** Two independent consumers
+>    converged on the same substrate: Semdragon needs inference-stage quiescence (#712),
+>    SemMachina needs rule bootstrap-replay caught-up (#732). Extend the ADR-083 producer
+>    pattern to these stages and aggregate over GRAPH_STATUS. **NOT a new readiness system.**
+>    Readiness = caught-up (contiguous high-water, every completion path), never merely started;
+>    readiness can never license an absence claim. Coordinate with #713 (Codex-thread bug:
+>    hierarchy replay duplicates triples — it undermines the parity snapshot #712 exists to
+>    license).
+> 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
+>    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
+>    pipeline (the `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching.
+>    #733 = intent-shaped "is this loop task in flight" query — the API must distinguish "no
+>    consumer exists" from "nothing in flight" (the issue's own ErrConsumerNotFound trap).
+> 3. **Complexity-pivot remainder:** adopter module contract (one Register bundling
+>    payloads/vocab/factories/projections) + `--validate` performing real registry composition
+>    (fold gh#734 — an unknown schema Type spelling silently skips validation — the
+>    validator-credibility bug) + tutorial configs compiled in CI (gh#725 = the motivating
+>    case) + docs rewrite LAST against the simplified surface.
 >
-> **CROSS-CHANGE COLLISION to coordinate (architect D3): `bounded-storage-operability` (0/35, BREAKING,
-> not-started) is a proposed retention epic that edits the SAME `graph-retention` spec file AND wants a
-> `DiscardNew` `MaxBytes` emergency ceiling, which #622's `CheckNoLifecycleRetention` predicate rejects
-> (`MaxBytes>0` forbidden). The "build vs merged main" rule doesn't catch it (it's a proposed SPEC, not merged
-> code). OWNER-DECIDED: #622 inc-0 lands the strict status-quo invariant ONLY (extends coverage, touches no
-> `MaxBytes` policy), sequences FIRST on the `graph-retention` spec; the `DiscardNew` carve-out is deferred
-> entirely to `bounded-storage-operability`, which rebases its delta onto #622's broadened requirement.**
+> **Small-bug track (parallel to the epic, non-epic, one focused PR each, dev+reviewer gates):**
+> #736 (integration suite oversubscribes Docker; #199 folded in — `TestHotReload_SeedIdempotency`
+> is the fix's canary; gate-reliability leverage on every future PR) · #741 (raw-path key
+> collision — silent data loss in shipped `protocol-flow.json` at >1 msg/s; the payload registry
+> does NOT fence this path) · #742 (MaxDeliver parking visibility — storage-capacity lane).
 >
-> **inc-0 (#622) MERGED + ARCHIVED (PR #716 `d03c49f7`) — then REOPENED same day on a Codex retrospective
-> (2 P0s: the "post-start" sweep raced async component start; component Start failures never failed
-> boot/health) and RE-CLOSED via `reopen-framework-owned-bucket-guards` (PR #719 `a4287869`, MERGED +
-> ARCHIVED 2026-07-28, THREE Codex rounds): component-start barrier + fail-closed boot + health StateFailed;
-> boot-boundary config drain (mid-boot adds/edits/registry changes join the boot transaction; cutoff
-> honesty: post-drain changes = dynamic class, durable closure = acquisition seam); EMBEDDINGS_CACHE +
-> cache_ttl + 4 unconsumed lifecycle hooks DELETED (loud rejection of stale configs; adopter note
-> `docs/operations/embeddings-cache-removal.md` = the sole sister migration channel — we do NOT edit
-> sister repos). The primitive is now REAL.**
+> **Own-change deferrals:** gh#735 (capacity rejection counted by the shared circuit breaker —
+> touches every publish, wants its own change) · gh#738 (cluster-aware account ceiling).
+> **Mechanical hygiene batch when slack:** sister-sweep then delete caller-less
+> `AssertNoLifecycleRetention`; graph-inference RetentionDays/CleanupInterval phantom pair;
+> census-exempt constant-based readers → `OpenCatalogBucket`; `ContentHash` caller-less,
+> retained pending owner word.
 >
-> **SHIPPED 2026-07-28 (all three of the previously-sequenced items):
-> (1) cache-CLASS deletion — PR #721 `f7965f0e` (Cache iface/NATSCache/HTTPConfig.Cache + branches +
-> doc example gone; cache.go→dedup.go preserving the LIVE dedup-identity surface; `ContentHash` now
-> caller-less, retained pending owner word).
-> (2) #625 + #629 — change `embedding-derived-state-convergence`, PR #722 `2b532d76` (archived
-> 2026-07-28): hop-1 single-writer seam (`hop1Mu`) + reconcile-at-execution closes #629 structurally
-> (semsource defaults `coalesce_ms=200` — the issue's "dormant" framing was FALSIFIED); #625 =
-> markStranded into the #613 failed map + dedicated 30s repairLoop, zero durable evidence. ONE Codex
-> round: floor-0 marks were clearable by superseded hop-2 terminals → replaced by the CAUSAL
-> strandedAt invariant (design.md records the falsification); `SavePendingGuarded` (CAS decision
-> table) closes the stale-downgrade write side; coalescer now publishes before the watcher.
-> Net durable-state delta: ZERO. `configs/statistical.json` carries `coalesce_ms:100` — first-ever
-> e2e coverage of the coalesced lane. Lesson memo: convergence marks clear causally, never by
-> "any later event."**
->
-> **EPIC C STRUCTURAL LEG COMPLETE (2026-07-29): `framework-bucket-catalog` MERGED `eff3927f`
-> (PR #724, archived 2026-07-29).** The 22-row descriptor catalog (graph/kvcatalog.go) is the ONE
-> source; FrameworkOwnedBuckets() is a derived view (owned set 19→21: +OWNER_CLAIMS/+OWNER_PRESENCE);
-> Ensure/OpenFrameworkBucket is the acquisition seam (Kind+params retention, fail-closed on every
-> discriminated field); the post-start sweep pass is DELETED, the pre-start pass demoted to the
-> owner-absent-from-composition backstop; an AST contract test bans catalog-bucket literals outside
-> the catalog. Two live bugs died red-first (F1 ENTITY_STATES History boot-race, owner-decided
-> History=1; F2 operator-named framework buckets now fail boot off-catalog). #714 + #717 CLOSED by
-> design. ONE Codex round (clean-boot tool loss → lazy execution-time bind; cross-owner seam →
-> exact-four Validate+belt; fail-open enums → explicit arms). FOUR e2e tiers green incl. agentic.
-> BREAKING: graph/query.Config bucket fields deleted; readers fail not-ready naming the owner;
-> adopter note `docs/operations/framework-bucket-catalog.md`. Follow-ups: #725 (hello-world config,
-> pre-existing); sister-sweep before deleting caller-less `natsclient.AssertNoLifecycleRetention`;
-> graph-inference RetentionDays/CleanupInterval phantom pair; census-exempt constant-based readers →
-> Open (mechanical).
->
-> **(1) RESOLVED 2026-07-29 — NOT a rebase. `bounded-storage-operability` is RETIRED (deleted, 0/35,
-> never started) and SUPERSEDED by `storage-capacity-observability` (4/4 artifacts, validates
-> `--strict`, 0/35 tasks).** The planned "add a `RetentionDiscardNewCeiling` Kind + fill rows" was
-> FALSIFIED by direct measurement, not by staleness: against real NATS 2.12 (KV `MaxBytes` 128 KiB,
-> `History` 1), at the ceiling NATS **rejects replacing an existing key** (`code=503 err_code=10077`)
-> while still accepting deletes and purges — a same-size replacement is net-zero bytes under History 1,
-> but the append is checked against `MaxBytes` BEFORE the superseded revision compacts away. So (a)
-> "reserve replacement headroom" is not expressible against a single append-checked limit — replacement
-> is the FIRST thing to fail; (b) graph-ingest writes one entity across many independently-ceilinged
-> buckets with no cross-bucket transaction, so a ceiling doesn't stop growth, it TEARS authoritative
-> state against derived indexes at a nondeterministic point; (c) it inverts ADR-068 — delete (the
-> semantic op we reserve) still works while update is denied by storage policy. **ADR-073:77-79's ban
-> on all `MaxBytes>0` on the identity tier STANDS, now independently confirmed; the retired change's
-> task to "update ADR-068/073 wording" would have re-opened it.** Owner steer that shaped the
-> replacement: *observability with prior warning first — "we do not want to turn off new writes unless
-> we have given them the chance to correct resources."* New change = inventory + growth/headroom/
-> time-to-threshold + pressure states, REPORT-ONLY; explicit bounds on ordinary time-shaped streams
-> ONLY; a **provisioner prefix guard refusing `KV_*`/`OBJ_*`** (the load-bearing safety boundary —
-> `createStream` has no name filter today and extending the reconciler to retention fields is what
-> would make an operator typo stamp age eviction onto graph state); expiring migration overrides.
-> Application-level admission in graph-ingest (entity-atomic, cross-bucket-coherent — the thing NATS
-> `MaxBytes` structurally cannot be) is DEFERRED behind a checkable 3-condition gate. Architect
-> adversarial review returned 3 BLOCKERS (all on the exclusion boundary) + 2 HIGH + 8 MEDIUM — all
-> folded in before validate. Probe preserved at scratchpad `ceiling_probe_test.go.txt`. Also filed
-> **#727** (objectstore JetStream handler acks unconditionally after a store call that cannot report
-> failure → transient failure = silent permanent loss; independent of capacity, split out so it
-> wasn't lost with the retired change). **(2) #712 projection quiescence (semdragon ask) —
-> third consumer of the readiness substrate; extend the ADR-083 producer pattern to inference stages
-> + aggregate over GRAPH_STATUS, NOT a new readiness system. (3) Complexity-pivot remainder:
-> adopter module contract (one Register bundling payloads/vocab/factories/projections) + `--validate`
-> doing real registry composition + tutorial configs compiled in CI (#725 is the motivating case) +
-> docs rewrite LAST against the simplified surface.**
-
-> **EPIC B COMPLETE (2026-07-28) — B3 MERGED (PR #709 `857988ef`, archive #711). B0/B1/B2/B3 ALL CLOSED.
-> This is the newest state; the recall-ceiling note below is now history.** B3 = the community-summary
-> ownership split: LLM summaries moved from the shared `COMMUNITY_INDEX` record to a worker-exclusive,
-> content-addressed `COMMUNITY_SUMMARIES` store keyed `{level}.{membership_hash}` — structurally closing
-> the #607 clobber + #617 resurrection classes (no CAS: a content-keyed write can't touch the
-> detector-exclusive partition; an unchanged membership is a cache-hit skip). graph-query joins
-> partition+summary by membership hash with a statistical floor; readiness gated on `COMMUNITY_INDEX` only.
-> ADR-087 (ownership decision + the membership-vs-content staleness trade). BREAKING; frontier e2e gate
-> GREEN on the FINAL code (`llm_enhanced=14/pending=0`, determinism 1.00, known-answer 7/7, recall 0.95,
-> `validation_errors:0`). **Codex found 3 real issues the internal reviewer missed (2 HIGH):** late
-> summary-bucket attach on a rolling upgrade → stuck on the statistical floor forever (fixed: independent
-> retrying resource watcher); a lagging `llm-failed` write clobbering an `llm-enhanced` summary (fixed:
-> CAS `PutFailedUnlessEnhanced`); +MEDIUM gauge-init on restart — all fixed + integration-proven + a
-> confirming frontier re-run. Two frontier runs surfaced two observability PHANTOMS (an e2e stage + a
-> metric writer still reading the emptied old `COMMUNITY_INDEX` field) — both migrated to the new store.
-> Ship-time follow-ups filed: **#710** (worker-owned bounded-GC for the content-addressed store, gated on
-> the size gauge) + **#661 reframed** to re-measure-after-B3. Lesson (reinforced twice this arc): a same-run
-> reviewer APPROVE is NOT the last word — Codex caught real HIGH correctness bugs on both #702 and #709;
-> the once-through Codex gate earns its keep. **NEXT (fresh session): Epic B fully closed — pick the next
-> epic-level WIP-1 item: Epic C (derived-state ownership, #622/#527/#625/#629) vs deferred Epic A
-> (#619/#633/#643) vs #701 (multi-community query expansion) vs #710 (summary-store GC). Reconcile at
-> start: git HEAD + `gh issue list` + `openspec list`.**
-
-> **RECALL-CEILING FIX MERGED + ARCHIVED (2026-07-27, PR #702 `f9833ace` + archive #705 `669790d6`) — front CLOSED (history). Superseded the "next front"
-> framing in the B2 note below.** The owner's question "why don't communities resolve as expected?" is
-> answered: the 0.85 thematic-recall ceiling was NEVER a partition/community problem — it was
-> synthesis-projection lossiness. GraphRAG answer synthesis fed the LLM only {community summary + up to 5
-> PageRank (query-AGNOSTIC) rep titles + 5 keywords}; entity bodies never reach the prompt, and a theme
-> term on a relevant NON-rep member's title/tags could not appear. OpenSpec change
-> `thematic-synthesis-context` fixes it with two query-side levers: (A) select digest reps by QUERY
-> RELEVANCE (`semanticScores` handleStrategyGraphRAG already computes), full PageRank fallback preserved;
-> (B) a capped `Tags` channel from `content.classification.tag` triples in both the LLM prompt and the
-> template floor. Architect-designed, developer-built, reviewer-APPROVE (2 MEDIUM + 2 NIT fixed; MEDIUM-2
-> promoted the tag predicate to framework constant `vocabulary.ContentClassificationTag`). **Frontier e2e:
-> `thematic_theme_recall_mean` 0.85 → 0.95, `battery`+`door` recovered, ZERO regressions (known-answer
-> 7/7, partition determinism 1.0).** Additive/non-breaking. `evacuation` (fire) stays missing — its only
-> tag-bearing entity sits in a document-type community that doesn't reach the fire query's top synthesis
-> clusters (cross-community coverage, NOT a tags defect); owner chose LAND-THE-WIN + filed **#701**
-> (retrieval-side multi-community query expansion). Codex reviewed #702 once (3 findings: P1 type-filter
-> leak via the score map, P2 fallback cap, P2 baton wording) — ALL addressed (score map now keyed by
-> surviving `entityIDs`; fallback capped-copy; wording fixed) + CI green, then MERGED + ARCHIVED (#705).
-> **NEXT (fresh session): recall-ceiling front is DONE — pick the next epic-level WIP-1 item: B3 (ownership
-> split, Tier-2, #607/#617) vs #701 (multi-community query expansion) vs Epic C vs deferred Epic A
-> (#619/#633/#643).** Codex/sister-session own the separate projection-contract + predicate-audit stack
-> (#686←#687←#696←#704, #685) — merged bottom-up after sister review; NOT this thread. Full detail:
-> memory `epic-b-recall-ceiling-synthesis-context.md`.
-
-> **B2 CLOSED (2026-07-26, honest negative) — SUPERSEDES the "B2 IS DECIDED ... HAS ROI" framing
-> immediately below.** The weight-tuning lever is exhausted: enabling the merged semantic-edge mechanism
-> raised `colocation_mean` 0.60→0.83, but a paired frontier decider (Gemini 2.5 Flash held constant,
-> partition the only variable) found thematic recall FLAT — 0.85 both arms, per-query byte-identical,
-> known-answer 7/7 both — because the colocation rise was a mega-community merge artifact
-> (`distinct_plurality_communities=2/5`, one 47-member community absorbing 4/5 themes), not genuine
-> theme coherence, and the partition sits off the recall path entirely (a context-diff showed the same
-> missed theme terms present in-corpus under both partitions; the 0.85 ceiling is upstream, in synthesis
-> compression / eval literal-term matching). This falsifies B2's founding premise. The mechanism (§1–§7,
-> §8.0 of the change) ships MERGED + DEFAULT-OFF as a future lever for a different corpus; the compound
-> colocation gate was measured and deliberately NOT adopted — the recorder stays record-only, hardened
-> by two trust instruments landed via PR #698 (`304368d9`). Two levers recorded out of B2 scope, future
-> work: retrieval-side multi-community query expansion, and embedding-input shaping (the absorbing
-> community's membership hints the embedding space organizes by document genre at least as strongly as
-> by theme). Full detail: ADR-086 "Outcome (2026-07-26)",
-> `openspec/changes/graph-clustering-semantic-edges/tasks.md` §8, and memory
-> `b2-partition-clusters-by-type-not-theme.md`. **The historical trace below (sessions 8–11) stands
-> as-is and is not re-derived — read it for how B2 was scoped and built, not for its "HAS ROI"
-> conclusion, which this note corrects.**
-
-> **B2 IS DECIDED — partition rebuild HAS ROI. The confounded frontier "low-ROI" hypothesis is REVERSED
-> by a white-box, LLM-independent measurement (session 11, 2026-07-24).** The owner course-corrected off the
-> frontier comparison (a black-box proxy; #654 re-scoped): with a KNOWN corpus we don't need a frontier model
-> to define "good" — we trace where each known-expected entity lands in the partition. New diagnostic
-> `test/e2e/scenarios/validate_partition_colocation.go` (stage `validate-partition-colocation`, built + reviewed
-> + unit-green; RECORDER, cheap 1.7b `task e2e:semantic`, no 8B/frontier). It reads `GetAllCommunities` and, per
-> B0 thematic query, measures whether the known-expected entities are co-located in one level-0 community.
->
-> **The finding (decisive): the partition clusters by ENTITY TYPE/STATUS, not by THEME.** All completed
-> `maint-*` → one blob; all `doc-*` → one blob; all `obs-*` → one blob; all sensor-docs → one blob (driven by
-> entity-id sibling edges dominating the LPA). Coverage is perfect (`entities_not_in_community=0`, all 18
-> present; trust guard clean — 5 communities, not collapsed). So any theme that spans entity types SCATTERS:
-> forklift 0.40 (maint+obs+doc across 3 comms), conveyor 0.33, fire 0.50, dock 0.75; cold-chain is the ONLY
-> co-located query (1.00) because both its entities are the same type (sensor-docs). `colocation_mean=0.60`.
-> This EXPLAINS the frontier "caps at 3/4" — the missing entity is a different type in a different community,
-> so retrieving "the relevant community" structurally cannot reach it; a better synthesizer can't fix a
-> theme-blind partition. **⇒ B2 (ADR-061 semantic-kNN co-location edges that cross type boundaries) is the
-> right lever, un-confounded.**
->
-> **NEXT (sequencing):**
-> 1. **Land the B2 diagnostic PR** — `validate_partition_colocation.go` + `_test.go` + `tiered.go` registration
->    (+ the `enhancement_workers: 2` pin in `configs/semantic-8b.json`, #652 quick-win, bundled). Test-instrumentation
->    + config only; unit-green + lint-clean. Merge gate = Codex → addressed → CI green (owner-run Codex).
-> 2. **Scope the B2 build (architect-owned)** — re-add ADR-061 semantic-kNN edges + #618 readiness gate; the
->    open design question is how to weight semantic edges against the entity-id sibling edges that currently
->    dominate (theme vs type). Success metric already instrumented: `colocation_mean` should rise on
->    theme-spanning queries. Write **ADR-08x** (semantic partition + readiness; promote ADR-061) now that B2 is scoped.
-> 3. **B1 determinism** — this run measured `1.00` on the ~74-entity corpus (run1=5/run2=5); the 0.83 was the
->    ~175-entity corpus. So B1's determinism piece is a LARGER-CORPUS phenomenon, not universal — verify on the
->    bigger corpus before treating as a live gap.
-> 4. **#652 de-prioritized but CORROBORATED.** This 1.7b run took stage-20=2m25s / stage-21=4m28s with LLM
->    `pending=9`, and `validate-globalsearch-known-answer` (stage 42) then TIMED OUT on graph-query `loadEntities`
->    under that sustained load — the SAME enhancement-oversubscription (5 workers vs 2 slots) biting the 1.7b tier,
->    not just 8B. The standard `configs/semantic.json` also defaults `enhancement_workers=5` (unpinned). Extending
->    the pin to the standard config is a candidate #652 follow-up. Full admission-gate consolidation stays architect-owned.
->
-> Default `task e2e:semantic` stays 1.7b (fast CI gate); 8b/frontier are optional quality reads. The B2 decision
-> needs NEITHER — the co-location signal is LLM-independent, so it's read on the cheap tier.
->
-> **THE RE-MEASURE (the whole point — done; measure-before-building paid off AGAIN).** The #645 fix
-> RESOLVED the dominant thematic-retrieval defect:
-> - **dim1 `empty_answer_count=0/5` (was 4/5)** at BOTH tiers — every question now retrieves
->   (count=68) and reaches synthesis. First clean thematic read achieved.
-> - **8B synthesis quality confirmed GOOD once retrieval works:** all 5 grounded, no fabrication;
->   recall 0.50–1.00 (cold-chain/conveyor 1.00; dock-equipment **0.50** weakest).
-> - **1.7b `task e2e:semantic` full 48-step gate GREEN (exit 0)** on the branch, incl. the
->   known-answer step — proves the fix does NOT regress the standard CI tier.
->
-> **Two prior-claim CORRECTIONS the re-measure forced (do not carry the old ones forward):**
-> 1. **Partition determinism is 0.83, NOT 1.0** (run1=6 comms / run2=5, level0=5, 175-entity corpus).
->    The session-9 "already 1.0" was on the ~74-entity corpus. **B1's determinism piece is a LIVE gap**,
->    not low-leverage.
-> 2. **Recall spread 0.50–1.00 is now MEASURABLE** (was invisible behind the zeroing) — that spread,
->    esp. dock-equipment 0.50, is the concrete **B2 coherence signal**. Scope B2 against it.
->
-> **8B harness caveat (capacity, not correctness).** `task e2e:semantic:8b` itself ran RED end-to-end:
-> two qwen3-8b on a 23.2 GiB box SATURATE — `validate-llm-enhancement` left `pending=10` after its
-> 10-min budget, total run 33m (vs ~10m), and `validate-globalsearch-known-answer` (step 41) failed
-> with a server-side **`EOF`** on the graphql POST (2/3 probes). The B0 eval (step 21) passed and the
-> SAME step passes at 1.7b → capacity artifact, NOT a regression. Container logs were LOST to the
-> `defer docker compose down -v` before OOM-vs-server-timeout could be confirmed — next 8B run must
-> stream container logs or use `task e2e:semantic:debug` (no teardown). Owner call needed on 8B-harness
-> viability (one shared 8b? more RAM?). See [[reference_seminstruct_8b_for_graphrag_measurement]].
->
-> **The B2 DECISION — now armed with a FRONTIER-CEILING probe (session 10, `task e2e:semantic:frontier`,
-> Gemini 2.5 Flash routing answer_synthesis + community_summary; cloud YARDSTICK, not the offline
-> product path).** Full 48-step scenario GREEN in 3m42s (remote synthesis → no 8b saturation; known-answer
-> passed → reconfirms the 8b EOF was pure capacity). **Result: Gemini MATCHED local qwen3-8b on 4/5 thematic
-> queries; it only lifted the weakest (dock-equipment 0.50→0.75, one entity). Every 4-expected-entity query
-> (forklift/fire/dock) caps at exactly 3/4 EVEN at the frontier.** Reading: (1) **synthesis quality is NOT
-> the bottleneck — the edge 8b appears within ~1 entity of a frontier model** on this corpus, consistent with
-> the tiered-fallback story (cloud not required); (2) the "misses exactly one" that survives a frontier model
-> *looks like* a NARROW retrieval/partition residual. **BUT the comparison is CONFOUNDED (Codex, PR #653): the
-> frontier and local runs were SEPARATE runs, each re-clustered from clean at level-0 determinism ~0.83, so
-> the recall delta conflates model quality with a possibly-different realized partition.** So **"B2 rebuild is
-> low-ROI" is a HYPOTHESIS, not a finding** — a rigorous answer needs a FROZEN `COMMUNITY_INDEX` evaluated by
-> both synthesizers in ONE paired run (filed as a follow-up). B1 (determinism 0.83) is still a live gap. Also
-> single run, ~74-entity corpus, 5 queries, recall coarse at N=4. (Gotcha that made the probe valid: `gemini-2.5-flash` is a thinking model; the hardcoded 200-tok
-> community_summary cap truncates under thinking → needs `reasoning_effort: none`, which exposed a graph/llm
-> gap — see log.)
->
-> **Original B0–B3 plan (stands, but now GATED by the #645 re-measure):**
-> - **B1** — `WithLevels(1)`, `EnableLLM=false` (interim, re-enabled B3), deterministic partition,
->   fix dead `GetEdgeWeight`, cold-start detection, ready-latch + phantom-`IsAvailable` fix,
->   non-empty degraded floor. #607 #608 #609 #617.
-> - **B2 (may be unnecessary — the re-measure decides)** — re-add ADR-061 semantic-kNN edges +
->   #618 readiness gate. Engine checkpoint weighted-LPA vs Leiden. #606 #618.
-> - **B3** — ownership split: `COMMUNITY_INDEX`=partition (detector-exclusive) + new
->   `COMMUNITY_SUMMARIES` keyed `{level}.{membership_hash}`; re-enable `EnableLLM`→seminstruct. #607/#617.
-> - **B0 converts to gates:** the instrument RECORDS today; B1/B2/B3 each convert their dimension
->   (stability/floor→B1, grounding/theme-recall→B2, Tier-2→B3) to a HARD gate — report-only past its
->   increment is the drift.
-> - **Deferred (not built):** B0 Layer-2 (semsource scorecard `thematic` band + `global_search` MCP
->   proxy); **ADR-08x** (semantic partition + split store + readiness; promote ADR-061) — write when B2 scoped.
->
-> **Run the valid measurement:** `task e2e:semantic:8b` (HEAVY local: ~20GiB Docker RAM, two qwen3-8b
-> for answer_synthesis + community_summary; ~10min). Instrument: `test/e2e/scenarios/validate_thematic_eval.go`.
->
-> **TENET (owner, hold throughout):** semstreams is TIERED with GRACEFUL FALLBACK — structural
-> partition + statistical summaries are the correct Tier-0/1 output; semantic edges + LLM narratives
-> are additive Tier-1/2; never fail/empty, degrade + report. Graded by B0.
->
-> (Epic C / deferred Epic A #619 #633 #643 remain queued behind Epic B.)
+> **Standing rules (unchanged):** build only against merged main (in-flight surface ⇒ automatic
+> HOLD) · no predicate/vocabulary surface changes · when a new issue lands on an UNSTARTED
+> change, amend the spec before implementation starts · owner CONFIRM-CLOSE gate on issue
+> closes · owner merge gate on PRs — this repo has NO required checks: verify green explicitly,
+> never `--auto`.
 
 ---
 
@@ -329,10 +85,48 @@ git status --porcelain                        # whether the tree is actually cle
 2. **Work** — the Next Action. One thing.
 3. **End** — update the table from checkable state, then rewrite Next Action.
 
+**Model roles (owner, 2026-07-30):** execution sessions run on Opus by default; escalate to
+Fable for epic planning, change-proposal/design review, and pre-merge review of critical-stage
+PRs (breaking changes, boot-path, durability/ack semantics, cross-plane ownership).
+
 **WIP = 1 at the epic level.** Eight OpenSpec changes are already stalled in the
 80–95% band; the last increment of each is disproportionately the observability
 and guardrail work this program is about. Adding parallel epics is how this
 becomes change number twelve through sixteen. Finish, then start.
+
+---
+
+## Issue flow (measured — update when touching the queue, at least weekly)
+
+Purpose: keep mint-vs-close **measured, not smelled**. Discovery during a hardening
+program is the program working (filing makes latent defects visible — the alternative
+is the same defects, invisible); divergence is only real if the watch conditions below
+trip. Regenerate the table with:
+`gh issue list --state all --limit 300 --json number,createdAt,closedAt` bucketed by ISO week.
+
+| Week | Opened | Closed | Net | Note |
+|---|---|---|---|---|
+| 2026-W26 | 24 | 33 | −9 | |
+| 2026-W27 | 57 | 41 | +16 | audit prep wave |
+| 2026-W28 | 15 | 16 | −1 | steady state |
+| 2026-W29 | 25 | 23 | +2 | steady state |
+| 2026-W30 | 73 | 23 | +50 | deliberate: pre-v1 audit filing + Codex projection-arc asks |
+| 2026-W31* | 24 | 11 | +13 | partial week; #737 merge closes 2 more |
+
+Composition 2026-07-30 (post-triage, post-confirm-close): 113 open = **32 bug / 77
+enhancement / 4 docs-class** (56 previously unlabeled triaged; owner CONFIRM-CLOSE executed
+same day: #622/#615/#617/#666/#654 closed with evidence comments against the merged epic
+ledgers, #729/#730 auto-closed by the #737 merge, and 6 partially-fixed issues retitled to
+their verified remainders — #621/#609/#608/#606/#618/#619; #199 folded into #736). Closure speed: days-to-close
+median **1d**, p75 5d; open-backlog median age 10d.
+
+**Dry criterion (program-exit gate):** two consecutive hardening increments surfacing
+zero new P1+ defect-class finds ⇒ discovery has converged; the remaining queue is
+asks/design work, sequenced post-v1 or by product need.
+
+**Watch conditions (either one makes the divergence concern real):**
+1. A closed class reopens (a second #719-shaped retrospective on the same guarantee).
+2. Per-increment defect finds stop trending down in severity or count.
 
 ---
 
