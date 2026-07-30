@@ -171,23 +171,28 @@
 ## 9. Spec + docs
 
 - [ ] 9.1 Apply the `graph-index-readiness` delta; `openspec validate --all --strict`
-- [ ] 9.2 **ADR-088** — one page: "readiness is per-producer; aggregation belongs to the consumer."
+- [x] 9.2 **ADR-088** — one page: "readiness is per-producer; aggregation belongs to the consumer."
       This is a cross-repo contract (semdragon + SemMachina both consume it) and the decision most
       likely to be re-litigated. Mechanics stay in the spec
-- [ ] 9.3 Adopter note stating the RULE, not the delta: ask `GRAPH_STATUS` for caught-up; one key per
+- [x] 9.3 Adopter note stating the RULE, not the delta: ask `GRAPH_STATUS` for caught-up; one key per
       producer you depend on; fold client-side; absent = unknown = fail closed;
       `bootstrap_scope == 0` means there was nothing to do
 
 ## 10. Gates
 
-- [ ] 10.1 `task lint` · `go vet` plain + `-tags=integration` + `-tags=live_llm`
-- [ ] 10.2 `go test -race ./...` — grep `^FAIL` explicitly; the pipeline exit code reports the tail stage
+- [x] 10.1 `task lint` · `go vet` plain + `-tags=integration` + `-tags=live_llm`
+- [x] 10.2 `go test -race ./...` — grep `^FAIL` explicitly; the pipeline exit code reports the tail stage
 - [ ] 10.3 Full `go test -race -tags=integration ./...` sweep (framework packages touched)
-- [ ] 10.4 `task schema:generate`; `git diff schemas/ specs/` empty
-- [ ] 10.5 **`task e2e:structural`** (graph-ingest + graph-index + rule on one stack) AND
+- [x] 10.4 `task schema:generate`; `git diff schemas/ specs/` empty
+- [x] 10.5 **`task e2e:structural`** (graph-ingest + graph-index + rule on one stack) AND
       **`task e2e:statistical`** (adds graph-embedding + graph-clustering — the multi-watcher
-      consumer path). Both, despite the not-breaking verdict
-- [ ] 10.6 All gates under `GOFLAGS=-mod=readonly`
+      consumer path). Both, despite the not-breaking verdict.
+      **BOTH GREEN 2026-07-30, exit 0.** `entity_load_poll_count=0` on both: the migrated stage
+      returns on its FIRST check because every declared producer already reports caught-up — which
+      is only reachable with all three keys Known + Fresh + healthy + `Lag == 0`. That is the two new
+      envelopes working end to end on a real stack, not just in tests. Also `entities_missing=0`,
+      `data_loss_percent=0`, `validation_errors=0` on both.
+- [x] 10.6 All gates under `GOFLAGS=-mod=readonly`
 
 ## 11. Review + integration
 
