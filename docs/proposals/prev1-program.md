@@ -91,31 +91,31 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **In flight, not blocking the epic:** PR #752 (archive sweep, auto-merge armed) · PR #755
->    (#750 flake fix — needs a Codex look before arming, it is code). Add-lane task 10.5 is CLOSED:
+> 0. **ALL MERGED as of session end:** #747 (dedup) · #752 (archive sweep, 13→4) · #754 (Fable's
+>    residency + staleness rules) · #755 (#750 flake fix) · #757 (readiness increment SCOPED, 49
+>    tasks, `openspec/changes/caught-up-readiness-producers/`). Add-lane task 10.5 is CLOSED:
 >    archiving `public-projection-mutation-client` promoted its spec to live truth carrying two
 >    statements our own dedup change had falsified (`Retry.MaxRetries=0 until #697 exists`;
 >    "remains vulnerable to ... double-applying"). Once live, routing to another thread stopped being
 >    the right answer — both corrected in #752.
-> 1. **EPIC SLOT — readiness increment: #712 + #732 as ONE change.** Two independent consumers
->    converged on the same substrate: Semdragon needs inference-stage quiescence (#712),
->    SemMachina needs rule bootstrap-replay caught-up (#732). Extend the ADR-083 producer
->    pattern to these stages and aggregate over GRAPH_STATUS. **NOT a new readiness system.**
->    Readiness = caught-up (contiguous high-water, every completion path), never merely started;
->    readiness can never license an absence claim. ~~Coordinate with #713~~ — **#713 is FIXED in
->    #747**, so the parity snapshot #712 exists to license is no longer undermined.
->    **MECHANISM CORRECTION (verified from code, session 17 — do NOT re-derive):** #712's premise
->    that "inference stages run asynchronously" is WRONG. Hierarchy inference is **synchronous**
->    inside graph-ingest (`component.go:989` "synchronous - no Start/Stop"; commits inline at
->    `:2364`) — there is no async inference stage to track. What Semdragon observed was
->    graph-ingest **consumption backlog** plus #713's duplicate re-fire. So the missing producer
->    is **graph-ingest's own caught-up envelope**, not per-inference-stage trackers, which makes
->    this materially cheaper. The substrate is fully built and needs only new producer keys:
->    `graph/readiness/{publisher,watcher}.go`, `GRAPH_STATUS` in the bucket catalog,
->    `EvaluateReadinessGate` as the single gate home, `IndexStatusResponse` already carrying
->    `BootstrapComplete` + contiguous high-water. Both seams are clean: rule already tracks the
->    bootstrap sentinel (`processor/rule/entity_watcher.go:477`) and graph-ingest already owns an
->    applied-seq watermark bucket (`GRAPH_INGEST_APPLIED_SEQ`).
+> 1. **EPIC SLOT — readiness increment: SCOPED AND READY TO IMPLEMENT (#757, merged).** The change
+>    is `caught-up-readiness-producers` (49 tasks, validates `--strict`); proposal + design carry the
+>    rulings and their rejected alternatives, so **do not re-scope — read it and start at task 1.**
+>
+>    **TASK 1 IS A MEASUREMENT, NOT CODE.** Does the JetStream consumer ack floor advance past a
+>    `MaxDeliver`-exhausted or `Term()`'d message? graph-ingest sets `MaxDeliver: 3` with five
+>    Nak/Term paths. **If it does not, the floor stalls forever on one poison message and the
+>    readiness signal inverts into permanently-not-caught-up — wrong in the dangerous direction.**
+>    A ~40-line testcontainer probe answers it; the fallback (`NumPending + NumAckPending` with no
+>    ack-floor claim) is written down in design.md §D0. Same move that settled the `DiscardNew`
+>    question in one run in session 16.
+>
+>    **#712's stated mechanism is WRONG and the proposal leads with the correction** — hierarchy
+>    inference is fully synchronous inside the CAS write; there are no async inference stages. A
+>    third cause neither issue names: an in-process lane queue of up to 2048 messages invisible to
+>    `NumPending`. Ack ordering (write → guard stamp → Ack, every failure path Nak/Term first) is
+>    what makes the signal sound.
+>
 > 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
 >    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
 >    pipeline (the `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching.
@@ -854,3 +854,23 @@ Append one line per session. Newest last.
   was the only tail coverage. Widened it instead (PR #755). A "cleanup" that silently removes the
   only check is exactly the shape this program exists to catch. **Next: readiness increment
   (#712 + #732) with the mechanism correction recorded above.**
+- **2026-07-30 (session 17c, close)** — **Readiness increment SCOPED, not built** (#757 merged;
+  `caught-up-readiness-producers`, 49 tasks). Deliberate stop: the dedup arc consumed a full context
+  window, and stopping mid-review is the worst place to run out. The next session opens on a
+  reviewable change with the mechanism correction already in writing rather than on two issues and a
+  wrong premise. **Three corrections landed in one day, all the same shape — the code and the
+  contract governing the code disagreed, and only one of them was checked:** (1) I proposed deleting
+  a per-rep latency assertion in favour of percentile gates; at `repetitions=5` both percentiles
+  resolve to `durations[3]` and never examine the max, so it was the ONLY tail coverage. (2) I then
+  raised that budget "to match the full profile" — it is a **contracted production-activation gate**
+  (ADR-077 §8 condition 4; the 10s belongs to the separate 21,000-entity Decision profile), and Codex
+  caught that I had verified the mechanism and never the contract citing it. Reverted, and pinned by
+  `TestOwnerLoadCIProfile_ContractedBudgets` so the constant now fails loudly with the ADR citation
+  in the message. (3) The architect's scoping ruling carried a **hard HOLD on
+  `rule-entity-watcher-hardening` from a pre-archive checkout** — it had archived hours earlier;
+  relaying it unchecked would have blocked the entire rule half on a satisfied dependency.
+  **Standing lesson: a subagent's STATE claims (`openspec list`, in-flight counts, what is archived)
+  go stale within a session — re-verify those specifically, even when its reasoning is excellent.**
+  Also worth carrying: `gh pr merge --auto` is a NO-OP on an already-green PR (nothing to wait for,
+  returns 0 silently) — a green PR needs a direct merge. Open follow-ups filed today: #746, #750
+  (still open — the flake needs an ADR-077 contract change, not a test edit), #751, #753.
