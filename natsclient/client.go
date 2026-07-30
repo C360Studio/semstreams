@@ -609,6 +609,11 @@ type consumerBinding struct {
 // Embedding keeps it a jetstream.Consumer; only Info is overridden, and its signature
 // must stay EXACTLY `Info(context.Context) (*jetstream.ConsumerInfo, error)` — a
 // divergent signature would silently stop overriding and reopen the race.
+//
+// STILL PRESENT UPSTREAM as of nats.go v1.52.0 (checked 2026-07-30; we pin v1.48.0).
+// The assignment is byte-identical across both, so a dependency bump does NOT retire
+// this guard — do not delete it on upgrade. Filing it upstream is tracked in the
+// change's follow-ups.
 type guardedConsumer struct {
 	jetstream.Consumer
 	infoMu sync.Mutex
@@ -640,9 +645,9 @@ func (g *guardedConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, er
 // here. Callers must not read zero as evidence of completeness or use it to license an
 // authoritative-absence claim (gh#742 owns operator visibility for parked messages).
 //
-// This deliberately returns the two integers rather than the jetstream.Consumer
-// handle. Handing back the handle would leak consume/fetch capability to callers that
-// need only counts, and would put Info().AckFloor one field away from every holder —
+// This deliberately returns a count rather than the jetstream.Consumer handle.
+// Handing back the handle would leak consume/fetch capability to callers that
+// need only a number, and would put Info().AckFloor one field away from every holder —
 // and the ack floor is MEASURED-UNUSABLE for catch-up: against both deployed server
 // versions it does not advance past a MaxDeliver-exhausted message, then advances past
 // it on an unrelated later acknowledgement, so it reads not-caught-up while idle and
@@ -655,7 +660,7 @@ func (g *guardedConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, er
 // would silently degrade in any deployment running without metrics, which is the
 // phantom-signal class this repo hunts.
 //
-// An unbound consumer is an ERROR, never (0, 0, nil): unknown backlog must not be
+// An unbound consumer is an ERROR, never (0, nil): unknown backlog must not be
 // representable as empty backlog. Mapping the error to a degraded readiness state is
 // caller policy.
 func (m *Client) OutstandingWork(
