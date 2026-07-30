@@ -98,23 +98,52 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    statements our own dedup change had falsified (`Retry.MaxRetries=0 until #697 exists`;
 >    "remains vulnerable to ... double-applying"). Once live, routing to another thread stopped being
 >    the right answer — both corrected in #752.
-> 1. **EPIC SLOT — readiness increment: SCOPED AND READY TO IMPLEMENT (#757, merged).** The change
->    is `caught-up-readiness-producers` (49 tasks, validates `--strict`); proposal + design carry the
->    rulings and their rejected alternatives, so **do not re-scope — read it and start at task 1.**
+> 1. **EPIC SLOT — readiness increment: IMPLEMENTED, IN REVIEW as PR #758 (34/49 tasks).**
+>    `caught-up-readiness-producers` §1–§7, §9, §10 are done and pushed; §8 residual tests, §11
+>    (reviewer → Fable → owner Codex) and archive remain. **Do not re-implement — read PR #758.**
 >
->    **TASK 1 IS A MEASUREMENT, NOT CODE.** Does the JetStream consumer ack floor advance past a
->    `MaxDeliver`-exhausted or `Term()`'d message? graph-ingest sets `MaxDeliver: 3` with five
->    Nak/Term paths. **If it does not, the floor stalls forever on one poison message and the
->    readiness signal inverts into permanently-not-caught-up — wrong in the dangerous direction.**
->    A ~40-line testcontainer probe answers it; the fallback (`NumPending + NumAckPending` with no
->    ack-floor claim) is written down in design.md §D0. Same move that settled the `DiscardNew`
->    question in one run in session 16.
+>    **TASK 1'S MEASUREMENT KILLED THE DESIGN'S FOUNDATION, and that is the headline.** Probed
+>    against BOTH deployed NATS versions (2.10, 2.12, identical): `AckFloor.Stream` does NOT advance
+>    past a `MaxDeliver`-exhausted message, DOES advance past `Term()`. The permanence follow-up then
+>    falsified my own first "stalls forever" reading — the floor sits behind the poison message while
+>    idle (+5s/+10s), then on the next unrelated ack **leaps PAST the never-applied message**. Wrong
+>    in BOTH directions: permanently-not-caught-up while quiet, falsely-covered under traffic. It
+>    never means "everything ≤ this is durable". Fallback taken (`NumPending + NumAckPending`, correct
+>    in all 12 observations); `proposal.md`, design D6 and task 8.1 all asserted the disproven claim
+>    and were corrected. **Do not let anyone "restore" the ack floor — the rejection is recorded with
+>    its measurement in ADR-088.**
 >
->    **#712's stated mechanism is WRONG and the proposal leads with the correction** — hierarchy
->    inference is fully synchronous inside the CAS write; there are no async inference stages. A
->    third cause neither issue names: an in-process lane queue of up to 2048 messages invisible to
->    `NumPending`. Ack ordering (write → guard stamp → Ack, every failure path Nak/Term first) is
->    what makes the signal sound.
+>    **FOUR MORE DEFECTS, NONE FOUND BY REVIEW — every one by questioning a result:**
+>    · `BootstrapScope` captured at the first status tick published `complete && scope == 0` (the
+>      contract's "authoritatively nothing to do") on **5 runs out of 5** with a real backlog, because
+>      it drained before the tick. Now captured at bind. Found by asking why a test took 0.83s.
+>    · `ComputeBacklogStatus` projected `Ready: true` from an UNMEASURED zero — absence of a
+>      measurement read as measurement of absence. Caught by the spec-derived test pre-commit.
+>    · **9 of 18 shipped `graph-ingest` instances bind ZERO jetstream consumers** (only input port is
+>      core NATS request/reply). Had empty-set reported degraded, half the fleet would publish a
+>      permanently-degraded envelope and every consumer folding that key would defer forever.
+>    · The nil-sentinel assumption was unverified; now measured on a real server.
+>
+>    **Owner/Fable review shaped the API twice and both were right:** the raw `jetstream.Consumer`
+>    lookup became `OutstandingWork`, then the two-counter return collapsed to `(uint64, error)` —
+>    "when the doc comment must warn callers away from the signature's own affordance, the signature
+>    is wrong". Those incidents became **#761's exported-surface rules**, which I then self-audited
+>    this branch against: `Verdict` struct replaces a 3-tuple, `Keys`/`Read`/`WaitForFirst` deleted
+>    as zero-caller phantoms (5.1 prescribed `WaitForFirst` — prescribed phantoms are still
+>    phantoms), and `Set.Evaluate` is UNEXPORTED pending a real caller.
+>
+>    **KNOWN GAP, not a compliance claim:** #761 requires Fable review BEFORE implementing new
+>    exported framework surface. `OutstandingWork` had it; `ComputeBacklogStatus`,
+>    `BacklogStatusInputs` and `readiness.Set` were written before #761 landed and have NOT.
+>
+>    **Task 5.4 (HTTP dump) deliberately NOT built** — `Set.Dumps()` exists and is tested, but no
+>    in-process HTTP consumer folds today, so a route would report over an empty key list. Real
+>    candidate: `processor/graph-clustering`, which hand-rolls two readiness watchers and is exactly
+>    what `Set` replaces. Recorded in tasks.md.
+>
+>    **e2e:structural AND e2e:statistical both GREEN, exit 0**, with `entity_load_poll_count=0` on
+>    both — the migrated stage returns on its FIRST check, reachable only with all three keys
+>    Known+Fresh+healthy+`Lag==0`. That is the two new envelopes working on a real stack.
 >
 > 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
 >    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
@@ -896,3 +925,24 @@ Append one line per session. Newest last.
   Also worth carrying: `gh pr merge --auto` is a NO-OP on an already-green PR (nothing to wait for,
   returns 0 silently) — a green PR needs a direct merge. Open follow-ups filed today: #746, #750
   (still open — the flake needs an ADR-077 contract change, not a test edit), #751, #753.
+- **2026-07-30 (session 18)** — **Readiness increment IMPLEMENTED end-to-end (PR #758, 34/49).**
+  §1 measurement → §7 honesty fixes → §9 ADR-088 + adopter note → §10 both required e2e tiers GREEN.
+  **The headline is that task 1's measurement destroyed the design's own foundation and the change
+  is better for it:** the ack floor is wrong in BOTH directions (not-caught-up while idle,
+  falsely-covered under traffic), so nothing reads it; the fallback sum was correct in all 12
+  observations. My first reading ("stalls forever") was itself falsified by the permanence
+  follow-up — recorded rather than quietly replaced. Four further defects, **none found by review,
+  every one by questioning a result**: scope captured at the wrong instant (wrong 5/5 runs, found by
+  asking why a test took 0.83s); `Ready` projected from an unmeasured zero; 9 of 18 shipped
+  graph-ingest instances bind zero consumers (a degraded verdict there would have bricked half the
+  fleet's readiness); the nil-sentinel assumption unverified until measured. Lessons worth keeping:
+  (1) **a fast test is a claim to check, not a gift** — 0.83s was the whole thread that unravelled the
+  scope defect; (2) **a wrong premise in a TEST is worth chasing to the configs** — "five shipped
+  configs" was invented, the truth was nine and by a different mechanism; (3) **mutation-verify every
+  new guard** — six were broken deliberately here and all six failed as intended; (4) owner/Fable
+  API review beat me twice on shape (raw handle → answer; two-counter → one number) and those
+  incidents became **#761**, which I then self-audited this branch against, deleting three
+  zero-caller exports and unexporting `Evaluate`. **Known gap stated, not papered over:** #761 wants
+  Fable review BEFORE new exported framework surface; `ComputeBacklogStatus`/`BacklogStatusInputs`/
+  `readiness.Set` predate it and have not had it. **Next: §11 review chain (reviewer → Fable →
+  owner Codex), §8 residual tests, then archive.**
