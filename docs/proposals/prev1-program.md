@@ -21,10 +21,16 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > #622/#615/#617/#666/#654 closed on evidence, #199 folded into #736, and
 > #621/#609/#608/#606/#618/#619 retitled to their verified remainders.
 >
+> **DONE since the triage checkpoint (2026-07-30):** `storage-capacity-observability` ARCHIVED
+> (PR #740 `d7aa542d`) — the two deltas are now seeded capability homes at
+> `openspec/specs/{stream-provisioning,storage-observability}/`, each with a Purpose written from
+> the merged code and an explicit statement of what it does NOT cover (`nats-streaming` = publish
+> path, `graph-retention` = KV/ObjectStore retention). `nats-streaming`'s "TBD - created by
+> archiving change" Purpose stub is also gone. Task 2.8 left unchecked and carried to gh#739 as
+> promised. `openspec validate --strict`: 21 specs, 13 changes.
+>
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **Archive `storage-capacity-observability`** (`openspec archive`; task 2.8 stays tracked as
->    gh#739 — do not mark it done, do not fold it silently). Small close-out; do first.
 > 1. **EPIC SLOT — readiness increment: #712 + #732 as ONE change.** Two independent consumers
 >    converged on the same substrate: Semdragon needs inference-stage quiescence (#712),
 >    SemMachina needs rule bootstrap-replay caught-up (#732). Extend the ADR-083 producer
