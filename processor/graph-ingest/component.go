@@ -675,6 +675,11 @@ type Component struct {
 	// BootstrapScope. bootBacklogKnown makes that capture once-only.
 	bootBacklog      atomic.Uint64
 	bootBacklogKnown atomic.Bool
+	// bootBacklogPartial latches when ANY bind-time read failed, so the accumulated
+	// partial is discarded in favour of the first whole observation. One global
+	// "known" flag was not enough: a success on one consumer marked the aggregate
+	// captured and permanently omitted a failed consumer's backlog.
+	bootBacklogPartial atomic.Bool
 	// bootBacklogDrained latches when outstanding first reaches zero. It is a latch
 	// rather than a live read because Ready already carries "caught up right now";
 	// a bootstrap bit that flickered under write load would defer every consumer

@@ -182,3 +182,61 @@ func TestLastSyncedRFC3339(t *testing.T) {
 		t.Errorf("got %q, want 2026-07-30T12:00:00Z", got)
 	}
 }
+
+// TestLatchBootstrap_PartialBindCaptureIsDiscarded is the Codex-found regression.
+//
+// The bug: one global bootBacklogKnown flag. With two bound consumers, a SUCCESSFUL
+// bind read for A marked the aggregate captured, so a FAILED read for B did not
+// "leave the capture unclaimed" — the tick fallback could never fire, and B's initial
+// backlog was omitted forever. If A measured zero and B held work, the producer would
+// publish `bootstrap_complete && bootstrap_scope == 0`: the contract's "authoritatively
+// nothing to replay", asserted over a real initial build.
+func TestLatchBootstrap_PartialBindCaptureIsDiscarded(t *testing.T) {
+	c := &Component{}
+
+	// Consumer A binds and reads 0. Consumer B's read FAILS.
+	c.bootBacklog.Add(0)
+	c.bootBacklogPartial.Store(true)
+
+	// First whole observation sees both consumers' real work.
+	scope, complete := c.latchBootstrap(700, false)
+	if scope != 700 {
+		t.Errorf("scope = %d, want 700 — a partial bind capture must be replaced by "+
+			"the first whole observation, not kept", scope)
+	}
+	if complete {
+		t.Error("700 outstanding is not complete")
+	}
+
+	// And it is still captured once: a later burst must not move it.
+	if scope, _ = c.latchBootstrap(9000, false); scope != 700 {
+		t.Errorf("scope = %d, want 700 (captured once)", scope)
+	}
+}
+
+// TestLatchBootstrap_CompleteBindCaptureIsKept is the other half: when every bind read
+// succeeded, the accumulated total is authoritative and the tick must NOT overwrite it
+// with a later, smaller observation (the backlog is draining by then).
+func TestLatchBootstrap_CompleteBindCaptureIsKept(t *testing.T) {
+	c := &Component{}
+
+	// Two consumers bound cleanly, 900 total at bind.
+	c.bootBacklog.Add(400)
+	c.bootBacklog.Add(500)
+
+	// By the first tick, 850 have drained.
+	scope, _ := c.latchBootstrap(50, false)
+	if scope != 900 {
+		t.Errorf("scope = %d, want 900 — a clean bind capture is the initial build; "+
+			"the tick must not replace it with a drained observation", scope)
+	}
+}
+
+// TestLatchBootstrap_NoBindReadRanTakesTheFirstObservation covers the deployment where
+// the tick beats every bind read (or no consumer is bound yet).
+func TestLatchBootstrap_NoBindReadRanTakesTheFirstObservation(t *testing.T) {
+	c := &Component{}
+	if scope, _ := c.latchBootstrap(120, false); scope != 120 {
+		t.Errorf("scope = %d, want 120", scope)
+	}
+}

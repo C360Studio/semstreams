@@ -151,11 +151,25 @@ func (s *Set) evaluate() Verdict {
 // query. It implies Evaluate's proceed — an unhealthy or unknown producer can never be
 // covered.
 func (s *Set) FullyCovered() Verdict {
-	if v := s.evaluate(); !v.OK {
-		return v
-	}
+	// ONE Read per watcher, with BOTH checks applied to that same Reading.
+	//
+	// This deliberately does not call evaluate() and then re-Read for lag. Two reads
+	// straddle an update: a first read seeing healthy-with-lag passes the gate (lag is
+	// not a health fault), and a second read seeing degraded-with-zero-lag passes the
+	// lag check — so the pair reports COVERED although NEITHER envelope was both
+	// healthy and drained. That licenses exactly the parity snapshot this whole change
+	// exists to prevent. Found by the Codex review.
 	for _, k := range s.keys {
-		if s.watchers[k].Read().Status.Lag != 0 {
+		r := s.watchers[k].Read()
+
+		ok, why := graph.EvaluateReadinessGate(graph.StatusReading{
+			Status: r.Status,
+			Fresh:  r.Fresh,
+		})
+		if !ok {
+			return Verdict{Key: k, Reason: why}
+		}
+		if r.Status.Lag != 0 {
 			// Healthy but behind: no defer REASON applies, because lag is not a
 			// fault. The key still names who is not drained.
 			return Verdict{Key: k}

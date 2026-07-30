@@ -174,15 +174,24 @@ func (c *Component) computeBacklogStatus(ctx context.Context) graph.IndexStatusR
 func (c *Component) recordBindBacklog(ctx context.Context, stream, name string) {
 	work, err := c.natsClient.OutstandingWork(ctx, stream, name)
 	if err != nil {
+		// A PARTIAL capture is worse than none: with several bound consumers, one
+		// success would otherwise mark the aggregate "known" and permanently omit the
+		// failed consumer's backlog. If A measured zero and B held work, the producer
+		// would publish `bootstrap_complete && bootstrap_scope == 0` — the contract's
+		// "authoritatively nothing to replay" — while B had a real initial build.
+		// Poisoning the whole capture sends it to the tick fallback, which reads the
+		// TOTAL across all consumers at once. Found by the Codex review; the previous
+		// comment here claimed the capture was "left unclaimed", which was true only
+		// for a single-consumer deployment.
+		c.bootBacklogPartial.Store(true)
 		c.logger.Warn("graph-ingest readiness: bind-time backlog read failed; "+
-			"bootstrap scope will be captured at the first successful status tick",
+			"bootstrap scope will be captured whole at the first successful status tick",
 			slog.String("stream", stream),
 			slog.String("consumer", name),
 			slog.Any("error", err))
 		return
 	}
 	c.bootBacklog.Add(work)
-	c.bootBacklogKnown.Store(true)
 }
 
 // latchBootstrap maintains the two bootstrap facts and returns (scope, complete).
@@ -212,8 +221,19 @@ func (c *Component) latchBootstrap(outstanding uint64, observationFailed bool) (
 		return c.bootBacklog.Load(), false
 	}
 
+	// Finalize the bind-time capture on the first successful FULL observation. If any
+	// bind read failed, the accumulated partial is discarded and replaced by this
+	// total — a partial scope is a false claim about the size of the initial build,
+	// and understating it can reach zero, which the contract reads as "there was
+	// nothing to do".
 	if c.bootBacklogKnown.CompareAndSwap(false, true) {
-		c.bootBacklog.Store(outstanding)
+		if c.bootBacklogPartial.Load() {
+			c.bootBacklog.Store(outstanding)
+		} else if c.bootBacklog.Load() == 0 && outstanding > 0 {
+			// No bind read ran at all (no consumers registered before the first
+			// tick); take this observation as the initial build.
+			c.bootBacklog.Store(outstanding)
+		}
 	}
 	if outstanding == 0 {
 		c.bootBacklogDrained.Store(true)

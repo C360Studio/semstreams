@@ -128,6 +128,9 @@ type Processor struct {
 	// statusLoopDone closes when the readiness tick has exited, so Stop can join it
 	// before tearing down the state the tick reads.
 	statusLoopDone chan struct{}
+	// statusFenced is raised BEFORE teardown and makes any in-flight or late tick
+	// return without publishing. The join is best-effort; this is the guarantee.
+	statusFenced atomic.Bool
 	// statusInterval is a TEST SEAM only, so an integration test can observe
 	// successive heartbeats without sleeping through production cadence.
 	statusInterval time.Duration
@@ -1213,10 +1216,13 @@ func (rp *Processor) Stop(_ time.Duration) error {
 	// dispatch gate prevents callbacks that already decoded an entry from
 	// evaluating after shutdown retirement, while NATS Stop runs without the
 	// processor config mutex held.
-	// Join the readiness tick BEFORE tearing down the records it reads. An in-flight
-	// tick would otherwise see the nil'd entityDispatchRecords as "zero configured
-	// patterns" and publish a vacuously-complete envelope from a processor stopped
-	// mid-replay — a fail-open that stays Fresh at consumers for three heartbeats.
+	// Raise the fence FIRST: from here no tick can publish, whether it is running,
+	// blocked on the dispatch gate, or about to start. The join below is a courtesy
+	// that lets the goroutine exit cleanly; the fence is what makes a post-teardown
+	// publish impossible, and a timed-out join must not be able to reopen it.
+	rp.statusFenced.Store(true)
+
+	// Join the readiness tick BEFORE tearing down the records it reads.
 	if rp.statusLoopDone != nil {
 		select {
 		case <-rp.statusLoopDone:

@@ -139,11 +139,30 @@ func (rp *Processor) statusTickInterval() time.Duration {
 }
 
 func (rp *Processor) refreshReadinessStatus(ctx context.Context) {
+	// SHUTDOWN FENCE, checked before computing and again before publishing.
+	//
+	// Joining the loop with a timeout is NOT sufficient and the previous version was
+	// wrong to rely on it: a tick can be blocked on entityDispatchGate.RLock — a gate
+	// held across entity fetch and rule evaluation — outlast the join, then acquire it
+	// AFTER teardown has nil'd entityDispatchRecords. entityBootstrapState reads an
+	// empty map as the legitimate "zero configured patterns" case, so the late tick
+	// would publish {ready:true, bootstrap_complete:true, scope:0} from a processor
+	// stopped mid-replay, and that entry stays Fresh at every consumer for three
+	// heartbeats. The flag makes post-Stop publication impossible rather than
+	// improbable. Found by the Codex review.
+	if rp.statusFenced.Load() {
+		return
+	}
 	status := rp.computeReadinessStatus()
 	// ONE compute feeds BOTH channels, so the scraped gauges and the watched KV key
 	// can never disagree about readiness.
 	if rp.readinessGauges != nil {
 		rp.readinessGauges.Set(status)
+	}
+	// Re-check: the compute above can block on the dispatch gate, so teardown may have
+	// begun in the meantime. This is the check that actually closes the window.
+	if rp.statusFenced.Load() {
+		return
 	}
 	rp.publishReadinessStatus(ctx, status)
 }

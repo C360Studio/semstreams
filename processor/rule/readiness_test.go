@@ -2,11 +2,16 @@ package rule
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 )
 
 // newBootstrapRecord builds an authoritative watcher record at a generation, with its
@@ -266,5 +271,111 @@ func TestEntityBootstrapProgress_CountsReplayThroughTheRealHandler(t *testing.T)
 	// writing into the authoritative record.
 	if stale := processor.entityBootstrapProgressFor(key, generation+1); stale != nil {
 		t.Error("a non-authoritative generation resolved a progress record")
+	}
+}
+
+// fenceProbeWriter records every readiness Put so a test can prove NOTHING was
+// published, not merely that the last thing published looked right.
+type fenceProbeWriter struct {
+	mu   sync.Mutex
+	puts []graph.IndexStatusResponse
+}
+
+func (w *fenceProbeWriter) Put(_ context.Context, _ string, value []byte) (uint64, error) {
+	var status graph.IndexStatusResponse
+	if err := json.Unmarshal(value, &status); err != nil {
+		return 0, err
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.puts = append(w.puts, status)
+	return uint64(len(w.puts)), nil
+}
+
+func (w *fenceProbeWriter) snapshot() []graph.IndexStatusResponse {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return append([]graph.IndexStatusResponse(nil), w.puts...)
+}
+
+// TestReadinessFence_NoPublishAfterStop is the Codex-required regression.
+//
+// The bug: Stop "joined" the readiness tick with a 2s timeout and then cleared
+// entityDispatchRecords. A tick blocked on entityDispatchGate.RLock — a gate held
+// across entity fetch and rule evaluation — can outlast that timeout, acquire the gate
+// AFTER teardown, read the nil map as the legitimate "zero configured patterns" case,
+// and publish {ready:true, bootstrap_complete:true, scope:0} from a processor stopped
+// MID-REPLAY. That entry stays Fresh at consumers for three heartbeats, so the fold
+// proceeds on it.
+//
+// This reproduces exactly that shape: hold the dispatch gate so a tick blocks, raise
+// the fence via Stop's teardown path, release the gate, and assert no ready envelope
+// was ever written.
+func TestReadinessFence_NoPublishAfterStop(t *testing.T) {
+	writer := &fenceProbeWriter{}
+	rp := &Processor{
+		logger:          slog.New(slog.DiscardHandler),
+		statusPublisher: readiness.NewPublisher(writer, readiness.KeyRule),
+	}
+
+	// A registered, MID-REPLAY generation: the honest answer is "not complete".
+	rp.entityDispatchRecords = map[string]managedEntityWatcher{
+		"ENTITY_STATES:a.>": newBootstrapRecord(1, false, 3),
+	}
+
+	// Block the tick inside computeReadinessStatus by holding the dispatch gate.
+	rp.entityDispatchGate.Lock()
+
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		rp.refreshReadinessStatus(context.Background())
+	}()
+
+	// Let the tick reach the gate and block there.
+	time.Sleep(50 * time.Millisecond)
+
+	// Teardown, in Stop's order: fence FIRST, then clear the records the tick reads.
+	rp.statusFenced.Store(true)
+	rp.entityDispatchRecords = nil
+
+	// Release; the tick now proceeds over the nil map.
+	rp.entityDispatchGate.Unlock()
+
+	select {
+	case <-ticked:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tick never completed")
+	}
+
+	for _, published := range writer.snapshot() {
+		if published.Ready || published.BootstrapComplete {
+			t.Fatalf("published a ready/bootstrapped envelope after Stop: %+v — a "+
+				"stopped processor's vacuous 'nothing to replay' stays Fresh at "+
+				"consumers for three heartbeats", published)
+		}
+	}
+	if n := len(writer.snapshot()); n != 0 {
+		t.Errorf("fence let %d publish(es) through after Stop", n)
+	}
+}
+
+// TestReadinessFence_PublishesNormallyBeforeStop proves the fence is not simply
+// disabling the producer — without it, this test would pass while the one above passed
+// vacuously.
+func TestReadinessFence_PublishesNormallyBeforeStop(t *testing.T) {
+	writer := &fenceProbeWriter{}
+	rp := &Processor{
+		logger:          slog.New(slog.DiscardHandler),
+		statusPublisher: readiness.NewPublisher(writer, readiness.KeyRule),
+	}
+	rp.refreshReadinessStatus(context.Background())
+
+	got := writer.snapshot()
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one publish before Stop, got %d", len(got))
+	}
+	if !got[0].Ready {
+		t.Errorf("an un-fenced processor with zero patterns is vacuously ready; got %+v", got[0])
 	}
 }

@@ -308,3 +308,81 @@ func TestSet_DumpsAreReadOnlyAndPerKey(t *testing.T) {
 		t.Errorf("rule was never published; dump must report unknown: %+v", dumps[1])
 	}
 }
+
+// TestSet_FullyCoveredDoesNotStraddleAnUpdate is the Codex-found regression.
+//
+// The bug: FullyCovered called evaluate() (one Read per watcher) and then Read AGAIN
+// for the lag check. A first read seeing HEALTHY with Lag > 0 passes the gate — lag is
+// not a health fault — and a second read seeing DEGRADED with Lag == 0 passes the lag
+// check. The pair then reports COVERED although NEITHER envelope was both healthy and
+// drained, licensing exactly the parity snapshot this change prevents.
+//
+// Driven deterministically: publish healthy-with-lag, confirm not covered; publish
+// degraded-with-zero-lag, confirm still not covered. Under the old two-read code the
+// second state was reachable as a false COVERED whenever it landed between the reads.
+// With one read per watcher, neither single envelope can ever satisfy both conditions,
+// so no interleaving produces a false positive.
+func TestSet_FullyCoveredDoesNotStraddleAnUpdate(t *testing.T) {
+	src := newMultiKeySource(KeyGraphIngest)
+	s, _ := startSet(t, src, []string{KeyGraphIngest})
+
+	// State A: healthy, but behind. Gate proceeds; coverage must not.
+	behind := readyEnvelope()
+	behind.Lag = 5
+	src.publish(t, KeyGraphIngest, behind)
+	waitForKnown(t, s, KeyGraphIngest)
+
+	if v := s.FullyCovered(); v.OK {
+		t.Fatal("healthy-with-lag must not report covered")
+	}
+	if v := s.evaluate(); !v.OK {
+		t.Fatal("precondition: lag is not a health fault, so the gate must proceed")
+	}
+
+	// State B: drained, but DEGRADED. Lag check alone would pass; health must not.
+	degradedDrained := graph.IndexStatusResponse{
+		State:             graph.IndexStateDegraded,
+		BootstrapComplete: true,
+		Lag:               0,
+	}
+	src.publish(t, KeyGraphIngest, degradedDrained)
+	waitFor(t, "degraded envelope to arrive", func() bool {
+		return s.FullyCovered().Reason == graph.DeferHardStop
+	})
+
+	v := s.FullyCovered()
+	if v.OK {
+		t.Error("drained-but-degraded must not report covered — the two conditions " +
+			"must hold in the SAME envelope, not across two reads")
+	}
+	if v.Reason != graph.DeferHardStop {
+		t.Errorf("reason = %q, want %q", v.Reason, graph.DeferHardStop)
+	}
+}
+
+// TestSet_FullyCoveredRequiresBothInOneEnvelope states the invariant directly: for any
+// single envelope, covered implies the gate passed AND lag is zero.
+func TestSet_FullyCoveredRequiresBothInOneEnvelope(t *testing.T) {
+	cases := []struct {
+		name string
+		env  graph.IndexStatusResponse
+	}{
+		{"healthy with lag", graph.IndexStatusResponse{
+			State: graph.IndexStateReady, Ready: true, BootstrapComplete: true, Lag: 3}},
+		{"degraded drained", graph.IndexStatusResponse{
+			State: graph.IndexStateDegraded, BootstrapComplete: true, Lag: 0}},
+		{"bootstrap incomplete drained", graph.IndexStatusResponse{
+			State: graph.IndexStateReady, Lag: 0}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := newMultiKeySource(KeyGraphIngest)
+			s, _ := startSet(t, src, []string{KeyGraphIngest})
+			src.publish(t, KeyGraphIngest, tc.env)
+			waitForKnown(t, s, KeyGraphIngest)
+			if v := s.FullyCovered(); v.OK {
+				t.Errorf("reported covered for %+v", tc.env)
+			}
+		})
+	}
+}
