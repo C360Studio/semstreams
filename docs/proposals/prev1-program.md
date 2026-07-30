@@ -29,14 +29,57 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > archiving change" Purpose stub is also gone. Task 2.8 left unchecked and carried to gh#739 as
 > promised. `openspec validate --strict`: 21 specs, 13 changes.
 >
-> **DONE 2026-07-30 (session 17) — EPIC SLOT RESEQUENCED AND SHIPPED TO PR.** The baton's item (1)
-> was the readiness increment; it was **displaced on evidence**: #712 alone licenses a parity
-> snapshot that still fails, because #713 corrupts the thing being compared, and the owner's own
-> 2026-07-28 triage had already promoted **#697 to critical path**. Owner picked #697+#713.
-> `add-lane-triple-deduplication` scoped (Fable-approved), implemented, reviewed 3× → **PR #747**
-> (`c53000f2`), `task e2e:structural` GREEN at HEAD on final code. Awaiting CI + Codex + owner
-> merge. Also filed **#746** (pre-existing research-graph first-wins defect the emitter sweep
-> surfaced) and attached the **five-spelling occurrence-identity inventory to #683**.
+> **DONE 2026-07-30 (session 17) — EPIC SLOT RESEQUENCED AND MERGED.** The baton's item (1) was the
+> readiness increment; it was **displaced on evidence**: #712 alone licenses a parity snapshot that
+> still fails, because #713 corrupts the thing being compared, and the owner's own 2026-07-28 triage
+> had already promoted **#697 to critical path**. Owner picked #697+#713.
+> `add-lane-triple-deduplication` scoped (Fable-approved), implemented, reviewed 4×, Codex-gated →
+> **PR #747 MERGED (`618c2c79`)**; #697 + #713 CLOSED. `e2e:structural` AND `e2e:agentic` both GREEN
+> at HEAD on final code. Filed **#746** (research-graph first-wins), **#750** (flaky latency budget →
+> fixed, PR #755), **#751** (hierarchy re-fire + `edgesCreated` drift), **#753** (sister adoption
+> umbrella); attached the **five-spelling occurrence-identity inventory to #683**.
+>
+> **Defect tally for this ONE increment — the program-exit gate is NOT close:** 4 P1-class found
+> internally, **3 BLOCKING found by Codex past an internal APPROVE**, 1 MEDIUM found by the reviewer
+> on the Codex fixes, plus 5 stale comments asserting behavior the code did not have. Every one was
+> semantic or concurrency shaped; six green CI checks and three e2e runs caught NONE of them. Exit
+> criterion is two consecutive increments with ZERO new P1+ finds — this was not one of them.
+>
+> **SPEC QUEUE: 13 in-flight → 4 (2026-07-30).** The stall had ONE cause, now fixed and codified in
+> the standing rules as Fable's task-list-residency rule: **five changes had written "archive only
+> after every owned sister repo has migrated and coordinated product release notes are published"
+> into their own task lists.** The SemStreams-side work in each was already DONE; the gate could
+> never clear from this repo, so they sat at 80–95% for 12–20 days looking like in-progress work. The
+> migration guidance — the part that IS ours — was already written months ago
+> (`docs/operations/29-entity-id-contract-clean-cutover.md`, `30-rule-event-identity-clean-cutover.md`,
+> `24-predicate-breaking-rename-ledger.md`, `31-sister-repo-cutover-checklist.md`, `migration-*.md`).
+> Owner ruling: **note the breaking change + publish migration guidance is our whole obligation;
+> conforming is the sister repo's job; further problems they hit become new issues.** Rescoped tasks
+> keep their original text and record why, so it is auditable. ARCHIVED today: `loop-iteration-budget`
+> (Codex's, rescued uncommitted off a feature branch with auto-merge armed),
+> `runtime-lifecycle-idempotency`, `rule-evaluation-completeness`, `rule-contract-bound-replace-owned`,
+> `rule-projection-contract-derivation`, `add-lane-triple-deduplication`, `entity-id-contract`,
+> `rule-event-identity`, `rule-entity-watcher-hardening`, `public-projection-mutation-client`.
+> Eight capability homes seeded with WRITTEN Purposes (not the `TBD - created by archiving` stub):
+> `agentic-loop`, `rule-engine`, `rule-projection-mutations`, `service-shutdown`,
+> `entity-id-contract`, `graph-events`, `projection-mutation-client`, `rule-entity-watching`.
+> **13 specs still carry the TBD stub — deliberately NOT backfilled** (an unverified spec is just
+> another drifting doc); write one when a change next touches that capability.
+>
+> **THE 4 THAT REMAIN — all real work, none administrative (staleness-tripwire lines):**
+> · `predicate-contract-enforcement` 42/44 — blocker is LOCAL and is a **security gap**: raw NATS or
+>   graph-tool holders can mint syntactically valid lineage triples; configuration-time authoring
+>   checks are NOT runtime authorization (task 5.6c wants a principal-bearing mutation envelope +
+>   seam-level denial of undeclared `agent.*` on non-delegated lanes).
+> · `predicate-raw-key-representation` 10/14 — local: membership-watch consumer identification, raw
+>   PREDICATE_INDEX in the announced wipe/reseed, docs, gates. **3.1 has a HALT condition (4.3): if
+>   the pre-v1 wipe window closes first, record the miss and re-file.**
+> · `graph-index-replacement-semantics` 15/19 — local: activate reconciliation for NAME/PREDICATE/
+>   source-owned INCOMING, supersede ADR-068 D3 clauses, gates.
+> · `poison-response-scoping` — **0 open tasks**, blocked purely by tooling: its `predicate-contract`
+>   delta carries MODIFIED requirements but `openspec/specs/predicate-contract/` does not exist, so
+>   `openspec archive` fails closed. Unblocks when `predicate-contract-enforcement` seeds that home —
+>   i.e. it is gated on that security work, NOT on paperwork. Retried twice today; still blocked.
 >
 > **CONVENTION NOW REQUIRED (owner, v1-blocking — conventions must be clear before v1):** an
 > occurrence-shaped triple group MUST carry an occurrence discriminator, and **`Context` is the
@@ -48,32 +91,31 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **Land #747** — owner-run Codex gate FIRST, fix findings, then `gh pr merge --squash --auto`
->    (ruleset now enforces it; see standing rules) + `openspec archive`. On archive: reconcile
->    tasks 8.2/8.3/8.4 (satisfied but under-claimed — the false `AddTriples` clause at
->    `openspec/specs/graph-ingest/spec.md:33` must be replaced by the MODIFIED delta, **do NOT
->    hand-edit it**), and send the adopter note (task 10.4 carries the full rule + 5 wire deltas).
->    Owner still routes the two falsified statements in `public-projection-mutation-client`'s spec
->    (`:343-345`, `:355`) to that Codex thread — not mine to edit.
-> 1. **EPIC SLOT — readiness increment: #712 + #732 as ONE change.** Two independent consumers
->    converged on the same substrate: Semdragon needs inference-stage quiescence (#712),
->    SemMachina needs rule bootstrap-replay caught-up (#732). Extend the ADR-083 producer
->    pattern to these stages and aggregate over GRAPH_STATUS. **NOT a new readiness system.**
->    Readiness = caught-up (contiguous high-water, every completion path), never merely started;
->    readiness can never license an absence claim. ~~Coordinate with #713~~ — **#713 is FIXED in
->    #747**, so the parity snapshot #712 exists to license is no longer undermined.
->    **MECHANISM CORRECTION (verified from code, session 17 — do NOT re-derive):** #712's premise
->    that "inference stages run asynchronously" is WRONG. Hierarchy inference is **synchronous**
->    inside graph-ingest (`component.go:989` "synchronous - no Start/Stop"; commits inline at
->    `:2364`) — there is no async inference stage to track. What Semdragon observed was
->    graph-ingest **consumption backlog** plus #713's duplicate re-fire. So the missing producer
->    is **graph-ingest's own caught-up envelope**, not per-inference-stage trackers, which makes
->    this materially cheaper. The substrate is fully built and needs only new producer keys:
->    `graph/readiness/{publisher,watcher}.go`, `GRAPH_STATUS` in the bucket catalog,
->    `EvaluateReadinessGate` as the single gate home, `IndexStatusResponse` already carrying
->    `BootstrapComplete` + contiguous high-water. Both seams are clean: rule already tracks the
->    bootstrap sentinel (`processor/rule/entity_watcher.go:477`) and graph-ingest already owns an
->    applied-seq watermark bucket (`GRAPH_INGEST_APPLIED_SEQ`).
+> 0. **ALL MERGED as of session end:** #747 (dedup) · #752 (archive sweep, 13→4) · #754 (Fable's
+>    residency + staleness rules) · #755 (#750 flake fix) · #757 (readiness increment SCOPED, 49
+>    tasks, `openspec/changes/caught-up-readiness-producers/`). Add-lane task 10.5 is CLOSED:
+>    archiving `public-projection-mutation-client` promoted its spec to live truth carrying two
+>    statements our own dedup change had falsified (`Retry.MaxRetries=0 until #697 exists`;
+>    "remains vulnerable to ... double-applying"). Once live, routing to another thread stopped being
+>    the right answer — both corrected in #752.
+> 1. **EPIC SLOT — readiness increment: SCOPED AND READY TO IMPLEMENT (#757, merged).** The change
+>    is `caught-up-readiness-producers` (49 tasks, validates `--strict`); proposal + design carry the
+>    rulings and their rejected alternatives, so **do not re-scope — read it and start at task 1.**
+>
+>    **TASK 1 IS A MEASUREMENT, NOT CODE.** Does the JetStream consumer ack floor advance past a
+>    `MaxDeliver`-exhausted or `Term()`'d message? graph-ingest sets `MaxDeliver: 3` with five
+>    Nak/Term paths. **If it does not, the floor stalls forever on one poison message and the
+>    readiness signal inverts into permanently-not-caught-up — wrong in the dangerous direction.**
+>    A ~40-line testcontainer probe answers it; the fallback (`NumPending + NumAckPending` with no
+>    ack-floor claim) is written down in design.md §D0. Same move that settled the `DiscardNew`
+>    question in one run in session 16.
+>
+>    **#712's stated mechanism is WRONG and the proposal leads with the correction** — hierarchy
+>    inference is fully synchronous inside the CAS write; there are no async inference stages. A
+>    third cause neither issue names: an in-process lane queue of up to 2048 messages invisible to
+>    `NumPending`. Ack ordering (write → guard stamp → Ack, every failure path Nak/Term first) is
+>    what makes the signal sound.
+>
 > 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
 >    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
 >    pipeline (the `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching.
@@ -789,3 +831,46 @@ Append one line per session. Newest last.
   forbids it and 3 files were untracked; "plumb the revision out of the CAS closure" — the
   closure never receives it) were both correctly refused by the agents. **Next: land #747
   (CI+Codex+merge+archive), then the readiness increment with its corrected mechanism.**
+- **2026-07-30 (session 17b, same day)** — **SPEC QUEUE 13 → 4, and the cause was structural, not
+  neglect.** The owner asked why so many changes sat partially complete. Reading every open task
+  across the eight answered it: five had written *"archive only after every owned sister repository
+  has migrated and coordinated product release notes are published"* into their own task lists. The
+  framework work in each was already finished; the gate could not clear from this repo, so finished
+  work hid as 80–95% in-progress for 12–20 days. Owner ruling — **our obligation is to note the
+  breaking change and publish migration guidance; conforming is the sister repo's job; further
+  problems become new issues** — is now codified as Fable's task-list-residency rule in the standing
+  rules, with a >7-day staleness tripwire beside it. The guidance itself turned out to have been
+  written months ago; only sister *execution* was outstanding, and that moved to gh#753.
+  Ten changes archived, eight capability homes seeded with real Purposes. Lessons: (1) **when a queue
+  looks like a dumpster fire, read the open TASKS, not the percentages** — the percentages were
+  measuring someone else's repo. (2) **A change may not gate itself on work it cannot do**; that is
+  now a rule rather than a lesson. (3) **Archiving makes a spec live, which converts "route this to
+  the other thread" into "fix it now"** — add-lane task 10.5 deferred two falsified statements as an
+  owner-routing item, and the moment `public-projection-mutation-client` archived they became current
+  truth asserting a guarantee we had just disproved. Corrected in #752. (4) **My own #750
+  recommendation was wrong and reading the code caught it**: I proposed deleting a per-rep latency
+  assertion in favor of the aggregate p95/p99 gates, but at `repetitions=5` both percentiles resolve
+  to `durations[3]`, the second-largest of five — neither ever examines the max, so the per-rep gate
+  was the only tail coverage. Widened it instead (PR #755). A "cleanup" that silently removes the
+  only check is exactly the shape this program exists to catch. **Next: readiness increment
+  (#712 + #732) with the mechanism correction recorded above.**
+- **2026-07-30 (session 17c, close)** — **Readiness increment SCOPED, not built** (#757 merged;
+  `caught-up-readiness-producers`, 49 tasks). Deliberate stop: the dedup arc consumed a full context
+  window, and stopping mid-review is the worst place to run out. The next session opens on a
+  reviewable change with the mechanism correction already in writing rather than on two issues and a
+  wrong premise. **Three corrections landed in one day, all the same shape — the code and the
+  contract governing the code disagreed, and only one of them was checked:** (1) I proposed deleting
+  a per-rep latency assertion in favour of percentile gates; at `repetitions=5` both percentiles
+  resolve to `durations[3]` and never examine the max, so it was the ONLY tail coverage. (2) I then
+  raised that budget "to match the full profile" — it is a **contracted production-activation gate**
+  (ADR-077 §8 condition 4; the 10s belongs to the separate 21,000-entity Decision profile), and Codex
+  caught that I had verified the mechanism and never the contract citing it. Reverted, and pinned by
+  `TestOwnerLoadCIProfile_ContractedBudgets` so the constant now fails loudly with the ADR citation
+  in the message. (3) The architect's scoping ruling carried a **hard HOLD on
+  `rule-entity-watcher-hardening` from a pre-archive checkout** — it had archived hours earlier;
+  relaying it unchecked would have blocked the entire rule half on a satisfied dependency.
+  **Standing lesson: a subagent's STATE claims (`openspec list`, in-flight counts, what is archived)
+  go stale within a session — re-verify those specifically, even when its reasoning is excellent.**
+  Also worth carrying: `gh pr merge --auto` is a NO-OP on an already-green PR (nothing to wait for,
+  returns 0 silently) — a green PR needs a direct merge. Open follow-ups filed today: #746, #750
+  (still open — the flake needs an ADR-077 contract change, not a test edit), #751, #753.
