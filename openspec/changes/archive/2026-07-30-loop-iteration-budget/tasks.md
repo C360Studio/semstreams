@@ -22,6 +22,8 @@
 
 - [x] 3.1 `task lint`, `go test -race ./...`, `go test ./test/contract/...`, schema drift clean
 - [x] 3.2 `go test -race -tags=integration -p 2 ./processor/agentic-loop/... ./processor/rule/...`
-- [ ] 3.3 `task e2e:agentic` green (loop budget exercised end-to-end) — deferred to supervisor per task brief
-- [ ] 3.4 Changelog entry naming the guard-path reason change; close gh#528/gh#529 with fix references —
-      deferred to supervisor per task brief
+- [x] 3.3 `task e2e:agentic` green (loop budget exercised end-to-end) — owner reported the
+      deferred supervisor run green on 2026-07-30
+- [x] 3.4 Merged PR #547 carries the release-note subject
+      `feat(agentic-loop): per-spawn iteration budget + uniform max_iterations reason`;
+      gh#528 and gh#529 closed with the merge on 2026-07-18
