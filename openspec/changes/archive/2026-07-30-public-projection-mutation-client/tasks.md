@@ -104,8 +104,18 @@
   expiry, token posture, enrollment posture, failed-first retry, and identical/concurrent same-owner rejection.
 - [x] 8.7 Audit production and tests to prove #700 adds no implied expiry, fake presence, or selective reaping for
   permanent foreign-edge cross-type conflicts; retain that policy as a separate follow-up.
-- [ ] 8.8 Run focused and repository-wide unit, race, integration, lint, schema, contract, and applicable end-to-end
+- [x] 8.8 Run focused and repository-wide unit, race, integration, lint, schema, contract, and applicable end-to-end
   gates for the #700 implementation.
+  — RUN 2026-07-30 on a tree containing #700's merged code: `go test -race ./...` 135 ok (no `^FAIL`);
+  `go test -race -tags=integration ./...` 136 ok; `task lint` clean; `go vet` plain + `-tags=integration`
+  + `-tags=live_llm` all exit 0; `task schema:generate` no drift in `schemas/`/`specs/`;
+  `go test ./test/contract/...` ok; **`task e2e:structural` GREEN** (validation_errors:0) and
+  **`task e2e:agentic` GREEN** (Scenario completed successfully; trajectory_steps:6,
+  governance_verdicts_approved_audit:1, tool_executions:1). `pkg/projection` — #700's own surface —
+  additionally got four `semstreams-reviewer` passes that same day, including mutation-tested
+  verification of `canonicalizeAppend`/`appendFactsPresent`.
+  **Scope caveat:** the runs were on the `feat/697-713-add-lane-dedup` tree (since merged as
+  `618c2c79`), i.e. #700's merged code plus the add-lane dedup work — not a #700-isolated run.
 - [x] 8.9 Run strict validation for this change and the complete OpenSpec set, plus Markdown and diff hygiene.
 - [x] 8.10 Obtain mandatory Fable re-review of the #700 public-contract amendment and resolve every finding before
   implementation acceptance.

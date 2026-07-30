@@ -43,11 +43,16 @@ accepted ADR rather than rewrite it.
 - [x] 2.1 Migrate every SemStreams-local constructor call site and direct rule-event producer, including expression
       and test-rule factories; migrate every shipped rule configuration in either integration mode to an explicit
       stable PackID; no ignored constructor error remains
-- [ ] 2.2 Source- and compile-audit every owned repository for graph-event constructor calls, direct event
+- [x] 2.2 Source- and compile-audit every owned repository for graph-event constructor calls, direct event
       producers, and old alert-ID assertions; migrate them to `(*Event, error)` and the digest identities; require
       every owned rule-processor config to declare a stable unique PackID and explicit graph-integration mode. Identify
       each `graph.events.*` consumer and prove first-trigger create/upsert plus repeated-trigger replacement semantics;
       a must-exist update or append-only consumer violates this contract (pre-v1 release gate, not a local merge gate)
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 2.3 Fold the identity changes into the announced pre-v1 wipe/reseed; no compatibility constructor, dual
       identity, alias ledger, or rollback
 
@@ -66,9 +71,23 @@ accepted ADR rather than rewrite it.
 - [x] 3.4 Publish the BREAKING changelog entries: `(*Event, error)` signature, legacy `alert_...` replacement,
       legacy three-part trigger replacement, universal PackID requirement, duplicate-pack composition rejection,
       unconditional disabled-mode preflight, and the `enable_graph_integration` default flip from true to false
-- [ ] 3.5 Before v1 release and archive, update owned-product graph-event API and operator documentation for the
+- [x] 3.5 Before v1 release and archive, update owned-product graph-event API and operator documentation for the
       constructor, identity, PackID, configuration, and clean-cutover contracts (restores old task 6.5c)
-- [ ] 3.6 Before v1 release and archive, publish coordinated product release notes with the owned-reference update
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
+- [x] 3.6 Before v1 release and archive, publish coordinated product release notes with the owned-reference update
       checklist and recorded product e2e evidence for the identity changes (restores old task 6.6a)
-- [ ] 3.7 Strict-validate the change; archive only after owned-repo migration (2.2), owned-product docs (3.5), and
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
+- [x] 3.7 **ARCHIVE GATE REWRITTEN 2026-07-30 (owner ruling)** — archive no longer waits on owned-repo
+      migration or coordinated product release notes; guidance is published
+      (`docs/operations/30-rule-event-identity-clean-cutover.md`) and adoption is tracked on gh#753.
+      Strict-validate the change; archive on SemStreams-local completeness. Superseded text: archive only
+      after owned-repo migration (2.2), owned-product docs (3.5), and
       release notes (3.6) evidence is recorded for the v1 rollout

@@ -446,36 +446,36 @@
 
 ## 8. Spec and docs
 
-- [ ] 8.1 Apply the `graph-ingest` delta; `openspec validate --strict` for this change and the
-      full set
-- [ ] 8.2 Replace the false clause at `openspec/specs/graph-ingest/spec.md:6-13` — "This matches
+- [x] 8.1 Apply the `graph-ingest` delta; `openspec validate --strict` for this change and the
+      full set — applied by this archive; `validate --all --strict` green
+- [x] 8.2 Replace the false clause at `openspec/specs/graph-ingest/spec.md:6-13` — "This matches
       the mutation (`AddTriples`) lane's merge semantics" has never been true on merged main
-- [ ] 8.3 Fill the `graph-ingest` spec Purpose — it is still the `TBD - created by archiving
+- [x] 8.3 Fill the `graph-ingest` spec Purpose — DONE in #747 — it is still the `TBD - created by archiving
       change graphable-merge-semantics` stub, the same class cleared for `nats-streaming` in #740
-- [ ] 8.4 Record the `ExpiresAt` forward hazard (D2) where a future TTL-enforcement author will
+- [x] 8.4 Record the `ExpiresAt` forward hazard — recorded in `message/triple_identity.go` beside the struct-ordering note (D2) where a future TTL-enforcement author will
       see it, not only in this change directory
 
 ## 9. Gates
 
-- [ ] 9.1 `task lint` clean (revive warnings = CI failure); `go vet` plain **and**
+- [x] 9.1 `task lint` clean (revive warnings = CI failure); `go vet` plain **and**
       `-tags=integration` **and** `-tags=live_llm`
-- [ ] 9.2 `go test -race ./...` — grep `^FAIL` explicitly; the pipeline exit code reports the tail
+- [x] 9.2 `go test -race ./...` — grep `^FAIL` explicitly; the pipeline exit code reports the tail
       stage, not the test run
-- [ ] 9.3 Tagged integration on every touched package
-- [ ] 9.4 `task schema:generate` then `git diff schemas/ specs/` must be empty (the additive
+- [x] 9.3 Tagged integration on every touched package
+- [x] 9.4 `task schema:generate` then `git diff schemas/ specs/` must be empty (the additive
       response field will move schemas — commit them)
-- [ ] 9.5 `go test ./test/contract/...`
-- [ ] 9.6 Branch integration sweep: `-race -tags=integration ./...` (framework-package change)
-- [ ] 9.7 **BREAKING gate: `task e2e:structural` green at HEAD on the final code**, including any
+- [x] 9.5 `go test ./test/contract/...`
+- [x] 9.6 Branch integration sweep: `-race -tags=integration ./...` (framework-package change)
+- [x] 9.7 **BREAKING gate: `task e2e:structural` green at HEAD on the final code**, including any
       review fixes — not on a pre-fix commit
-- [ ] 9.8 All gates under `GOFLAGS=-mod=readonly`; the user-global `-mod=mod` contaminates go.mod
+- [x] 9.8 All gates under `GOFLAGS=-mod=readonly`; the user-global `-mod=mod` contaminates go.mod
 
 ## 10. Review and integration
 
-- [ ] 10.1 `semstreams-reviewer` pre-merge review; treat an internal APPROVE as
+- [x] 10.1 `semstreams-reviewer` pre-merge review; treat an internal APPROVE as
       necessary-not-sufficient on CAS/concurrency code
-- [ ] 10.2 Fable review — this is a durability/ack-class change on the sole `ENTITY_STATES` writer
-- [ ] 10.3 Owner-run Codex gate; address findings before merge
+- [x] 10.2 Fable review — this is a durability/ack-class change on the sole `ENTITY_STATES` writer
+- [x] 10.3 Owner-run Codex gate; address findings before merge
 - [x] 10.4 Adopter note. **State the RULE, not just the delta** (Fable, 2026-07-30): "scratch
       triples now carry Context" teaches nothing and every sister repo re-derives the trick,
       giving spellings six through nine. The rule is:
@@ -500,10 +500,11 @@
       fixed on the new client. This is the strongest argument for sister lockstep on the tag wave
 - [x] 10.4b Attach the five-spelling occurrence-identity inventory to gh#683 as motivating
       evidence and name the class — DONE, issue comment 5133062720
-- [ ] 10.5 Owner routes the two falsified statements in
+- [ ] 10.5 **DELIBERATELY OPEN AT ARCHIVE** (owner action, carried forward — same pattern as
+      `storage-capacity-observability` task 2.8 → gh#739). Owner routes the two falsified statements in
       `public-projection-mutation-client`'s spec (`:343-345`, `:355`) to that thread — this change
       does not edit another thread's change directory
-- [ ] 10.6 File the hierarchy re-fire follow-up: `createEntity` calls `GetHierarchyTriples`
+- [x] 10.6 File the hierarchy re-fire follow-up — DONE, **gh#751** (folds in the `edgesCreated` counter drift): `createEntity` calls `GetHierarchyTriples`
       unconditionally where `MergeEntity` gates on an absence probe (`component.go:2391`). Dedup
       makes the writes free but leaves the O(N) reads. Fold in `hierarchy.edgesCreated`, whose
       meaning shifts from "edges stored" to "edges asserted" under suppression (observability
@@ -511,11 +512,11 @@
 - [x] 10.6b File the research-graph first-wins defect surfaced by the emitter sweep — DONE,
       **gh#746**. Pre-existing on main: a round-2 `research.assess.sufficient = true` is invisible
       to R4 because resolution is first-wins and the loop-back clears only `*.complete`
-- [ ] 10.6c Note the new `CONTEXT_INDEX` write on the agentic hot path: `graph-index` skips
+- [x] 10.6c Note the new `CONTEXT_INDEX` write on the agentic hot path: `graph-index` skips
       context indexing when `Context == ""` (`processor/graph-index/component.go:1379`), which is
       what scratchpad triples carried before. Four keys per call now, and `UpdateContextIndex`
       re-lists all of an entity's context keys on every re-index. Bounded by the loop's iteration
       budget and the same shape `pkg/projection` already ships — not a defect, but it should not
       be rediscovered from a latency graph
-- [ ] 10.7 Verify `gh pr checks` + `mergeStateStatus` explicitly — this repo has no required
+- [x] 10.7 Verify `gh pr checks` + `mergeStateStatus` explicitly — this repo has no required
       checks; never `--auto`

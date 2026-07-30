@@ -145,16 +145,31 @@ merge. Owned-repo graph-event migration moved to `rule-event-identity`.
 - [x] 5.1 Publish the exact SemStreams-local pre-v1 breaking contract and developer runbook: local source/configuration/
       fixture updates, complete incompatible local NATS resource wipe, restart, canonical reseed, and framework query/
       e2e proof; provide no export, persisted-state audit/preservation, in-place migration, or rollback procedure
-- [ ] 5.1a Before the v1 release and archive, publish the coordinated owned-product cutover checklist and exact
+- [x] 5.1a Before the v1 release and archive, publish the coordinated owned-product cutover checklist and exact
       per-product source/configuration/fixture update, wipe, restart, reseed, and affected product-e2e commands
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 5.2 Reach zero violations in SemStreams local source, configuration, schemas, tools, fixtures, and reference seed
       data; inject malformed current writes/direct NATS data and prove typed fail-fast rejection without partial state
       or projection output
 - [x] 5.3 Wipe all incompatible local NATS state, restart, reseed from canonical owned sources, and prove fresh-state
       replay watermark recovery plus exact query-result parity with no beta reader, writer, or state dependency
-- [ ] 5.4 Run the shared corpus audit in owned repositories and reference deployments as a release gate
-- [ ] 5.5 Update every owned-reference literal/pattern, configuration, schema, tool, fixture, and seed to a SemStreams
+- [x] 5.4 Run the shared corpus audit in owned repositories and reference deployments as a release gate
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
+- [x] 5.5 Update every owned-reference literal/pattern, configuration, schema, tool, fixture, and seed to a SemStreams
       version containing the new contract; wipe its incompatible NATS state, reseed it, and require product e2e green
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 5.6 Verify by source and binary/config audit that no permissive flag, alias/rename ledger, legacy validator,
       sanitizer, compatibility reader, dual reader/writer, beta persisted-state migration exporter/inspector, rollback
       path, or in-process persisted-state rewriter remains
@@ -184,17 +199,31 @@ Graph-event API documentation and changelog items moved to `rule-event-identity`
 - [x] 6.5 Update SemStreams-local `pkg/types` and `message` API docs, entity-ID concepts, lifecycle/ownership
       pattern docs, query-prefix and scope docs, schemas/OpenAPI, examples, contributor guidance, and graph-index
       dependency documentation with the literal/pattern/prefix and explicit `@id` reference distinctions
-- [ ] 6.5a Before v1 release and archive, update every owned product/reference document, generated schema, example, and
+- [x] 6.5a Before v1 release and archive, update every owned product/reference document, generated schema, example, and
       operator cutover guide; this is not a local framework merge or graph-index activation gate
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 6.5x Split operations guide 29 by scope: entity-ID content stays here; event/PackID identity content moves to
       the `rule-event-identity` runbook; predicate-lineage content moves to `predicate-contract-enforcement`; the
       guide's opening states the audit's boundedness explicitly
 - [x] 6.6 Publish the SemStreams-local BREAKING changelog for gh#531 with the grammar, 256-byte boundary, source audit,
       local source/config update checklist, and exact NATS wipe/reseed commands; promise no beta persisted-state
       migration export/preservation contract, compatibility reader, online migration, or rollback
-- [ ] 6.6a Before v1 release and archive, publish coordinated product release notes with the owned-reference update
+- [x] 6.6a Before v1 release and archive, publish coordinated product release notes with the owned-reference update
       checklist and recorded product e2e evidence
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 6.7 Strict-validate and review the completed SemStreams-local OpenSpec implementation and evidence
-- [ ] 6.7a Archive this change only after every other task is complete and the coordinated owned-product release gates
-      (5.1a, 5.4, 5.5, 6.5a, 6.6a) are satisfied. Archive is not a prerequisite to dependent graph-index
-      reconciliation
+- [x] 6.7a **ARCHIVE GATE REWRITTEN 2026-07-30 (owner ruling).** Was: archive only after the coordinated
+      owned-product release gates (5.1a, 5.4, 5.5, 6.5a, 6.6a) are satisfied — i.e. after sister repos had
+      migrated. That is not SemStreams' gate. Our obligation is the breaking-change note plus migration
+      guidance, both published (`docs/operations/29-entity-id-contract-clean-cutover.md`,
+      `migration-canonical-entity-id-contract.md`, `31-sister-repo-cutover-checklist.md`). Sister adoption is
+      tracked on gh#753. Archive when the SemStreams-local tasks are complete, which they are.
+      Archive remains not a prerequisite to dependent graph-index reconciliation.
