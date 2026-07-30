@@ -29,16 +29,51 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > archiving change" Purpose stub is also gone. Task 2.8 left unchecked and carried to gh#739 as
 > promised. `openspec validate --strict`: 21 specs, 13 changes.
 >
+> **DONE 2026-07-30 (session 17) — EPIC SLOT RESEQUENCED AND SHIPPED TO PR.** The baton's item (1)
+> was the readiness increment; it was **displaced on evidence**: #712 alone licenses a parity
+> snapshot that still fails, because #713 corrupts the thing being compared, and the owner's own
+> 2026-07-28 triage had already promoted **#697 to critical path**. Owner picked #697+#713.
+> `add-lane-triple-deduplication` scoped (Fable-approved), implemented, reviewed 3× → **PR #747**
+> (`c53000f2`), `task e2e:structural` GREEN at HEAD on final code. Awaiting CI + Codex + owner
+> merge. Also filed **#746** (pre-existing research-graph first-wins defect the emitter sweep
+> surfaced) and attached the **five-spelling occurrence-identity inventory to #683**.
+>
+> **CONVENTION NOW REQUIRED (owner, v1-blocking — conventions must be clear before v1):** an
+> occurrence-shaped triple group MUST carry an occurrence discriminator, and **`Context` is the
+> designated field**. The audit test is **per-MEMBER, not per-group — a unique triple does NOT
+> protect its siblings** (each triple dedups independently; that is exactly what the scratchpad
+> defect was, and the wrong inference was written into our own sweep notes before review caught
+> it). Five private spellings exist today with zero definitions; **#683 is where the class gets
+> retired**, migration is opportunistic follow-up.
+>
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
+> 0. **Land #747** — verify `gh pr checks` + `mergeStateStatus` explicitly (no required checks,
+>    never `--auto`), owner-run Codex gate, then merge + `openspec archive`. On archive: reconcile
+>    tasks 8.2/8.3/8.4 (satisfied but under-claimed — the false `AddTriples` clause at
+>    `openspec/specs/graph-ingest/spec.md:33` must be replaced by the MODIFIED delta, **do NOT
+>    hand-edit it**), and send the adopter note (task 10.4 carries the full rule + 5 wire deltas).
+>    Owner still routes the two falsified statements in `public-projection-mutation-client`'s spec
+>    (`:343-345`, `:355`) to that Codex thread — not mine to edit.
 > 1. **EPIC SLOT — readiness increment: #712 + #732 as ONE change.** Two independent consumers
 >    converged on the same substrate: Semdragon needs inference-stage quiescence (#712),
 >    SemMachina needs rule bootstrap-replay caught-up (#732). Extend the ADR-083 producer
 >    pattern to these stages and aggregate over GRAPH_STATUS. **NOT a new readiness system.**
 >    Readiness = caught-up (contiguous high-water, every completion path), never merely started;
->    readiness can never license an absence claim. Coordinate with #713 (Codex-thread bug:
->    hierarchy replay duplicates triples — it undermines the parity snapshot #712 exists to
->    license).
+>    readiness can never license an absence claim. ~~Coordinate with #713~~ — **#713 is FIXED in
+>    #747**, so the parity snapshot #712 exists to license is no longer undermined.
+>    **MECHANISM CORRECTION (verified from code, session 17 — do NOT re-derive):** #712's premise
+>    that "inference stages run asynchronously" is WRONG. Hierarchy inference is **synchronous**
+>    inside graph-ingest (`component.go:989` "synchronous - no Start/Stop"; commits inline at
+>    `:2364`) — there is no async inference stage to track. What Semdragon observed was
+>    graph-ingest **consumption backlog** plus #713's duplicate re-fire. So the missing producer
+>    is **graph-ingest's own caught-up envelope**, not per-inference-stage trackers, which makes
+>    this materially cheaper. The substrate is fully built and needs only new producer keys:
+>    `graph/readiness/{publisher,watcher}.go`, `GRAPH_STATUS` in the bucket catalog,
+>    `EvaluateReadinessGate` as the single gate home, `IndexStatusResponse` already carrying
+>    `BootstrapComplete` + contiguous high-water. Both seams are clean: rule already tracks the
+>    bootstrap sentinel (`processor/rule/entity_watcher.go:477`) and graph-ingest already owns an
+>    applied-seq watermark bucket (`GRAPH_INGEST_APPLIED_SEQ`).
 > 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
 >    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
 >    pipeline (the `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching.
@@ -691,3 +726,45 @@ Append one line per session. Newest last.
   required to X" is not "must not X"** — a negative permission is satisfiable by an implementation that
   still does the dangerous thing. **Next: owner sequences (2) #712 projection quiescence or (3) the
   complexity-pivot remainder; `storage-capacity-observability` is scoped and unstarted.**
+- **2026-07-30 (session 17)** — **EPIC SLOT RESEQUENCED ON EVIDENCE, then shipped to PR #747.**
+  The baton said readiness increment (#712+#732) next. Reconciling first turned up the reason not
+  to: **#712 alone licenses a parity comparison that still fails**, because #713 corrupts the
+  thing being compared — and the owner's own 2026-07-28 triage had already promoted **#697 to
+  critical path** without the baton being updated. Owner picked #697+#713. Then the architect
+  ruling + my own verification found **#697 as filed would not have fixed #713, twice over**:
+  wrong lane (two CAS append bodies share no code; #713's writes reach `Component.AddTriple`,
+  `add_batch` reaches only `AddTriples`) and a condition that never fires (hierarchy stamps
+  `Context: "inference.hierarchy"`, never a request ID). The real trigger is a **lane asymmetry**
+  nobody had named: `createEntity` calls `GetHierarchyTriples` unconditionally BEFORE the write
+  and that call commits inverse edges as side effects, so a 409 on an already-present ID returns
+  early with the edges already committed — where `MergeEntity` gates the same call behind an
+  absence probe. The arithmetic reproduces #713's reported revision deltas exactly.
+  **Three defects the change itself surfaced, all fixed in-PR rather than deferred:** (1) the
+  client's `classifyAppendResponse` ignored the new `Deduplicated` field, regressing the
+  late-commit retry to `CommitUnknown`+error — a regression WE introduced, violating this
+  change's own spec scenario; (2) a suppressed add/remove let the rule engine claim another
+  writer's revision, making `shouldSkipRule` **drop a genuine external change**, and
+  `RemoveTripleResponse.Removed` was hard-coded `true` so no-op removals were unreportable;
+  (3) **scratchpad** silently lost `agent.scratch.chars` — the predicate external rule matching
+  keys on — for any two calls of equal character count. Gates: `e2e:structural` GREEN at HEAD on
+  final code, `-race ./...` 135 ok, full `-race -tags=integration ./...` 136 ok, schema no drift,
+  `openspec validate --all --strict` 35/35. Filed **#746** (pre-existing research-graph
+  first-wins defect) and attached the **occurrence-identity inventory to #683**.
+  **Lessons worth the ink:** (1) **verify the LANE, not just the shape** — I traced todo triples
+  to production and wrongly called `write_todos` broken; production uses `ReplaceOwned`, and
+  checking the lane turned a false alarm into the real defect one component over (scratchpad).
+  (2) **A unique triple does not protect its siblings.** Each triple dedups independently, so
+  "does this group contain something unique" is the wrong audit; it must be per-member. That
+  wrong inference was written into our own sweep notes and survived until Fable pushed the
+  verification from 2 emitters to all members — which immediately found the `triplepub` argument
+  was wrong (verdict survived for a different reason: first-wins resolution + no count operators)
+  AND surfaced #746. **Fable's "marginal cost is minutes" was right; the scope extension paid off
+  inside one pass.** (3) **The full integration sweep earned its cost** — it caught the one thing
+  three prior gate runs and two review passes missed, and the trail ran from a failing test count
+  to a production data-loss bug. (4) **State the RULE in adopter notes, not the delta** — "scratch
+  triples now carry Context" teaches nothing; the rule stops sister repos re-deriving spellings
+  six through nine. (5) the once-through reviewer gate again caught a P1 past my own read (B1),
+  and my two directives that were WRONG (`git stash` for fails-without-fix — the role contract
+  forbids it and 3 files were untracked; "plumb the revision out of the CAS closure" — the
+  closure never receives it) were both correctly refused by the agents. **Next: land #747
+  (CI+Codex+merge+archive), then the readiness increment with its corrected mechanism.**
