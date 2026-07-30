@@ -147,6 +147,10 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > (2026-07-30, no bypass actors) requires `CI Status Check` + `e2e statistical` and blocks
 > direct pushes to main: `gh pr merge --auto` is now the correct default (it fires only on
 > green). Red merges are platform-impossible; the escape hatch is editing the ruleset itself.
+> · **E2E coverage gate:** a change adding operator-visible or cross-component behavior ships
+> its e2e stage in the relevant tier, or files a named coverage-gap issue at review time —
+> silent omission is a review finding (reviewer contract). The breaking-change rule is a RUN
+> gate; this is the COVERAGE gate. (#762's shape bug lived for weeks in exactly this gap.)
 > · **Task-list residency:** a change's tasks.md may only contain work completable from THIS
 > repo — cross-repo adoption lives in the adopter note + gh#753; a change whose remaining tasks
 > are all external is DONE: archive it. (Five changes sat mislabeled at 80–95% for 12–20 days
@@ -388,7 +392,7 @@ two files three times. Start Epic A here.
 | **A** — evidence cannot silently expire | body TTL, hydration signal, dedup identity, vector reconciliation, BM25 contract, readiness truth | ~~#612 #623 #602 #614pt2~~ (inc.1 ✓) · ~~#600 #616~~ (inc.2 ✓) · ~~#601~~ (inc.3 ✓) · ~~#613 #627 #630~~ (inc.4 ✓) · ~~#599 #597~~ (test-debt ✓ #642) · #619 #633 (deferred owner-decisions) · #643 (spun off) | **COMPLETE (inc.1–4 + test-debt merged/closed); only deferred owner-decisions #619 #633 remain** |
 | **B** — communities DELIVER GraphRAG (re-scoped: NL→thematic answers, not shrink) | B0 instrument → B1 stabilize/deterministic → B2 semantic-informed coherence → B3 ownership-split Tier-2 | ~~#606–#618~~ · #607/#617 closed by B3 · follow-ups #701 #710 | **✅ COMPLETE — B0/B1/B2/B3 ALL CLOSED. Recall-ceiling fix MERGED (PR #702, 0.85→0.95); B3 ownership split MERGED (PR #709 `857988ef`, archive #711; closes #607/#617). Follow-ups: #701 (multi-community expansion), #710 (summary-store GC), #661 reframed** |
 | **C** — operational / derived-KV-plane state-ownership (REDRAWN 2026-07-28) | generalize B3's single-writer + content-addressing + guard-coverage pattern across the plane the projection-contract arc leaves ungoverned; extend the boot retention/write-owner guard to full bucket coverage (the primitive), then repair loops that CONSUME it | ~~#622~~ (primitive, inc-0) DONE #625 #629 · ~~#527~~ folded into `graph-index-replacement-semantics` | **inc-0 (#622) MERGED + ARCHIVED 2026-07-28 (PR #716 `d03c49f7`, archive `2026-07-28-framework-owned-bucket-guards`). Two-pass boot-time retention guard over full `FrameworkOwnedBuckets()` (reconcile-then-assert, ObjectStore-symmetric) + write-ownership registration of ENTITY_SUFFIX_INDEX/GRAPH_INGEST_APPLIED_SEQ/GRAPH_STATUS. Codex found 3 BLOCKING past a same-run reviewer APPROVE (create-race coverage hole; 2 more forge/drop write holes) — ALL fixed + re-reviewed APPROVE + CI green, once-through Codex gate held. #715 closed (F2). Follow-ups: #714 (reader-creates), #717 (COMPONENT_STATUS classify), F2 blind-decode hardening (optional). NEXT: #625+#629 graph-embedding pair (consume the primitive).** |
-| **D** — consumer-path release gates | see prerequisite below | #615 + CI | **in progress** |
+| **D** — consumer-path release gates | step 1 (automate a tier) DONE — e2e-ladder statistical per-PR; steps 2-3 sequenced 2026-07-30 as concrete coverage issues | ~~#615~~ · #766 (storage-observability stage) #767 (dedup cardinality stage) #768 (gateway shape stage, gates #762) #769 (nightly semantic+agentic; crud-tools decision; unblocks #301) · #643 follows #769 | **step 1 done; 2-3 queued as issues + coverage-gate standing rule live** |
 | **E** — semsource clean cut | GRAPH stream posture, dead bucket wiring | semsource#110 | not started |
 
 ### Epic D has a prerequisite that was not obvious

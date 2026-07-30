@@ -151,6 +151,14 @@ not replace this review.
 - New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` without recorded Fable
   design review is a BLOCKING finding.
 
+## Coverage review
+
+- A change adding operator-visible or cross-component behavior must include its e2e stage in
+  the relevant tier or cite a filed coverage-gap issue. Neither present is a finding.
+- A new e2e stage must be falsifiable: RED against the unfixed or absent behavior (revert or
+  forced input), and count the assertions that actually ran — a green stage that skipped
+  everything proves nothing.
+
 ## Generic Go second pass
 
 Briefly flag context misuse, ignored cancellation, shared-memory races, missing `%w`, unlock hazards, error-class loss,
