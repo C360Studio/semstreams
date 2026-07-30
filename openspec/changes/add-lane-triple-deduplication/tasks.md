@@ -347,6 +347,103 @@
       `taskID = fmt.Sprintf("rule-%s-%d", entityID, time.Now().UnixNano())` (`:1492`), unique per
       spawn, so it always appends
 
+- [x] 7.9 (Codex C1, BLOCKING) **A failed or no-op mutation could be reported as
+      committed-degraded.** `handleTripleAddBatch` called `singleSubjectRevision` unconditionally,
+      so for an absent entity the append wrote nothing AND the revision read returned not-found —
+      the response carried BOTH `FailedSubjects` and `Degraded=true`. `AppendEvidence` checks
+      `response.Degraded` FIRST (`mutation_client.go:830`), so it entered committed verification
+      and could return a committed state for a not-found. `handleTripleRemove` had the identical
+      shape. **Root cause was my own M1 directive**, which said "route a failed read-back to
+      degraded" and never scoped it to writes that actually committed — so the fix is the
+      contract, not the symptom: revision and degraded state are now derived from whether THAT
+      SUBJECT committed (`addTriplesResult.CommittedRevisions`), failed subjects are resolved
+      before any degraded handling, and a no-op is never degraded. **Failing-first:**
+      `Should be false — a subject that FAILED did not commit, so it must not be flagged
+      degraded` and `Should be empty, but was post-write read-back failed: kv: key not found`,
+      on both the append and remove lanes. End-to-end absent cases added at the handler
+      (`TestHandleTripleAddBatch_AbsentEntityIsFailedNotDegraded`,
+      `TestHandleTripleRemove_AbsentEntityIsNoOpNotDegraded`) and at the client
+      (`TestAppendEvidenceAbsentEntityIsNotCommitted` → `CommitNotCommitted` + `MutationNotFound`)
+- [x] 7.10 (Codex C2, BLOCKING) **The post-hoc revision read could make a rule suppress another
+      writer's real update.** `revisionAfterMutation` did an independent live `Get` AFTER the CAS,
+      so a writer committing in between made the handler return THAT writer's revision — and
+      because our own mutation genuinely committed, the new `!Deduplicated` / `Removed` gates
+      recorded it as the rule's own, after which `shouldSkipRule` consumed exactly that revision
+      and dropped the external change. This is H1 through a different door: H1 was "on a no-op the
+      revision belongs to someone else", this is "even on a real commit the re-read can".
+      **The comment at `mutations.go:385` was wrong and is deleted, not preserved.** It claimed
+      over-reporting is harmless because revisions are monotonic; that holds for the readiness
+      consumer (`IndexedRevision >= myRev`) and is false for the rule tracker. Two consumers, two
+      safety properties — the analysis had generalized from the tolerant one, and I accepted that
+      generalization in review. The replacement text names both properties explicitly.
+      **Fix:** built the plumbing we had previously concluded was unavailable — new
+      `natsclient.KVStore.UpdateWithRetryRev` returns the exact revision the committed CAS
+      produced (`kv.Update` already returned it and it was being discarded). `UpdateWithRetry`
+      keeps its signature and delegates, so no other call site moves. Committed → exact CAS
+      revision; suppressed/no-op → live read and never degraded, per C1.
+      **Failing-first**, after restructuring the assertion (the first form asserted on an
+      injected external write, but the fix REMOVES the post-CAS read entirely so the injection
+      point no longer exists — the honest assertion is that no post-CAS re-read happens at all).
+      With the re-read temporarily reinstated: `Should be zero, but was 1 — the committed path
+      must not re-read the revision` and `Should not be: 0x3 — the handler returned the later
+      external writer's revision`, on both lanes. `mutations.go` md5
+      `daac519ba7f13b0b3984f357f026c3d0` before and after. Coordinated add/remove tests commit an
+      external write at the exact seam; `natsclient` integration tests pin
+      `UpdateWithRetryRev`'s own contract (own-commit vs later live read, create path, and zero
+      on failure)
+- [x] 7.11 (Codex C3, BLOCKING) **The documented struct-object hole violated the guarantee this
+      change makes.** A struct-valued `Object` keyed differently from its persisted
+      `map[string]any` form (declaration order vs sorted-key order), so replaying the same valid
+      in-process triple appended it again on every restart, advanced revisions and refired
+      watchers — exactly the corruption this change exists to eliminate. The reviewer and I had
+      both classified this "record, don't fix" on the grounds that it fails safe; **that was the
+      wrong lens** — the key is now the authoritative server-side contract, `Object` is still
+      `any`, and a missed suppression IS the failure the requirement forbids.
+      **Fixed rather than documented:** `canonicalObjectKey` now normalizes structured values
+      through a JSON decode/re-encode so struct and map forms converge, with a scalar fast path
+      (string/number/bool/nil) so the hot path pays nothing. Slice order is preserved — order is
+      meaning in a list. The "KNOWN HOLE" comment is deleted, not softened. **Failing-first:**
+      `a replayed structured object must not advance the revision` and `cardinality must be
+      unchanged across the replay`, on BOTH the single and batch lanes. Spec delta amended to
+      require canonical-encoding object identity
+
+- [x] 7.12 (reviewer nit, escalated to a FIX) **The scalar fast path contradicted the normalizing
+      path.** Measured: `int64(9007199254740993)` (2^53+1) keyed as `9007199254740993` while its
+      own persisted form — which JSON-decodes to `float64` — keyed as `9007199254740992`, so a
+      producer replaying a large-int scalar never suppressed and re-appended on every restart.
+      gh#713's exact failure mode surviving for one value class. The SAME `int64` inside a slice
+      took the normalizing round-trip and suppressed correctly, so the two paths disagreed with
+      each other. Verified empirically before changing anything.
+      **Fixed rather than documented, because this is C3 again**: "no in-repo producer today" is
+      "fails safe" in different clothes, and Codex already rejected that reasoning for an
+      authoritative server-side suppression contract.
+      The fast path is no longer "scalars" — it is now exactly the set for which the round-trip is
+      PROVABLY the identity (`string`, `bool`, `nil`, confirmed by measurement), renamed
+      `roundTripIsIdentity`. Every number normalizes. Strings remain fast-pathed, which is where
+      the saving actually was (entity references and enum-like literals). Comment rewritten to
+      describe what the code does and to name numeric width as a first-class divergence beside
+      container ordering. **Failing-first:** four subtests of
+      `TestAppendIdentityKey_ScalarKeysMatchTheirPersistedForm` (int64/int/uint64/max-int64) plus
+      `TestAppendIdentityKey_ScalarAndInContainerAgree`; at the lane,
+      `a replayed large-int scalar must not advance the revision` and `cardinality must be
+      unchanged across the replay`, with `message/triple_identity.go` md5
+      `14a184ef16877170c43c247ef1277780` before and after the temporary reinstatement
+- [x] 7.13 (reviewer nits 2-4) `AddTripleResponse`'s docstring still claimed KVRevision "is still
+      the entity's live revision, never zero" — doubly false after C2 (the committed path
+      deliberately does NOT report the live revision, and zero is reachable on the no-op and
+      failed paths). **Third round with this shape**, so this was done as a SWEEP rather than a
+      line fix: grepped `never zero|live revision|live, unchanged|read-your-writes|IndexedRevision`
+      across all non-test Go and corrected every sibling — `AddTripleResponse`,
+      `RemoveTripleResponse`, and the `MutationResponse` suppressed-path bullet.
+      The unreachable degraded guard KEEPS its guard (an invariant assertion against a
+      non-conforming backend is not a phantom signal) but drops the misleading
+      `post-write read-back failed: ` prefix, since that path performs no read-back; the comment
+      now states plainly that it is unreachable with real NATS because JetStream KV revisions are
+      stream sequences starting at 1, so no one hunts for a live path. The residual M1 shape that
+      deliberately survives — a no-op whose live read fails reports KVRevision 0 with
+      Degraded false, leaving the caller no read-your-writes anchor — is now documented on both
+      response types, on the helper, and in the spec delta
+
 ## 8. Spec and docs
 
 - [ ] 8.1 Apply the `graph-ingest` delta; `openspec validate --strict` for this change and the

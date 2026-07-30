@@ -211,19 +211,21 @@ func TestAddTriples_FullyDuplicateBatchReportsZeroWrittenAndNoFailures(t *testin
 	batch := []message.Triple{dedupTriple(dedupSubject), dedupTriple(dedupSubject)}
 	batch[1].Object = "c360.platform.robotics.mav1.drone.003"
 
-	written, deduplicated, failed, err := comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
+	result, err := comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
 	require.NoError(t, err)
-	require.Equal(t, 2, written)
-	require.Equal(t, 0, deduplicated)
+	require.Equal(t, 2, result.Written)
+	require.Equal(t, 0, result.Deduplicated)
 	_, revAfterFirst := readDedupEntity(t, comp, dedupSubject)
 
 	errorsBefore := atomic.LoadInt64(&comp.errors)
-	written, deduplicated, failed, err = comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
+	result, err = comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
 
 	require.NoError(t, err, "a wholly duplicate batch is not an error")
-	assert.Equal(t, 0, written, "WrittenCount counts only NEW tuples")
-	assert.Equal(t, 2, deduplicated, "written + deduplicated must account for the whole request")
-	assert.Empty(t, failed, "a suppressed subject must never appear among failed subjects")
+	assert.Equal(t, 0, result.Written, "WrittenCount counts only NEW tuples")
+	assert.Equal(t, 2, result.Deduplicated, "written + deduplicated must account for the whole request")
+	assert.Empty(t, result.FailedSubjects, "a suppressed subject must never appear among failed subjects")
+	assert.NotContains(t, result.CommittedRevisions, dedupSubject,
+		"a wholly suppressed subject committed nothing, so it must not appear as committed")
 	assert.Equal(t, errorsBefore, atomic.LoadInt64(&comp.errors))
 
 	stored, rev := readDedupEntity(t, comp, dedupSubject)
@@ -244,16 +246,18 @@ func TestAddTriples_PartialDuplicateCommitsOnlyTheNewTuples(t *testing.T) {
 	second := dedupTriple(dedupSubject)
 	second.Object = "c360.platform.robotics.mav1.drone.004"
 
-	written, deduplicated, failed, err := comp.addTriplesLane(ctx,
+	result, err := comp.addTriplesLane(ctx,
 		[]message.Triple{first, second}, dedupLaneAddBatch)
 
 	require.NoError(t, err)
-	assert.Equal(t, 1, written)
-	assert.Equal(t, 1, deduplicated)
-	assert.Empty(t, failed)
+	assert.Equal(t, 1, result.Written)
+	assert.Equal(t, 1, result.Deduplicated)
+	assert.Empty(t, result.FailedSubjects)
 
 	stored, rev := readDedupEntity(t, comp, dedupSubject)
 	assert.Equal(t, revBefore+1, rev, "the revision must advance exactly once")
+	assert.Equal(t, rev, result.CommittedRevisions[dedupSubject],
+		"the lane must report the exact revision its own CAS produced")
 	assert.Equal(t, 2, countDedupTriples(stored, first.Predicate))
 }
 
@@ -269,12 +273,12 @@ func TestAddTriples_WithinRequestDuplicatesCollapsePreservingOrder(t *testing.T)
 	distinctB.Object = "c360.platform.robotics.mav1.drone.00b"
 
 	batch := []message.Triple{repeated, distinctA, repeated, distinctB, repeated}
-	written, deduplicated, failed, err := comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
+	result, err := comp.addTriplesLane(ctx, batch, dedupLaneAddBatch)
 
 	require.NoError(t, err)
-	assert.Equal(t, 3, written)
-	assert.Equal(t, 2, deduplicated)
-	assert.Empty(t, failed)
+	assert.Equal(t, 3, result.Written)
+	assert.Equal(t, 2, result.Deduplicated)
+	assert.Empty(t, result.FailedSubjects)
 
 	stored, _ := readDedupEntity(t, comp, dedupSubject)
 	require.Equal(t, 3, countDedupTriples(stored, repeated.Predicate),
@@ -306,17 +310,17 @@ func TestAddTriples_SuppressionDoesNotMisclassifyMixedBatch(t *testing.T) {
 	const absentSubject = "c360.platform.robotics.mav1.drone.999"
 	absent := dedupTriple(absentSubject)
 
-	written, deduplicated, failed, err := comp.addTriplesLane(ctx,
+	result, err := comp.addTriplesLane(ctx,
 		[]message.Triple{present, absent}, dedupLaneAddBatch)
 
 	require.Error(t, err)
 	assert.ErrorIs(t, err, natsclient.ErrKVKeyNotFound,
 		"an all-absence failure set must stay classifiable as entity_not_found")
-	assert.Equal(t, 0, written)
-	assert.Equal(t, 1, deduplicated)
-	require.Len(t, failed, 1, "only the absent subject failed")
-	assert.Contains(t, failed, absentSubject)
-	assert.NotContains(t, failed, dedupSubject, "a suppressed subject is not a failed subject")
+	assert.Equal(t, 0, result.Written)
+	assert.Equal(t, 1, result.Deduplicated)
+	require.Len(t, result.FailedSubjects, 1, "only the absent subject failed")
+	assert.Contains(t, result.FailedSubjects, absentSubject)
+	assert.NotContains(t, result.FailedSubjects, dedupSubject, "a suppressed subject is not a failed subject")
 }
 
 // Task 6.1/6.2: the counter is labelled by a CLOSED lane enum, and the
@@ -442,10 +446,25 @@ func mockGetPassthrough(bucket *mockKVBucket, key string) (jetstream.KeyValueEnt
 	return nil, jetstream.ErrKeyNotFound
 }
 
-// Review M1: zero is the unsafe value for a revision, because the caller's
-// read-your-writes check is IndexedRevision >= myRev and a zero satisfies it
-// vacuously. A failed post-write read-back must degrade, not report zero.
-func TestTripleHandlers_FailedRevisionReadbackDegradesInsteadOfReportingZero(t *testing.T) {
+// SUPERSEDED PREMISE, kept deliberately as a guard on what replaced it.
+//
+// Review M1 required a failed post-write read-back to degrade rather than
+// report a bare zero, because the caller's read-your-writes check
+// (IndexedRevision >= myRev) is satisfied vacuously by zero. Codex C2 then
+// removed the post-write read-back from the COMMITTED path entirely — the
+// handler now returns the exact revision its own CAS produced — so on that path
+// there is no read to fail and the M1 hazard cannot arise at all.
+//
+// What survives is the NO-OP path, which still takes a live read because a
+// suppressed write has no revision of its own to report. Codex C1 governs it:
+// a no-op committed nothing, so a failed live read reports NO revision and is
+// NOT degraded. Marking it degraded is the C1 defect, because AppendEvidence
+// branches on Degraded before it inspects FailedSubjects.
+//
+// So this test now pins: committed → real revision, never degraded, whatever
+// the bucket does afterwards; no-op with a failing live read → no revision,
+// still not degraded.
+func TestTripleHandlers_RevisionEchoFailureIsNeverDegraded(t *testing.T) {
 	triple := dedupTriple(dedupSubject)
 	addData, err := json.Marshal(graph.AddTripleRequest{Triple: triple})
 	require.NoError(t, err)
@@ -458,13 +477,19 @@ func TestTripleHandlers_FailedRevisionReadbackDegradesInsteadOfReportingZero(t *
 
 	tests := []struct {
 		name string
-		// casGets is how many Get calls the handler makes BEFORE its read-back.
+		// casGets is how many Get calls the handler makes for the CAS itself.
 		casGets int
-		invoke  func(comp *Component, ctx context.Context) ([]byte, error)
+		// seeded is the entity's starting triples, chosen so the FIRST invoke
+		// commits and the SECOND is a no-op: the add lanes start empty (first
+		// add appends, second is a duplicate); remove starts with the triple
+		// present (first remove commits, second matches nothing).
+		seeded []message.Triple
+		invoke func(comp *Component, ctx context.Context) ([]byte, error)
 	}{
 		{
 			name:    "triple.add",
 			casGets: 1,
+			seeded:  []message.Triple{},
 			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
 				return comp.handleTripleAdd(ctx, addData)
 			},
@@ -472,6 +497,7 @@ func TestTripleHandlers_FailedRevisionReadbackDegradesInsteadOfReportingZero(t *
 		{
 			name:    "triple.add_batch",
 			casGets: 1,
+			seeded:  []message.Triple{},
 			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
 				return comp.handleTripleAddBatch(ctx, batchData)
 			},
@@ -480,6 +506,7 @@ func TestTripleHandlers_FailedRevisionReadbackDegradesInsteadOfReportingZero(t *
 			// RemoveTriple does an existence Get before its CAS Get.
 			name:    "triple.remove",
 			casGets: 2,
+			seeded:  []message.Triple{triple},
 			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
 				return comp.handleTripleRemove(ctx, removeData)
 			},
@@ -491,35 +518,47 @@ func TestTripleHandlers_FailedRevisionReadbackDegradesInsteadOfReportingZero(t *
 			comp, bucket := createTestComponentWithMockKVBucket(t)
 			ctx := context.Background()
 			require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-				ID: dedupSubject, Triples: []message.Triple{triple}, Version: 1, UpdatedAt: time.Now(),
+				ID: dedupSubject, Triples: tt.seeded, Version: 1, UpdatedAt: time.Now(),
 			}))
 
-			// Control: a healthy read-back reports a real revision.
-			body, handlerErr := tt.invoke(comp, ctx)
-			require.NoError(t, handlerErr)
-			var control graph.MutationResponse
-			require.NoError(t, json.Unmarshal(body, &control))
-			require.NotZero(t, control.KVRevision, "control: healthy read-back reports the revision")
-			require.False(t, control.Degraded, "control: a healthy call is not degraded")
-
-			// Now fail only the read-back: the write's own Get calls pass.
-			gets := 0
-			bucket.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
-				gets++
-				if gets > tt.casGets {
-					return nil, errors.New("simulated read-back failure")
+			// First call COMMITS (add appends a new tuple; remove removes one).
+			// Every Get past the CAS fails, proving the committed path does not
+			// depend on one: the revision comes from its own CAS.
+			failPastCAS := func() {
+				gets := 0
+				bucket.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
+					gets++
+					if gets > tt.casGets {
+						return nil, errors.New("simulated post-write read failure")
+					}
+					return mockGetPassthrough(bucket, key)
 				}
-				return mockGetPassthrough(bucket, key)
 			}
+			failPastCAS()
+			body, handlerErr := tt.invoke(comp, ctx)
+			bucket.getFunc = nil
+			require.NoError(t, handlerErr)
+			var committed graph.MutationResponse
+			require.NoError(t, json.Unmarshal(body, &committed))
+			assert.NotZero(t, committed.KVRevision,
+				"a committed write reports its own CAS revision and needs no read-back")
+			assert.False(t, committed.Degraded,
+				"nothing was re-read, so nothing could fail; a commit is not degraded")
 
+			// Second call is a NO-OP (the add is now a duplicate; the remove
+			// matches nothing). Its live read fails.
+			failPastCAS()
 			body, handlerErr = tt.invoke(comp, ctx)
-			require.NoError(t, handlerErr,
-				"the write already committed; a read-back failure is not a request failure")
-			var resp graph.MutationResponse
-			require.NoError(t, json.Unmarshal(body, &resp))
-			assert.True(t, resp.Degraded, "a failed read-back must be reported as degraded")
-			assert.Contains(t, resp.DegradedReason, "read-back failed")
-			assert.Zero(t, resp.KVRevision, "and must not present a fabricated revision")
+			bucket.getFunc = nil
+			require.NoError(t, handlerErr, "a no-op is a success")
+			var noop graph.MutationResponse
+			require.NoError(t, json.Unmarshal(body, &noop))
+			assert.False(t, noop.Degraded,
+				"a no-op committed nothing, so there is no committed write whose echo could be "+
+					"degraded — and a client branches on Degraded before FailedSubjects")
+			assert.Empty(t, noop.DegradedReason)
+			assert.Zero(t, noop.KVRevision,
+				"the live read failed, so report no revision rather than a fabricated one")
 		})
 	}
 }

@@ -113,6 +113,13 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > `strict_required_status_checks_policy` is **false** — checks can have run against a stale base,
 > so re-verify after a long merge queue (#747 itself went `CONFLICTING` on a baton edit while its
 > checks were green). BREAKING changes still owe the RELEVANT e2e tier beyond per-PR statistical.
+>
+> **Codex reviews ONCE (owner, 2026-07-30).** Fixing its findings does NOT earn a second round.
+> Once the fixes are in and gates are green, arm `--auto`. A re-check is warranted only by
+> something the fix work SURFACED — a NEW blocking-class defect, a change to the CONTRACT Codex
+> reviewed (not merely its implementation), material scope growth beyond the reviewed diff, or a
+> fix that had to modify a SHARED primitive with callers outside the change. Make that call
+> explicitly and state the reasoning either way.
 
 ---
 

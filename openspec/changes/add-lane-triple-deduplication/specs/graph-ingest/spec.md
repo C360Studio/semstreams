@@ -5,7 +5,14 @@
 ### Requirement: The add lane MUST NOT append a triple already stored with an identical tuple
 
 The add lane MUST suppress any triple whose six-field identity tuple — subject, predicate,
-object, datatype, source, context — already exists on the target entity. Suppression is
+object, datatype, source, context — already exists on the target entity. Object identity MUST be
+decided on the object's PERSISTED encoding, so that a value and the form it takes after a storage
+round-trip are one tuple. An object submitted in process and the same object read back from
+stored state MUST NOT be treated as two distinct assertions, whatever its Go type — a producer
+re-deriving its facts would otherwise append them again on every restart. This covers every way a
+round-trip can change an encoding, including field ordering in structured values and numeric width
+in values outside the storage format's exact range; a type excluded from normalization MUST be one
+whose round-trip is provably the identity, not one assumed to be unaffected. Suppression is
 unconditional: it does not depend on `RequestID`, on `Context` carrying a request identifier, on
 the caller, or on which entry point was used. It MUST cover every add-lane emitter from a single
 implementation, including the `graph.mutation.triple.add` and `graph.mutation.triple.add_batch`
@@ -103,12 +110,22 @@ how many tuples were suppressed, so a caller can distinguish "already present" f
 without an authoritative read-back, and a client MUST treat written plus suppressed equalling the
 submitted count as a fully accounted-for request rather than as an anomaly needing verification.
 
-A response for a request targeting exactly one entity MUST report that entity's live KV revision,
-unchanged by a suppressed write. Reporting zero is forbidden because the caller's read-your-writes
-check is `IndexedRevision >= myRev`, which a zero satisfies vacuously; when the post-write
-read-back fails, the response MUST be marked degraded instead of carrying a bare zero. A request
-spanning several entities has no single entity revision and MUST report none — that is undefined,
-not degraded.
+A response for a request targeting exactly one entity MUST report a KV revision derived from
+whether that entity actually committed. When the write COMMITTED, the reported revision MUST be
+the exact revision that write produced, never a value re-read afterwards: another writer can
+commit between the write and a re-read, and a caller that attributes the re-read revision to its
+own write would then act on someone else's. When the write was SUPPRESSED as a duplicate, the
+response MUST report the entity's live unchanged revision, so a read-your-writes check still
+resolves; if that live read fails the response MUST report no revision rather than being marked
+degraded, and a caller that sees a suppressed or no-op response carrying no revision has no
+read-your-writes anchor and MUST read authoritative state if it requires one. When the entity
+FAILED, the response MUST report no revision. A request spanning several
+entities has no single entity revision and MUST report none.
+
+A response MUST NOT be marked degraded unless a write COMMITTED. Degraded means a committed write
+whose echo could not be confirmed; a failure and a no-op are neither, and flagging either one
+degraded is unsafe because a client checks the degraded flag before it inspects failed subjects
+and would enter committed verification for a write that never happened.
 
 #### Scenario: an all-duplicate batch reports zero written and no failures
 
@@ -125,12 +142,20 @@ not degraded.
 - **THEN** written plus suppressed equals the number of tuples submitted
 - **AND** a client treats the request as fully committed without an authoritative read-back
 
-#### Scenario: a failed revision read-back degrades rather than reporting zero
+#### Scenario: a committed write reports its own revision, not a later writer's
 
-- **GIVEN** a single-entity add whose write committed
-- **WHEN** the post-write revision read-back fails
-- **THEN** the response is marked degraded with the read-back reason
-- **AND** it does not present zero as the entity's revision
+- **GIVEN** a single-entity add that commits
+- **WHEN** another writer commits to the same entity immediately afterwards
+- **THEN** the response reports the revision this request's own write produced
+- **AND** a caller tracking its own writes does not record the other writer's revision
+
+#### Scenario: a failed subject is not reported as degraded
+
+- **GIVEN** an add request targeting an entity that does not exist
+- **WHEN** the request is processed
+- **THEN** the entity appears among the failed subjects
+- **AND** the response is not marked degraded
+- **AND** it reports no revision
 
 ### Requirement: A no-op mutation MUST report that it committed nothing
 
@@ -140,7 +165,8 @@ writer. An add suppressed as a duplicate MUST be flagged as deduplicated, and a 
 matched no stored triple MUST report that nothing was removed. A caller that attributes the
 reported revision to its own write MUST consult these flags first: attributing another writer's
 revision to itself makes that caller discard the other writer's genuine change when its own
-change-feed later delivers it.
+change-feed later delivers it. A no-op MUST NOT be marked degraded — it has no committed write
+whose echo could have failed.
 
 #### Scenario: a suppressed add is not attributed to the caller
 

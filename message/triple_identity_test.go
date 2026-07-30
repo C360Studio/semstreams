@@ -1,6 +1,7 @@
 package message
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -261,4 +262,140 @@ func TestCanonicalObjectKey_UnmarshalableFallbackStaysDistinct(t *testing.T) {
 	// silently suppressed on a path that could not have been persisted anyway.
 	assert.NotEqual(t, AppendIdentityKey(left), AppendIdentityKey(right))
 	assert.Equal(t, AppendIdentityKey(left), AppendIdentityKey(left))
+}
+
+// zebraFirst declares Zebra before Alpha, so encoding/json emits it in that
+// order while the map[string]any it decodes into emits sorted keys.
+type zebraFirst struct {
+	Zebra string `json:"zebra"`
+	Alpha int    `json:"alpha"`
+}
+
+// A structured Object must key identically whether it arrives as a Go struct
+// or as the map[string]any form a JSON round-trip through ENTITY_STATES
+// produces. Without normalization a producer replaying a struct-valued triple
+// re-appends it on every restart — the exact corruption this key prevents.
+func TestAppendIdentityKey_StructAndItsPersistedFormShareOneKey(t *testing.T) {
+	structValue := zebraFirst{Zebra: "z", Alpha: 1}
+
+	encoded, err := json.Marshal(structValue)
+	require.NoError(t, err)
+	var persisted any
+	require.NoError(t, json.Unmarshal(encoded, &persisted))
+
+	require.NotEqual(t, string(encoded), mustMarshalString(t, persisted),
+		"fixture sanity: the struct and map encodings must actually differ in field order, "+
+			"or this test proves nothing")
+
+	inProcess := identityBaseTriple()
+	inProcess.Object = structValue
+	stored := identityBaseTriple()
+	stored.Object = persisted
+
+	assert.Equal(t, AppendIdentityKey(stored), AppendIdentityKey(inProcess),
+		"a struct and its persisted map form are one fact and must share one key")
+	assert.True(t, SameAppendTuple(stored, inProcess))
+
+	// Normalization must not erase real differences.
+	different := identityBaseTriple()
+	different.Object = zebraFirst{Zebra: "z", Alpha: 2}
+	assert.NotEqual(t, AppendIdentityKey(inProcess), AppendIdentityKey(different))
+}
+
+// Nested and slice-valued objects normalize too, and slices keep their order
+// (order IS meaning in a list, unlike map key order).
+func TestAppendIdentityKey_NestedAndSliceObjectsNormalize(t *testing.T) {
+	nested := map[string]any{"outer": zebraFirst{Zebra: "z", Alpha: 1}}
+	encoded, err := json.Marshal(nested)
+	require.NoError(t, err)
+	var persisted any
+	require.NoError(t, json.Unmarshal(encoded, &persisted))
+
+	left := identityBaseTriple()
+	left.Object = nested
+	right := identityBaseTriple()
+	right.Object = persisted
+	assert.Equal(t, AppendIdentityKey(left), AppendIdentityKey(right),
+		"a nested struct must normalize at every level")
+
+	ordered := identityBaseTriple()
+	ordered.Object = []string{"a", "b"}
+	reversed := identityBaseTriple()
+	reversed.Object = []string{"b", "a"}
+	assert.NotEqual(t, AppendIdentityKey(ordered), AppendIdentityKey(reversed),
+		"slice order is meaning and must not be normalized away")
+}
+
+func mustMarshalString(t *testing.T, v any) string {
+	t.Helper()
+	data, err := json.Marshal(v)
+	require.NoError(t, err)
+	return string(data)
+}
+
+// A scalar must key identically to its own persisted form, exactly as a value
+// inside a container does. int64 above 2^53 is where a fast path that skips
+// normalization diverges: the raw value encodes as 9007199254740993, while the
+// same value read back out of ENTITY_STATES has been through JSON's float64
+// and encodes as 9007199254740992. Two keys for one fact means a producer
+// replaying that triple re-appends it on every restart — gh#713's failure mode
+// surviving for one value class.
+func TestAppendIdentityKey_ScalarKeysMatchTheirPersistedForm(t *testing.T) {
+	persistedForm := func(object any) any {
+		encoded, err := json.Marshal(object)
+		require.NoError(t, err)
+		var decoded any
+		require.NoError(t, json.Unmarshal(encoded, &decoded))
+		return decoded
+	}
+
+	tests := []struct {
+		name   string
+		object any
+	}{
+		{"int64 above float64's exact range", int64(9007199254740993)},
+		{"int above float64's exact range", int(9007199254740993)},
+		{"uint64 above float64's exact range", uint64(18446744073709551615)},
+		{"max int64", int64(9223372036854775807)},
+		{"small int", 85},
+		{"float64", 85.5},
+		{"string", "c360.platform.robotics.mav1.drone.001"},
+		{"bool", true},
+		{"nil", nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inProcess := identityBaseTriple()
+			inProcess.Object = tt.object
+			stored := identityBaseTriple()
+			stored.Object = persistedForm(tt.object)
+
+			assert.Equal(t, AppendIdentityKey(stored), AppendIdentityKey(inProcess),
+				"a value and its persisted form are one fact and must share one key")
+		})
+	}
+}
+
+// The scalar fast path and the normalizing path must not disagree: the same
+// value must key the same whether it arrives bare or inside a container.
+func TestAppendIdentityKey_ScalarAndInContainerAgree(t *testing.T) {
+	big := int64(9007199254740993)
+
+	bare := identityBaseTriple()
+	bare.Object = big
+	bareStored := identityBaseTriple()
+	bareStored.Object = float64(big) // what the store returns
+
+	inSlice := identityBaseTriple()
+	inSlice.Object = []any{big}
+	inSliceStored := identityBaseTriple()
+	inSliceStored.Object = []any{float64(big)}
+
+	bareMatches := AppendIdentityKey(bare) == AppendIdentityKey(bareStored)
+	sliceMatches := AppendIdentityKey(inSlice) == AppendIdentityKey(inSliceStored)
+	assert.Equal(t, sliceMatches, bareMatches,
+		"a bare scalar and the same scalar inside a container must follow the same rule; "+
+			"one path suppressing and the other not is a contradiction")
+	assert.True(t, bareMatches, "and both must suppress")
 }

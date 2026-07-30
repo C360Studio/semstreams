@@ -586,7 +586,7 @@ type tripleAdderAdapter struct {
 // are attributable to hierarchy rather than to an operator-issued mutation
 // (gh#713: createEntity re-derives these on every re-registration).
 func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Triple) error {
-	_, err := a.component.addTripleLane(ctx, triple, dedupLaneHierarchy)
+	_, _, err := a.component.addTripleLane(ctx, triple, dedupLaneHierarchy)
 	return err
 }
 
@@ -1955,10 +1955,10 @@ func (c *Component) appendForeignEdges(ctx context.Context, primaryID string, fo
 	if len(foreign) == 0 {
 		return
 	}
-	if _, _, failed, aerr := c.addTriplesLane(ctx, foreign, dedupLaneForeignEdge); aerr != nil {
+	if result, aerr := c.addTriplesLane(ctx, foreign, dedupLaneForeignEdge); aerr != nil {
 		c.logger.Warn("failed to regroup cross-entity edges onto their subjects",
 			slog.String("primary_id", primaryID),
-			slog.Int("failed_subjects", len(failed)),
+			slog.Int("failed_subjects", len(result.FailedSubjects)),
 			slog.Any("error", aerr))
 	}
 }
@@ -3067,7 +3067,7 @@ func (c *Component) recordSuppressedDuplicates(lane dedupLane, suppressed int) {
 // A triple already stored under an identical six-field tuple is suppressed and
 // nothing is committed; see addTripleLane.
 func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error {
-	_, err := c.addTripleLane(ctx, triple, dedupLaneAdd)
+	_, _, err := c.addTripleLane(ctx, triple, dedupLaneAdd)
 	return err
 }
 
@@ -3075,7 +3075,13 @@ func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error 
 // suppressed-duplicate metric and reporting whether the triple was suppressed
 // so the request handler can echo it. deduplicated=true means the write was a
 // no-op: nothing committed, no revision advanced, and err is nil.
-func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, lane dedupLane) (deduplicated bool, err error) {
+//
+// committedRevision is the EXACT revision this call's CAS produced, and is 0
+// whenever nothing committed (suppressed, or an error). It is deliberately not
+// a post-hoc read: another writer can commit between the CAS and a re-read, and
+// a caller attributing that writer's revision to its own write would suppress
+// the writer's genuine change (Codex C2).
+func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, lane dedupLane) (deduplicated bool, committedRevision uint64, err error) {
 	// Deliberately KEPT under the gh#562 write-cost dedup (unlike MergeEntity's
 	// removed candidate pass): this is an O(1-triple) caller-blaming preflight
 	// that runs BEFORE any KV I/O. Without it a malformed Subject would drive
@@ -3086,16 +3092,17 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 	if contractErr := graph.ValidateEntityStateContract(&graph.EntityState{
 		ID: triple.Subject, Triples: []message.Triple{triple},
 	}); contractErr != nil {
-		return false, errs.WrapInvalid(contractErr, "Component", "AddTriple", "validate triple contract")
+		return false, 0, errs.WrapInvalid(contractErr, "Component", "AddTriple", "validate triple contract")
 	}
 
 	// Check context
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, errs.Wrap(ctxErr, "Component", "AddTriple", "context cancelled")
+		return false, 0, errs.Wrap(ctxErr, "Component", "AddTriple", "context cancelled")
 	}
 
-	// Use UpdateWithRetry for atomic read-modify-write with CAS
-	casErr := c.entityBucket.UpdateWithRetry(ctx, triple.Subject, func(current []byte) ([]byte, error) {
+	// UpdateWithRetryRev: atomic read-modify-write with CAS, returning the exact
+	// revision the commit produced (see the committedRevision doc above).
+	casRevision, casErr := c.entityBucket.UpdateWithRetryRev(ctx, triple.Subject, func(current []byte) ([]byte, error) {
 		var entity graph.EntityState
 
 		if len(current) > 0 {
@@ -3146,10 +3153,10 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 		// (the stored bytes and revision are untouched).
 		if errors.Is(casErr, errNoOpAddDuplicate) {
 			c.recordSuppressedDuplicates(lane, 1)
-			return true, nil
+			return true, 0, nil
 		}
 		atomic.AddInt64(&c.errors, 1)
-		return false, errs.Wrap(casErr, "Component", "AddTriple", "CAS update")
+		return false, 0, errs.Wrap(casErr, "Component", "AddTriple", "CAS update")
 	}
 
 	// Committed via the write gate — clear any stale poison entry (D3b).
@@ -3158,7 +3165,7 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 	// Read-after-write coherence: the entity-query cache must not serve the
 	// pre-add state on the next graph.ingest.query.* read.
 	c.invalidateEntityCacheEntry(triple.Subject)
-	return false, nil
+	return false, casRevision, nil
 }
 
 // AddTriples adds many triples in one call, batching per entity. Triples
@@ -3183,8 +3190,28 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 // whose message names the failing subjects; the per-subject error
 // detail surfaces via the handler's FailedSubjects response field.
 func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (writtenCount int, failedSubjects map[string]string, err error) {
-	writtenCount, _, failedSubjects, err = c.addTriplesLane(ctx, triples, dedupLaneAddBatch)
-	return writtenCount, failedSubjects, err
+	result, err := c.addTriplesLane(ctx, triples, dedupLaneAddBatch)
+	return result.Written, result.FailedSubjects, err
+}
+
+// addTriplesResult is one add-lane batch's outcome. Grouped into a struct
+// rather than a fifth and sixth return value so the batch handler can ask the
+// two questions it actually needs — "did THIS subject commit, and at which
+// revision" — without a positional argument pile.
+type addTriplesResult struct {
+	// Written counts NEWLY appended tuples only, excluding suppressed duplicates.
+	Written int
+	// Deduplicated counts tuples not appended because the entity already
+	// carried them, or because the request repeated them.
+	Deduplicated int
+	// FailedSubjects maps each subject that rolled back to its per-subject error.
+	FailedSubjects map[string]string
+	// CommittedRevisions holds the EXACT revision each subject's CAS produced,
+	// keyed by subject. A subject that was wholly suppressed or that failed is
+	// ABSENT — presence in this map is the authoritative answer to "did this
+	// call commit a write for that subject", which is what a caller must gate
+	// on before attributing a revision to itself (Codex C1/C2).
+	CommittedRevisions map[string]uint64
 }
 
 // addTriplesLane is AddTriples' body, carrying the lane label for the
@@ -3193,9 +3220,9 @@ func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (w
 // deduplicated accounts for every triple whose subject committed, which is what
 // lets a caller distinguish "already present" from "nothing happened" without
 // an authoritative read-back.
-func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple, lane dedupLane) (writtenCount, deduplicated int, failedSubjects map[string]string, err error) {
+func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple, lane dedupLane) (addTriplesResult, error) {
 	if len(triples) == 0 {
-		return 0, 0, nil, nil
+		return addTriplesResult{}, nil
 	}
 
 	// Preserve the established positional diagnostic for an omitted mutation
@@ -3203,7 +3230,7 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 	// authority for all subject syntax, references, and predicates.
 	for index := range triples {
 		if triples[index].Subject == "" {
-			return 0, 0, nil, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", index))
+			return addTriplesResult{}, errs.WrapInvalid(errs.ErrInvalidData, "Component", "AddTriples", fmt.Sprintf("triple[%d] subject cannot be empty", index))
 		}
 	}
 
@@ -3213,11 +3240,11 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 	if contractErr := graph.ValidateEntityStateContract(&graph.EntityState{
 		ID: triples[0].Subject, Triples: triples,
 	}); contractErr != nil {
-		return 0, 0, nil, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch contract")
+		return addTriplesResult{}, errs.WrapInvalid(contractErr, "Component", "AddTriples", "validate batch contract")
 	}
 
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return 0, 0, nil, errs.Wrap(ctxErr, "Component", "AddTriples", "context cancelled")
+		return addTriplesResult{}, errs.Wrap(ctxErr, "Component", "AddTriples", "context cancelled")
 	}
 
 	// Group triples by Subject so each entity sees a single CAS.
@@ -3234,7 +3261,9 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 	}
 	sort.Strings(subjects)
 
-	failedSubjects = make(map[string]string)
+	var writtenCount, deduplicated int
+	failedSubjects := make(map[string]string)
+	committedRevisions := make(map[string]uint64)
 	// allAbsences tracks whether EVERY per-subject failure was an ADR-055
 	// entity-not-found rejection. When true the aggregated error wraps
 	// ErrKVKeyNotFound so the handler can set ErrorCodeEntityNotFound on the
@@ -3269,7 +3298,7 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		// UpdateWithRetry invokes the closure synchronously on this goroutine,
 		// so the capture needs no synchronization.
 		groupSuppressed := 0
-		casErr := c.entityBucket.UpdateWithRetry(ctx, subject, func(current []byte) ([]byte, error) {
+		casRevision, casErr := c.entityBucket.UpdateWithRetryRev(ctx, subject, func(current []byte) ([]byte, error) {
 			var entity graph.EntityState
 
 			if len(current) > 0 {
@@ -3340,11 +3369,19 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		deduplicated += groupSuppressed
 		// Only NEWLY appended tuples count as written.
 		writtenCount += len(group) - groupSuppressed
+		// This subject COMMITTED, at exactly this revision.
+		committedRevisions[subject] = casRevision
 	}
 
-	if len(failedSubjects) == 0 {
-		return writtenCount, deduplicated, nil, nil
+	result := addTriplesResult{
+		Written:            writtenCount,
+		Deduplicated:       deduplicated,
+		CommittedRevisions: committedRevisions,
 	}
+	if len(failedSubjects) == 0 {
+		return result, nil
+	}
+	result.FailedSubjects = failedSubjects
 
 	// Sort failed-subject names for stable error messages.
 	failed := make([]string, 0, len(failedSubjects))
@@ -3370,7 +3407,7 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		innerErr = fmt.Errorf("CAS update failed for %d/%d subjects: %v",
 			len(failedSubjects), len(subjects), failed)
 	}
-	return writtenCount, deduplicated, failedSubjects, errs.Wrap(innerErr, "Component", "AddTriples", "batch CAS partial failure")
+	return result, errs.Wrap(innerErr, "Component", "AddTriples", "batch CAS partial failure")
 }
 
 // errNoOpRemove exits RemoveTriple's CAS closure when no stored triple
@@ -3385,7 +3422,7 @@ var errNoOpRemove = errors.New("remove triple: no matching predicate (no-op)")
 // A removal that matched nothing is a silent success; see removeTripleReported
 // when the caller needs to know whether anything was actually committed.
 func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string) error {
-	_, err := c.removeTripleReported(ctx, subject, predicate)
+	_, _, err := c.removeTripleReported(ctx, subject, predicate)
 	return err
 }
 
@@ -3398,31 +3435,34 @@ func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string)
 // consult this: on a no-op the live revision was produced by some OTHER writer,
 // and claiming it (the rule engine's per-rule feedback-loop tracker does
 // exactly that) makes the claimant drop that other writer's genuine change.
-func (c *Component) removeTripleReported(ctx context.Context, subject, predicate string) (removed bool, err error) {
+// committedRevision is the EXACT revision this call's CAS produced, and is 0
+// whenever nothing committed. Like the add lane's, it is not a post-hoc read:
+// see UpdateWithRetryRev for why re-reading is not equivalent (Codex C2).
+func (c *Component) removeTripleReported(ctx context.Context, subject, predicate string) (removed bool, committedRevision uint64, err error) {
 	if validateErr := validateEntityID(subject); validateErr != nil {
-		return false, errs.WrapInvalid(validateErr, "Component", "RemoveTriple", "validate subject")
+		return false, 0, errs.WrapInvalid(validateErr, "Component", "RemoveTriple", "validate subject")
 	}
 	if _, parseErr := vocabulary.ParsePredicate(predicate); parseErr != nil {
-		return false, errs.WrapInvalid(parseErr, "Component", "RemoveTriple", "validate predicate")
+		return false, 0, errs.WrapInvalid(parseErr, "Component", "RemoveTriple", "validate predicate")
 	}
 
 	// Check context
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, errs.Wrap(ctxErr, "Component", "RemoveTriple", "context cancelled")
+		return false, 0, errs.Wrap(ctxErr, "Component", "RemoveTriple", "context cancelled")
 	}
 
 	// Check if entity exists first - if not, nothing to remove
 	_, err = c.entityBucket.Get(ctx, subject)
 	if err != nil {
 		if natsclient.IsKVNotFoundError(err) {
-			return false, nil // Entity doesn't exist, nothing to remove
+			return false, 0, nil // Entity doesn't exist, nothing to remove
 		}
 		atomic.AddInt64(&c.errors, 1)
-		return false, errs.Wrap(err, "Component", "RemoveTriple", "entity lookup")
+		return false, 0, errs.Wrap(err, "Component", "RemoveTriple", "entity lookup")
 	}
 
 	// Use UpdateWithRetry for atomic read-modify-write with CAS
-	err = c.entityBucket.UpdateWithRetry(ctx, subject, func(current []byte) ([]byte, error) {
+	casRevision, err := c.entityBucket.UpdateWithRetryRev(ctx, subject, func(current []byte) ([]byte, error) {
 		if len(current) == 0 {
 			// Entity was deleted between our check and update - nothing to do
 			return nil, natsclient.ErrKVKeyNotFound
@@ -3470,14 +3510,14 @@ func (c *Component) removeTripleReported(ctx context.Context, subject, predicate
 		// NO write committed — bytes and revision untouched, so no cache
 		// invalidation is needed either.
 		if errors.Is(err, errNoOpRemove) {
-			return false, nil
+			return false, 0, nil
 		}
 		// Check if it's a wrapped "not found" error
 		if natsclient.IsKVNotFoundError(err) {
-			return false, nil // Entity was deleted, nothing to remove
+			return false, 0, nil // Entity was deleted, nothing to remove
 		}
 		atomic.AddInt64(&c.errors, 1)
-		return false, errs.Wrap(err, "Component", "RemoveTriple", "CAS update")
+		return false, 0, errs.Wrap(err, "Component", "RemoveTriple", "CAS update")
 	}
 
 	// Committed via the write gate — clear any stale poison entry (D3b).
@@ -3486,7 +3526,7 @@ func (c *Component) removeTripleReported(ctx context.Context, subject, predicate
 	// Read-after-write coherence: drop the cached entity so a query reflects
 	// the removed predicate (consumers clear markers via remove on reset).
 	c.invalidateEntityCacheEntry(subject)
-	return true, nil
+	return true, casRevision, nil
 }
 
 // ============================================================================

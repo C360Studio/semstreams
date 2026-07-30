@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // The add lane deduplicates by six-field tuple server-side (gh#697/gh#713), so
@@ -309,5 +310,47 @@ func TestClassifyAppendResponseCountsDeduplicatedAsAccountedFor(t *testing.T) {
 				t.Fatalf("unexpected anomaly for %#v: %v", tt.response, anomaly)
 			}
 		})
+	}
+}
+
+// Codex C1, end-to-end at the consumer that makes it dangerous. AppendEvidence
+// checks response.Degraded BEFORE it inspects FailedSubjects, so a server that
+// flags a FAILED subject as degraded pushes the client into committed
+// verification — and a not-found gets reported as committed.
+//
+// The server must therefore never combine FailedSubjects with Degraded. This
+// pins the client behavior for the shape the server now emits.
+func TestAppendEvidenceAbsentEntityIsNotCommitted(t *testing.T) {
+	t.Parallel()
+	req := validCreateMutation()
+	evidence := message.Triple{
+		Subject: req.Entity.ID, Predicate: "shared.value.p", Object: "evidence",
+	}
+
+	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
+		// The corrected server shape for an absent entity: the subject failed,
+		// nothing committed, NOT degraded, no revision.
+		subjectAddTriplesBatch: {{data: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
+			WrittenCount:   0,
+			FailedSubjects: map[string]string{req.Entity.ID: "entity not found"},
+		})}},
+		subjectQueryEntity: {{err: errs.ClassifiedCodeDetail(
+			errs.ErrorInvalid, graph.ErrorCodeEntityNotFound, nil, errors.New("entity absent"),
+		)}},
+	}}
+	client := newMutationTestClient(t, rpc)
+
+	receipt, err := client.AppendEvidence(context.Background(), AppendEvidenceMutation{
+		Contract: req.Contract, EntityID: req.Entity.ID,
+		Evidence: []message.Triple{evidence}, Metadata: req.Metadata,
+	})
+
+	if receipt.Commit != CommitNotCommitted {
+		t.Fatalf("commit = %q, want %q — an absent entity committed nothing",
+			receipt.Commit, CommitNotCommitted)
+	}
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) || mutationErr.Kind != MutationNotFound {
+		t.Fatalf("error = %#v, want kind %q", mutationErr, MutationNotFound)
 	}
 }

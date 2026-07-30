@@ -347,7 +347,7 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 	// AddTriple uses triple.Subject as entity ID. deduplicated=true is a
 	// SUCCESS with nothing committed: the entity already carried the identical
 	// six-field tuple, so no revision advanced and no watcher fired.
-	deduplicated, err := c.addTripleLane(ctx, req.Triple, dedupLaneAdd)
+	deduplicated, committedRevision, err := c.addTripleLane(ctx, req.Triple, dedupLaneAdd)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
 			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
@@ -358,11 +358,7 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 		return nil, rejectFromError(err)
 	}
 
-	// Get revision after successful mutation for feedback loop prevention. On
-	// the suppressed path this reports the entity's LIVE, unchanged revision —
-	// the read-your-writes comparison a caller makes against the graph-index
-	// envelope must not degrade to zero just because the write was a no-op.
-	kvRevision, degradedReason := c.revisionAfterMutation(ctx, req.Triple.Subject)
+	kvRevision, degradedReason := c.mutationRevision(ctx, req.Triple.Subject, committedRevision, !deduplicated)
 
 	return json.Marshal(graph.AddTripleResponse{
 		MutationResponse: graph.MutationResponse{
@@ -376,23 +372,59 @@ func (c *Component) handleTripleAdd(ctx context.Context, data []byte) ([]byte, e
 	})
 }
 
-// revisionAfterMutation reads back the live KV revision of an entity a
-// triple-mutation handler just acted on, returning a DegradedReason instead of
-// silently reporting zero when the read-back fails.
+// mutationRevision resolves the KV revision a triple-mutation response reports,
+// and the DegradedReason (if any) that goes with it. It has exactly two modes,
+// and which one applies is decided by whether THIS call committed a write.
 //
-// Zero is the unsafe value here. Consumers compare the reported revision
-// against the graph-index envelope's indexed_revision (`IndexedRevision >=
-// myRev`); over-reporting is harmless because revisions are monotonic, but
-// under-reporting to zero makes that check pass VACUOUSLY — the caller believes
-// its write is visible when nothing established that. Routing a failed
-// read-back to a degraded response follows handleEntityUpdateWithTriples, which
-// has made the same distinction since #120. The write itself is already
-// committed at this point, so this is never a failure — only an unconfirmed
-// echo, and callers MUST NOT retry on it.
-func (c *Component) revisionAfterMutation(ctx context.Context, entityID string) (revision uint64, degradedReason string) {
+// committed=true — report `committedRevision`, the exact revision this call's
+// own CAS produced, and never degrade. This must NOT be a re-read: another
+// writer can commit between the CAS and a post-hoc Get, and the Get would then
+// return that writer's revision. The rule engine's feedback-loop tracker
+// attributes the reported revision to itself and `shouldSkipRule` consumes it
+// once, so a mis-attributed revision makes the rule silently DROP the other
+// writer's genuine change (Codex C2).
+//
+// committed=false — the call was a no-op (suppressed duplicate, or a removal
+// that matched nothing). Nothing was written, so there is no owned revision;
+// report the entity's LIVE revision so a caller's read-your-writes check still
+// resolves, and NEVER mark it degraded. "Degraded" means a write committed but
+// its echo failed; a no-op has no write to echo, and the response's
+// Deduplicated / Removed flag already tells the caller not to claim the
+// revision. If that live read itself fails we report 0 rather than degrading
+// (Codex C1) — an accepted residual: a caller then sees Deduplicated/Removed
+// with KVRevision 0, which is NO read-your-writes anchor, and must read
+// authoritative state if it needs one. Degrading it instead would re-open the
+// failure where a client branching on Degraded treats a no-op as committed.
+//
+// NOTE the two consumers want different things and must not be conflated: the
+// readiness check (`IndexedRevision >= myRev`) tolerates over-reporting because
+// revisions are monotonic; the rule tracker does not tolerate it at all.
+func (c *Component) mutationRevision(
+	ctx context.Context, entityID string, committedRevision uint64, committed bool,
+) (revision uint64, degradedReason string) {
+	if committed {
+		if committedRevision == 0 {
+			// UNREACHABLE against real NATS, and kept deliberately: JetStream KV
+			// revisions are stream sequences that start at 1, so a committed
+			// write cannot yield 0. This is an invariant assertion against a
+			// non-conforming backend, not a live path — do not go hunting for
+			// one. Its job is to stop a bare zero being passed off as a
+			// revision, because the caller's read-your-writes check
+			// (`IndexedRevision >= myRev`) is satisfied vacuously by zero.
+			//
+			// The reason text must NOT claim a read-back: this path performs no
+			// post-write read at all, and saying otherwise misdirects whoever
+			// reads the response.
+			return 0, "commit reported no revision"
+		}
+		return committedRevision, ""
+	}
 	entry, err := c.entityBucket.Get(ctx, entityID)
 	if err != nil {
-		return 0, degradedReadbackErrPrefix + err.Error()
+		// A no-op whose live read failed is still a no-op, not a degraded
+		// commit. Report no revision; the caller was never entitled to claim
+		// one for a write it did not make.
+		return 0, ""
 	}
 	return entry.Revision, ""
 }
@@ -424,8 +456,8 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 		return nil, err
 	}
 
-	written, deduplicated, failed, err := c.addTriplesLane(ctx, req.Triples, dedupLaneAddBatch)
-	if err != nil && len(failed) == 0 {
+	result, err := c.addTriplesLane(ctx, req.Triples, dedupLaneAddBatch)
+	if err != nil && len(result.FailedSubjects) == 0 {
 		// Whole-batch failure: nothing committed. ADR-060: hard failure →
 		// typed error. Classify by the error's nature — pre-CAS validation
 		// (empty subject/predicate, WrapInvalid) is invalid_request; a context
@@ -448,7 +480,7 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 	// written counts NEWLY appended tuples only; Deduplicated carries the rest,
 	// so a fully-suppressed batch is (0 written, 0 failed, nil error) and stays
 	// distinguishable from an empty request.
-	kvRevision, degradedReason := c.singleSubjectRevision(ctx, req.Triples)
+	kvRevision, degradedReason := c.singleSubjectRevision(ctx, req.Triples, result)
 	return json.Marshal(graph.AddTriplesBatchResponse{
 		MutationResponse: graph.MutationResponse{
 			Degraded:       degradedReason != "",
@@ -456,30 +488,30 @@ func (c *Component) handleTripleAddBatch(ctx context.Context, data []byte) ([]by
 			Timestamp:      time.Now().UnixNano(),
 			KVRevision:     kvRevision,
 		},
-		WrittenCount:   written,
-		Deduplicated:   deduplicated,
-		FailedSubjects: failed,
+		WrittenCount:   result.Written,
+		Deduplicated:   result.Deduplicated,
+		FailedSubjects: result.FailedSubjects,
 	})
 }
 
-// singleSubjectRevision reports the live KV revision of the batch's target
-// entity when every triple shares one subject.
+// singleSubjectRevision reports the KV revision for a batch that targets exactly
+// one entity — the shape pkg/projection's AppendEvidence uses, whose receipt
+// carries this value into a read-your-writes comparison.
 //
-// It exists so a suppressed append does not degrade a caller's read-your-writes
-// check: pkg/projection's AppendEvidence rides this handler and is
-// single-entity by contract, and its receipt's KVRevision is compared against
-// the graph-index envelope's indexed_revision. A no-op write must still report
-// the entity's unchanged live revision.
+// Four outcomes, deliberately distinct:
 //
-// Three outcomes, deliberately distinct:
-//
-//   - single subject, read-back OK → the live revision.
-//   - single subject, read-back FAILED → (0, reason). The caller marks the
-//     response degraded rather than passing a bare zero off as a revision.
-//   - MULTIPLE subjects → (0, ""). Not an error and not degraded: a batch
-//     spanning entities has no single entity revision, so the correct answer is
-//     to report none. Callers needing per-entity revisions must read them back.
-func (c *Component) singleSubjectRevision(ctx context.Context, triples []message.Triple) (revision uint64, degradedReason string) {
+//   - MULTIPLE subjects → (0, ""). A batch spanning entities has no single
+//     entity revision. Undefined, not degraded.
+//   - the subject FAILED → (0, ""). It did not commit, so there is no revision
+//     to report and nothing to degrade. Marking a failure degraded is the
+//     dangerous case: AppendEvidence checks Degraded BEFORE it looks at
+//     FailedSubjects, so a degraded-flagged failure enters committed
+//     verification and can be reported as committed (Codex C1).
+//   - the subject COMMITTED → the exact revision its CAS produced.
+//   - the subject was wholly SUPPRESSED → its live revision, never degraded.
+func (c *Component) singleSubjectRevision(
+	ctx context.Context, triples []message.Triple, result addTriplesResult,
+) (revision uint64, degradedReason string) {
 	if len(triples) == 0 {
 		return 0, ""
 	}
@@ -489,7 +521,11 @@ func (c *Component) singleSubjectRevision(ctx context.Context, triples []message
 			return 0, ""
 		}
 	}
-	return c.revisionAfterMutation(ctx, subject)
+	if _, failed := result.FailedSubjects[subject]; failed {
+		return 0, ""
+	}
+	committedRevision, committed := result.CommittedRevisions[subject]
+	return c.mutationRevision(ctx, subject, committedRevision, committed)
 }
 
 // handleTripleRemove handles remove triple requests from rule processor and other components
@@ -502,16 +538,15 @@ func (c *Component) handleTripleRemove(ctx context.Context, data []byte) ([]byte
 	// RemoveTriple takes subject (entity ID) and predicate. Removing from a
 	// missing entity is an idempotent no-op success on the handler side, so a
 	// non-nil error here is a genuine internal failure (transient).
-	removed, err := c.removeTripleReported(ctx, req.Subject, req.Predicate)
+	removed, committedRevision, err := c.removeTripleReported(ctx, req.Subject, req.Predicate)
 	if err != nil {
 		return nil, rejectFromError(err)
 	}
 
-	// Get revision after successful mutation for feedback loop prevention.
-	// removed=false means nothing was committed, so this revision belongs to
-	// whoever wrote last — Removed reports which, so a caller cannot attribute
-	// another writer's revision to its own no-op.
-	kvRevision, degradedReason := c.revisionAfterMutation(ctx, req.Subject)
+	// removed=true → this call's own CAS revision. removed=false → a no-op, so
+	// report the entity's live revision (never degraded) and let Removed tell
+	// the caller not to claim it as its own.
+	kvRevision, degradedReason := c.mutationRevision(ctx, req.Subject, committedRevision, removed)
 
 	return json.Marshal(graph.RemoveTripleResponse{
 		MutationResponse: graph.MutationResponse{

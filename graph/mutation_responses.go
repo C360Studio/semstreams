@@ -38,19 +38,36 @@ import (
 // Partial-batch success is also a success body, not an error: see
 // AddTriplesBatchResponse (FailedSubjects is the partial signal).
 //
-// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch) DO use
-// Degraded: each reads the entity's live revision back after acting, and that
-// read can fail independently of the write. They set Degraded rather than
-// reporting KVRevision 0, because zero is the unsafe value for the caller's
-// `IndexedRevision >= myRev` read-your-writes check — it makes that comparison
-// pass vacuously. A multi-subject AddTriplesBatch is a separate case: it omits
-// KVRevision entirely and is NOT degraded, because a batch spanning entities
-// has no single entity revision to report.
+// Degraded is scoped to COMMITTED writes ONLY, on every handler. A failure and
+// a no-op are neither, and flagging either one degraded is unsafe rather than
+// merely imprecise: pkg/projection's AppendEvidence branches on Degraded BEFORE
+// it inspects FailedSubjects, so a degraded-flagged failure enters committed
+// verification and can be reported as committed.
+//
+// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch) therefore
+// resolve KVRevision from whether the write committed:
+//
+//   - COMMITTED → the exact revision that write's own CAS produced. NOT a
+//     value re-read afterwards: another writer can commit in between, and a
+//     caller attributing the re-read revision to itself is then holding
+//     someone else's. Never degraded on this path unless the commit somehow
+//     yielded no revision at all.
+//   - SUPPRESSED as a duplicate, or a removal that matched nothing → the
+//     entity's live unchanged revision, so a read-your-writes check usually
+//     still resolves. That live read can itself fail, in which case KVRevision
+//     is 0: a no-op has no committed write to fall back on, and reporting it as
+//     degraded would re-open the failure above. A caller seeing Deduplicated or
+//     Removed together with KVRevision 0 therefore has NO read-your-writes
+//     anchor and must read authoritative state if it needs one. Never degraded
+//     on this path: nothing committed, so there is no echo to fail, and
+//     Deduplicated / Removed already tell the caller not to claim the revision.
+//   - FAILED → no revision, not degraded.
+//   - A multi-subject AddTriplesBatch → no revision, not degraded: a batch
+//     spanning entities has no single entity revision to report.
 type MutationResponse struct {
-	// Degraded is true when the write committed but the post-write
-	// read-back failed. See the type docstring for the full contract; every
-	// entity- and triple-mutation handler populates it. Omitted in JSON when
-	// false.
+	// Degraded is true when the write COMMITTED but the post-write read-back
+	// failed. It is never set for a failure or a no-op. See the type docstring
+	// for the full contract. Omitted in JSON when false.
 	Degraded bool `json:"degraded,omitempty"`
 	// DegradedReason carries the read-back failure reason when Degraded is
 	// true (ADR-060: replaces the retired Error field on the degraded path).
@@ -199,8 +216,15 @@ type UpdateEntityWithTriplesResponse struct {
 // committed: the KV revision, entity version, and update timestamp are
 // unchanged and no ENTITY_STATES watcher fired. It is a success, not a failure
 // — a producer that re-derives its facts on restart is expected to hit it.
-// KVRevision is still the entity's live revision, never zero, so a caller's
-// read-your-writes comparison stays valid across a suppressed write.
+//
+// KVRevision follows the rule in MutationResponse: on a COMMITTED add it is the
+// revision this write's own CAS produced, and on a suppressed one it is the
+// entity's live revision — which may be 0 if that live read failed. A caller
+// that sees Deduplicated with KVRevision 0 has NO read-your-writes anchor from
+// this response and must read authoritative state if it needs one. A caller
+// tracking its own writes must not record the revision at all when
+// Deduplicated is true: nothing was written, so the value belongs to whoever
+// wrote last.
 type AddTripleResponse struct {
 	MutationResponse
 	Triple       *message.Triple `json:"triple,omitempty"`
@@ -261,7 +285,9 @@ type AddTriplesBatchResponse struct {
 // first. On a no-op the reported revision is whatever the last OTHER writer
 // produced, and claiming it as your own (the rule engine's per-rule
 // feedback-loop tracker does exactly this) makes you drop that writer's
-// genuine change.
+// genuine change. That no-op revision is a live read, which can itself fail and
+// leave KVRevision 0 — so Removed=false with KVRevision 0 carries no
+// read-your-writes anchor either; read authoritative state if you need one.
 type RemoveTripleResponse struct {
 	MutationResponse
 	Removed bool `json:"removed"`
