@@ -35,6 +35,8 @@ func TestIntegration_PublishToStreamAsync_PipelinesAndDrains(t *testing.T) {
 		Name:     "ASYNC_STREAM",
 		Subjects: []string{"async.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -90,6 +92,8 @@ func TestIntegration_PublishToStreamAsync_Ordering(t *testing.T) {
 		Name:     "ASYNC_ORDER_STREAM",
 		Subjects: []string{"asyncorder.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -159,6 +163,8 @@ func TestIntegration_PublishToStreamAsyncWithMsgID_Dedup(t *testing.T) {
 		Subjects:   []string{"asyncmsgid.>"},
 		Storage:    jetstream.MemoryStorage,
 		Duplicates: 2 * time.Minute,
+		MaxAge:     testStreamMaxAge,
+		MaxBytes:   testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -199,6 +205,8 @@ func TestIntegration_PublishBatchToStream(t *testing.T) {
 		Name:     "BATCH_STREAM",
 		Subjects: []string{"batch.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -265,6 +273,8 @@ func TestIntegration_PublishToStreamAsync_StampsTraceAndMsgID(t *testing.T) {
 		Name:     "ASYNC_HDR_STREAM",
 		Subjects: []string{"asynchdr.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -320,6 +330,8 @@ func TestIntegration_PublishToStreamAsync_EnqueueResetsCircuit(t *testing.T) {
 		Name:     "ASYNC_RESET_STREAM",
 		Subjects: []string{"asyncreset.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 
@@ -355,6 +367,8 @@ func TestIntegration_PublishBatchToStream_CtxCancel(t *testing.T) {
 		Name:     "BATCH_CANCEL_STREAM",
 		Subjects: []string{"batchcancel.>"},
 		Storage:  jetstream.MemoryStorage,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	})
 	require.NoError(t, err)
 

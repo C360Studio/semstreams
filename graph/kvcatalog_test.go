@@ -18,7 +18,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 22, "the catalog carries the 22 framework-guaranteed buckets")
+	assert.Len(t, seen, 23, "the catalog carries the 23 framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -99,7 +99,7 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 // and NOT the write-open COMPONENT_STATUS.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
-	assert.Len(t, owned, 21)
+	assert.Len(t, owned, 22)
 	for _, name := range []string{
 		BucketEntityStates, BucketPredicateIndex, BucketIncomingIndex, BucketOutgoingIndex,
 		BucketAliasIndex, BucketNameIndex, BucketEntitySuffixIndex, BucketSpatialIndex,
@@ -107,7 +107,7 @@ func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
 		BucketCommunitySummaries, BucketAnomalyIndex, BucketStructuralIndex,
 		BucketGraphIngestAppliedSeq, BucketGraphStatus,
-		BucketOwnerClaims, BucketOwnerPresence,
+		BucketOwnerClaims, BucketOwnerPresence, BucketStorageReport,
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}

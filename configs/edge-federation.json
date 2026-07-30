@@ -44,6 +44,16 @@
       }
     }
   },
+  "streams": {
+    "EDGE": {
+      "subjects": [
+        "edge.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 67108864,
+      "discard": "old"
+    }
+  },
   "components": {
     "udp": {
       "type": "input",

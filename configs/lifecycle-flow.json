@@ -58,6 +58,24 @@
       }
     }
   },
+  "streams": {
+    "MISSION": {
+      "subjects": [
+        "mission.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 67108864,
+      "discard": "old"
+    },
+    "RAW": {
+      "subjects": [
+        "raw.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    }
+  },
   "components": {
     "udp": {
       "type": "input",

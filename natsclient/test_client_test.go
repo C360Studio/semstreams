@@ -64,6 +64,8 @@ func TestNewTestClient_WithJetStream(t *testing.T) {
 	streamCfg := jetstream.StreamConfig{
 		Name:     "TEST_STREAM",
 		Subjects: []string{"test.>"},
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
 	}
 
 	stream, err := testClient.Client.CreateStream(ctx, streamCfg)

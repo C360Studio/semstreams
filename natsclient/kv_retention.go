@@ -10,25 +10,19 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// kvStreamPrefix is the NATS naming convention for a KV bucket's backing stream:
-// KV_<bucket> (nats.go jetstream/kv.go, kvBucketNamePre = "KV_"). A KV bucket's
-// lifecycle-eviction config — MaxAge (the bucket TTL) and MaxBytes (a size cap)
-// — lives on that stream's Config and is UpdateStream-mutable, which is what
-// makes the reconcile below possible. It is the KV analogue of the ObjectStore's
-// OBJ_<bucket> (storage/objectstore/retention.go).
-const kvStreamPrefix = "KV_"
-
 // kvBackingStreamRetention reads a KV bucket's backing-stream lifecycle-eviction
 // config: maxAge (the bucket TTL — age eviction) and maxBytes (size eviction;
-// -1/0 = unlimited). It mirrors backingStreamRetention in
-// storage/objectstore/retention.go but reaches the KV backing stream
-// (KV_<bucket>) through the JetStream context so the caller can subsequently
+// -1/0 = unlimited). That config lives on the KVStreamPrefix+<bucket> backing
+// stream and is UpdateStream-mutable, which is what makes the reconcile below
+// possible (prefix defined once in backing_stream_prefix.go). It mirrors
+// backingStreamRetention in storage/objectstore/retention.go but reaches the KV
+// backing stream through the JetStream context so the caller can subsequently
 // UpdateStream to strip a binding config. Pairs with the pure
 // CheckNoLifecycleRetention for the actual classification.
 func kvBackingStreamRetention(
 	ctx context.Context, js jetstream.JetStream, bucket string,
 ) (maxAge time.Duration, maxBytes int64, err error) {
-	stream, err := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, err := js.Stream(ctx, KVStreamPrefix+bucket)
 	if err != nil {
 		return 0, 0, errs.WrapTransient(err, "KVStore", "kvBackingStreamRetention",
 			fmt.Sprintf("get backing stream for KV bucket %q", bucket))
@@ -85,7 +79,7 @@ func ReconcileNoLifecycleRetention(
 
 	// Reconcile: strip the binding retention config in place. Non-destructive —
 	// stops future eviction, deletes nothing.
-	stream, gerr := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, gerr := js.Stream(ctx, KVStreamPrefix+bucket)
 	if gerr != nil {
 		return errs.WrapTransient(gerr, "KVStore", "ReconcileNoLifecycleRetention",
 			fmt.Sprintf("get backing stream to reconcile KV bucket %q", bucket))

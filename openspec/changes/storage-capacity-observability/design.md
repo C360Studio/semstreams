@@ -73,10 +73,33 @@ enforceable.
 Inventory enumerates JetStream directly rather than reporting the `trackStream` map. A resource
 created by a prior deploy, a sister process, or an operator out-of-band is exactly the resource most
 likely to be the growth problem, and it is precisely what a client-touched inventory cannot see.
-Enumeration uses the paged listing that already returns full stream info — config and state together
-— rather than a names listing followed by a describe per resource, which would be an avoidable N+1
-against the account. The existing tracked-stream metrics stay as they are; this is an additional,
-account-scoped view.
+The existing tracked-stream metrics stay as they are; this is an additional, account-scoped view.
+
+**The cost bound forbids O(N) round-trips — a describe call per resource — not "exactly one API
+call."** Resource configuration and state come from the paged listing that already returns both
+together, never from a follow-up describe. A second *paged* listing is O(pages) with a cheaper
+per-page payload, not an N+1, and one is required for correctness (below).
+
+**The info listing alone is not account-complete, and cannot report that it isn't.** The server moves
+any stream carrying an `offlineReason` out of `Streams` and into `Missing`/`Offline`
+(`nats-server/v2@v2.12.4/server/jetstream_api.go:502-503`, `:2046-2074`) while still counting it in
+`Total`. The Go client parses neither field and exposes no `Total` accessor (`nats.go@v1.48.0`
+`jetstream/jetstream.go:411-415`, `api.go:29-33`), so a collector reading only `ListStreams` publishes
+a complete-looking inventory that silently omits exactly the resources nobody can read, bound, or
+watch grow. This is not clustered-only: `server/jetstream.go:1334-1342` sets `offlineReason` on the
+**standalone single-server** recovery path when a persisted stream config or consumer requires a
+higher API level than the running binary — a NATS image rollback, which is precisely when an operator
+needs the storage view most.
+
+The names listing does NOT filter offline streams (`jetstream_api.go:1932-1949` appends every
+`filteredStreams` entry unconditionally), so names-minus-infos is exactly the unreadable set. Those
+resources are published as rows with a real name, kind and bucket from `ClassifyBackingStream`, and
+unknown tier and capacity. This is what gives "unknown capacity" its first groundable production
+producer rather than leaving the state near-unreachable.
+
+The two listings are not a consistent snapshot: a stream deleted between them yields a transient
+unknown row. That is the correct trade — a phantom row that resolves on the next collection is
+strictly better than a silent omission that never does.
 
 Collection is interval-driven with a timeout, never on the component-start or health path, and
 degrades to last-good-with-timestamp. A monitoring surface that can take down the system it monitors
@@ -125,12 +148,99 @@ Summing across tiers would produce a number that means nothing.
 An in-process sample window is the obvious implementation and it is self-defeating: every restart
 blanks the projection for a full window, and the longer the window needed to keep a burst from
 tripping `critical`, the longer the blackout. A deploy-loop or crash-loop — when the projection
-matters most — would guarantee there is never one. The rate is therefore derived from state the
-server itself retains across restarts, computable from a stream's own first/last timestamps and byte
-count, needing no local history. Where history is insufficient, the rate reports unknown rather than
-extrapolating from one observation.
+matters most — would guarantee there is never one.
 
-### 8. Report-only, and the gate future enforcement must clear
+The tempting fix is to read a stream's own `FirstTime`/`LastTime` span and divide its byte count by
+it, needing no history at all. **That is wrong for most of the catalog and was corrected here rather
+than shipped.** It is defensible for a bounded stream at steady state, where the span is effectively
+the retention window — but a KV bucket under `History` 1 compacts superseded revisions, so an
+actively churning bucket holds roughly constant bytes while its timestamps span a long window.
+Bytes-over-span would report sustained growth, and project exhaustion, for a bucket whose size never
+changes. More fundamentally, a single snapshot cannot distinguish "grew to 100 MB over a year" from
+"grew to 100 MB yesterday," and those demand opposite operator responses.
+
+Growth is therefore Δbytes over Δt across **successive observations**, and the per-key history of the
+report bucket (decision 8) is where those observations already live — restart-surviving by
+construction, with no separate sample store to build. This is why the report bucket sequences ahead
+of the growth work rather than after it. Where fewer than two observations exist, the rate reports
+unknown rather than extrapolating from one.
+
+### 8. The report is published to KV; HTTP and CLI are consumers, not the surface
+
+The report is written to a framework-owned KV bucket, one key per resource, and every operator-facing
+surface reads from there. Applying the 4-test heuristic gives an unambiguous answer: on restart a
+consumer needs the current report immediately rather than resumption from last ack (re-delivery of
+current state is correct recovery); the gateway, CLI, alert rule, and metrics exporter should all
+react rather than one dequeuing; consuming a report is fast and idempotent; and it is a fact about
+the world — the spec calls pressure a *state*. Four for KV, no conflict, so nothing here is two
+concepts conflated.
+
+The twofer then pays three times. `Get`/range is the operator read, so decision 4.4's "named
+transport" needs no new invention. `Watch` is the fan-out that gives the pressure gauge a consumer at
+merge time rather than leaving it a phantom signal. And per-key history is a restart-surviving growth
+series — the same job decision 7 solves from server-retained state, now with a second and better
+source that retains the *computed* row rather than raw byte counts.
+
+**One key per resource, not one report blob.** A single blob would be bounded by the NATS max payload
+on a large account, which is what would otherwise push the report toward ObjectStore. Per-resource
+keys remove that ceiling entirely, make history per-resource rather than per-snapshot, and let a
+disappeared resource be reclaimed by a KV delete — a semantic deletion the collector performs,
+which is the ADR-068-correct mechanism, rather than a retention policy this change has spent its
+whole argument refusing to add.
+
+**ObjectStore is deliberately NOT used, and the reason is a trap worth recording.** The framework has
+no bounded object lane: merged `graph-retention` requires content ObjectStores to carry no lifecycle
+retention (the constructor stamps none, boot strips any), and the `windowed` lifetime class that
+would have provided one was retired with `bounded-storage-operability`. A report-detail store would
+therefore grow without bound and without any legal way to expire it — making the observability
+system the exact unbounded-growth case it exists to detect. Per-resource keys mean the question
+never arises.
+
+The cost is that a consumer ranging the bucket sees a mix of revisions rather than an atomic
+snapshot. That is consistent with what the inventory already is — eventually consistent across its
+two listings — and every row carries its own collection timestamp so a consumer can see the spread.
+
+The bucket is declared in the descriptor catalog like every other framework-guaranteed bucket
+(operational class, owner-only writes, no-lifecycle retention with bounded History), following the
+`GRAPH_STATUS` precedent. Note the self-reference this creates: the inventory will report its own
+bucket. That is honest and correct — the observer is a real storage resource — and bounded History
+keeps it from being the thing that fills the account.
+
+### 9. The collector is a Service, not a Component
+
+Storage observability watches the **substrate**, not the flow. Its peers are already services —
+`flow_runtime_health`, `flow_runtime_metrics`, `metrics_forwarder`, `log_forwarder`, `heartbeat`,
+`pprof` — and every one of them is infrastructure observability. A component is a flow participant
+with ports that processes messages; the collector has no ports and never receives or emits one.
+Filing it as a component would place substrate monitoring in the data-flow graph as though it were a
+pipeline stage.
+
+The `Service` interface (`service/base.go:486`) settles it independently: it declares
+`Health() health.Status` and `RegisterMetrics(metric.MetricsRegistrar) error`. Tasks 4.3 and 4.1 are
+exactly those two methods, so the component route would mean reimplementing inside a component what
+the service contract already requires.
+
+**A restart is the supported way to change this service's configuration**, and that is a deliberate
+narrowing of an earlier position. Hot reconfiguration matters when a stale value silently drives a
+durable resource to the wrong policy — the capacity-ceiling case, where the damage is invisible and
+persistent. A stale threshold is not that: it evaluates pressure with old numbers until restart,
+visibly, destroying nothing. Restarting the collector is cheap precisely because section 3 put the
+report and its growth series in KV, where they survive the restart. The service constructor signature
+(`Constructor func(rawConfig json.RawMessage, deps *Dependencies) (Service, error)`) also makes
+build-from-config the natural service shape, so requiring live re-reads would be swimming upstream
+for a knob a reboot handles.
+
+The `ThresholdSource` seam from section 3 stays because it already exists and costs one function
+type — an operator who wants to retune during an incident can, without restarting the monitoring they
+are relying on. But nothing depends on it, and no work should be spent extending it.
+
+One cost is accepted knowingly rather than discovered later: **no service has a generated schema** —
+all 34 entries in `schemas/` are components. The operator surface is protected by a JSON round-trip
+test, which is the project's stated bar, but the asymmetry is a real framework gap and is filed as
+such rather than absorbed silently. (The `isHTTPManager` gating on service config-change watching,
+`service/service_manager.go:864`, is moot under the restart posture above.)
+
+### 10. Report-only, and the gate future enforcement must clear
 
 Nothing here rejects, throttles, degrades, or evicts. This is sequencing, not timidity: pressure-driven
 enforcement built on an unmeasured, untrusted signal is how the predecessor went wrong.

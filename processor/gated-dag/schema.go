@@ -124,6 +124,37 @@ func (c Config) Schema() component.ConfigSchema {
 				Default:     defaultDispatchStreamMaxAge,
 				Category:    "advanced",
 			},
+			"dispatch_stream_max_bytes": {
+				// "int", not "integer": the generator maps Go-style spellings and
+				// falls back to "string" for anything it does not recognize.
+				Type: "int",
+				Description: "Size ceiling for the dispatch stream, in bytes. Must be > 0: 0 and -1 both mean " +
+					"unlimited to JetStream, and an unbounded work stream exhausts the account's whole storage " +
+					"tier rather than only itself.",
+				Default:  defaultDispatchStreamMaxBytes,
+				Category: "advanced",
+			},
+			"dispatch_stream_discard": {
+				Type: "string",
+				Description: "Behavior at the size ceiling: 'new' refuses the newest dispatch (default; the " +
+					"executor rolls the claim back and the unit re-selects), 'old' evicts the oldest (which " +
+					"silently strands whichever unit's dispatch is dropped). Only safe as 'new' when " +
+					"dispatch_stream_retention deletes on ack; 'limits' + 'new' is rejected.",
+				Default:  defaultDispatchStreamDiscard,
+				Enum:     []string{"new", "old"},
+				Category: "advanced",
+			},
+			"dispatch_stream_retention": {
+				Type: "string",
+				Description: "Retention policy for the dispatch stream: 'workqueue' (default) deletes each " +
+					"dispatch once it is acked, so dispatch_stream_max_bytes is reached by genuine backlog; " +
+					"'limits' retains processed dispatches until max_age, so the ceiling fills with acked " +
+					"history. Choose 'limits' only when several independent consumers read the same dispatch " +
+					"subject, and pair it with discard 'old'. Cannot be changed on an existing stream.",
+				Default:  defaultDispatchStreamRetention,
+				Enum:     []string{"workqueue", "limits"},
+				Category: "advanced",
+			},
 			"dispatch_dedupe_window": {
 				Type:        "string",
 				Description: "Server-side duplicate-detection window (Nats-Msg-Id=unitID). Must be >= backstop_interval; makes the claim-rollback safe against an ack-timeout-after-persist (ADR-070 B1).",

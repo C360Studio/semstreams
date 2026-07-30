@@ -360,8 +360,19 @@ func TestJetStreamMethods(t *testing.T) {
 		assert.NoError(t, err)
 		ctx := context.Background()
 
-		// All should return ErrNotConnected when not connected
-		cfg := jetstream.StreamConfig{Name: "test", Subjects: []string{"test.*"}}
+		// All should return ErrNotConnected when not connected.
+		//
+		// The stream config declares its bounds so this still tests the CONNECTION
+		// check: CreateStream validates bounds before it looks at connection state
+		// (an under-declared config is invalid whether or not a server is reachable),
+		// so an unbounded config here would be refused for the wrong reason and the
+		// assertion below would pass for nothing.
+		cfg := jetstream.StreamConfig{
+			Name:     "test",
+			Subjects: []string{"test.*"},
+			MaxAge:   testStreamMaxAge,
+			MaxBytes: testStreamMaxBytes,
+		}
 		_, err = client.CreateStream(ctx, cfg)
 		assert.Equal(t, ErrNotConnected, err)
 

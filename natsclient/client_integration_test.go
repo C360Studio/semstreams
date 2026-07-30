@@ -150,7 +150,10 @@ func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 	require.NotNil(t, js)
 
 	// Create a stream
-	cfg := jetstream.StreamConfig{Name: "UNIT_TEST", Subjects: []string{"unit.test.*"}}
+	cfg := jetstream.StreamConfig{
+		Name: "UNIT_TEST", Subjects: []string{"unit.test.*"},
+		MaxAge: testStreamMaxAge, MaxBytes: testStreamMaxBytes,
+	}
 	stream, err := client.CreateStream(ctx, cfg)
 	require.NoError(t, err)
 	require.NotNil(t, stream)

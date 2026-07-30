@@ -900,18 +900,28 @@ func (r *Registry) updateCapabilityCache(ann *CapabilityAnnouncement) {
 	r.remoteCapabilities[key] = ann
 }
 
-// InitNATS initializes NATS JetStream capability discovery using natsclient.Client.
-// Creates the COMPONENT_CAPABILITIES stream if it doesn't exist.
-func (r *Registry) InitNATS(ctx context.Context, client *natsclient.Client, nodeID string) error {
-	r.mu.Lock()
-	r.natsClient = client
-	r.nodeID = nodeID
-	r.remoteCapabilities = make(map[string]*CapabilityAnnouncement)
-	r.mu.Unlock()
-
-	// Create COMPONENT_CAPABILITIES stream using natsclient
-	// Use explicit component types to avoid overlapping with JetStream API subjects
-	_, err := client.EnsureStream(ctx, jetstream.StreamConfig{
+// capabilitiesStreamConfig declares the COMPONENT_CAPABILITIES stream.
+//
+// It is a named function rather than a literal inside InitNATS so the declaration
+// is reachable by a test. That matters here specifically: this stream was the
+// framework's own violation of the bounds requirement it asks sister repos to
+// honor. It carried MaxMsgsPerSubject 1 and a one-hour MaxAge — bounded per
+// subject in practice — while the live server reported `max_bytes=-1 discard=old`,
+// neither of which anyone chose.
+//
+// Explicit component-type subjects avoid overlapping with JetStream API subjects.
+//
+// The size ceiling is generous relative to the data: one retained announcement per
+// component subject, each a small JSON document. 64 MiB is far above any plausible
+// fleet and is still a real ceiling on a memory-backed stream, whose bytes count
+// against the account's memory tier.
+//
+// DiscardOld is deliberate and is the only correct choice here. An announcement is
+// a FACT about a component's current capabilities, so the newest is the one worth
+// keeping; DiscardNew would refuse the fresh announcement at the ceiling and leave
+// discovery serving stale capabilities indefinitely.
+func capabilitiesStreamConfig() jetstream.StreamConfig {
+	return jetstream.StreamConfig{
 		Name: "COMPONENT_CAPABILITIES",
 		Subjects: []string{
 			"processor.capabilities.*",
@@ -923,7 +933,21 @@ func (r *Registry) InitNATS(ctx context.Context, client *natsclient.Client, node
 		Storage:           jetstream.MemoryStorage,
 		MaxMsgsPerSubject: 1,
 		MaxAge:            time.Hour,
-	})
+		MaxBytes:          64 << 20,
+		Discard:           jetstream.DiscardOld,
+	}
+}
+
+// InitNATS initializes NATS JetStream capability discovery using natsclient.Client.
+// Creates the COMPONENT_CAPABILITIES stream if it doesn't exist.
+func (r *Registry) InitNATS(ctx context.Context, client *natsclient.Client, nodeID string) error {
+	r.mu.Lock()
+	r.natsClient = client
+	r.nodeID = nodeID
+	r.remoteCapabilities = make(map[string]*CapabilityAnnouncement)
+	r.mu.Unlock()
+
+	_, err := client.EnsureStream(ctx, capabilitiesStreamConfig())
 	if err != nil {
 		return errs.Wrap(err, "Registry", "InitNATS", "ensure capabilities stream")
 	}

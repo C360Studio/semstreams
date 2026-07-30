@@ -56,6 +56,11 @@ scrape_configs:
 #         - targets:
 #           - alertmanager:9093
 
-# Rule files (optional - can be added for custom rules)
-# rule_files:
-#   - "rules/*.yml"
+# Rule files
+#
+# A glob that matches nothing is accepted, so this stays valid on a deployment
+# that does not mount the rules directory. rules/storage-pressure.yml ships the
+# example account-storage-pressure alerts: the pressure gauge has a consumer at
+# merge time rather than becoming a signal with nothing downstream.
+rule_files:
+  - "rules/*.yml"

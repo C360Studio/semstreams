@@ -83,6 +83,17 @@ run.
   (`config/streams.go:303-306`). An override names the resource, its owner, and an expiry; readiness
   reports active overrides and fails once one expires, and an override without an expiry is rejected
   so a bridge cannot become permanent.
+- Add an **archival classification** for a stream whose contract is permanence (#729), structurally
+  distinct from the expiring override. Forcing an archive through the override would mean renewing it
+  forever, which trains operators to renew without reading and destroys the signal value that makes
+  genuinely time-limited overrides worth having. Archival streams stay fully inventoried and are
+  measured against the account tier ceiling, since that is their only remaining limit.
+- Follow the bounds requirement to **every provisioning seam at creation**, and make an existing-stream
+  bind **report** declared-versus-observed divergence instead of discarding the declaration (#730).
+  `natsclient/stream.go:141-145` currently returns an existing stream and drops the caller's config in
+  silence, so a stream two components declare has its limits fixed permanently by boot order with no
+  diagnostic. Binding never restamps — a non-owner rewriting another owner's configuration is worse
+  than the drift it would correct.
 - Report unknown capacity as **unknown** — never as unlimited, and never as healthy.
 
 ## Non-goals

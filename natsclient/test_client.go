@@ -446,10 +446,7 @@ func (tc *TestClient) setupKVBuckets(ctx context.Context, buckets []string) erro
 // setupStreams creates the requested JetStream streams
 func (tc *TestClient) setupStreams(ctx context.Context, streams []TestStreamConfig) error {
 	for _, streamCfg := range streams {
-		cfg := jetstream.StreamConfig{
-			Name:     streamCfg.Name,
-			Subjects: streamCfg.Subjects,
-		}
+		cfg := testStreamConfig(streamCfg.Name, streamCfg.Subjects)
 
 		_, err := tc.Client.EnsureStream(ctx, cfg)
 		if err != nil {
@@ -457,6 +454,33 @@ func (tc *TestClient) setupStreams(ctx context.Context, streams []TestStreamConf
 		}
 	}
 	return nil
+}
+
+// Test-stream bounds. Every stream these helpers create declares them, rather
+// than the helpers taking an exemption from the bounds requirement.
+//
+// That is the point. A test path that could create an unbounded stream would let
+// the production contract go unexercised by the entire suite that uses these
+// helpers, and the suite is where the contract's own tests live — a guard nothing
+// routine drives is a guard nobody notices breaking. The values are small on
+// purpose: a test stream that outlives its container is a leak either way, and a
+// tight ceiling makes a runaway test fail loudly instead of filling the account.
+const (
+	testStreamMaxAge   = time.Hour
+	testStreamMaxBytes = 64 << 20
+)
+
+// testStreamConfig is the declared configuration the test helpers create streams
+// with. A test needing different bounds builds its own config and calls
+// EnsureStream directly — which is also how it would look in production.
+func testStreamConfig(name string, subjects []string) jetstream.StreamConfig {
+	return jetstream.StreamConfig{
+		Name:     name,
+		Subjects: subjects,
+		MaxAge:   testStreamMaxAge,
+		MaxBytes: testStreamMaxBytes,
+		Discard:  jetstream.DiscardOld,
+	}
 }
 
 // Terminate manually terminates the container and client (usually handled by t.Cleanup)
@@ -501,13 +525,10 @@ func (tc *TestClient) PrefixedBucketName(name string) string {
 	return tc.BucketPrefix + name
 }
 
-// CreateStream is a helper for creating JetStream streams during tests
+// CreateStream is a helper for creating JetStream streams during tests. The
+// stream carries declared bounds; see testStreamConfig.
 func (tc *TestClient) CreateStream(ctx context.Context, name string, subjects []string) (jetstream.Stream, error) {
-	cfg := jetstream.StreamConfig{
-		Name:     name,
-		Subjects: subjects,
-	}
-	return tc.Client.EnsureStream(ctx, cfg)
+	return tc.Client.EnsureStream(ctx, testStreamConfig(name, subjects))
 }
 
 // GetStream is a helper for getting existing JetStream streams during tests

@@ -1,7 +1,7 @@
 // kvspec.go is the MECHANISM half of the framework KV bucket catalog
 // (framework-bucket-catalog): a name-free descriptor type (BucketSpec) plus the
 // two-function acquisition seam every framework bucket goes through. The
-// POPULATION half — the one literal catalog of 22 descriptors — lives in
+// POPULATION half — the one literal catalog of 23 descriptors — lives in
 // graph/kvcatalog.go, which is deliberately NOT here: product bucket names do
 // not belong in the transport layer.
 //
@@ -339,7 +339,7 @@ func reconcileBoundedTTL(
 		return nil
 	}
 
-	stream, gerr := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, gerr := js.Stream(ctx, KVStreamPrefix+bucket)
 	if gerr != nil {
 		return errs.WrapTransient(gerr, "KVSpec", "reconcileBoundedTTL",
 			fmt.Sprintf("get backing stream to reconcile KV bucket %q", bucket))
@@ -396,7 +396,7 @@ func reconcileHistory(
 		declared = 1 // KV semantics: History 0 means depth 1
 	}
 
-	stream, gerr := js.Stream(ctx, kvStreamPrefix+bucket)
+	stream, gerr := js.Stream(ctx, KVStreamPrefix+bucket)
 	if gerr != nil {
 		return errs.WrapTransient(gerr, "KVSpec", "reconcileHistory",
 			fmt.Sprintf("get backing stream for KV bucket %q", bucket))

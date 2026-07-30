@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nats-io/nats.go/jetstream"
+
 	"github.com/c360studio/semstreams/agentic/agentrun"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
@@ -130,6 +132,15 @@ func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing
 	require.NoError(t, err, "Start must not error when the AGENT stream is absent (gh#246)")
 	require.NotNil(t, stop, "Start must return a non-nil (no-op) stop func when skipping")
 	stop() // no-op stop must not panic
+
+	// And it did not CREATE the stream to make the error go away. This subscriber is
+	// the framework's reference read-only consumer, and a stream's limits belong to
+	// the component that declares it: a consumer that reached for get-or-create
+	// would either invent limits it does not own or have its own declaration
+	// silently discarded, after which the stream's limits are decided by boot order.
+	_, getErr := tc.Client.GetStream(ctx, agentrun.AgentStreamName)
+	require.ErrorIs(t, getErr, jetstream.ErrStreamNotFound,
+		"a read-only consumer must bind by name, never provision the stream it reads")
 }
 
 // TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent confirms the normal

@@ -13,8 +13,37 @@
     "urls": ["nats://localhost:4222"]
   },
   "streams": {
+    "AGENT": {
+      "subjects": [
+        "agent.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
     "ENTITY": {
-      "subjects": ["entity.>"]
+      "subjects": [
+        "entity.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
+    },
+    "RULE": {
+      "subjects": [
+        "rule.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 67108864,
+      "discard": "old"
+    },
+    "TOOL": {
+      "subjects": [
+        "tool.>"
+      ],
+      "max_age": "24h",
+      "max_bytes": 268435456,
+      "discard": "old"
     }
   },
   "model_registry": {

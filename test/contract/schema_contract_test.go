@@ -372,9 +372,22 @@ func extractSchemaFromRegistration(name string, reg *component.Registration) map
 		prop["description"] = propSchema.Description
 
 		if propSchema.Default != nil {
-			// Normalize types since JSON unmarshal produces different types
+			// Normalize types since JSON unmarshal produces different types.
+			//
+			// EVERY integer width has to be listed. A default declared with an
+			// explicitly typed constant (int64, because the config field it fills is
+			// int64) would otherwise fall through to the default arm, stay int64, and
+			// fail comparison against the float64 a JSON decode produces — reporting
+			// "schema drift, run task schema:generate" for a schema that is not
+			// drifted and that regenerating cannot change.
 			switch v := propSchema.Default.(type) {
 			case int:
+				prop["default"] = float64(v)
+			case int32:
+				prop["default"] = float64(v)
+			case int64:
+				prop["default"] = float64(v)
+			case float32:
 				prop["default"] = float64(v)
 			case []string:
 				// Convert []string to []any for JSON comparison compatibility

@@ -12,11 +12,13 @@ import (
 )
 
 // objectStoreStreamPrefix is the NATS naming convention for an ObjectStore's
-// backing stream: OBJ_<bucket> (nats.go jetstream/object.go, objNameTmpl =
-// "OBJ_%s"). The store's lifecycle-eviction config — MaxAge (the ObjectStore
-// TTL) and MaxBytes (a size cap) — lives on that stream's Config and is
-// UpdateStream-mutable, which is what makes the D2 reconcile below possible.
-const objectStoreStreamPrefix = "OBJ_"
+// backing stream: OBJ_<bucket>. The store's lifecycle-eviction config — MaxAge
+// (the ObjectStore TTL) and MaxBytes (a size cap) — lives on that stream's
+// Config and is UpdateStream-mutable, which is what makes the D2 reconcile
+// below possible. The literal lives once in natsclient (alongside the KV
+// prefix) because the stream provisioner's refusal guard needs both and cannot
+// import this package.
+const objectStoreStreamPrefix = natsclient.ObjectStoreStreamPrefix
 
 // backingStreamRetention reads a content ObjectStore's backing-stream
 // lifecycle-eviction config: maxAge (the ObjectStore TTL — age eviction) and

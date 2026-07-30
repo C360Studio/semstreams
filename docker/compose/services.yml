@@ -156,6 +156,10 @@ services:
       - "9090:9090"
     volumes:
       - ../../configs/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alert rules, referenced by prometheus.yml's rule_files glob. Mounted so
+      # the example storage-pressure alerts are actually LOADED rather than
+      # being a file in the repo nobody evaluates.
+      - ../../configs/prometheus/rules:/etc/prometheus/rules:ro
       - prometheus-data:/prometheus
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"

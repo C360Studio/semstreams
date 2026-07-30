@@ -1383,6 +1383,11 @@ func (m *Manager) serviceNameToPrefix(serviceName string) string {
 		return "components"
 	case "message-logger":
 		return "message-logger"
+	case StorageObservabilityServiceName:
+		// Hyphens preserved, following the message-logger precedent: the
+		// default collapse would mount the storage report at
+		// /storageobservability, which no operator would guess.
+		return StorageObservabilityServiceName
 	default:
 		// Remove hyphens and use as-is
 		return strings.ReplaceAll(serviceName, "-", "")

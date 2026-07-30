@@ -1,0 +1,339 @@
+# Example Prometheus alert rules for SemStreams account storage pressure.
+#
+# These ship WITH the metrics rather than after them. A pressure gauge with
+# nothing downstream is the phantom-signal class this project has repeatedly had
+# to delete: it looks like coverage and is the opposite. Copy this file, tune the
+# thresholds and `for` windows to your account, and route it at your
+# Alertmanager.
+#
+# Everything here is REPORT-ONLY. SemStreams rejects no write, throttles no
+# component, fails no readiness gate, and applies no retention because of
+# storage pressure. These alerts tell a human to add capacity or correct a
+# bound; nothing acts on them automatically.
+#
+# ---------------------------------------------------------------------------
+# Two properties of this rule set are load-bearing. Read them before editing.
+# ---------------------------------------------------------------------------
+#
+# 1. NOTHING ALERTS ON A ROW DISAPPEARING.
+#
+#    The storage report is published to a KV bucket, one key per resource, and a
+#    resource the current collection no longer names has its key DELETED — a
+#    semantic reclamation the collector performs, not a retention policy. Any
+#    number of processes may publish that report account-wide, so reclamation is
+#    eventually consistent: a row one producer reclaims on a timing skew MAY
+#    transiently disappear and reappear on the next collection.
+#
+#    A disappearance-triggered alert (`absent(...)`, `absent_over_time(...)`, or
+#    a `unless`/`offset` construction that fires on a series going away) would
+#    therefore page on a skew rather than on a fact, and would keep doing it
+#    forever because nothing about the system is wrong. Alert on what a row SAYS
+#    — its pressure, its bound, its capacity state — never on whether it is
+#    there. A test enforces this: service/storage_observability_http_test.go,
+#    TestStorageAlertRules_KeyNothingOnRowDisappearance.
+#
+# 2. A RESOURCE WITH NO BOUND IS EVALUATED AGAINST ITS ACCOUNT TIER, AND STILL
+#    HAS NO HEADROOM SERIES OF ITS OWN.
+#
+#    An unbounded resource — an archival stream, or one admitted by a migration
+#    override — has no bound to have headroom against, so
+#    `semstreams_storage_resource_headroom_bytes` and
+#    `resource_time_to_threshold_seconds` are NOT published for it. Fabricating a
+#    per-resource number there would be a verdict the model never produced.
+#
+#    Its `resource_pressure` series IS published, inherited from the account limit
+#    of its storage tier, because that ceiling is the only one it has. Capacity
+#    matters MORE for a stream that can never evict: eviction is not available, so
+#    capacity is the only lever left. Read `resource_pressure` together with the
+#    row's `pressure.evaluated_against` field (`own-bound` or `account-tier`) —
+#    they demand different fixes. Own-bound pressure is resolved by raising that
+#    bound or letting retention work; account-tier pressure cannot be, and the
+#    finding is about every resource sharing the tier.
+#
+#    A resource whose TIER has no ceiling either (a stock server reports none) has
+#    no pressure state at all, and neither does one whose capacity could not be
+#    read. StorageResourceUnbounded and StorageResourcesWithUnknownCapacity below
+#    are what keep those visible.
+#
+# Report STALENESS is alertable through
+# `semstreams_storage_report_collected_timestamp_seconds`, whose VALUE is the
+# collection time rather than the scrape time. That distinction is the whole
+# reason the gauge exists: every other series here is stamped by Prometheus at
+# scrape, so a collector that died keeps producing fresh-looking samples of
+# stale numbers forever, and `timestamp()` cannot tell the difference. Alert on
+# `time() - gauge`, never on absence — see property 1.
+
+groups:
+  - name: semstreams-storage-pressure
+    interval: 1m
+    rules:
+      # --- derived pressure, per resource ---------------------------------
+      #
+      # Pressure is published as a NUMERIC severity (0=normal, 1=warning,
+      # 2=high, 3=critical) rather than as a label value, so the series is
+      # label-stable across transitions and leaves no stale tuple behind on
+      # every state change.
+      # Both are scoped to resources with a bound OF THEIR OWN, via
+      # `and on(...) resource_limit_bytes` — that series exists for exactly the
+      # bounded resources, so it is an exact discriminator for the two pressure
+      # bases (property 2). Do not drop the scope. A resource with no bound
+      # inherits its TIER's state verbatim, and every framework KV bucket is
+      # unbounded on bytes, so an unscoped rule turns one tier crossing a band
+      # into twenty-odd simultaneous critical pages for one fact — and the fix
+      # for all of them is the same single tier-level action.
+      # StorageAccountTierPressureHigh/Critical below are that class's alerts.
+      - alert: StorageResourcePressureHigh
+        expr: >-
+          semstreams_storage_resource_pressure >= 2
+          and on(resource, owner, kind, tier) semstreams_storage_resource_limit_bytes
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage resource {{ $labels.resource }} is under high pressure"
+          description: >-
+            {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
+            has reported pressure >= high against its OWN declared bound for 15 minutes.
+            This is report-only: nothing has been rejected, throttled, or degraded. Read
+            GET /storage-observability/report for the row — headroom, growth rate and
+            projected time-to-threshold — and raise the bound or reduce the retention
+            before the projection runs out.
+
+      - alert: StorageResourcePressureCritical
+        expr: >-
+          semstreams_storage_resource_pressure >= 3
+          and on(resource, owner, kind, tier) semstreams_storage_resource_limit_bytes
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Storage resource {{ $labels.resource }} is under critical pressure"
+          description: >-
+            {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
+            has reported critical pressure against its OWN declared bound for 5 minutes.
+            This is still report-only — writes are NOT being refused by SemStreams — but
+            this resource's own JetStream limit will refuse or evict at the ceiling. Raise
+            the bound, reduce retention, or add capacity now.
+
+      # --- rate, independent of proportional headroom ----------------------
+      #
+      # Proportional headroom alone misranks: a large resource at 40% filling in
+      # an hour is more urgent than a small one at 85% static for a month. This
+      # is the projection band on its own so an operator can tell a capacity
+      # problem from a rate problem.
+      - alert: StorageResourceExhaustionProjected
+        expr: semstreams_storage_resource_time_to_threshold_seconds < 86400
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage resource {{ $labels.resource }} projects exhaustion within a day"
+          description: >-
+            At its observed growth rate, {{ $labels.resource }} reaches its critical
+            headroom level in under 24 hours. Report-only. The rate is measured across
+            successive published observations and survives a restart, so this is a
+            sustained trend rather than one sample.
+
+      # --- the resources that carry NO pressure state (task 4.7) -----------
+      #
+      # `used_bytes unless limit_bytes` is exactly the unbounded set: a bounded
+      # resource publishes both, and a resource whose capacity could not be read
+      # publishes NEITHER (its usage is unknown, not zero). This names the
+      # resource, which is the whole point — an aggregate count cannot tell an
+      # operator what to go and bound.
+      - alert: StorageResourceUnbounded
+        expr: semstreams_storage_resource_used_bytes unless semstreams_storage_resource_limit_bytes
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Storage resource {{ $labels.resource }} has no configured bound"
+          description: >-
+            {{ $labels.resource }} (owner {{ $labels.owner }}, {{ $labels.tier }} tier)
+            carries no byte limit, so it has no headroom or projection of its own. Where
+            the {{ $labels.tier }} account tier HAS a ceiling, this resource's pressure is
+            evaluated against that instead — see semstreams_storage_account_pressure_state
+            for the tier, and StorageAccountTierPressureHigh/Critical. Where the tier has
+            no ceiling either (a stock server reports none), nothing constrains this
+            resource anywhere and it carries no pressure state at all; that is the case
+            this alert exists for. Report-only, and informational: an
+            unbounded resource is a legitimate choice (an archival stream declares
+            permanence deliberately). It is alerted so the choice stays deliberate rather
+            than becoming the thing nobody was looking at. Never read this as headroom.
+
+      - alert: StorageResourcesWithUnknownCapacity
+        expr: sum(semstreams_storage_resources{capacity_state="unknown"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Some account storage resources cannot be read"
+          description: >-
+            The server declines to describe one or more streams (typically a persisted
+            config requiring a higher API level than the running binary, after an image
+            rollback). Their capacity is UNKNOWN — which is neither unlimited nor healthy
+            — so nothing can warn about their growth. Read
+            GET /storage-observability/report for their names. Report-only.
+
+      # The not-evaluated aggregate, which is unbounded + unknown together. It is
+      # here so a dashboard built from these rules cannot end up counting only
+      # the rows that HAVE a state, which is how the resources with no bound
+      # become invisible.
+      - alert: StorageMostResourcesNotEvaluated
+        expr: >-
+          sum(semstreams_storage_pressure_resources{pressure_state="not-evaluated"})
+          > sum(semstreams_storage_pressure_resources{pressure_state!="not-evaluated"})
+        for: 1h
+        labels:
+          severity: info
+        annotations:
+          summary: "Most account storage resources carry no pressure state"
+          description: >-
+            More resources are unbounded or unreadable than are evaluable, so the pressure
+            surface covers a minority of the account. Report-only. This is expected on a
+            stock development server and is a finding in production.
+
+  - name: semstreams-storage-account
+    interval: 1m
+    rules:
+      # --- per-tier over-commitment ---------------------------------------
+      #
+      # JetStream keeps SEPARATE memory and file account limits, so the
+      # comparison is per tier and the tiers are never summed. Over-commitment is
+      # the failure mode a per-resource view cannot see: every resource can be
+      # inside its own bound while their declarations together exceed the
+      # account's.
+      - alert: StorageAccountTierOvercommitted
+        expr: semstreams_storage_account_overcommitment{state="over-committed"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier is over-committed"
+          description: >-
+            The bounds declared by {{ $labels.tier }}-backed resources exceed the account
+            limit for that tier. Each resource may still be within its own bound; they
+            cannot all reach it. Report-only. Compare
+            semstreams_storage_account_declared_bytes with
+            semstreams_storage_account_limit_bytes for this tier.
+
+      # An unbounded or unreadable account limit reports not-applicable, NEVER
+      # within-limit. This alert exists because "not-applicable" is easy to read
+      # as "fine" on a dashboard: with no tier ceiling, an unbounded resource has
+      # no ceiling at all.
+      - alert: StorageAccountTierLimitUnknown
+        expr: semstreams_storage_account_limit_state{state="unknown"} == 1
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.tier }} account storage limit could not be read"
+          description: >-
+            No account limit is known for the {{ $labels.tier }} tier, so its
+            over-commitment comparison reports not-applicable rather than satisfied.
+            Report-only. Distinct from a deliberately unlimited tier, which reports
+            state="unbounded".
+
+      # --- the tier ceiling's own capacity, not its declarations -------------
+      #
+      # Over-commitment above compares DECLARED bounds against the tier limit. A
+      # tier can pass that comparison and still be about to exhaust: declarations
+      # are not usage, an unbounded resource declares nothing, and the declared sum
+      # is only a floor. These two rules are on the bytes actually stored.
+      #
+      # They are also the alerts that cover every resource with no bound of its
+      # own. Such a resource inherits this state (property 2), so a tier alerting
+      # here IS the archival streams in it alerting.
+      # These are the alerts for the whole unbounded class, and their severities
+      # mirror the per-resource pair deliberately. The tier is the AUTHORITATIVE
+      # statement — the resource rows are copies of it — so a tier that only ever
+      # paged at warning while its own derived copies paged at critical would rank
+      # N restatements above the one fact an operator can act on.
+      - alert: StorageAccountTierPressureHigh
+        expr: semstreams_storage_account_pressure_state{state="high"} == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier is under high pressure"
+          description: >-
+            The {{ $labels.tier }} account tier has reported high pressure for 15
+            minutes against the bytes it is actually storing. Every resource in the tier
+            with no bound of its own inherits this state, and those resources cannot be
+            relieved by retention — check GET /storage-observability/report for rows whose
+            pressure reports evaluated_against="account-tier". Report-only.
+
+      - alert: StorageAccountTierPressureCritical
+        expr: semstreams_storage_account_pressure_state{state="critical"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier is under critical pressure"
+          description: >-
+            The {{ $labels.tier }} account tier is at critical pressure against the bytes
+            it is actually storing. This is the alert for every resource in the tier with
+            no bound of its own — an archival stream among them has no lever but account
+            capacity or deleting data, because it cannot evict. Report-only from
+            SemStreams; JetStream will refuse writes at the account ceiling. Read
+            semstreams_storage_account_headroom_bytes and
+            semstreams_storage_account_time_to_threshold_seconds for this tier.
+
+      - alert: StorageAccountTierExhaustionProjected
+        expr: semstreams_storage_account_time_to_threshold_seconds < 86400
+        for: 30m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The {{ $labels.tier }} storage tier projects exhaustion within a day"
+          description: >-
+            At the tier's observed growth rate, the {{ $labels.tier }} account limit
+            reaches its critical headroom level in under 24 hours. This is the lead time
+            for every unbounded resource in the tier: when the tier fills, a stream that
+            can never evict has no lever but account capacity or deleting data. The rate
+            is the tier's own, measured across successive published collections, so it
+            survives a restart and reflects a sustained trend. Report-only — SemStreams
+            refuses nothing — but JetStream will refuse writes at the ceiling.
+
+      # A migration override is a time-limited bridge admitting an unbounded stream
+      # that predates the bounds contract. Its expiry is enforced at validation and
+      # provisioning — the NEXT boot refuses to start — so a running instance keeps
+      # serving past the deadline. That is deliberate (the admitted stream still
+      # works; a fleet leaving the load balancer over a calendar date would be a
+      # self-inflicted outage), which makes this alert the only thing standing
+      # between a lapsed bridge and a deploy that fails for reasons nobody expected.
+      - alert: StorageStreamMigrationOverrideExpired
+        expr: semstreams_streams_migration_override_expired == 1
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "Migration override for {{ $labels.stream }} has expired"
+          description: >-
+            The stream_migration_overrides bridge admitting {{ $labels.stream }} (owner
+            {{ $labels.owner }}) passed its expiry. The stream is still unbounded and this instance
+            is still serving — but the next boot or deploy will REFUSE to start until it is resolved.
+            Bound the stream (max_age, max_bytes, discard), or move it to archival_streams with an
+            owner and a reason if permanence is genuinely its contract. Do this before the next
+            deploy, not during it.
+
+      # The report stopped arriving. This is the ONE rule that can tell you the
+      # collector itself failed, and it is why the gauge carries collection time
+      # rather than relying on scrape time: a dead collector's other series keep
+      # being scraped, fresh-stamped, forever. Deliberately expressed on the
+      # gauge's VALUE and not as absent() — a row may transiently vanish under
+      # concurrent reclamation (property 1), but the freshness gauge going stale
+      # means nobody collected, which is a different and always-real fault.
+      - alert: StorageReportStale
+        expr: time() - semstreams_storage_report_collected_timestamp_seconds > 900
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Storage report has not been collected for 15m"
+          description: >-
+            The storage report is {{ $value | humanizeDuration }} old. Every other
+            storage series is stamped at scrape time, so they will keep looking
+            current while the numbers behind them age — treat those as unreliable
+            until this clears. Check the storage-observability service's health
+            message for the last collection outcome.

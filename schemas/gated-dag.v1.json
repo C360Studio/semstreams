@@ -47,10 +47,36 @@
       "default": "GATEDDAG_DISPATCH",
       "category": "advanced"
     },
+    "dispatch_stream_discard": {
+      "type": "string",
+      "description": "Behavior at the size ceiling: 'new' refuses the newest dispatch (default; the executor rolls the claim back and the unit re-selects), 'old' evicts the oldest (which silently strands whichever unit's dispatch is dropped). Only safe as 'new' when dispatch_stream_retention deletes on ack; 'limits' + 'new' is rejected.",
+      "default": "new",
+      "enum": [
+        "new",
+        "old"
+      ],
+      "category": "advanced"
+    },
     "dispatch_stream_max_age": {
       "type": "string",
       "description": "Retention window for the dispatch stream; an unconsumed dispatch older than this is dropped.",
       "default": "24h",
+      "category": "advanced"
+    },
+    "dispatch_stream_max_bytes": {
+      "type": "integer",
+      "description": "Size ceiling for the dispatch stream, in bytes. Must be \u003e 0: 0 and -1 both mean unlimited to JetStream, and an unbounded work stream exhausts the account's whole storage tier rather than only itself.",
+      "default": 268435456,
+      "category": "advanced"
+    },
+    "dispatch_stream_retention": {
+      "type": "string",
+      "description": "Retention policy for the dispatch stream: 'workqueue' (default) deletes each dispatch once it is acked, so dispatch_stream_max_bytes is reached by genuine backlog; 'limits' retains processed dispatches until max_age, so the ceiling fills with acked history. Choose 'limits' only when several independent consumers read the same dispatch subject, and pair it with discard 'old'. Cannot be changed on an existing stream.",
+      "default": "workqueue",
+      "enum": [
+        "workqueue",
+        "limits"
+      ],
       "category": "advanced"
     },
     "dispatch_subject": {

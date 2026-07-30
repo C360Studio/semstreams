@@ -1,7 +1,24 @@
 # nats-streaming Specification
 
 ## Purpose
-TBD - created by archiving change natsclient-async-publish. Update Purpose after archive.
+
+The PUBLISH PATH onto a JetStream stream: how a message is written, acknowledged, deduplicated and
+traced, and what each publish variant costs. It covers the synchronous ack round-trip, the
+asynchronous ack future, the batch helper, deterministic message IDs for the server's
+duplicate-detection window, and the invariants every one of those paths shares — trace-context
+propagation, dedup headers, and circuit-breaker accounting.
+
+It does NOT cover where streams come from. Declaring, creating, bounding and reconciling a stream is
+`stream-provisioning`; reporting how much of the account those streams are consuming is
+`storage-observability`. The boundary is deliberate and worth keeping: this capability answers "how
+does a message get onto a stream", the other two answer "what stream exists, with what limits" and
+"how full is it". Filing provisioning here would put a data-plane concern and a
+capacity-and-lifecycle concern under one Purpose, which is how a spec stops being able to say no to
+anything.
+
+Related: `nats-kv-keys` (the KV plane's key grammar), `graph-retention` (the retention contract for
+KV and ObjectStore backing streams, which stream provisioning explicitly refuses to touch).
+
 ## Requirements
 ### Requirement: Synchronous stream publish blocks on the PubAck
 
