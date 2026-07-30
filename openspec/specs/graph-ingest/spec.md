@@ -1,7 +1,27 @@
 # graph-ingest Specification
 
 ## Purpose
-TBD - created by archiving change graphable-merge-semantics. Update Purpose after archive.
+
+graph-ingest is the **sole writer to `ENTITY_STATES`**, and this capability governs what that
+write means. It owns two ways state arrives and the rules each one follows:
+
+- the **Graphable lane** — JetStream arrivals that resolve by predicate-level replacement, so a
+  re-arriving entity refreshes its predicates rather than accumulating them, with per-entity
+  ordering preserved under concurrent processing and an applied-sequence guard so a redelivered
+  stale message cannot overwrite a newer write;
+- the **mutation lane** — the request/reply verbs (`graph.mutation.triple.add`,
+  `.add_batch`, `.remove`, `entity.update_with_triples`, `create_with_triples`), where the add
+  verbs are append-only and deduplicate by exact tuple, and the update verbs replace.
+
+It also owns the structural gate that rejects invalid entity IDs and predicates — unconditionally
+fail-closed, with no bypass configuration — the create-time indexing profile, and the queue-wait
+versus processing-time metric split.
+
+**What it does NOT cover.** Readiness and coverage of the derived indexes belong to
+`graph-index-readiness`; retention and deletion policy to `graph-retention`; the shape of the
+stored entity itself to `graph-state-contract` and `predicate-contract`; query and retrieval to
+`graph-query`. This capability is about the write boundary — who may write, by what rule, and
+what the response tells the caller about what happened.
 ## Requirements
 ### Requirement: A re-arriving entity's triples merge by predicate-level replacement
 

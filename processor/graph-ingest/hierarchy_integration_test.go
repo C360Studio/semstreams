@@ -54,7 +54,15 @@ func createTestComponentWithHierarchyConfig(t *testing.T, enableHierarchy bool) 
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
-	natsClient := testClient.Client
+	return createHierarchyComponentOnClient(t, testClient.Client, enableHierarchy)
+}
+
+// createHierarchyComponentOnClient builds a graph-ingest component over an
+// ALREADY-RUNNING NATS server, so a test can construct a second component over
+// the same store — the restart shape gh#713 reports, where a fresh process
+// re-registers unchanged entities against a graph that already holds them.
+func createHierarchyComponentOnClient(t *testing.T, natsClient *natsclient.Client, enableHierarchy bool) *Component {
+	t.Helper()
 
 	config := Config{
 		Ports: &component.PortConfig{

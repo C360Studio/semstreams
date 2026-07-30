@@ -966,7 +966,11 @@ const (
 // Emitted by the scratchpad tool on every call. Append-only on the
 // owning loop entity (NOT full-list-replace like write_todos): each
 // scratchpad call mints a stable scratch.id and lands four triples
-// keyed by it. The agent is the sole writer and sole interpreter of
+// correlated by the shared Context stamp carried on all four (the id
+// is also the Context value). Context, not the scratch.id Object, is
+// what groups them — it is one of the six add-lane identity fields, so
+// it also keeps two calls with the same text or character count from
+// collapsing into one entry. The agent is the sole writer and sole interpreter of
 // content; rule-opaque flagging on agent.scratch.text mirrors the
 // ADR-036 discipline applied to TodoContent.
 //
@@ -981,9 +985,10 @@ const (
 // debug, ops diagnosis) reconstructing what the model drafted before
 // committing.
 const (
-	// ScratchID is the stable per-call identifier (UUID). Keyed onto
-	// the loop entity so the four triples for one call correlate.
-	// Rule-matchable.
+	// ScratchID is the stable per-call identifier (UUID). The four
+	// triples of one call correlate by the shared Context stamp, whose
+	// value is this id — correlation is carried by Context, not by this
+	// predicate's Object. Rule-matchable.
 	// Example: "550e8400-e29b-41d4-a716-446655440000"
 	// DataType: string
 	ScratchID = "agent.scratch.id"

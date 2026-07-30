@@ -38,12 +38,36 @@ import (
 // Partial-batch success is also a success body, not an error: see
 // AddTriplesBatchResponse (FailedSubjects is the partial signal).
 //
-// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch) don't use
-// Degraded — they have no post-write read-back step.
+// Degraded is scoped to COMMITTED writes ONLY, on every handler. A failure and
+// a no-op are neither, and flagging either one degraded is unsafe rather than
+// merely imprecise: pkg/projection's AppendEvidence branches on Degraded BEFORE
+// it inspects FailedSubjects, so a degraded-flagged failure enters committed
+// verification and can be reported as committed.
+//
+// Triple-mutation handlers (AddTriple/RemoveTriple/AddTriplesBatch) therefore
+// resolve KVRevision from whether the write committed:
+//
+//   - COMMITTED → the exact revision that write's own CAS produced. NOT a
+//     value re-read afterwards: another writer can commit in between, and a
+//     caller attributing the re-read revision to itself is then holding
+//     someone else's. Never degraded on this path unless the commit somehow
+//     yielded no revision at all.
+//   - SUPPRESSED as a duplicate, or a removal that matched nothing → the
+//     entity's live unchanged revision, so a read-your-writes check usually
+//     still resolves. That live read can itself fail, in which case KVRevision
+//     is 0: a no-op has no committed write to fall back on, and reporting it as
+//     degraded would re-open the failure above. A caller seeing Deduplicated or
+//     Removed together with KVRevision 0 therefore has NO read-your-writes
+//     anchor and must read authoritative state if it needs one. Never degraded
+//     on this path: nothing committed, so there is no echo to fail, and
+//     Deduplicated / Removed already tell the caller not to claim the revision.
+//   - FAILED → no revision, not degraded.
+//   - A multi-subject AddTriplesBatch → no revision, not degraded: a batch
+//     spanning entities has no single entity revision to report.
 type MutationResponse struct {
-	// Degraded is true when the write committed but the post-write
-	// read-back failed. See type docstring for the full contract. Only
-	// entity-mutation handlers populate this. Omitted in JSON when false.
+	// Degraded is true when the write COMMITTED but the post-write read-back
+	// failed. It is never set for a failure or a no-op. See the type docstring
+	// for the full contract. Omitted in JSON when false.
 	Degraded bool `json:"degraded,omitempty"`
 	// DegradedReason carries the read-back failure reason when Degraded is
 	// true (ADR-060: replaces the retired Error field on the degraded path).
@@ -185,10 +209,26 @@ type UpdateEntityWithTriplesResponse struct {
 	Version        int64        `json:"version,omitempty"`
 }
 
-// AddTripleResponse response for triple addition
+// AddTripleResponse response for triple addition.
+//
+// Deduplicated=true means the entity already carried an identical six-field
+// tuple (subject, predicate, object, datatype, source, context), so NOTHING was
+// committed: the KV revision, entity version, and update timestamp are
+// unchanged and no ENTITY_STATES watcher fired. It is a success, not a failure
+// — a producer that re-derives its facts on restart is expected to hit it.
+//
+// KVRevision follows the rule in MutationResponse: on a COMMITTED add it is the
+// revision this write's own CAS produced, and on a suppressed one it is the
+// entity's live revision — which may be 0 if that live read failed. A caller
+// that sees Deduplicated with KVRevision 0 has NO read-your-writes anchor from
+// this response and must read authoritative state if it needs one. A caller
+// tracking its own writes must not record the revision at all when
+// Deduplicated is true: nothing was written, so the value belongs to whoever
+// wrote last.
 type AddTripleResponse struct {
 	MutationResponse
-	Triple *message.Triple `json:"triple,omitempty"`
+	Triple       *message.Triple `json:"triple,omitempty"`
+	Deduplicated bool            `json:"deduplicated,omitempty"`
 }
 
 // AddTriplesBatchResponse response for batched triple addition.
@@ -197,7 +237,13 @@ type AddTripleResponse struct {
 // err channel, not a body. This body is returned (with a nil Go error) for full
 // success AND for PARTIAL success — FailedSubjects is the partial signal:
 //
-//   - FailedSubjects empty + WrittenCount>0 → all entities committed.
+//   - FailedSubjects empty → every requested subject was processed without
+//     failure. WrittenCount may be ZERO on that path: the add lane suppresses a
+//     triple whose six-field tuple the entity already carries, so an entirely
+//     duplicate batch commits nothing and reports (WrittenCount 0, no failed
+//     subjects, no error). Read Deduplicated to tell that apart from an empty
+//     request — WrittenCount + Deduplicated accounts for every triple whose
+//     subject committed. A suppressed subject NEVER appears in FailedSubjects.
 //   - FailedSubjects non-empty → PARTIAL success: per-entity atomicity means
 //     subjects NOT in FailedSubjects DID commit (durable); subjects in
 //     FailedSubjects rolled back. The caller retries just the failed subset.
@@ -205,14 +251,43 @@ type AddTripleResponse struct {
 //     success into an error would make a committed write look retryable.
 //
 // FailedSubjects maps the failing entity IDs to their per-subject error
-// message. WrittenCount is the number of triples committed across all entities.
+// message. WrittenCount is the number of NEWLY APPENDED triples across all
+// entities, excluding every suppressed duplicate.
 type AddTriplesBatchResponse struct {
 	MutationResponse
-	WrittenCount   int               `json:"written_count"`
+	WrittenCount int `json:"written_count"`
+	// Deduplicated counts submitted triples that were NOT appended because the
+	// target entity already carried an identical six-field tuple (subject,
+	// predicate, object, datatype, source, context), or because the same tuple
+	// appeared earlier in this same request. It exists so a caller can
+	// distinguish "already present" from "nothing happened" without paying an
+	// authoritative read-back.
+	//
+	// This is a COUNT, not a no-op flag — it is non-zero on batches that also
+	// committed writes (a mixed batch reports written=1, deduplicated=2). The
+	// "nothing committed" predicate for this response is
+	// `WrittenCount == 0 && len(FailedSubjects) == 0`. Do NOT pattern-match it
+	// against AddTripleResponse.Deduplicated, which IS a boolean no-op flag;
+	// gating on `Deduplicated > 0` here reintroduces the revision-claiming bug
+	// that flag exists to prevent.
+	Deduplicated   int               `json:"deduplicated,omitempty"`
 	FailedSubjects map[string]string `json:"failed_subjects,omitempty"`
 }
 
-// RemoveTripleResponse response for triple removal
+// RemoveTripleResponse response for triple removal.
+//
+// Removed reports whether a write was actually COMMITTED. False means the call
+// was a true no-op — the entity was absent, or no stored triple carried the
+// predicate — so no revision advanced and no watcher fired. It is still a
+// success: removal is idempotent.
+//
+// A caller that attributes KVRevision to its own write MUST consult Removed
+// first. On a no-op the reported revision is whatever the last OTHER writer
+// produced, and claiming it as your own (the rule engine's per-rule
+// feedback-loop tracker does exactly this) makes you drop that writer's
+// genuine change. That no-op revision is a live read, which can itself fail and
+// leave KVRevision 0 — so Removed=false with KVRevision 0 carries no
+// read-your-writes anchor either; read authoritative state if you need one.
 type RemoveTripleResponse struct {
 	MutationResponse
 	Removed bool `json:"removed"`

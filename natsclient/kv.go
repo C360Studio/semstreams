@@ -255,13 +255,47 @@ func (kv *KVStore) getRetryConfig() retry.Config {
 }
 
 // UpdateWithRetry performs CAS update with automatic retry on conflicts
-// If the key doesn't exist, it creates it
+// If the key doesn't exist, it creates it.
+//
+// Use UpdateWithRetryRev when the caller must ATTRIBUTE the write to itself:
+// this variant discards the committed revision, and re-reading it afterwards is
+// not equivalent — another writer can commit in between, and the re-read then
+// returns that writer's revision.
 func (kv *KVStore) UpdateWithRetry(ctx context.Context, key string,
 	updateFn func(current []byte) ([]byte, error)) error {
+	_, err := kv.UpdateWithRetryRev(ctx, key, updateFn)
+	return err
+}
+
+// UpdateWithRetryRev is UpdateWithRetry that also returns the EXACT KV revision
+// the committed write produced.
+//
+// This exists because a post-hoc `Get` is not a substitute. Between the CAS and
+// the re-read, another writer can commit; the re-read then reports THAT
+// writer's revision, and any caller that attributes the reported revision to
+// its own write is now holding someone else's. The rule engine's per-rule
+// feedback-loop tracker does exactly that attribution, and `shouldSkipRule`
+// consumes the recorded revision once and returns true — so a mis-attributed
+// revision makes the rule silently DROP the external writer's genuine change.
+//
+// Note this is a strictly different safety property from the readiness
+// consumer's `IndexedRevision >= myRev` check, which tolerates over-reporting
+// because revisions are monotonic. Two consumers, two properties; do not
+// generalize from the tolerant one.
+//
+// On any non-nil error the returned revision is 0 — nothing committed.
+func (kv *KVStore) UpdateWithRetryRev(ctx context.Context, key string,
+	updateFn func(current []byte) ([]byte, error)) (uint64, error) {
 
 	// Apply timeout to the entire retry operation
 	ctx, cancel := kv.applyTimeout(ctx)
 	defer cancel()
+
+	// committedRevision is ASSIGNED (never accumulated) on each successful
+	// write, so a CAS retry replaces a losing attempt's value rather than
+	// leaving a stale one behind. retry.Do runs the closure synchronously on
+	// this goroutine, so the capture needs no synchronization.
+	var committedRevision uint64
 
 	// Get retry configuration
 	retryConfig := kv.getRetryConfig()
@@ -319,8 +353,10 @@ func (kv *KVStore) UpdateWithRetry(ctx context.Context, key string,
 		// Create or update based on whether key exists
 		if revision == 0 {
 			// Key doesn't exist - create it
-			_, err = kv.bucket.Create(ctx, key, newValue)
+			var createdRevision uint64
+			createdRevision, err = kv.bucket.Create(ctx, key, newValue)
 			if err == nil {
+				committedRevision = createdRevision
 				return nil // Success!
 			}
 			// Conflict error - WILL be retried (this is the intended retry case)
@@ -341,8 +377,10 @@ func (kv *KVStore) UpdateWithRetry(ctx context.Context, key string,
 		}
 
 		// Key exists - update with CAS
-		_, err = kv.Update(ctx, key, newValue, revision)
+		var updatedRevision uint64
+		updatedRevision, err = kv.Update(ctx, key, newValue, revision)
 		if err == nil {
+			committedRevision = updatedRevision
 			return nil // Success!
 		}
 		// Conflict error - WILL be retried (this is the intended retry case)
@@ -364,10 +402,13 @@ func (kv *KVStore) UpdateWithRetry(ctx context.Context, key string,
 
 	// Check if we exceeded max retries on a conflict error
 	if err != nil && IsKVConflictError(err) {
-		return ErrKVMaxRetriesExceeded
+		return 0, ErrKVMaxRetriesExceeded
+	}
+	if err != nil {
+		return 0, err
 	}
 
-	return err
+	return committedRevision, nil
 }
 
 // UpdateJSON performs CAS update on JSON data with automatic retry
