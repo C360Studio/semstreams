@@ -234,6 +234,26 @@ asks/design work, sequenced post-v1 or by product need.
 1. A closed class reopens (a second #719-shaped retrospective on the same guarantee).
 2. Per-increment defect finds stop trending down in severity or count.
 
+## Bug-class ledger (update when a class fix lands or a new instance appears)
+
+The issue-flow table measures VOLUME; this measures whether fixes are STRUCTURAL. One row per
+recurring defect class: the structural fix, and sites closed vs remaining. Review question at
+every critical-stage gate: does this PR close a row, or add an instance to an open one? **An
+issue that closes a row is always worth minting; a Nth instance on an open row means the row's
+fix is overdue.**
+
+| Class | Structural fix | Status (2026-07-30) |
+|---|---|---|
+| Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | fix in flight (`caught-up-readiness-producers`); #733 constrained by comment; memory sharpened |
+| Hand-rolled ack-disposition tables (classify→Ack/Nak/Term per consumer) | shared `natsclient` helper on `pkg/errs` classes | **open — gh#759** (5 sites: heartbeat, objectstore, agentic-loop, keyed_ingest, stream.go; #727 was instance five) |
+| Occurrence identity (unique sibling doesn't protect the group) | one discriminator convention (`Context`) / repeated-value grammar | 5 spellings live → gh#683 owns the general fix; scratchpad instance fixed in #747 |
+| Get-or-create discards declared config (boot order decides) | enforce at the acquisition seam | KV closed (bucket catalog, #724); streams closed (#737); consumer-config drift UNCHECKED |
+| Fail-open on error (error → permissive default) | classify-and-propagate, never default-permissive | isExplicitEdge closed (#674); anomaly-path FindSimilar remains (#618 remainder) |
+| Phantom signals (metric/knob/hook with no consumer) | grep-for-the-consumer; delete, don't wire | 13 killed pre-v1 + 4 lifecycle hooks (#719) + queue-depth gauge (#709); discipline live |
+| Cross-repo gates written into local task lists | task-list residency rule (standing rules) + gh#753 | 5 instances rescoped 2026-07-30; guard live |
+
+---
+
 ---
 
 ## Evidence (stable — do not re-derive)
