@@ -35,17 +35,17 @@
 
 ## 2. Shared envelope + projection
 
-- [ ] 2.1 Add `BootstrapScope uint64` / `bootstrap_scope,omitempty` to `graph.IndexStatusResponse`
+- [x] 2.1 Add `BootstrapScope uint64` / `bootstrap_scope,omitempty` to `graph.IndexStatusResponse`
       with doc text stating: producer's own unit; `complete && scope == 0` means authoritatively
       nothing to do; the gate MUST NOT read it; it licenses nothing about absence
-- [ ] 2.2 Add `graph.ComputeBacklogStatus` as a SECOND named projection beside `ComputeIndexStatus`.
+- [x] 2.2 Add `graph.ComputeBacklogStatus` as a SECOND named projection beside `ComputeIndexStatus`.
       Do NOT add mutually-exclusive fields to `IndexStatusInputs` (makes an invalid state
       representable) and do NOT bend `ComputeIndexStatus` (risks byte-drift in graph-index's output,
       which the current spec protects). Note `ComputeIndexStatus` computes
       `Ready = target > 0 && indexed >= target`, which is false at 0/0 — hence a separate projection
-- [ ] 2.3 Assert in a test that `EvaluateReadinessGate`'s verdict is identical for two envelopes
+- [x] 2.3 Assert in a test that `EvaluateReadinessGate`'s verdict is identical for two envelopes
       differing only in `BootstrapScope` — this is the guard that stops it becoming a threshold knob
-- [ ] 2.4 `readiness.KeyGraphIngest` and `readiness.KeyRule` constants
+- [x] 2.4 `readiness.KeyGraphIngest` and `readiness.KeyRule` constants
 
 ## 3. graph-ingest producer
 

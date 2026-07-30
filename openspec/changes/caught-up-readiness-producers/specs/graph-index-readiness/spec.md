@@ -10,6 +10,21 @@ every bound durable consumer of pending plus delivered-but-unacknowledged work. 
 insufficient: an in-process lane queue holds delivered-but-unacked messages that pending does not
 count, so a producer reporting only pending under-reports its own backlog.
 
+**The total MUST be the sum, because the sum is invariant to which of the two counters currently
+holds a message and neither half is.** A message moves between them continuously — delivered
+(pending → unacknowledged), negatively acknowledged back (unacknowledged → pending), redelivered
+again — so either counter read alone oscillates while real outstanding work is steady. Only the total
+is monotone with respect to work actually outstanding. This is stated so no later reader re-derives
+it and "simplifies" the projection to one counter.
+
+`Lag` reaching zero is a claim about **backlog**, never about **completeness**. A message that
+exhausts its delivery limit is parked and leaves both counters, so it is invisible to this signal; a
+caught-up envelope therefore MUST NOT be read as evidence that every published message was applied,
+and MUST NOT license an authoritative-absence claim. The readiness gate MUST NOT consult the ack
+floor for this purpose: measurement against both deployed server versions found it does not advance
+past a delivery-exhausted message and then advances past it on an unrelated later acknowledgement, so
+it reads not-caught-up while idle and falsely-covered under traffic.
+
 `Ready` MUST be true only when that total is zero AND bootstrap is complete. `Ready`, `Lag`, and
 `StalenessMs` MUST NOT latch — a new backlog after a caught-up period MUST return the producer to
 not-ready. `State` MUST be `degraded` when consumer state cannot be read, because an unreadable
