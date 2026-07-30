@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -196,6 +197,29 @@ type entityWatcherFactory func(context.Context, string, string) (jetstream.KeyWa
 type managedEntityWatcher struct {
 	watcher    jetstream.KeyWatcher
 	generation uint64
+	// bootstrap tracks THIS generation's replay progress. It is a pointer so the
+	// watcher goroutine can record progress without taking the dispatch write lock,
+	// while the readiness reader still sees it through the authoritative record.
+	bootstrap *entityBootstrapProgress
+}
+
+// entityBootstrapProgress is one watcher generation's replay state.
+//
+// PER GENERATION, NOT PER PROCESS — this is the whole point, and it deliberately
+// diverges from graph-index's process-lifetime latch
+// (processor/graph-index/watermark.go:120-127). The watcher set is runtime-mutable via
+// a component-config PUT (service/component_manager_http.go -> updateWatchBuckets),
+// and recreating a watcher RE-RUNS its replay because the watch is created without
+// UpdatesOnly. A process-lifetime latch would keep reporting "bootstrapped" while a
+// freshly re-added pattern was mid-replay — which is gh#732's exact bug wearing a new
+// costume.
+type entityBootstrapProgress struct {
+	// complete flips when the watcher observes the nil sentinel that ends NATS's
+	// initial value replay.
+	complete atomic.Bool
+	// replayed counts values delivered BEFORE that sentinel — this generation's
+	// contribution to BootstrapScope.
+	replayed atomic.Uint64
 }
 
 func (rp *Processor) prepareEntityWatcher(ctx context.Context, bucketName, pattern string) (jetstream.KeyWatcher, error) {
@@ -232,7 +256,11 @@ func (rp *Processor) registerEntityWatcherLocked(
 	}
 	rp.entityNextGeneration++
 	generation := rp.entityNextGeneration
-	rp.entityDispatchRecords[key] = managedEntityWatcher{watcher: watcher, generation: generation}
+	rp.entityDispatchRecords[key] = managedEntityWatcher{
+		watcher:    watcher,
+		generation: generation,
+		bootstrap:  &entityBootstrapProgress{},
+	}
 	return watcherCtx, generation
 }
 
@@ -449,6 +477,9 @@ func (rp *Processor) handleEntityUpdatesForKey(
 	// internal message handler goroutine when using defer or calling from another goroutine.
 
 	bootstrap := true
+	// Progress record for THIS generation. Nil for unmanaged test/legacy handlers,
+	// which have no generation identity to report against.
+	progress := rp.entityBootstrapProgressFor(managedKey, managedGeneration)
 
 	for {
 		select {
@@ -474,8 +505,19 @@ func (rp *Processor) handleEntityUpdatesForKey(
 				return
 			}
 			if entry == nil {
+				// The nil sentinel ends NATS's initial value replay. This is the
+				// ONLY signal that a bootstrap finished, and it arrives even when
+				// the replay was empty — which is what makes
+				// `complete && scope == 0` mean "authoritatively nothing to do"
+				// rather than "too early to tell".
 				bootstrap = false
+				if progress != nil {
+					progress.complete.Store(true)
+				}
 				continue
+			}
+			if bootstrap && progress != nil {
+				progress.replayed.Add(1)
 			}
 			if managedKey != "" && !rp.entityWatcherIsActive(managedKey, watcher, managedGeneration) {
 				return

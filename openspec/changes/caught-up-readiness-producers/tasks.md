@@ -90,22 +90,26 @@
 
 ## 4. rule producer
 
-- [ ] 4.1 Track sentinel observation per watcher generation. The existing `bootstrap` value is a
+- [x] 4.1 Track sentinel observation per watcher generation. The existing `bootstrap` value is a
       goroutine-local `bool` (`entity_watcher.go:451`, flipped `:477`) that is consumed and
       discarded — it is a hook point, not existing state. Generation identity already exists
       (`managedEntityWatcher{watcher, generation}` `:196-199`, authority `:517-524`)
-- [ ] 4.2 `BootstrapComplete` = conjunction over currently-authoritative generations; FALSE again on
+- [x] 4.2 `BootstrapComplete` = conjunction over currently-authoritative generations; FALSE again on
       a new generation. **Deliberately diverges from graph-index's process-lifetime latch**
       (`processor/graph-index/watermark.go:120-127`) because the watcher set is runtime-mutable via
       component-config PUT (`service/component_manager_http.go:772` →
       `entity_watcher.go:290-395`) and recreation re-runs replay (`:209` passes no `UpdatesOnly`)
-- [ ] 4.3 `BootstrapScope` = values replayed across bootstrap generations
-- [ ] 4.4 `State` from the two EXISTING sticky latches — `graphStateGuardDegraded` (`:57-69`) and
+- [x] 4.3 `BootstrapScope` = values replayed across bootstrap generations
+- [x] 4.4 `State` from the two EXISTING sticky latches — `graphStateGuardDegraded` (`:57-69`) and
       `graphStateResetRequired`. Do not invent states
-- [ ] 4.5 Zero configured patterns ⇒ zero watchers ⇒ vacuously complete with scope 0
-- [ ] 4.6 **Integration test that the empty-pattern nil sentinel actually arrives from real
+- [x] 4.5 Zero configured patterns ⇒ zero watchers ⇒ vacuously complete with scope 0
+- [x] 4.6 **Integration test that the empty-pattern nil sentinel actually arrives from real
       JetStream.** Unit coverage exists (`entity_watcher_atomic_bootstrap_test.go:282`); no
-      integration test does. The behavior depends on `UpdatesOnly` being unset — verify, don't assume
+      integration test does. The behavior depends on `UpdatesOnly` being unset — verify, don't assume.
+      **VERIFIED against a real server 2026-07-30:** a watch on a pattern matching nothing in an
+      empty bucket delivers the nil sentinel as its FIRST update. `complete && scope == 0` is
+      therefore reachable; had it not been, every empty pattern would sit forever mid-replay and
+      defer every consumer on a healthy deployment.
 
 ## 5. Consumer fold + surface
 
@@ -133,10 +137,10 @@
 
 ## 7. Honesty fixes this change exposes
 
-- [ ] 7.1 rule `Health()` sets `Healthy = true` (`processor/rule/processor.go:552-555`) and stays
+- [x] 7.1 rule `Health()` sets `Healthy = true` (`processor/rule/processor.go:552-555`) and stays
       true after the entity-watch lane latches degraded. Once the KV envelope says `degraded`, the
       two surfaces contradict each other — fix the condition
-- [ ] 7.2 `processor/rule/processor.go:896-897` claims Start "ensures watchers started". False:
+- [x] 7.2 `processor/rule/processor.go:896-897` claims Start "ensures watchers started". False:
       `run()` closes `ready` at `:515` BEFORE `watchEntityStates` at `:518`
 - [ ] 7.3 `graph/inference/hierarchy.go:145` claims "This method has NO side effects", contradicted
       by its own `:148-151`. That comment was the cover story for gh#713

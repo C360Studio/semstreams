@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph/readiness"
 	message "github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -118,6 +119,14 @@ type Processor struct {
 	// cannot be trusted (a pattern watcher failed to start or closed
 	// unexpectedly). Sticky like reset-required, with a distinct error code.
 	graphStateGuardDegraded atomic.Bool
+
+	// Readiness producer state (ADR-083 envelope on the rule GRAPH_STATUS key).
+	// See readiness.go: bootstrap completion is tracked PER WATCHER GENERATION,
+	// not per process, because the watcher set is runtime-mutable.
+	statusPublisher *readiness.Publisher
+	// statusInterval is a TEST SEAM only, so an integration test can observe
+	// successive heartbeats without sleeping through production cadence.
+	statusInterval time.Duration
 	// graphStateGuardDone closes when either sticky latch above fires so
 	// entity-watch loops unwind promptly instead of draining dead updates.
 	graphStateGuardDone     chan struct{}
@@ -443,6 +452,23 @@ func (rp *Processor) Health() component.HealthStatus {
 		health.Uptime = time.Since(rp.startTime)
 	}
 
+	// The two sticky entity-watch latches are health facts, and this surface must
+	// not contradict the readiness envelope that already reports them
+	// (readiness.go computeReadinessStatus). Before this, run() set Healthy = true
+	// once watchers were established and NOTHING lowered it again: a processor whose
+	// entity-watch lane had latched degraded — or which had stopped evaluating rules
+	// entirely under reset-required — still answered Healthy from here, while its
+	// KV envelope said degraded. An operator reconciling the two had no way to tell
+	// which was right.
+	switch {
+	case rp.graphStateResetRequired.Load():
+		health.Healthy = false
+		health.LastError = "entity-state contract violation: rule evaluation halted (reset required)"
+	case rp.graphStateGuardDegraded.Load():
+		health.Healthy = false
+		health.LastError = "entity-watch lane degraded"
+	}
+
 	return health
 }
 
@@ -546,6 +572,19 @@ func (rp *Processor) run(ctx context.Context) {
 		} else {
 			defer rp.drainCronScheduler()
 		}
+	}
+
+	// Readiness publisher. Started AFTER watchEntityStates so the first tick sees
+	// the registered generations rather than reporting a vacuous complete over an
+	// empty record set.
+	if err := rp.createStatusBucket(ctx); err != nil {
+		// Non-fatal: a rule processor that cannot publish readiness still evaluates
+		// rules. Consumers fail closed on the absent key, which is the correct
+		// reading — it is genuinely unknown.
+		rp.logger.Warn("rule readiness publisher unavailable; "+
+			"consumers will read this producer as unknown", "error", err)
+	} else {
+		go rp.statusMetricsLoop(ctx)
 	}
 
 	// NOW mark healthy - watchers established, subscriptions ready
@@ -893,8 +932,14 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// goroutine's channel read.
 	go rp.runRevisionSweeper(rp.shutdown, revisionSweepInterval, rp.revisionTTL)
 
-	// Wait for run() to complete initialization (coalescer setup, watchers started)
-	// This ensures entityCoalescer is set before Start() returns
+	// Wait for run() to signal that the COALESCER is initialized. This does NOT
+	// mean watchers have started: run() closes `ready` immediately after building
+	// the coalescer and only then calls watchEntityStates, so a watcher's initial
+	// replay is still in flight — usually — when Start returns. The previous comment
+	// here claimed "watchers started" and was simply false; asserting either
+	// ordering asserts a race (gh#732 measured the interval as not even consistently
+	// positive). Consumers that need "replay finished" read bootstrap_complete off
+	// the rule GRAPH_STATUS key; there is no ordering to sleep on.
 	select {
 	case <-rp.ready:
 		// Initialization complete
