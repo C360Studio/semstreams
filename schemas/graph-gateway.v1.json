@@ -35,6 +35,19 @@
       "description": "Port configuration",
       "category": "basic"
     },
+    "readiness_keys": {
+      "type": "array",
+      "description": "GRAPH_STATUS producer keys to expose on the read-only readiness surface (empty disables it)",
+      "items": {
+        "type": "string"
+      },
+      "category": "basic"
+    },
+    "readiness_path": {
+      "type": "string",
+      "description": "Path for the read-only readiness surface",
+      "category": "basic"
+    },
     "standalone_server": {
       "type": "boolean",
       "description": "Create a standalone HTTP server (for tests/development). When false ServiceManager provides HTTP serving",

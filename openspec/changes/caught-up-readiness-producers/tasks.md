@@ -124,16 +124,27 @@
       reports Lag == 0`. Must NOT gate any read path. Document why this does not violate ADR-085:
       that ADR banned coverage as admission control **for reads**, and explicitly defers the
       non-read case to "that consumer's evidence" — gh#712 is that evidence
-- [ ] 5.4 One read-only HTTP dump: watched keys + per-key `known`/`fresh`/`age`. **Not a verdict** —
+- [x] 5.4 One read-only HTTP dump: watched keys + per-key `known`/`fresh`/`age`. **Not a verdict** —
       a verdict bakes the key list into the framework, which requirement 5 forbids.
-      **NOT BUILT YET — deliberately held, needs an owner call.** `Set.Dumps()` exists and is tested
-      (the data half is done). The missing half is a route, and there is no in-process HTTP consumer
-      that folds today: §6's consumer is an e2e stage that reads over NATS, so a route added now
-      would report over an empty key list — a phantom by this repo's own grep-for-the-consumer rule.
-      **The real candidate is `processor/graph-clustering`**, which already hand-rolls TWO readiness
-      watchers (`component.go:585`, `:592`, `:1380`, `:1395`) and is exactly what `Set` replaces.
-      Migrating it gives the process a real `Set` to expose. That is a genuine simplification but is
-      NOT in this change's task list — file it, or fold it in on an owner call.
+      **BUILT on `gateway/graph-gateway` (owner call).** The spec delta carries a MUST for it
+      ("The gateway MUST expose a read-only surface..."), so shipping it unbuilt would have made the
+      archived spec claim a surface that did not exist — the exact phantom class this program exists
+      to kill. `GET {prefix}/readiness` returns one row per configured key: envelope + `known` +
+      `fresh` + `age_ms`. NO aggregate verdict field, guarded by a WIRE-level test (a struct-level
+      one would not catch a future added field) that also runs in the all-ready case, which is
+      precisely when someone would be tempted to add one.
+      **Key list comes from CONFIG (`readiness_keys`), never a framework default** — the producer
+      set is deployment-dependent, so a framework list would either report permanently-unknown
+      producers a deployment does not run or silently omit ones it does. Empty list ⇒ no watchers,
+      no route registered; the route's ABSENCE is a clearer signal than an endpoint that always
+      answers empty. Watcher-start failure is NON-FATAL: an observability surface must not take the
+      query path down with it.
+      **CORRECTION to this file's earlier note:** it named `processor/graph-clustering` as the
+      migration candidate. That was WRONG and the migration must not be done — its two watchers have
+      deliberately ASYMMETRIC semantics (graph-index absent ⇒ defer; graph-embedding absent ⇒ benign,
+      drop to structural-only, `component.go:1388-1392`), while `Set` is an all-or-nothing
+      conjunction that refuses optional keys. Folding it onto `Set` would defer on an absent
+      embedding key and break unopted deployments — a behavior change, not a simplification.
 - [x] 5.5 Do NOT touch `/readyz` (`service/service_manager.go:1465-1485`)
 
 ## 6. Prove the surface has a consumer

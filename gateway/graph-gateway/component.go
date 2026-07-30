@@ -39,6 +39,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
@@ -75,6 +76,8 @@ type Config struct {
 	QueryTimeout              time.Duration         `json:"query_timeout" schema:"type:duration,description:Query timeout duration,category:basic"`
 	DomainExamplesPath        string                `json:"domain_examples_path" schema:"type:string,description:Path to domain examples JSON directory or file,category:classifier"`
 	EnableEmbeddingClassifier bool                  `json:"enable_embedding_classifier" schema:"type:bool,description:Enable T1/T2 embedding classifier using domain examples,category:classifier"`
+	ReadinessKeys             []string              `json:"readiness_keys,omitempty" schema:"type:array,description:GRAPH_STATUS producer keys to expose on the read-only readiness surface (empty disables it),category:basic"`
+	ReadinessPath             string                `json:"readiness_path,omitempty" schema:"type:string,description:Path for the read-only readiness surface,category:basic"`
 }
 
 // Validate implements component.Validatable interface
@@ -209,6 +212,7 @@ type Component struct {
 
 	// Dependencies
 	natsClient    *natsclient.Client
+	readinessSet  *readiness.Set
 	natsRequester natsRequester // Interface for NATS request/reply (mockable)
 	logger        *slog.Logger
 
@@ -578,6 +582,17 @@ func (c *Component) Start(ctx context.Context) error {
 		c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-gateway", c.logger)
 	}
 
+	// Readiness watchers for the read-only operator surface. A failure here is
+	// NON-FATAL: this gateway's job is serving queries, and losing an observability
+	// surface must not take the query path down with it. The route reports the keys
+	// as unknown, which is the honest reading.
+	if c.natsClient != nil {
+		if err := c.startReadinessSet(ctx); err != nil {
+			c.logger.Warn("readiness surface watchers unavailable; "+
+				"the surface will report its keys as unknown", slog.Any("error", err))
+		}
+	}
+
 	// Standalone mode: create our own HTTP server for tests/development.
 	// In production (StandaloneServer=false), ServiceManager calls
 	// RegisterHTTPHandlers() on its shared mux — no server needed here.
@@ -634,6 +649,8 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.mu.Unlock()
 		return nil // Already stopped
 	}
+
+	c.stopReadinessSet()
 
 	// Shutdown HTTP server gracefully
 	if c.httpServer != nil {
@@ -716,6 +733,21 @@ func (c *Component) RegisterHTTPHandlers(prefix string, mux *http.ServeMux) {
 		}
 	}
 	mux.HandleFunc(mcpPath, c.handleMCP)
+
+	// Read-only readiness surface. Registered only when the operator configured keys:
+	// a route that watches nothing is a phantom, and its absence is a clearer signal
+	// than an endpoint that always answers with an empty list.
+	if len(c.config.ReadinessKeys) > 0 {
+		readinessPath := c.config.ReadinessPath
+		if readinessPath == "" {
+			readinessPath = defaultReadinessPath
+		}
+		readinessPath = joinGatewayPath(prefix, readinessPath)
+		mux.HandleFunc(readinessPath, c.handleReadiness)
+		c.logger.Info("readiness surface registered",
+			slog.String("path", readinessPath),
+			slog.Any("keys", c.config.ReadinessKeys))
+	}
 
 	// Register playground if enabled
 	if c.config.EnablePlayground {
