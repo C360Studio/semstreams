@@ -45,8 +45,13 @@
 
 ## 4. Closeout
 
-- [ ] 4.1 Update vocabulary, index-reference, KV Twofer, and operator docs with the selected key shapes and
+- [x] 4.1 Update vocabulary, index-reference, KV Twofer, and operator docs with the selected key shapes and
       filters.
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [ ] 4.2 Run lint, race, contracts, real-NATS integration, structural + semantic e2e, and affected product suites.
 - [ ] 4.3 If the pre-v1 wipe window closed before 3.1, halt: record the missed window in the ADR and re-file this
       change as a post-v1 migration proposal instead of executing a second wipe.

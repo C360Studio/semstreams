@@ -10,8 +10,12 @@
 - [x] 1.2 Validate the strict lower-kebab grammar against the corpus and produce the exact breaking rename ledger
 - [x] 1.3 Record the grammar, domain/domain-category delegation, and registration relationship in a new ADR
 - [x] 1.4 Implement one typed parser and table/fuzz tests for valid, malformed, wildcard, Unicode, and length cases
-- [ ] 1.5 Add owned sister-repository inventory commands and a coordinated zero-violation release gate
-
+- [x] 1.5 Add owned sister-repository inventory commands and a coordinated zero-violation release gate
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 ## 2. Declarative and Agent Authoring Gates
 
 - [x] 2.1 Validate vocabulary registration and reject invalid registered constants at startup
@@ -53,8 +57,13 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       `*_test.go` fixtures, and structured `testdata`. Add the grammar-only `internal/semantictest` predicate fixture
       builder, delegate it without normalization to `vocabulary.ParsePredicate`, ban imports from production Go
       files, and do not add a graph-entity or triple factory
-- [ ] 4.1a Rename every owned sister-repository producer, rule, schema, tool, exact query, positive fixture, and
+- [x] 4.1a Rename every owned sister-repository producer, rule, schema, tool, exact query, positive fixture, and
       structured `testdata` artifact against the same breaking SemStreams version
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 4.2 Publish the reviewed rename ledger as breaking release documentation, not a runtime alias table
 - [x] 4.3 Make update/replace validate the complete candidate before any destructive removal
 - [x] 4.4 Add graph-ingest and graph-index replay validation that independently blocks readiness on invalid state
@@ -72,9 +81,13 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       `research-pipeline`; migrate active ADRs/proposals, public API comments, examples, runbooks, schemas, and
       substitution guidance. Permit old spelling only in a record explicitly identified as historical; retain no
       alias, dual read/write, runtime rename table, or active unrelated-prose exception
-- [ ] 4.6b Apply the same semantic lineage migration to every owned product/reference producer, consumer, exact query,
+- [x] 4.6b Apply the same semantic lineage migration to every owned product/reference producer, consumer, exact query,
       schema, rule configuration, active document, and fixture before the v1 release/archive gate
-
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 ## 5. Enforcement and Release Gates
 
 - [x] 5.1 Run both SemStreams-local predicate audits to zero unexplained production, `*_test.go`, and
@@ -85,8 +98,13 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
 - [x] 5.1a Extend the source/config corpus to classify related-loop map keys, constructed lineage predicates, and
       lineage substitutions; prove every generated `agent.lineage.<role-key>` value is canonical and every remaining
       `lineage.*` occurrence is removed unless it belongs to a record explicitly identified as historical
-- [ ] 5.1b Run the same production and fixture audits in every owned sister repository and reference design; require
+- [x] 5.1b Run the same production and fixture audits in every owned sister repository and reference design; require
       zero unexplained violations before the v1 release/archive gate
+      — **SCOPE CORRECTED 2026-07-30 (owner ruling).** SemStreams' obligation is to note the
+      breaking change and publish migration guidance; **conforming to the framework is the sister
+      repo's job**, and further problems they hit become new issues in this queue. Guidance is
+      published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
+      guides); adoption is tracked on **gh#753** and does NOT gate this archive.
 - [x] 5.1d Reconcile the SemStreams-local test-fixture audit drift tracked by issue #684 without weakening the
       fail-closed contract or absorbing the independent #671 scope. Start from the recorded 62-finding baseline
       (2,068 candidates and 134 exact classifications): first restore production/fixture substitution-extraction
@@ -125,5 +143,8 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       envelope and seam-level denial of undeclared `agent.*` predicates on non-delegated graph-mutation lanes.
       Configuration-time rule/tool authoring checks are not runtime authorization, and raw NATS or graph-tool
       holders can currently mint syntactically valid lineage triples.
-- [ ] 5.7 Archive the OpenSpec change so the predicate and graph-ingest deltas become current truth, only after local
+- [ ] 5.7 **SISTER GATE REMOVED 2026-07-30 (owner ruling)** — coordinated owned-product tasks 1.5, 4.1a,
+      4.6b, 5.1b no longer gate this archive (guidance published; adoption on gh#753). Remaining blocker is
+      LOCAL: task 5.6c (namespace-authority threat model). Original text: archive the OpenSpec change so the
+      predicate and graph-ingest deltas become current truth, only after local
       tasks 4.6, 5.2, 5.3, 5.6b, and 5.6c and coordinated owned-product tasks 1.5, 4.1a, 4.6b, and 5.1b are complete
