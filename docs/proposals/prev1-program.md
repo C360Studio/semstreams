@@ -98,9 +98,30 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    statements our own dedup change had falsified (`Retry.MaxRetries=0 until #697 exists`;
 >    "remains vulnerable to ... double-applying"). Once live, routing to another thread stopped being
 >    the right answer — both corrected in #752.
-> 1. **EPIC SLOT — readiness increment: IMPLEMENTED, IN REVIEW as PR #758 (34/49 tasks).**
->    `caught-up-readiness-producers` §1–§7, §9, §10 are done and pushed; §8 residual tests, §11
->    (reviewer → Fable → owner Codex) and archive remain. **Do not re-implement — read PR #758.**
+> 1. **EPIC SLOT — readiness increment: REVIEW CHAIN CLOSED, awaiting CI to merge (PR #758, 44/49).**
+>    `caught-up-readiness-producers` §1–§10 done; **#763 folded in** (shared readiness gauge set).
+>    Reviewer CHANGES REQUESTED → fixed. Fable APPROVED (API shape ×2, gauge design). Codex
+>    CHANGES REQUESTED → fixed. Only 9.1 + archive remain, which are archive-time.
+>    **Do not re-implement — read PR #758.**
+>
+>    **THE DEFECT TALLY IS THE PROGRAM SIGNAL, and it is bad in an instructive way.** 6 self-found
+>    (each by questioning a RESULT, none by reading code) · 2 HIGH from the reviewer · 3 blocking
+>    from Codex. **Two of Codex's three landed on code written to FIX the reviewer's findings** —
+>    a 2s join that made a fail-open improbable rather than impossible, and a `FullyCovered` that
+>    read each watcher twice so health and lag came from DIFFERENT envelopes. Carry that pattern:
+>    **a fix is new code and inherits the full defect rate; the remedy needs the same adversarial
+>    pass as the original.** Nowhere near the exit criterion of two increments with zero P1+ finds.
+>
+>    **FOUR ASSERTIONS IN THIS BRANCH EXISTED WHILE PROVING NOTHING**, and one survived TWO repair
+>    attempts (I "covered" a production counter by calling it from the test itself — exercising the
+>    plumbing, never the mutated line). Named shape worth keeping: **a test that reconstructs the
+>    behavior it means to verify tests the reconstruction.** Also: an assertion whose expected value
+>    equals the type's zero value proves nothing unless some case makes it non-zero.
+>
+>    **EVIDENCE ERROR I MADE AND CORRECTED:** I claimed `entity_load_poll_count=0` proved all three
+>    keys were Known+Fresh+healthy+`Lag==0`. It does not — an early return yields the same 0. Codex
+>    independently flagged the same gap. Stage-level tests now arrange a REAL not-covered
+>    observation and assert both withhold and release.
 >
 >    **TASK 1'S MEASUREMENT KILLED THE DESIGN'S FOUNDATION, and that is the headline.** Probed
 >    against BOTH deployed NATS versions (2.10, 2.12, identical): `AckFloor.Stream` does NOT advance
