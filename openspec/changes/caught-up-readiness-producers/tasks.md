@@ -113,24 +113,32 @@
 
 ## 5. Consumer fold + surface
 
-- [ ] 5.1 `readiness.Set` — N watchers by key, `Start`/`Stop`/`WaitForFirst`; fold returns
+- [x] 5.1 `readiness.Set` — N watchers by key, `Start`/`Stop`/`WaitForFirst`; fold returns
       `(proceed, firstDeferKey, graph.DeferReason)` in deterministic key order, delegating each key
       to `graph.EvaluateReadinessGate`. **No new defer reasons. No optional-key flag** (an optional
       key is one you did not declare)
-- [ ] 5.2 Verify absent-key fail-closed works with zero new semantics: `Watcher.Read()` returns
+- [x] 5.2 Verify absent-key fail-closed works with zero new semantics: `Watcher.Read()` returns
       `Known=false, Fresh=false` (`graph/readiness/watcher.go:271-283`) → gate short-circuits to
       `DeferStatusUnknown` (`readiness_gate.go:143-145`). Add a test
-- [ ] 5.3 Separately-named coverage predicate for snapshot callers: `proceed && every declared key
+- [x] 5.3 Separately-named coverage predicate for snapshot callers: `proceed && every declared key
       reports Lag == 0`. Must NOT gate any read path. Document why this does not violate ADR-085:
       that ADR banned coverage as admission control **for reads**, and explicitly defers the
       non-read case to "that consumer's evidence" — gh#712 is that evidence
 - [ ] 5.4 One read-only HTTP dump: watched keys + per-key `known`/`fresh`/`age`. **Not a verdict** —
-      a verdict bakes the key list into the framework, which requirement 5 forbids
-- [ ] 5.5 Do NOT touch `/readyz` (`service/service_manager.go:1465-1485`)
+      a verdict bakes the key list into the framework, which requirement 5 forbids.
+      **NOT BUILT YET — deliberately held, needs an owner call.** `Set.Dumps()` exists and is tested
+      (the data half is done). The missing half is a route, and there is no in-process HTTP consumer
+      that folds today: §6's consumer is an e2e stage that reads over NATS, so a route added now
+      would report over an empty key list — a phantom by this repo's own grep-for-the-consumer rule.
+      **The real candidate is `processor/graph-clustering`**, which already hand-rolls TWO readiness
+      watchers (`component.go:585`, `:592`, `:1380`, `:1395`) and is exactly what `Set` replaces.
+      Migrating it gives the process a real `Set` to expose. That is a genuine simplification but is
+      NOT in this change's task list — file it, or fold it in on an owner call.
+- [x] 5.5 Do NOT touch `/readyz` (`service/service_manager.go:1465-1485`)
 
 ## 6. Prove the surface has a consumer
 
-- [ ] 6.1 Migrate `test/e2e/scenarios/stages/entities.go:72-89` off its entity-count +
+- [x] 6.1 Migrate `test/e2e/scenarios/stages/entities.go:72-89` off its entity-count +
       critical-entity deadline poll onto the fold. **This is what makes the change "add a signal and
       delete its workaround" rather than "add a signal"** — without it the fold is a phantom by this
       repo's grep-for-the-consumer rule

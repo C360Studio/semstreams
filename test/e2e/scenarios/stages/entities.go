@@ -6,6 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/test/e2e/client"
 )
 
@@ -39,6 +41,59 @@ type EntityCountResult struct {
 	Warnings         []string `json:"warnings,omitempty"`
 }
 
+// ReadinessKeys are the producers this stage depends on before it can call the graph
+// settled. The list is the CONSUMER'S, deliberately: there is no framework-declared
+// "all producers" set, because the producer set is deployment-dependent and a
+// framework default would either make this stage defer on an outage it does not care
+// about or silently omit one it does.
+//
+// graph-index is included because every tier this stage runs on wires it; graph-ingest
+// and rule are the two producers this change adds.
+//
+// VERIFIED 2026-07-30 against every config this stage runs on (e2e-structural,
+// structural, statistical, semantic, semantic-8b, semantic-frontier): all three
+// components are present AND enabled in each. Declaring a key whose producer a tier
+// does not run would make this stage wait out its full timeout on an absent key — so
+// re-check this list when a tier's component set changes. The failure is at least
+// self-describing: the timeout names the key and reports status_unknown.
+var ReadinessKeys = []string{
+	readiness.KeyGraphIngest,
+	readiness.KeyGraphIndex,
+	readiness.KeyRule,
+}
+
+// awaitProducersCaughtUp blocks until every declared producer reports healthy AND
+// drained, or the validation timeout expires. It returns the last defer reason so a
+// timeout says WHICH producer was not ready and WHY, instead of "expected 50 entities,
+// got 43" — which named a symptom and left the cause to guesswork.
+func (v *EntityVerifier) awaitProducersCaughtUp(ctx context.Context, pollCount *int) error {
+	set := readiness.NewSet(v.NATSClient.Client(), ReadinessKeys)
+	if err := set.Start(ctx); err != nil {
+		return fmt.Errorf("start readiness watchers: %w", err)
+	}
+	defer set.Stop()
+
+	deadline := time.Now().Add(v.ValidationTimeout)
+	var lastKey string
+	var lastReason graph.DeferReason
+
+	for time.Now().Before(deadline) {
+		covered, key, reason := set.FullyCovered()
+		if covered {
+			return nil
+		}
+		lastKey, lastReason = key, reason
+		time.Sleep(v.PollInterval)
+		*pollCount++
+	}
+
+	// Include the per-key dump: on a timeout the operator wants every producer's
+	// state at once, not just the first one that deferred.
+	return fmt.Errorf(
+		"producers not caught up within %s (first defer: key=%q reason=%q); per-key state: %+v",
+		v.ValidationTimeout, lastKey, lastReason, set.Dumps())
+}
+
 // VerifyEntityCount checks that enough entities have been loaded
 func (v *EntityVerifier) VerifyEntityCount(ctx context.Context) (*EntityCountResult, error) {
 	if v.NATSClient == nil {
@@ -53,38 +108,38 @@ func (v *EntityVerifier) VerifyEntityCount(ctx context.Context) (*EntityCountRes
 	var lastErr error
 	var criticalFound bool
 
-	// Poll until entities are loaded AND critical entities exist
-	deadline := time.Now().Add(v.ValidationTimeout)
+	// WAIT ON THE PRODUCERS' OWN CAUGHT-UP SIGNAL, not on a count reaching a
+	// threshold (gh#712). The count-plus-critical-entities poll this replaced was a
+	// workaround for a signal that did not exist: it declared success the moment
+	// enough entities happened to be present, which is true long before ingest has
+	// finished applying, and it could equally declare failure on a slow stack that
+	// was working perfectly. Both readings were about TIMING, not about truth.
+	//
+	// FullyCovered is the right predicate here rather than the health gate: this is a
+	// snapshot caller, and ADR-085 bans coverage as admission control for READS while
+	// explicitly deferring the non-read case to the consumer's evidence. gh#712 is
+	// that evidence.
 	pollCount := 0
+	coverageErr := v.awaitProducersCaughtUp(ctx, &pollCount)
+	if coverageErr != nil {
+		lastErr = coverageErr
+	}
 
-	for time.Now().Before(deadline) {
-		var err error
-		actualCount, err = v.NATSClient.CountEntities(ctx)
-		if err != nil {
-			lastErr = err
-			time.Sleep(v.PollInterval)
-			pollCount++
-			continue
+	// The counts are still verified — the signal says the producers are done, and
+	// these say they did the right thing. A caught-up stack with the wrong entities
+	// is still a failure, it is just a different one, and it is now attributable
+	// rather than confounded with "we did not wait long enough".
+	var err error
+	actualCount, err = v.NATSClient.CountEntities(ctx)
+	if err != nil {
+		lastErr = err
+	}
+	criticalFound = true
+	for _, entityID := range criticalEntities {
+		if _, gerr := v.NATSClient.GetEntity(ctx, entityID); gerr != nil {
+			criticalFound = false
+			break
 		}
-
-		// Check if we have enough entities
-		if actualCount >= minRequired {
-			// Also verify critical entities exist
-			criticalFound = true
-			for _, entityID := range criticalEntities {
-				_, err := v.NATSClient.GetEntity(ctx, entityID)
-				if err != nil {
-					criticalFound = false
-					break
-				}
-			}
-			if criticalFound {
-				break
-			}
-		}
-
-		time.Sleep(v.PollInterval)
-		pollCount++
 	}
 
 	result := &EntityCountResult{
