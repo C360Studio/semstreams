@@ -1,0 +1,334 @@
+# storage-observability Specification
+
+## Purpose
+
+How much of the JetStream account SemStreams is using, how fast that is growing, and how worried an
+operator should be — as a REPORT, never as enforcement.
+
+It covers the account-wide inventory (every stream, KV bucket and ObjectStore, including the ones this
+process never created), owner attribution through the descriptor catalog, the three capacity states
+that must never collapse into each other, growth measured across successive published observations,
+the projection those inputs support, and the pressure state derived from it. The produced truth is a
+published KV report, one key per resource: every operator surface — HTTP, Prometheus, health, alert
+rules — is a CONSUMER of that report rather than a second opinion about the account, so no two
+surfaces can disagree.
+
+Two commitments shape everything here.
+
+CAPACITY IS THREE STATES, NOT TWO. Bounded, unbounded, and unknown are different situations with
+different responses. An unreadable limit is not an absent limit, and an absent limit is not a safe
+one. A resource reported healthy because nobody could measure it is worse than one not reported at
+all, because it manufactures confidence — and removing that class of phantom signal is why this
+capability exists.
+
+PRESSURE IS REPORT-ONLY. Nothing here rejects a write, throttles a component, fails a readiness gate,
+or applies retention. That is sequencing rather than timidity: enforcement built on an unmeasured
+signal is how this capability's predecessor went wrong. Application-level capacity admission is the
+correct eventual home for backpressure and is deferred behind a gate with four stated, evidence-
+decidable conditions, recorded below.
+
+It does NOT cover which streams exist or what bounds they declare (`stream-provisioning`), nor the
+retention contract of the graph's own buckets (`graph-retention`).
+
+## Requirements
+
+### Requirement: Every account storage resource MUST appear in one inventory
+
+SemStreams MUST expose a single inventory covering every JetStream-backed storage resource in the
+account — ordinary streams, `KV_*` bucket backing streams, and `OBJ_*` ObjectStore backing streams —
+regardless of whether this process created or has otherwise touched the resource. Each entry MUST
+carry the physical resource name, its storage tier, its configured limits, its actual usage, and its
+observed growth rate. Enumeration MUST read each resource's configuration and state from the listing
+that returns both together, never from a follow-up describe call per resource; the cost bound
+forbids per-resource round-trips, not a second paged listing.
+
+A resource the server declines to describe — one carrying an offline reason, which the info listing
+omits entirely rather than reporting — MUST still appear in the inventory, named, with unknown tier
+and unknown capacity. An inventory that silently omits the resources nobody can read is worse than
+no inventory, because it manufactures the appearance of completeness. Detecting them requires
+reconciling the info listing against the name listing, which is not a consistent snapshot: a resource
+deleted between the two MAY appear once as unknown and MUST resolve on a later collection.
+
+Logical owner attribution is defined for `KV_*` resources only (see the attribution requirement).
+There is no owner registry for ordinary streams or ObjectStore backing streams, and the inventory
+enumerates the account — so a resource another process declared has no declaration this process can
+read. Those kinds MUST therefore report attribution as **not-applicable**, which MUST be distinct
+from the **unattributed** state a `KV_*` resource carries when the catalog does not declare its
+bucket. Collapsing the two would report "the framework has no owner concept here" and "this bucket
+escaped the catalog" as the same fact, and only the second is a finding.
+
+#### Scenario: A resource this process never touched still appears
+
+- **GIVEN** an account containing a stream created by a prior deploy or a sister process, which this
+  process has never created, opened, or published to
+- **WHEN** the storage inventory is collected
+- **THEN** the resource appears in the inventory with its configured limits and actual usage
+
+#### Scenario: A resource the server declines to describe is still named
+
+- **GIVEN** an account containing a stream the server excludes from the info listing because it
+  carries an offline reason (e.g. a persisted config requiring a higher API level than the running
+  binary, after a server rollback)
+- **WHEN** the inventory is collected
+- **THEN** the resource appears with its real name, its kind derived from the name, unknown tier, and
+  unknown capacity
+- **AND** the inventory does not report itself as complete while omitting it
+
+#### Scenario: Collection never blocks start or health
+
+- **GIVEN** an inventory collection that exceeds its configured timeout
+- **WHEN** component start and health evaluation run concurrently
+- **THEN** neither is blocked or failed by the collection
+- **AND** the inventory reports its last successful result with the timestamp it was collected
+
+### Requirement: KV owner attribution MUST derive from the descriptor catalog
+
+The inventory MUST attribute a `KV_*` backing stream to a logical owner by stripping the single
+leading `KV_` prefix to recover the bucket name and resolving that name through the bucket descriptor
+catalog, which returns an empty owner for any bucket it does not declare. A bucket the catalog does
+not declare MUST be reported as unattributed rather than omitted or force-fit, so account-wide
+visibility does not depend on framework ownership. Exactly one leading prefix is stripped: a product
+bucket whose own name begins `KV_` yields a backing stream with a doubled prefix, and the recovered
+name MUST be the bucket's real name rather than a further-stripped one. The inventory MUST NOT
+maintain its own bucket-to-owner mapping, so it cannot disagree with the acquisition seam about who
+owns a bucket.
+
+#### Scenario: A catalog bucket reports its catalog owner
+
+- **GIVEN** a `KV_*` backing stream whose bucket name, after stripping one leading `KV_`, is declared
+  in the bucket descriptor catalog
+- **WHEN** the inventory attributes the resource
+- **THEN** the reported owner equals the catalog descriptor's declared owner
+
+#### Scenario: Attribution follows the catalog rather than a copy of it
+
+- **GIVEN** a bucket that was previously declared in the descriptor catalog and is no longer
+- **WHEN** the inventory is collected after that removal
+- **THEN** the resource reports as unattributed
+- **AND** no retained mapping continues to report the former owner
+
+#### Scenario: A doubled prefix is not over-stripped
+
+- **GIVEN** a product bucket literally named `KV_FOO`, whose backing stream is therefore `KV_KV_FOO`
+- **WHEN** the inventory recovers the bucket name
+- **THEN** the recovered name is `KV_FOO`
+- **AND** the resource is reported as unattributed rather than mis-attributed to a bucket named `FOO`
+
+### Requirement: Unknown capacity MUST report as unknown
+
+A resource whose configured limit or actual usage cannot be determined MUST be reported as unknown.
+It MUST NOT be reported as unlimited, as zero, or as healthy, and it MUST NOT be silently omitted
+from the inventory. An unknown capacity MUST suppress any headroom or time-to-threshold projection
+for that resource rather than emitting a fabricated one. Unknown, unbounded, and bounded MUST be
+three distinct reported states.
+
+#### Scenario: Capacity cannot be read for a resource
+
+- **GIVEN** a storage resource whose limit or usage cannot be read
+- **WHEN** the inventory reports it
+- **THEN** its capacity reports as unknown, distinctly from unlimited and from healthy
+- **AND** no headroom or time-to-threshold value is projected for it
+
+#### Scenario: An unbounded resource is distinguished from an unreadable one
+
+- **GIVEN** one resource with a deliberately unlimited configured limit and one whose limit could not
+  be read
+- **WHEN** both are reported
+- **THEN** the first reports as unbounded and the second as unknown
+
+### Requirement: Pressure state MUST be derived and reported without enforcement
+
+SemStreams MUST derive a pressure state — `normal`, `warning`, `high`, or `critical` — for every
+resource with known capacity, from operator-configurable thresholds over both proportional headroom
+and projected time-to-threshold, taking the worse of the two and reporting which input raised it, so
+that a slowly-filling large resource and a rapidly-filling small one are both surfaced before
+exhaustion. Pressure MUST be report-only in this capability: no write is rejected, no component is
+throttled, no readiness gate is failed, and no retention is applied as a consequence of pressure.
+Pressure MUST be observable through Prometheus metrics, health status, and logs — health may report
+the state, and MUST NOT degrade readiness because of it. Thresholds MUST NOT be captured in a form
+that outlives a configuration change without being reapplied; a restart is a supported way to apply
+a threshold change, since a stale threshold only evaluates old numbers visibly and destroys nothing.
+This is deliberately weaker than the rule governing values that drive durable resources, where a
+stale capture would silently reconcile a resource to the wrong policy.
+
+#### Scenario: Projected exhaustion raises pressure before headroom does
+
+- **GIVEN** a resource with substantial proportional headroom but a growth rate whose projected
+  time-to-threshold is inside the configured warning horizon
+- **WHEN** pressure is evaluated
+- **THEN** the resource reports at least `warning`
+- **AND** the reported state names the projection as the input that raised it
+
+#### Scenario: Critical pressure rejects nothing
+
+- **GIVEN** a resource evaluated at `critical` pressure
+- **WHEN** writes, component starts, and readiness checks proceed against that resource
+- **THEN** none are rejected, throttled, degraded, or failed as a consequence of the pressure state
+- **AND** the state is visible in metrics, health status, and logs
+
+### Requirement: Capacity admission MUST NOT be built until the deferral gate is satisfied
+
+A pressure state MUST NOT gate a write, a component start, a readiness check, or a retention decision
+anywhere in the system until every condition below holds.
+
+Application-level capacity admission — rejecting a write before any bucket is touched, so the
+rejection is entity-atomic and cross-bucket-coherent — is the correct eventual home for
+backpressure, and is the thing a NATS `MaxBytes` structurally cannot provide. It is DEFERRED, not
+rejected, and the deferral is a gate with stated conditions rather than an intention. Designing
+enforcement against an unmeasured signal is how this capability's predecessor went wrong: the
+signal has to be trustworthy before anything is allowed to act on it.
+
+The gate MUST be recorded where it outlives the change that deferred it, and every condition MUST be
+checkable by someone who was not present for the decision. All four MUST hold:
+
+1. **This capability is merged and running.** Report-only pressure exists in production, not in a
+   branch.
+2. **The projection is verified against observed outcome on at least THREE real resources.** A
+   projection that has never been checked against what actually happened is a number, not a
+   measurement. Three is the floor because one is an anecdote and two cannot show a pattern.
+3. **No `critical` state resolved without operator action.** A critical that cleared on its own is a
+   false positive, and admission built on a signal that cries wolf would refuse real work. This
+   condition is about the signal's precision, and it is the one most likely to fail first.
+4. **The rejection path is proven to classify transient and NAK**, rather than acking and dropping.
+   An admission control that loses the writes it refuses is worse than no admission control, because
+   the loss is silent and the operator believes they applied backpressure.
+
+A consumer that wants backpressure today should read the report and make its own decision explicitly,
+where the choice is visible in its own code.
+
+#### Scenario: The gate is checkable by someone who was not there
+
+- **GIVEN** an engineer proposing capacity admission
+- **WHEN** they look for what unblocks it
+- **THEN** they find the four conditions stated with the reason each exists
+- **AND** each condition is decidable from evidence rather than from judgement about intent
+
+#### Scenario: A restarted collector evaluates with the edited thresholds
+
+- **GIVEN** a collector whose pressure thresholds are edited in configuration and which is then
+  restarted
+- **WHEN** pressure is next evaluated
+- **THEN** the evaluation uses the edited thresholds
+- **AND** the growth series survives the restart, so the restart costs no observability
+
+#### Scenario: A resource with unknown capacity has no pressure state
+
+- **GIVEN** a resource whose capacity is unknown
+- **WHEN** pressure is evaluated
+- **THEN** no pressure state is reported for it, and its unknown capacity is surfaced instead
+
+### Requirement: Growth rate MUST survive process restart or report unknown
+
+Projected time-to-threshold MUST NOT depend on samples held only in process memory, because a
+restart, deploy, or crash-loop would blank the projection exactly when it is most needed, and a
+longer smoothing window makes that blackout longer. The growth rate MUST be computed from the
+difference between successive observations of a resource's size, persisted so it survives a restart.
+It MUST NOT be derived by dividing a resource's current size by the span of its own retained
+timestamps: that cannot distinguish sustained growth from churn at a stable size, and would report
+growth for a compacting KV bucket whose size never changes. Where fewer than two observations exist,
+the rate MUST report as unknown rather than be extrapolated from a single observation.
+
+#### Scenario: A churning but stable-size resource reports no growth
+
+- **GIVEN** a resource whose contents are continuously replaced but whose total size is unchanged
+  between successive observations
+- **WHEN** its growth rate is computed
+- **THEN** the rate is zero and no exhaustion is projected
+- **AND** the rate is not inferred from the span of the resource's retained timestamps
+
+#### Scenario: Projection survives a restart
+
+- **GIVEN** a resource with an established growth rate
+- **WHEN** the process restarts and pressure is evaluated
+- **THEN** a growth rate and projection are available without waiting a full smoothing window
+
+#### Scenario: Insufficient history reports unknown rate
+
+- **GIVEN** a resource for which insufficient history exists to compute a rate
+- **WHEN** pressure is evaluated
+- **THEN** the growth rate reports as unknown and no time-to-threshold is projected
+
+### Requirement: Operators MUST get an actionable storage report
+
+SemStreams MUST publish the storage report to a framework-owned KV bucket, one key per inventoried
+resource, carrying that resource's owner or attribution state, configured bound or its absence,
+current usage, headroom, pressure state, projected time-to-threshold, and the timestamp it was
+collected. Every operator-facing surface — HTTP route, CLI, alerting, metrics exporter — MUST be a
+CONSUMER of that bucket rather than a separate report-producing path, so there is one produced truth
+and no surface can disagree with another. A resource absent from the current collection MUST be
+removed by deleting its key, never by expiring it under a retention policy: reclamation here is a
+semantic decision the collector makes, on the same principle that governs the rest of the graph. A
+resource that is still present but whose row could not be written MUST retain its previous row rather
+than being reclaimed — failing to write a row is not a decision that the resource is gone, and
+conflating the two reintroduces the silent omission this capability exists to end.
+
+Under concurrent producers reclamation is eventually consistent: a row one producer reclaims on a
+timing skew MAY transiently disappear and reappear on a later collection. Consumers MUST NOT treat a
+row's disappearance as proof a resource is gone. This is a stronger caveat than the mixed-revision
+one above — a vanishing key is not the same as a stale one — and it means a disappearance-triggered
+alert would be unsound.
+Ranging the bucket MUST reconstruct the whole report; consumers MAY observe a mix of revisions
+across keys, which is why each key carries its own collection timestamp. The report MUST name resources carrying no
+bound at all. The report MUST compare declared bounds against the account limit **within each storage
+tier** — memory-backed and file-backed resources have separate account limits and MUST NOT be summed
+together — and MUST report the account limit as unbounded when the server reports no limit for that
+tier, rather than treating the absence as a zero or omitting the comparison silently.
+
+#### Scenario: Every operator surface reads the published report
+
+- **GIVEN** the collector has published a report and an operator queries it through the HTTP route
+  and again through the CLI
+- **WHEN** both responses are compared
+- **THEN** both are derived from the same published KV state
+- **AND** neither surface recomputes the inventory independently
+
+#### Scenario: A row that failed to write is not reclaimed
+
+- **GIVEN** a resource that is present in the current collection but whose row write fails
+- **WHEN** reclamation runs for that collection
+- **THEN** the resource's previous row is retained
+- **AND** it is not deleted as though the collector had decided the resource was gone
+
+#### Scenario: A disappeared resource is deleted, not expired
+
+- **GIVEN** a resource that was present in a previous collection and is absent from the current one
+- **WHEN** the report is published
+- **THEN** that resource's key is deleted
+- **AND** no retention policy is configured on the report bucket to expire it
+
+#### Scenario: The report names unbounded resources
+
+- **GIVEN** an account containing at least one resource with no configured bound
+- **WHEN** the operator requests the storage report
+- **THEN** that resource is named as unbounded together with its owner
+- **AND** it is not represented as having capacity headroom of its own, though it MAY carry a pressure
+  state inherited from its storage tier's ceiling (see stream-provisioning), labelled with the basis
+  it was evaluated against
+
+#### Scenario: A tier ceiling carries its own growth and projection
+
+- **GIVEN** a bounded storage tier whose account usage has been observed across two collections
+- **WHEN** the report is published
+- **THEN** the tier row carries the tier's own growth rate, headroom, projected time-to-threshold and
+  pressure state, measured against the account's usage of that tier
+- **AND** those are reported independently of the over-commitment verdict, which compares DECLARED
+  bounds and can report within-limit while the bytes actually stored are near exhaustion
+- **AND** the tier's rate is measured across the account row's own retained history, so it survives a
+  restart on the same terms as a resource's rate
+
+#### Scenario: Over-commitment is reported per storage tier
+
+- **GIVEN** an account whose file-backed limit is smaller than the sum of the declared bounds of its
+  file-backed resources
+- **WHEN** the operator requests the storage report
+- **THEN** the report shows a declared-versus-limit comparison for the file-backed tier that
+  identifies it as over-committed
+- **AND** memory-backed resources are not included in that tier's sum
+
+#### Scenario: An unbounded account limit is reported as such
+
+- **GIVEN** a server that reports no limit for a storage tier
+- **WHEN** the operator requests the storage report
+- **THEN** that tier's account limit reports as unbounded
+- **AND** the over-commitment comparison for that tier reports as not applicable rather than as
+  satisfied
