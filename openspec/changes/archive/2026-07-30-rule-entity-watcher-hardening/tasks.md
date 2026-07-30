@@ -37,7 +37,11 @@
       retention or an operator setting
 - [x] 2.4 Run `task lint`, `go test -race ./...`, contract tests, schema drift check, and structural e2e before landing;
       add agentic e2e if rule-pack configuration or agentic rule behavior remains in the extracted diff
-- [ ] 2.5 Strict-validate and review this change, then archive only after every task and recorded gate is complete
+- [x] 2.5 Strict-validate and review this change, then archive only after every task and recorded gate is complete
+      — `openspec validate rule-entity-watcher-hardening --strict` passes 2026-07-30. Review is recorded at
+      task 0.1 (adversarial review of the generalized watcher implementation from `f3adabb8` against this
+      change). Tasks 2.1–2.4 complete with the Gate Evidence below; entity-ID validation was explicitly
+      scoped out to `entity-id-contract`, which archived 2026-07-30.
 
 ## Gate Evidence (2026-07-16)
 
