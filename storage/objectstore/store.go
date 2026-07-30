@@ -418,7 +418,11 @@ func (s *Store) Close() error {
 func (s *Store) StoreContent(ctx context.Context, cs message.ContentStorable) (*message.StorageReference, error) {
 	entityID := cs.EntityID()
 	if err := semtypes.ValidateEntityID(entityID); err != nil {
-		return nil, err
+		// The contract error is already class Invalid with a machine code/detail;
+		// WrapInvalid adds the store attribution and preserves that contract
+		// (inheritMachineContract), keeping the JetStream consumer's ack decision
+		// table class-complete on this path (#727: Invalid must Term, not retry).
+		return nil, errs.WrapInvalid(err, "Store", "StoreContent", "validate entity ID")
 	}
 
 	start := time.Now()

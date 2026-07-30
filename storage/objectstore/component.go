@@ -5,6 +5,7 @@ package objectstore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -419,7 +420,10 @@ func (c *Component) handleAPIRequest(msg *nats.Msg) {
 }
 
 // handleWriteRequest handles async write operations via core NATS
-// Stores message and emits StoredMessage with StorageRef for downstream processors
+// Stores message and emits StoredMessage with StorageRef for downstream processors.
+// Core NATS has no ack/redelivery semantics, so a failed write can only be
+// surfaced — logged once here (the shared processWriteMessage returns errors
+// rather than logging, per the return-vs-log convention).
 func (c *Component) handleWriteRequest(msg *nats.Msg) {
 	atomic.AddUint64(&c.messagesReceived, 1)
 	c.lastActivity.Store(time.Now())
@@ -427,14 +431,26 @@ func (c *Component) handleWriteRequest(msg *nats.Msg) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	c.processWriteMessage(ctx, msg.Data)
+	if err := c.processWriteMessage(ctx, msg.Data); err != nil {
+		c.logger.Error("Failed to process write message",
+			slog.String("subject", msg.Subject),
+			slog.String("error", err.Error()))
+	}
 }
 
 // emitStoredMessage attempts to parse the incoming message and emit a StoredMessage
-// with StorageRef for downstream semantic processing
-func (c *Component) emitStoredMessage(data []byte, storageKey string) {
+// with StorageRef for downstream semantic processing.
+//
+// Returns nil for by-design skips (no "stored" port configured, message not a
+// BaseMessage, payload not Graphable) — those messages never owe downstream a
+// StorageReference. Returns a classified error when a REQUIRED publication
+// fails (marshal or publish): the "stored" port is configured and the payload
+// qualifies, so downstream losing the reference is the same loss shape as a
+// failed store — the caller must not ack the delivery (#727). Errors are
+// returned, not logged here; the transport caller logs once.
+func (c *Component) emitStoredMessage(data []byte, storageKey string) error {
 	if !c.hasPort("stored") {
-		return // No stored output port configured
+		return nil // No stored output port configured
 	}
 
 	// Try to parse as BaseMessage to extract Graphable payload
@@ -442,7 +458,7 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 	if err != nil {
 		c.logger.Debug("Message not a BaseMessage, skipping StoredMessage emit",
 			slog.String("error", err.Error()))
-		return
+		return nil
 	}
 
 	// Extract Graphable payload
@@ -451,7 +467,7 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 	if !ok {
 		c.logger.Debug("Payload not Graphable, skipping StoredMessage emit",
 			slog.String("payload_type", fmt.Sprintf("%T", payload)))
-		return
+		return nil
 	}
 
 	// Create StorageReference
@@ -462,8 +478,59 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 		Size:            int64(len(data)),
 	}
 
-	// Create StoredMessage wrapping original Graphable + StorageRef
-	storedMsg := NewStoredMessage(graphable, storageRef, baseMsg.Type().Key())
+	if err := c.publishStoredMessage(graphable, storageRef, baseMsg.Type().Key()); err != nil {
+		return err
+	}
+
+	c.logger.Debug("Emitted StoredMessage",
+		slog.String("entity_id", graphable.EntityID()),
+		slog.String("storage_key", storageKey))
+	return nil
+}
+
+// emitStoredMessageFromContentStorable emits a StoredMessage for ContentStorable payloads
+// This is used when we've already stored via StoreContent and have a proper StorageRef.
+//
+// Same contract as emitStoredMessage: nil for by-design skips (no "stored"
+// port, ContentStorable not Graphable), a classified error when the required
+// publication fails so the caller can refuse the ack (#727).
+func (c *Component) emitStoredMessageFromContentStorable(
+	baseMsg *message.BaseMessage,
+	cs message.ContentStorable,
+	storageRef *message.StorageReference,
+) error {
+	if !c.hasPort("stored") {
+		return nil
+	}
+
+	// ContentStorable must also be Graphable for downstream processing
+	graphable, ok := cs.(graph.Graphable)
+	if !ok {
+		c.logger.Debug("ContentStorable not Graphable, skipping StoredMessage emit",
+			slog.String("entity_id", cs.EntityID()))
+		return nil
+	}
+
+	if err := c.publishStoredMessage(graphable, storageRef, baseMsg.Type().Key()); err != nil {
+		return err
+	}
+
+	c.logger.Debug("Emitted StoredMessage for ContentStorable",
+		slog.String("entity_id", cs.EntityID()),
+		slog.String("storage_key", storageRef.Key))
+	return nil
+}
+
+// publishStoredMessage wraps a Graphable + StorageReference in a StoredMessage
+// envelope and publishes it on the "stored" port. Shared tail of the two emit
+// paths. Marshal failure is Invalid (retrying the same message cannot fix it);
+// publish failure is Transient (broker or stream unavailability).
+func (c *Component) publishStoredMessage(
+	graphable graph.Graphable,
+	storageRef *message.StorageReference,
+	originalType string,
+) error {
+	storedMsg := NewStoredMessage(graphable, storageRef, originalType)
 
 	// Wrap in BaseMessage for transport
 	wrappedMsg := message.NewBaseMessage(
@@ -472,12 +539,9 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 		c.instanceName, // source
 	)
 
-	// Marshal and publish
 	msgData, err := wrappedMsg.MarshalJSON()
 	if err != nil {
-		c.logger.Error("Failed to marshal StoredMessage",
-			slog.String("error", err.Error()))
-		return
+		return errs.WrapInvalid(err, "Component", "publishStoredMessage", "marshal StoredMessage")
 	}
 
 	storedSubject := c.getPortSubject("stored", "storage.%s.stored")
@@ -485,87 +549,17 @@ func (c *Component) emitStoredMessage(data []byte, storageKey string) {
 	// Use JetStream publishing when port type is "jetstream" for durability
 	if c.isJetStreamPort("stored") {
 		if err := c.natsClient.PublishToStream(context.Background(), storedSubject, msgData); err != nil {
-			c.logger.Error("Failed to publish StoredMessage to JetStream",
-				slog.String("subject", storedSubject),
-				slog.String("error", err.Error()))
-			return
+			return errs.WrapTransient(err, "Component", "publishStoredMessage",
+				fmt.Sprintf("publish StoredMessage to JetStream subject %s", storedSubject))
 		}
-	} else {
-		// Fallback to core NATS for non-JetStream ports
-		if err := c.natsClient.GetConnection().Publish(storedSubject, msgData); err != nil {
-			c.logger.Error("Failed to publish StoredMessage",
-				slog.String("subject", storedSubject),
-				slog.String("error", err.Error()))
-			return
-		}
+		return nil
 	}
-
-	c.logger.Debug("Emitted StoredMessage",
-		slog.String("entity_id", graphable.EntityID()),
-		slog.String("storage_key", storageKey),
-		slog.String("subject", storedSubject))
-}
-
-// emitStoredMessageFromContentStorable emits a StoredMessage for ContentStorable payloads
-// This is used when we've already stored via StoreContent and have a proper StorageRef
-func (c *Component) emitStoredMessageFromContentStorable(
-	baseMsg *message.BaseMessage,
-	cs message.ContentStorable,
-	storageRef *message.StorageReference,
-) {
-	if !c.hasPort("stored") {
-		return
+	// Fallback to core NATS for non-JetStream ports
+	if err := c.natsClient.GetConnection().Publish(storedSubject, msgData); err != nil {
+		return errs.WrapTransient(err, "Component", "publishStoredMessage",
+			fmt.Sprintf("publish StoredMessage to subject %s", storedSubject))
 	}
-
-	// ContentStorable must also be Graphable for downstream processing
-	graphable, ok := cs.(graph.Graphable)
-	if !ok {
-		c.logger.Debug("ContentStorable not Graphable, skipping StoredMessage emit",
-			slog.String("entity_id", cs.EntityID()))
-		return
-	}
-
-	// Create StoredMessage wrapping original Graphable + StorageRef
-	storedMsg := NewStoredMessage(graphable, storageRef, baseMsg.Type().Key())
-
-	// Wrap in BaseMessage for transport
-	wrappedMsg := message.NewBaseMessage(
-		storedMsg.Schema(),
-		storedMsg,
-		c.instanceName,
-	)
-
-	// Marshal and publish
-	msgData, err := wrappedMsg.MarshalJSON()
-	if err != nil {
-		c.logger.Error("Failed to marshal StoredMessage",
-			slog.String("error", err.Error()))
-		return
-	}
-
-	storedSubject := c.getPortSubject("stored", "storage.%s.stored")
-
-	// Use JetStream publishing when port type is "jetstream" for durability
-	if c.isJetStreamPort("stored") {
-		if err := c.natsClient.PublishToStream(context.Background(), storedSubject, msgData); err != nil {
-			c.logger.Error("Failed to publish StoredMessage to JetStream",
-				slog.String("subject", storedSubject),
-				slog.String("error", err.Error()))
-			return
-		}
-	} else {
-		if err := c.natsClient.GetConnection().Publish(storedSubject, msgData); err != nil {
-			c.logger.Error("Failed to publish StoredMessage",
-				slog.String("subject", storedSubject),
-				slog.String("error", err.Error()))
-			return
-		}
-	}
-
-	c.logger.Debug("Emitted StoredMessage for ContentStorable",
-		slog.String("entity_id", cs.EntityID()),
-		slog.String("storage_key", storageRef.Key),
-		slog.String("subject", storedSubject))
+	return nil
 }
 
 // publishEvent publishes a simple storage event to the events subject
@@ -766,24 +760,136 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 	return errs.WrapTransient(errs.ErrStorageUnavailable, "Component", "waitForStream", fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
 }
 
-// handleJetStreamWriteRequest handles JetStream messages for write operations
+// Nak delays mirror the documented house precedent in
+// natsclient.ConsumeWithHeartbeat (natsclient/heartbeat.go): 30s breathing room
+// before retrying failed work, 5s for graceful shutdown/cancellation. They are
+// deliberately NOT operator-configurable (#727).
+const (
+	transientNakDelay = 30 * time.Second
+	shutdownNakDelay  = 5 * time.Second
+)
+
+// writeDisposition is the ack decision for one JetStream write delivery.
+type writeDisposition int
+
+const (
+	dispositionAck          writeDisposition = iota // positive ack: work fully committed
+	dispositionNakShutdown                          // NakWithDelay(shutdownNakDelay): cancelled mid-flight
+	dispositionTerm                                 // Term: structurally invalid, retry can never succeed
+	dispositionNakTransient                         // NakWithDelay(transientNakDelay): transient or unclassified
+)
+
+// classifyWriteDisposition maps a processWriteMessage outcome onto the ack
+// decision table:
+//
+//	nil error                  -> Ack
+//	ctx cancelled + any error  -> NakWithDelay(5s)  (graceful shutdown)
+//	errs.IsInvalid             -> Term              (poison message, do not retry)
+//	anything else              -> NakWithDelay(30s) (transient/unclassified: retry)
+//
+// The delays and the Term/NAK split follow natsclient.ConsumeWithHeartbeat,
+// with one DELIBERATE divergence: heartbeat lets cancellation own the outcome
+// even when work returned nil (NAK -> redeliver -> duplicate), because its
+// select can race a success report against ctx.Done(). Here a nil error means
+// the store commit and any required emit fully completed, so nil Acks even
+// under a cancelled context — NAKing completed work would guarantee a
+// duplicate object on redelivery for zero durability gain.
+//
+// For NON-nil errors, cancellation is checked BEFORE the invalid class
+// (heartbeat precedent: cancellation owns the delivery outcome;
+// select-race-on-pre-cancelled-ctx discipline): an error observed under a
+// cancelled context may be the cancellation itself surfacing through the
+// store, and terminating it would permanently drop a retryable message during
+// shutdown. Unclassified errors deliberately fall to the transient NAK —
+// retrying is the safe default; terminating loses data.
+func classifyWriteDisposition(ctxErr, procErr error) writeDisposition {
+	if procErr == nil {
+		return dispositionAck
+	}
+	if ctxErr != nil {
+		return dispositionNakShutdown
+	}
+	if errs.IsInvalid(procErr) {
+		return dispositionTerm
+	}
+	return dispositionNakTransient
+}
+
+// handleJetStreamWriteRequest handles JetStream messages for write operations.
+//
+// Delivery contract: at-least-once. The delivery is positively acked ONLY after
+// the store commit AND any required StorageReference publication both succeed;
+// failures NAK (transient) or Term (structurally invalid) per
+// classifyWriteDisposition. Redelivery after a partial failure re-runs the
+// store: both write paths generate time/nonce-suffixed keys
+// (Store.generateContentKey appends UnixNano; DefaultKeyGenerator appends a
+// unix-seconds timestamp), so a redelivered message stores a NEW object rather
+// than overwriting — duplicates beat loss (#727).
+//
+// Retry is BOUNDED, not indefinite: the write consumer's default MaxDeliver=3
+// (component.GetConsumerConfigFromDefinitionWithDefault) caps delivery
+// attempts — roughly 60s of backend-outage tolerance at the 30s transient NAK
+// delay — after which the message parks un-acked awaiting operator action;
+// parked-message visibility is tracked as the MaxDeliver parking follow-up.
 func (c *Component) handleJetStreamWriteRequest(ctx context.Context, msg jetstream.Msg) {
 	atomic.AddUint64(&c.messagesReceived, 1)
 	c.lastActivity.Store(time.Now())
 
-	// Process the message using existing logic
-	c.processWriteMessage(ctx, msg.Data())
+	c.settleJetStreamWrite(ctx, msg, c.processWriteMessage(ctx, msg.Data()))
+}
 
-	// Acknowledge the message
-	if err := msg.Ack(); err != nil {
-		c.logger.Error("Failed to ack JetStream message",
-			slog.String("error", err.Error()))
+// settleJetStreamWrite applies the ack decision for one delivery and logs the
+// processing error exactly once (processWriteMessage returns errors rather
+// than logging, per the return-vs-log convention). Split from
+// handleJetStreamWriteRequest so the decision table is drivable with a fake
+// jetstream.Msg in unit tests.
+func (c *Component) settleJetStreamWrite(ctx context.Context, msg jetstream.Msg, procErr error) {
+	switch classifyWriteDisposition(ctx.Err(), procErr) {
+	case dispositionAck:
+		if err := msg.Ack(); err != nil {
+			c.logger.Error("Failed to ack JetStream message",
+				slog.String("error", err.Error()))
+		}
+	case dispositionNakShutdown:
+		// Same NAK verb for both cancellation causes, different visibility:
+		// DeadlineExceeded here is the per-message processing deadline
+		// (natsclient's messageHandlerContext default, 30s) expiring over a
+		// hung backend — a real failure class that can silently park the
+		// message once MaxDeliver exhausts, so it must be loud. Canceled is
+		// genuine shutdown/restart noise and stays Debug.
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			c.logger.Error("Write processing deadline exceeded; NAK for redelivery",
+				slog.String("subject", msg.Subject()),
+				slog.String("error", procErr.Error()))
+		} else {
+			c.logger.Debug("Write processing cancelled; NAK for redelivery",
+				slog.String("subject", msg.Subject()),
+				slog.String("error", procErr.Error()))
+		}
+		_ = msg.NakWithDelay(shutdownNakDelay)
+	case dispositionTerm:
+		c.logger.Error("Terminating JetStream write delivery: structurally invalid message",
+			slog.String("subject", msg.Subject()),
+			slog.String("error", procErr.Error()))
+		if err := msg.Term(); err != nil {
+			c.logger.Error("Failed to terminate JetStream message",
+				slog.String("error", err.Error()))
+		}
+	case dispositionNakTransient:
+		c.logger.Error("Failed to process JetStream write; NAK for redelivery",
+			slog.String("subject", msg.Subject()),
+			slog.String("error", procErr.Error()))
+		_ = msg.NakWithDelay(transientNakDelay)
 	}
 }
 
-// processWriteMessage contains the shared logic for processing write messages
-// Used by both core NATS and JetStream handlers
-func (c *Component) processWriteMessage(ctx context.Context, data []byte) {
+// processWriteMessage contains the shared logic for processing write messages.
+// Used by both core NATS and JetStream handlers. Returns the store or
+// required-emit error (already classified and attributed by the store/emit
+// layer) so each transport caller can apply its own delivery semantics — the
+// JetStream handler's ack decision, the core NATS handler's log-and-drop.
+// Errors are returned, not logged here (return-vs-log convention).
+func (c *Component) processWriteMessage(ctx context.Context, data []byte) error {
 	// Report storing stage (throttled)
 	c.reportStoring(ctx)
 
@@ -794,45 +900,42 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) {
 			// Use StoreContent for proper key generation and StoredContent envelope
 			storageRef, err := c.store.StoreContent(ctx, cs)
 			if err != nil {
-				c.logger.Error("Failed to store ContentStorable",
-					slog.String("error", err.Error()))
-				return
+				return err
 			}
 
 			atomic.AddUint64(&c.messagesStored, 1)
 
-			// Publish storage event
+			// Publish storage event (best-effort monitoring signal, never gates the ack)
 			c.publishEvent(Event{
 				Type:      "stored",
 				Key:       storageRef.Key,
 				Timestamp: time.Now(),
 			})
 
-			// Emit StoredMessage with proper StorageRef
-			c.emitStoredMessageFromContentStorable(baseMsg, cs, storageRef)
-			return
+			// Emit StoredMessage with proper StorageRef — a REQUIRED publication
+			// when the "stored" port is configured; its failure gates the ack.
+			return c.emitStoredMessageFromContentStorable(baseMsg, cs, storageRef)
 		}
 	}
 
 	// Fallback: store raw bytes for non-ContentStorable messages
 	key, err := c.store.Store(ctx, data)
 	if err != nil {
-		c.logger.Error("Failed to store message",
-			slog.String("error", err.Error()))
-		return
+		return err
 	}
 
 	atomic.AddUint64(&c.messagesStored, 1)
 
-	// Publish simple storage event (for monitoring/audit)
+	// Publish simple storage event (best-effort monitoring signal, never gates the ack)
 	c.publishEvent(Event{
 		Type:      "stored",
 		Key:       key,
 		Timestamp: time.Now(),
 	})
 
-	// Try to emit StoredMessage if we have a "stored" output port
-	c.emitStoredMessage(data, key)
+	// Emit StoredMessage if we have a "stored" output port — required
+	// publication when configured; decode/non-Graphable skips return nil.
+	return c.emitStoredMessage(data, key)
 }
 
 // getPortSubject gets the subject for a named port, or generates a default
