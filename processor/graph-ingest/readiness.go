@@ -8,6 +8,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -93,7 +94,14 @@ func (c *Component) statusTickInterval() time.Duration {
 // instants would let separate distribution channels disagree about readiness with no
 // way for a consumer to tell which was right.
 func (c *Component) refreshReadinessStatus(ctx context.Context) {
-	c.publishReadinessStatus(ctx, c.computeBacklogStatus(ctx))
+	status := c.computeBacklogStatus(ctx)
+	// ONE compute feeds BOTH channels. Two computes at slightly different instants
+	// would let the scraped gauges and the watched KV key disagree about readiness,
+	// with no way for a consumer reconciling them to tell which was right.
+	if c.readinessGauges != nil {
+		c.readinessGauges.Set(status)
+	}
+	c.publishReadinessStatus(ctx, status)
 }
 
 // computeBacklogStatus reads outstanding work across every bound consumer and
@@ -290,6 +298,9 @@ func (c *Component) publishReadinessStatus(ctx context.Context, status graph.Ind
 			// Shutdown, not a failure: Stop cancels mid-Put on the way out.
 			return
 		}
+		if c.readinessGauges != nil {
+			c.readinessGauges.RecordPublishFailure()
+		}
 		c.logger.Warn("readiness status publish failed",
 			slog.String("bucket", readiness.BucketGraphStatus),
 			slog.String("key", c.statusPublisher.Key()),
@@ -312,4 +323,16 @@ func (c *Component) createStatusBucket(ctx context.Context) error {
 	}
 	c.statusPublisher = readiness.NewPublisher(bucket, readiness.KeyGraphIngest)
 	return nil
+}
+
+// initReadinessGauges builds the scrapeable half of the envelope.
+//
+// NO revision gauges: graph-ingest is a BACKLOG producer, and the spec states such a
+// producer SHALL NOT expose indexed_revision / target_revision and SHALL NOT
+// synthesize a value — a fabricated revision is worse than an absent one.
+func (c *Component) initReadinessGauges(registry *metric.MetricsRegistry) {
+	c.readinessGauges = readiness.NewGauges(
+		readiness.ProducerNames{Service: "graph-ingest", Subsystem: "graph_ingest"},
+	)
+	c.readinessGauges.Register(registry)
 }

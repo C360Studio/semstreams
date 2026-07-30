@@ -124,6 +124,7 @@ type Processor struct {
 	// See readiness.go: bootstrap completion is tracked PER WATCHER GENERATION,
 	// not per process, because the watcher set is runtime-mutable.
 	statusPublisher *readiness.Publisher
+	readinessGauges *readiness.Gauges
 	// statusInterval is a TEST SEAM only, so an integration test can observe
 	// successive heartbeats without sleeping through production cadence.
 	statusInterval time.Duration
@@ -312,6 +313,10 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 	if natsClient != nil {
 		rp.graphEventPublisher = natsClient
 	}
+
+	// Readiness gauges: the scrapeable half of the ADR-066 envelope. Built at
+	// construction so the series exist before the first status tick.
+	rp.initReadinessGauges(metricsRegistry)
 
 	// Set up input and output ports
 	rp.setupPorts()

@@ -667,6 +667,7 @@ type Component struct {
 	// Readiness producer state (ADR-083 envelope on the graph-ingest GRAPH_STATUS
 	// key). See readiness.go for the projection and the bootstrap latch rules.
 	statusPublisher  *readiness.Publisher
+	readinessGauges  *readiness.Gauges
 	boundConsumers   []boundConsumer
 	boundConsumersMu sync.RWMutex
 	// bootBacklog is the outstanding count at the first successful read after
@@ -829,6 +830,11 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Initialize last activity
 	comp.lastActivity.Store(time.Now())
+
+	// Readiness gauges: the scrapeable half of the ADR-066 envelope. Registered at
+	// construction (not Start) so the series exist before the first status tick,
+	// matching every other metric on this component.
+	comp.initReadinessGauges(deps.MetricsRegistry)
 
 	return comp, nil
 }

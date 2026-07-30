@@ -7,6 +7,7 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -129,7 +130,13 @@ func (rp *Processor) statusTickInterval() time.Duration {
 }
 
 func (rp *Processor) refreshReadinessStatus(ctx context.Context) {
-	rp.publishReadinessStatus(ctx, rp.computeReadinessStatus())
+	status := rp.computeReadinessStatus()
+	// ONE compute feeds BOTH channels, so the scraped gauges and the watched KV key
+	// can never disagree about readiness.
+	if rp.readinessGauges != nil {
+		rp.readinessGauges.Set(status)
+	}
+	rp.publishReadinessStatus(ctx, status)
 }
 
 // publishReadinessStatus writes the envelope to the rule GRAPH_STATUS key. A failed
@@ -142,6 +149,9 @@ func (rp *Processor) publishReadinessStatus(ctx context.Context, status graph.In
 	if err := rp.statusPublisher.Publish(ctx, status); err != nil {
 		if ctx.Err() != nil {
 			return
+		}
+		if rp.readinessGauges != nil {
+			rp.readinessGauges.RecordPublishFailure()
 		}
 		rp.logger.Warn("readiness status publish failed",
 			slog.String("bucket", readiness.BucketGraphStatus),
@@ -162,4 +172,16 @@ func (rp *Processor) createStatusBucket(ctx context.Context) error {
 	}
 	rp.statusPublisher = readiness.NewPublisher(bucket, readiness.KeyRule)
 	return nil
+}
+
+// initReadinessGauges builds the scrapeable half of the envelope.
+//
+// NO revision gauges: the rule processor's readiness is bootstrap-replay completion,
+// not a revision watermark, so indexed_revision / target_revision would be
+// synthesized values it does not have.
+func (rp *Processor) initReadinessGauges(registry *metric.MetricsRegistry) {
+	rp.readinessGauges = readiness.NewGauges(
+		readiness.ProducerNames{Service: "rule-processor", Subsystem: "rule_processor"},
+	)
+	rp.readinessGauges.Register(registry)
 }
