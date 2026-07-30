@@ -162,20 +162,27 @@
 
 ## 6. Documentation and gates
 
-- [ ] 6.1 Write the storage pressure runbook: reading the report, correcting capacity ahead of the
+- [x] 6.1 Write the storage pressure runbook: reading the report, correcting capacity ahead of the
       projection, what each pressure state does and does not mean, and the `DiscardNew` ceiling behavior
-- [ ] 6.2 Record that pressure is report-only and that admission control is deferred behind a checkable
+- [x] 6.2 Record that pressure is report-only and that admission control is deferred behind a checkable
       gate: this change merged; the rejection path proven to classify transient and NAK; projection
       verified against observed outcome on at least three real resources with no `critical` that
       resolved without operator action
-- [ ] 6.3 Seed or correct the capability home — `openspec/specs/nats-streaming/spec.md` is a publish-path
+- [x] 6.3 Seed or correct the capability home — `openspec/specs/nats-streaming/spec.md` is a publish-path
       capability whose Purpose is still a `TBD` stub; stream provisioning is a separate capability and
       must not be filed under it
 - [x] 6.4 Confirm no EXISTING catalog row's declared retention policy changed, no retention Kind was
       added, and `graph-retention`, the acquisition seam, and ADR-068/073 are untouched. Adding the 4.4b
       report-bucket row is in scope and expected; changing how any existing bucket is governed is not
-- [ ] 6.5 Run lint, `go test -race ./...`, tagged integration on touched packages, contract tests, and
+- [x] 6.4b Gate the SHIPPED configs against the bounds requirement (found in review of section 5).
+      Nothing ran `ValidateStreamDeclarations` over `configs/**/*.json`: the reference-config test
+      covers rule predicates only, and the config package's tests build declarations in Go, so no test
+      read the JSON an operator starts from. 5.1 is a flag day — a shipped config missing a field is a
+      deployment that will not boot, found by whoever copies it. The test loads through
+      `LoadFromBytes` (the loader's path guard refuses `../configs`) and MUST fail rather than skip:
+      the first version skipped all 41 files and was green
+- [x] 6.5 Run lint, `go test -race ./...`, tagged integration on touched packages, contract tests, and
       `task schema:generate` with no uncommitted drift
-- [ ] 6.6 Run a relevant e2e tier before merge. This is REQUIRED, not conditional: tasks 1.1 and 5.1
+- [x] 6.6 Run a relevant e2e tier before merge. This is REQUIRED, not conditional: tasks 1.1 and 5.1
       change stream provisioning and can fail boot, which is the breaking-change class the house rule
       covers regardless of pressure staying report-only

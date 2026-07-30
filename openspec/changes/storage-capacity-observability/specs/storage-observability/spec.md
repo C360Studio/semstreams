@@ -134,6 +134,43 @@ stale capture would silently reconcile a resource to the wrong policy.
 - **THEN** none are rejected, throttled, degraded, or failed as a consequence of the pressure state
 - **AND** the state is visible in metrics, health status, and logs
 
+### Requirement: Capacity admission MUST NOT be built until the deferral gate is satisfied
+
+A pressure state MUST NOT gate a write, a component start, a readiness check, or a retention decision
+anywhere in the system until every condition below holds.
+
+Application-level capacity admission — rejecting a write before any bucket is touched, so the
+rejection is entity-atomic and cross-bucket-coherent — is the correct eventual home for
+backpressure, and is the thing a NATS `MaxBytes` structurally cannot provide. It is DEFERRED, not
+rejected, and the deferral is a gate with stated conditions rather than an intention. Designing
+enforcement against an unmeasured signal is how this capability's predecessor went wrong: the
+signal has to be trustworthy before anything is allowed to act on it.
+
+The gate MUST be recorded where it outlives the change that deferred it, and every condition MUST be
+checkable by someone who was not present for the decision. All four MUST hold:
+
+1. **This capability is merged and running.** Report-only pressure exists in production, not in a
+   branch.
+2. **The projection is verified against observed outcome on at least THREE real resources.** A
+   projection that has never been checked against what actually happened is a number, not a
+   measurement. Three is the floor because one is an anecdote and two cannot show a pattern.
+3. **No `critical` state resolved without operator action.** A critical that cleared on its own is a
+   false positive, and admission built on a signal that cries wolf would refuse real work. This
+   condition is about the signal's precision, and it is the one most likely to fail first.
+4. **The rejection path is proven to classify transient and NAK**, rather than acking and dropping.
+   An admission control that loses the writes it refuses is worse than no admission control, because
+   the loss is silent and the operator believes they applied backpressure.
+
+A consumer that wants backpressure today should read the report and make its own decision explicitly,
+where the choice is visible in its own code.
+
+#### Scenario: The gate is checkable by someone who was not there
+
+- **GIVEN** an engineer proposing capacity admission
+- **WHEN** they look for what unblocks it
+- **THEN** they find the four conditions stated with the reason each exists
+- **AND** each condition is decidable from evidence rather than from judgement about intent
+
 #### Scenario: A restarted collector evaluates with the edited thresholds
 
 - **GIVEN** a collector whose pressure thresholds are edited in configuration and which is then
