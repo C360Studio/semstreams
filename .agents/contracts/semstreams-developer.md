@@ -57,6 +57,28 @@ or runtime mechanics; they do not replace this project-specific role.
 - Construct maximum supported keys and filters and prove their exact match sets against real NATS. Representative
   corpus success and arithmetic alone do not authorize an index layout.
 
+## Exported-surface contracts
+
+Derived from the 2026-07-30 surface incidents (raw-handle accessor, two-counter return,
+zero-consumer "observability" split). These bind every NEW exported symbol; framework packages
+(`natsclient`, `graph`, `message`, `pkg/*`) additionally require Fable design review BEFORE
+implementation (baton model-roles rule).
+
+- Return the answer, not the components. If the doc comment must warn callers against using part
+  of the return — or against deriving the real quantity themselves — collapse the signature until
+  the warning is unnecessary. A signature's affordances are its contract; prose does not override
+  them.
+- Never return a capability where the caller needs a value. Handles, connections, maps, and
+  internal contexts stay private; expose the question's answer. A leaked handle offers its whole
+  wider surface to every future caller.
+- Three or more correlated non-error returns are a named struct. Values that travel together get
+  a type; positional tuples drift and misbind at call sites.
+- A new exported symbol needs a named caller at birth. Grep-for-the-consumer applies to API
+  surface exactly as to signals: "for observability" or "for future use" with zero present
+  consumers is a phantom — do not export it.
+- Widen deliberately, never speculatively. When a real second consumer needs more than the
+  current surface answers, that is the moment to extend — under the same review.
+
 ## Storage and retention contracts
 
 - Keep `windowed`, `entity-owned`, and `retained` storage classes distinct. Bounded admission and capacity rejection
