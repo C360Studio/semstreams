@@ -336,6 +336,39 @@ becomes change number twelve through sixteen. Finish, then start.
 
 ---
 
+## Issue flow (measured — update when touching the queue, at least weekly)
+
+Purpose: keep mint-vs-close **measured, not smelled**. Discovery during a hardening
+program is the program working (filing makes latent defects visible — the alternative
+is the same defects, invisible); divergence is only real if the watch conditions below
+trip. Regenerate the table with:
+`gh issue list --state all --limit 300 --json number,createdAt,closedAt` bucketed by ISO week.
+
+| Week | Opened | Closed | Net | Note |
+|---|---|---|---|---|
+| 2026-W26 | 24 | 33 | −9 | |
+| 2026-W27 | 57 | 41 | +16 | audit prep wave |
+| 2026-W28 | 15 | 16 | −1 | steady state |
+| 2026-W29 | 25 | 23 | +2 | steady state |
+| 2026-W30 | 73 | 23 | +50 | deliberate: pre-v1 audit filing + Codex projection-arc asks |
+| 2026-W31* | 24 | 11 | +13 | partial week; #737 merge closes 2 more |
+
+Composition 2026-07-30 (post-triage): 121 open = **36 bug / 81 enhancement / 4 docs-class**
+(56 previously unlabeled, triaged this date). Closure speed: days-to-close median **1d**,
+p75 5d; open-backlog median age 10d. Several bug-labeled issues are confirm-close
+candidates against merged epic ledgers (verification in flight; owner CONFIRM-CLOSE gate
+applies — no unilateral closes).
+
+**Dry criterion (program-exit gate):** two consecutive hardening increments surfacing
+zero new P1+ defect-class finds ⇒ discovery has converged; the remaining queue is
+asks/design work, sequenced post-v1 or by product need.
+
+**Watch conditions (either one makes the divergence concern real):**
+1. A closed class reopens (a second #719-shaped retrospective on the same guarantee).
+2. Per-increment defect finds stop trending down in severity or count.
+
+---
+
 ## Evidence (stable — do not re-derive)
 
 | Doc | Holds |
