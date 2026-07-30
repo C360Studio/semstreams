@@ -139,6 +139,18 @@ not replace this review.
 - Breaking changes have relevant e2e evidence before the commit lands, including the full ingest-to-query path.
 - Paid or prolonged operations use validated monitors plus active polling of authoritative state every 30-60 seconds.
 
+## Exported-surface review
+
+- For every NEW exported symbol: name its caller. Zero present consumers is a finding (phantom
+  surface).
+- A return whose doc comment warns against part of its own affordance is a finding — require the
+  collapsed signature.
+- A capability return (handle, connection, map, internal context) where callers need a value is a
+  finding.
+- Three or more correlated non-error returns without a named struct is a finding.
+- New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` without recorded Fable
+  design review is a BLOCKING finding.
+
 ## Generic Go second pass
 
 Briefly flag context misuse, ignored cancellation, shared-memory races, missing `%w`, unlock hazards, error-class loss,

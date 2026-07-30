@@ -193,7 +193,9 @@ git status --porcelain                        # whether the tree is actually cle
 
 **Model roles (owner, 2026-07-30):** execution sessions run on Opus by default; escalate to
 Fable for epic planning, change-proposal/design review, and pre-merge review of critical-stage
-PRs (breaking changes, boot-path, durability/ack semantics, cross-plane ownership).
+PRs (breaking changes, boot-path, durability/ack semantics, cross-plane ownership, and NEW
+exported surface on framework packages — `natsclient`, `graph`, `message`, `pkg/*` — reviewed at
+DESIGN time, before implementation; see `.agents/contracts/` exported-surface rules).
 
 **WIP = 1 at the epic level.** Eight OpenSpec changes are already stalled in the
 80–95% band; the last increment of each is disproportionately the observability
