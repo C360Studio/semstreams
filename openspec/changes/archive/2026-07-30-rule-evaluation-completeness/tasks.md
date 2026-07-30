@@ -23,5 +23,14 @@
 
 - [x] 3.1 `task lint`, `go test -race ./...`, `go test ./test/contract/...`, schema drift clean
 - [x] 3.2 `go test -race -tags=integration -p 2 ./processor/rule/...`
-- [ ] 3.3 `task e2e:structural` green (rule paths exercised end-to-end)
-- [ ] 3.4 Close gh#519 (noting the superseded WIP branch) and gh#530 with fix references
+- [x] 3.3 `task e2e:structural` green (rule paths exercised end-to-end)
+      — GREEN 2026-07-30. `Scenario completed successfully`, `validation_errors:0`,
+      `rules_validation_passed:1`, `rules_evaluated_count:613`, `rules_firings_count:6`,
+      `validate-rules` + `validate-rule-transitions` stages both ran. **Scope caveat, recorded
+      deliberately:** the run was on the `feat/697-713-add-lane-dedup` tree, i.e. this change's
+      already-merged code PLUS the add-lane dedup work — not a clean-main run. It is evidence that
+      the merged rule paths pass structural e2e, and arguably stronger for carrying an unrelated
+      change on top; it is NOT a clean-main measurement. Re-run on main if that distinction ever
+      matters.
+- [x] 3.4 Close gh#519 (noting the superseded WIP branch) and gh#530 with fix references
+      — both verified CLOSED 2026-07-30 via `gh issue view`

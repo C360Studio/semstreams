@@ -31,4 +31,6 @@
 - [x] 6.2 `go test -race ./...` (unit) and the relevant integration tests for `service/`.
 - [x] 6.3 `task schema:generate` → confirm no `schemas/`/`specs/` drift.
 - [x] 6.4 semstreams-reviewer pre-merge pass on the diff — APPROVED (round 1 HIGH #1 live-PUT stale baseline fixed + race closed; #2 UseNumber; nits).
-- [ ] 6.5 `openspec validate runtime-lifecycle-idempotency --strict`; on merge, close gh#520 + gh#514, cross-link gh#515.
+- [x] 6.5 `openspec validate runtime-lifecycle-idempotency --strict`; on merge, close gh#520 + gh#514, cross-link gh#515.
+      — strict validation passes 2026-07-30; gh#520, gh#514, and gh#515 all verified CLOSED via
+      `gh issue view`.
