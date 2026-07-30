@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -22,16 +23,11 @@ type embeddingMetrics struct {
 	// Readiness envelope gauges (ADR-066 §3): the honest Ready/lag/watermark numbers
 	// computeEmbeddingStatus already answers over NATS, now scrapeable so an operator
 	// can dashboard/alert without a per-sample status request (#579 at the source).
-	readiness       prometheus.Gauge     // 1 when Ready (pipeline caught up to target), else 0
-	lag             prometheus.Gauge     // revisions behind target (0 = caught up)
-	indexedRevision prometheus.Gauge     // low-water-of-pending watermark
-	targetRevision  prometheus.Gauge     // ENTITY_STATES stream LastSeq target
-	readinessState  *prometheus.GaugeVec // one-hot over building|ready|degraded|reset_required
-	// statusPublishFailures counts heartbeat writes to GRAPH_STATUS that failed
-	// (ADR-083). A rising value is the producer-side half of a consumer reporting
-	// status_unknown: it says the envelope is not reaching the bucket, which the
-	// consumer alone cannot distinguish from a crashed producer.
-	statusPublishFailures prometheus.Counter
+	// Owned by the SHARED set rather than hand-rolled here. This component and
+	// graph-index each maintained their own copy and both omitted
+	// bootstrap_complete; the shared set makes that omission unrepresentable
+	// (#763). Emitted metric names are unchanged, pinned by a test.
+	readiness *readiness.Gauges
 	// contentUnresolved counts entities whose offloaded BODY (a StorageRef)
 	// could not be fetched because no content store is wired, so that body was
 	// excluded from the embedding (gh#414). The entity may still be embedded from
@@ -145,47 +141,12 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Help:      "Offloaded bodies successfully fetched from a resolved store — the positive signal that ADR-063 federated resolution is including bodies previously excluded",
 			}),
 
-			readiness: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "readiness",
-				Help:      "1 when the readiness envelope is Ready (embedding pipeline caught up to target revision), else 0 (ADR-066)",
-			}),
-
-			lag: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "lag",
-				Help:      "Revisions the embedding pipeline is behind the ENTITY_STATES target (target_revision - indexed_revision; 0 = caught up)",
-			}),
-
-			indexedRevision: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "indexed_revision",
-				Help:      "Low-water-of-pending watermark: every ENTITY_STATES revision <= this reached a terminal embedding outcome (ADR-066)",
-			}),
-
-			targetRevision: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "target_revision",
-				Help:      "ENTITY_STATES stream LastSeq the embedding pipeline must catch up to (ADR-066)",
-			}),
-
-			readinessState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "readiness_state",
-				Help:      "Readiness state one-hot (building|ready|degraded|reset_required): current state=1, others=0, so catching-up is distinguishable from broken",
-			}, []string{"state"}),
-
-			statusPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_embedding",
-				Name:      "status_publish_failures_total",
-				Help:      "Readiness heartbeat writes to the GRAPH_STATUS KV key that failed (ADR-083): consumers go status_unknown and fail closed while this rises",
-			}),
+			// Revision-lag producer: indexed_revision / target_revision are
+			// meaningful here and stay exposed.
+			readiness: readiness.NewGauges(
+				readiness.ProducerNames{Service: "graph-embedding", Subsystem: "graph_embedding"},
+				readiness.WithRevisionGauges(),
+			),
 
 			dedupSkipped: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -227,12 +188,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = registry.RegisterCounter("graph-embedding", "content_unresolved_total", metrics.contentUnresolved)
 			_ = registry.RegisterCounter("graph-embedding", "content_resolve_error_total", metrics.contentResolveError)
 			_ = registry.RegisterCounter("graph-embedding", "content_resolved_total", metrics.contentResolved)
-			_ = registry.RegisterGauge("graph-embedding", "readiness", metrics.readiness)
-			_ = registry.RegisterGauge("graph-embedding", "lag", metrics.lag)
-			_ = registry.RegisterGauge("graph-embedding", "indexed_revision", metrics.indexedRevision)
-			_ = registry.RegisterGauge("graph-embedding", "target_revision", metrics.targetRevision)
-			_ = registry.RegisterGaugeVec("graph-embedding", "readiness_state", metrics.readinessState)
-			_ = registry.RegisterCounter("graph-embedding", "status_publish_failures_total", metrics.statusPublishFailures)
+			metrics.readiness.Register(registry)
 			_ = registry.RegisterCounterVec("graph-embedding", "dedup_skipped_total", metrics.dedupSkipped)
 			_ = registry.RegisterCounter("graph-embedding", "text_truncated_total", metrics.textTruncated)
 			_ = registry.RegisterCounter("graph-embedding", "offloaded_identity_included_total", metrics.offloadedIdentityIncluded)
@@ -248,12 +204,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.contentUnresolved)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contentResolveError)
 			_ = prometheus.DefaultRegisterer.Register(metrics.contentResolved)
-			_ = prometheus.DefaultRegisterer.Register(metrics.readiness)
-			_ = prometheus.DefaultRegisterer.Register(metrics.lag)
-			_ = prometheus.DefaultRegisterer.Register(metrics.indexedRevision)
-			_ = prometheus.DefaultRegisterer.Register(metrics.targetRevision)
-			_ = prometheus.DefaultRegisterer.Register(metrics.readinessState)
-			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
+			metrics.readiness.Register(nil)
 			_ = prometheus.DefaultRegisterer.Register(metrics.dedupSkipped)
 			_ = prometheus.DefaultRegisterer.Register(metrics.textTruncated)
 			_ = prometheus.DefaultRegisterer.Register(metrics.offloadedIdentityIncluded)
@@ -352,26 +303,12 @@ func registererFor(registry *metric.MetricsRegistry) prometheus.Registerer {
 // state to 0, so a stale state can never linger at 1 — a "ready" pipeline that later
 // degrades reads degraded=1, ready=0, not both.
 func (m *embeddingMetrics) setReadinessGauges(resp graph.IndexStatusResponse) {
-	var ready float64
-	if resp.Ready {
-		ready = 1
-	}
-	m.readiness.Set(ready)
-	m.lag.Set(float64(resp.Lag))
-	m.indexedRevision.Set(float64(resp.IndexedRevision))
-	m.targetRevision.Set(float64(resp.TargetRevision))
-	for _, s := range graph.AllIndexStates {
-		v := 0.0
-		if s == resp.State {
-			v = 1
-		}
-		m.readinessState.WithLabelValues(s).Set(v)
-	}
+	m.readiness.Set(resp)
 }
 
 // recordStatusPublishFailure counts one failed GRAPH_STATUS heartbeat write (ADR-083).
 func (m *embeddingMetrics) recordStatusPublishFailure() {
-	m.statusPublishFailures.Inc()
+	m.readiness.RecordPublishFailure()
 }
 
 // setEmbedderType sets the embedder type gauge.

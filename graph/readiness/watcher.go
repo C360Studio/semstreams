@@ -52,7 +52,22 @@ const (
 	KeyGraphIndex = "graph-index"
 	// KeyGraphEmbedding is graph-embedding's status key.
 	KeyGraphEmbedding = "graph-embedding"
+	// KeyGraphIngest is graph-ingest's status key. Its envelope is a BACKLOG
+	// envelope (graph.ComputeBacklogStatus): Lag is in MESSAGES, and the revision
+	// fields are absent because graph-ingest consumes multiple streams whose
+	// sequence spaces are independent.
+	KeyGraphIngest = "graph-ingest"
+	// KeyRule is the rule processor's status key, reporting bootstrap-replay
+	// completion for its entity watchers.
+	KeyRule = "rule"
 )
+
+// Declaring a key here does NOT make it mandatory. There is deliberately no
+// framework-level "all producers" list: the producer set is deployment-dependent
+// (graph-ingest appears in 11 shipped configs, graph-index in 8, rule in 8,
+// graph-embedding in 4), so a framework-declared mandatory list would break every
+// config that runs one producer without another. Each CONSUMER declares the keys it
+// depends on and folds them client-side.
 
 const (
 	// DefaultHeartbeat is the producers' status tick: they publish the envelope

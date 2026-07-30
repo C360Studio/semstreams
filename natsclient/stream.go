@@ -322,8 +322,8 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 	consumerKey := cfg.StreamName + ":" + cfg.ConsumerName
 	c.consumersMu.Lock()
 	if c.consumers != nil {
-		if existingConsumer, exists := c.consumers[consumerKey]; exists {
-			existingConsumer.Stop()
+		if existing, exists := c.consumers[consumerKey]; exists {
+			existing.consumeCtx.Stop()
 			delete(c.consumers, consumerKey)
 			c.logger.Debug("Stopped existing consumer before recreation", slog.String("consumer_key", consumerKey))
 		}
@@ -376,17 +376,22 @@ func (c *Client) ConsumeStreamWithConfigContexts(
 			"setup context ended while starting consumer")
 	}
 
+	// Wrap ONCE and share the wrapper: the metrics registry and the consumer
+	// bookkeeping below hold the same handle under different keys, so the Info()
+	// guard has to live on the handle itself (see guardedConsumer).
+	guarded := &guardedConsumer{Consumer: consumer}
+
 	// Track consumer for JetStream metrics only after setup committed.
 	if c.jsMetrics != nil {
-		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, consumer)
+		c.jsMetrics.trackConsumer(cfg.StreamName, consumerCfg.Durable, guarded)
 	}
 
 	// Track consumer for cleanup
 	c.consumersMu.Lock()
 	if c.consumers == nil {
-		c.consumers = make(map[string]jetstream.ConsumeContext)
+		c.consumers = make(map[string]consumerBinding)
 	}
-	c.consumers[consumerKey] = consumeCtx
+	c.consumers[consumerKey] = consumerBinding{consumeCtx: consumeCtx, consumer: guarded}
 	c.consumersMu.Unlock()
 
 	c.resetCircuit()
@@ -661,8 +666,8 @@ func (c *Client) StopConsumer(streamName, consumerName string) {
 	defer c.consumersMu.Unlock()
 
 	key := streamName + ":" + consumerName
-	if consumeCtx, ok := c.consumers[key]; ok {
-		consumeCtx.Stop()
+	if binding, ok := c.consumers[key]; ok {
+		binding.consumeCtx.Stop()
 		delete(c.consumers, key)
 	}
 }
@@ -693,8 +698,8 @@ func (c *Client) StopAllConsumers() {
 	c.consumersMu.Lock()
 	defer c.consumersMu.Unlock()
 
-	for key, consumeCtx := range c.consumers {
-		consumeCtx.Stop()
+	for key, binding := range c.consumers {
+		binding.consumeCtx.Stop()
 		delete(c.consumers, key)
 	}
 }

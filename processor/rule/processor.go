@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph/readiness"
 	message "github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -118,6 +119,21 @@ type Processor struct {
 	// cannot be trusted (a pattern watcher failed to start or closed
 	// unexpectedly). Sticky like reset-required, with a distinct error code.
 	graphStateGuardDegraded atomic.Bool
+
+	// Readiness producer state (ADR-083 envelope on the rule GRAPH_STATUS key).
+	// See readiness.go: bootstrap completion is tracked PER WATCHER GENERATION,
+	// not per process, because the watcher set is runtime-mutable.
+	statusPublisher *readiness.Publisher
+	readinessGauges *readiness.Gauges
+	// statusLoopDone closes when the readiness tick has exited, so Stop can join it
+	// before tearing down the state the tick reads.
+	statusLoopDone chan struct{}
+	// statusFenced is raised BEFORE teardown and makes any in-flight or late tick
+	// return without publishing. The join is best-effort; this is the guarantee.
+	statusFenced atomic.Bool
+	// statusInterval is a TEST SEAM only, so an integration test can observe
+	// successive heartbeats without sleeping through production cadence.
+	statusInterval time.Duration
 	// graphStateGuardDone closes when either sticky latch above fires so
 	// entity-watch loops unwind promptly instead of draining dead updates.
 	graphStateGuardDone     chan struct{}
@@ -304,6 +320,10 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 		rp.graphEventPublisher = natsClient
 	}
 
+	// Readiness gauges: the scrapeable half of the ADR-066 envelope. Built at
+	// construction so the series exist before the first status tick.
+	rp.readinessGauges = initReadinessGauges(metricsRegistry)
+
 	// Set up input and output ports
 	rp.setupPorts()
 
@@ -443,6 +463,23 @@ func (rp *Processor) Health() component.HealthStatus {
 		health.Uptime = time.Since(rp.startTime)
 	}
 
+	// The two sticky entity-watch latches are health facts, and this surface must
+	// not contradict the readiness envelope that already reports them
+	// (readiness.go computeReadinessStatus). Before this, run() set Healthy = true
+	// once watchers were established and NOTHING lowered it again: a processor whose
+	// entity-watch lane had latched degraded — or which had stopped evaluating rules
+	// entirely under reset-required — still answered Healthy from here, while its
+	// KV envelope said degraded. An operator reconciling the two had no way to tell
+	// which was right.
+	switch {
+	case rp.graphStateResetRequired.Load():
+		health.Healthy = false
+		health.LastError = "entity-state contract violation: rule evaluation halted (reset required)"
+	case rp.graphStateGuardDegraded.Load():
+		health.Healthy = false
+		health.LastError = "entity-watch lane degraded"
+	}
+
 	return health
 }
 
@@ -546,6 +583,20 @@ func (rp *Processor) run(ctx context.Context) {
 		} else {
 			defer rp.drainCronScheduler()
 		}
+	}
+
+	// Readiness publisher. Started AFTER watchEntityStates so the first tick sees
+	// the registered generations rather than reporting a vacuous complete over an
+	// empty record set.
+	if err := rp.createStatusBucket(ctx); err != nil {
+		// Non-fatal: a rule processor that cannot publish readiness still evaluates
+		// rules. Consumers fail closed on the absent key, which is the correct
+		// reading — it is genuinely unknown.
+		rp.logger.Warn("rule readiness publisher unavailable; "+
+			"consumers will read this producer as unknown", "error", err)
+	} else {
+		rp.statusLoopDone = make(chan struct{})
+		go rp.statusMetricsLoop(ctx)
 	}
 
 	// NOW mark healthy - watchers established, subscriptions ready
@@ -893,8 +944,14 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// goroutine's channel read.
 	go rp.runRevisionSweeper(rp.shutdown, revisionSweepInterval, rp.revisionTTL)
 
-	// Wait for run() to complete initialization (coalescer setup, watchers started)
-	// This ensures entityCoalescer is set before Start() returns
+	// Wait for run() to signal that the COALESCER is initialized. This does NOT
+	// mean watchers have started: run() closes `ready` immediately after building
+	// the coalescer and only then calls watchEntityStates, so a watcher's initial
+	// replay is still in flight — usually — when Start returns. The previous comment
+	// here claimed "watchers started" and was simply false; asserting either
+	// ordering asserts a race (gh#732 measured the interval as not even consistently
+	// positive). Consumers that need "replay finished" read bootstrap_complete off
+	// the rule GRAPH_STATUS key; there is no ordering to sleep on.
 	select {
 	case <-rp.ready:
 		// Initialization complete
@@ -1159,6 +1216,22 @@ func (rp *Processor) Stop(_ time.Duration) error {
 	// dispatch gate prevents callbacks that already decoded an entry from
 	// evaluating after shutdown retirement, while NATS Stop runs without the
 	// processor config mutex held.
+	// Raise the fence FIRST: from here no tick can publish, whether it is running,
+	// blocked on the dispatch gate, or about to start. The join below is a courtesy
+	// that lets the goroutine exit cleanly; the fence is what makes a post-teardown
+	// publish impossible, and a timed-out join must not be able to reopen it.
+	rp.statusFenced.Store(true)
+
+	// Join the readiness tick BEFORE tearing down the records it reads.
+	if rp.statusLoopDone != nil {
+		select {
+		case <-rp.statusLoopDone:
+		case <-time.After(2 * time.Second):
+			rp.logger.Warn("readiness tick did not exit before teardown; " +
+				"a late publish could report a stale envelope")
+		}
+	}
+
 	rp.entityWatcherUpdateMu.Lock()
 	rp.entityDispatchGate.Lock()
 	rp.mu.Lock()

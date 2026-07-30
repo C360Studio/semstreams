@@ -24,6 +24,10 @@ type ingestWork struct {
 	entityID string
 	stream   string
 	seq      uint64
+	// deliveredAt is the JetStream timestamp of this message, carried from the
+	// consume closure so the ack path can age the readiness view without a second
+	// Metadata() call on a per-message hot path.
+	deliveredAt time.Time
 }
 
 // laneGuard is one lane's in-memory applied-sequence cache — tier 1 of the
@@ -221,6 +225,11 @@ func (c *Component) processIngest(ctx context.Context, lane int, work ingestWork
 	if ackErr := work.msg.Ack(); ackErr != nil {
 		c.logger.Error("Failed to ack JetStream message", slog.Any("error", ackErr))
 	}
+	// Age the readiness view from the newest message whose graph write is durable.
+	// Stamped AFTER the ack attempt, on the success path only: an un-acked message
+	// has not been applied, and stamping earlier would age the view from work that
+	// may still Nak.
+	c.recordApplied(work.deliveredAt)
 	return nil
 }
 

@@ -77,7 +77,7 @@ type Client struct {
 	subs []*nats.Subscription
 
 	// Consumer management
-	consumers   map[string]jetstream.ConsumeContext
+	consumers   map[string]consumerBinding
 	consumersMu sync.RWMutex
 
 	// Circuit breaker
@@ -577,13 +577,138 @@ func (m *Client) Close(ctx context.Context) error {
 	return nil
 }
 
+// consumerBinding is the client's per-consumer bookkeeping: the ConsumeContext it
+// needs for lifecycle (Stop) plus the Consumer handle callers need for Info().
+//
+// The two live in ONE map value rather than two parallel maps deliberately. There are
+// six sites that create, replace, or delete this bookkeeping across client.go and
+// stream.go; parallel maps would let a future edit update one and miss another, and a
+// missed delete would hand out a handle to a stopped consumer. One value makes that
+// class unrepresentable — the compiler visits every site.
+type consumerBinding struct {
+	consumeCtx jetstream.ConsumeContext
+	consumer   jetstream.Consumer
+}
+
+// guardedConsumer serializes Info() on one consumer handle.
+//
+// jetstream.Consumer.Info() is NOT safe for concurrent use on the same handle: it
+// assigns the fetched ConsumerInfo to the consumer's own cache field with no
+// synchronization (nats.go jetstream/consumer.go — `p.info = resp.ConsumerInfo`). Two
+// callers reading the same bound consumer at once race inside the library, and the
+// detector reports it against OUR call site. Confirmed by the graph-ingest lifecycle
+// stress test the moment a second reader existed.
+//
+// THE GUARD IS ON THE HANDLE, NOT ON A CALL SITE, and that is the point. This client
+// hands the same *jetstream.Consumer to two independent maps — the consumer
+// bookkeeping and the metrics registry — under DIFFERENT keys (ConsumerName vs
+// Durable), so any scheme that locks per map entry protects one reader and leaves the
+// other racing the identical object. Wrapping once at creation means every present and
+// future caller in this package is covered by construction.
+//
+// Embedding keeps it a jetstream.Consumer; only Info is overridden, and its signature
+// must stay EXACTLY `Info(context.Context) (*jetstream.ConsumerInfo, error)` — a
+// divergent signature would silently stop overriding and reopen the race.
+//
+// STILL PRESENT UPSTREAM as of nats.go v1.52.0 (checked 2026-07-30; we pin v1.48.0).
+// The assignment is byte-identical across both, so a dependency bump does NOT retire
+// this guard — do not delete it on upgrade. Filing it upstream is tracked in the
+// change's follow-ups.
+type guardedConsumer struct {
+	jetstream.Consumer
+	infoMu sync.Mutex
+}
+
+// Info serializes the underlying call. The lock is held across the network round trip
+// because the unsynchronized write happens at the END of the library's Info().
+func (g *guardedConsumer) Info(ctx context.Context) (*jetstream.ConsumerInfo, error) {
+	g.infoMu.Lock()
+	defer g.infoMu.Unlock()
+	return g.Consumer.Info(ctx)
+}
+
+// CachedInfo serializes the READ of the same field Info writes.
+//
+// Overriding it is not optional. jetstream.Consumer includes CachedInfo, implemented as
+// a bare `return p.info` — the exact field Info assigns. Guarding only Info would leave
+// the promoted CachedInfo racing the guarded writer, so the "every caller is covered"
+// claim above would be false for it. No caller in this repo uses Consumer.CachedInfo
+// today; this closes the hole rather than waiting for one to open it.
+func (g *guardedConsumer) CachedInfo() *jetstream.ConsumerInfo {
+	g.infoMu.Lock()
+	defer g.infoMu.Unlock()
+	return g.Consumer.CachedInfo()
+}
+
+// OutstandingWork returns the bound consumer's TOTAL outstanding messages —
+// undelivered (pending) plus delivered-but-unacknowledged.
+//
+// It returns one number because the total is the only sound one. The sum is invariant
+// to which of the two underlying counters currently holds a message and neither half
+// is: a message moves between them continuously — delivered (pending -> ack-pending),
+// negatively acknowledged back (ack-pending -> pending), redelivered again — so either
+// counter read alone oscillates while real outstanding work is steady. Only the total
+// is monotone with respect to work actually outstanding. Reading pending alone would
+// additionally under-report by the whole in-process lane queue, which is
+// delivered-but-unacked. The halves are therefore summed HERE rather than returned,
+// so no caller can gate on one of them.
+//
+// ZERO MEANS NO OUTSTANDING WORK, NOT THAT EVERY MESSAGE WAS APPLIED. A message that
+// exhausts MaxDeliver is parked and leaves the count entirely, so it is invisible
+// here. Callers must not read zero as evidence of completeness or use it to license an
+// authoritative-absence claim (gh#742 owns operator visibility for parked messages).
+//
+// This deliberately returns a count rather than the jetstream.Consumer handle.
+// Handing back the handle would leak consume/fetch capability to callers that
+// need only a number, and would put Info().AckFloor one field away from every holder —
+// and the ack floor is MEASURED-UNUSABLE for catch-up: against both deployed server
+// versions it does not advance past a MaxDeliver-exhausted message, then advances past
+// it on an unrelated later acknowledgement, so it reads not-caught-up while idle and
+// falsely-covered under traffic. Keeping the handle private seals "never
+// floor-derived" at the seam instead of leaving it to review vigilance.
+//
+// It reads the UNCONDITIONAL consumer bookkeeping, not the metrics registry. The only
+// other retained handle lives in jetstreamMetrics.consumers, which is nil unless
+// WithMetrics was given a non-nil registry — a readiness producer sourced from there
+// would silently degrade in any deployment running without metrics, which is the
+// phantom-signal class this repo hunts.
+//
+// An unbound consumer is an ERROR, never (0, nil): unknown backlog must not be
+// representable as empty backlog. Mapping the error to a degraded readiness state is
+// caller policy.
+func (m *Client) OutstandingWork(
+	ctx context.Context, streamName, consumerName string,
+) (uint64, error) {
+	m.consumersMu.RLock()
+	binding, ok := m.consumers[streamName+":"+consumerName]
+	m.consumersMu.RUnlock()
+	if !ok || binding.consumer == nil {
+		return 0, errs.WrapInvalid(
+			fmt.Errorf("no consumer bound for %s:%s", streamName, consumerName),
+			"Client", "OutstandingWork", "look up bound consumer")
+	}
+
+	// Info() is serialized by guardedConsumer, which wraps the handle at creation.
+	info, err := binding.consumer.Info(ctx)
+	if err != nil {
+		return 0, errs.WrapTransient(err, "Client", "OutstandingWork",
+			"read consumer info for "+streamName+":"+consumerName)
+	}
+	// NumAckPending is a server-side count and never negative; the signed type is an
+	// artifact of the wire struct.
+	if info.NumAckPending < 0 {
+		return info.NumPending, nil
+	}
+	return info.NumPending + uint64(info.NumAckPending), nil
+}
+
 // stopAllConsumers stops all JetStream consumers.
 func (m *Client) stopAllConsumers() {
 	m.consumersMu.Lock()
 	defer m.consumersMu.Unlock()
 
-	for name, consumer := range m.consumers {
-		consumer.Stop()
+	for name, binding := range m.consumers {
+		binding.consumeCtx.Stop()
 		m.logger.Debug("Stopped consumer", slog.String("consumer", name))
 	}
 	m.consumers = nil
@@ -1128,10 +1253,14 @@ func (m *Client) ConsumeStream(ctx context.Context, streamName, subject string, 
 		return err
 	}
 
+	// Wrap ONCE, then share the wrapper with every holder — the metrics registry and
+	// the consumer bookkeeping below both get the same guarded handle.
+	guarded := &guardedConsumer{Consumer: consumer}
+
 	// Track consumer for metrics collection
-	consumerInfo, err := consumer.Info(ctx)
+	consumerInfo, err := guarded.Info(ctx)
 	if err == nil {
-		m.jsMetrics.trackConsumer(streamName, consumerInfo.Name, consumer)
+		m.jsMetrics.trackConsumer(streamName, consumerInfo.Name, guarded)
 	}
 
 	// Start consuming messages
@@ -1158,17 +1287,17 @@ func (m *Client) ConsumeStream(ctx context.Context, streamName, subject string, 
 	}
 
 	if m.consumers == nil {
-		m.consumers = make(map[string]jetstream.ConsumeContext)
+		m.consumers = make(map[string]consumerBinding)
 	}
 	consumerKey := fmt.Sprintf("%s:%s", streamName, subject)
 
 	// Stop any existing consumer for this key
-	if existingConsumer, exists := m.consumers[consumerKey]; exists {
-		existingConsumer.Stop()
+	if existing, exists := m.consumers[consumerKey]; exists {
+		existing.consumeCtx.Stop()
 		m.logger.Debug("Replaced existing consumer", slog.String("consumer_key", consumerKey))
 	}
 
-	m.consumers[consumerKey] = consumeContext
+	m.consumers[consumerKey] = consumerBinding{consumeCtx: consumeContext, consumer: guarded}
 
 	m.resetCircuit()
 	return nil

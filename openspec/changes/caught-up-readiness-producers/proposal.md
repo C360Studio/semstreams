@@ -39,11 +39,20 @@ The missing producer is therefore **graph-ingest's own caught-up envelope**, not
 
 The ack ordering is airtight. In `processIngest` (`keyed_ingest.go:125-225`) the write happens at
 `:166`, the durable guard stamp at `:211`, and **Ack at `:221`** — every failure path Naks or Terms
-without acking. So `ack(seq N)` implies that message's graph write is durable, which makes the
-server-maintained consumer ack floor the contiguous high-water: restart-surviving, and it accounts
-for the in-memory lane queue because those messages are delivered-but-unacked.
+without acking. So `ack(seq N)` implies that message's graph write is durable.
 
-Outstanding work is `NumPending + NumAckPending`, per bound consumer.
+**It does NOT follow that the server's ack floor is a contiguous high-water, and measurement killed
+that idea — see design.md §D0.** A real-NATS probe on both deployed server versions found
+`AckFloor.Stream` does not advance past a `MaxDeliver`-exhausted message (it does advance past
+`Term()`), and then, on the next unrelated ack, **jumps past the never-applied message entirely**. The
+floor is wrong in both directions — permanently-not-caught-up while idle, falsely-covered under
+traffic — so no part of this change reads it.
+
+Outstanding work is **`NumPending + NumAckPending`**, per bound consumer. That sum measured 0 in every
+probe observation, including both cases where the floor was wrong, and it accounts for the in-memory
+lane queue because those messages are delivered-but-unacked. It answers *is there backlog*, which is
+the question; it does not answer *was everything applied* (a parked message leaves both counters —
+gh#742).
 
 ## What Changes
 

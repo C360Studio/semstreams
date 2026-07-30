@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -21,16 +22,13 @@ type indexMetrics struct {
 	// Readiness envelope gauges (ADR-066): the honest Ready/lag/watermark numbers
 	// computeIndexStatus already answers over NATS, now scrapeable so an operator can
 	// dashboard/alert without a per-sample status request (#579 at the source).
-	readiness       prometheus.Gauge     // 1 when Ready (index caught up to target), else 0
-	lag             prometheus.Gauge     // revisions behind target (0 = caught up)
-	indexedRevision prometheus.Gauge     // low-water-of-pending watermark
-	targetRevision  prometheus.Gauge     // ENTITY_STATES stream LastSeq target
-	readinessState  *prometheus.GaugeVec // one-hot over building|ready|degraded|reset_required
-	// statusPublishFailures counts heartbeat writes to GRAPH_STATUS that failed
-	// (ADR-083). A rising value is the producer-side half of a consumer reporting
-	// status_unknown: it says the envelope is not reaching the bucket, which the
-	// consumer alone cannot distinguish from a crashed producer.
-	statusPublishFailures prometheus.Counter
+	//
+	// Owned by the SHARED set rather than hand-rolled here. This component and
+	// graph-embedding each maintained their own copy and both omitted
+	// bootstrap_complete; the shared set makes that omission unrepresentable (#763).
+	// Emitted metric names are unchanged — readiness.Gauges reproduces them exactly,
+	// pinned by a test.
+	readiness *readiness.Gauges
 }
 
 // Package-level metrics (registered once to avoid duplicate registration errors)
@@ -92,47 +90,12 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 				Help:      "Owner reconciliation KV operations by index type, operation, and outcome",
 			}, []string{"index_type", "operation", "result"}),
 
-			readiness: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "readiness",
-				Help:      "1 when the readiness envelope is Ready (index caught up to target revision), else 0 (ADR-066)",
-			}),
-
-			lag: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "lag",
-				Help:      "Revisions the index is behind the ENTITY_STATES target (target_revision - indexed_revision; 0 = caught up)",
-			}),
-
-			indexedRevision: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "indexed_revision",
-				Help:      "Low-water-of-pending watermark: every ENTITY_STATES revision <= this has been applied (ADR-066)",
-			}),
-
-			targetRevision: prometheus.NewGauge(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "target_revision",
-				Help:      "ENTITY_STATES stream LastSeq the index must catch up to (ADR-066)",
-			}),
-
-			readinessState: prometheus.NewGaugeVec(prometheus.GaugeOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "readiness_state",
-				Help:      "Readiness state one-hot (building|ready|degraded|reset_required): current state=1, others=0, so catching-up is distinguishable from broken",
-			}, []string{"state"}),
-
-			statusPublishFailures: prometheus.NewCounter(prometheus.CounterOpts{
-				Namespace: "semstreams",
-				Subsystem: "graph_index",
-				Name:      "status_publish_failures_total",
-				Help:      "Readiness heartbeat writes to the GRAPH_STATUS KV key that failed (ADR-083): consumers go status_unknown and fail closed while this rises",
-			}),
+			// Revision-lag producer: indexed_revision / target_revision are
+			// meaningful here and stay exposed.
+			readiness: readiness.NewGauges(
+				readiness.ProducerNames{Service: "graph-index", Subsystem: "graph_index"},
+				readiness.WithRevisionGauges(),
+			),
 		}
 
 		// Register metrics with the metrics registry if available
@@ -144,12 +107,7 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = registry.RegisterCounter("graph-index", "write_failures_total", metrics.writeFailures)
 			_ = registry.RegisterCounterVec("graph-index", "reindex_events_total", metrics.reindexEvents)
 			_ = registry.RegisterCounterVec("graph-index", "reconcile_operations_total", metrics.reconcileOperations)
-			_ = registry.RegisterGauge("graph-index", "readiness", metrics.readiness)
-			_ = registry.RegisterGauge("graph-index", "lag", metrics.lag)
-			_ = registry.RegisterGauge("graph-index", "indexed_revision", metrics.indexedRevision)
-			_ = registry.RegisterGauge("graph-index", "target_revision", metrics.targetRevision)
-			_ = registry.RegisterGaugeVec("graph-index", "readiness_state", metrics.readinessState)
-			_ = registry.RegisterCounter("graph-index", "status_publish_failures_total", metrics.statusPublishFailures)
+			metrics.readiness.Register(registry)
 		} else {
 			// Fallback to default prometheus registry for testing
 			_ = prometheus.DefaultRegisterer.Register(metrics.eventsProcessed)
@@ -159,12 +117,7 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.writeFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.reindexEvents)
 			_ = prometheus.DefaultRegisterer.Register(metrics.reconcileOperations)
-			_ = prometheus.DefaultRegisterer.Register(metrics.readiness)
-			_ = prometheus.DefaultRegisterer.Register(metrics.lag)
-			_ = prometheus.DefaultRegisterer.Register(metrics.indexedRevision)
-			_ = prometheus.DefaultRegisterer.Register(metrics.targetRevision)
-			_ = prometheus.DefaultRegisterer.Register(metrics.readinessState)
-			_ = prometheus.DefaultRegisterer.Register(metrics.statusPublishFailures)
+			metrics.readiness.Register(nil)
 		}
 	})
 	return metrics
@@ -176,26 +129,12 @@ func getMetrics(registry *metric.MetricsRegistry) *indexMetrics {
 // state to 0, so a stale state can never linger at 1 — a "ready" index that later
 // degrades reads degraded=1, ready=0, not both.
 func (m *indexMetrics) setReadinessGauges(resp graph.IndexStatusResponse) {
-	var ready float64
-	if resp.Ready {
-		ready = 1
-	}
-	m.readiness.Set(ready)
-	m.lag.Set(float64(resp.Lag))
-	m.indexedRevision.Set(float64(resp.IndexedRevision))
-	m.targetRevision.Set(float64(resp.TargetRevision))
-	for _, s := range graph.AllIndexStates {
-		v := 0.0
-		if s == resp.State {
-			v = 1
-		}
-		m.readinessState.WithLabelValues(s).Set(v)
-	}
+	m.readiness.Set(resp)
 }
 
 // recordStatusPublishFailure counts one failed GRAPH_STATUS heartbeat write (ADR-083).
 func (m *indexMetrics) recordStatusPublishFailure() {
-	m.statusPublishFailures.Inc()
+	m.readiness.RecordPublishFailure()
 }
 
 func (m *indexMetrics) recordReconcileOperation(indexType, operation string, err error) {

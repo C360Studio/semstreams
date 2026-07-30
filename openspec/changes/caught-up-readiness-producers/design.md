@@ -1,26 +1,53 @@
 # Design — caught-up readiness producers
 
-## D0. Measure the mechanism before building on it — this is task 1, not a footnote
+## D0. MEASURED 2026-07-30 — the ack floor is unusable; take the fallback
 
-The whole graph-ingest half rests on one unverified assumption: that the JetStream consumer's ack
-floor is contiguous and advances past terminal outcomes. The **ack-ordering** claim is solid and read
-from code (`keyed_ingest.go:125-225`: write → guard stamp → Ack, with every failure path Nak/Term
-before ack). What is NOT verified in this repo is NATS server behavior:
+The graph-ingest half rested on one unverified assumption: that the JetStream consumer's ack floor is
+contiguous and advances past terminal outcomes. The **ack-ordering** claim is solid and read from code
+(`keyed_ingest.go:125-225`: write → guard stamp → Ack, with every failure path Nak/Term before ack).
+NATS server behavior was not verified in this repo, so a throwaway testcontainer probe settled it
+against **both deployed server versions** (2.10-alpine and 2.12-alpine both appear in `docker/compose/`).
+Stream of 5 messages, poison at stream sequence 2, every other sequence acked, `MaxDeliver: 3`:
 
-> **Does `AckFloor.Stream` advance past a message that exhausts `MaxDeliver: 3`? Does `Term()`
-> advance it?**
+| server | terminal mode | `AckFloor.Stream` | idle +5s / +10s | after 3 more msgs published+acked | `NumPending` | `NumAckPending` |
+|---|---|---|---|---|---|---|
+| 2.10 **and** 2.12 | `MaxDeliver` exhausted (3× Nak) | **1 — did NOT advance** | still 1 | **8** | 0 | 0 |
+| 2.10 **and** 2.12 | `Term()` | **5 — advanced** | 5 | 8 | 0 | 0 |
 
-graph-ingest sets `MaxDeliver: 3` (`component.go:1510-1521`) and has five Nak/Term paths. **If a
-terminated or max-delivered message does not advance the floor, the floor stalls forever on one
-poison message and the mechanism inverts into permanently-not-caught-up** — a readiness signal that
-is wrong in the dangerous direction.
+**Answers: (a) NO — MaxDeliver exhaustion does not advance the floor. (b) YES — `Term()` does.**
+Identical on both server versions.
 
-Prove it with a throwaway testcontainer probe before writing any producer code. This repo has the
-precedent: a 40-line real-NATS probe settled the `DiscardNew` question in one run and falsified the
-author's own hypothesis, where a spec, two ADRs, and three agents had argued from prose.
+**The floor is worse than "stalls", and the failure is bidirectional.** The probe's follow-up
+measurements found the stall is not permanent: with no traffic the floor sits at 1 indefinitely
+(verified at +5s and +10s), but the moment any *later* message is acked it leaps to the new high-water
+— **8, skipping sequence 2 entirely, which was never applied.** So:
 
-If the floor does stall, the fallback is `NumPending + NumAckPending` without any floor claim — the
-outstanding-work number still works; only the "contiguous high-water" framing has to go.
+- **Idle after a poison message** → `Ready = (floor == lastSeq)` reads permanently-not-caught-up. This
+  is the dangerous direction D0 predicted.
+- **Traffic after a poison message** → the floor asserts coverage of a message that was dropped. This
+  is the *opposite* dangerous direction, which D0 did not predict and which no amount of prose would
+  have surfaced.
+
+Either way **`AckFloor.Stream` never means "everything at or below this sequence is durable in the
+graph."** The "restart-surviving contiguous high-water" framing is dead. `proposal.md` has been
+corrected rather than left asserting it.
+
+**Take the fallback: outstanding work is `NumPending + NumAckPending`, with no ack-floor claim
+anywhere.** The probe measured it 0 in all 12 observations (2 versions × 2 terminal modes × 3 sample
+points), including both cases where the floor was wrong. It is the only number that was right every
+time, and it already accounts for the in-process lane queue because those messages are
+delivered-but-unacked. Nothing else in the design changes — `Lag` was always going to be this sum.
+
+**Honesty boundary the spec MUST state:** `NumPending + NumAckPending == 0` means *no outstanding
+work*, **not** *every message was applied*. A `MaxDeliver`-parked message disappears from both
+counters (measured above: both 0 while sequence 2 was never applied). "Caught up" is therefore a
+statement about backlog, never about completeness — it cannot license an absence claim, consistent
+with the existing readiness rule. Operator visibility for parked messages is already filed as
+**gh#742**; this change must not paper over it by implying coverage.
+
+Probe deleted per task 1.2. Precedent held: a ~40-line real-NATS probe falsified the author's own
+hypothesis in one run — twice here, since the first result ("stalls forever") was itself corrected by
+the permanence follow-up.
 
 ## D1. What "caught up" means, per lane
 
@@ -163,8 +190,15 @@ framework, which D4 rejects.
 **"Cannot report settled before inferred writes are durable" is satisfied by construction** — ack is
 the last statement in the success path, after the CAS, hierarchy containers/edges,
 `ensureRelationshipTargetsExist` (`wg.Wait()` at `component.go:2730`), `routeForeignEdges`, and the
-guard stamp. **Pin it with a test**: assert ack is terminal, or force a write failure and assert the
-ack floor does not advance.
+guard stamp.
+
+**Pin it with a test — but NOT on the ack floor.** The original wording here ("force a write failure
+and assert the ack floor does not advance") was written before §D0's measurement and is now the wrong
+assertion twice over: nothing in this change reads `AckFloor`, so it tests NATS rather than us; and it
+would **pass for the wrong reason** once the failure repeats to `MaxDeliver` exhaustion — the floor
+does not advance there either, while the message is dropped. Assert instead on the quantity production
+actually consults: force a write failure and assert **`NumPending + NumAckPending` stays > 0** (so
+`Ready` stays false) while the write is failing, plus ack-is-terminal on the success path.
 
 ## D7. Capability home
 
