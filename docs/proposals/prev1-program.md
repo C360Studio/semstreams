@@ -48,8 +48,8 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **Land #747** — verify `gh pr checks` + `mergeStateStatus` explicitly (no required checks,
->    never `--auto`), owner-run Codex gate, then merge + `openspec archive`. On archive: reconcile
+> 0. **Land #747** — owner-run Codex gate FIRST, fix findings, then `gh pr merge --squash --auto`
+>    (ruleset now enforces it; see standing rules) + `openspec archive`. On archive: reconcile
 >    tasks 8.2/8.3/8.4 (satisfied but under-claimed — the false `AddTriples` clause at
 >    `openspec/specs/graph-ingest/spec.md:33` must be replaced by the MODIFIED delta, **do NOT
 >    hand-edit it**), and send the adopter note (task 10.4 carries the full rule + 5 wire deltas).
@@ -105,6 +105,14 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > (2026-07-30, no bypass actors) requires `CI Status Check` + `e2e statistical` and blocks
 > direct pushes to main: `gh pr merge --auto` is now the correct default (it fires only on
 > green). Red merges are platform-impossible; the escape hatch is editing the ruleset itself.
+>
+> **Ordering caveat on `--auto` (added from the #747 run — the ruleset does NOT enforce the Codex
+> gate).** Arm `--auto` only AFTER the owner-run Codex round closes and its findings are fixed.
+> The ruleset requires **0 approvals** and does **not** dismiss stale reviews on push, so arming
+> earlier means a post-review fix push auto-merges UNREVIEWED the moment checks go green. Also
+> `strict_required_status_checks_policy` is **false** — checks can have run against a stale base,
+> so re-verify after a long merge queue (#747 itself went `CONFLICTING` on a baton edit while its
+> checks were green). BREAKING changes still owe the RELEVANT e2e tier beyond per-PR statistical.
 
 ---
 
