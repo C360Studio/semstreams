@@ -141,14 +141,23 @@ func isContainerEntity(entityID string) bool {
 }
 
 // GetHierarchyTriples returns hierarchy membership triples for the given entity ID.
-// This method has NO side effects - it only computes triples, it doesn't write them.
-// The caller must include these triples in the entity before writing to storage.
+//
+// IT HAS SIDE EFFECTS ON CONTAINER ENTITIES. It does not write the SUBJECT entity —
+// the caller must include the returned triples before writing that — but it DOES
+// create missing container entities and append inverse edges to them, as steps 2 and 4
+// below say plainly.
+//
+// The previous comment here opened with "This method has NO side effects", contradicted
+// four lines later by its own step 2. That was gh#713's cover story: a reader who
+// stopped at the first line had no reason to look for the re-fire the container writes
+// cause. A name that says "Get" and a comment that says "no side effects" are not a
+// contract; the steps are.
 //
 // For each enabled level (type, system, domain), it:
 // 1. Computes the container entity ID
-// 2. Auto-creates the container if it doesn't exist (side effect on containers only)
+// 2. Auto-creates the container if it doesn't exist (WRITE — side effect on containers)
 // 3. Returns a membership triple from entity to container
-// 4. Adds inverse edge to container (container → contains → entity)
+// 4. Adds inverse edge to container (container → contains → entity) (WRITE)
 //
 // Returns empty slice if hierarchy is disabled or entity ID is invalid.
 func (h *HierarchyInference) GetHierarchyTriples(ctx context.Context, entityID string) ([]message.Triple, error) {

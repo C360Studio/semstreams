@@ -150,7 +150,7 @@
       two surfaces contradict each other — fix the condition
 - [x] 7.2 `processor/rule/processor.go:896-897` claims Start "ensures watchers started". False:
       `run()` closes `ready` at `:515` BEFORE `watchEntityStates` at `:518`
-- [ ] 7.3 `graph/inference/hierarchy.go:145` claims "This method has NO side effects", contradicted
+- [x] 7.3 `graph/inference/hierarchy.go:145` claims "This method has NO side effects", contradicted
       by its own `:148-151`. That comment was the cover story for gh#713
 
 ## 8. Tests
