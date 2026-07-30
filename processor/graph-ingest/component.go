@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
+	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -663,6 +664,29 @@ type Component struct {
 	entityBootstrapStarted  atomic.Bool
 	entityBootstrapComplete atomic.Bool
 
+	// Readiness producer state (ADR-083 envelope on the graph-ingest GRAPH_STATUS
+	// key). See readiness.go for the projection and the bootstrap latch rules.
+	statusPublisher  *readiness.Publisher
+	boundConsumers   []boundConsumer
+	boundConsumersMu sync.RWMutex
+	// bootBacklog is the outstanding count at the first successful read after
+	// binding — the initial catch-up this producer latched against, published as
+	// BootstrapScope. bootBacklogKnown makes that capture once-only.
+	bootBacklog      atomic.Uint64
+	bootBacklogKnown atomic.Bool
+	// bootBacklogDrained latches when outstanding first reaches zero. It is a latch
+	// rather than a live read because Ready already carries "caught up right now";
+	// a bootstrap bit that flickered under write load would defer every consumer
+	// during ordinary operation.
+	bootBacklogDrained atomic.Bool
+	// lastAppliedAt is the JetStream timestamp of the most recently APPLIED message
+	// (stamped on the ack path). It ages the reported staleness.
+	lastAppliedAt atomic.Value // stores time.Time
+	// statusInterval and statusNowFn are TEST SEAMS only, so an integration test can
+	// observe successive heartbeats and assert staleness without racing the clock.
+	statusInterval time.Duration
+	statusNowFn    func() time.Time
+
 	// Per-entity poison inventory (poison-response-scoping D2/D3). Observability
 	// only — no read or write path consults it for a decision; refusal derives
 	// solely from decoding stored bytes at each seam. entityPoisonSize mirrors
@@ -1082,6 +1106,16 @@ func (c *Component) Start(ctx context.Context) error {
 		cancel()
 		return errs.Wrap(err, "Component", "Start", "mutation handler setup")
 	}
+
+	// Readiness publisher, AFTER subscriptions so the first tick sees the bound
+	// consumer set rather than reporting a vacuous caught-up on an empty set.
+	if err := c.createStatusBucket(ctx); err != nil {
+		c.teardownIngestPool()
+		cancel()
+		return errs.Wrap(err, "Component", "Start", "readiness status bucket")
+	}
+	c.wg.Add(1)
+	go c.statusMetricsLoop(ctx)
 
 	// Mark as running
 	c.running = true
@@ -1558,11 +1592,12 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		// A submit failure MUST Nak so the server redelivers (ADR-072 B1), never
 		// silent-drop.
 		work := ingestWork{
-			entity:   entity,
-			msg:      msg,
-			entityID: entity.ID,
-			stream:   meta.Stream,
-			seq:      meta.Sequence.Stream,
+			entity:      entity,
+			msg:         msg,
+			entityID:    entity.ID,
+			stream:      meta.Stream,
+			seq:         meta.Sequence.Stream,
+			deliveredAt: meta.Timestamp,
 		}
 		if serr := c.ingestPool.SubmitBlocking(c.ingestSubmitCtx, work); serr != nil {
 			if nakErr := msg.Nak(); nakErr != nil {
@@ -1573,6 +1608,16 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	if err != nil {
 		return fmt.Errorf("consumer setup failed for stream %s: %w", streamName, err)
 	}
+
+	// Record the consumer for the readiness tick ONLY after the bind committed, so
+	// the backlog sum never asks about a consumer that failed to bind (which would
+	// degrade the envelope on a consumer that does not exist).
+	c.registerBoundConsumer(streamName, consumerName)
+
+	// Capture this port's contribution to BootstrapScope NOW, while the backlog is
+	// still whole. See recordBindBacklog: reading it at the first status tick lets a
+	// fast-draining backlog report "nothing to do".
+	c.recordBindBacklog(ctx, streamName, consumerName)
 
 	c.logger.Debug("graph-ingest subscribed (JetStream)",
 		slog.String("subject", subject),

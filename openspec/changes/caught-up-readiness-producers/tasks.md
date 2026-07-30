@@ -61,19 +61,31 @@
 
 ## 3. graph-ingest producer
 
-- [ ] 3.1 Status tick mirroring `processor/graph-index/component.go:1119-1160` (one compute feeds
+- [x] 3.1 Status tick mirroring `processor/graph-index/component.go:1119-1160` (one compute feeds
       both the gauges and the KV key)
-- [ ] 3.2 Backlog projection: sum `NumPending + NumAckPending` across every bound consumer.
+- [x] 3.2 Backlog projection: sum `NumPending + NumAckPending` across every bound consumer.
       **Pending alone under-reports by up to `defaultIngestLanes(8) × ingestLaneQueueDepth(256)
       = 2048`** in-process messages (`component.go:532`, `:538`, submit `:1567`) — add a test that
       would fail if only pending were counted
-- [ ] 3.3 `BootstrapComplete` = existing boot-sweep latch (`component.go:663-665`, already surfaced
-      in `Health()` `:911-913`) AND boot-backlog target reached. `BootstrapScope` = boot-backlog count
-- [ ] 3.4 `State = degraded` on `consumer.Info()` failure, mirroring
+- [x] 3.3 `BootstrapComplete` = existing boot-sweep latch (`component.go:663-665`, already surfaced
+      in `Health()` `:911-913`) AND boot-backlog target reached. `BootstrapScope` = boot-backlog count.
+      **`BootstrapScope` is captured AT BIND, not at the first status tick — this was a real defect
+      found by mutation, not a style choice.** The first tick runs after `setupSubscriptions`,
+      `createStatusBucket`, and goroutine scheduling, with delivery live throughout; a 200-message
+      backlog drained before it **5 runs out of 5**, so the producer published `complete && scope == 0`
+      — the contract's "authoritatively nothing to do" — on every start that had real work.
+      A failed bind-time read leaves the capture unclaimed so the first successful tick still fills it.
+- [x] 3.4 `State = degraded` on `consumer.Info()` failure, mirroring
       `processor/graph-index/watermark.go:70-79`
-- [ ] 3.5 `StalenessMs` from the oldest outstanding message's `meta.Timestamp` (already read at
-      `component.go:1541`) — reported, never gating
-- [ ] 3.6 **OMIT `IndexedRevision` / `TargetRevision`.** Add a test asserting they are absent on the
+- [x] 3.5 `StalenessMs` from the oldest outstanding message's `meta.Timestamp` (already read at
+      `component.go:1541`) — reported, never gating.
+      **DEVIATION, deliberate:** reports the AGE OF THE VIEW (now − JetStream timestamp of the most
+      recently APPLIED message) instead of the literal oldest-outstanding. Tracking the latter exactly
+      needs per-message bookkeeping over up to 2048 in-flight messages on the ingest hot path; this is
+      graph-index's own semantic for the same field (its `IndexedAt`) and costs one atomic store on the
+      ack path. They coincide closely because delivery is approximately stream-ordered, it is a FLOOR
+      either way, and the field is reported-never-gating so the residual cannot change a verdict.
+- [x] 3.6 **OMIT `IndexedRevision` / `TargetRevision`.** Add a test asserting they are absent on the
       wire; a stream sequence in a KV-revision field corrupts every read-your-writes check
 
 ## 4. rule producer
