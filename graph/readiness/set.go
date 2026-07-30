@@ -60,13 +60,6 @@ func NewSet(src BucketSource, keys []string, opts ...Option) *Set {
 	return s
 }
 
-// Keys returns the declared producer keys in fold order.
-func (s *Set) Keys() []string {
-	out := make([]string, len(s.keys))
-	copy(out, s.keys)
-	return out
-}
-
 // Start begins watching every declared key. Safe to call once; subsequent calls are
 // no-ops, matching Watcher.Start.
 func (s *Set) Start(ctx context.Context) error {
@@ -97,31 +90,29 @@ func (s *Set) Stop() {
 	})
 }
 
-// WaitForFirst blocks until every declared key has produced a first reading, or the
-// context ends.
-//
-// It does NOT wait for readiness — only for the feeds to exist. A caller that waited
-// here and then skipped the fold would be gating on transport, not on health.
-func (s *Set) WaitForFirst(ctx context.Context) error {
-	for _, k := range s.keys {
-		if err := s.watchers[k].WaitForFirst(ctx); err != nil {
-			return err
-		}
-	}
-	return nil
+// Verdict is one fold's answer. The three values are correlated — Key and Reason are
+// only meaningful together, and only when !OK — so they travel as a named type rather
+// than a positional tuple that drifts and misbinds at call sites.
+type Verdict struct {
+	// OK reports that every declared key passed.
+	OK bool
+	// Key names the first key (in sorted order) that did not pass. Empty when OK.
+	Key string
+	// Reason is that key's typed defer reason. It is DeferNone when OK, and also when
+	// a key is healthy but merely not drained — FullyCovered's extra condition is not
+	// a health fault and invents no reason for one.
+	Reason graph.DeferReason
 }
 
-// Read returns the current reading for one declared key.
-func (s *Set) Read(key string) (Reading, bool) {
-	w, ok := s.watchers[key]
-	if !ok {
-		return Reading{}, false
-	}
-	return w.Read(), true
-}
-
-// Evaluate folds every declared key through graph.EvaluateReadinessGate and returns
+// evaluate folds every declared key through graph.EvaluateReadinessGate and returns
 // the first defer in sorted key order.
+//
+// UNEXPORTED DELIBERATELY, not by oversight. It is the general health fold and the
+// obvious thing to export — but it has no caller outside this package today
+// (FullyCovered is what the one consumer needs), and a new exported symbol needs a
+// named caller at birth. Export it the moment a health-only consumer exists; the
+// likely first is processor/graph-clustering, which currently hand-rolls two readiness
+// watchers and is what Set replaces.
 //
 // It introduces NO new gate semantics and NO new defer reasons: each key is delegated
 // to the single home for gate semantics, and the fold is a conjunction over the
@@ -130,8 +121,8 @@ func (s *Set) Read(key string) (Reading, bool) {
 // DeferStatusUnknown. Fail-closed on a key nobody ever published is therefore a
 // property of the existing pieces, not something this type adds.
 //
-// On proceed the returned key is empty and the reason is DeferNone.
-func (s *Set) Evaluate() (proceed bool, deferKey string, reason graph.DeferReason) {
+// On proceed the Verdict's Key is empty and its Reason is DeferNone.
+func (s *Set) evaluate() Verdict {
 	for _, k := range s.keys {
 		r := s.watchers[k].Read()
 		ok, why := graph.EvaluateReadinessGate(graph.StatusReading{
@@ -139,10 +130,10 @@ func (s *Set) Evaluate() (proceed bool, deferKey string, reason graph.DeferReaso
 			Fresh:  r.Fresh,
 		})
 		if !ok {
-			return false, k, why
+			return Verdict{Key: k, Reason: why}
 		}
 	}
-	return true, "", graph.DeferNone
+	return Verdict{OK: true}
 }
 
 // FullyCovered reports the STRICTER predicate a snapshot caller needs: every declared
@@ -159,17 +150,18 @@ func (s *Set) Evaluate() (proceed bool, deferKey string, reason graph.DeferReaso
 // So: use this to decide WHEN TO TAKE A SNAPSHOT, never to decide whether to answer a
 // query. It implies Evaluate's proceed — an unhealthy or unknown producer can never be
 // covered.
-func (s *Set) FullyCovered() (covered bool, pendingKey string, reason graph.DeferReason) {
-	proceed, deferKey, why := s.Evaluate()
-	if !proceed {
-		return false, deferKey, why
+func (s *Set) FullyCovered() Verdict {
+	if v := s.evaluate(); !v.OK {
+		return v
 	}
 	for _, k := range s.keys {
 		if s.watchers[k].Read().Status.Lag != 0 {
-			return false, k, graph.DeferNone
+			// Healthy but behind: no defer REASON applies, because lag is not a
+			// fault. The key still names who is not drained.
+			return Verdict{Key: k}
 		}
 	}
-	return true, "", graph.DeferNone
+	return Verdict{OK: true}
 }
 
 // Dump is a read-only projection of every declared key's local state, for an operator

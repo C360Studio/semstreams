@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/test/e2e/client"
 )
@@ -74,15 +73,13 @@ func (v *EntityVerifier) awaitProducersCaughtUp(ctx context.Context, pollCount *
 	defer set.Stop()
 
 	deadline := time.Now().Add(v.ValidationTimeout)
-	var lastKey string
-	var lastReason graph.DeferReason
+	var last readiness.Verdict
 
 	for time.Now().Before(deadline) {
-		covered, key, reason := set.FullyCovered()
-		if covered {
+		last = set.FullyCovered()
+		if last.OK {
 			return nil
 		}
-		lastKey, lastReason = key, reason
 		time.Sleep(v.PollInterval)
 		*pollCount++
 	}
@@ -91,7 +88,7 @@ func (v *EntityVerifier) awaitProducersCaughtUp(ctx context.Context, pollCount *
 	// state at once, not just the first one that deferred.
 	return fmt.Errorf(
 		"producers not caught up within %s (first defer: key=%q reason=%q); per-key state: %+v",
-		v.ValidationTimeout, lastKey, lastReason, set.Dumps())
+		v.ValidationTimeout, last.Key, last.Reason, set.Dumps())
 }
 
 // VerifyEntityCount checks that enough entities have been loaded

@@ -112,8 +112,7 @@ func waitForKnown(t *testing.T, s *Set, keys ...string) {
 func waitForProceed(t *testing.T, s *Set) {
 	t.Helper()
 	waitFor(t, "fold to proceed", func() bool {
-		proceed, _, _ := s.Evaluate()
-		return proceed
+		return s.evaluate().OK
 	})
 }
 
@@ -126,15 +125,15 @@ func TestSet_AbsentKeyFailsClosedWithNoNewSemantics(t *testing.T) {
 	src := newMultiKeySource(KeyGraphIngest, KeyRule)
 	s, _ := startSet(t, src, []string{KeyGraphIngest, KeyRule})
 
-	proceed, key, reason := s.Evaluate()
-	if proceed {
+	v := s.evaluate()
+	if v.OK {
 		t.Fatal("proceeded with no envelope ever published")
 	}
-	if reason != graph.DeferStatusUnknown {
-		t.Errorf("reason = %q, want %q", reason, graph.DeferStatusUnknown)
+	if v.Reason != graph.DeferStatusUnknown {
+		t.Errorf("reason = %q, want %q", v.Reason, graph.DeferStatusUnknown)
 	}
-	if key != KeyGraphIngest {
-		t.Errorf("defer key = %q, want the first key in sorted order (%q)", key, KeyGraphIngest)
+	if v.Key != KeyGraphIngest {
+		t.Errorf("defer key = %q, want the first key in sorted order (%q)", v.Key, KeyGraphIngest)
 	}
 }
 
@@ -151,12 +150,12 @@ func TestSet_ProceedsOnlyWhenEveryDeclaredKeyIsReady(t *testing.T) {
 
 	waitForKnown(t, s, KeyGraphIngest, KeyRule)
 
-	_, key, reason := s.Evaluate()
-	if key != KeyRule {
-		t.Errorf("defer key = %q, want %q", key, KeyRule)
+	v := s.evaluate()
+	if v.Key != KeyRule {
+		t.Errorf("defer key = %q, want %q", v.Key, KeyRule)
 	}
-	if reason != graph.DeferBootstrapIncomplete {
-		t.Errorf("reason = %q, want %q", reason, graph.DeferBootstrapIncomplete)
+	if v.Reason != graph.DeferBootstrapIncomplete {
+		t.Errorf("reason = %q, want %q", v.Reason, graph.DeferBootstrapIncomplete)
 	}
 
 	src.publish(t, KeyRule, readyEnvelope())
@@ -170,15 +169,10 @@ func TestSet_DeferKeyIsDeterministic(t *testing.T) {
 	// Declared in deliberately unsorted order.
 	s, _ := startSet(t, src, []string{KeyRule, KeyGraphIndex, KeyGraphIngest})
 
-	if got := s.Keys(); got[0] != KeyGraphIndex || got[1] != KeyGraphIngest || got[2] != KeyRule {
-		t.Fatalf("keys not sorted: %v", got)
-	}
-
 	// Every key is unknown, so the first in SORTED order must be reported, not the
 	// first declared.
-	_, key, _ := s.Evaluate()
-	if key != KeyGraphIndex {
-		t.Errorf("defer key = %q, want %q (sorted first)", key, KeyGraphIndex)
+	if v := s.evaluate(); v.Key != KeyGraphIndex {
+		t.Errorf("defer key = %q, want %q (sorted first)", v.Key, KeyGraphIndex)
 	}
 }
 
@@ -194,9 +188,8 @@ func TestSet_HardStopAndUnknownAreDistinct(t *testing.T) {
 		BootstrapComplete: true,
 	})
 	waitForKnown(t, s, KeyGraphIngest)
-	_, _, reason := s.Evaluate()
-	if reason != graph.DeferHardStop {
-		t.Errorf("degraded producer: reason = %q, want %q", reason, graph.DeferHardStop)
+	if v := s.evaluate(); v.Reason != graph.DeferHardStop {
+		t.Errorf("degraded producer: reason = %q, want %q", v.Reason, graph.DeferHardStop)
 	}
 
 	// Now let the feed go stale: same producer, but the consumer can no longer vouch
@@ -205,9 +198,8 @@ func TestSet_HardStopAndUnknownAreDistinct(t *testing.T) {
 	waitForProceed(t, s)
 	clock.advance(FreshnessWindow(DefaultHeartbeat) + time.Second)
 
-	_, _, reason = s.Evaluate()
-	if reason != graph.DeferStatusUnknown {
-		t.Errorf("stale feed: reason = %q, want %q", reason, graph.DeferStatusUnknown)
+	if v := s.evaluate(); v.Reason != graph.DeferStatusUnknown {
+		t.Errorf("stale feed: reason = %q, want %q", v.Reason, graph.DeferStatusUnknown)
 	}
 }
 
@@ -216,9 +208,9 @@ func TestSet_HardStopAndUnknownAreDistinct(t *testing.T) {
 // asked for.
 func TestSet_EmptyKeyListProceeds(t *testing.T) {
 	s := NewSet(newMultiKeySource(), nil)
-	proceed, key, reason := s.Evaluate()
-	if !proceed || key != "" || reason != graph.DeferNone {
-		t.Errorf("got (%v, %q, %q), want (true, \"\", \"\")", proceed, key, reason)
+	v := s.evaluate()
+	if !v.OK || v.Key != "" || v.Reason != graph.DeferNone {
+		t.Errorf("got %+v, want {OK:true}", v)
 	}
 }
 
@@ -226,8 +218,8 @@ func TestSet_EmptyKeyListProceeds(t *testing.T) {
 // from folding it twice.
 func TestSet_DuplicateKeysCollapse(t *testing.T) {
 	s := NewSet(newMultiKeySource(KeyGraphIngest), []string{KeyGraphIngest, KeyGraphIngest, ""})
-	if got := s.Keys(); len(got) != 1 || got[0] != KeyGraphIngest {
-		t.Errorf("keys = %v, want exactly [%s]", got, KeyGraphIngest)
+	if got := s.Dumps(); len(got) != 1 || got[0].Key != KeyGraphIngest {
+		t.Errorf("dumps = %+v, want exactly one for %s", got, KeyGraphIngest)
 	}
 }
 
@@ -248,25 +240,20 @@ func TestSet_FullyCoveredIsStricterThanProceed(t *testing.T) {
 	waitForKnown(t, s, KeyGraphIngest, KeyRule)
 	waitForProceed(t, s) // the HEALTH gate proceeds — lag is not a fault
 
-	covered, key, _ := s.FullyCovered()
-	if covered {
+	v := s.FullyCovered()
+	if v.OK {
 		t.Error("reported fully covered with 42 messages outstanding")
 	}
-	if key != KeyGraphIngest {
-		t.Errorf("pending key = %q, want %q", key, KeyGraphIngest)
+	if v.Key != KeyGraphIngest {
+		t.Errorf("pending key = %q, want %q", v.Key, KeyGraphIngest)
 	}
 
 	drained := readyEnvelope()
 	src.publish(t, KeyGraphIngest, drained)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if covered, _, _ = s.FullyCovered(); covered {
-			return
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-	t.Fatal("never became fully covered after the backlog drained")
+	waitFor(t, "fully covered after the backlog drained", func() bool {
+		return s.FullyCovered().OK
+	})
 }
 
 // TestSet_FullyCoveredImpliesProceed pins the ordering: an unhealthy or unknown
@@ -276,12 +263,12 @@ func TestSet_FullyCoveredImpliesProceed(t *testing.T) {
 	s, _ := startSet(t, src, []string{KeyGraphIngest})
 
 	// Never published: unknown.
-	covered, _, reason := s.FullyCovered()
-	if covered {
+	v := s.FullyCovered()
+	if v.OK {
 		t.Error("unknown producer reported as covered")
 	}
-	if reason != graph.DeferStatusUnknown {
-		t.Errorf("reason = %q, want %q", reason, graph.DeferStatusUnknown)
+	if v.Reason != graph.DeferStatusUnknown {
+		t.Errorf("reason = %q, want %q", v.Reason, graph.DeferStatusUnknown)
 	}
 }
 
