@@ -1007,10 +1007,22 @@ func classifyAppendResponse(
 			response.WrittenCount,
 		)
 	}
-	if response.WrittenCount != expectedCount {
+	// The request is accounted for when every submitted tuple was either newly
+	// written or already present. FailedSubjects is known empty here, so a
+	// suppressed tuple IS a stored tuple — treating it as unaccounted-for would
+	// raise an anomaly on a wholly successful append, and when an ambiguous
+	// earlier attempt has already been recorded that anomaly escalates to
+	// CommitUnknown plus a non-nil error. That is precisely the late-commit
+	// scenario the contract requires to report success: the original commits
+	// late, the identical retry is fully suppressed, and one tuple is stored.
+	//
+	// A server that predates the Deduplicated field sends zero, and this
+	// degrades to the plain written-vs-expected check it replaces.
+	if response.WrittenCount+response.Deduplicated != expectedCount {
 		return "", false, fmt.Errorf(
-			"add-batch response wrote %d of %d requested triples",
+			"add-batch response wrote %d and deduplicated %d of %d requested triples",
 			response.WrittenCount,
+			response.Deduplicated,
 			expectedCount,
 		)
 	}
@@ -1184,6 +1196,16 @@ func (c *MutationClient) canonicalizeAppend(
 			)
 		}
 	}
+	// Collapse tuples this request repeats, preserving first-input order. The
+	// server's add lane suppresses by the same six-field key, so leaving them on
+	// the wire would make the response's written count disagree with the
+	// requested count for a batch that is entirely well-formed — routing a
+	// perfectly good append into anomaly verification. Rejecting the request as
+	// invalid instead was considered and refused: a caller assembling an
+	// evidence list innocently should not have to pre-deduplicate it.
+	// Validation above runs on the UNCOLLAPSED list so its positional
+	// diagnostics still name the caller's own indexes.
+	evidence, _ = message.DedupeAppendTriples(nil, evidence)
 	candidate := &graph.EntityState{ID: req.EntityID, Triples: evidence}
 	if err := graph.ValidateEntityStateContract(candidate); err != nil {
 		return nil, MutationMetadata{}, invalidMutationError(operation, err)
@@ -1269,23 +1291,25 @@ func ownedFactsMatch(
 	return true
 }
 
+// appendFactsPresent reports whether every evidence tuple is present on the
+// authoritative entity. Presence is a SET question, not a multiset one: the add
+// lane stores at most one copy of a six-field tuple, so N identical evidence
+// tuples are satisfied by the one stored copy. Consuming matches from a
+// multiset — which this did before add-lane deduplication existed — demanded
+// one stored copy per submitted copy and reported a perfectly committed append
+// as not committed.
 func appendFactsPresent(evidence []message.Triple, entity *graph.EntityState) bool {
 	if entity == nil {
 		return false
 	}
-	available := append([]message.Triple(nil), entity.Triples...)
-	for _, want := range evidence {
-		found := -1
-		for index, candidate := range available {
-			if sameAppendTuple(want, candidate) {
-				found = index
-				break
-			}
-		}
-		if found < 0 {
+	stored := make(map[string]struct{}, len(entity.Triples))
+	for index := range entity.Triples {
+		stored[message.AppendIdentityKey(entity.Triples[index])] = struct{}{}
+	}
+	for index := range evidence {
+		if _, present := stored[message.AppendIdentityKey(evidence[index])]; !present {
 			return false
 		}
-		available = append(available[:found], available[found+1:]...)
 	}
 	return true
 }
@@ -1321,15 +1345,16 @@ func sameTripleMultiset(left, right []message.Triple) bool {
 	return true
 }
 
-func sameAppendTuple(left, right message.Triple) bool {
-	return left.Subject == right.Subject &&
-		left.Predicate == right.Predicate &&
-		left.Datatype == right.Datatype &&
-		left.Source == right.Source &&
-		left.Context == right.Context &&
-		objectsEqual(left.Object, right.Object)
-}
-
+// The add-lane identity predicate that used to live here as sameAppendTuple is
+// now message.SameAppendTuple / message.AppendIdentityKey — ONE implementation
+// shared with graph-ingest's server-side suppression. A local copy that merely
+// agreed today would be a drift class: the client would eventually verify
+// presence under a different definition of "the same assertion" than the one
+// the server wrote under. appendFactsPresent consumes the key form directly.
+//
+// sameFullTriple stays local and nine-field: replace/create verification is a
+// different question, where confidence, timestamp, and expiry ARE part of what
+// was requested.
 func sameFullTriple(left, right message.Triple) bool {
 	if left.Subject != right.Subject ||
 		left.Predicate != right.Predicate ||

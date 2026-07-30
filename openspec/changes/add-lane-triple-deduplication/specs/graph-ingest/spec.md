@@ -100,8 +100,15 @@ duplicate. A request in which everything was suppressed MUST return `WrittenCoun
 empty failed-subject set and no error — success with nothing written is a valid outcome, and a
 suppressed subject MUST NOT appear among failed subjects. The response MUST additionally report
 how many tuples were suppressed, so a caller can distinguish "already present" from "no traffic"
-without an authoritative read-back. Any reported KV revision MUST be the live, unchanged revision
-of the entity, never zero.
+without an authoritative read-back, and a client MUST treat written plus suppressed equalling the
+submitted count as a fully accounted-for request rather than as an anomaly needing verification.
+
+A response for a request targeting exactly one entity MUST report that entity's live KV revision,
+unchanged by a suppressed write. Reporting zero is forbidden because the caller's read-your-writes
+check is `IndexedRevision >= myRev`, which a zero satisfies vacuously; when the post-write
+read-back fails, the response MUST be marked degraded instead of carrying a bare zero. A request
+spanning several entities has no single entity revision and MUST report none — that is undefined,
+not degraded.
 
 #### Scenario: an all-duplicate batch reports zero written and no failures
 
@@ -116,6 +123,40 @@ of the entity, never zero.
 - **GIVEN** a batch of tuples of which some are already stored
 - **WHEN** the batch is submitted
 - **THEN** written plus suppressed equals the number of tuples submitted
+- **AND** a client treats the request as fully committed without an authoritative read-back
+
+#### Scenario: a failed revision read-back degrades rather than reporting zero
+
+- **GIVEN** a single-entity add whose write committed
+- **WHEN** the post-write revision read-back fails
+- **THEN** the response is marked degraded with the read-back reason
+- **AND** it does not present zero as the entity's revision
+
+### Requirement: A no-op mutation MUST report that it committed nothing
+
+A triple mutation that commits nothing MUST say so in its response, because the KV revision it
+reports is the entity's live revision and on a no-op that revision was produced by a DIFFERENT
+writer. An add suppressed as a duplicate MUST be flagged as deduplicated, and a removal that
+matched no stored triple MUST report that nothing was removed. A caller that attributes the
+reported revision to its own write MUST consult these flags first: attributing another writer's
+revision to itself makes that caller discard the other writer's genuine change when its own
+change-feed later delivers it.
+
+#### Scenario: a suppressed add is not attributed to the caller
+
+- **GIVEN** a rule that previously wrote a triple, and a later unrelated write by another
+  component that advanced the entity's revision
+- **WHEN** that rule re-asserts the identical triple and it is suppressed
+- **THEN** the response reports the write as deduplicated
+- **AND** the rule does not record the reported revision as its own
+- **AND** the rule still evaluates when its watcher delivers the other component's change
+
+#### Scenario: a removal that matched nothing reports nothing removed
+
+- **GIVEN** an entity carrying no triple with the requested predicate
+- **WHEN** a removal for that predicate is processed
+- **THEN** the request succeeds
+- **AND** the response reports that nothing was removed
 
 ### Requirement: Suppressed duplicates MUST be observable
 

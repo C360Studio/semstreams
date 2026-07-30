@@ -350,8 +350,10 @@ func TestAppendEvidenceAmbiguitySurvivesNonDefinitiveSuccessResponse(t *testing.
 			response: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
 				WrittenCount: 0,
 			}),
-			wantQueryCount:   1,
-			wantErrorSnippet: "wrote 0 of 1",
+			wantQueryCount: 1,
+			// Deduplicated is absent (zero), so a zero written count is still
+			// unaccounted-for and still an anomaly — the counts stay pinned.
+			wantErrorSnippet: "wrote 0 and deduplicated 0 of 1",
 		},
 		{
 			name: "excess written count",
@@ -359,7 +361,7 @@ func TestAppendEvidenceAmbiguitySurvivesNonDefinitiveSuccessResponse(t *testing.
 				WrittenCount: 2,
 			}),
 			wantQueryCount:   1,
-			wantErrorSnippet: "wrote 2 of 1",
+			wantErrorSnippet: "wrote 2 and deduplicated 0 of 1",
 		},
 		{
 			name:             "malformed response",

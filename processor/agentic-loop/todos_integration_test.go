@@ -5,6 +5,7 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +20,31 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// storedTodoTripleCount reads the loop entity back over the production
+// graph.ingest.query.entity surface — the same one the todo reader consumes —
+// and counts its agent.todo.* triples.
+func storedTodoTripleCount(ctx context.Context, t *testing.T, client *natsclient.Client, loopEntityID string) int {
+	t.Helper()
+	reqData, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: loopEntityID})
+	require.NoError(t, err)
+
+	respData, err := client.RequestClassified(ctx, "graph.ingest.query.entity", reqData, 5*time.Second)
+	require.NoError(t, err)
+
+	var entity graph.EntityState
+	require.NoError(t, graph.UnmarshalEntityState(respData, &entity))
+
+	count := 0
+	for _, triple := range entity.Triples {
+		if strings.HasPrefix(triple.Predicate, "agent.todo.") {
+			count++
+		}
+	}
+	return count
+}
 
 // TestIntegration_TodoWriteReadRoundTrip is the end-to-end proof of
 // the ADR-036 compaction-survival mechanism: triples written to the
@@ -81,19 +107,35 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	}
 
 	// Born-first (ADR-055): the loop-execution entity must exist before
-	// write_todos appends triples to it. In production graphWriter creates it
+	// anything writes todo triples to it. In production graphWriter creates it
 	// via create_with_triples carrying agentic.LoopExecutionMessageType()
-	// (#277) before the agent's first write_todos; post-must-exist-flip a
-	// triple.add_batch to an absent entity is rejected, not auto-vivified.
+	// (#277) before the agent's first write_todos.
+	//
+	// The triples are planted in the SAME write, because that stores what
+	// production stores. write_todos does not use the append lane at all — it
+	// goes through projection.ReplaceOwned (write_todos.go), the replace lane,
+	// which writes the caller's desired set verbatim. The append lane
+	// deduplicates by exact six-field tuple, and a real todo batch shares one
+	// `now` across every item, so its three agent.todo.updated-at triples are
+	// byte-identical and collapse to one — shearing the reader's fixed
+	// five-stride grouping. Planting via the create lane (also verbatim)
+	// reproduces the production-shaped stored state without dragging
+	// owner-token and contract scaffolding into a test about compaction
+	// survival. Do NOT "fix" this by making the planted timestamps distinct:
+	// production genuinely writes one shared updated_at across items, so that
+	// would make the fixture less faithful, not more.
 	require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
 		ID:          loopEntityID,
 		MessageType: agentic.LoopExecutionMessageType(),
+		Triples:     triples,
 	}))
 
-	written, failed, err := c.AddTriples(ctx, triples)
-	require.NoError(t, err)
-	require.Empty(t, failed)
-	require.Equal(t, len(triples), written)
+	// The reader consumes STORED state, so assert on stored state — read back
+	// over the same graph.ingest.query.entity surface the reader itself uses.
+	// All five triples per item must survive, including the three identical
+	// updated-at tuples the append lane would have collapsed.
+	require.Equal(t, len(triples), storedTodoTripleCount(ctx, t, natsClient, loopEntityID),
+		"the reader groups agent.todo.* triples in strides of five; a missing one shears every later group")
 
 	// Iteration 2 — context has been "compacted" (irrelevant to this
 	// test — the assembler doesn't read trajectory; it reads triples).

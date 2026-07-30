@@ -79,8 +79,21 @@ func (m *tripleMutator) AddTriple(ctx context.Context, ruleID string, triple mes
 		return 0, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	// Track the revision to prevent this rule from re-triggering on its own write.
-	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
+	// Track the revision to prevent this rule from re-triggering on its own
+	// write — but ONLY when this call actually produced it.
+	//
+	// Deduplicated means the add lane suppressed the triple because an identical
+	// six-field tuple was already stored: nothing was committed, so the live
+	// revision the handler reports belongs to whoever wrote last. Tracking it
+	// would arm shouldSkipRule against ANOTHER writer's revision, and since that
+	// skip consumes the entry and returns true exactly once, the rule's watcher
+	// would silently drop a genuine external change to this entity.
+	//
+	// This is not a rare shape: actions.go builds add_triple with a constant
+	// Source and empty Context, varying only Timestamp — all excluded from
+	// add-lane identity — so every re-assertion of the same (subject, predicate,
+	// object) is suppressed.
+	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" && !resp.Deduplicated {
 		m.revisionTracker.trackRuleRevision(ruleID, triple.Subject, resp.KVRevision)
 	}
 
@@ -120,7 +133,13 @@ func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predi
 		return 0, fmt.Errorf("unmarshal response: %w", err)
 	}
 
-	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" {
+	// Same rule as AddTriple's tracking gate: !resp.Removed means no stored
+	// triple carried the predicate (or the entity was gone), so nothing was
+	// committed and the reported revision is some other writer's. This hazard
+	// pre-dates add-lane deduplication — RemoveTriple has had a no-op path since
+	// the errNoOpRemove sentinel landed — but it is the same defect and is fixed
+	// here rather than left as a known exception.
+	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" && resp.Removed {
 		m.revisionTracker.trackRuleRevision(ruleID, subject, resp.KVRevision)
 	}
 

@@ -184,11 +184,21 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 	createdAt := now.UTC().Format(time.RFC3339Nano)
 	chars := len(args.Text)
 
-	// Four triples on the loop entity, all keyed to the same scratch_id
-	// via co-emission. The graph is a set-of-triples; downstream
-	// consumers reconstruct each entry by grouping triples sharing the
-	// same scratch.id Object. Append-only — multiple scratchpad calls
-	// within one loop simply accumulate.
+	// Four triples on the loop entity, every one stamped with this call's
+	// scratchID in Context. Downstream consumers reconstruct an entry by
+	// grouping the triples that share that Context value. Append-only —
+	// multiple scratchpad calls within one loop simply accumulate.
+	//
+	// Context is load-bearing, not decoration. It is one of the six fields in
+	// add-lane identity (subject, predicate, object, datatype, source,
+	// context), and the add lane suppresses any triple whose tuple is already
+	// stored. Before this stamp only ScratchID carried the per-call UUID, so
+	// two calls emitting the same text — or merely the same CHARACTER COUNT,
+	// which is far likelier — produced byte-identical ScratchText /
+	// ScratchCreatedAt / ScratchChars tuples, and the second call landed as an
+	// id with no chars. Timestamp cannot do this job: it is deliberately
+	// EXCLUDED from identity, because producers stamp time.Now() and including
+	// it would mean deduplication never fired for anyone.
 	//
 	// Failures here ARE surfaced as ToolErrorNetwork because the graph
 	// emission is the audit/recovery contract of this tool (per the
@@ -209,10 +219,10 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 	// git history for the pre-migration TestScratchpadExecutor_
 	// PartialWrite_LeavesOrphanID it replaced.
 	triples := []message.Triple{
-		{Subject: loopEntityID, Predicate: agvocab.ScratchID, Object: scratchID, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
-		{Subject: loopEntityID, Predicate: agvocab.ScratchText, Object: args.Text, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
-		{Subject: loopEntityID, Predicate: agvocab.ScratchCreatedAt, Object: createdAt, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
-		{Subject: loopEntityID, Predicate: agvocab.ScratchChars, Object: chars, Source: scratchpadToolSource, Timestamp: now, Confidence: 1.0},
+		{Subject: loopEntityID, Predicate: agvocab.ScratchID, Object: scratchID, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
+		{Subject: loopEntityID, Predicate: agvocab.ScratchText, Object: args.Text, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
+		{Subject: loopEntityID, Predicate: agvocab.ScratchCreatedAt, Object: createdAt, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
+		{Subject: loopEntityID, Predicate: agvocab.ScratchChars, Object: chars, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
 	}
 	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
 		return agentic.ToolResult{

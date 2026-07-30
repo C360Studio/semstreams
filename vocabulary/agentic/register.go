@@ -147,7 +147,7 @@ func registerOpsConfigPredicates() {
 // structural predicates stay rule-matchable.
 func registerScratchPredicates() {
 	vocabulary.Register(ScratchID,
-		vocabulary.WithDescription("Stable per-call identifier (UUID) correlating the four triples written by one scratchpad call"),
+		vocabulary.WithDescription("Stable per-call identifier (UUID); the four triples of one scratchpad call correlate by the shared Context stamp carrying this value"),
 		vocabulary.WithDataType("string"))
 
 	vocabulary.Register(ScratchText,
