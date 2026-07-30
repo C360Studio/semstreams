@@ -22,13 +22,25 @@
       (`jetstream_metrics.go:147-155`), and `c.jsMetrics` is nil unless `WithMetrics` was called with
       a non-nil registry (`options.go:209-223`). Reading readiness from there would make the signal
       silently degrade when metrics are off — a phantom by this repo's own rule.**
-      **DECISION: narrow accessor on `natsclient.Client`, backed by the ALREADY-UNCONDITIONAL
-      `c.consumers` bookkeeping (`client.go:80-81`, populated `stream.go:385-390`) — store the
-      `jetstream.Consumer` beside the `ConsumeContext` it already keeps and expose a lookup.**
+      **DECISION (storage): store the `jetstream.Consumer` beside the `ConsumeContext` in the
+      ALREADY-UNCONDITIONAL `c.consumers` bookkeeping** (`client.go:80-81`, populated
+      `stream.go:385-390`), as ONE map value rather than parallel maps — six sites create/replace/
+      delete that bookkeeping, and a missed delete would hand out a handle to a stopped consumer.
       Rejected "graph-ingest retains its own handle": `ConsumeStreamWithConfig` does not return the
       consumer and has **20+ non-test callers**, so that route needs a signature change or a parallel
       API for one caller's benefit. Rejected reusing the metrics map: conditional, and string-keyed
       by `stream:consumer` so a miss is silent.
+      **DECISION (exposure) — REVISED TWICE by Fable review on PR #758; the handle stays PRIVATE:**
+      `func (c *Client) OutstandingWork(ctx, streamName, consumerName string) (uint64, error)`.
+      · Not a `jetstream.Consumer` lookup: that leaks consume/fetch capability to callers who need a
+      number, and puts `Info().AckFloor` one field away from every holder — structurally reopening
+      the class §D0 just closed. · Not `(pending, ackPending uint64, err error)` either: that
+      signature needed a doc comment warning callers away from its own affordance, which means the
+      signature was wrong. The sum is computed INSIDE, so gating on one half is unrepresentable.
+      The "halves for observability" justification was a phantom by this repo's grep-for-the-consumer
+      rule — zero consumers; the metrics path polls `Info()` itself. Widen deliberately if a real
+      one appears. · Unbound/failed consumer returns an ERROR, never 0 — unknown backlog must not be
+      representable as empty backlog; mapping it to `degraded` stays caller policy.
       Note `updateStats` (`jetstream_metrics.go:196-211`) already calls `consumer.Info()` on a poll —
       precedent for the call, and a reason to keep the readiness tick's own cadence separate rather
       than piggybacking on metrics collection.
