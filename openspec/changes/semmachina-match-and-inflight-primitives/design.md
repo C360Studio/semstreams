@@ -31,6 +31,28 @@ Implementing gh#733 as written would therefore ship the exact defect the previou
 budget removing. The design below reads `NumPending + NumAckPending` via `OutstandingWork`, and the
 spec makes the ack-floor prohibition normative so it cannot return as an optimization.
 
+## §1 Fable design review — APPROVED 2026-07-31
+
+The gate is closed; implementation may start. Three answers, each amending a decision below.
+
+**Q1 — no variadic.** `Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager) (bool, error)`.
+The options-variadic failed the widen-deliberately rule on its own evidence: exactly one "option"
+existed, and it was not an option. The lifecycle `Manager` determines **answerability** — whether
+`$entity.lifecycle.*` resolves or pre-scan-errors — not flavor. A dependency that changes which
+questions can be answered belongs in the signature, visibly. `nil` is an honest "I don't have one",
+and D2's pre-scan then names any lifecycle field as unresolvable, which is the correct outcome. An
+options struct is introduced when a real second dependency arrives, under the same review.
+
+**Q2/D4 — accepted, with the argument re-grounded.** See the rewritten D4: the consumer-cost-asymmetry
+framing was load-bearing and should not have been. It is now a corollary.
+
+**Q4 — neither proposed shape.** The query is served by the component over NATS request/reply. See the
+rewritten D3.
+
+**Endorsed without change:** D1's shared-helper extraction *with the tests-unmodified tripwire*, D2's
+pre-scan deriving its prefix set from the evaluator's own constants, D5's production-answer
+resolution, and the one-PR complete-system scope.
+
 ## Goals / Non-Goals
 
 **Goals**
@@ -93,27 +115,80 @@ answer, not the components"*. `ConsumerNameFor(...) string` is a component the c
 combine with a stream name and a client to get what it actually wanted, and it freezes the derivation
 as a public contract forever.
 
-**Decision:** take option (2). `sanitizeSubject` and the assembled name stay unexported; the existing
-call site (`component.go:761-764`) and the new query share one internal helper so the query cannot
-address a different consumer than the component binds. That shared helper is the real fix — the drift
-gh#733 fears is between *two derivations*, not between a derivation and a caller.
+**Decision:** take option (2), and serve it **from the component over NATS request/reply** — the third
+shape, which dissolves the component-method-vs-package-function dilemma rather than choosing a horn.
 
-### D4 — Cooldown is not applied, and the contract says so out loud
+Both proposed shapes were flawed. A package-level function needs `ConsumerNameSuffix` and the stream
+name passed in, which *relocates* the consumer-side reconstruction into a parameter list instead of
+deleting it. A component method assumes the caller holds a component handle, which a boot-time
+recovery pass may not — and may not even be in-process.
 
-A stateless caller has no rule instance, so `r.lastTriggered` does not exist for it. Options were to
-apply cooldown (impossible without instance state), error when a definition declares one (refuses a
-common, benign case), or evaluate conditions on their merits and document the gap.
+The house pattern already resolves this: **components execute and do not know their caller.** The
+agentic-loop component already serves `agentic.query.trajectory` through `SubscribeForRequests`
+(`component.go:375`, handler `:1796`), so an in-flight query subject follows an established surface
+rather than inventing one, and is the NATS Direct shape the `/query-pattern` rubric prescribes for
+this kind of read. The component derives its own consumer name internally via the shared helper: **no
+name, no config, and no handle crosses any boundary**, the derivation is deleted from every caller
+rather than relocated, and an out-of-process recovery pass is served for free.
 
-**Decision:** evaluate on the merits and document. The resulting disagreement is one-directional —
-the stateless verdict can be **permissive** relative to a running engine (matching where a live rule
-would be cooling down) and never the reverse. For gh#731's consumer that is the safe direction:
-`true` means "the pack still owes this entity a hop", so the recovery pass keeps its hands off; a
-false negative is what strands an entity. Documented, one-directional, and safe-side is acceptable;
-undocumented would not be.
+`sanitizeSubject` and the assembled name stay unexported. The existing `setupConsumer` call site
+(`component.go:761-764`) and the new query handler share one internal helper, so the query cannot
+address a different consumer than the component binds — that shared helper is the real fix, since the
+drift gh#733 fears is between *two derivations*, not between a derivation and a caller.
 
-**This is the decision most worth Fable's attention** — it is the one place the primitive knowingly
-answers a slightly different question than production, and the argument rests on the consumer's cost
-asymmetry rather than on a framework invariant.
+### D3a — Unknown is not zero, and no-responders is unknown
+
+**Decision (Fable, Q4 constraint):** a no-responders reply SHALL be surfaced as *unknown*, never as
+zero outstanding work — stated once in the spec and inherited by every path that can fail to observe.
+
+Moving the query onto the wire introduces a failure mode the in-process shapes did not have: the
+agentic-loop component may be down. `natsclient.IsNoResponders` (`natsclient/errors.go:333`) detects
+it. A down loop component emphatically does **not** mean nothing is in flight — messages may be
+sitting in the stream with nobody to answer for them, which is precisely when a recovery pass is most
+likely to be running and most likely to do damage.
+
+This is the same rule that shaped `OutstandingWork`'s error-not-`(0, nil)` return for an unbound
+consumer, and the same rule as `ErrConsumerNotFound`-is-not-idle. Three instances of one invariant:
+**an absent measurement must never render as a measurement of absence.** It is stated once as a
+requirement and the specific cases cite it.
+
+**Consequence for the consumer, recorded because it composes:** the recovery pass gates on the loop's
+readiness producer *first* — the ADR-066 envelope gh#732 just shipped — and only then queries
+in-flight state. The two halves of this change compose: readiness answers "is this component's answer
+trustworthy yet", in-flight answers "what is it". Asking the second without the first is the
+cold-start read bucket, and it fails closed.
+
+### D4 — The primitive answers obligation; production answers instant (cooldown not applied)
+
+**Decision (Fable-approved, argument re-grounded):** cooldown is not applied, and the contract states
+what the primitive answers rather than caveating what it approximates.
+
+**Cooldown is a rate limiter, not a match negation.** A rule inside its cooldown window still owes the
+entity the hop — it fires when the window expires. So the two paths are not "production" and "a
+permissive approximation of production"; they answer **two different questions**:
+
+| | Question | Cooldown |
+|---|---|---|
+| Stateless `Matches` | *Does this pack still owe this entity work?* — **obligation** | irrelevant |
+| Running engine | *Would this rule fire right now?* — **instant** | applies |
+
+For gh#731's consumer — a boot-time recovery pass deciding whether a parked turn is stranded or still
+owed a hop — **obligation is the more correct answer**, not a tolerable approximation of the instant
+one. A rule mid-cooldown means work is genuinely still coming; classifying that entity as stranded
+would be wrong, and it is wrong for a reason about the domain, not about which direction is safer.
+
+The one-directional-safety property (the stateless verdict can differ from a live engine only by
+matching where the engine would be cooling down, never the reverse) is now a **corollary** of the
+above rather than the load-bearing beam. It was doing too much work in the first draft: an argument
+resting on one named consumer's cost asymmetry does not survive that consumer changing its mind.
+
+Framing it as a distinct question also fixes the discoverability problem. A future consumer that
+genuinely needs the instant answer is not reading a caveat and hoping it does not apply to them —
+they are reading a different question and can immediately tell it is not theirs.
+
+*Alternative rejected:* refuse definitions that declare a cooldown. It makes the primitive useless
+for its named consumer over a semantically benign feature, and it would refuse on the basis of a
+field that does not affect the question actually being asked.
 
 ### D5 — Empty condition list resolves to the production answer
 
@@ -121,11 +196,26 @@ The two paths disagree (`true` in the evaluator, `false` in the wrapper). The ca
 production would do, so the stateless path returns `false`. The spec states it so the next reader does
 not "fix" it toward the evaluator.
 
-### D6 — Signature shapes
+### D6 — Signature shapes (settled at §1)
 
-Both return `(value, error)` — two correlated returns, under the three-or-more-is-a-struct threshold,
-with no component the doc comment must warn callers away from. Exact spellings are deliberately left
-open for Fable (see Open Questions), since naming is part of what that review is for.
+```go
+// processor/rule
+func Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager) (bool, error)
+```
+
+No variadic. The lifecycle `Manager` is a **named parameter**, not an option, because it determines
+answerability rather than flavor — with it, `$entity.lifecycle.*` resolves; without it, D2's pre-scan
+names the field unresolvable and errors. `nil` is an honest "I don't have one". `Matches` reads as the
+question at the call site.
+
+`Definition` is same-package (`rule_factory.go:15`); `*graph.EntityState` is the type imported locally
+as `gtypes` (`expression_factory.go:10`); `*lifecycle.Manager` is `pkg/lifecycle/manager.go:43`.
+
+The in-flight query is a NATS request/reply subject served by the component (D3), so its "signature"
+is a request/response payload pair plus the handler shape the component already uses for
+`agentic.query.trajectory`: `func (c *Component) handleX(context.Context, []byte) ([]byte, error)`,
+with `errs.Classified` carrying the error class to the wire. Both returns stay under the
+three-or-more-is-a-struct threshold.
 
 ## Risks / Trade-offs
 
@@ -155,21 +245,22 @@ existing caller's behavior changes. Rollback is removal of the new symbols.
 Sequencing: Fable design review → implementation → reviewer → owner Codex round → merge. Per the
 baton, both issues land in **one PR** (`PR scope = complete system`).
 
-## Open Questions
+## Open Questions — all closed at §1
 
-1. **Exact exported names and signatures** — deferred to Fable by design. gh#731 sketches
-   `Matches(def, state, opts...) (bool, error)`; the options-variadic is the part most worth
-   challenging, since today there is exactly one option (the lifecycle `Manager`).
-2. **D4 — is documented one-directional cooldown permissiveness acceptable**, or should a definition
-   declaring a cooldown be refused outright? The former serves the known consumer; the latter is
-   stricter and cannot mislead a future one.
-3. ~~**Consumer-to-subject cardinality**~~ — **RESOLVED against the code:** 1:1. The consumer name is
-   derived from the subject and `FilterSubject` is that subject, so the outstanding count is the
-   subject's. No requirement rewording needed.
-4. **Does the in-flight query belong on the component or at package level?** This is the sharpest
-   remaining question, and the cardinality check above is what sharpens it: `ConsumerNameSuffix` is
-   **component config**, so a package-level function cannot name the right consumer without being
-   handed the suffix and the stream name — which is the consumer-side reconstruction gh#733 exists to
-   delete, merely relocated to a parameter list. A component method has the config but assumes the
-   caller holds a component handle, which a boot-time recovery pass may not. Neither shape is
-   obviously right; picking wrong reintroduces the defect in a new place.
+1. ~~**Exact exported names and signatures**~~ — **CLOSED.** No variadic; the lifecycle `Manager` is a
+   named parameter because it governs answerability. See D6.
+2. ~~**D4 — is documented cooldown permissiveness acceptable?**~~ — **CLOSED, and the question was
+   slightly wrong.** Permissiveness is not what is being accepted: the primitive answers *obligation*
+   where production answers *instant*, and for the named consumer obligation is the more correct
+   question. See the rewritten D4.
+3. ~~**Consumer-to-subject cardinality**~~ — **CLOSED against the code before review:** 1:1. The
+   consumer name is derived from the subject and `FilterSubject` is that subject, so the outstanding
+   count is that subject's.
+4. ~~**Component method or package-level function?**~~ — **CLOSED: neither.** The component serves the
+   query over NATS request/reply, which deletes the derivation from every caller instead of relocating
+   it and survives an out-of-process caller. See D3, and D3a for the no-responders constraint that
+   moving onto the wire introduces.
+
+**New constraint arriving with Q4's answer, tracked here so it is not lost in D3a:** no-responders is
+*unknown*, never zero. The recovery pass must gate on the loop's readiness envelope (gh#732) before
+trusting an in-flight answer.

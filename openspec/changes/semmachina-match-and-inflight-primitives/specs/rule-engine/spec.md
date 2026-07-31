@@ -91,10 +91,19 @@ Specifically, a definition carrying **no conditions** SHALL NOT match. The two e
 disagree on this today — the evaluator treats an empty condition list as passing, while the rule
 wrapper returns false before reaching it — and the wrapper is the production answer.
 
-Any gate the stateless path cannot evaluate because it is inherently stateful — notably the
-per-rule cooldown, which is a property of a rule instance's history rather than of the definition —
-SHALL be documented as not applied, and the contract SHALL state the direction of the resulting
-disagreement so a caller can reason about it.
+The per-rule cooldown SHALL NOT be applied, and the contract SHALL state that the stateless entry
+point answers **obligation** — "does this rule pack still owe this entity work?" — where the running
+engine answers **instant** — "would this rule fire right now?".
+
+Cooldown is a rate limiter, not a match negation: a rule inside its cooldown window still owes the
+entity the hop and will fire when the window expires. The two paths therefore answer two different
+questions, and the stateless one is not an approximation of the other. It follows as a corollary that
+a stateless verdict can differ from a running engine only by matching where the engine would be
+cooling down, never the reverse — but the contract SHALL be written as the distinct question, not as
+a caveat on the instant one, so a consumer needing the instant answer can see the primitive is not
+theirs rather than reading a tolerance note and hoping it does not apply.
+
+A definition declaring a cooldown SHALL NOT be refused on that basis.
 
 #### Scenario: A definition with no conditions does not match
 
@@ -102,10 +111,18 @@ disagreement so a caller can reason about it.
 - **WHEN** it is matched statelessly
 - **THEN** the verdict is no-match, agreeing with the running engine rather than with the bare evaluator
 
-#### Scenario: Cooldown is documented as unapplied rather than silently skipped
+#### Scenario: A cooling-down rule still reports an outstanding obligation
 
 - **GIVEN** a definition whose rule would currently be within its cooldown window in a running engine
+- **AND** whose conditions match the entity
 - **WHEN** it is matched statelessly
-- **THEN** the conditions are evaluated on their merits, cooldown not applied
-- **AND** the contract states this explicitly, so a caller knows the stateless verdict can be
-  permissive relative to a running engine and never the reverse
+- **THEN** the verdict is a match, because the pack still owes this entity the hop
+- **AND** the contract identifies this as the obligation question rather than as a tolerated
+  divergence from the instant one
+
+#### Scenario: A cooldown-bearing definition is answered, not refused
+
+- **GIVEN** a definition that declares a cooldown
+- **WHEN** it is matched statelessly
+- **THEN** it is evaluated normally
+- **AND** no error is returned on account of the cooldown field being present

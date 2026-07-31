@@ -7,19 +7,21 @@
 
 ## 1. Fable design review (GATE — blocks all implementation)
 
-- [ ] 1.1 Fable review of `design.md` against gh#761's exported-surface contract. The three open
-      questions are the agenda, not a footnote: **(a)** exact names and signatures, and specifically
-      whether the options-variadic earns its place when exactly one option exists today;
-      **(b)** D4 — is documented one-directional cooldown permissiveness acceptable, or should a
-      definition declaring a cooldown be refused outright; **(c)** Q4 — component method vs
-      package-level function for the in-flight query, where `ConsumerNameSuffix` being component
-      config means a package-level shape risks relocating the reconstruction rather than deleting it
-- [ ] 1.2 Record the verdict and every signature decision in `design.md` before writing code; if
-      Fable's answers change a requirement's wording, amend the delta in the same pass and re-run
-      `openspec validate --strict`
-- [ ] 1.3 Confirm both symbols still have named callers at birth (SemMachina / semdragon boot-time
-      recovery pass). If the consumer's plan changed while this sat, they are phantoms and the change
-      stops here rather than exporting speculatively
+- [x] 1.1 Fable review of `design.md` against gh#761's exported-surface contract — **APPROVED
+      2026-07-31**. (a) **No variadic**: the lifecycle `Manager` governs answerability, not flavor, so
+      it is a named parameter; `nil` is honest and the D2 pre-scan then errors on lifecycle fields.
+      (b) **D4 accepted with the argument re-grounded**: cooldown is a rate limiter, not a match
+      negation, so the primitive answers *obligation* where production answers *instant* — the
+      consumer-cost-asymmetry argument becomes a corollary instead of the load-bearing beam.
+      (c) **Q4: neither shape** — the component serves the query over NATS request/reply, deleting the
+      derivation from callers rather than relocating it, and surviving an out-of-process caller
+- [x] 1.2 Verdict and signature decisions recorded in `design.md` (§1 section, D3, D3a, D4, D6);
+      deltas amended for the cooldown reframing and the wire shape; `openspec validate --strict` clean
+- [x] 1.3 Named callers at birth confirmed — SemMachina / semdragon boot-time recovery pass, per both
+      issues and the §1 review. Neither symbol is a phantom export
+- [ ] 1.4 **NEW, from Q4's answer**: the `unknown ≠ zero` rule now has THREE instances (no consumer,
+      no responders, unreadable state). Implement it as ONE rule the three cases cite, not three
+      coincidences — the spec states it that way and the code must match
 
 ## 2. Pre-implementation verification (may run in parallel with §1)
 
@@ -38,28 +40,40 @@
 - [ ] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
       the existing method and the new entry point. **`EvaluateEntityState`'s observable behavior must
       not change** — see 5.1 for how that is proven, not asserted
-- [ ] 3.2 Implement the stateless entry point with the signature §1 settled. It touches no
-      `shouldTrigger`, no `lastTriggered`, no cooldown state, no `MatchState`
+- [ ] 3.2 Implement `Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager)
+      (bool, error)` — §1-settled signature, no variadic. It touches no `shouldTrigger`, no
+      `lastTriggered`, no cooldown state, no `MatchState`
 - [ ] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
       the first unresolvable field before any evaluation runs. `evaluator.go` is NOT modified
 - [ ] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
       `$entity.lifecycle.*` condition errors rather than evaluating against an absent value
 - [ ] 3.5 Empty condition list returns no-match (D5), matching the wrapper rather than the evaluator
+- [ ] 3.6 Cooldown is NOT applied and a cooldown-declaring definition is NOT refused (D4). The doc
+      comment states the **obligation** question — "does this pack still owe this entity work" — not a
+      caveat about permissiveness, so a consumer needing the *instant* answer can tell at a glance
+      this primitive is not theirs
 
 ## 4. gh#733 — task in-flight query (agentic-loop)
 
 - [ ] 4.1 Route the existing `setupConsumer` name derivation (`component.go:761-764`) and the new
       query through ONE internal helper, so the query cannot address a different consumer than the
       component binds. This shared helper is the actual fix; the exported query is its surface
-- [ ] 4.2 Implement the in-flight query in the shape §1 settled, sourcing
-      `natsclient.OutstandingWork` — never `AckFloor`, never `AGENT_LOOPS` `state=running`
-- [ ] 4.3 Map `jetstream.ErrConsumerNotFound` to an error that is DISTINGUISHABLE by the caller from
-      "consumer exists, nothing outstanding". A caller must be able to branch on the difference
-      without string-matching
-- [ ] 4.4 `sanitizeSubject` and the assembled consumer name stay unexported. Verify with
-      `grep` over the package's exported surface, not by inspection
-- [ ] 4.5 State in the doc comment that the answer is scoped to THIS deployment's consumer
-      (`ConsumerNameSuffix` distinguishes deployments on one subject)
+- [ ] 4.2 Serve the query as a **NATS request/reply subject on the component** (§1 Q4), following the
+      existing `agentic.query.trajectory` wire (`component.go:375` subscribe, `:1796` handler) —
+      `SubscribeForRequests`, handler `func(context.Context, []byte) ([]byte, error)`, `errs.Classified`
+      for the error class. Unsubscribe on shutdown alongside the trajectory subscription (`:509`)
+- [ ] 4.3 Source the answer from `natsclient.OutstandingWork` — never `AckFloor`, never `AGENT_LOOPS`
+      `state=running`
+- [ ] 4.4 Implement the `unknown ≠ zero` rule (1.4) once, cited by all three cases: consumer-not-found,
+      state-unreadable, and — for the CALLER — `natsclient.IsNoResponders`
+      (`natsclient/errors.go:333`). A caller must branch on the difference without string-matching an
+      error message
+- [ ] 4.5 `sanitizeSubject` and the assembled consumer name stay unexported. Verify with `grep` over
+      the package's exported surface, not by inspection. **No name, config, or handle crosses the
+      wire** — that is what makes the derivation deleted rather than relocated
+- [ ] 4.6 Document that the answer is scoped to THIS deployment's consumer (`ConsumerNameSuffix`
+      distinguishes deployments on one subject), and that a consumer gates on the loop's ADR-066
+      readiness envelope (gh#732) before treating an in-flight answer as authoritative
 
 ## 5. Tests
 
@@ -76,10 +90,17 @@
 - [ ] 5.4 Engine-state non-observability: run a stateless match against a definition the engine holds
       state for, then assert match state, trigger latch and last-triggered are byte-identical
 - [ ] 5.5 In-flight query: outstanding while unacked (across at least one heartbeat renewal), zero
-      after ack, ERROR when no consumer exists. The no-consumer case is the one that matters most —
+      after ack, UNKNOWN when no consumer exists. The no-consumer case is the one that matters most —
       it is the defect gh#733 was filed about
-- [ ] 5.6 Integration test drives the PRODUCTION wire for the in-flight query — a real consumer on a
-      real stream, not a mock returning a canned count. A sync mock for an async seam proves nothing
+- [ ] 5.6 Integration test drives the PRODUCTION wire for the in-flight query — a real request over
+      NATS to a real component with a real consumer on a real stream, not a mock returning a canned
+      count. A sync mock for an async seam proves nothing, and the wire IS the contract here
+- [ ] 5.7 **No-responders test with the component actually stopped and task messages still on the
+      stream.** This is the failure mode Q4's answer introduced, and the one where a wrong answer is
+      most costly. Assert the caller sees unknown, NOT zero — and mutation-check it: make the handler
+      return a zero count on that path and confirm the test goes red
+- [ ] 5.8 Assert the three `unknown ≠ zero` cases route through ONE rule (1.4) — e.g. one construction
+      site — so a future fourth case cannot be added as a fourth coincidence that forgets it
 
 ## 6. Review chain and gates
 

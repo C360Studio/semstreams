@@ -147,8 +147,8 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    **Fable design review BEFORE implementation**; session 18 shipped three symbols that predate
 >    that rule and never got the pass. Do not add a fourth.
 >
->    **SCOPED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 0/28, blocked at §1, the Fable
->    gate. Do not start §3 onward until that closes.** Both seams re-verified at HEAD, and the
+>    **SCOPED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 3/33. §1 FABLE GATE PASSED
+>    (APPROVED 2026-07-31); implementation is UNBLOCKED.** Both seams re-verified at HEAD, and the
 >    scoping turned up one thing that changes the work: **gh#733's stated premise is falsified.** The
 >    issue says the loop consumer's ack floor "is the only authoritative answer"; #758 D0 measured
 >    `AckFloor` lying in BOTH directions and ADR-088 records the rejection. Implementing #733 as
@@ -156,12 +156,26 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    makes "never floor-derived" normative, and the answer sources `natsclient.OutstandingWork`,
 >    which #758 already built and which already errors rather than returning `(0, nil)` for an
 >    unbound consumer. Half of #733 is therefore already done; what remains is that calling it needs
->    a consumer name the caller cannot legitimately obtain. **Three open questions are Fable's
->    agenda, not footnotes:** the options-variadic with exactly one option; whether documented
->    one-directional cooldown permissiveness is acceptable (D4 — the one place the primitive
->    knowingly answers a slightly different question than production); and component-method vs
->    package-function for the in-flight query, where `ConsumerNameSuffix` being component config
->    means the package shape risks RELOCATING the reconstruction rather than deleting it.
+>    a consumer name the caller cannot legitimately obtain.
+>
+>    **§1 ANSWERS (Fable, binding — all three sharpened the design rather than ratifying it):**
+>    · **No variadic.** `Matches(def, state, lifecycle *lifecycle.Manager) (bool, error)`. The
+>      `Manager` governs ANSWERABILITY, not flavor, so it is a named parameter; `nil` is honest and
+>      the pre-scan then errors on lifecycle fields. A dependency that changes which questions can be
+>      answered belongs in the signature, visibly.
+>    · **Cooldown: obligation, not permissiveness.** A rule mid-cooldown STILL OWES the hop —
+>      cooldown is a rate limiter, not a match negation. So the primitive answers *does this pack
+>      still owe this entity work* where production answers *would it fire right now*. My draft had
+>      the consumer's cost asymmetry load-bearing; it is now a corollary. **A contract that names its
+>      question survives a consumer changing its mind; a caveat does not.**
+>    · **In-flight query: NEITHER component method nor package function** — the component serves it
+>      over NATS request/reply (the existing `agentic.query.trajectory` wire). Package-level would
+>      have RELOCATED the reconstruction into a parameter list; the wire DELETES it, and serves an
+>      out-of-process recovery pass for free. **New constraint it introduces: no-responders is
+>      UNKNOWN, never zero** — a down loop component does not mean the work is gone. That makes
+>      three instances of one invariant (no consumer / no responders / unreadable), specced as ONE
+>      rule. Consumers gate on the loop's ADR-066 readiness envelope (gh#732) before trusting an
+>      in-flight answer — **the two halves of this program's last two increments compose.**
 >
 > 2. **Complexity-pivot remainder:** adopter module contract (one Register bundling
 >    payloads/vocab/factories/projections) + `--validate` performing real registry composition
