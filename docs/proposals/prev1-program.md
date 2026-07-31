@@ -9,10 +9,12 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-31 (SESSION 20 — #731+#733 MERGED **and ARCHIVED**; the epic slot is FILLED by the
-> tag's last breaking item, #762+#768, scoped and Fable-APPROVED. See NEXT item 1.
-> **MEASURED at session 20 close:** 121 open = 32 bug / 82 enh / 6 docs · in-flight changes **3 on
-> main, 4 once #782 lands** · 11 TBD-stub specs · #762 and #768 both OPEN.
+> **STATE 2026-07-31 (SESSION 20 — #731+#733 MERGED and ARCHIVED; **#762+#768 also MERGED
+> (`9b8a11d9`) and ARCHIVED**. The tag checklist's item 1 is DONE and the epic slot is OPEN —
+> **the next action is the TAG itself**, checklist items 2-5. See NEXT item 1.
+> **MEASURED at session 20 close:** in-flight changes **3** · 11 TBD-stub specs ·
+> `openspec validate --all --strict` 34/0 · #762, #768, #731, #733 all CLOSED. Re-measure the
+> issue queue at next session start — it moved during this one (gh#784 and gh#786 filed).
 >
 > **SESSION 19'S CLOSE-OUT CARRIED A FALSE NEGATIVE ABOUT ITS OWN REVIEW CHAIN, and this file
 > repeated it.** It recorded §6.1 (`semstreams-reviewer`) and §6.3 (Codex) as NOT RUN, and §6.5 as
@@ -143,34 +145,23 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
 > milestone section below; everything here is sequenced against it.**
 >
-> **1. THE EPIC SLOT — implement #762 + #768, the LAST breaking item before the tag.**
-> Change `gateway-response-envelope-detection` scoped and **Fable-APPROVED (design task 1.1)**,
-> PR #782. 43 tasks, 4 done (all of §1). **Implementation starts at task 2.1 — enumerate before
-> changing anything.** Do NOT start below §2 without reading `design.md`; the decisions are not
-> restatements of the issue.
+> **1. THE EPIC SLOT IS OPEN — the next action is THE TAG, not another epic.**
+> #762+#768 MERGED (`9b8a11d9`) and ARCHIVED; `gateway-response-projection` is live truth.
+> **The tag checklist's item 1 is DONE — go to the Tag milestone section below and work items
+> 2-5:** tier evidence at the tag commit (`task e2e:semantic` + `task e2e:agentic` green at HEAD;
+> statistical is already green per-PR), the tagged vets (`-tags=integration` AND `-tags=live_llm`),
+> `/tag-release`, and never re-tag. The tag activates gh#753.
 >
-> · **The fix is envelope DETECTION, and that is forced by mechanism, not taste.** graph-query's
->   `handleQuerySemantic`/`handleQuerySpatial` proxy downstream and return the response verbatim, so
->   a `graph.index.query.*` envelope can surface under a `graph.query.*` subject. Whether a response
->   carries the envelope is a property of the RESPONSE, so no maintained subject list can be right.
->   **gh#762's own fix sketch — "widen the gate to cover every subject whose handler returns
->   QueryResponse" — is therefore not implementable as written.** Do not follow the issue here.
-> · **The discriminator is the CLOSED key set** (`data` AND `timestamp`, every key drawn from
->   `{data, request_id, timestamp}`), never `has("data")`. The permissive form strips a nesting level
->   from any payload legitimately carrying a top-level `data`, converting a cosmetic defect into
->   **silent data loss**. Fable approved it for exactly that reason.
-> · **The spec RESERVES the envelope shape** (review addition): a non-envelope type may not consist
->   solely of envelope keys. The closed set's one residual — a LATER type coincidentally occupying the
->   shape — is undefendable by detection, so it becomes a reviewable contract violation instead.
-> · **Required test:** the CROSS-FAMILY case, one test crossing families, not two per-family tests
->   (which would pass under a subject-keyed implementation and prove nothing).
-> · **Stage lands in `statistical`** — the per-PR tier, RED against main before the fix, and asserting
->   three things: `graph.query.*` unwrapped, `graph.index.query.*` UNCHANGED, `graph.query.prefix`
->   untouched. Adopter note is a THREE-way table (changed · already flat · unchanged-by-design).
-> · Two phantoms found while scoping, both dispositioned SEPARATELY, neither fixed inside the change:
->   the gateway's `Error` branch (the envelope has no such field, so it has never fired) and
->   `request_id` (set by no producer). `graph.query.capabilities` is routed to a subject no handler
->   serves — confirm dead vs gap during implementation.
+> **Carry these two from the #762 increment — both were caught EXTERNALLY, neither by a gate:**
+> · **Enumerate a surface from the component that OWNS it.** I enumerated the gateway's reachable
+>   subjects from graph-query's registration table and the static router, and got a phantom entry
+>   (`graph.query.byName`, which the gateway does not route), a second phantom (`batch`), and a
+>   MISS (`agentic.query.trajectory`, the router's first branch). The adopter note shipped telling
+>   sisters to change a read path that does not exist. Codex and the reviewer found it
+>   independently. The fix is now drift-proof: the test scrapes the routing function itself.
+> · **Three of five reviewer findings were guards that reported green without checking.** The
+>   shipped path was sound. This is the standing finding relocated to verification code — a guard
+>   is code, and it inherits the full defect rate.
 >
 > **2. THEN THE TAG — v1.0.0-beta.159**, per the Tag milestone section below. #762 is its item 1;
 > once merged, the remaining gates are tier evidence at the tag commit, the tagged vets, and
@@ -307,11 +298,25 @@ deletion, #737 stream bounds, #747 dedup, #758 readiness + natsclient Info seria
 #777 primitives) is guidance-published and waiting on ONE lockstep event. Gate checklist, in
 order — nothing else blocks the tag:
 
-1. **Fold the LAST breaking item: #762 (gateway envelope) + #768 (its shape-stage gate).**
-   Tagging without it means semdragon adapts to the double-nested shape at .159 and gets
-   broken AGAIN at .160 — a second lockstep for one paragraph of code. Constraints already
-   recorded on the issue: envelope DETECTION not prefix-append; adopter note; the #768 stage
-   RED against main before the fix, green after.
+1. ~~**Fold the LAST breaking item: #762 (gateway envelope) + #768 (its shape-stage gate).**~~
+   **DONE 2026-07-31 — PR #787 MERGED (`9b8a11d9`), change ARCHIVED, both issues CLOSED.**
+   Detection (not prefix-append) on the closed key set; adopter note published; the #768 stage
+   is live in `statistical` and was recorded **RED (EXIT=201) against the unfixed gateway,
+   green (EXIT=0) after**. `gateway-response-projection` is seeded live truth (5 requirements,
+   Purpose written, not the TBD stub).
+   **Two corrections worth carrying, because both were caught EXTERNALLY:**
+   · **The blast radius was ONE GraphQL field (`graphSummary`), not two.** My enumeration
+     claimed `graph.query.byName` — which the gateway does not route at all — because it was
+     derived from graph-query's registration table instead of from the gateway's OWN routing
+     function. The adopter note had told sisters to change a read path that does not exist.
+     Corrected before merge; the note now carries a revert-it callout. **When enumerating a
+     surface, enumerate from the component that OWNS the surface.**
+   · **Three of the five reviewer findings were guards that reported green without checking** —
+     a sync guard blind to `omitempty` (the exact re-entry path for the fixed defect), an order
+     test that did not pin the order, and a probe-count check that was a tautology. The shipped
+     path was sound; the VERIFICATION was not. Same class as this program's standing finding.
+   Follow-ups filed, not folded in: **gh#784** (GraphQL `capabilities` routes to a subject
+   nothing serves) · **gh#786** (`QueryResponse.RequestID` set by no producer).
 2. **Tier evidence at the tag commit** (manual until #769's nightly exists): `task
    e2e:semantic` + `task e2e:agentic` green at HEAD, statistical already green per-PR.
 3. **Tagged vets**: full `go vet -tags=integration` AND `-tags=live_llm` (pre-tag sweep rule).
@@ -418,6 +423,8 @@ Pedantry bucket measured: zero — every blocker carried a failure scenario.
 | Fail-open on error (error → permissive default) | classify-and-propagate, never default-permissive | isExplicitEdge closed (#674); anomaly-path FindSimilar remains (#618 remainder) |
 | Phantom signals (metric/knob/hook with no consumer) | grep-for-the-consumer; delete, don't wire | 13 killed pre-v1 + 4 lifecycle hooks (#719) + queue-depth gauge (#709); discipline live |
 | Cross-repo gates written into local task lists | task-list residency rule (standing rules) + gh#753 | 5 instances rescoped 2026-07-30; guard live |
+| **Guard reports green without checking** (a verification that cannot fail) | mutation-check every guard, and prefer a LITERAL expectation over one derived from the thing being checked | **open — 3 new instances in #787 alone** (sync guard blind to `omitempty`; order test that did not pin order; `checked != len(probes)` tautology). Distinct from "a test that reconstructs": these are guards on OTHER tests' integrity. All 3 found by review, none by CI |
+| Enumerating a surface from the wrong owner | derive from the component that OWNS the surface, and scrape it rather than hand-maintain | **1 instance (#787)**: gateway subjects enumerated from graph-query's registrations → 2 phantom entries + 1 miss + a wrong adopter instruction. Fixed drift-proof |
 
 ---
 
@@ -1178,4 +1185,20 @@ Append one line per session. Newest last.
   reviewable contract violation) and required the **cross-family test**. Three phantoms surfaced and
   were dispositioned separately rather than folded in: the gateway's `Error` branch (the envelope has
   no such field), `request_id` (no producer sets it), and `graph.query.capabilities` (routed to a
-  subject no handler serves). **Next: implement #762+#768 starting at task 2.1, then the .159 tag.**
+  subject no handler serves). Then **implemented and merged it in the same session** — PR #787
+  (`9b8a11d9`), archived, `gateway-response-projection` seeded with a written Purpose. The #768
+  stage is falsifiable and was SEEN red: `e2e:statistical` EXIT=201 against the unfixed gateway with
+  the real defect on real data, EXIT=0 after. **Both reviews found the same thing, and it was the
+  thing I had flagged as most likely wrong: the enumeration.** `graph.query.byName` is not
+  gateway-routed at all, so the blast radius was ONE field and the adopter note had told sisters to
+  change a path that does not exist — because I enumerated the gateway's surface from graph-query's
+  registration table instead of from the gateway's own routing function. **Keeper: enumerate a
+  surface from the component that OWNS it**, and make the enumeration drift-proof rather than
+  hand-maintained (the test now scrapes the routing function; it caught a bug in itself on the first
+  run — a regex that matched 4 of 20 subjects while passing a non-empty check).
+  **Second keeper: three of the reviewer's five findings were guards that reported green without
+  checking** — a sync guard blind to `omitempty` (the exact re-entry path for the defect just
+  fixed), an order test that did not pin the order, and a probe-count check that was a tautology.
+  The shipped path was sound; the verification was not. A guard is code and inherits the full defect
+  rate. Owner ruled no Codex re-check (shipped behavior byte-identical to what was reviewed).
+  **Next: the .159 TAG — checklist items 2-5.**
