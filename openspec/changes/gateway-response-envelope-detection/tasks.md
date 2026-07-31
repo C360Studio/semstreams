@@ -28,52 +28,68 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 2. Enumerate before changing anything
 
-- [ ] 2.1 **Enumerate the actual marshalled top-level shape of every subject routed through
+- [x] 2.1 **DONE — enumeration table in the PR body.** 19 subjects across both families. Envelope-returning: all 8 `graph.index.query.*` (gated today) PLUS `graph.query.summary` AND `graph.query.byName` — the latter proxies to `graph.index.query.byName` and returns it verbatim, so it double-nested despite being a pure passthrough to a family that worked. Non-envelope: prefix/entity/batch/relationships/pathSearch/hierarchyStats/spatial/temporal/semantic/similar/globalSearch/searchGraph  
+      ORIGINAL: **Enumerate the actual marshalled top-level shape of every subject routed through
       `handleNATSResponseWithExtensions`** — both families, all ~19 subjects. This is the discharge of
       the design's one data-loss risk (D1), and it also produces the adopter note's field list.
       Record the table in the PR
-- [ ] 2.2 **Assert non-collision** in a table-driven test: no current payload matches the envelope
+- [x] 2.2 **DONE — `TestUnwrapQueryResponse_NoCollisionWithRealResponseTypes`**, table-driven over REAL production types (marshalled, not hand-written shapes). Mutation-verified BOTH ways: disabling the closed-key-set loop and disabling the timestamp requirement each turn it RED with the FALSE POSITIVE message. The first mutation attempt did not compile, which reads identically to "guard unneeded" — caught, fixed, re-run  
+      ORIGINAL: **Assert non-collision** in a table-driven test: no current payload matches the envelope
       discriminator without BEING an envelope. Falsifiable — adding a fake `{data,timestamp}`-only
       non-envelope case to the table must turn it RED
-- [ ] 2.3 Confirm `graph.query.prefix` (`PrefixQueryResponse` = `{entities, next_cursor}`) fails the
+- [x] 2.3 **DONE** — `PrefixQueryResponse` fails the discriminator on both required keys, asserted by test in the collision table AND in `TestGateway_PrefixKeepsItsOwnUnwrapPath`  
+      ORIGINAL: Confirm `graph.query.prefix` (`PrefixQueryResponse` = `{entities, next_cursor}`) fails the
       discriminator on both required keys, by test rather than by reading
-- [ ] 2.4 **Disposition `graph.query.capabilities`** — routed by the gateway with no producer-side
+- [x] 2.4 **DONE — filed as gh#784, NOT fixed here.** Confirmed a real gap rather than dead code: the GraphQL schema advertises `capabilities` (`component.go:1597`) and routes it to `graph.query.capabilities`, which no component subscribes to. A test asserts the subject mapping, so it passes while the feature cannot work  
+      ORIGINAL: **Disposition `graph.query.capabilities`** — routed by the gateway with no producer-side
       registration found. Grep for the consumer AND the producer; if dead, delete the route in a
       SEPARATE commit; if a real gap, file an issue. Do NOT fix it inside this change
-- [ ] 2.5 **Confirm the `error` key is phantom before deleting its branch (D5):** grep every producer
+- [x] 2.5 **DONE — phantom CONFIRMED, and stronger than expected.** No producer sets an `error` key. `QueryResponse`'s own doc comment records that **ADR-060 REMOVED the in-body Error field** — the gateway was not reading a field that never existed, it was reading one an ADR deliberately deleted. Guarded by `TestQueryResponse_HasNoErrorField`  
+      ORIGINAL: **Confirm the `error` key is phantom before deleting its branch (D5):** grep every producer
       for an `error` key set on this envelope. A phantom is phantom once the PRODUCER side is checked,
       not once the type is read
-- [ ] 2.6 **File the `request_id` phantom as its own issue** (1.4) — confirmed set by no producer.
+- [x] 2.6 **DONE — filed as gh#786**  
+      ORIGINAL: **File the `request_id` phantom as its own issue** (1.4) — confirmed set by no producer.
       Allowed-optional in the closed key set, so the discriminator is indifferent; it is NOT deleted
       inside this change
 
 ## 3. Detector in `graph` (framework package — new exported surface)
 
-- [ ] 3.1 Add the envelope predicate/unwrapper beside `QueryResponse[T]` in
+- [x] 3.1 **DONE** — `graph.UnwrapQueryResponse` in `graph/query_contracts.go`, beside the type  
+      ORIGINAL: Add the envelope predicate/unwrapper beside `QueryResponse[T]` in
       `graph/query_contracts.go`, per D2 — one description of the shape, co-located with the type, so
       a field added to the struct lands beside the predicate that must account for it
-- [ ] 3.2 Discriminator is the CLOSED key set: `data` AND `timestamp` present, every key drawn from
+- [x] 3.2 **DONE** — closed key set via named constants that double as the sync guard: `TestQueryResponse_HasNoErrorField` fails if `QueryResponse` marshals a key absent from the set  
+      ORIGINAL: Discriminator is the CLOSED key set: `data` AND `timestamp` present, every key drawn from
       `{data, request_id, timestamp}`. Not `has("data")` — that is the data-loss direction
-- [ ] 3.3 Unwrap EXACTLY ONCE (D3); no re-testing of the unwrapped payload. Test with an envelope
+- [x] 3.3 **DONE** — `TestUnwrapQueryResponse_RemovesExactlyOneLayer`: an envelope whose `data` is itself envelope-shaped keeps its inner `data`/`timestamp`  
+      ORIGINAL: Unwrap EXACTLY ONCE (D3); no re-testing of the unwrapped payload. Test with an envelope
       whose `data` is itself envelope-shaped: exactly one layer comes off
-- [ ] 3.4 Non-envelope input is returned byte-for-byte unchanged, and failing detection is NOT an
+- [x] 3.4 **DONE** — non-envelope returns `(raw, false)`; byte-equality asserted across 13 table cases  
+      ORIGINAL: Non-envelope input is returned byte-for-byte unchanged, and failing detection is NOT an
       error condition
-- [ ] 3.5 Exported-surface rules from `.agents/contracts/semstreams-developer.md` apply: doc comment
+- [x] 3.5 **DONE** — doc comment states the contract, why the subject cannot decide it, and four explicit NOT-promises  
+      ORIGINAL: Exported-surface rules from `.agents/contracts/semstreams-developer.md` apply: doc comment
       states the contract, and names what the function does NOT promise
 
 ## 4. Gateway wiring
 
-- [ ] 4.1 Replace the `strings.HasPrefix(subject, "graph.index.query.")` gate at
+- [x] 4.1 **DONE** — the subject no longer participates in the decision  
+      ORIGINAL: Replace the `strings.HasPrefix(subject, "graph.index.query.")` gate at
       `gateway/graph-gateway/component.go:1720` with the detector call. The subject stops
       participating in the decision entirely
-- [ ] 4.2 **Delete the dead `Error string` branch** (D5), and replace the stale comment describing
+- [x] 4.2 **DONE** — dead `Error` branch deleted, comment replaced with the ADR-060 error path  
+      ORIGINAL: **Delete the dead `Error string` branch** (D5), and replace the stale comment describing
       `{data, error, timestamp: time}` with one naming the real error path (natsclient's `error: `
       body convention). Gated on 2.5 confirming
-- [ ] 4.3 Detection runs before the `graph.query.prefix` special case, and the ORDER is pinned by a
+- [x] 4.3 **DONE** — `TestGateway_PrefixKeepsItsOwnUnwrapPath` pins order and asserts prefix still projects a bare array  
+      ORIGINAL: Detection runs before the `graph.query.prefix` special case, and the ORDER is pinned by a
       test (D4) — a future field addition must break a test, not a deployment
-- [ ] 4.4 `graph.query.summary` → `graphSummary` projects `total_entities` at the top level. This is
+- [x] 4.4 **DONE** — `TestGateway_SummaryProjectsUnwrapped`  
+      ORIGINAL: `graph.query.summary` → `graphSummary` projects `total_entities` at the top level. This is
       gh#762's motivating instance; it is a test case, not the acceptance criterion
-- [ ] 4.5 **REQUIRED by review — the cross-family test.** Exercise the proxy path: a
+- [x] 4.5 **DONE — `TestGateway_EnvelopeProjectsIdenticallyAcrossFamilies`.** ONE payload, both subjects, `require.JSONEq` on the projections. Verified RED under a restored prefix gate (with the detector still present, so the mutation compiled): the two projections differed by exactly one `data` hop  
+      ORIGINAL: **REQUIRED by review — the cross-family test.** Exercise the proxy path: a
       `graph.index.query.*` envelope surfacing under a `graph.query.*` subject
       (`handleQuerySemantic` / `handleQuerySpatial` return the downstream response verbatim), asserted
       as ONE test crossing the families — **not** the two families tested separately. Scoping finding
@@ -81,25 +97,31 @@ session re-litigating finished work, exactly as a file predicting success costs 
       is load-bearing for D1 and must be load-bearing for the coverage. Two separate per-family tests
       would pass under a subject-keyed implementation and prove nothing about the decision this
       design rests on
-- [ ] 4.6 **Reservation check (1.5):** verify no response type on the projection path consists solely
+- [x] 4.6 **DONE** — no response type on the projection path occupies the envelope shape; the collision table is the record  
+      ORIGINAL: **Reservation check (1.5):** verify no response type on the projection path consists solely
       of envelope keys without being the envelope. Falls out of 2.1's enumeration; record the result
 
 ## 5. The shape gate (gh#768) — falsifiable or it is not a gate
 
-- [ ] 5.1 Add the e2e response-shape stage in the **`statistical`** tier (1.2) — the per-PR tier, so
+- [x] 5.1 **DONE** — `validate-gateway-response-shape` registered in `statistical` (and `semantic`)  
+      ORIGINAL: Add the e2e response-shape stage in the **`statistical`** tier (1.2) — the per-PR tier, so
       the gate runs on the PR carrying the fix
 - [ ] 5.1a The stage asserts **three** things, not one: (a) the `graph.query.*` family is unwrapped,
       (b) `graph.index.query.*` is **UNCHANGED**, (c) `graph.query.prefix` is untouched. (b) and (c)
       are regression assertions — this change must not fix one family by breaking the others
-- [ ] 5.2 Assertions are over **raw JSON keys**, never a decoded struct — both shapes unmarshal
+- [x] 5.2 **DONE** — probes decode to `map[string]json.RawMessage` and assert keys; never a typed struct  
+      ORIGINAL: Assertions are over **raw JSON keys**, never a decoded struct — both shapes unmarshal
       cleanly into a permissive target, so a decoding test passes under the defect AND the fix
-- [ ] 5.3 Assert the ABSENCE of `data.data.*`, not merely the presence of expected leaves. Reaching
+- [x] 5.3 **DONE** — asserts absence of a `data` hop AND of a leaked `timestamp`, not leaf reachability  
+      ORIGINAL: Assert the ABSENCE of `data.data.*`, not merely the presence of expected leaves. Reaching
       the right value is exactly what the broken shape also permits
-- [ ] 5.4 Cover representative subjects from **both** families, not only `graph.query.*`
+- [x] 5.4 **DONE** — three probes: `graph.query.*` unwrapped, `graph.index.query.*` unchanged, `graph.query.prefix` untouched  
+      ORIGINAL: Cover representative subjects from **both** families, not only `graph.query.*`
 - [ ] 5.5 **Record the stage RED against unfixed main, then green with the fix**, with output pasted
       in the PR. A stage never seen red is not evidence. Use `git stash` for the fails-without-fix
       check, never `git checkout`
-- [ ] 5.6 Confirm the stage actually RAN and asserted — count assertions/PASSes; a green new gate may
+- [x] 5.6 **DONE** — stage publishes `gateway_shape_probes_checked` and FAILS if it is not 3, so a stage that silently skips cannot report green  
+      ORIGINAL: Confirm the stage actually RAN and asserted — count assertions/PASSes; a green new gate may
       have skipped everything
 
 ## 6. Adopter obligation (ours: publish; theirs: conform)
@@ -116,11 +138,14 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 7. Gates
 
-- [ ] 7.1 `task lint` clean (revive warnings = CI failure)
+- [x] 7.1 **DONE** — `task lint` clean. One revive `redefines-builtin-id` found and fixed (`const max` shadowed the builtin)  
+      ORIGINAL: `task lint` clean (revive warnings = CI failure)
 - [ ] 7.2 **Run what CI runs — BOTH suites:** `go test -race ./...` AND
       `go test -race -tags=integration -p 2 ./...`. Half of CI is how the last increment went red
-- [ ] 7.3 Full `go vet` plain AND `-tags=integration` (`go test`'s vet is a SUBSET — no copylocks)
-- [ ] 7.4 `task schema:generate` → no drift; `openspec validate --all --strict`
+- [x] 7.3 **DONE** — `go vet` plain AND `-tags=integration`, both clean  
+      ORIGINAL: Full `go vet` plain AND `-tags=integration` (`go test`'s vet is a SUBSET — no copylocks)
+- [x] 7.4 **DONE** — `task schema:generate` no drift; `openspec validate --all --strict`; contract tests ok  
+      ORIGINAL: `task schema:generate` → no drift; `openspec validate --all --strict`
 - [ ] 7.5 **BREAKING ⇒ a relevant e2e tier green before merge**, beyond the per-PR statistical. The
       gateway path is consumer-facing: run the tier covering it and state which
 - [ ] 7.6 Re-verify against main after any long merge queue — `strict_required_status_checks_policy`

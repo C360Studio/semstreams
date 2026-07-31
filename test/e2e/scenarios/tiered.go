@@ -335,6 +335,13 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
 		{"test-http-gateway", s.executeTestHTTPGateway, []string{"statistical", "semantic"}},
+		// gh#768: gateway response SHAPE. Every other gateway stage decodes into
+		// typed structs, and the wrapped and unwrapped shapes both decode
+		// cleanly — so a shape regression is invisible to them by construction.
+		// This one asserts over raw JSON keys and HARD-FAILs on a repeated
+		// `data` hop. Statistical tier because that is the per-PR tier, and this
+		// stage's value is running on the PR that changes the shape.
+		{"validate-gateway-response-shape", s.executeValidateGatewayResponseShape, []string{"statistical", "semantic"}},
 		{"test-embedding-fallback", s.executeTestEmbeddingFallback, []string{"statistical", "semantic"}},
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
 		// Structural indexes (k-core, pivot) - require community detection for meaningful structure

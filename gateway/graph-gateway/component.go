@@ -1714,24 +1714,25 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 		}
 	}
 
-	// Unwrap QueryResponse envelope for graph.index.query.* subjects
-	// These handlers return QueryResponse[T] with {data: T, error: string, timestamp: time}
-	// We need to extract just the data field for the GraphQL response
-	if strings.HasPrefix(subject, "graph.index.query.") {
-		var envelope struct {
-			Data  json.RawMessage `json:"data"`
-			Error string          `json:"error,omitempty"`
-		}
-		if err := json.Unmarshal(resp, &envelope); err == nil {
-			if envelope.Error != "" {
-				c.writeGraphQLError(w, http.StatusOK, envelope.Error)
-				return
-			}
-			if len(envelope.Data) > 0 {
-				resp = envelope.Data
-			}
-		}
-	}
+	// Unwrap the QueryResponse envelope by DETECTING it on the reply, never by
+	// matching the subject (gh#762). The subject is not a sound basis: handlers
+	// proxy — graph-query's semantic, spatial, similar and byName handlers
+	// forward downstream and return that reply verbatim — so an envelope
+	// produced under `graph.index.query.*` arrives here under a `graph.query.*`
+	// subject. The previous prefix gate consequently left `graph.query.summary`
+	// and `graph.query.byName` double-nested as `data.<field>.data.*`.
+	//
+	// graph.UnwrapQueryResponse owns the discriminator, beside the type it
+	// describes; a second copy here is the drift that caused this bug. It leaves
+	// every non-envelope reply — including graph.query.prefix's own
+	// {entities, next_cursor} shape, handled just below — byte-for-byte intact.
+	//
+	// There is deliberately NO in-body error branch. ADR-060 removed
+	// QueryResponse.Error: a reply is EITHER this success body OR a classified
+	// error on the err channel, intercepted upstream by RequestClassified. The
+	// branch that used to live here read a field no producer has emitted since,
+	// so it never fired.
+	resp, _ = graph.UnwrapQueryResponse(resp)
 
 	// Unwrap entities envelope for collection responses (e.g. graph.query.prefix)
 	// Internal NATS APIs return {"entities": [...]} for consistency; GraphQL expects raw arrays
