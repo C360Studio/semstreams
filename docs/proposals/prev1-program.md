@@ -9,9 +9,29 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-31 (SESSION 19 CLOSED — the #731+#733 epic MERGED; see NEXT item 0.
-> Queue MEASURED at close: 121 open = 32 bug / 82 enh / 6 docs (labels sum to 120; one issue carries
-> none). gh#712/#732/#763 are NOW all closed — but #732 and #763 were still
+> **STATE 2026-07-31 (SESSION 20 — #731+#733 MERGED **and ARCHIVED**; the epic slot is FILLED by the
+> tag's last breaking item, #762+#768, scoped and Fable-APPROVED. See NEXT item 1.
+> **MEASURED at session 20 close:** 121 open = 32 bug / 82 enh / 6 docs · in-flight changes **3 on
+> main, 4 once #782 lands** · 11 TBD-stub specs · #762 and #768 both OPEN.
+>
+> **SESSION 19'S CLOSE-OUT CARRIED A FALSE NEGATIVE ABOUT ITS OWN REVIEW CHAIN, and this file
+> repeated it.** It recorded §6.1 (`semstreams-reviewer`) and §6.3 (Codex) as NOT RUN, and §6.5 as
+> outstanding. All three had happened: PR #777's thread records **Codex + semstreams-reviewer at
+> `168f3311`, 7 findings** — 4 blocking (the global in-flight subject could not identify a
+> deployment; a supplied-but-failed lifecycle lookup read as resolved state; `Definition.Enabled`
+> unchecked, so a disabled rule reported work owed; the exported signature deviated from Fable's
+> approved `*lifecycle.Manager` and admitted a panicking typed nil), 2 high (no caller
+> `context.Context` on an API doing KV I/O; a second-subscription start failure leaked the first
+> responder), 1 verification gap (the wire test asserted `InFlight == (Outstanding > 0)` with no task
+> ever published — a handler hardcoded to zero passed it) — all addressed at `013538cd`
+> mutation-verified, plus `f3db6130` and `278d1425`. The lines were written BEFORE the round and
+> never amended AFTER it. **This is the state-file rule biting from the other direction: the known
+> failure mode is a file predicting success, but a file predicting a GAP costs just as much** — a
+> session re-litigating finished work, and a defect tally that understates what the gates caught.
+> **Amend a task line when the work HAPPENS, not only when it succeeds.** Corrected in the archived
+> `tasks.md` (PR #780); the discipline is written into the new change's task header.
+>
+> (Historical, retained: gh#712/#732/#763 are all closed — but #732 and #763 were still
 > OPEN when session 18 wrote them down as closed. They were closed on owner CONFIRM-CLOSE only after
 > their implementing paths were re-verified in merged code. RE-MEASURE anyway; this line is a
 > snapshot, not a source. See Issue flow below). Recently completed — verify with
@@ -120,7 +140,45 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > it). Five private spellings exist today with zero definitions; **#683 is where the class gets
 > retired**, migration is opportunistic follow-up.
 >
-> **NEXT (ordered; WIP = 1 at the epic level):**
+> **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
+> milestone section below; everything here is sequenced against it.**
+>
+> **1. THE EPIC SLOT — implement #762 + #768, the LAST breaking item before the tag.**
+> Change `gateway-response-envelope-detection` scoped and **Fable-APPROVED (design task 1.1)**,
+> PR #782. 43 tasks, 4 done (all of §1). **Implementation starts at task 2.1 — enumerate before
+> changing anything.** Do NOT start below §2 without reading `design.md`; the decisions are not
+> restatements of the issue.
+>
+> · **The fix is envelope DETECTION, and that is forced by mechanism, not taste.** graph-query's
+>   `handleQuerySemantic`/`handleQuerySpatial` proxy downstream and return the response verbatim, so
+>   a `graph.index.query.*` envelope can surface under a `graph.query.*` subject. Whether a response
+>   carries the envelope is a property of the RESPONSE, so no maintained subject list can be right.
+>   **gh#762's own fix sketch — "widen the gate to cover every subject whose handler returns
+>   QueryResponse" — is therefore not implementable as written.** Do not follow the issue here.
+> · **The discriminator is the CLOSED key set** (`data` AND `timestamp`, every key drawn from
+>   `{data, request_id, timestamp}`), never `has("data")`. The permissive form strips a nesting level
+>   from any payload legitimately carrying a top-level `data`, converting a cosmetic defect into
+>   **silent data loss**. Fable approved it for exactly that reason.
+> · **The spec RESERVES the envelope shape** (review addition): a non-envelope type may not consist
+>   solely of envelope keys. The closed set's one residual — a LATER type coincidentally occupying the
+>   shape — is undefendable by detection, so it becomes a reviewable contract violation instead.
+> · **Required test:** the CROSS-FAMILY case, one test crossing families, not two per-family tests
+>   (which would pass under a subject-keyed implementation and prove nothing).
+> · **Stage lands in `statistical`** — the per-PR tier, RED against main before the fix, and asserting
+>   three things: `graph.query.*` unwrapped, `graph.index.query.*` UNCHANGED, `graph.query.prefix`
+>   untouched. Adopter note is a THREE-way table (changed · already flat · unchanged-by-design).
+> · Two phantoms found while scoping, both dispositioned SEPARATELY, neither fixed inside the change:
+>   the gateway's `Error` branch (the envelope has no such field, so it has never fired) and
+>   `request_id` (set by no producer). `graph.query.capabilities` is routed to a subject no handler
+>   serves — confirm dead vs gap during implementation.
+>
+> **2. THEN THE TAG — v1.0.0-beta.159**, per the Tag milestone section below. #762 is its item 1;
+> once merged, the remaining gates are tier evidence at the tag commit, the tagged vets, and
+> `/tag-release`. The tag activates gh#753.
+>
+> **3. POST-TAG:** complexity-pivot remainder (item 4 below), Epic D stages #766/#767, #759
+> ack-disposition extraction, the hygiene batch, #772. Fable's ruling: sisters do not need any of
+> these to migrate, so none of them gates the tag.
 >
 > 0. **SESSION 18 CLOSED — readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED
 >    (#771 `7d4f967f`).** `caught-up-readiness-producers` is live truth in
@@ -135,7 +193,9 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    NOT `KeyedPool.Stats()`, which has a caller; the original phrasing would have sent someone to
 >    the wrong function), **#765** (rule docs describe an `WatchAll` guard the code no longer has).
 >
-> 1. **NEXT EPIC SLOT — SemMachina primitives pair #731 + #733** (was item 2; promoted by the
+> 3b. **DONE — SemMachina primitives pair #731 + #733** (kept for its design record; the epic is
+>    merged AND archived, `openspec/specs/{rule-engine,agentic-loop}/` carry the 6 requirements as
+>    live truth. Nothing here is outstanding.) (was item 2; promoted by the
 >    readiness increment closing). Additive, non-breaking, one PR. #731 = stateless "would this
 >    Definition match this EntityState now" — lift the REAL evaluation pipeline (the
 >    `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching. #733 = intent-shaped
@@ -186,7 +246,8 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >      rule. Consumers gate on the loop's ADR-066 readiness envelope (gh#732) before trusting an
 >      in-flight answer — **the two halves of this program's last two increments compose.**
 >
-> 2. **Complexity-pivot remainder:** adopter module contract (one Register bundling
+> 4. **Complexity-pivot remainder — POST-TAG** (Fable 2026-07-31: sisters do not need it to
+>    migrate, so it does not gate .159): adopter module contract (one Register bundling
 >    payloads/vocab/factories/projections) + `--validate` performing real registry composition
 >    (fold gh#734 — an unknown schema Type spelling silently skips validation — the
 >    validator-credibility bug) + tutorial configs compiled in CI (gh#725 = the motivating
@@ -1095,3 +1156,26 @@ Append one line per session. Newest last.
   **Re-verify the base after main moves** — the ruleset permits merging a stale-base green.
   **Run what CI runs, both suites.** **Mutation-check the mutation check.**
   **Next: archive `semmachina-match-and-inflight-primitives`, then the complexity-pivot remainder.**
+- **2026-07-31 (session 20)** — Archive landed (#780 `8df57914`): 6 requirements promoted to live
+  truth, `agentic-loop`'s Purpose widened from iteration-budgets-only, and a `rule-engine` table that
+  promised a "three-way distinction" while shipping two rows repaired at promotion rather than
+  deferred. In-flight changes 4 → 3. **The session's finding is a correction to session 19's own
+  close-out: it recorded §6.1/§6.3/§6.5 as outstanding when all three had happened** — PR #777's
+  thread records Codex + semstreams-reviewer at `168f3311`, 7 findings, all mutation-verified at
+  `013538cd`. The owner caught it in one sentence; I had been about to archive around it. The task
+  lines were written before the round and never amended after. **The keeper generalises the existing
+  rule rather than adding one: a state file must record measurements, and a prediction of a GAP is
+  as costly as a prediction of success** — it bought a session re-litigating finished work and
+  understated what the gates had caught. Amend a line when the work HAPPENS.
+  Then scoped the tag's last breaking item, **#762 + #768 → `gateway-response-envelope-detection`**
+  (#782), Fable-APPROVED at design time. Scoping changed the fix: **gh#762's own sketch is not
+  implementable** — graph-query's semantic/spatial handlers proxy downstream and return responses
+  verbatim, so an envelope can surface under either family and no subject list can be correct. That
+  turns "detection not prefix-append" from a stylistic preference into a mechanical necessity. The
+  discriminator is the closed key set, because `has("data")` would convert a cosmetic defect into
+  silent data loss. Fable added the **shape reservation** (the closed set's one residual — a later
+  type coincidentally occupying the envelope's shape — is undefendable by detection, so it becomes a
+  reviewable contract violation) and required the **cross-family test**. Three phantoms surfaced and
+  were dispositioned separately rather than folded in: the gateway's `Error` branch (the envelope has
+  no such field), `request_id` (no producer sets it), and `graph.query.capabilities` (routed to a
+  subject no handler serves). **Next: implement #762+#768 starting at task 2.1, then the .159 tag.**
