@@ -122,7 +122,7 @@ func WithBucketPrefix(prefix string) TestOption {
 func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 	// Default configuration
 	cfg := &testConfig{
-		natsVersion: "2.12-alpine",
+		natsVersion: "2.14-alpine",
 		timeout:     5 * time.Second,
 		// 180s startup timeout: the wait strategy's MappedPort polls
 		// take hundreds of ms each under heavy Docker pressure (parallel
@@ -276,7 +276,7 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 
 	// Default configuration
 	cfg := &testConfig{
-		natsVersion: "2.12-alpine",
+		natsVersion: "2.14-alpine",
 		timeout:     5 * time.Second,
 		// 180s startup timeout: the wait strategy's MappedPort polls
 		// take hundreds of ms each under heavy Docker pressure (parallel

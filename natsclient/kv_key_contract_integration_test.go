@@ -19,10 +19,25 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+// The normative server this conformance test runs against, pinned by digest so
+// the KV key grammar is validated against a known build rather than whatever
+// `2.14-alpine` resolves to today.
+//
+// Moved 2.12.4 -> 2.14.4 on 2026-07-31 (gh#790) with the grammar re-verified,
+// not merely renumbered: upstream's validBucketRe / validKeyRe /
+// validSearchKeyRe are byte-identical between nats.go v1.48.0 and v1.52.0
+// (jetstream/kv.go:501-503), and this test passes against the new server, so
+// the accepted/rejected key sets are unchanged.
+//
+// pinnedNATSGoVersion is REPORTED in this test's log line. It must track the
+// module actually in go.mod — it read v1.48.0 while the build used v1.52.0
+// after the SDK bump, which made the evidence line silently false. The unit
+// test TestKVContractPinnedNATSGoDependency asserts the real resolved version;
+// this constant exists so the logged evidence matches it.
 const (
-	normativeNATSServerVersion = "2.12.4-alpine"
-	normativeNATSServerDigest  = "sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea"
-	pinnedNATSGoVersion        = "v1.48.0"
+	normativeNATSServerVersion = "2.14.4-alpine"
+	normativeNATSServerDigest  = "sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66"
+	pinnedNATSGoVersion        = pinnedNATSGoContractVersion
 )
 
 func TestKVKeyContractNormativeNATS(t *testing.T) {
