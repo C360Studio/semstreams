@@ -9,7 +9,9 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-30 (post-triage checkpoint; queue: 113 open = 32 bug / 77 enh / 4 docs — see
+> **STATE 2026-07-30 (SESSION 18 CLOSED — readiness increment merged + archived; see NEXT item 0.
+> Queue was 113 open at the last triage = 32 bug / 77 enh / 4 docs; +4 filed since (#762-#765) and
+> gh#712/#732/#763 closed — RE-MEASURE, do not trust this line. See
 > Issue flow below). Recently completed — verify with `git log --oneline -15` + `gh issue list`,
 > detail lives in the archives and the Epics table, do NOT re-derive:**
 > Epic C FULL ARC merged + archived (#716→#719→#721→#722→#724: 22-row bucket catalog, acquisition
@@ -91,87 +93,28 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **ALL MERGED as of session end:** #747 (dedup) · #752 (archive sweep, 13→4) · #754 (Fable's
->    residency + staleness rules) · #755 (#750 flake fix) · #757 (readiness increment SCOPED, 49
->    tasks, `openspec/changes/caught-up-readiness-producers/`). Add-lane task 10.5 is CLOSED:
->    archiving `public-projection-mutation-client` promoted its spec to live truth carrying two
->    statements our own dedup change had falsified (`Retry.MaxRetries=0 until #697 exists`;
->    "remains vulnerable to ... double-applying"). Once live, routing to another thread stopped being
->    the right answer — both corrected in #752.
-> 1. **EPIC SLOT — readiness increment: REVIEW CHAIN CLOSED, awaiting CI to merge (PR #758, 44/49).**
->    `caught-up-readiness-producers` §1–§10 done; **#763 folded in** (shared readiness gauge set).
->    Reviewer CHANGES REQUESTED → fixed. Fable APPROVED (API shape ×2, gauge design). Codex
->    CHANGES REQUESTED → fixed. Only 9.1 + archive remain, which are archive-time.
->    **Do not re-implement — read PR #758.**
+> 0. **SESSION 18 CLOSED — readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED (#771).**
+>    `caught-up-readiness-producers` is live truth in `openspec/specs/graph-index-readiness/`
+>    (6 requirements added, 1 modified). gh#712 + gh#732 CLOSED. **#763 folded in** — the shared
+>    `readiness.Gauges` set. In-flight changes 5 → 4. Filed: **#762** (GraphQL `graph.query.*` keeps
+>    its `QueryResponse` envelope → `data.<field>.data.*`; gate at `graph-gateway/component.go:1720`
+>    matches only `graph.index.query.`), **#764** (`BoundedDispatcher.Stats()` chain dead-ends —
+>    NOT `KeyedPool.Stats()`, which has a caller; the original phrasing would have sent someone to
+>    the wrong function), **#765** (rule docs describe an `WatchAll` guard the code no longer has).
 >
->    **THE DEFECT TALLY IS THE PROGRAM SIGNAL, and it is bad in an instructive way.** 6 self-found
->    (each by questioning a RESULT, none by reading code) · 2 HIGH from the reviewer · 3 blocking
->    from Codex. **Two of Codex's three landed on code written to FIX the reviewer's findings** —
->    a 2s join that made a fail-open improbable rather than impossible, and a `FullyCovered` that
->    read each watcher twice so health and lag came from DIFFERENT envelopes. Carry that pattern:
->    **a fix is new code and inherits the full defect rate; the remedy needs the same adversarial
->    pass as the original.** Nowhere near the exit criterion of two increments with zero P1+ finds.
+> 1. **NEXT EPIC SLOT — SemMachina primitives pair #731 + #733** (was item 2; promoted by the
+>    readiness increment closing). Additive, non-breaking, one PR. #731 = stateless "would this
+>    Definition match this EntityState now" — lift the REAL evaluation pipeline (the
+>    `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching. #733 = intent-shaped
+>    "is this loop task in flight" — the API must distinguish "no consumer exists" from "nothing in
+>    flight" (the issue's own `ErrConsumerNotFound` trap).
 >
->    **FOUR ASSERTIONS IN THIS BRANCH EXISTED WHILE PROVING NOTHING**, and one survived TWO repair
->    attempts (I "covered" a production counter by calling it from the test itself — exercising the
->    plumbing, never the mutated line). Named shape worth keeping: **a test that reconstructs the
->    behavior it means to verify tests the reconstruction.** Also: an assertion whose expected value
->    equals the type's zero value proves nothing unless some case makes it non-zero.
+>    **Read `.agents/contracts/semstreams-developer.md` FIRST — #761's exported-surface rules are
+>    now binding and both issues are new API surface.** Framework packages additionally require
+>    **Fable design review BEFORE implementation**; session 18 shipped three symbols that predate
+>    that rule and never got the pass. Do not add a fourth.
 >
->    **EVIDENCE ERROR I MADE AND CORRECTED:** I claimed `entity_load_poll_count=0` proved all three
->    keys were Known+Fresh+healthy+`Lag==0`. It does not — an early return yields the same 0. Codex
->    independently flagged the same gap. Stage-level tests now arrange a REAL not-covered
->    observation and assert both withhold and release.
->
->    **TASK 1'S MEASUREMENT KILLED THE DESIGN'S FOUNDATION, and that is the headline.** Probed
->    against BOTH deployed NATS versions (2.10, 2.12, identical): `AckFloor.Stream` does NOT advance
->    past a `MaxDeliver`-exhausted message, DOES advance past `Term()`. The permanence follow-up then
->    falsified my own first "stalls forever" reading — the floor sits behind the poison message while
->    idle (+5s/+10s), then on the next unrelated ack **leaps PAST the never-applied message**. Wrong
->    in BOTH directions: permanently-not-caught-up while quiet, falsely-covered under traffic. It
->    never means "everything ≤ this is durable". Fallback taken (`NumPending + NumAckPending`, correct
->    in all 12 observations); `proposal.md`, design D6 and task 8.1 all asserted the disproven claim
->    and were corrected. **Do not let anyone "restore" the ack floor — the rejection is recorded with
->    its measurement in ADR-088.**
->
->    **FOUR MORE DEFECTS, NONE FOUND BY REVIEW — every one by questioning a result:**
->    · `BootstrapScope` captured at the first status tick published `complete && scope == 0` (the
->      contract's "authoritatively nothing to do") on **5 runs out of 5** with a real backlog, because
->      it drained before the tick. Now captured at bind. Found by asking why a test took 0.83s.
->    · `ComputeBacklogStatus` projected `Ready: true` from an UNMEASURED zero — absence of a
->      measurement read as measurement of absence. Caught by the spec-derived test pre-commit.
->    · **9 of 18 shipped `graph-ingest` instances bind ZERO jetstream consumers** (only input port is
->      core NATS request/reply). Had empty-set reported degraded, half the fleet would publish a
->      permanently-degraded envelope and every consumer folding that key would defer forever.
->    · The nil-sentinel assumption was unverified; now measured on a real server.
->
->    **Owner/Fable review shaped the API twice and both were right:** the raw `jetstream.Consumer`
->    lookup became `OutstandingWork`, then the two-counter return collapsed to `(uint64, error)` —
->    "when the doc comment must warn callers away from the signature's own affordance, the signature
->    is wrong". Those incidents became **#761's exported-surface rules**, which I then self-audited
->    this branch against: `Verdict` struct replaces a 3-tuple, `Keys`/`Read`/`WaitForFirst` deleted
->    as zero-caller phantoms (5.1 prescribed `WaitForFirst` — prescribed phantoms are still
->    phantoms), and `Set.Evaluate` is UNEXPORTED pending a real caller.
->
->    **KNOWN GAP, not a compliance claim:** #761 requires Fable review BEFORE implementing new
->    exported framework surface. `OutstandingWork` had it; `ComputeBacklogStatus`,
->    `BacklogStatusInputs` and `readiness.Set` were written before #761 landed and have NOT.
->
->    **Task 5.4 (HTTP dump) deliberately NOT built** — `Set.Dumps()` exists and is tested, but no
->    in-process HTTP consumer folds today, so a route would report over an empty key list. Real
->    candidate: `processor/graph-clustering`, which hand-rolls two readiness watchers and is exactly
->    what `Set` replaces. Recorded in tasks.md.
->
->    **e2e:structural AND e2e:statistical both GREEN, exit 0**, with `entity_load_poll_count=0` on
->    both — the migrated stage returns on its FIRST check, reachable only with all three keys
->    Known+Fresh+healthy+`Lag==0`. That is the two new envelopes working on a real stack.
->
-> 2. **SemMachina primitives pair: #731 + #733** (additive, non-breaking, one PR). #731 =
->    stateless "would this Definition match this EntityState now" — lift the REAL evaluation
->    pipeline (the `ExpressionRule.EvaluateEntityState` seam), do not re-implement matching.
->    #733 = intent-shaped "is this loop task in flight" query — the API must distinguish "no
->    consumer exists" from "nothing in flight" (the issue's own ErrConsumerNotFound trap).
-> 3. **Complexity-pivot remainder:** adopter module contract (one Register bundling
+> 2. **Complexity-pivot remainder:** adopter module contract (one Register bundling
 >    payloads/vocab/factories/projections) + `--validate` performing real registry composition
 >    (fold gh#734 — an unknown schema Type spelling silently skips validation — the
 >    validator-credibility bug) + tutorial configs compiled in CI (gh#725 = the motivating
@@ -971,3 +914,24 @@ Append one line per session. Newest last.
   Fable review BEFORE new exported framework surface; `ComputeBacklogStatus`/`BacklogStatusInputs`/
   `readiness.Set` predate it and have not had it. **Next: §11 review chain (reviewer → Fable →
   owner Codex), §8 residual tests, then archive.**
+- **2026-07-30 (session 18)** — **Readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED
+  (#771).** gh#712 + gh#732 closed; #763 folded in; in-flight changes 5 → 4. The spec is live truth.
+  **The defect tally is the finding, and it is worse than the count suggests: 6 self-found, 2 HIGH
+  from the reviewer, 3 blocking from Codex — and TWO of Codex's three landed on code written to FIX
+  the reviewer's findings.** Carry that: **a fix is new code and inherits the full defect rate**; a
+  remedy needs the same adversarial pass as the original, and "the reviewer's finding is addressed"
+  is not the same as "the mechanism is closed". Concretely: a 2s join made a fail-open improbable
+  rather than impossible (a tick can block on a gate held across evaluation and outlast it), and a
+  `FullyCovered` that read each watcher twice let health and lag come from DIFFERENT envelopes.
+  Other keepers: (1) **every defect I found myself came from questioning a RESULT, none from reading
+  code** — a 0.83s test runtime unravelled a scope capture that was wrong 5/5 runs; a wrong test
+  premise forced a config check that found 9 of 18 graph-ingest instances bind zero consumers.
+  (2) **Four assertions existed while proving nothing**, one surviving TWO repair attempts — I
+  "covered" a production counter by calling it from the test itself. Named shape: *a test that
+  reconstructs the behavior it means to verify tests the reconstruction*; and an expected value
+  equal to the type's zero value proves nothing unless some case makes it non-zero. (3) **I
+  overclaimed evidence** — `entity_load_poll_count=0` does not prove keys were caught-up (an early
+  return yields the same 0); Codex independently flagged it. (4) **13 "failures" in an integration
+  sweep were my own concurrent mutation tests oversubscribing Docker** — container-start signatures,
+  each passing in isolation; re-run quiet before believing a red. **Next: #731 + #733, and read
+  `.agents/contracts/semstreams-developer.md` FIRST — #761 is binding and both are new API surface.**
