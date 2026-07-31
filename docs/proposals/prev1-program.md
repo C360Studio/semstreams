@@ -407,7 +407,7 @@ order — nothing else blocks the tag:
 **Explicitly POST-tag (sisters do not need them to migrate):** **#749 FIRST** (canonical tool
 effect metadata — semdev + a second sister both need it; additive with fail-safe `unknown` so
 no lockstep required; ships in the tag after .159; both sisters told on the issue NOT to
-hand-roll interim schemas; framework surface ⇒ Fable design gate first) · complexity-pivot remainder
+hand-roll interim schemas; framework surface ⇒ Fable design gate first) · complexity-pivot remainder — **design center = gh#798** (derive ownership contracts from predicate registration; semdev .159 feedback, mechanical-derivation proof; HOLDS behind the in-flight predicate arc) with **#799** (SimpleOwner facade + terminal-Bind builder) and **#800** (heartbeater death loud in health — bug); front-door batch = #749 + #795 + #799
 (module contract, `--validate`, #725/#734, docs), Epic D stages #766/#767, #759 ack-disposition
 extraction, hygiene batch, #772 (gates predicate-contract-enforcement's archive, not the tag).
 The three in-flight Codex-arc changes continue on their own track; the enforcement security gap
