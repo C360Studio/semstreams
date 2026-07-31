@@ -395,20 +395,22 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	return nil
 }
 
-// toolListSubject is the discovery request/reply subject THIS deployment
-// serves on. It is deliberately NOT the "tool.list" default.
+// toolListSubject is the DEFAULT discovery request/reply subject, used
+// deliberately rather than an override.
 //
-// This tier's TOOL stream covers `tool.>`, so a request to the default subject
-// is captured by JetStream and answered with a publish ack
-// (`{"stream":"TOOL","seq":N}`) before the component's core-NATS responder ever
-// sees it — silently, because the subscription itself succeeds. The component
-// documents the override (`agentic-tools/config.go`: "Override to e.g.
-// 'discovery.tool.list' when JetStream streams cover 'tool.>'"), and the flow
-// config now declares it.
+// This stage is RED against a deployment whose streams cover `tool.>` — which
+// this tier's TOOL stream does — and that is the stage working, not a bug in
+// the stage. The request is captured by JetStream and answered with a publish
+// ack (`{"stream":"TOOL","seq":N}`) before the component's core-NATS responder
+// sees it, silently, because the subscription itself succeeds. Filed as gh#810.
 //
-// Found by this stage on its first run. Filed as the underlying footgun: a
-// deployment silently loses tool discovery, and nothing warns.
-const toolListSubject = "discovery.tool.list"
+// An earlier revision of this stage pointed at an overridden subject so it
+// would pass. That was a workaround masking the defect the stage had just
+// found: it made the tier green while every real deployment on the default
+// subject still had no discovery. The stage stays on the default subject and
+// stays red until gh#810 closes it — at which point this becomes a live
+// regression guard for the capture class.
+const toolListSubject = "tool.list"
 
 // verifyToolEffectCatalog asserts the operator-visible discovery catalog carries
 // a resolved effect classification for every tool (gh#749, ADR-089).
