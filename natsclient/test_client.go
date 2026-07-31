@@ -7,11 +7,101 @@ import (
 	"testing"
 	"time"
 
+	"github.com/docker/go-connections/nat"
 	gonats "github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// mappedPortRetryBudget bounds how long resolveMappedPort will keep asking
+// Docker for a host-side port mapping.
+//
+// Deliberately SHORT. This covers a mapping that is momentarily unresolvable
+// under Docker API pressure, not a container that failed to start — the wait
+// strategy already owns start-up, with its own 180s budget. A long budget here
+// would convert "this container is dead" into a slow, confusing timeout
+// instead of a fast, accurate failure.
+const (
+	mappedPortRetryBudget   = 10 * time.Second
+	mappedPortRetryInterval = 50 * time.Millisecond
+)
+
+// portResolver returns a container's host-side mapping for a port. It exists as
+// a function type so the retry logic can be tested without Docker: the failure
+// this guards against only reproduces under API pressure, so a test that needs
+// a real daemon could not assert it.
+type portResolver func(ctx context.Context, port string) (string, error)
+
+// containerPortResolver adapts a live container to portResolver.
+func containerPortResolver(container testcontainers.Container) portResolver {
+	return func(ctx context.Context, port string) (string, error) {
+		mapped, err := container.MappedPort(ctx, nat.Port(port))
+		if err != nil {
+			return "", err
+		}
+		return mapped.Port(), nil
+	}
+}
+
+// resolveMappedPort asks for a container's host-side port mapping, retrying
+// transient failures within a bounded budget.
+//
+// # Why this retries at all
+//
+// The wait strategy is `ForHTTP("/healthz")` on the MONITORING port. A 200
+// there proves the NATS process is accepting connections on :4222 INSIDE the
+// container — it proves nothing about Docker having published the host-side
+// mapping for 4222, which is a separate fact owned by the daemon. Nothing waited
+// on that mapping, and MappedPort was called once, so a mapping that was not yet
+// resolvable failed the test instantly with `port "4222" not found` (gh#736;
+// observed at 0.47s, which is why it never looked like the timeout class that
+// issue documents).
+//
+// The earlier `ForListeningPort("4222/tcp")` strategy did implicitly wait on it,
+// and was removed in beta.91 (gh#107) because two wait strategies doubled
+// MappedPort polling pressure. That reasoning was right about pressure, and it
+// is why this fix is a bounded retry at the point of use rather than a restored
+// second wait strategy — it re-establishes the guarantee without re-adding the
+// polling cost.
+//
+// A failure that persists past the budget is returned with its attempt count and
+// elapsed time, so a genuinely dead container stays distinguishable from a slow
+// mapping instead of being hidden by the retry.
+func resolveMappedPort(ctx context.Context, resolve portResolver, port string) (string, error) {
+	deadline := time.Now().Add(mappedPortRetryBudget)
+	var lastErr error
+
+	for attempt := 1; ; attempt++ {
+		mapped, err := resolve(ctx, port)
+		if err == nil {
+			return mapped, nil
+		}
+		lastErr = err
+
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// BOTH errors are wrapped. Formatting the lookup error with %v
+			// instead made errors.Is(err, <lookup cause>) false on this path,
+			// so a caller could not tell "cancelled while the port was
+			// unresolvable" from "cancelled for some other reason" — the
+			// original cause has to survive, or the next person re-debugs it.
+			return "", fmt.Errorf(
+				"resolve mapped port %s: context ended after %d attempt(s): %w (last lookup error: %w)",
+				port, attempt, ctxErr, lastErr)
+		}
+		if remaining := time.Until(deadline); remaining <= 0 {
+			return "", fmt.Errorf(
+				"resolve mapped port %s: still unresolved after %d attempt(s) over %s — "+
+					"the container is likely gone rather than slow: %w",
+				port, attempt, mappedPortRetryBudget, lastErr)
+		}
+
+		select {
+		case <-ctx.Done():
+		case <-time.After(mappedPortRetryInterval):
+		}
+	}
+}
 
 // TestClient provides testcontainers-based NATS for testing
 type TestClient struct {
@@ -194,19 +284,20 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 		return nil, fmt.Errorf("failed to get container host: %w", err)
 	}
 
-	port, err := container.MappedPort(ctx, "4222")
+	resolve := containerPortResolver(container)
+	port, err := resolveMappedPort(ctx, resolve, "4222")
 	if err != nil {
 		container.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get mapped port: %w", err)
 	}
-	monitoringPort, err := container.MappedPort(ctx, "8222")
+	monitoringPort, err := resolveMappedPort(ctx, resolve, "8222")
 	if err != nil {
 		container.Terminate(ctx)
 		return nil, fmt.Errorf("failed to get mapped monitoring port: %w", err)
 	}
 
 	// Build connection URL
-	url := fmt.Sprintf("nats://%s:%s", host, port.Port())
+	url := fmt.Sprintf("nats://%s:%s", host, port)
 
 	// Create NATS client with appropriate timeout
 	client, err := NewClient(url,
@@ -239,7 +330,7 @@ func NewSharedTestClient(opts ...TestOption) (*TestClient, error) {
 		container:     container,
 		Client:        client,
 		URL:           url,
-		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort.Port()),
+		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort),
 		BucketPrefix:  cfg.bucketPrefix,
 		cleanup: func() {
 			// Use timeout context for drain to prevent hanging, then terminate container
@@ -348,19 +439,20 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 		t.Fatalf("Failed to get container host: %v", err)
 	}
 
-	port, err := container.MappedPort(ctx, "4222")
+	resolve := containerPortResolver(container)
+	port, err := resolveMappedPort(ctx, resolve, "4222")
 	if err != nil {
 		container.Terminate(ctx)
 		t.Fatalf("Failed to get mapped port: %v", err)
 	}
-	monitoringPort, err := container.MappedPort(ctx, "8222")
+	monitoringPort, err := resolveMappedPort(ctx, resolve, "8222")
 	if err != nil {
 		container.Terminate(ctx)
 		t.Fatalf("Failed to get mapped monitoring port: %v", err)
 	}
 
 	// Build connection URL
-	url := fmt.Sprintf("nats://%s:%s", host, port.Port())
+	url := fmt.Sprintf("nats://%s:%s", host, port)
 
 	// Create NATS client with appropriate timeout
 	client, err := NewClient(url,
@@ -393,7 +485,7 @@ func NewTestClient(t testing.TB, opts ...TestOption) *TestClient {
 		container:     container,
 		Client:        client,
 		URL:           url,
-		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort.Port()),
+		MonitoringURL: fmt.Sprintf("http://%s:%s", host, monitoringPort),
 		BucketPrefix:  cfg.bucketPrefix,
 		cleanup: func() {
 			// Use timeout context for drain to prevent hanging, then terminate container
