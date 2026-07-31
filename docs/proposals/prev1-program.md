@@ -90,7 +90,8 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **THE 3 THAT REMAIN — all real work, none administrative (staleness-tripwire lines).** Measured
 > with `openspec list` on 2026-07-31 after both archives landed; the "4" this line used to claim
-> counted `poison-response-scoping`, archived since:
+> counted `poison-response-scoping`, archived since. **`openspec list` now shows FOUR** — the fourth
+> is `semmachina-match-and-inflight-primitives`, the newly-opened epic (NEXT item 1), not backlog:
 > · `predicate-contract-enforcement` 42/44 — blocker is LOCAL and is a **security gap**: raw NATS or
 >   graph-tool holders can mint syntactically valid lineage triples; configuration-time authoring
 >   checks are NOT runtime authorization (task 5.6c wants a principal-bearing mutation envelope +
@@ -145,6 +146,22 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    now binding and both issues are new API surface.** Framework packages additionally require
 >    **Fable design review BEFORE implementation**; session 18 shipped three symbols that predate
 >    that rule and never got the pass. Do not add a fourth.
+>
+>    **SCOPED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 0/28, blocked at §1, the Fable
+>    gate. Do not start §3 onward until that closes.** Both seams re-verified at HEAD, and the
+>    scoping turned up one thing that changes the work: **gh#733's stated premise is falsified.** The
+>    issue says the loop consumer's ack floor "is the only authoritative answer"; #758 D0 measured
+>    `AckFloor` lying in BOTH directions and ADR-088 records the rejection. Implementing #733 as
+>    written would re-ship the defect the previous increment spent its budget removing — so the delta
+>    makes "never floor-derived" normative, and the answer sources `natsclient.OutstandingWork`,
+>    which #758 already built and which already errors rather than returning `(0, nil)` for an
+>    unbound consumer. Half of #733 is therefore already done; what remains is that calling it needs
+>    a consumer name the caller cannot legitimately obtain. **Three open questions are Fable's
+>    agenda, not footnotes:** the options-variadic with exactly one option; whether documented
+>    one-directional cooldown permissiveness is acceptable (D4 — the one place the primitive
+>    knowingly answers a slightly different question than production); and component-method vs
+>    package-function for the in-flight query, where `ConsumerNameSuffix` being component config
+>    means the package shape risks RELOCATING the reconstruction rather than deleting it.
 >
 > 2. **Complexity-pivot remainder:** adopter module contract (one Register bundling
 >    payloads/vocab/factories/projections) + `--validate` performing real registry composition
