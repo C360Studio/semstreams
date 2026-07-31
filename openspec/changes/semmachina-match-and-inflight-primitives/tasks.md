@@ -124,8 +124,12 @@
       off in this session's operating rules). Outstanding before merge, not silently skipped
 - [x] 6.2 Gates run on the rebased branch: `task lint` clean; `go vet -tags=integration ./...` clean;
       `go test -race ./...` **0 failures**; `openspec validate --all --strict` 34/0; `task
-      schema:generate` produced no drift. Branch integration sweep (`-race -tags=integration ./...`)
-      run separately — result posted on PR #777. **Guards mutation-checked, not merely green:**
+      schema:generate` produced no drift. Branch integration sweep (`-race -tags=integration ./...`):
+      **135 packages ok, 1 FAIL — `TestIntegration_HandleEntityUpdate_NotFound` in
+      `processor/graph-ingest`, attributed to gh#736 on evidence, NOT waved through**: container-start
+      signature (`port "4222" not found`), `go list -deps ./processor/graph-ingest` reaches neither
+      changed package, passes alone (3.2s) and passes as a quiet package (75.7s), substrate healthy
+      (58Gi free). Investigated BEFORE re-running anything; reproduction added to gh#736. **Guards mutation-checked, not merely green:**
       replacing the no-consumer guard with `return 0, nil` turns three unit tests AND the integration
       wire test red; restored, all pass
 - [ ] 6.3 Owner-run Codex round; fix findings. **NOT RUN — owner-run by definition, and this is a
