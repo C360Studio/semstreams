@@ -169,6 +169,7 @@ type ExecutionContext struct {
 	// field stays nil-safe — substitution tokens just survive
 	// untouched (and trip the unresolved-template warning) when no
 	// manager is wired.
+	//
 	Lifecycle LifecycleManager
 
 	// lifecycleParticipantCache memoizes the LookupByEntityID result

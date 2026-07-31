@@ -5,8 +5,20 @@
 ### Requirement: Whether a loop task is in flight MUST be readable without reconstructing the consumer name
 The agentic-loop component SHALL answer the in-flight question — "does this deployment currently have
 outstanding agentic-loop work for this task subject" — over its NATS request/reply surface, and the
-caller SHALL NOT need to know, derive, or supply the loop's JetStream consumer name, its stream name,
-or its consumer-name suffix.
+caller SHALL NOT need to know, derive, or supply the loop's JetStream consumer name or its stream
+name.
+
+The request subject SHALL carry **deployment identity**. Request/reply subscription is plain
+subject subscription, so a single shared subject means every agentic-loop in the NATS account
+receives the request and replies, and the requester keeps whichever reply arrives first — an
+arbitrary deployment's answer delivered with full confidence, which is the precise permissive
+failure this capability exists to remove. The deployment token SHALL be the loop's consumer-name
+suffix rather than a separately invented identifier, because that suffix already determines which
+durable consumer exists: two loops sharing it bind the SAME consumer and therefore necessarily
+report the same count, while two loops with different suffixes are different deployments. The
+addressing thereby matches the thing being measured. Supplying that token is a SELECTOR — the
+caller states which deployment it is asking about, which is inherent to the question — and is not
+the consumer-name reconstruction this capability forbids.
 
 The consumer name and its subject-sanitizing derivation remain **private to the component**. A caller
 that must reconstruct a name has taken on a contract the framework never promised: when the derivation
@@ -32,6 +44,22 @@ boundary, and a caller in another process is served identically.
 - **WHEN** it issues the in-flight request over NATS
 - **THEN** it receives the same answer an in-process caller would
 - **AND** it requires no component handle to do so
+
+#### Scenario: Two deployments in one account are addressed separately
+
+- **GIVEN** two agentic-loop deployments on one NATS account with distinct consumer-name suffixes
+- **AND** one holding outstanding work while the other is idle
+- **WHEN** a caller addresses each deployment's subject in turn
+- **THEN** each answer reflects that deployment's own consumer, deterministically and repeatably
+- **AND** asking one deployment about a task subject it does not bind is unknown, never the other
+  deployment's count
+
+#### Scenario: A request subscription installed before a failing one is not leaked
+
+- **GIVEN** component start installs more than one request subscription in sequence
+- **WHEN** a later one fails and start is abandoned
+- **THEN** every already-installed request subscription is unsubscribed during start-failure cleanup
+- **AND** a subsequent start attempt leaves exactly one responder per subject
 
 #### Scenario: Outstanding work is visible while a task is being worked
 

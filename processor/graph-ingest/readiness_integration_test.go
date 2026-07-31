@@ -5,6 +5,7 @@ package graphingest
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,14 +23,41 @@ import (
 // what keeps a field off the wire, so decoding into the struct cannot prove it).
 func readEnvelope(ctx context.Context, t *testing.T, tc *natsclient.TestClient) (graph.IndexStatusResponse, []byte) {
 	t.Helper()
+	status, raw, ok := tryReadEnvelope(ctx, t, tc)
+	require.True(t, ok, "graph-ingest readiness key not published yet; "+
+		"use tryReadEnvelope from a polling loop")
+	return status, raw
+}
+
+// tryReadEnvelope is readEnvelope for POLLING callers: it reports a
+// not-yet-published key as ok=false instead of failing the test.
+//
+// A poll loop that tolerates "not the state I want yet" but not "the key does not
+// exist yet" fails on its own first iteration, because the key appears on the
+// producer's first status tick and the loop starts before it. That is what broke
+// TestIntegration_ReadinessEnvelope_BacklogIsNotReady in CI: component start, then
+// a read 0.56s later, then `nats: key not found` straight into require.NoError.
+//
+// Absent is not the same as negative — which is the distinction this very
+// capability exists to enforce, so the test helper had better honour it too. Every
+// OTHER bucket or decode error still fails hard: a missing key during startup is
+// expected, a broken bucket is not.
+func tryReadEnvelope(
+	ctx context.Context, t *testing.T, tc *natsclient.TestClient,
+) (graph.IndexStatusResponse, []byte, bool) {
+	t.Helper()
 	bucket, err := tc.Client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
 	require.NoError(t, err, "GRAPH_STATUS bucket")
+
 	entry, err := bucket.Get(ctx, readiness.KeyGraphIngest)
+	if errors.Is(err, jetstream.ErrKeyNotFound) || errors.Is(err, jetstream.ErrKeyDeleted) {
+		return graph.IndexStatusResponse{}, nil, false
+	}
 	require.NoError(t, err, "graph-ingest readiness key")
 
 	var status graph.IndexStatusResponse
 	require.NoError(t, json.Unmarshal(entry.Value(), &status))
-	return status, entry.Value()
+	return status, entry.Value(), true
 }
 
 func startIngestForReadiness(ctx context.Context, t *testing.T) (*natsclient.TestClient, *Component) {
@@ -98,7 +127,10 @@ func TestIntegration_ReadinessEnvelope_PublishedAndCatchesUp(t *testing.T) {
 	tc, _ := startIngestForReadiness(ctx, t)
 
 	require.Eventually(t, func() bool {
-		status, _ := readEnvelope(ctx, t, tc)
+		status, _, ok := tryReadEnvelope(ctx, t, tc)
+		if !ok {
+			return false
+		}
 		return status.Ready && status.BootstrapComplete && status.State == graph.IndexStateReady
 	}, 30*time.Second, 200*time.Millisecond,
 		"an idle stack must publish a caught-up envelope")
@@ -157,7 +189,14 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 	sawNotReady := false
 	notReadyDeadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(notReadyDeadline) {
-		status, _ := readEnvelope(ctx, t, tc)
+		status, _, ok := tryReadEnvelope(ctx, t, tc)
+		if !ok {
+			// Key not published yet — the producer's first tick has not landed.
+			// This is THE iteration that failed in CI: unpublished is not
+			// not-ready, it is not-yet-observed, so keep polling.
+			time.Sleep(20 * time.Millisecond)
+			continue
+		}
 		if status.Lag > 0 && !status.Ready {
 			sawNotReady = true
 			break
@@ -172,7 +211,10 @@ func TestIntegration_ReadinessEnvelope_BacklogIsNotReady(t *testing.T) {
 
 	// ...and it must eventually catch up.
 	require.Eventually(t, func() bool {
-		status, _ := readEnvelope(ctx, t, tc)
+		status, _, ok := tryReadEnvelope(ctx, t, tc)
+		if !ok {
+			return false
+		}
 		return status.Ready && status.BootstrapComplete
 	}, 60*time.Second, 100*time.Millisecond,
 		"the producer must reach caught-up after draining the backlog")
@@ -221,7 +263,10 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	defer func() { _ = c.Stop(5 * time.Second) }()
 
 	require.Eventually(t, func() bool {
-		status, _ := readEnvelope(ctx, t, tc)
+		status, _, ok := tryReadEnvelope(ctx, t, tc)
+		if !ok {
+			return false
+		}
 		return status.Ready && status.BootstrapComplete
 	}, 20*time.Second, 100*time.Millisecond,
 		"a deployment with no streaming input must be honestly caught up")
@@ -303,7 +348,10 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Eventually(t, func() bool {
-		status, _ := readEnvelope(ctx, t, tc)
+		status, _, ok := tryReadEnvelope(ctx, t, tc)
+		if !ok {
+			return false
+		}
 		return status.Ready && status.BootstrapComplete
 	}, 60*time.Second, 50*time.Millisecond, "producer must reach caught-up")
 
@@ -318,4 +366,37 @@ func TestIntegration_ReadyImpliesTheWritesAreDurable(t *testing.T) {
 	require.Zero(t, missing,
 		"producer reported caught-up with %d of %d entities not yet durable — "+
 			"acknowledgement is not the terminal step of the success path", missing, published)
+}
+
+// TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure pins the branch that
+// broke CI, deterministically rather than by hoping the startup race recurs.
+//
+// The original helper called require.NoError on bucket.Get, so a key that had not
+// been published yet failed the test outright — and every polling loop in this file
+// called it on its first iteration, before the producer's first status tick. The
+// class was five loops wide, not one.
+//
+// Deleting the key after it exists reproduces the same sentinel branch on demand:
+// tryReadEnvelope must report not-observed, and readEnvelope must still fail hard,
+// because absent is a legitimate answer only to a poller.
+func TestIntegration_ReadinessEnvelope_AbsentKeyIsNotAFailure(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	tc, _ := startIngestForReadiness(ctx, t)
+
+	require.Eventually(t, func() bool {
+		_, _, ok := tryReadEnvelope(ctx, t, tc)
+		return ok
+	}, 30*time.Second, 100*time.Millisecond, "the producer should publish its key")
+
+	bucket, err := tc.Client.GetKeyValueBucket(ctx, readiness.BucketGraphStatus)
+	require.NoError(t, err)
+	require.NoError(t, bucket.Purge(ctx, readiness.KeyGraphIngest))
+
+	// The key is now absent. A poller must be told "not observed", not failed.
+	_, _, ok := tryReadEnvelope(ctx, t, tc)
+	require.False(t, ok,
+		"an absent readiness key must report not-observed to a polling caller; "+
+			"failing here is what broke TestIntegration_ReadinessEnvelope_BacklogIsNotReady in CI")
 }

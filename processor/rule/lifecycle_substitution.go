@@ -52,16 +52,41 @@ import (
 // intended for the rule-fire path, not per-message-shaped. See
 // LookupByEntityID's contract.
 func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) {
+	// Tolerant wrapper: the stateful path treats a lookup failure as "no
+	// lifecycle state", which is correct for firing. populateLifecycleStateFields
+	// carries the error for callers that must not answer without it.
+	_ = populateLifecycleStateFields(ctx, manager, entityID, fields)
+}
+
+// populateLifecycleStateFields is PopulateLifecycleStateFields with the lookup
+// error RETAINED.
+//
+// The split exists because "the caller supplied a Manager" and "lifecycle state
+// resolved" are different facts, and conflating them reproduces this capability's
+// defining defect. A supplied-but-failing lookup leaves `$entity.lifecycle.*`
+// unresolved; the evaluator then returns `false, nil` for an optional field, and a
+// stateless caller reads that confident no-match as "nothing owed".
+//
+// The stateful path keeps swallowing the error — a rule that cannot resolve
+// lifecycle state must not fire, and false is the right answer for firing. The
+// stateless path refuses instead, but only when a condition actually needs the
+// state (see Matches). Same resolution, two dispositions, one implementation.
+//
+// A plain `manager == nil` is sufficient here: the only exported entry point that
+// supplies one takes a concrete *lifecycle.Manager and rejects nil before
+// converting, so a typed nil cannot reach this interface parameter.
+func populateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) error {
 	if manager == nil || entityID == "" || fields == nil {
-		return
+		return nil
 	}
 	p, err := manager.LookupByEntityID(ctx, entityID)
 	if err != nil {
-		return
+		return err
 	}
 	fields["$entity.lifecycle.phase"] = p.Phase()
 	fields["$entity.lifecycle.terminal"] = p.IsTerminal()
 	fields["$entity.lifecycle.workflow"] = p.Workflow()
+	return nil
 }
 
 const lifecycleSubstitutionPrefix = "$entity.lifecycle."

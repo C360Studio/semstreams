@@ -3,8 +3,16 @@
 ## ADDED Requirements
 
 ### Requirement: A rule Definition MUST be matchable against an EntityState without a running Processor
-The framework SHALL expose a stateless entry point answering "would this rule `Definition` match this
+The framework SHALL expose stateless entry points answering "would this rule `Definition` match this
 `EntityState` now", usable without constructing a `Processor` or binding any watcher.
+
+Lifecycle answerability SHALL be expressed by WHICH entry point the caller invokes — one that takes
+a lifecycle lookup and one that does not — rather than by a nil-able parameter or an omitted option.
+The lookup governs which class of conditions can be answered at all, not how they are answered, so
+that fact belongs where a call site cannot miss it. A single nil-able parameter leaves a
+lookup-less call reading as complete while silently giving up on every lifecycle condition, and an
+optional variadic hides it further: the call compiles, reads as finished, and fails at runtime.
+Both entry points SHALL share one implementation so the pair cannot drift.
 
 That entry point SHALL perform the same pre-processing the stateful evaluation performs — `$`-templated
 condition **value** substitution against the entity, and `$entity.lifecycle.*` field resolution when a
@@ -53,6 +61,21 @@ this entity a hop" reads a false negative as "this entity is stranded" and inter
 pack whose first-hop rule carries such a condition, that misclassifies every entity in the world.
 An error the caller can refuse on is recoverable; a fabricated verdict is not.
 
+The stateless entry point SHALL likewise propagate an **evaluation** error rather than converting it
+to a no-match verdict, even though the running engine converts it. The engine logs and returns false
+because a rule that cannot be evaluated must not fire; that is correct for firing and wrong for
+asking. The two SHALL therefore differ on error handling while never differing on a verdict, and the
+contract SHALL make the resulting three-way distinction explicit to callers:
+
+| Result | Means |
+|---|---|
+| no-match, no error | evaluation completed; the conditions do not hold; nothing is owed |
+| error | evaluation could not complete — absent `Required` field, operator failure, unresolved template |
+
+Collapsing the second row into the first reproduces this capability's own defect one level up: a
+malformed definition or a mis-shaped entity would report "nothing owed", and a consumer reads that as
+"stranded" and intervenes.
+
 The stateful evaluation path's behavior SHALL NOT change. A rule pack that evaluates today MUST
 evaluate identically afterward.
 
@@ -69,13 +92,35 @@ evaluate identically afterward.
 - **WHEN** it is matched statelessly
 - **THEN** an error is returned identifying the condition as requiring stateful evaluation
 
-#### Scenario: Lifecycle fields resolve when a Manager is supplied and error when it is not
+#### Scenario: Lifecycle answerability is selected by which entry point is called
 
 - **GIVEN** a definition with a condition on `$entity.lifecycle.phase`
-- **WHEN** it is matched statelessly WITH a lifecycle `Manager` supplied
+- **WHEN** it is matched through the entry point that TAKES a lifecycle lookup
 - **THEN** the field resolves and the match proceeds
-- **WHEN** it is matched statelessly WITHOUT one
+- **WHEN** it is matched through the entry point that takes NO lookup
 - **THEN** an error is returned rather than a verdict computed from an absent value
+
+#### Scenario: A supplied lookup that failed is not resolved state
+
+- **GIVEN** a lifecycle lookup is supplied but its resolution fails — an unregistered
+  participant or a transient backend failure
+- **WHEN** a definition carrying a lifecycle condition is matched
+- **THEN** an error naming the underlying lookup failure is returned, not a no-match verdict
+- **AND** a definition carrying NO lifecycle condition is unaffected by that failure
+
+#### Scenario: An absent lookup on the lifecycle entry point is refused, not downgraded
+
+- **GIVEN** the entry point that requires a lifecycle lookup
+- **WHEN** it is called with no lookup, including a typed-nil one
+- **THEN** it returns an error directing the caller to the no-lookup entry point
+- **AND** it does not silently behave as though no lookup were needed
+
+#### Scenario: An unevaluable condition is distinguishable from an unmet one
+
+- **GIVEN** a definition whose condition marks a field `Required` and an entity lacking that field
+- **WHEN** it is matched statelessly
+- **THEN** an error is returned rather than a no-match verdict
+- **AND** the running engine, given the same input, still returns a bare no-match as it does today
 
 #### Scenario: The stateful path keeps its existing tolerance
 

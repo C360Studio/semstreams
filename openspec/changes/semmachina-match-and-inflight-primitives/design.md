@@ -35,7 +35,9 @@ spec makes the ack-floor prohibition normative so it cannot return as an optimiz
 
 The gate is closed; implementation may start. Three answers, each amending a decision below.
 
-**Q1 — no variadic.** `Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager) (bool, error)`.
+**Q1 — no variadic.** *(Owner ruling 2026-07-31 later refined the shape further — see D6. §1's
+HOLDING survives intact; only the spelling changed, from one nil-able parameter to a split pair that
+puts answerability in the function name.)* `Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager) (bool, error)`.
 The options-variadic failed the widen-deliberately rule on its own evidence: exactly one "option"
 existed, and it was not an option. The lifecycle `Manager` determines **answerability** — whether
 `$entity.lifecycle.*` resolves or pre-scan-errors — not flavor. A dependency that changes which
@@ -199,14 +201,55 @@ not "fix" it toward the evaluator.
 ### D6 — Signature shapes (settled at §1)
 
 ```go
-// processor/rule
-func Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager) (bool, error)
+// processor/rule — SPLIT PAIR (owner ruling, 2026-07-31, superseding the single
+// nil-able parameter §1 approved)
+func Matches(ctx context.Context, def Definition, state *graph.EntityState) (bool, error)
+func MatchesWithLifecycle(ctx context.Context, def Definition, state *graph.EntityState,
+    manager *lifecycle.Manager) (bool, error)
 ```
 
-No variadic. The lifecycle `Manager` is a **named parameter**, not an option, because it determines
-answerability rather than flavor — with it, `$entity.lifecycle.*` resolves; without it, D2's pre-scan
-names the field unresolvable and errors. `nil` is an honest "I don't have one". `Matches` reads as the
-question at the call site.
+§1's holding is PRESERVED and strengthened: the lifecycle lookup determines **answerability**, not
+flavor, so it must be visible — and the split puts it in the function NAME rather than in an argument
+a caller can pass as `nil`. This is the stdlib pattern (`http.NewRequest` /
+`NewRequestWithContext`).
+
+Three shapes were considered, ranked by where answerability is visible:
+
+| Shape | Answerability visible |
+|---|---|
+| Split pair (**chosen**) | in the name |
+| Single nil-able parameter (§1's approval) | in the signature — but `nil` reads as complete |
+| `...MatchOption` variadic (§1 rejected) | nowhere — a lookup-less call compiles and reads as finished |
+
+`ctx` is first, per Codex finding 5: the lookup performs KV/graph I/O, and without a caller context a
+degraded backend wedges a boot-time recovery pass indefinitely.
+
+**`manager` is REQUIRED on the lifecycle entry point.** Absent is not a degraded mode; it is a call
+to the wrong function, so it is refused and the caller is pointed at `Matches`. With the concrete
+type that check is total — see below.
+
+**The lifecycle parameter is the CONCRETE `*lifecycle.Manager`** (owner ruling 2026-07-31, matching
+what §1 approved). A narrow read-only interface was implemented first and withdrawn.
+
+The argument for the interface was that resolution performs only two lookups while `LifecycleManager`
+also carries `TransitionWith`/`Complete`/`Fail`, and that a concrete parameter would make Codex
+finding 2's required unregistered-participant and transient-lookup tests impossible. **That second
+claim was wrong and was retracted**: `natsclient.NewTestClient` works fine, so a real Manager is
+constructible in a test. The true cost is that those tests need Docker — they move from unit tier to
+integration tier — not that they cannot exist. A weaker argument than stated, and not enough to
+deviate from an approved signature.
+
+Concrete also buys something the interface could not: **the typed-nil hazard becomes
+unrepresentable rather than guarded.** `manager == nil` on a pointer is total, so there is no
+non-nil-interface-holding-a-nil-pointer to detect and no panic inside `LookupByEntityID` to avoid.
+`isNilLookup` and its `reflect` call are deleted. The nil-checked pointer is widened to the interface
+the internals consume only after the check, so no typed nil reaches them either.
+
+Test placement follows from the ruling: the failure-mode matrix (transient lookup error, context
+cancellation, the ordinary-definition regression guard) stays at UNIT tier against
+`matchesWithLookup` — the shared implementation both entry points delegate to, exercised through the
+interface it actually consumes. The exported wrapper's wiring to a real Manager is covered at
+INTEGRATION tier in `matches_lifecycle_integration_test.go`. Nothing is lost; one seam moved.
 
 `Definition` is same-package (`rule_factory.go:15`); `*graph.EntityState` is the type imported locally
 as `gtypes` (`expression_factory.go:10`); `*lifecycle.Manager` is `pkg/lifecycle/manager.go:43`.

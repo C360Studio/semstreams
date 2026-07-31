@@ -68,6 +68,7 @@ type Component struct {
 
 	// Query subscription for trajectory requests
 	trajectorySub *natsclient.Subscription
+	inflightSub   *natsclient.Subscription
 
 	// Approval-timeout sweeper lifecycle. cancel is called from Stop
 	// to terminate the goroutine; done is closed by the goroutine on
@@ -117,6 +118,11 @@ func newConsumerLifecycleContext(startCtx context.Context) (context.Context, con
 type consumerInfo struct {
 	streamName   string
 	consumerName string
+	// subject is the FilterSubject this consumer was bound with. Recorded so
+	// the in-flight query (gh#733) can find the consumer this component
+	// actually bound instead of re-deriving its name — a second derivation is
+	// a thing that can drift, and a recorded binding is not.
+	subject string
 }
 
 // NewComponent creates a new agentic-loop component
@@ -378,6 +384,16 @@ func (c *Component) Start(ctx context.Context) error {
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
 		}
 		c.trajectorySub = sub
+
+		// Set up in-flight query handler (gh#733). Same wire as the trajectory
+		// query: the answer is served, never the consumer name it is derived from.
+		inflightSub, err := c.natsClient.SubscribeForRequests(ctx,
+			InFlightQuerySubjectFor(c.config.ConsumerNameSuffix), c.handleInFlightQuery)
+		if err != nil {
+			c.cleanupConsumersAfterStartFailure()
+			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to in-flight query")
+		}
+		c.inflightSub = inflightSub
 	}
 
 	c.started = true
@@ -428,6 +444,27 @@ func (c *Component) cleanupConsumersAfterStartFailure() {
 		}
 	}
 	c.consumerInfos = nil
+
+	// Request subscriptions must be torn down here too. Start installs them in
+	// sequence, so a failure on the Nth leaves the first N-1 live while `started`
+	// stays false — and Stop returns early when not started, so nothing ever
+	// reaps them. A Start retry would then install a SECOND responder on the same
+	// subject, and NATS would deliver requests to both.
+	c.unsubscribeRequestHandlers()
+}
+
+// unsubscribeRequestHandlers tears down every installed request/reply subscription
+// and nils it, so the operation is idempotent and safe on both the start-failure
+// and the normal-Stop path.
+func (c *Component) unsubscribeRequestHandlers() {
+	if c.trajectorySub != nil {
+		_ = c.trajectorySub.Unsubscribe()
+		c.trajectorySub = nil
+	}
+	if c.inflightSub != nil {
+		_ = c.inflightSub.Unsubscribe()
+		c.inflightSub = nil
+	}
 }
 
 // initPromptRegistry seeds the handler's prompt.Registry with
@@ -506,11 +543,9 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.mu.Lock()
 	}
 
-	// Unsubscribe from trajectory query handler
-	if c.trajectorySub != nil {
-		_ = c.trajectorySub.Unsubscribe()
-		c.trajectorySub = nil
-	}
+	// Unsubscribe every request handler. Once the in-flight one is gone a caller
+	// sees no-responders — which is UNKNOWN, not zero (gh#733).
+	c.unsubscribeRequestHandlers()
 
 	// Cancel the component-owned consumer lifecycle before stopping consumers.
 	// In-flight deliveries observe this cancellation and are NAKed exactly once.
@@ -863,6 +898,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 	c.consumerInfos = append(c.consumerInfos, consumerInfo{
 		streamName:   streamName,
 		consumerName: consumerName,
+		subject:      subject,
 	})
 
 	c.logger.Info("Subscribed (JetStream)",

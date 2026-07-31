@@ -183,9 +183,10 @@ func (e *Evaluator) evaluateConditionWithStateAndMessage(entityState *gtypes.Ent
 	// and reuse one resolution path. Lifecycle values are pre-resolved
 	// at the caller against pkg/lifecycle.Manager — see
 	// stateful_evaluator.go's runEvaluation for the wire.
-	if strings.HasPrefix(condition.Field, "$state.") ||
-		strings.HasPrefix(condition.Field, "$prev.") ||
-		strings.HasPrefix(condition.Field, "$entity.lifecycle.") {
+	// Prefix set lives in stateless.go as the single source shared with
+	// EnsureStatelessResolvable — see the comment there for why two copies
+	// of this list is the defect, not the duplication.
+	if hasStatefulPrefix(condition.Field) {
 		fieldValue, exists := stateFields[condition.Field]
 		if !exists {
 			if condition.Required {
