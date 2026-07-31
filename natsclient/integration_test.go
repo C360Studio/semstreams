@@ -271,7 +271,7 @@ func TestIntegration_HealthMonitoring(t *testing.T) {
 // is the authoritative "NATS ready to serve" signal.
 func startNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.12-alpine",
+		Image:        "nats:2.14-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          []string{"-m", "8222"}, // Enable monitoring
 		WaitingFor: wait.ForAll(
@@ -301,7 +301,7 @@ func startNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Conta
 // Wait strategy rationale: see startNATSContainer above.
 func startNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.12-alpine",
+		Image:        "nats:2.14-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream and monitoring
 		WaitingFor: wait.ForAll(

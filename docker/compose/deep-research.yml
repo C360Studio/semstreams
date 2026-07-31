@@ -15,7 +15,7 @@
 
 services:
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.14-alpine
     container_name: semstreams-deep-research-nats
     ports:
       - "54222:4222"

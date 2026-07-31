@@ -28,7 +28,7 @@ func setupTestNATS(t *testing.T) (*natsclient.Client, func()) {
 	// health on the monitoring port with explicit startup timeout. Bare
 	// ForListeningPort (without timeout) flakes under Docker API pressure.
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.12-alpine",
+		Image:        "nats:2.14-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream + monitoring
 		WaitingFor: wait.ForAll(

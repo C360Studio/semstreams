@@ -48,7 +48,7 @@ jobs:
           go mod tidy
 
       - name: Pull NATS image
-        run: docker pull nats:latest
+        run: docker pull nats:2.14-alpine
 
       - name: Run semspec e2e tests
         run: |

@@ -195,7 +195,7 @@ func startTestNATSContainer(ctx context.Context, t *testing.T) (testcontainers.C
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.12-alpine",
+		Image:        "nats:2.14-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          []string{"--http_port", "8222"},
 		WaitingFor: wait.ForAll(
@@ -226,7 +226,7 @@ func startTestNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontai
 	t.Helper()
 
 	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.12-alpine",
+		Image:        "nats:2.14-alpine",
 		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
 		Cmd:          []string{"--js", "--http_port", "8222"}, // Enable JetStream + monitoring
 		WaitingFor: wait.ForAll(

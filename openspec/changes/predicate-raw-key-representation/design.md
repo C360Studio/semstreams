@@ -29,10 +29,21 @@ subscriptions 68 to 68, and zero slow consumers. The maximum raw key was 451 byt
 83,557 rows/s.
 
 The complete exact, owner, maximum-owner, namespace, and resource record is in
-[operations/32](../../../docs/operations/32-predicate-layout-smoke-harness.md). It is pinned to
+[operations/32](../../../docs/operations/32-predicate-layout-smoke-harness.md). The figures above were measured on
 `nats:2.12.4-alpine@sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea`
 and `github.com/nats-io/nats.go v1.48.0`. Hash-plus-catalog figures are informational comparison evidence only and
 never a selection threshold.
+
+**The pin MOVED on 2026-07-31 (gh#790): `nats:2.14.4-alpine` + `nats.go v1.52.0`.** The repo was carrying three
+NATS regimes simultaneously, including an unpinned `nats:latest` in CI, and converging them moved this evidence
+environment. What that does and does not change for this change:
+
+- **The representation DECISION stands.** Both gates — `TestIntegration_PredicateLayoutSmoke` and
+  `TestIntegration_OwnerFilterLoadHarness` — were re-run against the new pin and PASS, so the conformance basis
+  for choosing raw keys is re-established rather than inherited.
+- **The absolute latency and throughput NUMBERS above are historical**, measured on the old pin. They remain a
+  truthful record; they are not current-pin evidence. **Re-measure before citing any of them as a current budget**,
+  and do not compare a future run against them without noting the pin change.
 
 ## Economics
 
