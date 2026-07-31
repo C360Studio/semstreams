@@ -69,6 +69,7 @@ contract SHALL make the resulting three-way distinction explicit to callers:
 
 | Result | Means |
 |---|---|
+| match, no error | evaluation completed; the conditions hold; the pack owes this entity the hop |
 | no-match, no error | evaluation completed; the conditions do not hold; nothing is owed |
 | error | evaluation could not complete — absent `Required` field, operator failure, unresolved template |
 
