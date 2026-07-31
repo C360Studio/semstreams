@@ -1714,24 +1714,31 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 		}
 	}
 
-	// Unwrap QueryResponse envelope for graph.index.query.* subjects
-	// These handlers return QueryResponse[T] with {data: T, error: string, timestamp: time}
-	// We need to extract just the data field for the GraphQL response
-	if strings.HasPrefix(subject, "graph.index.query.") {
-		var envelope struct {
-			Data  json.RawMessage `json:"data"`
-			Error string          `json:"error,omitempty"`
-		}
-		if err := json.Unmarshal(resp, &envelope); err == nil {
-			if envelope.Error != "" {
-				c.writeGraphQLError(w, http.StatusOK, envelope.Error)
-				return
-			}
-			if len(envelope.Data) > 0 {
-				resp = envelope.Data
-			}
-		}
-	}
+	// Unwrap the QueryResponse envelope by DETECTING it on the reply, never by
+	// matching the subject (gh#762). The families do not partition by envelope
+	// usage: `graph.query.summary` is served by graph-query's own handler and
+	// returns the envelope, so the previous `graph.index.query.` prefix gate
+	// left it double-nested as `data.graphSummary.data.*`. That is the observed
+	// defect, and it is the only one on the reachable GraphQL surface.
+	//
+	// Detection rather than a corrected subject list because the subject is not
+	// a sound basis in general: handlers proxy — semantic, spatial, similar,
+	// temporal, entity and byName forward downstream and return that reply
+	// verbatim — so a reply enveloped by one component can surface under
+	// another family's subject. No reachable proxy does so today; this is a
+	// soundness property, not a second live bug.
+	//
+	// graph.UnwrapQueryResponse owns the discriminator, beside the type it
+	// describes; a second copy here is the drift that caused this bug. It leaves
+	// every non-envelope reply — including graph.query.prefix's own
+	// {entities, next_cursor} shape, handled just below — byte-for-byte intact.
+	//
+	// There is deliberately NO in-body error branch. ADR-060 removed
+	// QueryResponse.Error: a reply is EITHER this success body OR a classified
+	// error on the err channel, intercepted upstream by RequestClassified. The
+	// branch that used to live here read a field no producer has emitted since,
+	// so it never fired.
+	resp, _ = graph.UnwrapQueryResponse(resp)
 
 	// Unwrap entities envelope for collection responses (e.g. graph.query.prefix)
 	// Internal NATS APIs return {"entities": [...]} for consistency; GraphQL expects raw arrays
