@@ -171,8 +171,12 @@ restored. A guard test that passes with the guard removed proves nothing.
 
 ## 6. Review chain and gates
 
-- [ ] 6.1 `semstreams-reviewer` pass on the full diff — **NOT RUN by this session** (subagents are
-      off in this session's operating rules). Outstanding before merge, not silently skipped
+- [x] 6.1 `semstreams-reviewer` pass on the full diff — **RAN**, combined with the Codex round at
+      `168f3311` (PR #777 comment, 2026-07-31T01:41Z). This line previously read "NOT RUN by this
+      session"; that was written BEFORE the round and never updated after it, so the change closed
+      out carrying a false negative about its own review chain. **A task line written ahead of the
+      work is a prediction, and a prediction left unamended reads as a measurement** — the same class
+      as the baton's own state-file rule
 - [x] 6.2 Gates run on the rebased branch: `task lint` clean; `go vet -tags=integration ./...` clean;
       `go test -race ./...` **0 failures**; `openspec validate --all --strict` 34/0; `task
       schema:generate` produced no drift. Branch integration sweep (`-race -tags=integration ./...`):
@@ -183,14 +187,25 @@ restored. A guard test that passes with the guard removed proves nothing.
       (58Gi free). Investigated BEFORE re-running anything; reproduction added to gh#736. **Guards mutation-checked, not merely green:**
       replacing the no-consumer guard with `return 0, nil` turns three unit tests AND the integration
       wire test red; restored, all pass
-- [ ] 6.3 Owner-run Codex round; fix findings. **NOT RUN — owner-run by definition, and this is a
-      CODE PR, so `--auto` must NOT be armed until it closes** (unlike the docs-only #776). **A fix is new code and inherits the full defect rate**
-      — the remedy gets the same adversarial pass as the original, and "the finding is addressed" is
-      not "the mechanism is closed"
+- [x] 6.3 Owner-run Codex round; fix findings. **RAN at `168f3311` — 7 findings: 4 blocking
+      (global in-flight subject cannot identify a deployment; a supplied-but-failed lifecycle lookup
+      read as resolved state; `Definition.Enabled` unchecked so a disabled rule reported work owed;
+      the exported signature deviated from Fable's approved `*lifecycle.Manager` and the interface
+      admitted a panicking typed nil), 2 high (no caller `context.Context` on an API doing KV I/O;
+      second-subscription start failure leaked the first responder), 1 verification gap (the
+      production-wire test asserted `InFlight == (Outstanding > 0)` with no task ever published — a
+      handler hardcoded to zero passed it).** All 7 addressed at `013538cd` mutation-verified, with
+      follow-on fixes at `f3db6130` (entry-point split) and `278d1425` (finding 4a fully closed).
+      **A fix is new code and inherits the full defect rate** — no re-check owed under the
+      once-through rule: no new blocking-class defect surfaced, the reviewed CONTRACT did not
+      change, and no shared primitive with callers outside the change was modified
 - [x] 6.4 Additive/non-breaking confirmed: no NATS state, schema, wire-format or config change, so no
       e2e tier is owed beyond the per-PR `e2e:statistical`. **Re-confirm rather than assume** — if any
       of §3/§4 turned out to touch a boot path or a wire shape, this line is wrong and a tier is owed
-- [ ] 6.5 Both issues land in ONE PR (baton: PR scope = complete system, not chunk boundary); close
-      gh#731 and gh#733 only on owner CONFIRM-CLOSE
-- [ ] 6.6 Apply the deltas and archive; write the `agentic-loop` Purpose widening into the live spec
-      rather than leaving it scoped to iteration budgets
+- [x] 6.5 Both issues landed in ONE PR (baton: PR scope = complete system, not chunk boundary) —
+      **PR #777 merged as `72f9b15b`**; gh#731 and gh#733 both CLOSED on owner CONFIRM-CLOSE
+- [x] 6.6 Deltas applied and change archived; the `agentic-loop` Purpose was WIDENED in the live
+      spec rather than left scoped to iteration budgets. One editorial repair made while promoting:
+      the rule-engine "three-way distinction" table shipped only TWO rows (no-match / error), so the
+      prose promised a distinction the table did not draw — the `true, nil` row is stated explicitly,
+      verified against `Matches` returning the evaluator's verdict unchanged
