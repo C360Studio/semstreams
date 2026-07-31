@@ -136,6 +136,7 @@ func (e *BashExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "bash",
 			Description: "Run a shell command. Use for file operations, git, builds, tests, and any other shell task.",
+			Effect:      agentic.ToolEffectExternal,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -121,6 +121,7 @@ func (e *WebSearchExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "web_search",
 			Description: "Search the web for documentation, API references, libraries, or technical solutions. Returns titles, URLs, and descriptions for matching results.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -63,6 +63,7 @@ func (e *ReadLoopResultExecutor) ListTools() []agentic.ToolDefinition {
 			Name:        ReadLoopResultToolName,
 			Description: "Fetch the final Result text a previously completed agent loop produced, so this agent can react to or build on it without having the full content injected into its prompt. Returns a text slice plus role/outcome/completed_at metadata and total_bytes so the caller can page through long results by calling again with a different offset.",
 			Paginated:   true,
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

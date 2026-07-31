@@ -800,13 +800,18 @@ func (c *Component) ListTools() []ToolDefinition {
 	// Use a map to deduplicate by name (local registry takes precedence)
 	toolMap := make(map[string]ToolDefinition)
 
-	// Add global tools first
+	// Add global tools first. Effect is served RESOLVED (Canonical) so
+	// discovery consumers read a declared value rather than
+	// re-implementing the absent-means-unknown rule; the registry
+	// normalizes too, and applying it here as well keeps the guarantee
+	// independent of which registry supplied the definition.
 	for _, tool := range globalTools {
 		toolMap[tool.Name] = ToolDefinition{
 			Name:        tool.Name,
 			Description: tool.Description,
 			Provider:    "internal",
 			Available:   true,
+			Effect:      string(tool.Effect.Canonical()),
 		}
 	}
 
@@ -817,6 +822,7 @@ func (c *Component) ListTools() []ToolDefinition {
 			Description: tool.Description,
 			Provider:    "internal",
 			Available:   true,
+			Effect:      string(tool.Effect.Canonical()),
 		}
 	}
 

@@ -43,6 +43,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "create_flow",
 			Description: "Create a new flow definition. Flow becomes non-deployed by default. Provide the full flow JSON matching the flow schema (id, name, nodes, connections, ...).",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -57,6 +58,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "update_flow",
 			Description: "Update an existing flow definition. Uses optimistic concurrency — the flow JSON must carry the current version number; mismatch returns an error so the caller can re-fetch and retry.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -71,6 +73,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "delete_flow",
 			Description: "Delete a flow definition by ID. Does not stop a running instance of this flow; that is a separate lifecycle operation.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -85,6 +88,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "list_flows",
 			Description: "List all persisted flow definitions with their IDs, names, and runtime state.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -93,6 +97,7 @@ func (e *FlowExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "get_flow",
 			Description: "Get the full definition of a specific flow by ID, including nodes, connections, runtime state, and version.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

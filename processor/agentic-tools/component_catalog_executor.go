@@ -40,6 +40,7 @@ func (e *ComponentCatalogExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        ComponentCatalogToolName,
 			Description: "List registered component factory types with their schemas, metadata (type, protocol, domain, version), and configuration schema. Use type_filter to fetch a single type when you only need its schema — avoids sending the full catalog into the model context. Returns an array of component type objects.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

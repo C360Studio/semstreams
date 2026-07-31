@@ -40,6 +40,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "create_rule",
 			Description: "Create a new rule in the rules engine. The rule becomes active immediately after approval. Provide the full rule definition as JSON.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -55,6 +56,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "update_rule",
 			Description: "Update an existing rule. Replaces the entire rule definition.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -70,6 +72,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "delete_rule",
 			Description: "Delete a rule from the rules engine.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -84,6 +87,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "list_rules",
 			Description: "List all active rules in the rules engine.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -92,6 +96,7 @@ func (e *RuleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "get_rule",
 			Description: "Get the full definition of a specific rule.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

@@ -69,6 +69,7 @@ func (e *FlowMonitorExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        FlowMonitorToolName,
 			Description: "Return aggregated runtime statistics for a flow: total completed loops, breakdown by outcome and role, total token usage, and a recency-capped list of individual loop records. Scans the AGENT_LOOPS KV bucket for completions whose workflow_slug matches flow_id. Note: flow_id must match the workflow_slug used at dispatch time.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

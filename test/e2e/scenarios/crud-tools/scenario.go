@@ -167,6 +167,7 @@ func (s *Scenario) Execute(ctx context.Context) (*scenarios.Result, error) {
 	}{
 		{"verify-components", s.verifyComponents},
 		{"verify-registered-tools", s.verifyRegisteredTools},
+		{"verify-tool-effect-catalog", s.verifyToolEffectCatalog},
 		{"seed-persona-override", s.seedPersonaOverride},
 		{"inject-user-message", s.injectUserMessage},
 		{"wait-for-tool-execution", s.waitForToolExecution},
@@ -391,6 +392,100 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	}
 
 	result.Details["registered_m2_tools"] = []string{"list_components", "monitor_flow"}
+	return nil
+}
+
+// toolListSubject is the default discovery request/reply subject. The
+// agentic-tools component subscribes here unless a port named "tool.list"
+// overrides it, and this deployment declares no such port.
+const toolListSubject = "tool.list"
+
+// verifyToolEffectCatalog asserts the operator-visible discovery catalog carries
+// a resolved effect classification for every tool (gh#749, ADR-089).
+//
+// This is the e2e coverage stage for the effect contract: the unit tests prove
+// the projection in isolation, but only a live request/reply proves that a real
+// deployment's tool.list responder serves the field — the gap #762's response
+// shape bug lived in for weeks.
+//
+// Three assertions, each catching a different regression:
+//   - every entry carries a NON-EMPTY effect (an omitempty regression on the DTO
+//     would silently drop the fail-safe value for unclassified tools)
+//   - every effect is a member of the enum (a raw unnormalized value reaching
+//     the wire)
+//   - a known read tool and a known write tool carry their expected values (the
+//     classification survived registration → aggregation → projection, rather
+//     than everything collapsing to "unknown")
+func (s *Scenario) verifyToolEffectCatalog(ctx context.Context, result *scenarios.Result) error {
+	// RequestClassified, not Request: a raw request returns a handler error as a
+	// success-shaped {message,detail} body with err == nil, which would decode
+	// here as a catalog of zero tools and report as "responder not subscribed"
+	// (gh#337).
+	raw, err := s.nats.RequestClassified(ctx, toolListSubject, []byte("{}"), 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("request %s: %w (is the agentic-tools tool.list responder subscribed?)", toolListSubject, err)
+	}
+
+	var response struct {
+		Tools []struct {
+			Name   string `json:"name"`
+			Effect string `json:"effect"`
+		} `json:"tools"`
+	}
+	if err := json.Unmarshal(raw, &response); err != nil {
+		return fmt.Errorf("unmarshal tool.list response: %w (body: %.200s)", err, raw)
+	}
+	if len(response.Tools) == 0 {
+		return fmt.Errorf("tool.list returned zero tools — the catalog assertion would be vacuous (body: %.200s)", raw)
+	}
+
+	validEffects := map[string]bool{
+		string(agentic.ToolEffectUnknown):  true,
+		string(agentic.ToolEffectReadOnly): true,
+		string(agentic.ToolEffectMutating): true,
+		string(agentic.ToolEffectExternal): true,
+	}
+	// Expected classifications for tools this deployment is guaranteed to
+	// register. Both directions: a read tool and a write tool, so a catalog
+	// that collapsed every entry to one value fails here.
+	expected := map[string]string{
+		"list_rules":  string(agentic.ToolEffectReadOnly),
+		"create_rule": string(agentic.ToolEffectMutating),
+	}
+
+	var blank, invalid, mismatched []string
+	seen := make(map[string]string, len(response.Tools))
+	for _, tool := range response.Tools {
+		seen[tool.Name] = tool.Effect
+		switch {
+		case tool.Effect == "":
+			blank = append(blank, tool.Name)
+		case !validEffects[tool.Effect]:
+			invalid = append(invalid, fmt.Sprintf("%s=%q", tool.Name, tool.Effect))
+		}
+	}
+	for name, want := range expected {
+		got, ok := seen[name]
+		if !ok {
+			return fmt.Errorf("tool %q absent from the discovery catalog — this deployment registers rule CRUD, so the catalog assertion is not measuring what it claims", name)
+		}
+		if got != want {
+			mismatched = append(mismatched, fmt.Sprintf("%s: got %q want %q", name, got, want))
+		}
+	}
+
+	if len(blank) > 0 {
+		return fmt.Errorf("%d tool(s) served a blank effect: %v — the discovery field must always carry the resolved value, including \"unknown\"", len(blank), blank)
+	}
+	if len(invalid) > 0 {
+		return fmt.Errorf("tool(s) served an effect outside the enum: %v — aggregation must normalize before the value reaches the wire", invalid)
+	}
+	if len(mismatched) > 0 {
+		return fmt.Errorf("classification did not survive to discovery: %v", mismatched)
+	}
+
+	result.Details["tool_effect_catalog_size"] = len(response.Tools)
+	result.Details["tool_effects"] = seen
 	return nil
 }
 

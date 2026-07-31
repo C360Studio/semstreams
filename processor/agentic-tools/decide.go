@@ -219,6 +219,7 @@ func (e *DecideExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        DecideToolName,
 			Description: "Terminal decision tool for coordinator agents. Call exactly once with the action your role's system prompt enumerates. Emits a coordinator.decision.next-action triple on this loop's entity so downstream rules can route; the full args stay in the loop's Result for any agent that needs supporting data.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

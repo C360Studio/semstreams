@@ -99,6 +99,7 @@ func (e *WriteTodosExecutor) ListTools() []agentic.ToolDefinition {
 			"Submit the entire current list on each call — every call replaces the prior list, so include items already completed if you want them remembered. " +
 			"Use this when work has multiple steps that span iterations, when steps depend on prior results, or when context compaction may evict your plan from the conversation. " +
 			"Skip it for single-step lookups or one-shot tool calls where there is nothing to track.",
+		Effect: agentic.ToolEffectMutating,
 		Parameters: map[string]any{
 			"type":                 "object",
 			"required":             []string{"todos"},

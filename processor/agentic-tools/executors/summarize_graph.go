@@ -124,6 +124,7 @@ func (e *SummarizeGraphExecutor) ListTools() []agentic.ToolDefinition {
 		Description: "Get a high-level overview of what's in the knowledge graph: entity types and their counts, predicates with their counts, and example entity IDs per type. " +
 			"Call this BEFORE query_entity or query_relationships when you don't already know specific IDs to query — the example IDs are real and copy-pasteable. " +
 			"Use search_graph for natural-language exploration once you know roughly what you're looking for.",
+		Effect: agentic.ToolEffectReadOnly,
 		Parameters: map[string]any{
 			"type":                 "object",
 			"additionalProperties": false,

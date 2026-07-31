@@ -283,6 +283,7 @@ func (e *EmitLessonExecutor) ListTools() []agentic.ToolDefinition {
 				"(id:<entity-id-prefix of 3+ segments> or tag:<token>) so the lesson reaches the right future loops. " +
 				"Keep injection_form short — it is rendered verbatim into future briefs; put the full explanation in detail. " +
 				"The framework derives attribution (which loop, which role) automatically; do not pass identity fields.",
+			Effect: agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

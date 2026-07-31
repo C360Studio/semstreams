@@ -176,3 +176,35 @@ func (b *blockingStore) Store(ctx context.Context, record ToolCallRecord) error 
 func (b *blockingStore) Close() error {
 	return b.store.Close()
 }
+
+// TestRecordingExecutor_ListToolsPreservesEffect pins that a WRAPPING executor
+// passes tool-definition metadata through unchanged (gh#749).
+//
+// RecordingExecutor delegates ListTools to the wrapped executor today, so this
+// holds by construction — which is exactly why it is asserted rather than left
+// to inspection. A wrapper that ever reconstructs definitions field-by-field
+// (to add a prefix, mark availability, annotate provenance) would silently drop
+// Effect, and the loss would surface downstream as a catalog of "unknown" with
+// no failing test pointing at the wrapper. Same shape as the discovery
+// projection, which already silently dropped Strict and Paginated.
+func TestRecordingExecutor_ListToolsPreservesEffect(t *testing.T) {
+	store := NewInMemoryToolCallStore()
+	executor := newMockExecutor()
+	executor.tools = []agentic.ToolDefinition{
+		{Name: "read_tool", Description: "reads", Effect: agentic.ToolEffectReadOnly},
+		{Name: "write_tool", Description: "writes", Effect: agentic.ToolEffectMutating},
+		{Name: "outside_tool", Description: "reaches out", Effect: agentic.ToolEffectExternal},
+		{Name: "quiet_tool", Description: "declares nothing"},
+	}
+	recorder := NewRecordingExecutor(executor, store, nil)
+	defer func() { _ = recorder.Stop(time.Second) }()
+
+	got := recorder.ListTools()
+	require.Len(t, got, len(executor.tools))
+
+	for i, want := range executor.tools {
+		assert.Equal(t, want.Name, got[i].Name)
+		assert.Equal(t, want.Effect, got[i].Effect,
+			"wrapping executor changed the effect of %q — a wrapper must pass tool metadata through unchanged", want.Name)
+	}
+}

@@ -71,6 +71,7 @@ func (e *EmitDiagnosisExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        EmitDiagnosisToolName,
 			Description: "Emit a structured ops diagnosis finding to the knowledge graph. Call once per finding; you may call multiple times per loop before submit_work. Each call mints a new diagnosis entity with evidence-backed predicates so downstream rules can branch on severity and confidence without parsing prose.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

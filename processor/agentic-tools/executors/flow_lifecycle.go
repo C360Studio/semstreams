@@ -57,6 +57,7 @@ func (e *FlowLifecycleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "deploy_flow",
 			Description: "Deploy a flow definition into the runtime. Transitions the flow from not_deployed → deployed. The flow must already exist (use create_flow first). After deploy, call start_flow to begin processing.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -71,6 +72,7 @@ func (e *FlowLifecycleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "start_flow",
 			Description: "Start a deployed flow. Transitions the flow from deployed → running. The flow must already be deployed (use deploy_flow first).",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -85,6 +87,7 @@ func (e *FlowLifecycleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "stop_flow",
 			Description: "Stop a running flow. Transitions the flow from running → stopped. Components remain deployed; call start_flow to resume or undeploy_flow to tear down.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -99,6 +102,7 @@ func (e *FlowLifecycleExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "undeploy_flow",
 			Description: "Undeploy a flow from the runtime. Transitions the flow from stopped (or deployed) → not_deployed. Tears down the runtime components; the flow definition remains and can be re-deployed.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

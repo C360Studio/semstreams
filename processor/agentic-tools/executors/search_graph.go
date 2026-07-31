@@ -73,6 +73,7 @@ func (e *SearchGraphExecutor) ListTools() []agentic.ToolDefinition {
 		Description: "Search the knowledge graph in natural language. Returns a synthesized answer, the most relevant entities, and community summaries. " +
 			"Call this BEFORE query_entity / query_relationships when you don't already know specific IDs — search surfaces the IDs and context worth querying directly. " +
 			"For a structural overview of the graph (entity types and predicates) call summarize_graph instead.",
+		Effect: agentic.ToolEffectReadOnly,
 		Parameters: map[string]any{
 			"type":                 "object",
 			"required":             []string{"query"},
