@@ -165,8 +165,12 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > it). Five private spellings exist today with zero definitions; **#683 is where the class gets
 > retired**, migration is opportunistic follow-up.
 >
-> **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
-> milestone section below; everything here is sequenced against it.**
+> **NEXT (ordered; WIP = 1 at the epic level). THIS SECTION IS THE ONLY PLACE PRIORITIES ARE SET.**
+> The tag is CUT, so it is no longer the organising goal — the Tag milestone section below is now
+> HISTORY plus the template for the next tag. **Do not take a priority from it, or from a log
+> entry.** That is exactly how gh#749 was missed for three close-outs: #801 set it in the
+> Tag-milestone section while this one still said "finish the in-flight changes". If you are adding
+> a priority, add it HERE; explain it anywhere.
 >
 > **1. gh#749 FIRST — canonical tool effect metadata. TWO SISTERS ARE BLOCKED ON IT.**
 > Set by #801 from semdev's post-.159 feedback, and it OUTRANKS the in-flight changes: both sisters
