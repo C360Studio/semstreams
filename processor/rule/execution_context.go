@@ -170,12 +170,7 @@ type ExecutionContext struct {
 	// untouched (and trip the unresolved-template warning) when no
 	// manager is wired.
 	//
-	// Typed as the READ-ONLY LifecycleLookup, not LifecycleManager:
-	// substitution only ever looks things up, and a field that could
-	// Complete or Fail a workflow is a capability this path should not
-	// be able to reach even by accident. LifecycleManager satisfies it,
-	// so the processor's wiring is unchanged.
-	Lifecycle LifecycleLookup
+	Lifecycle LifecycleManager
 
 	// lifecycleParticipantCache memoizes the LookupByEntityID result
 	// for the lifetime of this ExecutionContext, so multi-template

@@ -40,25 +40,27 @@
 - [x] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
       the existing method and the new entry point. **`EvaluateEntityState`'s observable behavior must
       not change** — see 5.1 for how that is proven, not asserted
-- [x] 3.2 **RESOLVED by owner ruling 2026-07-31 — the signature is a SPLIT PAIR, not one function
-      with a nil-able lookup:**
-      `Matches(ctx, def, state) (bool, error)` and
-      `MatchesWithLifecycle(ctx, def, state, lookup LifecycleLookup) (bool, error)`, sharing one
-      implementation so the pair cannot drift. §1's holding is preserved and strengthened — the
-      lookup governs ANSWERABILITY, so it must be visible, and the name is the most visible place
-      there is. Ranked by where answerability shows up: split (in the name) > one nil-able parameter
-      (§1's approval — but `nil` reads as complete) > `...MatchOption` (nowhere; the call compiles,
-      reads as finished, fails at runtime). `ctx` is first per Codex finding 5.
-      **Honest correction to my own pitch:** I said the split would delete `isNilLookup`/reflect. It
-      does not — `LookupByEntityID` dereferences its receiver, so a typed nil still has to be caught.
-      What changed is its JOB: from silently treating a typed nil as absent, to refusing it loudly and
-      naming the entry point the caller actually wanted. Mutation-verified.
-      **Still open for Fable, narrowed:** `LifecycleLookup` (narrow read-only) vs the concrete
-      `*lifecycle.Manager`. Decisive constraint found while preparing options — `lifecycle.NewManager`
-      requires a `*natsclient.Client` and `newManagerForTest` is unexported, so a concrete parameter
-      makes Codex finding 2's REQUIRED unregistered-participant and transient-lookup unit tests
-      impossible. Findings 2 and 4a pull against each other; the interface is what lets both be
-      satisfied. `*lifecycle.Manager` satisfies it, so §1's intended call site is unchanged.
+- [x] 3.2 **RESOLVED — owner ruled twice, and the second ruling corrected an argument of mine that
+      rested on a false premise.**
+      Final: `Matches(ctx, def, state)` + `MatchesWithLifecycle(ctx, def, state, manager
+      *lifecycle.Manager)`, one shared implementation, CONCRETE manager as §1 approved.
+      · **Split** (ruling 1): §1's holding preserved and strengthened — the manager governs
+        ANSWERABILITY, so it must be visible, and the name is the most visible place. Ranked by where
+        that shows up: split (in the name) > one nil-able param (`nil` reads as complete) >
+        `...MatchOption` (nowhere — compiles, reads as finished, fails at runtime).
+      · **Concrete** (ruling 2): I argued for a narrow `LifecycleLookup` on the grounds that a
+        concrete parameter would make Codex finding 2's required tests **impossible**. **That was
+        false and I retracted it** — `natsclient.NewTestClient` works, so a real Manager is
+        constructible in a test. The true cost is Docker: those tests move from unit to integration
+        tier. A much weaker argument, and not enough to deviate from an approved signature.
+      · **What concrete bought:** the typed-nil hazard is now UNREPRESENTABLE, not guarded.
+        `manager == nil` on a pointer is total, so `isNilLookup` and its `reflect` call are DELETED.
+        The nil-checked pointer widens to the internal interface only after the check.
+      · **Coverage placement, not coverage loss:** the failure matrix (transient lookup error, ctx
+        cancellation, ordinary-definition regression guard) stays at unit tier against
+        `matchesWithLookup` — the shared implementation both entry points delegate to, driven through
+        the interface it consumes. The exported wrapper against a REAL Manager is covered at
+        integration tier in `matches_lifecycle_integration_test.go` (3 tests, green)
 - [x] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
       the first unresolvable field before any evaluation runs. `evaluator.go` is NOT modified
 - [x] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
@@ -151,7 +153,8 @@ restored. A guard test that passes with the guard removed proves nothing.
       split pair (task 3.2). The process defect Codex named — a task checked complete while its own
       text said it needed confirmation — is what got fixed; the ruling then went further than either
       option on the table. The narrow-interface-vs-concrete question remains explicitly open and is
-      recorded as open rather than assumed closed by the split
+      recorded as open rather than assumed closed by the split. **Now closed by ruling 2 (concrete),
+      with my supporting argument retracted as factually wrong — see task 3.2**
 - [x] 7.6 **[high 5] `context.Context`.** Now the first parameter, propagated to the lifecycle
       lookup; cancellation test proves a blocked lookup returns instead of wedging the caller
 - [x] 7.7 **[high 6] Start-failure subscription leak** (introduced by this change's second

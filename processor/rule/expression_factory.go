@@ -220,7 +220,7 @@ func evaluateConditionsAgainstEntity(
 	conditions []expression.ConditionExpression,
 	logic string,
 	entityState *gtypes.EntityState,
-	lifecycleLookup LifecycleLookup,
+	lifecycleLookup LifecycleManager,
 ) (bool, error) {
 	if len(conditions) == 0 {
 		return false, nil
@@ -246,7 +246,7 @@ func substituteConditionsForEntity(
 	conditions []expression.ConditionExpression,
 	logic string,
 	entityState *gtypes.EntityState,
-	lifecycleLookup LifecycleLookup,
+	lifecycleLookup LifecycleManager,
 ) expression.LogicalExpression {
 	ec := &ExecutionContext{
 		EntityID:  entityState.ID,

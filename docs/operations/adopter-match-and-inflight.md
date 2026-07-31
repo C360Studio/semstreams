@@ -16,14 +16,14 @@ measurement that shaped the second one.
 matched, err := rule.Matches(ctx, def, entityState)
 
 // with one — those conditions resolve
-matched, err := rule.MatchesWithLifecycle(ctx, def, entityState, lookup)
+matched, err := rule.MatchesWithLifecycle(ctx, def, entityState, mgr) // *lifecycle.Manager
 ```
 
 **Pick by what you can answer, not by what you can pass.** The pair is split so the
 limitation is in the name you type: a lookup-less call cannot answer lifecycle
-conditions, and you find that out at the call site rather than at runtime. Passing
-nil to `MatchesWithLifecycle` is refused — including a typed nil — and points you
-back at `Matches`.
+conditions, and you find that out at the call site rather than at runtime. Passing a
+nil `*lifecycle.Manager` to `MatchesWithLifecycle` is refused and points you back at
+`Matches`.
 
 `ctx` is not decoration: the lookup performs KV/graph I/O, so without it a degraded
 backend wedges your recovery pass indefinitely. Pass a deadline.
@@ -55,7 +55,7 @@ Both primitives distinguish **"no"** from **"could not tell"**. Do not collapse 
 | `rule.Matches` | Means |
 |---|---|
 | `false, nil` | evaluated; conditions do not hold; nothing owed. Safe to act on. |
-| `_, err` | could not evaluate — unresolvable `$state.*` / `$prev.*` / `transition`; a lifecycle field whose lookup was absent **or failed**; an unresolved condition-value template; an absent `Required` field; a failed operator. **Not** a statement about obligation. |
+| `_, err` | could not evaluate — unresolvable `$state.*` / `$prev.*` / `transition`; a lifecycle field whose manager was absent **or failed to resolve**; an unresolved condition-value template; an absent `Required` field; a failed operator. **Not** a statement about obligation. |
 
 Two of those deserve emphasis, because both once returned a confident `false`:
 a **supplied lookup that fails** is not resolved state (an unregistered participant

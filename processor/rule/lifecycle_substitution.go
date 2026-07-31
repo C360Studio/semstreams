@@ -27,31 +27,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"reflect"
 	"sort"
 	"strings"
 
-	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
-
-// LifecycleLookup is the READ-ONLY slice of the Lifecycle harness that condition
-// resolution needs — the two lookups that answer "what phase is this entity in"
-// and "what does this workflow declare".
-//
-// It exists because resolution is a read and must not demand a write capability.
-// The rule package's LifecycleManager (actions.go) also carries TransitionWith,
-// Complete, Fail and AssertRuleWritable — powers a match check has no business
-// holding, and which a caller would otherwise hand over just to ask a question.
-// Taking the narrow set means a read-only caller can supply a read-only object,
-// and a test double is two methods rather than eight.
-//
-// LifecycleManager and *lifecycle.Manager both satisfy it, so every existing
-// caller passes unchanged.
-type LifecycleLookup interface {
-	LookupByEntityID(ctx context.Context, entityID string) (lifecycle.Participant, error)
-	GetWorkflowDefinition(workflow string) (lifecycle.WorkflowDef, error)
-}
 
 // PopulateLifecycleStateFields resolves the Participant for entityID
 // via manager.LookupByEntityID and writes the resulting
@@ -71,7 +51,7 @@ type LifecycleLookup interface {
 // O(workflows) plus one direct-key KV Get per call (no bucket scan);
 // intended for the rule-fire path, not per-message-shaped. See
 // LookupByEntityID's contract.
-func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, entityID string, fields expression.StateFields) {
+func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) {
 	// Tolerant wrapper: the stateful path treats a lookup failure as "no
 	// lifecycle state", which is correct for firing. populateLifecycleStateFields
 	// carries the error for callers that must not answer without it.
@@ -91,8 +71,12 @@ func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, 
 // lifecycle state must not fire, and false is the right answer for firing. The
 // stateless path refuses instead, but only when a condition actually needs the
 // state (see Matches). Same resolution, two dispositions, one implementation.
-func populateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, entityID string, fields expression.StateFields) error {
-	if isNilLookup(manager) || entityID == "" || fields == nil {
+//
+// A plain `manager == nil` is sufficient here: the only exported entry point that
+// supplies one takes a concrete *lifecycle.Manager and rejects nil before
+// converting, so a typed nil cannot reach this interface parameter.
+func populateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) error {
+	if manager == nil || entityID == "" || fields == nil {
 		return nil
 	}
 	p, err := manager.LookupByEntityID(ctx, entityID)
@@ -103,28 +87,6 @@ func populateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, 
 	fields["$entity.lifecycle.terminal"] = p.IsTerminal()
 	fields["$entity.lifecycle.workflow"] = p.Workflow()
 	return nil
-}
-
-// isNilLookup reports whether a LifecycleLookup is absent, including the TYPED-nil
-// case that a plain `== nil` misses.
-//
-// `var m *lifecycle.Manager; Matches(ctx, def, state, m)` produces an interface
-// value with a non-nil type and a nil pointer. `manager == nil` is false for it, so
-// an untreated typed nil passes an "is a lookup available" guard and then panics
-// inside LookupByEntityID. An exported API taking an interface has to handle this;
-// the caller's `m` genuinely IS absent and deserves the absent-lookup behavior, not
-// a crash.
-func isNilLookup(manager LifecycleLookup) bool {
-	if manager == nil {
-		return true
-	}
-	v := reflect.ValueOf(manager)
-	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
-		return v.IsNil()
-	default:
-		return false
-	}
 }
 
 const lifecycleSubstitutionPrefix = "$entity.lifecycle."

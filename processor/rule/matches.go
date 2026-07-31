@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/c360studio/semstreams/pkg/lifecycle"
+
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
@@ -82,28 +84,33 @@ func Matches(ctx context.Context, def Definition, state *gtypes.EntityState) (bo
 // on every lifecycle condition, and a variadic option would hide it further still:
 // `Matches(ctx, def, state)` would compile, read as finished, and fail at runtime.
 //
-// lookup is REQUIRED here. Passing nil is a caller mistake, not a degraded mode —
-// the function for "I have no lookup" is Matches — so it is refused loudly rather
-// than silently downgraded. The check also catches a TYPED nil
-// (`var m *lifecycle.Manager`), which is a non-nil interface holding a nil pointer
-// and would otherwise pass a plain `!= nil` and panic inside LookupByEntityID.
+// manager is REQUIRED here. Passing nil is a caller mistake, not a degraded mode —
+// the function for "I have no manager" is Matches — so it is refused rather than
+// silently downgraded.
+//
+// The parameter is the CONCRETE *lifecycle.Manager (owner ruling 2026-07-31,
+// matching what §1 approved). Concrete is what makes the nil check total: `manager
+// == nil` on a pointer is always correct, so a typed nil cannot exist here and the
+// panic-inside-LookupByEntityID hazard is unrepresentable rather than merely
+// guarded. The nil-checked pointer is only then widened to the interface the
+// internals take, so no typed nil can reach them either.
 func MatchesWithLifecycle(
-	ctx context.Context, def Definition, state *gtypes.EntityState, lookup LifecycleLookup,
+	ctx context.Context, def Definition, state *gtypes.EntityState, manager *lifecycle.Manager,
 ) (bool, error) {
-	if isNilLookup(lookup) {
+	if manager == nil {
 		return false, fmt.Errorf(
-			"rule.MatchesWithLifecycle: lifecycle lookup is nil (a typed nil counts); " +
-				"call Matches instead if you have none — lifecycle conditions are then " +
-				"refused explicitly rather than silently unanswered")
+			"rule.MatchesWithLifecycle: lifecycle manager is nil; call Matches instead if " +
+				"you have none — lifecycle conditions are then refused explicitly rather " +
+				"than silently unanswered")
 	}
-	return matchesWithLookup(ctx, "MatchesWithLifecycle", def, state, lookup)
+	return matchesWithLookup(ctx, "MatchesWithLifecycle", def, state, manager)
 }
 
 // matchesWithLookup is the single implementation behind both entry points, so the
 // pair cannot drift.
 func matchesWithLookup(
 	ctx context.Context, caller string, def Definition,
-	state *gtypes.EntityState, lifecycle LifecycleLookup,
+	state *gtypes.EntityState, lifecycle LifecycleManager,
 ) (bool, error) {
 	if state == nil {
 		return false, fmt.Errorf("rule.%s: entity state is nil", caller)
@@ -137,8 +144,8 @@ func matchesWithLookup(
 	// caller happened to supply a Manager. (Measured: it did. Caught by mutating
 	// the guard, not by reading the code.)
 	//
-	// Answerability is driven by what ACTUALLY resolved, not by whether a lookup was
-	// handed in. isNilLookup absorbs the typed-nil interface case.
+	// Answerability is driven by what ACTUALLY resolved, not by whether a manager was
+	// handed in.
 	lifecycleResolved := len(stateFields) > 0
 	for _, condition := range def.Conditions {
 		err := expression.EnsureStatelessResolvable(condition, lifecycleResolved)

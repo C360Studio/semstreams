@@ -205,7 +205,7 @@ not "fix" it toward the evaluator.
 // nil-able parameter §1 approved)
 func Matches(ctx context.Context, def Definition, state *graph.EntityState) (bool, error)
 func MatchesWithLifecycle(ctx context.Context, def Definition, state *graph.EntityState,
-    lookup LifecycleLookup) (bool, error)
+    manager *lifecycle.Manager) (bool, error)
 ```
 
 §1's holding is PRESERVED and strengthened: the lifecycle lookup determines **answerability**, not
@@ -224,18 +224,32 @@ Three shapes were considered, ranked by where answerability is visible:
 `ctx` is first, per Codex finding 5: the lookup performs KV/graph I/O, and without a caller context a
 degraded backend wedges a boot-time recovery pass indefinitely.
 
-**`lookup` is REQUIRED on the lifecycle entry point.** Absent is not a degraded mode; it is a call to
-the wrong function, so it is refused loudly and the caller is pointed at `Matches`. The check catches
-a TYPED nil too — `var m *lifecycle.Manager` is a non-nil interface holding a nil pointer, and
-`LookupByEntityID` dereferences its receiver immediately. Note the split does NOT make typed-nil
-unrepresentable, it makes it a loud input error instead of a panic.
+**`manager` is REQUIRED on the lifecycle entry point.** Absent is not a degraded mode; it is a call
+to the wrong function, so it is refused and the caller is pointed at `Matches`. With the concrete
+type that check is total — see below.
 
-`LifecycleLookup` (narrow, read-only) rather than the concrete `*lifecycle.Manager`: resolution
-performs exactly two lookups while `LifecycleManager` also carries `TransitionWith`/`Complete`/`Fail`,
-and — decisively — `lifecycle.NewManager` requires a `*natsclient.Client` while `newManagerForTest` is
-unexported, so a concrete parameter would make Codex finding 2's REQUIRED unregistered-participant
-and transient-lookup tests impossible at unit level. `*lifecycle.Manager` satisfies the interface, so
-the call site §1 intended is unchanged.
+**The lifecycle parameter is the CONCRETE `*lifecycle.Manager`** (owner ruling 2026-07-31, matching
+what §1 approved). A narrow read-only interface was implemented first and withdrawn.
+
+The argument for the interface was that resolution performs only two lookups while `LifecycleManager`
+also carries `TransitionWith`/`Complete`/`Fail`, and that a concrete parameter would make Codex
+finding 2's required unregistered-participant and transient-lookup tests impossible. **That second
+claim was wrong and was retracted**: `natsclient.NewTestClient` works fine, so a real Manager is
+constructible in a test. The true cost is that those tests need Docker — they move from unit tier to
+integration tier — not that they cannot exist. A weaker argument than stated, and not enough to
+deviate from an approved signature.
+
+Concrete also buys something the interface could not: **the typed-nil hazard becomes
+unrepresentable rather than guarded.** `manager == nil` on a pointer is total, so there is no
+non-nil-interface-holding-a-nil-pointer to detect and no panic inside `LookupByEntityID` to avoid.
+`isNilLookup` and its `reflect` call are deleted. The nil-checked pointer is widened to the interface
+the internals consume only after the check, so no typed nil reaches them either.
+
+Test placement follows from the ruling: the failure-mode matrix (transient lookup error, context
+cancellation, the ordinary-definition regression guard) stays at UNIT tier against
+`matchesWithLookup` — the shared implementation both entry points delegate to, exercised through the
+interface it actually consumes. The exported wrapper's wiring to a real Manager is covered at
+INTEGRATION tier in `matches_lifecycle_integration_test.go`. Nothing is lost; one seam moved.
 
 `Definition` is same-package (`rule_factory.go:15`); `*graph.EntityState` is the type imported locally
 as `gtypes` (`expression_factory.go:10`); `*lifecycle.Manager` is `pkg/lifecycle/manager.go:43`.
