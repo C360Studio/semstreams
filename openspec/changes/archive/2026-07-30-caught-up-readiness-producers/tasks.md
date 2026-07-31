@@ -204,7 +204,12 @@
 
 - [x] 10.1 `task lint` · `go vet` plain + `-tags=integration` + `-tags=live_llm`
 - [x] 10.2 `go test -race ./...` — grep `^FAIL` explicitly; the pipeline exit code reports the tail stage
-- [ ] 10.3 Full `go test -race -tags=integration ./...` sweep (framework packages touched)
+- [x] 10.3 Full `go test -race -tags=integration ./...` sweep (framework packages touched).
+      **GREEN: `EXIT=0`, 136 packages ok, 0 FAIL**, run with nothing else touching Docker. An earlier
+      13-failure run was MY OWN concurrent mutation tests oversubscribing the daemon — every failure
+      carried a container-start signature (`port "8222/tcp" not found`, or a 180s wait deadline) and
+      each failing test passed in isolation. Recorded because "the sweep was red" would otherwise
+      read as a code fact.
 - [x] 10.4 `task schema:generate`; `git diff schemas/ specs/` empty
 - [x] 10.5 **`task e2e:structural`** (graph-ingest + graph-index + rule on one stack) AND
       **`task e2e:statistical`** (adds graph-embedding + graph-clustering — the multi-watcher
@@ -218,10 +223,33 @@
 
 ## 11. Review + integration
 
-- [ ] 11.1 `semstreams-reviewer` — treat an internal APPROVE as necessary-not-sufficient on
-      concurrency/startup code
-- [ ] 11.2 Fable review — cross-plane ownership + a cross-repo contract
-- [ ] 11.3 Owner-run Codex gate
+- [x] 11.1 `semstreams-reviewer` — **CHANGES REQUESTED, 2 HIGH + 6 MEDIUM; all blocking fixed.**
+      HIGH-1: the e2e stage SWALLOWED its own gate (`coverageErr` read only under
+      `actualCount < minRequired`), so the one consumer proving the fold non-phantom could not turn a
+      tier red. HIGH-2: per-instance gauges are ORPHANED on component recreation — `RegisterGauge`
+      keeps the FIRST collector, so a rebuilt component writes to unregistered collectors while the
+      exported series freeze at the stopped instance's values (measured against the real registry).
+      The reviewer explicitly framed its verdict as necessary-not-sufficient on concurrency — which
+      Codex then vindicated.
+- [x] 11.2 Fable review — **APPROVED across three rounds.** (a) `OutstandingWork`: rejected the raw
+      `jetstream.Consumer` lookup (leaks capability; puts `Info().AckFloor` one field from every
+      holder), then rejected its own two-counter replacement — "when the comment must warn callers
+      away from the signature's own affordance, the signature is wrong". (b) #763 shared gauge design
+      approved with a stated boundary. (c) One finding: a stale sentence surviving the two-counter
+      draft; re-reading the whole comment found a SECOND instance it had not flagged.
+- [x] 11.3 Owner-run Codex gate — **CHANGES REQUESTED, 3 blocking + 1 verification gap; all fixed.**
+      **TWO OF THE THREE LANDED ON CODE WRITTEN TO FIX THE REVIEWER'S FINDINGS**, which is the
+      lesson worth carrying: a fix is new code and inherits the full defect rate. (1) The rule
+      shutdown fail-open was NOT closed — a 2s join makes it improbable, not impossible, because a
+      tick can block on `entityDispatchGate.RLock` past the timeout; replaced with a fence checked
+      before compute AND before publish. (2) `FullyCovered` read each watcher TWICE, so health and
+      lag could come from DIFFERENT envelopes — healthy-with-lag then degraded-with-zero-lag reports
+      COVERED though neither envelope was both. (3) One global `bootBacklogKnown` meant a successful
+      bind read for consumer A marked the aggregate captured, permanently omitting a FAILED read for
+      B — my own comment claiming "leaves the capture unclaimed" was true only single-consumer.
+      (4) Verification gap: `poll_count=0` cannot distinguish withholding from always-proceeding —
+      same evidence error I had already self-corrected, now covered by stage-level tests that
+      arrange a REAL not-covered observation and assert both withhold and release.
 - [x] 11.4 Re-run `openspec list` and re-check HOLDs. **RE-VERIFIED 2026-07-30 at PR-head (counts
       moved since the earlier check — #761 landed mid-session and the archive sweep changed the
       queue).** Four other changes in flight: `predicate-raw-key-representation` 10/14,
