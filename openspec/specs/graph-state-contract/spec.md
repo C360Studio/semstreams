@@ -1,7 +1,35 @@
 # graph-state-contract Specification
 
 ## Purpose
-TBD - created by archiving change poison-response-scoping. Update Purpose after archive.
+
+Defines the ENTITY_STATES **canonical-decode contract** — where a stored value is validated, and
+how a component responds when one violates it ("poison").
+
+**Validation rides existing read points.** No component holds an ENTITY_STATES watcher whose sole
+purpose is re-validating writes it does not otherwise consume for work. Detection belongs to the
+reads that already happen: the sole writer's boot snapshot sweep, per-request validating reads, and
+a consumer's own input or replay path. A dedicated contract-guard watcher is self-observation of an
+already-gated path, taxed per write on every deployment — gh#562 measured the bill at a −9.1%
+ingest-ceiling regression from three such watchers on one connection.
+
+**Poison response is scoped by reader class, not globally.** The authoritative read surface serves
+ENTITY_STATES values per request, and every response is enforced by the canonical decode of the
+bytes it returns — so correctness never depended on a global latch. It refuses exactly the poisoned
+entities, keeps serving every unaffected one, and recovers without a process restart. A projection
+owner serves a derived view it cannot re-validate per request, so it latches the whole view sticky
+on observed poison and recovers only by operator reset and restart. The typed
+`graph_state_reset_required` code and its bounded reasons are identical across both classes: the
+scope of the refusal differs, the vocabulary does not.
+
+Poison is a repairable condition rather than a terminal one, so typed errors name the poisoned
+entity whenever identity is known, and an aggregate read fails as a whole naming **every** poisoned
+entity encountered in that attempt — never silent omission, never one-per-round-trip discovery.
+
+This capability does NOT cover the marshal-site write gate that keeps poison out of ENTITY_STATES
+in the first place (`graph-ingest`), predicate vocabulary legality
+(`predicate-contract-enforcement`), or the beta-cutover reader-class reconciliation still owed by
+that change (gh#772).
+
 ## Requirements
 ### Requirement: Poison response scope is defined per reader class
 
