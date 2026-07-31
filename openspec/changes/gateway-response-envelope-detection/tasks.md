@@ -19,7 +19,8 @@ session re-litigating finished work, exactly as a file predicting success costs 
 - [x] 1.4 Open Question 3 resolved — **`request_id` phantom confirmed, dispositioned SEPARATELY.**
       Allowed-optional in the closed set, so the discriminator is indifferent to its fate; deleting it
       here would violate the one-disposition-per-commit discipline 2.4 already applies
-- [ ] 1.5 **Spec addition required by review: RESERVE the envelope key set.** A non-envelope response
+- [x] 1.5 **DONE** — the reservation requirement is in the delta.
+      ORIGINAL: **Spec addition required by review: RESERVE the envelope key set.** A non-envelope response
       type MUST NOT consist solely of keys from `{data, request_id, timestamp}`. Written into the
       `gateway-response-projection` delta — converts the closed set's one residual (a LATER type
       coincidentally occupying the envelope's shape, which detection cannot defend against because it
@@ -106,7 +107,10 @@ session re-litigating finished work, exactly as a file predicting success costs 
 - [x] 5.1 **DONE** — `validate-gateway-response-shape` registered in `statistical` (and `semantic`)  
       ORIGINAL: Add the e2e response-shape stage in the **`statistical`** tier (1.2) — the per-PR tier, so
       the gate runs on the PR carrying the fix
-- [ ] 5.1a The stage asserts **three** things, not one: (a) the `graph.query.*` family is unwrapped,
+- [x] 5.1a **DONE — all three asserted, verified by their own metrics on the real stack:**
+      `graph_query_family_unwrapped_latency_ms:10`, `graph_index_query_family_unchanged_latency_ms:3`,
+      `graph_query_prefix_untouched_latency_ms:17`.
+      ORIGINAL: The stage asserts **three** things, not one: (a) the `graph.query.*` family is unwrapped,
       (b) `graph.index.query.*` is **UNCHANGED**, (c) `graph.query.prefix` is untouched. (b) and (c)
       are regression assertions — this change must not fix one family by breaking the others
 - [x] 5.2 **DONE** — probes decode to `map[string]json.RawMessage` and assert keys; never a typed struct  
@@ -117,7 +121,13 @@ session re-litigating finished work, exactly as a file predicting success costs 
       the right value is exactly what the broken shape also permits
 - [x] 5.4 **DONE** — three probes: `graph.query.*` unwrapped, `graph.index.query.*` unchanged, `graph.query.prefix` untouched  
       ORIGINAL: Cover representative subjects from **both** families, not only `graph.query.*`
-- [ ] 5.5 **Record the stage RED against unfixed main, then green with the fix**, with output pasted
+- [x] 5.5 **DONE — RECORDED, both directions, on the real Docker stack.**
+      RED against the unfixed gateway (prefix gate restored, detector still present so the
+      mutation compiled): `task e2e:statistical` **EXIT=201**, stage 28/42 FAILED —
+      `DOUBLE-NESTED (gh#762): field carries a repeated \`data\` hop — callers would read
+      data.graphSummary.data.* instead of data.graphSummary.*` on real e2e data
+      (`total_entities:125`). GREEN with the fix: **EXIT=0**, stage completed in 36ms.
+      ORIGINAL: **Record the stage RED against unfixed main, then green with the fix**, with output pasted
       in the PR. A stage never seen red is not evidence. Use `git stash` for the fails-without-fix
       check, never `git checkout`
 - [x] 5.6 **DONE** — stage publishes `gateway_shape_probes_checked` and FAILS if it is not 3, so a stage that silently skips cannot report green  
@@ -126,27 +136,39 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 6. Adopter obligation (ours: publish; theirs: conform)
 
-- [ ] 6.1 Adopter note in `docs/operations/` — **a three-way table** (1.3): subjects that CHANGE with
+- [x] 6.1 **DONE — `docs/operations/adopter-gateway-response-shape.md`**, three-way table:
+      CHANGES (`graphSummary`, `byName` with exact before/after paths) · ALREADY FLAT (the four
+      `graph.index.query.*` fields) · UNCHANGED-BY-DESIGN (12 fields, with why each is exempt),
+      plus a grep recipe an adopter can run against their own client.
+      ORIGINAL: Adopter note in `docs/operations/` — **a three-way table** (1.3): subjects that CHANGE with
       exact before/after JSON paths per subject · subjects ALREADY FLAT · subjects
       UNCHANGED-BY-DESIGN. Sisters grep their read paths against it; anything less makes them
       re-derive the list. **The third column is the one instinct omits** and the one that stops an
       adopter "fixing" a path that was never broken
-- [ ] 6.2 Note that this lands INSIDE the v1.0.0-beta.159 lockstep wave, so adopters conform once.
+- [x] 6.2 **DONE** — stated in the note.
+      ORIGINAL: Note that this lands INSIDE the v1.0.0-beta.159 lockstep wave, so adopters conform once.
       Activated by the tag alongside gh#753
-- [ ] 6.3 **Task-list residency:** no cross-repo adoption task belongs in this file. Sister migration
+- [x] 6.3 **DONE** — no cross-repo task in this file.
+      ORIGINAL: **Task-list residency:** no cross-repo adoption task belongs in this file. Sister migration
       is gh#753's; problems they hit become new issues here
 
 ## 7. Gates
 
 - [x] 7.1 **DONE** — `task lint` clean. One revive `redefines-builtin-id` found and fixed (`const max` shadowed the builtin)  
       ORIGINAL: `task lint` clean (revive warnings = CI failure)
-- [ ] 7.2 **Run what CI runs — BOTH suites:** `go test -race ./...` AND
+- [x] 7.2 **DONE — BOTH suites.** `go test -race ./...` **135 ok / 0 FAIL**;
+      `go test -race -tags=integration -p 2 ./...` **136 ok / 0 FAIL** (full branch sweep,
+      owed because `graph` is a framework package). gh#736's Docker oversubscription did not
+      bite this run.
+      ORIGINAL: **Run what CI runs — BOTH suites:** `go test -race ./...` AND
       `go test -race -tags=integration -p 2 ./...`. Half of CI is how the last increment went red
 - [x] 7.3 **DONE** — `go vet` plain AND `-tags=integration`, both clean  
       ORIGINAL: Full `go vet` plain AND `-tags=integration` (`go test`'s vet is a SUBSET — no copylocks)
 - [x] 7.4 **DONE** — `task schema:generate` no drift; `openspec validate --all --strict`; contract tests ok  
       ORIGINAL: `task schema:generate` → no drift; `openspec validate --all --strict`
-- [ ] 7.5 **BREAKING ⇒ a relevant e2e tier green before merge**, beyond the per-PR statistical. The
+- [x] 7.5 **DONE — `task e2e:statistical` GREEN at HEAD (EXIT=0)**, 42 stages, and the new
+      shape stage asserted all three probes (`gateway_shape_probes_checked:3`).
+      ORIGINAL: **BREAKING ⇒ a relevant e2e tier green before merge**, beyond the per-PR statistical. The
       gateway path is consumer-facing: run the tier covering it and state which
 - [ ] 7.6 Re-verify against main after any long merge queue — `strict_required_status_checks_policy`
       is false, so checks can have run against a stale base
