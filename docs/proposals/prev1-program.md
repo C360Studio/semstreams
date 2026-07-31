@@ -15,6 +15,11 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > main; they now can. Expect inbound adoption issues; per the residency rule they arrive as NEW
 > issues here, never as tasks in our change files.
 > **The whole pre-tag checklist is discharged** — see the Tag milestone section, now marked DONE.
+> **AFTER the tag, same session:** NATS converged to ONE pinned version — the survey found three
+> regimes at once, including an unpinned **`nats:latest` in CI**, which meant the `CI Status Check`
+> the merge ruleset requires was testing a floating substrate (#790 → #791/#792:
+> `nats:2.14.4-alpine` + `nats.go v1.52.0`, evidence pins re-run not waived, drift guard added).
+> Then gh#736's fast-fail flake class root-caused and fixed (#793). See the Small-bug track.
 > **MEASURED at the tag:** 122 open = 33 bug / 82 enh / 6 docs · in-flight changes **3** ·
 > 11 TBD-stub specs · `openspec validate --all --strict` 34/0 · lint + `go vet` plain,
 > `-tags=integration` AND `-tags=live_llm` all clean · `-race ./...` 135 ok/0 FAIL ·
@@ -182,12 +187,35 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > every tag costs a manual tier run and every regression between tags is invisible.
 >
 > **Small-bug track (parallel, non-epic, one focused PR each, dev+reviewer gates):**
-> #736 (integration suite oversubscribes Docker — gate-reliability leverage on EVERY future PR;
-> it did not bite this session, which is luck, not evidence) · #741 (raw-path key collision:
-> silent data loss in shipped `protocol-flow.json` at >1 msg/s) · #742 (MaxDeliver parking
-> visibility) · #759 (shared ack-disposition helper, 5 hand-rolled sites) · **#784** (GraphQL
-> `capabilities` routes to a subject nothing serves) · **#786** (`QueryResponse.RequestID`
-> phantom).
+> #741 (raw-path key collision: silent data loss in shipped `protocol-flow.json` at >1 msg/s) ·
+> #742 (MaxDeliver parking visibility) · #759 (shared ack-disposition helper, 5 hand-rolled sites) ·
+> **#784** (GraphQL `capabilities` routes to a subject nothing serves) · **#786**
+> (`QueryResponse.RequestID` phantom) · **#790** (NATS convergence — Part A/B DONE, see below).
+>
+> **#736 is HALF FIXED, and its remaining half is smaller than it looked. Read this before
+> touching it.** It is TWO classes, not one, and the issue's own suggested fix is FALSIFIED:
+> · **`-p 1` is wrong. MEASURED on the full suite: 524s at `-p 2` vs 1016s at `-p 1` — 94%
+>   SLOWER**, both green. The issue's numbers came from a 5-package subset where contention
+>   dominates; across 136 packages, most starting no containers, serialization costs more than the
+>   contention it removes. `-p 2` is the right setting, not a way-station. **Do not "fix" this by
+>   serializing.**
+> · **Fast-fail class — FIXED (#793).** `port "4222" not found` at 0.47s: the wait strategy proved
+>   the NATS process was up INSIDE the container, but nothing waited on Docker publishing the
+>   HOST-side mapping, and `MappedPort` was called once. beta.91 (gh#107) had removed
+>   `ForListeningPort("4222/tcp")` for polling cost — correct about cost, but it was the only thing
+>   waiting on that mapping, so an optimisation deleted a guarantee. Fixed with a bounded retry at
+>   the point of use.
+> · **Timeout class — STILL OPEN.** The 120-180s `wait until ready: context deadline exceeded`.
+>   Fires INSIDE `GenericContainer`, so #793 does not touch it.
+> · **Container consolidation is REJECTED (owner, 2026-07-31):** shared containers mean shared
+>   JetStream/KV state, so isolation would ride on 337 call sites each being disciplined about
+>   stream/bucket naming. Order-dependent cross-test pollution is worse to debug than the ~10% wall
+>   clock it saves (measured: ~208ms marginal per container).
+> · **Some of what we call flakes is HOST DEBT.** After ~8 full sweeps in one session `docker info`
+>   latency measured **1169ms** (healthy ≈50-100ms) with 24.5GB build cache; a container start then
+>   failed at 183s and read exactly like a code regression during a NATS version change. After
+>   `docker builder prune -af`, latency halved and the package went 197s -> 13.5s. **Take a
+>   `docker info` latency reading BEFORE attributing a container failure to a change.**
 >
 > **TWO KEEPERS FROM THE LAST INCREMENT — both caught EXTERNALLY, both about verification rather
 > than shipped code. The shipped paths were sound; the guards were not.**
@@ -1260,4 +1288,24 @@ Append one line per session. Newest last.
   hides), and `predicate-contract-enforcement`'s remaining blocker is a genuine SECURITY gap —
   runtime authorization vs configuration-time authoring checks. **Owner action outstanding: hand
   the sisters the tag** (release step 7; the only part not doable from here).
-  **Next: pick ONE in-flight change and land it. WIP = 1.**
+  **Then, post-tag, two unplanned pieces that were both worth it.** (a) A "update NATS and make the
+  Dockerfiles match" ask turned out to be **three regimes at once**, including `nats:latest` in
+  ci.yml/release.yml/semspec-validation.yml — the merge gate was testing a FLOATING substrate, and
+  the plausible reason ADR-088 had to measure AckFloor against "both deployed NATS versions".
+  Converged to 2.14.4-alpine + nats.go v1.52.0. The evidence-pin clause in operations/32 was
+  HONOURED, not waived: both predicate-layout gates re-run and passing before the pin was rewritten.
+  **Then #792 fixed a defect in #791 that I had merged an hour earlier** — the sweep grepped the
+  literal `nats:2.12-alpine` and missed `"nats:" + cfg.natsVersion`, so every integration test still
+  ran 2.12 while CI ran 2.14. **A concatenated value has no searchable literal**; fixed structurally
+  with a drift guard. That is the enumerate-from-the-owning-component rule violated ONE HOUR after
+  writing it down. (b) gh#736: **the issue's own suggested fix is falsified — `-p 1` is 94% slower
+  on the full suite (524s → 1016s)**, its numbers having come from a 5-package subset. Root-caused
+  and fixed the fast-fail class instead (#793); the timeout class stays open; container
+  consolidation rejected on owner's call (shared JetStream state across 337 sites). Also learned
+  that some "flakes" are host debt — `docker info` latency 1169ms after 8 sweeps, halved by pruning,
+  package 197s → 13.5s.
+  **Keepers: measure a perf fix on the REAL workload (a subset benchmark does not generalise); take
+  a `docker info` reading before blaming a change; and a guard is code — 3 of 5 reviewer findings
+  this session were guards that reported green without checking.**
+  **Next: pick ONE in-flight change and land it. WIP = 1 — `predicate-contract-enforcement` first,
+  its blocker is a security gap.**
