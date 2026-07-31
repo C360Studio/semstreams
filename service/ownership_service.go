@@ -139,6 +139,25 @@ func (s *OwnershipService) Stop(timeout time.Duration) error {
 // Downstream binds its own owners against the returned heartbeater via
 // projection.BindMutationClient; framework binaries get the built-in static
 // binding by calling WireOwnership, which composes this.
+//
+// THE CALLER MUST RUN THE RETURNED HEARTBEATER. This is Phase A: it CONSTRUCTS
+// the heartbeater, it does not RUN it (ADR-058). Register the ownership service
+// before StartAll —
+//
+//	mgr.RegisterInstance("ownership", NewOwnershipService(reg, hb, metrics, logger))
+//
+// — because OwnershipService.Start is what runs both the heartbeat loop and
+// WatchRevival. Without it, an owner's OWNER_PRESENCE key ages out after
+// ownership.PresenceTTL, the next registrant compacts the owning entry out of
+// the epoch, and a rival binds cells this process still believes it owns. The
+// framework binaries have always discharged this; a caller reaching the
+// substrate directly must too.
+//
+// CALL ONCE PER BOOT, and never alongside WireOwnership. Each call builds a
+// fresh Registry with its own incarnation nonce; re-registering an owner ID on
+// a second registry replaces the first's epoch entry, invalidating the first
+// registry's OwnerToken and turning its writes into stale-token writes at the
+// ingest seam. (AttachOwnership carries the same once-at-boot rule.)
 func WireOwnershipSubstrate(
 	ctx context.Context,
 	natsClient *natsclient.Client,
@@ -163,10 +182,13 @@ func WireOwnershipSubstrate(
 	// this boot's create-races and post-boot dynamic re-acquisition (there is
 	// no post-start sweep anymore). This backstop is a DISTINCT concern from
 	// ADR-058 ownership; it is folded into this one shared boot function ON
-	// PURPOSE — every composition reaches it through WireOwnershipSubstrate
-	// (directly, or via WireOwnership), so wiring it here covers both binaries
-	// AND downstream framework-only boots with no half-migration drift (the
-	// beta.18 lesson).
+	// PURPOSE — both cmd/semstreams and cmd/e2e-semstreams reach it exactly
+	// once before StartAll (verifiable: ownership.EnsureBuckets has one
+	// non-test caller, right here), so wiring it here covers both binaries with
+	// no half-migration drift (the beta.18 lesson). The INTENT is that a
+	// downstream framework-only boot inherits the same backstop by calling the
+	// substrate — but that is an intent this code cannot enforce, and beta.18
+	// was precisely a composition that did not get migrated.
 	if err := graph.AssertOwnedBucketsClean(ctx, natsClient, logger); err != nil {
 		return nil, nil, fmt.Errorf("assert framework-owned graph buckets retention-clean: %w", err)
 	}
@@ -220,7 +242,8 @@ func WireOwnership(
 // WireOwnershipShutdown is the ADR-058 rollout-step-2 drift-killer. It returns
 // the shutdown-cancellable context that governs the lifecycle Manager-internal
 // ownership heartbeater (spawned eagerly in Phase A by AttachOwnership inside
-// WireOwnership — see manager.go) and a single cleanup func that, on shutdown,
+// WireOwnershipSubstrate, reached directly or via WireOwnership — see
+// manager.go) and a single cleanup func that, on shutdown,
 // SIGNALS (cancel) then JOINS the Manager's heartbeat and graph-state guard via
 // WaitOwnership, in that order.
 //
@@ -232,7 +255,8 @@ func WireOwnership(
 // ADR-058 exists to prevent. Folding it into one call both mains make
 // identically removes that prospective drift structurally.
 //
-// The caller MUST pass the returned ctx to WireOwnership (so AttachOwnership's
+// The caller MUST pass the returned ctx to whichever wiring helper they call —
+// WireOwnership or WireOwnershipSubstrate (so AttachOwnership's
 // heartbeater binds to it) and `defer` the returned func at the same point the
 // hand-rolled hbCancel/WaitOwnership defers lived, so LIFO still runs cancel+join
 // BEFORE the earlier-registered NATS Close defer (the gh#279 join, ADR-056 PR-4).

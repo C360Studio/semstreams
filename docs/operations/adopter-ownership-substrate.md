@@ -41,9 +41,12 @@ You get the complete Phase-A substrate and nothing nil-able on success:
 - `Manager.AttachOwnership`, so lifecycle creates are ownership-aware,
 - the shared heartbeater later contract-bearing owners enrol against.
 
-Then bind your own owners explicitly, against that heartbeater:
+Then bind your own owners explicitly, against that heartbeater. Predicates must
+be registered in the vocabulary before a contract over them validates:
 
 ```go
+vocabulary.Register("myapp.thing.status") // else Contract.Validate rejects it
+
 mutations, err := projection.BindMutationClient(hbCtx, projection.MutationClientConfig{
     NATS:        client,
     Registry:    registry,
@@ -54,6 +57,42 @@ mutations, err := projection.BindMutationClient(hbCtx, projection.MutationClient
 ```
 
 `BindRulePackContracts` enrols against the same heartbeater.
+
+## You MUST run the heartbeater — Phase B is not optional
+
+The substrate CONSTRUCTS the heartbeater; it does not RUN it. Registering an
+owner writes its `OWNER_PRESENCE` key once, and nothing refreshes that key until
+something runs the heartbeat loop. Register the ownership service before
+`StartAll`:
+
+```go
+mgr.RegisterInstance("ownership", service.NewOwnershipService(registry, heartbeater, metrics, logger))
+```
+
+**Skip this and your ownership quietly expires.** The presence key ages out after
+`ownership.PresenceTTL` (120s), the next registrant compacts your owning entry
+out of the epoch, and a rival can bind the same predicate cells while your
+process is still live and believes it owns them. With owner-lease enforcement
+off (the default) that is two live writers on one predicate group; with it on,
+your writes start being rejected. The same omission also costs you
+`WatchRevival` — the ADR-056 PR-4 watcher that quiesces your owners when another
+incarnation takes over — because `OwnershipService.Start` is what runs both.
+
+This is a real hazard, not a theoretical one: it was measured on the first draft
+of this note, which omitted the step. No presence bump after 35s (heartbeat
+interval is 30s), against a control that showed an explicit heartbeat does
+advance the key.
+
+Phase A constructs, Phase B runs (ADR-058). The framework binaries have always
+discharged this; a framework-only composition has to do it too.
+
+## Call the substrate ONCE per boot
+
+Do not call `WireOwnershipSubstrate` twice, and do not call it alongside
+`WireOwnership`. Each call builds a fresh `Registry` with its own incarnation
+nonce; re-registering the same owner ID on the second registry replaces the
+first's epoch entry, which invalidates the first registry's `OwnerToken` and
+turns its writes into stale-token writes at the ingest seam.
 
 ## Why two functions instead of one that skips the bind
 
