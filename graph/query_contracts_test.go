@@ -3,6 +3,8 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -39,7 +41,10 @@ func TestUnwrapQueryResponse_RecognizesTheEnvelope(t *testing.T) {
 		{
 			name: "predicate list data",
 			resp: NewQueryResponse(PredicateListData{}),
-			want: `{`,
+			// No substring assertion: the real content of this case is the
+			// unwrapped verdict and the timestamp-absence check below. `"{"`
+			// would be true of any JSON object and only reads like coverage.
+			want: ``,
 		},
 		{
 			name: "envelope carrying request_id (the optional third key)",
@@ -118,7 +123,10 @@ func TestUnwrapQueryResponse_NoCollisionWithRealResponseTypes(t *testing.T) {
 			raw:  mustMarshal(t, OutgoingRelationshipsData{}),
 		},
 		{
-			// graph.embedding.query.similar's shape, by field names.
+			// Hand-written by field names, NOT a marshalled production type:
+			// `graph` cannot import processor/graph-embedding. The
+			// subject-keyed inventory that DOES use production types lives in
+			// gateway/graph-gateway/response_shape_test.go.
 			name: "SimilarResponse shape (graph.query.similar)",
 			raw:  []byte(`{"entity_id":"a.b.c.d.e.f","similar":[],"duration":"1ms"}`),
 		},
@@ -220,15 +228,47 @@ func TestQueryResponse_HasNoErrorField(t *testing.T) {
 			"The gateway's deleted error branch must be reconsidered.\n  got: %s", raw)
 	}
 
-	// The closed key set must stay in sync with the struct — a field added to
-	// QueryResponse without updating the constants would make the discriminator
-	// stop recognizing its own envelope.
-	for key := range fields {
+	_ = fields
+}
+
+// TestQueryResponse_DeclaredFieldsMatchClosedKeySet keeps the discriminator in
+// sync with the struct it describes.
+//
+// It walks the STRUCT TAGS, not a marshalled value. An earlier version iterated
+// the keys of a marshalled zero value, which cannot see an `omitempty` field —
+// it never even exercised `request_id`. That blind spot is the exact re-entry
+// path for gh#762: add `Cursor string \`json:"cursor,omitempty"\“ to
+// QueryResponse and every detector test stays green, but a real reply that
+// populates Cursor then carries a foreign key, UnwrapQueryResponse returns
+// (raw, false), and that subject silently goes back to `data.<field>.data.*` —
+// the defect this capability exists to remove, re-entering through the guard
+// meant to prevent it. Found by review and proven by mutation, not argued.
+func TestQueryResponse_DeclaredFieldsMatchClosedKeySet(t *testing.T) {
+	rt := reflect.TypeOf(QueryResponse[json.RawMessage]{})
+	seen := map[string]bool{}
+
+	for i := 0; i < rt.NumField(); i++ {
+		key, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if key == "" || key == "-" {
+			continue
+		}
+		seen[key] = true
 		switch key {
 		case queryResponseDataKey, queryResponseRequestIDKey, queryResponseTimestampKey:
 		default:
-			t.Errorf("QueryResponse marshals key %q, absent from the closed key set "+
-				"used by UnwrapQueryResponse — add it there or detection breaks", key)
+			t.Errorf("QueryResponse declares json key %q, absent from the closed key set used "+
+				"by UnwrapQueryResponse. Add it to the constants, or detection stops "+
+				"recognizing its own envelope and the double-nesting defect returns.", key)
+		}
+	}
+
+	// The reverse direction: a constant naming a key the struct no longer
+	// declares makes the closed set wider than the type, which admits foreign
+	// shapes.
+	for _, key := range []string{queryResponseDataKey, queryResponseRequestIDKey, queryResponseTimestampKey} {
+		if !seen[key] {
+			t.Errorf("closed key set names %q, which QueryResponse no longer declares — "+
+				"the discriminator is wider than the type it describes", key)
 		}
 	}
 }

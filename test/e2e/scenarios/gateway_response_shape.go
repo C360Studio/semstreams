@@ -104,15 +104,27 @@ func (s *TieredScenario) executeValidateGatewayResponseShape(ctx context.Context
 		result.Metrics[probe.name+"_latency_ms"] = latency.Milliseconds()
 	}
 
-	// Count what was actually asserted. A stage reporting "green" while
-	// skipping every probe is the failure mode this program keeps finding, so
-	// the count is published and the stage fails if it drifts.
+	// Count what was actually asserted, against a LITERAL.
+	//
+	// An earlier version compared `checked != len(probes)`, which is a
+	// tautology: the loop returns on the first error, so after it `checked ==
+	// len(probes)` always. The one case it claimed to catch — a probe list that
+	// shrank or emptied — was exactly the case it missed, since an empty
+	// gatewayShapeProbes() gives 0 != 0 false and the stage reports GREEN with
+	// zero assertions. Found by review.
 	result.Metrics["gateway_shape_probes_checked"] = checked
-	if checked != len(probes) {
-		return fmt.Errorf("gateway shape: asserted %d of %d probes", checked, len(probes))
+	if checked != wantShapeProbes {
+		return fmt.Errorf(
+			"gateway shape: asserted %d probes, expected %d — a shrunken probe set is a "+
+				"silent loss of coverage, not a pass", checked, wantShapeProbes)
 	}
 	return nil
 }
+
+// wantShapeProbes is the number of probes this stage must run: the
+// graph.query.* family, the graph.index.query.* regression guard, and the
+// graph.query.prefix regression guard. Deleting a probe is a stage FAILURE.
+const wantShapeProbes = 3
 
 // probeGatewayFieldShape POSTs a GraphQL query and returns the RAW JSON of the
 // projected field, without decoding it into any typed struct.
@@ -175,6 +187,10 @@ func (s *TieredScenario) probeGatewayFieldShape(
 // reachability-only assertion cannot distinguish the defect from the fix.
 func assertProjectedShape(probe shapeProbe, projected json.RawMessage) error {
 	if probe.arrayShaped {
+		// SHAPE only, deliberately: an empty array passes. This is not a data
+		// assertion and must not be read as one — its job is that a removed or
+		// reordered prefix unwrap yields an OBJECT and turns this RED. Entity
+		// counts are asserted by the dedicated prefix stages.
 		var arr []json.RawMessage
 		if err := json.Unmarshal(projected, &arr); err != nil {
 			return fmt.Errorf("expected a bare array, got %q", truncateForError(projected))

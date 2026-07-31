@@ -48,14 +48,20 @@ const (
 //
 // # Why the caller must not decide this from the subject
 //
-// Query handlers PROXY: graph-query's semantic, spatial, similar and byName
-// handlers forward to a downstream subject and return that reply verbatim, so
-// an envelope produced under `graph.index.query.*` reaches a caller under a
-// `graph.query.*` subject. Whether a reply carries the envelope is therefore a
-// property of the REPLY, not of the subject that served it, and any
-// subject-keyed rule is wrong for some reply no matter how it is maintained
-// (gh#762, where a prefix-gated unwrap left `graph.query.summary` and
-// `graph.query.byName` double-nested).
+// The families do not partition by envelope usage. `graph.query.summary` is
+// served by graph-query's own handler and returns this envelope, so a
+// prefix-gated unwrap keyed on `graph.index.query.` left it double-nested as
+// `data.<field>.data.*` — that is gh#762, and it is the observed defect.
+//
+// The property is more general than that one instance, which is why detection
+// rather than a corrected subject list. Query handlers PROXY: graph-query's
+// semantic, spatial, similar, temporal, entity and byName handlers forward to a
+// downstream subject and return that reply verbatim, so a reply enveloped by
+// one component can surface under another family's subject. No reachable proxy
+// surfaces an envelope TODAY — this is a soundness property, not a second live
+// bug — but it means whether a reply carries the envelope is a property of the
+// REPLY, and any subject-keyed rule is one downstream change away from being
+// wrong again.
 //
 // # The discriminator is the CLOSED key set, deliberately
 //

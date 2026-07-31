@@ -17,10 +17,16 @@ removes that envelope uniformly, by detecting it on the reply rather than matchi
 | GraphQL field | Before | After |
 |---|---|---|
 | `graphSummary` | `data.graphSummary.data.total_entities`<br>`data.graphSummary.data.entity_types`<br>`data.graphSummary.data.entity_sample_truncated` | `data.graphSummary.total_entities`<br>`data.graphSummary.entity_types`<br>`data.graphSummary.entity_sample_truncated` |
-| `byName` (unmapped field; payload is spread under `data`) | `data.data.matches` | `data.matches` |
 
-Both were reached through `graph.query.*` subjects that returned the envelope while the gateway
-only unwrapped `graph.index.query.*`.
+**One field. That is the entire blast radius on the GraphQL surface.** `graph.query.summary` returned
+the envelope while the gateway unwrapped only `graph.index.query.*`.
+
+> An earlier draft of this note listed a second field, `byName`. That was wrong and is corrected
+> here: `graph.query.byName` is a real NATS subject but the gateway does not route to it — there is
+> no `byName` branch in the query router, no field mapping, and no such field in the schema. A
+> NATS-Direct consumer of `graph.query.byName` talks to graph-query without passing through this
+> gateway and is **unaffected by this change**. If you already edited a `byName` GraphQL read path
+> on the strength of that draft, revert it.
 
 The envelope's own metadata (`timestamp`, and `request_id` when present) is no longer visible to
 GraphQL callers at all. It was never part of the intended contract — it leaked because the envelope
@@ -54,6 +60,7 @@ here, or stripping a level, you are introducing a bug rather than adopting a cha
 | `spatialSearch`, `temporalSearch` | arrays | served by the spatial/temporal indexes, never enveloped |
 | `similaritySearch`, `findSimilar` | search results | served by graph-embedding, never enveloped |
 | `globalSearch`, `localSearch`, `searchGraph` | GraphRAG results | raw marshal |
+| `trajectory` | `Trajectory` object | served by agentic-loop over `agentic.query.trajectory`, never enveloped |
 
 ## How to check your client
 

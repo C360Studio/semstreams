@@ -1715,12 +1715,18 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 	}
 
 	// Unwrap the QueryResponse envelope by DETECTING it on the reply, never by
-	// matching the subject (gh#762). The subject is not a sound basis: handlers
-	// proxy — graph-query's semantic, spatial, similar and byName handlers
-	// forward downstream and return that reply verbatim — so an envelope
-	// produced under `graph.index.query.*` arrives here under a `graph.query.*`
-	// subject. The previous prefix gate consequently left `graph.query.summary`
-	// and `graph.query.byName` double-nested as `data.<field>.data.*`.
+	// matching the subject (gh#762). The families do not partition by envelope
+	// usage: `graph.query.summary` is served by graph-query's own handler and
+	// returns the envelope, so the previous `graph.index.query.` prefix gate
+	// left it double-nested as `data.graphSummary.data.*`. That is the observed
+	// defect, and it is the only one on the reachable GraphQL surface.
+	//
+	// Detection rather than a corrected subject list because the subject is not
+	// a sound basis in general: handlers proxy — semantic, spatial, similar,
+	// temporal, entity and byName forward downstream and return that reply
+	// verbatim — so a reply enveloped by one component can surface under
+	// another family's subject. No reachable proxy does so today; this is a
+	// soundness property, not a second live bug.
 	//
 	// graph.UnwrapQueryResponse owns the discriminator, beside the type it
 	// describes; a second copy here is the drift that caused this bug. It leaves

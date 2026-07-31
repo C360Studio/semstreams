@@ -29,7 +29,17 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 2. Enumerate before changing anything
 
-- [x] 2.1 **DONE — enumeration table in the PR body.** 19 subjects across both families. Envelope-returning: all 8 `graph.index.query.*` (gated today) PLUS `graph.query.summary` AND `graph.query.byName` — the latter proxies to `graph.index.query.byName` and returns it verbatim, so it double-nested despite being a pure passthrough to a family that worked. Non-envelope: prefix/entity/batch/relationships/pathSearch/hierarchyStats/spatial/temporal/semantic/similar/globalSearch/searchGraph  
+- [x] 2.1 **DONE — CORRECTED after review; the first enumeration was wrong in both directions.**
+      It was derived from graph-query's registration table and the static router, NOT from the
+      gateway's own reachable set — so it claimed `graph.query.byName` (which the gateway does
+      NOT route: no branch, no field mapping, no schema field) and `graph.query.batch` (also
+      unrouted), while MISSING `agentic.query.trajectory` (routed, and the FIRST branch of the
+      router). **Blast radius on the reachable GraphQL surface is exactly ONE field,
+      `graphSummary`.** The inventory is now derived from `mapGraphQLQueryToNATSSubject` itself
+      and is drift-proof: `TestGateway_EveryRoutedSubjectHasAShapeCase` scrapes the routing
+      function and fails on an unclassified route AND on a case for an unroutable subject.
+      Envelope-returning and reachable: `graph.query.summary` + the four routed
+      `graph.index.query.*`  
       ORIGINAL: **Enumerate the actual marshalled top-level shape of every subject routed through
       `handleNATSResponseWithExtensions`** — both families, all ~19 subjects. This is the discharge of
       the design's one data-loss risk (D1), and it also produces the adopter note's field list.
@@ -83,13 +93,24 @@ session re-litigating finished work, exactly as a file predicting success costs 
       ORIGINAL: **Delete the dead `Error string` branch** (D5), and replace the stale comment describing
       `{data, error, timestamp: time}` with one naming the real error path (natsclient's `error: `
       body convention). Gated on 2.5 confirming
-- [x] 4.3 **DONE** — `TestGateway_PrefixKeepsItsOwnUnwrapPath` pins order and asserts prefix still projects a bare array  
+- [x] 4.3 **DONE — the order claim was FALSE and is now true.** The original test did not pin the
+      order at all (review mutation-proved it: swapping the two blocks left the package green),
+      because with an UNWRAPPED prefix reply both orders yield the same array. Added
+      `TestGateway_PrefixUnwrapOrderIsLoadBearing`, which feeds an ENVELOPED
+      `PrefixQueryResponse` — the only input that distinguishes them — and is verified RED under
+      the reversed order (projects an object instead of an array)  
       ORIGINAL: Detection runs before the `graph.query.prefix` special case, and the ORDER is pinned by a
       test (D4) — a future field addition must break a test, not a deployment
 - [x] 4.4 **DONE** — `TestGateway_SummaryProjectsUnwrapped`  
       ORIGINAL: `graph.query.summary` → `graphSummary` projects `total_entities` at the top level. This is
       gh#762's motivating instance; it is a test case, not the acceptance criterion
-- [x] 4.5 **DONE — `TestGateway_EnvelopeProjectsIdenticallyAcrossFamilies`.** ONE payload, both subjects, `require.JSONEq` on the projections. Verified RED under a restored prefix gate (with the detector still present, so the mutation compiled): the two projections differed by exactly one `data` hop  
+- [x] 4.5 **DONE, with its scope CORRECTED** → `TestGateway_UnwrapIsSubjectInvariant`. ONE payload,
+      both subjects, `require.JSONEq`; verified RED under a restored prefix gate (detector still
+      present, so the mutation compiled). **It is subject-invariance coverage, NOT proof of a
+      reachable proxy instance** — no reachable proxy surfaces an envelope today, and claiming
+      otherwise was the review's HIGH finding. The live evidence that the families do not
+      partition by envelope usage is `graph.query.summary`: reachable, served by graph-query's
+      OWN handler, and enveloped  
       ORIGINAL: **REQUIRED by review — the cross-family test.** Exercise the proxy path: a
       `graph.index.query.*` envelope surfacing under a `graph.query.*` subject
       (`handleQuerySemantic` / `handleQuerySpatial` return the downstream response verbatim), asserted
@@ -98,7 +119,10 @@ session re-litigating finished work, exactly as a file predicting success costs 
       is load-bearing for D1 and must be load-bearing for the coverage. Two separate per-family tests
       would pass under a subject-keyed implementation and prove nothing about the decision this
       design rests on
-- [x] 4.6 **DONE** — no response type on the projection path occupies the envelope shape; the collision table is the record  
+- [x] 4.6 **DONE** — no reachable response type occupies the envelope shape.
+      `TestGateway_RoutedShapesClassifyCorrectly` runs every routed subject's real reply through
+      the production projection path and asserts the classification, with a producer citation per
+      case  
       ORIGINAL: **Reservation check (1.5):** verify no response type on the projection path consists solely
       of envelope keys without being the envelope. Falls out of 2.1's enumeration; record the result
 
@@ -130,7 +154,10 @@ session re-litigating finished work, exactly as a file predicting success costs 
       ORIGINAL: **Record the stage RED against unfixed main, then green with the fix**, with output pasted
       in the PR. A stage never seen red is not evidence. Use `git stash` for the fails-without-fix
       check, never `git checkout`
-- [x] 5.6 **DONE** — stage publishes `gateway_shape_probes_checked` and FAILS if it is not 3, so a stage that silently skips cannot report green  
+- [x] 5.6 **DONE — the guard was a TAUTOLOGY and is now real.** `checked != len(probes)` is
+      unreachable (the loop returns on first error), so an emptied probe list reported GREEN with
+      zero assertions — the exact case it claimed to catch. Now compared against the literal
+      `wantShapeProbes = 3`  
       ORIGINAL: Confirm the stage actually RAN and asserted — count assertions/PASSes; a green new gate may
       have skipped everything
 
