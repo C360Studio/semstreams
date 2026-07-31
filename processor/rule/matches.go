@@ -35,11 +35,11 @@ import (
 // It touches NO engine state: no trigger latch, no last-triggered timestamp, no
 // match state. Calling it is not observable in a running engine's behavior.
 //
-// lifecycle may be nil. It governs ANSWERABILITY, not preference: with a lookup,
-// `$entity.lifecycle.*` conditions resolve; without one they cannot be answered and
-// Matches returns an error rather than a verdict. That is why it is a parameter and
-// not an option — passing nil is an honest "I don't have one", and the refusal that
-// follows is the correct outcome rather than a degraded one.
+// Matches answers WITHOUT a lifecycle lookup, so `$entity.lifecycle.*` conditions
+// cannot be resolved and are refused with an error rather than evaluated against an
+// absent value. If you have a lookup, call MatchesWithLifecycle — the pair is split
+// precisely so that this limitation is visible in the name you typed, rather than
+// hidden in a nil argument or an omitted option.
 //
 // Matches returns an error, never a bare false, for any condition it cannot fully
 // resolve — `$state.*`, `$prev.*`, and `transition` have no meaning outside a
@@ -67,9 +67,46 @@ import (
 // "nothing owed", and a recovery pass reads that as "stranded" and intervenes.
 // Treat an error as "cannot tell — leave it alone", which is the safe action in
 // both directions.
-func Matches(ctx context.Context, def Definition, state *gtypes.EntityState, lifecycle LifecycleLookup) (bool, error) {
+func Matches(ctx context.Context, def Definition, state *gtypes.EntityState) (bool, error) {
+	return matchesWithLookup(ctx, "Matches", def, state, nil)
+}
+
+// MatchesWithLifecycle is Matches for a caller that HAS a lifecycle lookup, so
+// `$entity.lifecycle.*` conditions can be answered instead of refused.
+//
+// The pair exists rather than one function with a nil-able parameter because the
+// lookup governs ANSWERABILITY, not preference — with it a class of conditions can
+// be evaluated, without it that class cannot be. Splitting puts that fact in the
+// function NAME, where a call site cannot miss it. A single nil-able parameter
+// leaves `Matches(ctx, def, state, nil)` looking complete while silently giving up
+// on every lifecycle condition, and a variadic option would hide it further still:
+// `Matches(ctx, def, state)` would compile, read as finished, and fail at runtime.
+//
+// lookup is REQUIRED here. Passing nil is a caller mistake, not a degraded mode —
+// the function for "I have no lookup" is Matches — so it is refused loudly rather
+// than silently downgraded. The check also catches a TYPED nil
+// (`var m *lifecycle.Manager`), which is a non-nil interface holding a nil pointer
+// and would otherwise pass a plain `!= nil` and panic inside LookupByEntityID.
+func MatchesWithLifecycle(
+	ctx context.Context, def Definition, state *gtypes.EntityState, lookup LifecycleLookup,
+) (bool, error) {
+	if isNilLookup(lookup) {
+		return false, fmt.Errorf(
+			"rule.MatchesWithLifecycle: lifecycle lookup is nil (a typed nil counts); " +
+				"call Matches instead if you have none — lifecycle conditions are then " +
+				"refused explicitly rather than silently unanswered")
+	}
+	return matchesWithLookup(ctx, "MatchesWithLifecycle", def, state, lookup)
+}
+
+// matchesWithLookup is the single implementation behind both entry points, so the
+// pair cannot drift.
+func matchesWithLookup(
+	ctx context.Context, caller string, def Definition,
+	state *gtypes.EntityState, lifecycle LifecycleLookup,
+) (bool, error) {
 	if state == nil {
-		return false, fmt.Errorf("rule.Matches: entity state is nil")
+		return false, fmt.Errorf("rule.%s: entity state is nil", caller)
 	}
 
 	// A disabled rule owes nothing — it cannot fire, so it cannot be mid-delivery.
@@ -113,11 +150,11 @@ func Matches(ctx context.Context, def Definition, state *gtypes.EntityState, lif
 		// it", which is actively misleading for a caller that passed one.
 		if lookupErr != nil && strings.HasPrefix(condition.Field, lifecycleSubstitutionPrefix) {
 			return false, fmt.Errorf(
-				"rule.Matches: definition %q: condition on %q is unanswerable because the "+
+				"rule.%s: definition %q: condition on %q is unanswerable because the "+
 					"supplied lifecycle lookup failed for %q: %w",
-				def.ID, condition.Field, state.ID, lookupErr)
+				caller, def.ID, condition.Field, state.ID, lookupErr)
 		}
-		return false, fmt.Errorf("rule.Matches: definition %q: %w", def.ID, err)
+		return false, fmt.Errorf("rule.%s: definition %q: %w", caller, def.ID, err)
 	}
 
 	logic := def.Logic
@@ -131,7 +168,7 @@ func Matches(ctx context.Context, def Definition, state *gtypes.EntityState, lif
 	// not reach an operator. eq/contains do not error on a leftover token — they
 	// compare it as an ordinary string and return a confident verdict, which is
 	// this capability's defining defect wearing a different hat.
-	if err := ensureNoUnresolvedConditionValues(def.ID, expr.Conditions); err != nil {
+	if err := ensureNoUnresolvedConditionValues(caller, def.ID, expr.Conditions); err != nil {
 		return false, err
 	}
 
@@ -147,7 +184,7 @@ func Matches(ctx context.Context, def Definition, state *gtypes.EntityState, lif
 // It reuses unresolvedTemplateVarRe — the same pattern the action path uses to warn
 // about surviving tokens — rather than a second literal list, for the same
 // single-source reason the stateful prefix set has one home.
-func ensureNoUnresolvedConditionValues(defID string, conditions []expression.ConditionExpression) error {
+func ensureNoUnresolvedConditionValues(caller, defID string, conditions []expression.ConditionExpression) error {
 	for _, condition := range conditions {
 		s, ok := condition.Value.(string)
 		if !ok {
@@ -155,9 +192,9 @@ func ensureNoUnresolvedConditionValues(defID string, conditions []expression.Con
 		}
 		if token := unresolvedTemplateVarRe.FindString(s); token != "" {
 			return fmt.Errorf(
-				"rule.Matches: definition %q: condition on %q has an unresolved value template %q; "+
+				"rule.%s: definition %q: condition on %q has an unresolved value template %q; "+
 					"it would be compared as a literal string and produce a confident wrong verdict",
-				defID, condition.Field, token)
+				caller, defID, condition.Field, token)
 		}
 	}
 	return nil

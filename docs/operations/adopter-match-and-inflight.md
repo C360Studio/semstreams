@@ -12,8 +12,18 @@ measurement that shaped the second one.
 ## Rule 1 — ask the framework whether a rule matches; do not rebuild the pipeline
 
 ```go
-matched, err := rule.Matches(ctx, def, entityState, lifecycleLookup) // lookup may be nil
+// no lifecycle lookup — $entity.lifecycle.* conditions are REFUSED, not guessed
+matched, err := rule.Matches(ctx, def, entityState)
+
+// with one — those conditions resolve
+matched, err := rule.MatchesWithLifecycle(ctx, def, entityState, lookup)
 ```
+
+**Pick by what you can answer, not by what you can pass.** The pair is split so the
+limitation is in the name you type: a lookup-less call cannot answer lifecycle
+conditions, and you find that out at the call site rather than at runtime. Passing
+nil to `MatchesWithLifecycle` is refused — including a typed nil — and points you
+back at `Matches`.
 
 `ctx` is not decoration: the lookup performs KV/graph I/O, so without it a degraded
 backend wedges your recovery pass indefinitely. Pass a deadline.

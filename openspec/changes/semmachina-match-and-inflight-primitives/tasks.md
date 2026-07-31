@@ -40,19 +40,25 @@
 - [x] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
       the existing method and the new entry point. **`EvaluateEntityState`'s observable behavior must
       not change** — see 5.1 for how that is proven, not asserted
-- [ ] 3.2 **REOPENED by Codex finding 4 — the signature gate was self-approved and must not be.**
-      The task was checked complete while its own text said the deviation "needs Fable
-      confirmation"; that is the process defect, independent of whether the deviation is right.
-      Current signature: `Matches(ctx context.Context, def Definition, state *gtypes.EntityState,
-      lifecycle LifecycleLookup) (bool, error)`. Two departures from `design.md:199-212` now need an
-      explicit ruling: **(a)** `LifecycleLookup` (narrow, read-only) instead of the approved concrete
-      `*lifecycle.Manager`; **(b)** `ctx` added as the first parameter (Codex finding 5 — the call
-      does KV/graph I/O and the repo is context-first). The typed-nil hazard Codex identified is
-      FIXED regardless of which way (a) goes: `isNilLookup` treats a typed nil as absent instead of
-      passing the guard and panicking in `LookupByEntityID`. Original rationale for (a): resolution
-      performs two lookups while `LifecycleManager` also carries `TransitionWith`/`Complete`/`Fail`,
-      so the concrete type makes a read demand a write capability. **Stays open until Fable rules.** Touches no `shouldTrigger`, no `lastTriggered`, no
-      cooldown state, no `MatchState`.
+- [x] 3.2 **RESOLVED by owner ruling 2026-07-31 — the signature is a SPLIT PAIR, not one function
+      with a nil-able lookup:**
+      `Matches(ctx, def, state) (bool, error)` and
+      `MatchesWithLifecycle(ctx, def, state, lookup LifecycleLookup) (bool, error)`, sharing one
+      implementation so the pair cannot drift. §1's holding is preserved and strengthened — the
+      lookup governs ANSWERABILITY, so it must be visible, and the name is the most visible place
+      there is. Ranked by where answerability shows up: split (in the name) > one nil-able parameter
+      (§1's approval — but `nil` reads as complete) > `...MatchOption` (nowhere; the call compiles,
+      reads as finished, fails at runtime). `ctx` is first per Codex finding 5.
+      **Honest correction to my own pitch:** I said the split would delete `isNilLookup`/reflect. It
+      does not — `LookupByEntityID` dereferences its receiver, so a typed nil still has to be caught.
+      What changed is its JOB: from silently treating a typed nil as absent, to refusing it loudly and
+      naming the entry point the caller actually wanted. Mutation-verified.
+      **Still open for Fable, narrowed:** `LifecycleLookup` (narrow read-only) vs the concrete
+      `*lifecycle.Manager`. Decisive constraint found while preparing options — `lifecycle.NewManager`
+      requires a `*natsclient.Client` and `newManagerForTest` is unexported, so a concrete parameter
+      makes Codex finding 2's REQUIRED unregistered-participant and transient-lookup unit tests
+      impossible. Findings 2 and 4a pull against each other; the interface is what lets both be
+      satisfied. `*lifecycle.Manager` satisfies it, so §1's intended call site is unchanged.
 - [x] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
       the first unresolvable field before any evaluation runs. `evaluator.go` is NOT modified
 - [x] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
@@ -141,7 +147,11 @@ restored. A guard test that passes with the guard removed proves nothing.
 - [x] 7.4 **[blocking 4b] Typed-nil panic.** `lifecycle != nil` admitted a typed nil
       (`var m *lifecycle.Manager`) as a live lookup, then panicked in `LookupByEntityID`.
       `isNilLookup` treats it as absent. Test asserts no panic AND the absent-lookup refusal
-- [ ] 7.5 **[blocking 4a] Signature gate — see reopened task 3.2. NOT self-approvable.**
+- [x] 7.5 **[blocking 4a] Signature gate — RULED by the owner, not self-approved.** Outcome: the
+      split pair (task 3.2). The process defect Codex named — a task checked complete while its own
+      text said it needed confirmation — is what got fixed; the ruling then went further than either
+      option on the table. The narrow-interface-vs-concrete question remains explicitly open and is
+      recorded as open rather than assumed closed by the split
 - [x] 7.6 **[high 5] `context.Context`.** Now the first parameter, propagated to the lifecycle
       lookup; cancellation test proves a blocked lookup returns instead of wedging the caller
 - [x] 7.7 **[high 6] Start-failure subscription leak** (introduced by this change's second
