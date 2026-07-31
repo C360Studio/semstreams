@@ -150,6 +150,7 @@ type LifecycleManager interface {
 	History(ctx context.Context, workflow, entityID string) ([]lifecycle.TransitionEvent, error)
 	Children(ctx context.Context, parentEntityID string, opts lifecycle.ChildOptions) ([]lifecycle.ChildResult, error)
 	References(ctx context.Context, entityID string) ([]lifecycle.ReferenceStub, error)
+	CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (lifecycle.Participant, error)
 	UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error
 	Transition(ctx context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, note string) error
 	Watch(ctx context.Context, workflow string) (<-chan lifecycle.Participant, error)

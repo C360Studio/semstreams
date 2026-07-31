@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -1085,4 +1086,70 @@ func (m *Manager) DespawnWith(ctx context.Context, workflow, entityID string, so
 		}
 	}
 	return m.Despawn(ctx, workflow, entityID)
+}
+
+// CreateFromOperator decodes an operator-supplied initial state into the
+// workflow's registered Schema and creates the instance, returning the
+// authoritative committed state (gh#814).
+//
+// This is the BIRTH lane, and it is the only lane that carries a full initial
+// state envelope. The must-exist lanes — UpdateFromOperator and Transition —
+// stay envelope-free and continue to require an existing entity. Nothing here
+// auto-vivifies: an operator who patches a non-existent instance still gets
+// ErrEntityNotFound, because a patch that silently created state would make
+// "the instance exists" unfalsifiable from the operator surface.
+//
+// CREATE-OR-FAIL. It delegates to Create, whose write is a CAS create; a
+// duplicate ID returns ErrAlreadyExists rather than overwriting. There is no
+// upsert lane on the operator surface, deliberately — upsert would make a
+// retried request indistinguishable from a fresh one, and the operator API is
+// exactly where that ambiguity is most expensive.
+//
+// Why the Manager owns the decode rather than handing callers a blank
+// Participant to fill: the workflow's Go type is registration-private, the
+// projection layer already owns Schema→instance allocation, and a two-step
+// "allocate then remember to Create" contract puts a half-built Participant in
+// a caller's hands. One call in, committed state out.
+//
+// The returned Participant is read back through Get, not echoed from the
+// input — so a caller renders what was committed (including any framework-
+// derived fields) rather than its own request body.
+//
+// The decoded state's Workflow() must match the workflow argument. A body
+// claiming a different workflow than the route it arrived on is refused rather
+// than silently trusted, since the route is what an authorization layer will
+// have gated on.
+func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (Participant, error) {
+	reg, err := m.lookupByWorkflow(workflow)
+	if err != nil {
+		return nil, err
+	}
+	if len(initial) == 0 {
+		return nil, fmt.Errorf("%w: initial state is required to create a %q instance",
+			ErrInvalidInitialState, workflow)
+	}
+
+	target := reflect.New(reg.meta.GoType).Interface().(Participant)
+	if err := json.Unmarshal(initial, target); err != nil {
+		return nil, fmt.Errorf("%w: decode initial state for workflow %q: %s",
+			ErrInvalidInitialState, workflow, err.Error())
+	}
+
+	if got := target.Workflow(); got != workflow {
+		return nil, fmt.Errorf("%w: initial state declares workflow %q but was submitted to %q",
+			ErrInvalidInitialState, got, workflow)
+	}
+	if target.EntityID() == "" {
+		return nil, fmt.Errorf("%w: initial state for workflow %q has no entity ID",
+			ErrInvalidInitialState, workflow)
+	}
+
+	if err := m.Create(ctx, target); err != nil {
+		return nil, err
+	}
+
+	// Authoritative read-back. Create emits triples and graph-ingest merges
+	// them; returning the projection of what actually landed is the only
+	// answer that stays true if the merge dropped or defaulted anything.
+	return m.Get(ctx, workflow, target.EntityID())
 }

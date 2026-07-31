@@ -59,6 +59,8 @@ type fakeManager struct {
 	defs              []lifecycle.WorkflowDef
 	historyByID       map[string][]lifecycle.TransitionEvent
 	writableFields    map[string]map[string]bool // workflow → field → allowed
+	createCalls       int
+	createErr         error
 	updateCalls       int
 	transitionCalls   int
 	transitionErr     error
@@ -187,6 +189,41 @@ func (m *fakeManager) Children(_ context.Context, parentEntityID string, _ lifec
 
 func (m *fakeManager) References(_ context.Context, _ string) ([]lifecycle.ReferenceStub, error) {
 	return nil, nil
+}
+
+// CreateFromOperator mirrors the real Manager's create-or-fail contract:
+// decode into the workflow's shape, refuse a body naming a different
+// workflow than the route, refuse a missing entity ID, 409-equivalent on a
+// duplicate, and return the STORED state rather than the submitted body.
+func (m *fakeManager) CreateFromOperator(_ context.Context, workflow string, initial json.RawMessage) (lifecycle.Participant, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.createCalls++
+	if m.createErr != nil {
+		return nil, m.createErr
+	}
+	if len(initial) == 0 {
+		return nil, fmt.Errorf("%w: empty body", lifecycle.ErrInvalidInitialState)
+	}
+	var p fakeParticipant
+	if err := json.Unmarshal(initial, &p); err != nil {
+		return nil, fmt.Errorf("%w: %s", lifecycle.ErrInvalidInitialState, err.Error())
+	}
+	if p.WorkflowF != workflow {
+		return nil, fmt.Errorf("%w: body workflow %q != route %q", lifecycle.ErrInvalidInitialState, p.WorkflowF, workflow)
+	}
+	if p.EntityIDF == "" {
+		return nil, fmt.Errorf("%w: no entity id", lifecycle.ErrInvalidInitialState)
+	}
+	if m.entities[workflow] == nil {
+		m.entities[workflow] = make(map[string]*fakeParticipant)
+	}
+	if _, exists := m.entities[workflow][p.EntityIDF]; exists {
+		return nil, fmt.Errorf("%w: %s", lifecycle.ErrAlreadyExists, p.EntityIDF)
+	}
+	stored := p
+	m.entities[workflow][p.EntityIDF] = &stored
+	return &stored, nil
 }
 
 func (m *fakeManager) UpdateFromOperator(_ context.Context, workflow, entityID string, patch map[string]any) error {
@@ -1056,5 +1093,171 @@ func mustDecodeJSON(t *testing.T, r *http.Response, into any) {
 	t.Helper()
 	if err := json.NewDecoder(r.Body).Decode(into); err != nil {
 		t.Fatalf("decode JSON: %v", err)
+	}
+}
+
+// TestCreateInstance_BirthLane is gh#814's acceptance path at the gateway
+// boundary: an external client creates the first instance on a fresh store,
+// then reads and transitions it.
+//
+// Before this route existed the surface exposed list/get/history/children,
+// operator state patch, and transition — every operation EXCEPT the one that
+// makes the first instance. A composition that had correctly disabled every
+// unbound product writer therefore had no supported public way to create
+// deterministic state, and the workarounds (re-enable a legacy seed writer, or
+// publish raw graph mutations) are exactly what the ownership cutover forbids.
+func TestCreateInstance_BirthLane(t *testing.T) {
+	srv, mgr := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
+		Workflow:               "mission",
+		OperatorWritableFields: []string{"owner_org_id"},
+	})
+	defer srv.Close()
+
+	body := `{"entity_id":"acme.ops.gcs.mission.instance.001","workflow":"mission","phase":"planned","owner_org_id":"acme"}`
+	resp, err := http.Post(srv.URL+"/lifecycle/workflows/mission", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST create: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusCreated {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("create status = %d, want 201 (body: %s)", resp.StatusCode, raw)
+	}
+
+	// The response is the committed state read back, not the request echoed.
+	var created map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if got := created["entity_id"]; got != "acme.ops.gcs.mission.instance.001" {
+		t.Errorf("created entity_id = %v, want the created instance", got)
+	}
+	if got := created["phase"]; got != "planned" {
+		t.Errorf("created phase = %v, want planned", got)
+	}
+	if mgr.createCalls != 1 {
+		t.Errorf("CreateFromOperator called %d times, want 1", mgr.createCalls)
+	}
+
+	// The instance is now readable through the existing GET lane — the point
+	// of the whole exercise is deterministic state a later assertion can rest
+	// on, so a create that did not become readable would be worthless.
+	getResp, err := http.Get(srv.URL + "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.001")
+	if err != nil {
+		t.Fatalf("GET created instance: %v", err)
+	}
+	defer func() { _ = getResp.Body.Close() }()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200 — created instance is not readable", getResp.StatusCode)
+	}
+}
+
+// TestCreateInstance_IsCreateOrFail pins the ruling's create-or-fail
+// semantics. A duplicate ID must be a 409 conflict and must NOT overwrite:
+// there is no upsert lane on the operator surface, deliberately, because
+// upsert makes a retried request indistinguishable from a fresh one.
+func TestCreateInstance_IsCreateOrFail(t *testing.T) {
+	srv, mgr := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{Workflow: "mission"})
+	defer srv.Close()
+
+	body := `{"entity_id":"acme.ops.gcs.mission.instance.dup","workflow":"mission","phase":"planned","owner_org_id":"first"}`
+	first, err := http.Post(srv.URL+"/lifecycle/workflows/mission", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	_ = first.Body.Close()
+	if first.StatusCode != http.StatusCreated {
+		t.Fatalf("first create status = %d, want 201", first.StatusCode)
+	}
+
+	// Same ID, different payload — an upsert would silently replace.
+	second := `{"entity_id":"acme.ops.gcs.mission.instance.dup","workflow":"mission","phase":"planned","owner_org_id":"second"}`
+	dup, err := http.Post(srv.URL+"/lifecycle/workflows/mission", "application/json", strings.NewReader(second))
+	if err != nil {
+		t.Fatalf("duplicate create: %v", err)
+	}
+	defer func() { _ = dup.Body.Close() }()
+	if dup.StatusCode != http.StatusConflict {
+		raw, _ := io.ReadAll(dup.Body)
+		t.Fatalf("duplicate create status = %d, want 409 (body: %s)", dup.StatusCode, raw)
+	}
+
+	// And the original survived untouched.
+	stored, err := mgr.Get(context.Background(), "mission", "acme.ops.gcs.mission.instance.dup")
+	if err != nil {
+		t.Fatalf("read back after duplicate: %v", err)
+	}
+	if got := stored.(*fakeParticipant).OwnerOrgIDF; got != "first" {
+		t.Errorf("owner_org_id = %q after a refused duplicate, want %q — the conflict must not have overwritten", got, "first")
+	}
+}
+
+// TestCreateInstance_RejectsMalformedInitialState covers the 400 arm: a body
+// that cannot become a valid Participant for the routed workflow. Each case is
+// a distinct way an operator gets it wrong, and all of them must be 400 rather
+// than a 500 that reads as a server fault.
+func TestCreateInstance_RejectsMalformedInitialState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+	}{
+		{"empty body", ``},
+		{"not JSON", `{`},
+		{"workflow mismatch with the route", `{"entity_id":"acme.ops.gcs.mission.instance.x","workflow":"other","phase":"planned"}`},
+		{"no entity id", `{"workflow":"mission","phase":"planned"}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{Workflow: "mission"})
+			defer srv.Close()
+
+			resp, err := http.Post(srv.URL+"/lifecycle/workflows/mission", "application/json", strings.NewReader(tc.body))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusBadRequest {
+				raw, _ := io.ReadAll(resp.Body)
+				t.Errorf("status = %d, want 400 (body: %s)", resp.StatusCode, raw)
+			}
+		})
+	}
+}
+
+// TestCreateInstance_MustExistLanesDoNotAutoVivify is the other half of
+// envelope-on-create: the patch and transition lanes still require an existing
+// entity. If either created state on the way past, "the instance exists" would
+// stop being falsifiable from the operator surface.
+func TestCreateInstance_MustExistLanesDoNotAutoVivify(t *testing.T) {
+	srv, mgr := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
+		Workflow:               "mission",
+		OperatorWritableFields: []string{"owner_org_id"},
+	})
+	defer srv.Close()
+
+	const ghost = "acme.ops.gcs.mission.instance.ghost"
+	for _, lane := range []struct {
+		name string
+		path string
+		body string
+	}{
+		{"state patch", "/state", `{"owner_org_id":"acme"}`},
+		{"transition", "/transition", `{"phase":"active"}`},
+	} {
+		t.Run(lane.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/lifecycle/workflows/mission/"+ghost+lane.path,
+				"application/json", strings.NewReader(lane.body))
+			if err != nil {
+				t.Fatalf("POST %s: %v", lane.name, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+				t.Errorf("%s on a non-existent instance returned %d — must-exist lanes must not auto-vivify", lane.name, resp.StatusCode)
+			}
+			if _, err := mgr.Get(context.Background(), "mission", ghost); err == nil {
+				t.Errorf("%s created the instance — only the create lane may", lane.name)
+			}
+		})
 	}
 }

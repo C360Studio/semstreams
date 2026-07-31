@@ -5,6 +5,7 @@
 //
 //	{root}                                  GET   → list workflow types + counts
 //	{root}/{type}                           GET   → list instances (query params for filters) — or WS upgrade when ?stream=true
+//	{root}/{type}                           POST  → create instance (birth lane; create-or-fail, 409 on duplicate)
 //	{root}/{type}/{id}                      GET   → instance state
 //	{root}/{type}/{id}/history              GET   → phase-transition history
 //	{root}/{type}/{id}/children             GET   → child instances
@@ -25,6 +26,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -62,12 +64,16 @@ func (c *Component) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case 0:
 		c.handleListWorkflows(w, r)
 	case 1:
-		// {type} — list instances OR WebSocket upgrade when
-		// ?stream=true. The WS path stays under the same URL for
-		// CORS and discovery parity (operator dashboards point at
-		// the workflow type, add ?stream=true to subscribe).
+		// {type} — create (POST), list instances (GET), OR WebSocket
+		// upgrade when ?stream=true. The WS path stays under the same
+		// URL for CORS and discovery parity (operator dashboards point
+		// at the workflow type, add ?stream=true to subscribe).
 		if r.URL.Query().Get("stream") == "true" {
 			c.handleWebSocket(w, r, segments[0])
+			return
+		}
+		if r.Method == http.MethodPost {
+			c.handleCreateInstance(w, r, segments[0])
 			return
 		}
 		c.handleListInstances(w, r, segments[0])
@@ -175,8 +181,10 @@ func (c *Component) handleListWorkflows(w http.ResponseWriter, r *http.Request) 
 // coercion against the registered struct.
 func (c *Component) handleListInstances(w http.ResponseWriter, r *http.Request, workflow string) {
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		c.writeError(w, http.StatusMethodNotAllowed, "GET only")
+		// POST is routed to create before reaching here, so anything
+		// arriving is neither — advertise both real verbs.
+		w.Header().Set("Allow", "GET, POST")
+		c.writeError(w, http.StatusMethodNotAllowed, "GET (list) or POST (create) only")
 		c.recordRequest(false, "method not allowed")
 		return
 	}
@@ -331,6 +339,38 @@ func (c *Component) handleStatePatch(w http.ResponseWriter, r *http.Request, wor
 		return
 	}
 	c.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	c.recordRequest(true, "")
+}
+
+// handleCreateInstance creates a workflow instance from an
+// operator-supplied initial state (gh#814).
+//
+// This is the BIRTH lane, and the only one carrying a full initial-state
+// envelope — the must-exist lanes (state patch, transition) stay
+// envelope-free and still require an existing entity. Nothing auto-vivifies.
+//
+// Create-or-fail: a duplicate ID is 409, never an overwrite. There is no
+// upsert lane on the operator surface, so a retried request is
+// distinguishable from a fresh one.
+//
+// Returns 201 with the authoritative committed state read back through the
+// Manager, not the request body echoed — a caller renders what landed.
+func (c *Component) handleCreateInstance(w http.ResponseWriter, r *http.Request, workflow string) {
+	r.Body = http.MaxBytesReader(w, r.Body, c.config.MaxBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		c.writeError(w, http.StatusBadRequest,
+			fmt.Sprintf("could not read request body: %s", err.Error()))
+		c.recordRequest(false, "unreadable body")
+		return
+	}
+
+	created, err := c.manager.CreateFromOperator(r.Context(), workflow, body)
+	if err != nil {
+		c.writeErrorFromLifecycle(w, "create", err)
+		return
+	}
+	c.writeJSON(w, http.StatusCreated, created)
 	c.recordRequest(true, "")
 }
 
@@ -511,6 +551,13 @@ func errorToStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, lifecycle.ErrUpdateRetriesExhausted):
 		return http.StatusConflict
+	case errors.Is(err, lifecycle.ErrAlreadyExists):
+		// Create-or-fail: a duplicate ID is a conflict, never an
+		// overwrite. Without this arm it fell through to 500 and read
+		// as a server fault instead of "that instance already exists".
+		return http.StatusConflict
+	case errors.Is(err, lifecycle.ErrInvalidInitialState):
+		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
 }
