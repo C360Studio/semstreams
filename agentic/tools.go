@@ -126,8 +126,27 @@ const (
 
 	// ToolEffectExternal means the tool can change state or take
 	// irrevocable action OUTSIDE the deployment boundary: a third-party
-	// write, an email, a spend. It DOMINATES ToolEffectMutating under
+	// write, an email, a purchase. It DOMINATES ToolEffectMutating under
 	// worst-effect semantics.
+	//
+	// "Spend" here means an irrevocable COMMERCIAL ACTION the tool
+	// initiates — an order, a transfer, a booking. It does NOT mean the
+	// metered cost of an external read: a query against a paid search or
+	// data API consumes quota, and quota consumption is a cost, not an
+	// effect on the world. A metered external read stays read_only. (The
+	// two doc comments used to answer this differently; this is the
+	// ruling.)
+	//
+	// MEDIATION DOES NOT LAUNDER EFFECT, but one hop through the
+	// deployment is not itself external. bash is external_effect because
+	// the command it runs can reach anything. A tool that writes a rule
+	// or deploys a flow is mutating, even when the flow it deploys later
+	// performs an outbound HTTP POST: the tool's own effect is the
+	// configuration write, and the outbound action is the deployed
+	// component's effect, classified where that component is described.
+	// Classify what the tool does, not what a thing it configures might
+	// later do — otherwise every configuration tool collapses to
+	// external_effect and the enum stops discriminating.
 	ToolEffectExternal ToolEffect = "external_effect"
 )
 

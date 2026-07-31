@@ -59,37 +59,43 @@ func newEffectBlindnessComponent(t *testing.T, toolName string, effect agentic.T
 	return executor
 }
 
-// TestApprovalGating_IsBlindToEffect is the "approval enforcement is not
-// weakened" acceptance test, asserted in BOTH directions.
+// TestApprovalFilter_GatesOnNameAlone pins the approval filter's own contract:
+// it decides from the configured name set and the ApprovedBy bypass, and it has
+// no other input.
 //
-// Proving the field changes nothing IS this increment's contract: effect
-// metadata is descriptive, and the configured approval-required NAME set stays
-// the sole authority. A one-directional test (only that a dangerous tool still
-// gates) would miss the more likely regression — a `read_only` declaration
-// quietly buying a tool out of a gate an operator configured deliberately.
-func TestApprovalGating_IsBlindToEffect(t *testing.T) {
+// NOTE ON SCOPE, because an earlier version of this test overclaimed and review
+// caught it: this exercises ApprovalFilter in isolation, where varying a tool's
+// EFFECT is not even expressible — FilterToolCalls takes []ToolCall, and
+// ToolCall carries no effect. So this cannot be the effect-blindness evidence,
+// and naming it that way asserted a property it never set up.
+//
+// The real effect-blindness assertion for the approval direction lives in
+// TestApprovalFilter_IsBlindToEffect_ThroughTheComponent (in-package), which
+// varies effect across registered definitions and checks the component's actual
+// filter. That one is mutation-proved against the gh#808 shape.
+func TestApprovalFilter_GatesOnNameAlone(t *testing.T) {
 	t.Parallel()
 
-	t.Run("a read_only tool named in the approval set still gates", func(t *testing.T) {
+	t.Run("a tool named in the approval set gates", func(t *testing.T) {
 		t.Parallel()
 		filter := agentictools.NewApprovalFilter([]string{"gated_tool"})
 		result := filter.FilterToolCalls("loop-1", []agentic.ToolCall{{ID: "c1", Name: "gated_tool"}})
 
 		if len(result.Rejected) != 1 {
-			t.Fatalf("rejected %d calls, want 1 — a read_only declaration must not buy a tool out of a configured gate", len(result.Rejected))
+			t.Fatalf("rejected %d calls, want 1", len(result.Rejected))
 		}
 		if len(result.Approved) != 0 {
 			t.Errorf("approved %d calls, want 0", len(result.Approved))
 		}
 	})
 
-	t.Run("an external_effect tool not named is not gated", func(t *testing.T) {
+	t.Run("a tool not named is not gated", func(t *testing.T) {
 		t.Parallel()
 		filter := agentictools.NewApprovalFilter([]string{"some_other_tool"})
 		result := filter.FilterToolCalls("loop-1", []agentic.ToolCall{{ID: "c1", Name: "dangerous_tool"}})
 
 		if len(result.Approved) != 1 {
-			t.Fatalf("approved %d calls, want 1 — an external_effect declaration must not add a gate the operator did not configure", len(result.Approved))
+			t.Fatalf("approved %d calls, want 1", len(result.Approved))
 		}
 		if len(result.Rejected) != 0 {
 			t.Errorf("rejected %d calls, want 0", len(result.Rejected))

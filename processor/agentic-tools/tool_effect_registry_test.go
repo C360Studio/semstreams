@@ -113,9 +113,6 @@ func TestRegistryListTools_NormalizesEffect(t *testing.T) {
 			t.Errorf("served Effect = %q, want %q — aggregation must normalize what registration never inspected",
 				tools[0].Effect, agentic.ToolEffectUnknown)
 		}
-		if tools[0].Effect == agentic.ToolEffectReadOnly {
-			t.Error("an unrecognized effect resolved to read_only at aggregation")
-		}
 	})
 
 	t.Run("definition drifts after registration", func(t *testing.T) {

@@ -24,7 +24,12 @@ func (e *StubWebSearchExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "web_search",
 			Description: "Search the web for documentation, API references, libraries, or technical solutions. Returns titles, URLs, and descriptions for matching results.",
-			Effect:      agentic.ToolEffectReadOnly,
+			// read_only, unlike the Brave-backed executor's mutating: the
+			// stub has no TriplePublisher and emits nothing. Two definitions
+			// of the same tool name legitimately carry different effects
+			// because they ARE different implementations; discovery reports
+			// whichever one this deployment registered.
+			Effect: agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

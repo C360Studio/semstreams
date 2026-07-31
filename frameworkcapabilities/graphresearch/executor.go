@@ -167,6 +167,12 @@ func (e *ResearchGraphExecutor) SetLogger(logger *slog.Logger) {
 func (e *ResearchGraphExecutor) ListTools() []agentic.ToolDefinition {
 	return []agentic.ToolDefinition{{
 		Name: ResearchGraphToolName,
+		// mutating: spawning a research operation writes a LoopEntity into
+		// the loops KV bucket and the research.requested.<loopID> trigger
+		// key, and the chain publishes triples. In-deployment state change,
+		// so worst-effect is mutating even though the answer it returns is
+		// a read (gh#749, ADR-089).
+		Effect: agentic.ToolEffectMutating,
 		Description: "Spawn an asynchronous graph-research operation. The chain runs the existing graph classifier, " +
 			"routes to one of {synthesize_directly, retighten, walk_seeds, decompose}, executes multi-tier subqueries, " +
 			"assesses sufficiency, and synthesises an answer with provenance refs. Returns immediately and terminates " +

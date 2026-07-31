@@ -395,10 +395,20 @@ func (s *Scenario) verifyRegisteredTools(ctx context.Context, result *scenarios.
 	return nil
 }
 
-// toolListSubject is the default discovery request/reply subject. The
-// agentic-tools component subscribes here unless a port named "tool.list"
-// overrides it, and this deployment declares no such port.
-const toolListSubject = "tool.list"
+// toolListSubject is the discovery request/reply subject THIS deployment
+// serves on. It is deliberately NOT the "tool.list" default.
+//
+// This tier's TOOL stream covers `tool.>`, so a request to the default subject
+// is captured by JetStream and answered with a publish ack
+// (`{"stream":"TOOL","seq":N}`) before the component's core-NATS responder ever
+// sees it — silently, because the subscription itself succeeds. The component
+// documents the override (`agentic-tools/config.go`: "Override to e.g.
+// 'discovery.tool.list' when JetStream streams cover 'tool.>'"), and the flow
+// config now declares it.
+//
+// Found by this stage on its first run. Filed as the underlying footgun: a
+// deployment silently loses tool discovery, and nothing warns.
+const toolListSubject = "discovery.tool.list"
 
 // verifyToolEffectCatalog asserts the operator-visible discovery catalog carries
 // a resolved effect classification for every tool (gh#749, ADR-089).
@@ -436,7 +446,13 @@ func (s *Scenario) verifyToolEffectCatalog(ctx context.Context, result *scenario
 		return fmt.Errorf("unmarshal tool.list response: %w (body: %.200s)", err, raw)
 	}
 	if len(response.Tools) == 0 {
-		return fmt.Errorf("tool.list returned zero tools — the catalog assertion would be vacuous (body: %.200s)", raw)
+		// A body shaped like {"stream":...,"seq":...} is a JetStream publish
+		// ack, not a catalog: a stream whose subjects cover the discovery
+		// subject answers the request before the component's core-NATS
+		// responder does, and the subscription still succeeds so nothing warns.
+		return fmt.Errorf("%s returned zero tools — the catalog assertion would be vacuous (body: %.200s). "+
+			"A {\"stream\",\"seq\"} body means a JetStream stream captured the discovery subject; "+
+			"override the tool.list port subject to one no stream covers", toolListSubject, raw)
 	}
 
 	validEffects := map[string]bool{

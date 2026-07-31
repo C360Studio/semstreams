@@ -178,9 +178,18 @@ func (r *ExecutorRegistry) ListTools() []agentic.ToolDefinition {
 			//     ToolDefinition at all, so executors registered that
 			//     way never pass the RegisterExecutor check.
 			//
-			// Every framework consumer of tool definitions — dispatch's
-			// resolveDefaultTools, the loop's discoverTools, the
-			// discovery catalog — reads through this one choke point.
+			// Every framework consumer of tool definitions reads through
+			// this one choke point. Enumerated, because the enumeration
+			// IS the evidence for the guarantee:
+			//   - agentic-dispatch/component.go resolveDefaultTools
+			//   - agentic-loop/handlers.go discoverTools
+			//   - rule/actions.go resolveToolNames (publish_agent's
+			//     default_tools resolver)
+			//   - agentic-tools/component.go Component.ListTools (both
+			//     the local and shared branches)
+			// Deliberate non-consumer: agentic-detonator/canary.go calls
+			// its own executor's ListTools directly and feeds a canary
+			// model, never a registry or a discovery catalog.
 			def.Effect = def.Effect.Canonical()
 			tools = append(tools, def)
 		}

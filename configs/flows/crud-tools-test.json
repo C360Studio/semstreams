@@ -172,7 +172,8 @@
         "allowed_tools": ["create_rule", "update_rule", "delete_rule", "list_rules", "get_rule"],
         "ports": {
           "inputs": [
-            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true},
+            {"name": "tool.list", "type": "nats", "subject": "discovery.tool.list"}
           ],
           "outputs": [
             {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}

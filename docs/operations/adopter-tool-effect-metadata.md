@@ -110,16 +110,33 @@ approval defaults (deferred, filed separately).
 
 ## What SemStreams classified
 
-Every framework-owned tool is classified, enforced by a source-level check so a
-new framework tool cannot ship unclassified. Broad strokes:
+Every tool in the in-repo packages that register into the shared executor
+registry is classified, enforced by a source-level check that validates the
+value (not just the field's presence) so a new tool in those packages cannot
+ship unclassified or misspelled. Broad strokes:
 
 | Effect | Tools |
 |---|---|
-| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `search_graph`, `summarize_graph`, `read_loop_result`, `component_catalog`, `flow_monitor`, `web_search`, and the `list_*` / `get_*` half of the rule, flow, persona, and flow-template tools |
-| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `instantiate_flow_template`, `deploy_flow`, `start_flow`, `stop_flow`, `undeploy_flow`, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis` |
+| `read_only` | `query_entity`, `query_entities`, `query_relationships`, `query_neighbors`, `query_by_type`, `search_graph`, `summarize_graph`, `read_loop_result`, `component_catalog`, `flow_monitor`, `instantiate_flow_template` (renders, persists nothing), and the `list_*` / `get_*` half of the rule, flow, persona, and flow-template tools |
+| `mutating` | the `create_*` / `update_*` / `delete_*` half of those same CRUD tools, `deploy_flow`, `start_flow`, `stop_flow`, `undeploy_flow`, `scratchpad`, `write_todos`, `decide`, `emit_lesson`, `emit_diagnosis`, `research_graph`, and `web_search` **when backed by a real provider** — it writes observation triples to the graph; the no-provider stub is `read_only` |
 | `external_effect` | `bash`, `http_request` |
 
-**Your own executors are not covered by that check** — they are outside the
-framework packages. The fail-safe covers them instead: an undeclared effect
-resolves to `unknown`, never to `read_only`. Classify them yourself if you want
-them to read as anything better than unclassified.
+Note `web_search`: two implementations share one tool name and legitimately
+carry different effects. Read the effect off the catalog your deployment serves
+rather than assuming a name maps to a fixed classification.
+
+**Your own executors are not covered by that check** — it scans only the in-repo
+packages that register into the shared registry. The fail-safe covers yours
+instead: an undeclared effect resolves to `unknown`, never to `read_only`.
+Classify them yourself if you want them to read as anything better than
+unclassified.
+
+## Two rules for classifying your own tools
+
+- **A metered external read is `read_only`.** Quota consumption is a cost, not an
+  effect on the world. `external_effect` "spend" means an irrevocable commercial
+  action the tool initiates — an order, a transfer, a booking.
+- **Mediation does not launder effect, but one hop is not external.** A tool that
+  writes config is `mutating` even if the thing it configures later reaches
+  outward; that outbound action is the deployed component's effect. Classify what
+  the tool itself does.

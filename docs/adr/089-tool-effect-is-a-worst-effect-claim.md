@@ -106,7 +106,24 @@ framework-side. Sending it would manufacture the appearance of a control.
 the loop. A product that wants the model to know a tool is dangerous says so in
 persona prose — a product decision, not a wire contract.
 
-**7. The enum is open for extension.**
+**7. Metered external reads are `read_only`; mediation does not launder effect.**
+
+Two cases the four definitions did not decide, and adopters hit both immediately.
+
+*Metered reads.* A query against a paid search or data API consumes quota. Quota
+consumption is a **cost**, not an effect on the world, so a metered external read
+stays `read_only`. "Spend" in the `external_effect` sense means an irrevocable
+commercial action the tool initiates — an order, a transfer, a booking.
+
+*Transitivity.* A tool that writes a rule or deploys a flow is `mutating`, even
+when the deployed flow later performs an outbound POST. The tool's own effect is
+the configuration write; the outbound action belongs to the deployed component
+and is classified where that component is described. `bash` is `external_effect`
+not because it is mediated but because the command it runs can reach anything
+directly. Without this rule every configuration tool collapses to
+`external_effect` and the enum stops discriminating.
+
+**8. The enum is open for extension.**
 
 Consumers must not switch exhaustively without a default arm resolving to
 `unknown`, so a later member lands additively without a coordinated release.
@@ -126,11 +143,22 @@ Consumers must not switch exhaustively without a default arm resolving to
   bought nothing except divergence from the spelling both consumers were told to
   wait for.
 - Every framework-owned tool is classified at birth, enforced by a source-level
-  check over the owning packages. An all-`unknown` framework catalog would have
-  poisoned the deferred approval-defaulting work before it started.
-- Application-supplied executors outside the framework packages are not bound by
-  that check; the fail-safe covers them — an undeclared effect resolves to
+  check that scans every in-repo package registering into the shared executor
+  registry — `processor/agentic-tools{,/executors}` and
+  `frameworkcapabilities/graphresearch`. An all-`unknown` framework catalog would
+  have poisoned the deferred approval-defaulting work before it started. The
+  check validates the VALUE, not merely the presence of the field: 10 of the 16
+  builtin registration sites use `RegisterTool(name, executor)`, which never
+  inspects a definition, so boot-time enum refusal structurally cannot see their
+  typos.
+- Application-supplied executors outside those packages are not bound by that
+  check; the fail-safe covers them — an undeclared effect resolves to
   `unknown`, never to `read_only`.
+- Two definitions of the same tool NAME may legitimately carry different effects
+  when they are different implementations. `web_search` is the shipped case: the
+  Brave-backed executor is `mutating` because it writes observation triples to
+  the graph, while the stub emits nothing and is `read_only`. Discovery reports
+  whichever implementation the deployment registered.
 
 ## Non-goals
 

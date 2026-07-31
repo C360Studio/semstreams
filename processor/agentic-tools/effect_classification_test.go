@@ -30,14 +30,37 @@ const minimumClassifiedTools = 40
 // the correction this program adopted after two hand-maintained inventories
 // drifted (#787, #792).
 //
+// IT CHECKS THE VALUE, NOT JUST THE KEY. Presence-only would be a guard that
+// reports green without checking: 10 of the 16 builtin registration sites use
+// RegisterTool(name, executor), which never inspects a ToolDefinition, so
+// RegisterExecutor's boot-time enum refusal cannot see their typos. A
+// misspelled `Effect: "read-only"` on one of those would register fine and be
+// silently normalized to unknown at aggregation. So each literal's value must
+// resolve to one of the four agentic.ToolEffect* constants.
+//
 // WHAT IT DOES NOT COVER, stated rather than implied: application-supplied
-// executors outside these packages. Those are third-party producers, and the
-// framework's answer for them is the fail-safe — an undeclared effect resolves
-// to unknown at aggregation, never to read_only. This test binds the framework's
-// OWN tools, where shipping an unclassified tool would poison downstream
-// approval defaulting with a catalog full of `unknown`.
+// executors outside the scanned packages. Those are third-party producers, and
+// the framework's answer for them is the fail-safe — an undeclared effect
+// resolves to unknown at aggregation, never to read_only. This test binds the
+// framework's OWN tools, where shipping an unclassified tool would poison
+// downstream approval defaulting with a catalog full of `unknown`.
+//
+// The scanned set is every in-repo package that registers into the shared
+// ExecutorRegistry. Verified by grepping RegisterTool/RegisterExecutor call
+// sites repo-wide: processor/agentic-tools{,/executors} plus
+// frameworkcapabilities/graphresearch (registered from both binaries' main.go).
+// processor/agentic-detonator constructs ToolDefinitions but never registers
+// them — it calls its executor's ListTools directly to feed a canary model — so
+// it reaches no discovery catalog and is deliberately out of scope.
 func TestEveryFrameworkToolDeclaresAnEffect(t *testing.T) {
-	dirs := []string{".", "executors"}
+	dirs := []string{".", "executors", "../../frameworkcapabilities/graphresearch"}
+
+	validEffectConstants := map[string]bool{
+		"ToolEffectUnknown":  true,
+		"ToolEffectReadOnly": true,
+		"ToolEffectMutating": true,
+		"ToolEffectExternal": true,
+	}
 
 	type unclassified struct {
 		pos  string
@@ -95,6 +118,7 @@ func TestEveryFrameworkToolDeclaresAnEffect(t *testing.T) {
 			})
 
 			for pos, lit := range defs {
+				effectValue := ""
 				hasEffect := false
 				toolName := "<unnamed>"
 				for _, elt := range lit.Elts {
@@ -109,14 +133,30 @@ func TestEveryFrameworkToolDeclaresAnEffect(t *testing.T) {
 					switch key.Name {
 					case "Effect":
 						hasEffect = true
+						// Only a reference to one of the exported constants
+						// counts. A string literal — including a correctly
+						// spelled one — is rejected on purpose: it is the
+						// spelling that drifts, and the constants exist so
+						// the compiler catches a rename.
+						if sel, ok := kv.Value.(*ast.SelectorExpr); ok {
+							effectValue = sel.Sel.Name
+						} else {
+							effectValue = exprText(kv.Value)
+						}
 					case "Name":
 						toolName = exprText(kv.Value)
 					}
 				}
-				if hasEffect {
-					classified++
-				} else {
+				switch {
+				case !hasEffect:
 					missing = append(missing, unclassified{pos: pos, name: toolName})
+				case !validEffectConstants[effectValue]:
+					missing = append(missing, unclassified{
+						pos:  pos,
+						name: toolName + " (declares Effect: " + effectValue + ", not an agentic.ToolEffect* constant)",
+					})
+				default:
+					classified++
 				}
 			}
 		}
