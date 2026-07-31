@@ -9,9 +9,9 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-31 (SESSION 18 CLOSED AND RECONCILED — both archives landed; see NEXT item 0.
-> Queue MEASURED 2026-07-31 after the closes: 123 open = 32 bug / 84 enh / 6 docs (labels sum to
-> 122; one issue carries none). gh#712/#732/#763 are NOW all closed — but #732 and #763 were still
+> **STATE 2026-07-31 (SESSION 19 CLOSED — the #731+#733 epic MERGED; see NEXT item 0.
+> Queue MEASURED at close: 121 open = 32 bug / 82 enh / 6 docs (labels sum to 120; one issue carries
+> none). gh#712/#732/#763 are NOW all closed — but #732 and #763 were still
 > OPEN when session 18 wrote them down as closed. They were closed on owner CONFIRM-CLOSE only after
 > their implementing paths were re-verified in merged code. RE-MEASURE anyway; this line is a
 > snapshot, not a source. See Issue flow below). Recently completed — verify with
@@ -147,13 +147,17 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    **Fable design review BEFORE implementation**; session 18 shipped three symbols that predate
 >    that rule and never got the pass. Do not add a fourth.
 >
->    **IMPLEMENTED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 29/33, PR #777 OPEN.**
->    §1 Fable gate PASSED before any code was written. **The 4 open tasks are the review chain and
->    the archive: §6.1 reviewer and §6.3 owner-run Codex are OUTSTANDING, and this is a CODE PR, so
->    `--auto` MUST NOT be armed until the Codex round closes** (the docs-only close-out PRs were a
->    different case). Gates green: lint, `go vet -tags=integration`, `go test -race ./...` 0 failures,
->    `openspec validate --strict` 34/0, no schema drift; guards mutation-checked rather than merely
->    green. Both seams re-verified at HEAD, and the
+>    **MERGED 2026-07-31 — PR #777 `72f9b15b`. gh#731 + gh#733 CLOSED on owner CONFIRM-CLOSE.**
+>    `semmachina-match-and-inflight-primitives` 37/41; the 4 open are §6.1 reviewer (NOT run — off in
+>    that session), §6.3 Codex re-check (NOT run — owner armed `--auto` without one), and the archive.
+>    **THE ARCHIVE IS THE NEXT ACTION FOR THIS CHANGE.**
+>
+>    **Shipped:** `rule.Matches` / `rule.MatchesWithLifecycle` (split pair, one implementation,
+>    concrete `*lifecycle.Manager`, ctx first) and the agentic-loop in-flight query on
+>    `agentic.query.inflight.<deployment>`. Adopter note
+>    `docs/operations/adopter-match-and-inflight.md`.
+>
+>    Both seams re-verified at HEAD, and the
 >    scoping turned up one thing that changes the work: **gh#733's stated premise is falsified.** The
 >    issue says the loop consumer's ack floor "is the only authoritative answer"; #758 D0 measured
 >    `AckFloor` lying in BOTH directions and ADR-088 records the rejection. Implementing #733 as
@@ -1032,3 +1036,33 @@ Append one line per session. Newest last.
   regressing the practice this file celebrates) — Purpose written from the archived change, stub
   count back to 11; and readiness task 9.1 was left unchecked though PR #771 is the commit that
   performed it. **Next is unchanged: #731 + #733, Fable design review BEFORE implementation.**
+- **2026-07-31 (session 19)** — **#731+#733 epic MERGED (PR #777 `72f9b15b`); both issues CLOSED.**
+  Also landed: #776 (session-18 close-out reconciled — five claims measurement contradicted). Queue
+  121 open = 32/82/6; in-flight changes 4, of which one is this epic awaiting archive.
+  **THE FINDING IS NOT THE FEATURE. Every defect this session was caught EXTERNALLY; none by me
+  re-reading my own work.** Three rounds, worth carrying individually:
+  (1) **Codex found 4 blocking + 2 high + a verification gap I had CHECKED OFF AS COMPLETE.** The
+  gap — a wire test that published nothing, so a handler hardcoded to zero would pass — I had
+  *named in my own summary* and checked the box anyway. Naming a gap is not covering it.
+  (2) **Fixing a finding introduced a worse bug, and the mutation check is the only thing that
+  caught it.** My first fix for "supplied lookup ≠ resolved state" raised the lookup error
+  unconditionally — which would have refused EVERY ordinary definition whenever a Manager was
+  supplied, because `LookupByEntityID` errors for any entity that is not lifecycle-managed. The
+  mutation reported **0 failing tests**, which is what sent me looking. *A fix is new code* is now
+  measured, not asserted.
+  (3) **I argued a design position on a premise that collapsed under one owner question.** I claimed
+  a concrete `*lifecycle.Manager` made required tests impossible; `natsclient.NewTestClient` works
+  fine, so the real cost was only that they need Docker. Retracted in the design doc rather than
+  quietly dropped. **Ruling: split pair + concrete type** — and the concrete type delivered the
+  `reflect`/`isNilLookup` deletion my own split had promised and failed to deliver.
+  (4) **A red CI `Test` job after rebase, because I ran half of what CI runs** (`-race ./...` but not
+  `-race -tags=integration -p 2 ./...`). It surfaced a five-poll-loop-wide race in graph-ingest's
+  readiness test: `readEnvelope` hard-failed on a key that only exists after the first status tick.
+  A helper for the READINESS capability — whose whole point is absent ≠ negative — treated absent as
+  failure. Fixed here (`tryReadEnvelope`), and **my first mutation check of that fix was itself
+  broken**: it did not compile, so `grep "^--- FAIL"` matched nothing, which reads identically to
+  "the fix was unnecessary". Same defect shape as the bug, twice in one session.
+  **Keepers: a state file records measurements, never predictions** (#776 corrected five of those).
+  **Re-verify the base after main moves** — the ruleset permits merging a stale-base green.
+  **Run what CI runs, both suites.** **Mutation-check the mutation check.**
+  **Next: archive `semmachina-match-and-inflight-primitives`, then the complexity-pivot remainder.**
