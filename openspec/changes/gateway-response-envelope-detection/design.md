@@ -132,13 +132,36 @@ against main before the fix, green after. A stage that has never been seen red i
    own. Rollback is only clean *before* the tag; after it, adopters have conformed and reverting
    becomes a second breaking change. This is why it precedes the tag rather than following it.
 
-## Open Questions
+## Resolved questions (Fable review, task 1.1 — APPROVE)
 
-1. **Which e2e tier owns the shape stage** — `core` (cheapest, runs everywhere, gateway is core
-   surface) vs `structural`. Leaning `core`: the assertion needs no inference tier, and a gate that
-   runs on every tier invocation catches more.
-2. **Does the adopter note enumerate affected GraphQL fields exhaustively, or state the rule?**
-   Leaning exhaustive — an adopter diffing their client wants the list, and the list is derivable
-   once. To be confirmed with the enumeration from D1's risk mitigation, which produces it anyway.
-3. **`request_id` is `omitempty` and unused by producers** — none of the enumerated call sites set it.
-   Possible fourth phantom; out of scope here, worth a follow-up issue rather than a silent fix.
+1. **Tier: `statistical`.** Not `core` as this design leaned. It is the per-PR tier, and gh#768's
+   entire value is running *on this PR* — RED against main before the fix. A gate that does not run
+   where the fix lands is not the fix's gate. The stage asserts **three** things, not one:
+   `graph.query.*` unwrapped, `graph.index.query.*` **unchanged**, and `graph.query.prefix`
+   untouched (its own struct, per scoping finding 2). The second and third are regression assertions:
+   this change must not fix one family by breaking the others.
+2. **Adopter note: exhaustive, as a three-way table** — subjects that CHANGE (with exact before/after
+   JSON paths per subject), subjects ALREADY FLAT, and subjects UNCHANGED-BY-DESIGN. Sisters grep
+   their read paths against the note; anything less makes them re-derive it, which is what the
+   migration-checklist rule exists to prevent. The third column is the one that would be omitted by
+   instinct and is the one that stops an adopter "fixing" a path that was never broken.
+3. **`request_id` phantom: confirmed, and dispositioned SEPARATELY.** It is allowed-optional in the
+   closed key set, so the discriminator is indifferent to whether it survives. Deleting it inside this
+   change would violate the same one-disposition-per-commit discipline task 2.4 already applies to
+   `graph.query.capabilities`.
+
+**Added on review — D7, the shape reservation.** The closed key set is exact for every response type
+that exists today and carries one residual forward: a response type introduced LATER consisting only
+of envelope keys would be unwrapped as an envelope. Detection cannot defend against this, because such
+a response is indistinguishable from the envelope on the wire. The spec therefore RESERVES the
+envelope's key set — a non-envelope type may not occupy it — converting a latent runtime defect into a
+reviewable contract violation, caught when the type is written rather than when a consumer loses a
+field. This is what earns the capability its own home: "an unowned contract is one nobody checks"
+applies forward to types not yet written, not only backward to the defect that prompted it.
+
+**Added on review — the cross-family test is required, not optional.** Scoping finding 1 (the proxy
+path surfacing a `graph.index.query.*` envelope under a `graph.query.*` subject) is the mechanism that
+makes subject enumeration *unsound* rather than merely fragile, and it is load-bearing for D1. It must
+therefore be load-bearing for the coverage: an explicit cross-family test, not the two families tested
+separately. Testing each family alone would pass under a subject-keyed implementation and prove
+nothing about the decision this design rests on.

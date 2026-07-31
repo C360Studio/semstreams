@@ -71,6 +71,40 @@ envelope is the ordinary case for the families that do not use one.
 - **WHEN** the gateway projects it
 - **THEN** it is passed through unchanged
 
+### Requirement: The envelope's key set MUST be reserved against collision by other response types
+A response type served through the gateway's projection path MUST NOT consist solely of keys drawn
+from the envelope field set (`data`, `request_id`, `timestamp`) unless it IS the envelope. The
+envelope's shape is reserved, and a new or modified response type that would occupy it MUST be given
+a distinguishing field or a different field name instead.
+
+Detection on a closed key set is exact for every response type that exists when it is written, and
+carries exactly one residual risk forward: a response type introduced LATER that happens to consist
+only of envelope keys would be detected as an envelope and unwrapped, silently removing a nesting
+level from a payload nobody intended to wrap. Detection cannot defend against this on its own, because
+by construction such a response is indistinguishable from the envelope on the wire.
+
+Stating the reservation converts that residual from a latent runtime defect into a **reviewable
+contract violation** — visible when the offending type is written, in review, rather than when a
+consumer loses a field in production. This is also what earns this capability its own home: an
+unowned contract is one nobody checks, and that observation applies forward to types not yet written,
+not only backward to the defect that prompted the capability.
+
+#### Scenario: A new response type may not occupy the envelope's shape
+
+- **GIVEN** a proposed gateway response type whose marshalled form consists only of keys drawn from
+  `{data, request_id, timestamp}`
+- **AND** that type is not the query-response envelope
+- **WHEN** it is reviewed
+- **THEN** it is rejected as a contract violation
+- **AND** the remedy is a distinguishing field or a different field name, not a detection exception
+
+#### Scenario: A reserved-shape collision is caught before it ships
+
+- **GIVEN** a change introducing such a type
+- **WHEN** the projection path's response types are checked against the reservation
+- **THEN** the collision is reported against the new type
+- **AND** it is not left to surface as a missing field in a consumer
+
 ### Requirement: The envelope MUST be removed exactly once, never iteratively
 The gateway MUST unwrap at most one envelope layer per response, and MUST NOT re-test the unwrapped
 payload in order to unwrap again.

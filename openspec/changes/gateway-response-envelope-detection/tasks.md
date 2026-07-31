@@ -7,13 +7,24 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 1. Design sign-off (before implementation)
 
-- [ ] 1.1 Fable design review of `design.md`. This is BREAKING on consumer surface and adds a new
-      exported symbol to the `graph` framework package, so review happens at DESIGN time, before
-      implementation, per the contracts' exported-surface rule
-- [ ] 1.2 Resolve design Open Question 1 — which e2e tier owns the shape stage (`core` vs
-      `structural`). Leaning `core`; the assertion needs no inference tier
-- [ ] 1.3 Resolve Open Question 2 — adopter note enumerates affected GraphQL fields exhaustively, or
-      states the rule. The enumeration in 2.1 produces the list either way
+- [x] 1.1 Fable design review of `design.md` — **APPROVE**, with one spec addition, three answers and
+      one required test. The load-bearing decision (closed key set over `has("data")`) was approved
+      **for the stated reason**: it is the difference between fixing a cosmetic defect and creating
+      silent data loss
+- [x] 1.2 Open Question 1 resolved — **tier is `statistical`, not `core`.** It is the per-PR tier and
+      gh#768's whole value is running ON this PR, RED against main before the fix; a gate that does
+      not run where the fix lands is not the fix's gate
+- [x] 1.3 Open Question 2 resolved — **adopter note is exhaustive, as a three-way table** (changed
+      with exact before/after paths · already flat · unchanged-by-design)
+- [x] 1.4 Open Question 3 resolved — **`request_id` phantom confirmed, dispositioned SEPARATELY.**
+      Allowed-optional in the closed set, so the discriminator is indifferent to its fate; deleting it
+      here would violate the one-disposition-per-commit discipline 2.4 already applies
+- [ ] 1.5 **Spec addition required by review: RESERVE the envelope key set.** A non-envelope response
+      type MUST NOT consist solely of keys from `{data, request_id, timestamp}`. Written into the
+      `gateway-response-projection` delta — converts the closed set's one residual (a LATER type
+      coincidentally occupying the envelope's shape, which detection cannot defend against because it
+      is indistinguishable on the wire) from a latent runtime defect into a reviewable contract
+      violation
 
 ## 2. Enumerate before changing anything
 
@@ -32,6 +43,9 @@ session re-litigating finished work, exactly as a file predicting success costs 
 - [ ] 2.5 **Confirm the `error` key is phantom before deleting its branch (D5):** grep every producer
       for an `error` key set on this envelope. A phantom is phantom once the PRODUCER side is checked,
       not once the type is read
+- [ ] 2.6 **File the `request_id` phantom as its own issue** (1.4) — confirmed set by no producer.
+      Allowed-optional in the closed key set, so the discriminator is indifferent; it is NOT deleted
+      inside this change
 
 ## 3. Detector in `graph` (framework package — new exported surface)
 
@@ -59,10 +73,24 @@ session re-litigating finished work, exactly as a file predicting success costs 
       test (D4) — a future field addition must break a test, not a deployment
 - [ ] 4.4 `graph.query.summary` → `graphSummary` projects `total_entities` at the top level. This is
       gh#762's motivating instance; it is a test case, not the acceptance criterion
+- [ ] 4.5 **REQUIRED by review — the cross-family test.** Exercise the proxy path: a
+      `graph.index.query.*` envelope surfacing under a `graph.query.*` subject
+      (`handleQuerySemantic` / `handleQuerySpatial` return the downstream response verbatim), asserted
+      as ONE test crossing the families — **not** the two families tested separately. Scoping finding
+      1 is the mechanism that makes subject enumeration *unsound* rather than merely fragile, so it
+      is load-bearing for D1 and must be load-bearing for the coverage. Two separate per-family tests
+      would pass under a subject-keyed implementation and prove nothing about the decision this
+      design rests on
+- [ ] 4.6 **Reservation check (1.5):** verify no response type on the projection path consists solely
+      of envelope keys without being the envelope. Falls out of 2.1's enumeration; record the result
 
 ## 5. The shape gate (gh#768) — falsifiable or it is not a gate
 
-- [ ] 5.1 Add the e2e response-shape stage in the tier chosen at 1.2
+- [ ] 5.1 Add the e2e response-shape stage in the **`statistical`** tier (1.2) — the per-PR tier, so
+      the gate runs on the PR carrying the fix
+- [ ] 5.1a The stage asserts **three** things, not one: (a) the `graph.query.*` family is unwrapped,
+      (b) `graph.index.query.*` is **UNCHANGED**, (c) `graph.query.prefix` is untouched. (b) and (c)
+      are regression assertions — this change must not fix one family by breaking the others
 - [ ] 5.2 Assertions are over **raw JSON keys**, never a decoded struct — both shapes unmarshal
       cleanly into a permissive target, so a decoding test passes under the defect AND the fix
 - [ ] 5.3 Assert the ABSENCE of `data.data.*`, not merely the presence of expected leaves. Reaching
@@ -76,8 +104,11 @@ session re-litigating finished work, exactly as a file predicting success costs 
 
 ## 6. Adopter obligation (ours: publish; theirs: conform)
 
-- [ ] 6.1 Adopter note in `docs/operations/` — the shape change, affected fields per 1.3, and the
-      before/after for each
+- [ ] 6.1 Adopter note in `docs/operations/` — **a three-way table** (1.3): subjects that CHANGE with
+      exact before/after JSON paths per subject · subjects ALREADY FLAT · subjects
+      UNCHANGED-BY-DESIGN. Sisters grep their read paths against it; anything less makes them
+      re-derive the list. **The third column is the one instinct omits** and the one that stops an
+      adopter "fixing" a path that was never broken
 - [ ] 6.2 Note that this lands INSIDE the v1.0.0-beta.159 lockstep wave, so adopters conform once.
       Activated by the tag alongside gh#753
 - [ ] 6.3 **Task-list residency:** no cross-repo adoption task belongs in this file. Sister migration
