@@ -11,9 +11,13 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 > **STATE 2026-07-31 (SESSION 20 — THE TAG IS CUT. `v1.0.0-beta.159` is pushed
 > (`8813270c`), which makes this the first POST-TAG session. The sister-lockstep wave is
-> RELEASED and gh#753 is ACTIVE — sisters were pinned at .158 and could not compile against
-> main; they now can. Expect inbound adoption issues; per the residency rule they arrive as NEW
-> issues here, never as tasks in our change files.
+> RELEASED and **SISTERS ARE ADOPTING IT NOW** — release step 7 done 2026-07-31, so the tag
+> checklist is discharged end to end, owner action included. They were pinned at .158 and could not
+> compile against main. **gh#753 is live, not pending.** Adoption problems arrive as NEW issues
+> here, never as tasks in our change files (residency rule). **Triage an inbound adopter issue
+> AHEAD of the in-flight queue** — a blocked sister is a worse state than a stalled change. First
+> ones to expect are against the two published breaking notes: the gateway response shape (one
+> field, `graphSummary`) and the bucket catalog.
 > **The whole pre-tag checklist is discharged** — see the Tag milestone section, now marked DONE.
 > **AFTER the tag, same session:** NATS converged to ONE pinned version — the survey found three
 > regimes at once, including an unpinned **`nats:latest` in CI**, which meant the `CI Status Check`
@@ -360,8 +364,13 @@ tag commit: lint clean · `go vet` plain + `-tags=integration` + `-tags=live_llm
 The annotated tag names every breaking change with its migration doc, so a sister team can work
 straight from `git show v1.0.0-beta.159` — 92 commits, 7 breaking merges.
 **Item 2 cost two manual tier runs; that is what gh#769 (nightly) exists to remove.**
-**Step 7 is OWNER-ONLY and is the one remaining action: hand each sister team the tag + its
-migration doc.**
+**Step 7 DONE 2026-07-31 — sisters are adopting `v1.0.0-beta.159` now.** The tag checklist is
+fully discharged, owner action included. **gh#753 is therefore LIVE, not pending**: adoption
+problems arrive as NEW issues in this repo (residency rule), and the first ones to expect are
+against the two published breaking notes — the gateway response shape
+(`docs/operations/adopter-gateway-response-shape.md`, one field: `graphSummary`) and the bucket
+catalog. Triage those ahead of the in-flight queue when they land; a blocked sister is a worse
+state than a stalled change.
 
 Original rationale, retained: the tag is what unblocks downstream — sisters were pinned to .158
 and could not compile against main; every breaking merge since (projection-contract arc, Epic C catalog + EMBEDDINGS_CACHE
@@ -1286,8 +1295,8 @@ Append one line per session. Newest last.
   **The wave is released and gh#753 is active.** Post-tag queue re-sequenced: the three in-flight
   changes come FIRST (the 80-95% band is where this program's audit said the guardrail work
   hides), and `predicate-contract-enforcement`'s remaining blocker is a genuine SECURITY gap —
-  runtime authorization vs configuration-time authoring checks. **Owner action outstanding: hand
-  the sisters the tag** (release step 7; the only part not doable from here).
+  runtime authorization vs configuration-time authoring checks. **Release step 7 closed the same day: sisters are
+  adopting .159.** The wave is fully released — tag cut, guidance published, adopters moving.
   **Then, post-tag, two unplanned pieces that were both worth it.** (a) A "update NATS and make the
   Dockerfiles match" ask turned out to be **three regimes at once**, including `nats:latest` in
   ci.yml/release.yml/semspec-validation.yml — the merge gate was testing a FLOATING substrate, and
