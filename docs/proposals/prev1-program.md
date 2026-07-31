@@ -14,6 +14,14 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > gh#712/#732/#763 closed — RE-MEASURE, do not trust this line. See
 > Issue flow below). Recently completed — verify with `git log --oneline -15` + `gh issue list`,
 > detail lives in the archives and the Epics table, do NOT re-derive:**
+> **2026-07-30 late additions:** `poison-response-scoping` unhooked + archived (PR #773: its
+> MODIFIED delta targeted a spec home existing only in `predicate-contract-enforcement`'s
+> unarchived delta — withdrawn with auditable rescope, `graph-state-contract` seeded as the
+> 30th capability spec, cutover-paragraph reconciliation handed to the owning thread as
+> **gh#772, a pre-archive obligation on predicate-contract-enforcement**). Spec queue → 4 once
+> #773 lands, all genuinely moving. #762 (gateway double-nesting) carries two Fable
+> constraints: fix by ENVELOPE DETECTION not prefix-append, and it is BREAKING for adapted
+> consumers — sister-lockstep + the #768 shape stage is its merge gate.
 > Epic C FULL ARC merged + archived (#716→#719→#721→#722→#724: 22-row bucket catalog, acquisition
 > seam, component-start barrier, fail-closed boot, boot-boundary config drain, EMBEDDINGS_CACHE
 > class deleted). `storage-capacity-observability` IMPLEMENTED + MERGED (PR #737 `552a1647`,
@@ -243,7 +251,7 @@ fix is overdue.**
 
 | Class | Structural fix | Status (2026-07-30) |
 |---|---|---|
-| Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | fix in flight (`caught-up-readiness-producers`); #733 constrained by comment; memory sharpened |
+| Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | **MERGED** (#758 `52cf2abf`: `OutstandingWork(uint64,error)` sealed at the seam, upstream nats.go Info() race guarded on the handle); #733 constrained; change still open for the #763 gauges fold — MUST NOT archive while its MODIFIED gauge requirement is false (Fable ruling 2026-07-30) |
 | Hand-rolled ack-disposition tables (classify→Ack/Nak/Term per consumer) | shared `natsclient` helper on `pkg/errs` classes | **open — gh#759** (5 sites: heartbeat, objectstore, agentic-loop, keyed_ingest, stream.go; #727 was instance five) |
 | Occurrence identity (unique sibling doesn't protect the group) | one discriminator convention (`Context`) / repeated-value grammar | 5 spellings live → gh#683 owns the general fix; scratchpad instance fixed in #747 |
 | Get-or-create discards declared config (boot order decides) | enforce at the acquisition seam | KV closed (bucket catalog, #724); streams closed (#737); consumer-config drift UNCHECKED |
