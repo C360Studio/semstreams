@@ -102,7 +102,7 @@ jobs:
           cache: true
 
       - name: Pull NATS image
-        run: docker pull nats:latest
+        run: docker pull nats:2.14-alpine
 
       - name: Run unit tests
         run: go test -v -race ./...

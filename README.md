@@ -41,7 +41,7 @@ For local development, we run NATS in Docker:
 task dev:nats:start
 
 # Or manually with Docker
-docker run -d --name semstreams-nats -p 4222:4222 nats:2.12-alpine -js
+docker run -d --name semstreams-nats -p 4222:4222 nats:2.14-alpine -js
 ```
 
 See [Prerequisites Guide](docs/basics/00-prerequisites.md) for detailed setup instructions.

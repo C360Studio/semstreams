@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       nats:
-        image: nats:2.10
+        image: nats:2.14
       postgres:
         image: postgres:17
     steps:
@@ -117,7 +117,7 @@ profiles:
       config:
         workflow_path: .github/workflows/{spec_id}-qa.yml
         runner_label: ubuntu-latest
-        nats_image: nats:2.10
+        nats_image: nats:2.14
         postgres_image: postgres:17
     lease:
       mode: ephemeral         # CI runs are one-shot

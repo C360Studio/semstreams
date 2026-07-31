@@ -13,7 +13,7 @@ tasks:
         if docker ps -a --format '{{.Names}}' | grep -q '^semstreams-nats$'; then
           docker start semstreams-nats 2>/dev/null || true
         else
-          docker run -d --name semstreams-nats -p 4222:4222 -p 8222:8222 nats:2.12-alpine -js -m 8222
+          docker run -d --name semstreams-nats -p 4222:4222 -p 8222:8222 nats:2.14-alpine -js -m 8222
         fi
         echo "[OK] NATS running at nats://localhost:4222"
         echo "     Monitor at http://localhost:8222"

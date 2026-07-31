@@ -16,7 +16,7 @@
 services:
   # NATS Server with JetStream
   nats:
-    image: nats:2.10-alpine
+    image: nats:2.14-alpine
     container_name: semstreams-agentic-nats
     ports:
       - "34222:4222" # Client connections (3xxxx range to avoid collisions)

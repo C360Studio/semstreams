@@ -129,7 +129,7 @@ docker run -d \
   --name semstreams-nats \
   -p 4222:4222 \
   -p 8222:8222 \
-  nats:2.12-alpine -js -m 8222
+  nats:2.14-alpine -js -m 8222
 ```
 
 Ports:
@@ -223,7 +223,7 @@ Another NATS instance or application is using the port. Find and stop it:
 lsof -i :4222
 
 # Or use a different port
-docker run -d --name semstreams-nats -p 4223:4222 nats:2.12-alpine -js
+docker run -d --name semstreams-nats -p 4223:4222 nats:2.14-alpine -js
 # Then update configs/hello-world.json to use nats://localhost:4223
 ```
 

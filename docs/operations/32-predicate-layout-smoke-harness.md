@@ -15,13 +15,28 @@ test; do not copy its codecs, workload generator, percentile calculation, or res
 
 | Dependency | Decision pin |
 |---|---|
-| NATS server | `nats:2.12.4-alpine` |
-| NATS image digest | `sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea` |
-| Go SDK | `github.com/nats-io/nats.go v1.48.0` |
+| NATS server | `nats:2.14.4-alpine` |
+| NATS image digest | `sha256:f2123f533c2b0cada0a5c5ec434fb2b8cfe1cf220215ef9d7517e1372917ad66` |
+| Go SDK | `github.com/nats-io/nats.go v1.52.0` |
 
 Changing the server digest or SDK invalidates inherited conformance and performance evidence. A predicate grammar,
 entity-ID bound, filter implementation, storage layout, or test profile change requires the affected gates to be
 rerun as well.
+
+**Pin moved 2026-07-31 (gh#790), and the clause above was honoured rather than waived.** The repo had three
+NATS regimes at once — `2.10-alpine`, `2.12-alpine`, and an unpinned `nats:latest` in CI — so the convergence
+onto `2.14.4-alpine` necessarily moved this pin. Both affected gates were **re-run against the new pin before it
+was written here**, and both passed:
+
+| Gate | Result on `nats:2.14.4-alpine` + `nats.go v1.52.0` |
+|---|---|
+| `TestIntegration_OwnerFilterLoadHarness` (workers-4) | PASS, 2.46s |
+| `TestIntegration_PredicateLayoutSmoke` (hash-catalog, raw-nine-token) | PASS, 6.18s |
+
+Conformance evidence is therefore re-established, not inherited across the version change. **Performance rows
+recorded below under the OLD pin are historical**: they remain a truthful record of what was measured on
+`2.12.4-alpine`, and are not claimed as current-pin evidence. Re-measure before citing a latency budget as
+current.
 
 ## Reproduction commands
 
@@ -69,7 +84,7 @@ match-set assertion.
 | Host CPU and memory | Apple M3 Pro; 12 CPU; 38,654,705,664 bytes RAM |
 | Docker allocation | 23,744 MB |
 | Docker client/server | 29.6.1/29.6.1; testcontainers API 1.51; CLI API 1.55 |
-| NATS server and image digest | `nats:2.12.4-alpine` and the pinned digest above |
+| NATS server and image digest | `nats:2.12.4-alpine` @ `sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea` |
 | Go SDK | `github.com/nats-io/nats.go v1.48.0` |
 | Evidence capture | [In-tree raw phase appendix](evidence/graph-index-pre-tag-0a7af288.md) |
 

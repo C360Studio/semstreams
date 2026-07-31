@@ -170,7 +170,7 @@ jobs:
 
             ```bash
             # Start SemStreams with NATS
-            docker run -d --name nats -p 4222:4222 nats:latest
+            docker run -d --name nats -p 4222:4222 nats:2.14-alpine
             docker run -d --name semstreams \
               --network host \
               -e SEMSTREAMS_NATS_URL=nats://localhost:4222 \
