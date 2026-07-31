@@ -192,7 +192,9 @@
 
 ## 9. Spec + docs
 
-- [ ] 9.1 Apply the `graph-index-readiness` delta; `openspec validate --all --strict`
+- [x] 9.1 Apply the `graph-index-readiness` delta; `openspec validate --all --strict` (performed by
+      the archive commit itself, PR #771 `7d4f967f`: 6 requirements added + 1 modified promoted to
+      live truth at `openspec/specs/graph-index-readiness/`; validate clean at 33 items)
 - [x] 9.2 **ADR-088** — one page: "readiness is per-producer; aggregation belongs to the consumer."
       This is a cross-repo contract (semdragon + SemMachina both consume it) and the decision most
       likely to be re-litigated. Mechanics stay in the spec
