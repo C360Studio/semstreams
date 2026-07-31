@@ -53,6 +53,21 @@ this entity a hop" reads a false negative as "this entity is stranded" and inter
 pack whose first-hop rule carries such a condition, that misclassifies every entity in the world.
 An error the caller can refuse on is recoverable; a fabricated verdict is not.
 
+The stateless entry point SHALL likewise propagate an **evaluation** error rather than converting it
+to a no-match verdict, even though the running engine converts it. The engine logs and returns false
+because a rule that cannot be evaluated must not fire; that is correct for firing and wrong for
+asking. The two SHALL therefore differ on error handling while never differing on a verdict, and the
+contract SHALL make the resulting three-way distinction explicit to callers:
+
+| Result | Means |
+|---|---|
+| no-match, no error | evaluation completed; the conditions do not hold; nothing is owed |
+| error | evaluation could not complete — absent `Required` field, operator failure, unresolved template |
+
+Collapsing the second row into the first reproduces this capability's own defect one level up: a
+malformed definition or a mis-shaped entity would report "nothing owed", and a consumer reads that as
+"stranded" and intervenes.
+
 The stateful evaluation path's behavior SHALL NOT change. A rule pack that evaluates today MUST
 evaluate identically afterward.
 
@@ -76,6 +91,13 @@ evaluate identically afterward.
 - **THEN** the field resolves and the match proceeds
 - **WHEN** it is matched statelessly WITHOUT one
 - **THEN** an error is returned rather than a verdict computed from an absent value
+
+#### Scenario: An unevaluable condition is distinguishable from an unmet one
+
+- **GIVEN** a definition whose condition marks a field `Required` and an entity lacking that field
+- **WHEN** it is matched statelessly
+- **THEN** an error is returned rather than a no-match verdict
+- **AND** the running engine, given the same input, still returns a bare no-match as it does today
 
 #### Scenario: The stateful path keeps its existing tolerance
 

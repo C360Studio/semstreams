@@ -25,30 +25,42 @@
 
 ## 2. Pre-implementation verification (may run in parallel with §1)
 
-- [ ] 2.1 Re-verify the four pre-processing steps at HEAD before refactoring anything — they are
+- [x] 2.1 Re-verify the four pre-processing steps at HEAD before refactoring anything — they are
       cited at `expression_factory.go:176-182,196,203-208` as of this change's authoring, and line
       pins go stale
-- [ ] 2.2 Enumerate every existing caller of `EvaluateEntityState` and of the loop's `consumerName`
+- [x] 2.2 Enumerate every existing caller of `EvaluateEntityState` and of the loop's `consumerName`
       derivation. The shared-helper refactor must leave each one behaviorally identical, and the
       enumeration is what makes "identical" checkable rather than asserted
-- [ ] 2.3 Confirm the evaluator's unresolvable-prefix set has a single source the pre-scan can derive
+- [x] 2.3 Confirm the evaluator's unresolvable-prefix set has a single source the pre-scan can derive
       from (D2's stated drift hazard). If it is a bare literal list today, lifting it to one shared
       constant is part of this change, not a follow-up
 
 ## 3. gh#731 — stateless Definition matching (rule-engine)
 
-- [ ] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
+- [x] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
       the existing method and the new entry point. **`EvaluateEntityState`'s observable behavior must
       not change** — see 5.1 for how that is proven, not asserted
-- [ ] 3.2 Implement `Matches(def Definition, state *graph.EntityState, lifecycle *lifecycle.Manager)
-      (bool, error)` — §1-settled signature, no variadic. It touches no `shouldTrigger`, no
-      `lastTriggered`, no cooldown state, no `MatchState`
-- [ ] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
+- [x] 3.2 Implement `Matches(def Definition, state *gtypes.EntityState, lifecycle LifecycleLookup)
+      (bool, error)` — no variadic, per §1. Touches no `shouldTrigger`, no `lastTriggered`, no
+      cooldown state, no `MatchState`.
+      **DEVIATION FROM §1's LITERAL SPELLING — needs Fable confirmation, flagged not buried.**
+      Fable wrote the third parameter as `*lifecycle.Manager` (concrete). Implemented instead as a
+      new narrow read-only interface `LifecycleLookup` (`LookupByEntityID` + `GetWorkflowDefinition`).
+      Reason: the resolution path performs only those two lookups, while the package's existing
+      `LifecycleManager` also carries `TransitionWith` / `Complete` / `Fail` / `AssertRuleWritable`.
+      Demanding either the concrete Manager or the wide interface makes a caller hand a **read** a
+      **write** capability just to ask a question — the inverse of the exported-surface rule that
+      motivated Fable's own answer. `*lifecycle.Manager` satisfies `LifecycleLookup`, so Fable's
+      intended call site compiles unchanged; §1's actual holding (a named parameter, not a variadic,
+      because it governs answerability) is preserved exactly. `ExecutionContext.Lifecycle` narrowed
+      to the same interface for the same reason. **If Fable prefers the concrete type, this reverts
+      in one line.**
+- [x] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
       the first unresolvable field before any evaluation runs. `evaluator.go` is NOT modified
-- [ ] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
+- [x] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
       `$entity.lifecycle.*` condition errors rather than evaluating against an absent value
-- [ ] 3.5 Empty condition list returns no-match (D5), matching the wrapper rather than the evaluator
-- [ ] 3.6 Cooldown is NOT applied and a cooldown-declaring definition is NOT refused (D4). The doc
+- [x] 3.5 Empty condition list returns no-match (D5), matching the wrapper rather than the evaluator
+- [x] 3.6 Cooldown is NOT applied and a cooldown-declaring definition is NOT refused (D4). The doc
       comment states the **obligation** question — "does this pack still owe this entity work" — not a
       caveat about permissiveness, so a consumer needing the *instant* answer can tell at a glance
       this primitive is not theirs
@@ -77,17 +89,17 @@
 
 ## 5. Tests
 
-- [ ] 5.1 **The stateful path's existing rule-evaluation tests run UNMODIFIED against the refactor.**
+- [x] 5.1 **The stateful path's existing rule-evaluation tests run UNMODIFIED against the refactor.**
       If any assertion needs editing to stay green, that is evidence of a behavior change — report it,
       do not adjust the test
-- [ ] 5.2 Stateless match: templated condition values resolve; verdict agrees with the stateful path
+- [x] 5.2 Stateless match: templated condition values resolve; verdict agrees with the stateful path
       on a shared corpus of definitions. **Do not compute the expected verdict by calling the same
       helper under test** — a test that reconstructs the behavior it means to verify tests the
       reconstruction
-- [ ] 5.3 Unresolvable-field cases (`$state.*`, `$prev.*`, `transition`, lifecycle-without-Manager)
+- [x] 5.3 Unresolvable-field cases (`$state.*`, `$prev.*`, `transition`, lifecycle-without-Manager)
       each return an error and NO verdict. **Mutation-check each guard**: break it and confirm the
       test goes red, because a guard test that passes with the guard removed proves nothing
-- [ ] 5.4 Engine-state non-observability: run a stateless match against a definition the engine holds
+- [x] 5.4 Engine-state non-observability: run a stateless match against a definition the engine holds
       state for, then assert match state, trigger latch and last-triggered are byte-identical
 - [ ] 5.5 In-flight query: outstanding while unacked (across at least one heartbeat renewal), zero
       after ack, UNKNOWN when no consumer exists. The no-consumer case is the one that matters most —

@@ -177,38 +177,8 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 		return false
 	}
 
-	if len(r.conditions) == 0 {
-		return false
-	}
-
-	// Build LogicalExpression from rule conditions. Substitute
-	// $-prefixed string Values against the entity before evaluation
-	// — without this, a condition `value: "$entity.triple.foo.length"`
-	// reaches the operator as the literal template and coerce-errors.
-	// See SubstituteConditionValues for the contract; #149 surfaced
-	// the gap during reference-pack integration testing.
-	ec := &ExecutionContext{
-		EntityID:  entityState.ID,
-		Entity:    entityState,
-		Lifecycle: r.lifecycleManager,
-	}
-	expr := r.buildLogicalExpression()
-	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
-
-	// ADR-047: pre-resolve $entity.lifecycle.* condition fields into
-	// a stateFields map and dispatch via EvaluateWithStateAndMessage
-	// so the evaluator's broadened prefix check picks them up.
-	// No-op when no Manager is wired or the entity isn't
-	// lifecycle-managed.
-	stateFields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), r.lifecycleManager, entityState.ID, stateFields)
-	var result bool
-	var err error
-	if len(stateFields) > 0 {
-		result, err = r.evaluator.EvaluateWithStateAndMessage(entityState, stateFields, nil, expr)
-	} else {
-		result, err = r.evaluator.Evaluate(entityState, expr)
-	}
+	result, err := evaluateConditionsAgainstEntity(
+		r.evaluator, r.conditions, r.logic, entityState, r.lifecycleManager)
 	if err != nil {
 		slog.Debug("ExpressionRule: evaluation error",
 			"rule", r.name,
@@ -219,6 +189,56 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 
 	r.shouldTrigger = result
 	return result
+}
+
+// evaluateConditionsAgainstEntity is the pre-processing between a rule's declared
+// conditions and the evaluator. It is shared by the stateful path
+// (ExpressionRule.EvaluateEntityState) and the stateless one (Matches) so the two
+// cannot drift — which is the whole point of gh#731. A consumer that rebuilds this
+// sequence loses a step and gets a confident wrong answer; so would a second copy
+// of it living in this package.
+//
+// Three steps, each of which a bare-evaluator caller silently loses:
+//
+//  1. An empty condition list does NOT match. The evaluator disagrees —
+//     EvaluateWithStateAndMessage treats an empty list as passing — and the rule
+//     engine's answer is the production one, so it is the answer here.
+//  2. $-prefixed condition VALUES are substituted against the entity. Without
+//     this, `value: "$entity.triple.foo.length"` reaches the operator as literal
+//     template text and coerce-errors (#149, found during reference-pack
+//     integration testing).
+//  3. $entity.lifecycle.* fields are pre-resolved into a stateFields map and
+//     dispatched through EvaluateWithStateAndMessage so the evaluator's prefix
+//     check picks them up (ADR-047). No-op on a nil lookup or an entity that is
+//     not lifecycle-managed.
+//
+// Cooldown is deliberately NOT here: it is a property of a rule instance's
+// history, not of its conditions, and only the stateful caller has one.
+func evaluateConditionsAgainstEntity(
+	evaluator *expression.Evaluator,
+	conditions []expression.ConditionExpression,
+	logic string,
+	entityState *gtypes.EntityState,
+	lifecycleLookup LifecycleLookup,
+) (bool, error) {
+	if len(conditions) == 0 {
+		return false, nil
+	}
+
+	ec := &ExecutionContext{
+		EntityID:  entityState.ID,
+		Entity:    entityState,
+		Lifecycle: lifecycleLookup,
+	}
+	expr := expression.LogicalExpression{Conditions: conditions, Logic: logic}
+	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
+
+	stateFields := expression.StateFields{}
+	PopulateLifecycleStateFields(context.Background(), lifecycleLookup, entityState.ID, stateFields)
+	if len(stateFields) > 0 {
+		return evaluator.EvaluateWithStateAndMessage(entityState, stateFields, nil, expr)
+	}
+	return evaluator.Evaluate(entityState, expr)
 }
 
 // buildLogicalExpression converts rule conditions to expression.LogicalExpression

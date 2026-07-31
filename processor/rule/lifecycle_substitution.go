@@ -30,8 +30,27 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
+
+// LifecycleLookup is the READ-ONLY slice of the Lifecycle harness that condition
+// resolution needs — the two lookups that answer "what phase is this entity in"
+// and "what does this workflow declare".
+//
+// It exists because resolution is a read and must not demand a write capability.
+// The rule package's LifecycleManager (actions.go) also carries TransitionWith,
+// Complete, Fail and AssertRuleWritable — powers a match check has no business
+// holding, and which a caller would otherwise hand over just to ask a question.
+// Taking the narrow set means a read-only caller can supply a read-only object,
+// and a test double is two methods rather than eight.
+//
+// LifecycleManager and *lifecycle.Manager both satisfy it, so every existing
+// caller passes unchanged.
+type LifecycleLookup interface {
+	LookupByEntityID(ctx context.Context, entityID string) (lifecycle.Participant, error)
+	GetWorkflowDefinition(workflow string) (lifecycle.WorkflowDef, error)
+}
 
 // PopulateLifecycleStateFields resolves the Participant for entityID
 // via manager.LookupByEntityID and writes the resulting
@@ -51,7 +70,7 @@ import (
 // O(workflows) plus one direct-key KV Get per call (no bucket scan);
 // intended for the rule-fire path, not per-message-shaped. See
 // LookupByEntityID's contract.
-func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleManager, entityID string, fields expression.StateFields) {
+func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, entityID string, fields expression.StateFields) {
 	if manager == nil || entityID == "" || fields == nil {
 		return
 	}
