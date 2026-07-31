@@ -9,6 +9,84 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-01 (SESSION 22 CLOSE — THE BATCH IS BUILT AND UNDER REVIEW, AND THE
+> REVIEW ROUND WAS THE MOST EXPENSIVE OF THE PROGRAM SO FAR.** Three PRs open, one clean,
+> two carrying verdicts. **Read the two review verdicts before touching #816** — every
+> finding has a MEASURED repro behind it, and re-deriving them costs a session.
+>
+> **PR #815 (gh#812, ownership substrate) — FIXED, green, awaiting the Codex re-check
+> decision.** `WireOwnershipSubstrate` split out of `WireOwnership`. Codex AND
+> `semstreams-reviewer` independently found the same blocking defect and the reviewer
+> MEASURED it: the adopter recipe never ran the returned heartbeater, so a downstream
+> following it verbatim gets `OWNER_PRESENCE` ageing out at `PresenceTTL`, the next
+> registrant compacting their owning entry out of the epoch, and no `WatchRevival`. Fixed
+> at `209d67b7`. **The test also could not catch it** — two mutations survived it
+> (AttachOwnership deleted; retention backstop deleted). Both now killed by explicit
+> guards. Getting the backstop mutation honest took three attempts: deleting the block
+> failed the BUILD (not a pass), and disabling only its error check left the call running.
+>
+> **PR #816 (gh#814, lifecycle create lane) — 3 BLOCKING + 5 HIGH, NOT FIXED. This is the
+> next implementation work, and it is scoped: OpenSpec change `lifecycle-operator-create`
+> carries the whole target state (proposal + 9 task groups + spec delta, validates
+> --strict).** The route is right; projecting `Create` onto an externally-reachable surface
+> made three of its pre-existing gaps load-bearing:
+> · **entity-ID pattern never enforced on create** → measured orphan: commits, 201s,
+>   readable by `Get`, INVISIBLE to `List`/`Watch`, and `Despawn` refuses to reclaim it.
+>   Strict owner-lease does NOT save this (unclaimed ≠ stale).
+> · **a committed birth can report as 500** — `Create` discards the causal mutation
+>   response and `CreateFromOperator` does a post-hoc `Get`; the contract defines
+>   `Degraded=true` as committed-but-read-back-failed, MUST NOT retry.
+> · **operator births attributed to the framework** — `buildInitialTriples` hardcodes
+>   `TransitionSourceFramework`, corrupting audit provenance on the highest-privilege
+>   operator op.
+> Plus: **`Register` never validates that `Schema` implements `Participant`**, so the
+> unchecked assertion PANICS on the first request to the new lane (unreachable via `Get`
+> on a fresh volume — reachability differs by path, and this PR removes the compile-time
+> backstop that made the misconfig unshippable); **the no-auto-vivify claim has zero
+> production-seam coverage** (mutation-proved: both guards disabled in the real Manager,
+> whole repo green); **`ErrOwnerQuiesced` is the NEXT instance of the unmapped-sentinel
+> shape** `ErrAlreadyExists` had; 413 is a lie on all THREE POST lanes (pre-existing
+> class); `POST ?stream=true` skips create and breaks the error envelope.
+> **One claim is WITHDRAWN, not fixed:** the workflow-mismatch guard cannot fire in
+> production (every real `Participant` returns `Workflow()` from a package constant), and
+> the test "proving" it only passed because the FAKE has a JSON-decodable workflow field.
+>
+> **#816 must become `Refs gh#814`, not `Closes`** — merging currently closes the only
+> place its acceptance gap is tracked.
+>
+> **NEXT: implement `lifecycle-operator-create`** (start at task 1; the standing trap is
+> written at the top of its tasks.md). Then #810 (`tool.list` swallowed by JetStream when
+> a stream covers `tool.>` — found by #809's own new e2e stage). Then **#809 completes**
+> (gh#749 tool effect metadata; its e2e stage is deliberately RED and stays that way until
+> #810 lands — the red IS the finding). Then #795.
+>
+> **PR #809 (gh#749) — reviewer round done, fixed, awaiting Codex.** Canonical
+> `agentic.ToolEffect` as a WORST-EFFECT claim. Reviewer caught `web_search` classified
+> `read_only` while writing 7 triples per result (permissive direction, on cross-repo
+> metadata, inside the change that exists to prevent exactly that); an approval-blindness
+> test that could not fail; and `research_graph` shipping unclassified, falsifying the
+> ADR's own guarantee. All fixed at `b2362848`.
+>
+> **THREE ISSUES FILED FROM DEFECTS FOUND BY THIS SESSION'S OWN NEW TESTS:** #810
+> (tool.list capture), #811 (five e2e tiers exit 0 on scenario failure —
+> `ignore_error: true`; a gate that cannot go red is not a gate), #808 (effect-derived
+> approval policy, deferred with its registry-not-wire constraint recorded).
+>
+> **THE SESSION'S ONE LESSON, and it repeated across three PRs:** I built each thing
+> correctly against its ruling's named constraints and did not inspect the primitive I was
+> projecting. `Create`'s preconditions, its result contract, its audit attribution;
+> `WireOwnership`'s Phase-B half; `ToolDefinition`'s write paths. **Projecting an existing
+> primitive onto a new surface makes that primitive's existing gaps newly reachable** —
+> and reachability, not correctness, is what changed. Every one was caught externally.
+>
+> **gh#813's Test-job red could not be reproduced** — zero failed runs in the last 40
+> repo-wide, and its three SHAs all went green on attempt 1. Local
+> `-race -tags=integration -p 2 ./...` finished 136 ok / 0 FAIL; the one container-start
+> timeout earlier in the session (`port "8222/tcp"` at 120s, gh#736's open timeout class)
+> did not reproduce. `docker info` sat at 956–1078ms all session (healthy ≈50–100ms).
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-07-31 (SESSION 20 — THE TAG IS CUT. `v1.0.0-beta.159` is pushed
 > (`8813270c`), which makes this the first POST-TAG session. The sister-lockstep wave is
 > RELEASED and **SISTERS ARE ADOPTING IT NOW** — release step 7 done 2026-07-31, so the tag
