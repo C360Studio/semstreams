@@ -120,13 +120,19 @@
 
 ## 6. Review chain and gates
 
-- [ ] 6.1 `semstreams-reviewer` pass on the full diff
-- [ ] 6.2 `task lint` (revive warnings = CI failure), `go test -race ./...`, `-race -tags=integration`
-      branch integration sweep (framework-package change), `task schema:generate` + no-drift check
-- [ ] 6.3 Owner-run Codex round; fix findings. **A fix is new code and inherits the full defect rate**
+- [ ] 6.1 `semstreams-reviewer` pass on the full diff — **NOT RUN by this session** (subagents are
+      off in this session's operating rules). Outstanding before merge, not silently skipped
+- [x] 6.2 Gates run on the rebased branch: `task lint` clean; `go vet -tags=integration ./...` clean;
+      `go test -race ./...` **0 failures**; `openspec validate --all --strict` 34/0; `task
+      schema:generate` produced no drift. Branch integration sweep (`-race -tags=integration ./...`)
+      run separately — result posted on PR #777. **Guards mutation-checked, not merely green:**
+      replacing the no-consumer guard with `return 0, nil` turns three unit tests AND the integration
+      wire test red; restored, all pass
+- [ ] 6.3 Owner-run Codex round; fix findings. **NOT RUN — owner-run by definition, and this is a
+      CODE PR, so `--auto` must NOT be armed until it closes** (unlike the docs-only #776). **A fix is new code and inherits the full defect rate**
       — the remedy gets the same adversarial pass as the original, and "the finding is addressed" is
       not "the mechanism is closed"
-- [ ] 6.4 Additive/non-breaking confirmed: no NATS state, schema, wire-format or config change, so no
+- [x] 6.4 Additive/non-breaking confirmed: no NATS state, schema, wire-format or config change, so no
       e2e tier is owed beyond the per-PR `e2e:statistical`. **Re-confirm rather than assume** — if any
       of §3/§4 turned out to touch a boot path or a wire shape, this line is wrong and a tier is owed
 - [ ] 6.5 Both issues land in ONE PR (baton: PR scope = complete system, not chunk boundary); close

@@ -147,8 +147,13 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >    **Fable design review BEFORE implementation**; session 18 shipped three symbols that predate
 >    that rule and never got the pass. Do not add a fourth.
 >
->    **SCOPED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 3/33. §1 FABLE GATE PASSED
->    (APPROVED 2026-07-31); implementation is UNBLOCKED.** Both seams re-verified at HEAD, and the
+>    **IMPLEMENTED 2026-07-31 — `semmachina-match-and-inflight-primitives`, 29/33, PR #777 OPEN.**
+>    §1 Fable gate PASSED before any code was written. **The 4 open tasks are the review chain and
+>    the archive: §6.1 reviewer and §6.3 owner-run Codex are OUTSTANDING, and this is a CODE PR, so
+>    `--auto` MUST NOT be armed until the Codex round closes** (the docs-only close-out PRs were a
+>    different case). Gates green: lint, `go vet -tags=integration`, `go test -race ./...` 0 failures,
+>    `openspec validate --strict` 34/0, no schema drift; guards mutation-checked rather than merely
+>    green. Both seams re-verified at HEAD, and the
 >    scoping turned up one thing that changes the work: **gh#733's stated premise is falsified.** The
 >    issue says the loop consumer's ack floor "is the only authoritative answer"; #758 D0 measured
 >    `AckFloor` lying in BOTH directions and ADR-088 records the rejection. Implementing #733 as
