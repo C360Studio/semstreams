@@ -26,7 +26,7 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > Then gh#736's fast-fail flake class root-caused and fixed (#793). See the Small-bug track.
 > **`predicate-contract-enforcement` ARCHIVED 2026-07-31 — the last of the three Codex-arc changes.
 > In-flight 3 → 2.** Its 5.6c blocker was rescoped (Fable), not built as written.
-> **NEXT ACTION IS gh#749, NOT the in-flight arc** — #801 set that from semdev's post-.159
+> **NEXT ACTION IS **gh#812 LEADS the additive batch (semdragon BLOCKED mid-cutover: WireOwnership demands framework-private contracts — unconditional-wiring class; Fable ruling on the issue: SPLIT the substrate helper, don't skip-on-empty; zero-contract production-wire test RED-first) **+ gh#814 (lifecycle-gateway has every operation EXCEPT create — semdragon's fresh-volume acceptance blocked; ruling: POST /workflows/{type} → Manager.Create, envelope-on-create, CAS 409, composes with #678 allowlists; both semdragon blockers lead together), then gh#810** (tool.list swallowed by the shipped TOOL stream shape — plane-collision class; Fable ruling: provisioning guard rejecting stream filters over declared request/reply subjects + pub-ack rejection in the #785 decoder + default-subject move; #749's own e2e stage stays RED until it lands). Then** gh#749, NOT the in-flight arc** — #801 set that from semdev's post-.159
 > feedback and two sisters are blocked on it. This file disagreed with itself for several PRs
 > (NEXT said "in-flight first" while the Tag-milestone section said "#749 FIRST"); reconciled
 > 2026-07-31. **A priority added anywhere but NEXT will be missed — the next session reads NEXT.**
