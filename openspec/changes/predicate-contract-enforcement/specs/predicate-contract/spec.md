@@ -115,6 +115,62 @@ MUST resolve to exactly one candidate.
 - **THEN** it accepts the exception only when exactly one candidate matches and parsing returns that reason
 - **AND** a missing, stale, duplicate, broad, unmatched, or wrong-reason classification fails the audit
 
+### Requirement: An agent tool MUST NOT accept a caller-controlled predicate
+A tool exposed to a model MUST construct any predicate it writes internally, and MUST NOT accept a
+predicate, triple, or equivalent grammar-bearing value from the model's tool input.
+
+This is stated as a PROHIBITION on the tool surface, deliberately, and not as an exemption of the
+graph seam. "The graph is not required to authenticate writers" would be satisfiable while a tool
+happily handed a model the power to mint `agent.lineage.*` — an exemption describes what a component
+need not do, and leaves the dangerous act permitted. The enforceable statement is what a tool MUST
+NOT do.
+
+The scope of the rule follows from what is actually enforceable. The model is the only
+semi-trusted principal in the system: it emits tool calls whose arguments it chooses. Every other
+writer of `graph.mutation.*` is infrastructure holding NATS credentials, and is inside the trust
+boundary (see the requirement below). So the tool surface is where a real boundary exists, and it is
+the surface this rule binds.
+
+Compliance MUST be verified against the tool REGISTRY rather than a maintained list of tool names,
+so a tool added later is covered without anyone remembering, and the verification MUST itself be
+shown capable of failing.
+
+#### Scenario: a graph-writing tool constructs its own predicate
+
+- **GIVEN** a tool that writes to the graph on the model's behalf
+- **WHEN** its input schema is inspected
+- **THEN** no property conveys a predicate, triple, or equivalent grammar-bearing value
+- **AND** the predicate it writes is determined by the tool implementation
+
+#### Scenario: the verification is shown capable of failing
+
+- **GIVEN** a registry containing a tool that DOES accept a caller-controlled predicate
+- **WHEN** the registry audit runs
+- **THEN** it reports that tool as a violation
+- **AND** a clean result on the real registry is therefore evidence rather than an absence of looking
+
+### Requirement: Mutation-lane access MUST be treated as the trust boundary, not as authenticated identity
+A component MUST NOT infer namespace authority, principal identity, or write privilege from
+caller-supplied triple content, message fields, or subject naming on `graph.mutation.*`.
+
+The graph seam authenticates no principal, and no principal concept exists to authenticate: NATS
+authentication is connection-level, and the mutation lanes accept any triple from any publisher.
+Access to those lanes is therefore itself the trust boundary. Deployments requiring separation
+between writers MUST enforce it with NATS subject permissions, which is the layer that actually
+holds identity.
+
+Stating this is what prevents an implied guarantee. A component that behaved as though
+configuration-time authoring checks were runtime authorization would be relying on a property the
+system does not have — the checks constrain what rules and dispatch may AUTHOR, not what a
+credential holder may WRITE.
+
+#### Scenario: authority is not inferred from message content
+
+- **GIVEN** a mutation request whose triples name an `agent.*` predicate
+- **WHEN** it is applied
+- **THEN** no component treats the predicate namespace as evidence of the caller's authority
+- **AND** the write is accepted or refused on grammar and contract grounds alone
+
 ### Requirement: The beta cutover updates owned producers and resets incompatible state
 
 The breaking release MUST update every SemStreams producer, owned reference design, generated schema/tool
@@ -122,17 +178,26 @@ surface, exact query, and participating owned sister repository to the canonical
 MUST publish an exact source/configuration rename ledger, but that ledger MUST NOT be loaded as a runtime
 alias or transformation table.
 
-Existing ENTITY_STATES containing a noncanonical predicate MUST block readiness with an error requiring the
-operator to export if needed, clear incompatible graph/index buckets, and reingest from canonical sources.
-SemStreams MUST NOT rewrite malformed beta state in place. Queries remain not-ready until clean reingest and
-index replay reach the authoritative watermark.
+Existing ENTITY_STATES containing a noncanonical predicate MUST surface as typed
+`graph_state_reset_required` poison per the graph-state-contract reader classes: projection and replay
+consumers MUST block whole-view readiness until clean reingest and index replay reach the authoritative
+watermark, while the authoritative graph-ingest surface refuses exactly the poisoned entities and keeps
+serving valid state. SemStreams MUST NOT rewrite malformed beta state in place; repair is the operator
+delete/reset path.
 
 #### Scenario: incompatible beta state requires a clean reset
 
 - **GIVEN** an existing ENTITY_STATES bucket containing a noncanonical predicate
 - **WHEN** the breaking SemStreams binary starts
-- **THEN** graph readiness is refused with reset/reingest instructions
+- **THEN** projection and replay consumers refuse whole-view readiness with reset/reingest instructions
 - **AND** no compatibility reader or in-place transformer accepts the old state
+
+#### Scenario: the authoritative surface keeps serving unaffected entities during the incident
+
+- **GIVEN** an ENTITY_STATES bucket in which SOME entities carry a noncanonical predicate
+- **WHEN** a caller reads a valid entity from the authoritative graph-ingest surface
+- **THEN** that entity is served normally
+- **AND** only the poisoned entities are refused, as typed `graph_state_reset_required`
 
 #### Scenario: clean reingest exposes only canonical identities
 

@@ -139,11 +139,42 @@ wipe/restart/reseed and real-NATS proof where their evidence overlaps the entity
       serialized real-NATS integration, schema generation with no drift, contract tests, agentic e2e, and structural
       e2e pass. The sole full-suite Docker inspect timeout passed immediately when its exact integration test reran
       in isolation
-- [ ] 5.6c Before v1, close the explicit namespace-authority threat-model gap with a principal-bearing mutation
-      envelope and seam-level denial of undeclared `agent.*` predicates on non-delegated graph-mutation lanes.
-      Configuration-time rule/tool authoring checks are not runtime authorization, and raw NATS or graph-tool
-      holders can currently mint syntactically valid lineage triples.
-- [ ] 5.7 **SISTER GATE REMOVED 2026-07-30 (owner ruling)** — coordinated owned-product tasks 1.5, 4.1a,
+- [x] 5.6c **RESCOPED AND CLOSED — Fable APPROVED 2026-07-31 with three conditions, all met.**
+      The original (principal-bearing mutation envelope + seam-level denial of undeclared `agent.*`)
+      would have built an authorization layer on a system with **no authentication substrate**, to
+      deny one namespace to an actor who can forge every other one — the hole-class rule inverted,
+      producing implied guarantees instead of real ones. Fable probed the threat models that would
+      overturn the rescope; each has a home that is not this task: multi-tenancy is not the product
+      shape, untrusted wires are NATS subject-permissions territory, and the audit need is
+      **provenance (gh#692's lane), not authorization**.
+      **(a) Trust boundary stated as a PROHIBITION, not an exemption** (Fable condition 2, the
+      negative-permission rule): two `predicate-contract` requirements — *an agent tool MUST NOT
+      accept a caller-controlled predicate*, and *a component MUST NOT infer authority from
+      caller-supplied content on `graph.mutation.*`*. "The graph is not required to authenticate
+      writers" would have been satisfiable while a tool handed a model the power to mint
+      `agent.lineage.*`.
+      **(b) REGISTRY-level contract test with a canary** (Fable condition 1; a static name list
+      would be two things that agree today):
+      `processor/agentic-tools/executors/predicate_authority_contract_test.go` walks
+      `ExecutorRegistry.ListTools()` and recurses each tool's JSON schema. `canaryExecutor`
+      declares a tool WITH a `predicate` parameter and asserts the audit flags it, so a clean result
+      on the real registry is evidence rather than an absence of looking. **The registry floor
+      earned itself immediately:** the first version passed vacuously on 3 tools because
+      `RegisterBuiltins` skips every stateful tool on a nil NATS client — none of the graph writers
+      were being audited. Now audits **15** tools including `decide`, `emit_diagnosis`,
+      `emit_lesson`, `scratchpad`, `write_todos`.
+      **(c) Envelope DEFERRED with trigger conditions → gh#802** (Fable condition 3, a gate not a
+      parking lot): multi-tenancy entering the product shape · an untrusted `graph.mutation.*` wire
+      that subject permissions cannot express · a tool legitimately needing caller-chosen predicates
+      · a non-repudiation (not provenance) audit requirement. **Sequencing recorded: gh#798's
+      registry-derived ownership produces exactly the per-predicate owner map an authz layer would
+      consume, so the envelope gets CHEAPER after it — and building now would build on plumbing
+      #798 is about to reshape.**
+- [x] 5.7 **UNBLOCKED AND DONE.** gh#772 applied (cutover paragraph aligned to the
+      graph-state-contract reader classes, with the matching scenario: the authoritative surface
+      keeps serving unaffected entities during the incident — the blanket-blocking wording would
+      have landed as current truth CONTRADICTING merged poison-scoping behavior). 5.6c closed per
+      Fable. ORIGINAL: **SISTER GATE REMOVED 2026-07-30 (owner ruling)** — coordinated owned-product tasks 1.5, 4.1a,
       4.6b, 5.1b no longer gate this archive (guidance published; adoption on gh#753). Remaining blocker is
       LOCAL: task 5.6c (namespace-authority threat model). Original text: archive the OpenSpec change so the
       predicate and graph-ingest deltas become current truth, only after local
