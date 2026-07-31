@@ -24,7 +24,9 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > the merge ruleset requires was testing a floating substrate (#790 → #791/#792:
 > `nats:2.14.4-alpine` + `nats.go v1.52.0`, evidence pins re-run not waived, drift guard added).
 > Then gh#736's fast-fail flake class root-caused and fixed (#793). See the Small-bug track.
-> **MEASURED at the tag:** 122 open = 33 bug / 82 enh / 6 docs · in-flight changes **3** ·
+> **`predicate-contract-enforcement` ARCHIVED 2026-07-31 — the last of the three Codex-arc changes.
+> In-flight 3 → 2.** Its 5.6c blocker was rescoped (Fable), not built as written.
+> **MEASURED at the tag:** 122 open = 33 bug / 82 enh / 6 docs · in-flight changes **2** ·
 > 11 TBD-stub specs · `openspec validate --all --strict` 34/0 · lint + `go vet` plain,
 > `-tags=integration` AND `-tags=live_llm` all clean · `-race ./...` 135 ok/0 FAIL ·
 > `-race -tags=integration -p 2 ./...` 136 ok/0 FAIL · **e2e statistical, semantic AND agentic
@@ -162,23 +164,27 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
 > milestone section below; everything here is sequenced against it.**
 >
-> **1. FINISH THE THREE IN-FLIGHT CHANGES — they are the top of the queue now, not the
-> complexity pivot.** All three are real work stalled in the 80-95% band, and the band is exactly
-> where this program's own audit said the observability and guardrail work hides. WIP = 1; pick
-> ONE and land it.
-> · **`predicate-contract-enforcement` 42/44** — the blocker is a **SECURITY gap**, and it is the
->   highest-value item on this list: raw NATS or graph-tool holders can mint syntactically valid
->   lineage triples, because configuration-time authoring checks are NOT runtime authorization.
->   Task 5.6c wants a principal-bearing mutation envelope + seam-level denial of undeclared
->   `agent.*` on non-delegated lanes. **gh#772 is a pre-archive obligation on this change** (the
->   cutover-paragraph reconciliation inherited from #773's rescope).
+> **1. TWO IN-FLIGHT CHANGES REMAIN** (was three). WIP = 1; pick ONE and land it.
+> **`predicate-contract-enforcement` is ARCHIVED** — 44/44, the last of the three Codex-arc changes.
+> `predicate-contract` is seeded live truth (8 requirements, Purpose written). Its blocker 5.6c was
+> **RESCOPED, not implemented as written** (Fable APPROVED 2026-07-31): the principal-bearing
+> mutation envelope would have built an authorization layer on a system with **no authentication
+> substrate**, to deny one namespace to an actor who can forge every other one — the hole-class rule
+> inverted. Closed instead by stating the trust boundary as a **prohibition** (an exemption would be
+> satisfiable while a tool handed a model the power to mint `agent.lineage.*`), a **registry-level**
+> tool audit with a canary, and a **trigger-gated deferral (gh#802)**. gh#772 applied with it.
+> **Carry the method, not just the outcome: when a security task asks for enforcement, first check
+> whether the substrate it would enforce ON exists.** It did not.
 > · **`predicate-raw-key-representation` 10/14** — membership-watch consumer identification, raw
 >   PREDICATE_INDEX in the announced wipe/reseed, docs, gates. **CHECK ITS HALT CONDITION FIRST
->   (task 4.3): if the pre-v1 wipe window has closed, record the miss and re-file rather than
->   implement.** .159 is still pre-v1 so the window is presumed open — verify, do not assume.
+>   (task 4.3): if the pre-v1 wipe window has closed, record the miss and re-file** rather than
+>   implement. Still pre-v1 so the window is presumed open — verify, do not assume. **Its evidence
+>   pin MOVED (gh#790): the representation DECISION stands (gates re-run green on 2.14.4 +
+>   nats.go v1.52.0), but the latency/throughput numbers in its design are historical — re-measure
+>   before citing any as a current budget.**
 > · **`graph-index-replacement-semantics` 15/19** — activate reconciliation for NAME/PREDICATE/
->   source-owned INCOMING, supersede ADR-068 D3 clauses, gates. Oldest (10d); carries gh#527 and
->   the ADR-073 Increment-0 fold-in.
+>   source-owned INCOMING, supersede ADR-068 D3 clauses, gates. Oldest (10d); carries gh#527 and the
+>   ADR-073 Increment-0 fold-in.
 >
 > **2. THEN the complexity-pivot remainder** (item 4 below): adopter module contract, `--validate`
 > performing real registry composition (fold gh#734 — an unknown schema Type spelling silently
@@ -1316,5 +1322,21 @@ Append one line per session. Newest last.
   **Keepers: measure a perf fix on the REAL workload (a subset benchmark does not generalise); take
   a `docker info` reading before blaming a change; and a guard is code — 3 of 5 reviewer findings
   this session were guards that reported green without checking.**
-  **Next: pick ONE in-flight change and land it. WIP = 1 — `predicate-contract-enforcement` first,
-  its blocker is a security gap.**
+  **Then closed `predicate-contract-enforcement` (44/44, ARCHIVED) by RESCOPING its security
+  blocker rather than building it.** Task 5.6c asked for a principal-bearing mutation envelope;
+  scoping it against the code showed there is **no principal to bear** (NATS auth is
+  connection-level; no Principal/Actor concept exists in graph/ or pkg/projection/), that denying
+  `agent.*` bounds nothing when the same actor can write every other namespace, and that the one
+  reachable path — the model — was already closed by tools that construct predicates internally.
+  Fable APPROVED with three conditions, each of which improved it: the tool audit takes the
+  **registry-level form with a canary** (a static list would be two things that agree today — and
+  the registry floor immediately caught my first version passing **vacuously over 3 tools**, none of
+  them graph writers); the spec states the boundary as a **prohibition, not an exemption**; and the
+  deferral (gh#802) carries **trigger conditions** so it is a gate rather than a parking lot.
+  **Keeper: when a security task asks for enforcement, check first whether the substrate it would
+  enforce ON exists.** Building authorization without authentication produces implied guarantees,
+  which is worse than a stated gap. Also filed the mechanism for gh#736's timeout class: the wait
+  strategy burns its full 180s budget on an **unresolvable port mapping**, not on readiness — same
+  root cause as the fast-fail class, on the port the strategy itself uses.
+  **Next: pick ONE of the two remaining in-flight changes. WIP = 1. Check
+  `predicate-raw-key-representation`'s HALT condition before implementing it.**
