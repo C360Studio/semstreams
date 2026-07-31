@@ -6,6 +6,15 @@
   recorded in `adversarial-review.md`; artifacts revised to the post-review shape
 - [x] 1.2 Audit `predicate-contract-enforcement`'s spec deltas, checked tasks, and proposal (not
   just open tasks) for latch/readiness assertions — found the `predicate-contract` beta-cutover
+  **RESCOPED 2026-07-30 (owner-directed archive unblock): the `predicate-contract` MODIFIED
+  delta this audit produced is WITHDRAWN from this change.** A MODIFIED delta cannot target a
+  spec home that does not exist; the base requirement lives only inside
+  `predicate-contract-enforcement`'s own unarchived delta, so the dependency inverted this
+  change's archive onto that change's completion. The normative content is NOT lost: the
+  reader-class poison rule archives here in `graph-state-contract` (general over every
+  canonical-decode failure, noncanonical predicates included); the textual reconciliation of
+  the cutover paragraph is handed to the owning thread as **gh#772** with the exact
+  replacement text. Original delta text preserved in git history at this change's tip.
   conflict; resolved via our MODIFIED delta + hard ordering dependency (theirs syncs first)
 - [x] 1.3 Finalize ADR-079 (Proposed → Accepted) and file the `graph/query/client.go`
   watcher-tax follow-up issue it names
