@@ -68,6 +68,7 @@ type Component struct {
 
 	// Query subscription for trajectory requests
 	trajectorySub *natsclient.Subscription
+	inflightSub   *natsclient.Subscription
 
 	// Approval-timeout sweeper lifecycle. cancel is called from Stop
 	// to terminate the goroutine; done is closed by the goroutine on
@@ -117,6 +118,11 @@ func newConsumerLifecycleContext(startCtx context.Context) (context.Context, con
 type consumerInfo struct {
 	streamName   string
 	consumerName string
+	// subject is the FilterSubject this consumer was bound with. Recorded so
+	// the in-flight query (gh#733) can find the consumer this component
+	// actually bound instead of re-deriving its name — a second derivation is
+	// a thing that can drift, and a recorded binding is not.
+	subject string
 }
 
 // NewComponent creates a new agentic-loop component
@@ -378,6 +384,15 @@ func (c *Component) Start(ctx context.Context) error {
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
 		}
 		c.trajectorySub = sub
+
+		// Set up in-flight query handler (gh#733). Same wire as the trajectory
+		// query: the answer is served, never the consumer name it is derived from.
+		inflightSub, err := c.natsClient.SubscribeForRequests(ctx, InFlightQuerySubject, c.handleInFlightQuery)
+		if err != nil {
+			c.cleanupConsumersAfterStartFailure()
+			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to in-flight query")
+		}
+		c.inflightSub = inflightSub
 	}
 
 	c.started = true
@@ -510,6 +525,13 @@ func (c *Component) Stop(timeout time.Duration) error {
 	if c.trajectorySub != nil {
 		_ = c.trajectorySub.Unsubscribe()
 		c.trajectorySub = nil
+	}
+
+	// Unsubscribe from in-flight query handler. Once this returns, a caller
+	// sees no-responders — which is UNKNOWN, not zero (gh#733).
+	if c.inflightSub != nil {
+		_ = c.inflightSub.Unsubscribe()
+		c.inflightSub = nil
 	}
 
 	// Cancel the component-owned consumer lifecycle before stopping consumers.
@@ -863,6 +885,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 	c.consumerInfos = append(c.consumerInfos, consumerInfo{
 		streamName:   streamName,
 		consumerName: consumerName,
+		subject:      subject,
 	})
 
 	c.logger.Info("Subscribed (JetStream)",
