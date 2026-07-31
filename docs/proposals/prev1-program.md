@@ -254,7 +254,10 @@ order — nothing else blocks the tag:
 5. **Tag activates gh#753**: sisters begin migration against the published guides; further
    problems arrive as new issues here, per the residency rule.
 
-**Explicitly POST-tag (sisters do not need them to migrate):** complexity-pivot remainder
+**Explicitly POST-tag (sisters do not need them to migrate):** **#749 FIRST** (canonical tool
+effect metadata — semdev + a second sister both need it; additive with fail-safe `unknown` so
+no lockstep required; ships in the tag after .159; both sisters told on the issue NOT to
+hand-roll interim schemas; framework surface ⇒ Fable design gate first) · complexity-pivot remainder
 (module contract, `--validate`, #725/#734, docs), Epic D stages #766/#767, #759 ack-disposition
 extraction, hygiene batch, #772 (gates predicate-contract-enforcement's archive, not the tag).
 The three in-flight Codex-arc changes continue on their own track; the enforcement security gap
