@@ -12,8 +12,11 @@ measurement that shaped the second one.
 ## Rule 1 — ask the framework whether a rule matches; do not rebuild the pipeline
 
 ```go
-matched, err := rule.Matches(def, entityState, lifecycleLookup) // lifecycleLookup may be nil
+matched, err := rule.Matches(ctx, def, entityState, lifecycleLookup) // lookup may be nil
 ```
+
+`ctx` is not decoration: the lookup performs KV/graph I/O, so without it a degraded
+backend wedges your recovery pass indefinitely. Pass a deadline.
 
 Reaching for `expression.Evaluator` directly loses condition-value substitution and
 lifecycle resolution, and inherits the evaluator's "empty condition list passes"
@@ -42,7 +45,15 @@ Both primitives distinguish **"no"** from **"could not tell"**. Do not collapse 
 | `rule.Matches` | Means |
 |---|---|
 | `false, nil` | evaluated; conditions do not hold; nothing owed. Safe to act on. |
-| `_, err` | could not evaluate — unresolvable `$state.*` / `$prev.*` / `transition`, a lifecycle field with no lookup supplied, an absent `Required` field, a failed operator. **Not** a statement about obligation. |
+| `_, err` | could not evaluate — unresolvable `$state.*` / `$prev.*` / `transition`; a lifecycle field whose lookup was absent **or failed**; an unresolved condition-value template; an absent `Required` field; a failed operator. **Not** a statement about obligation. |
+
+Two of those deserve emphasis, because both once returned a confident `false`:
+a **supplied lookup that fails** is not resolved state (an unregistered participant
+or a transient KV error must not read as "nothing owed"), and an **unresolved value
+template** would otherwise be compared by `eq`/`contains` as an ordinary string.
+
+A **disabled** definition is not an error — it returns `false, nil`. It cannot fire,
+so it owes nothing.
 
 Treat an error as *cannot tell — leave it alone*. That is the safe action in both
 directions.
@@ -50,8 +61,17 @@ directions.
 ## Rule 4 — in-flight work: ask over NATS, never derive the consumer name
 
 ```go
-raw, err := client.RequestClassified(ctx, agenticloop.InFlightQuerySubject, req, timeout)
+subject := agenticloop.InFlightQuerySubjectFor(deployment) // deployment = the loop's ConsumerNameSuffix
+raw, err := client.RequestClassified(ctx, subject, req, timeout)
 ```
+
+**The subject is deployment-addressed, and that is load-bearing.** Request/reply uses
+plain subject subscription, so a shared subject would let every agentic-loop in the
+account reply and you would keep whichever landed first — an arbitrary deployment's
+answer, delivered with full confidence. The suffix is the right selector because it
+already determines which durable consumer exists: loops sharing it bind the same
+consumer and report the same count; loops with different suffixes are different
+deployments. Empty suffix maps to `agenticloop.DefaultDeployment`.
 
 Request `{"subject":"agent.task.*"}`; a known answer decodes to
 `{subject, outstanding, inFlight}`. The consumer name, its subject sanitizing, and

@@ -1,12 +1,14 @@
 package rule
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/lifecycle"
 	"github.com/c360studio/semstreams/processor/rule/expression"
 )
 
@@ -96,7 +98,7 @@ func TestMatches_AgreesWithHandWrittenVerdicts(t *testing.T) {
 	for _, c := range matchCorpus() {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := Matches(defFor(c), createTestEntityState("test.entity.id", c.triples), nil)
+			got, err := Matches(context.Background(), defFor(c), createTestEntityState("test.entity.id", c.triples), nil)
 			if err != nil {
 				t.Fatalf("Matches returned error: %v", err)
 			}
@@ -125,7 +127,7 @@ func TestMatches_AgreesWithStatefulPath(t *testing.T) {
 			}
 			wantStateful := stateful.EvaluateEntityState(entity)
 
-			got, err := Matches(def, createTestEntityState("test.entity.id", c.triples), nil)
+			got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", c.triples), nil)
 			if err != nil {
 				t.Fatalf("Matches returned error: %v", err)
 			}
@@ -155,7 +157,7 @@ func TestMatches_TemplatedConditionValueResolves(t *testing.T) {
 		{Subject: "test", Predicate: "gather.child.completed", Object: "b"},
 	})
 
-	got, err := Matches(def, entity, nil)
+	got, err := Matches(context.Background(), def, entity, nil)
 	if err != nil {
 		t.Fatalf("Matches returned error: %v", err)
 	}
@@ -199,7 +201,7 @@ func TestMatches_UnresolvableFieldErrors(t *testing.T) {
 				ID: "unresolvable", Type: "expression", Name: "Unresolvable", Enabled: true, Logic: "and",
 				Conditions: []expression.ConditionExpression{tc.condition},
 			}
-			got, err := Matches(def, createTestEntityState("test.entity.id", nil), nil)
+			got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", nil), nil)
 			if err == nil {
 				t.Fatal("expected an error; got nil — an unanswerable condition must never " +
 					"return a verdict, because a caller reads false as 'nothing owed' and acts on it")
@@ -243,7 +245,7 @@ func TestMatches_EvaluationErrorPropagatesRatherThanBecomingFalse(t *testing.T) 
 	}
 
 	// Matches refuses instead, so the caller can tell "cannot tell" from "not owed".
-	got, err := Matches(def, createTestEntityState("test.entity.id", triples), nil)
+	got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", triples), nil)
 	if err == nil {
 		t.Fatal("expected an error: an absent REQUIRED field means the question could not be " +
 			"answered, and collapsing that into 'nothing owed' is what strands an entity")
@@ -294,7 +296,7 @@ func TestMatches_LifecycleResolvesWhenLookupSupplied(t *testing.T) {
 		},
 	}
 
-	got, err := Matches(def, createTestEntityState(entityID, nil), mgr)
+	got, err := Matches(context.Background(), def, createTestEntityState(entityID, nil), mgr)
 	if err != nil {
 		t.Fatalf("Matches returned error with a lookup supplied: %v", err)
 	}
@@ -310,7 +312,7 @@ func TestMatches_EmptyConditionListDoesNotMatch(t *testing.T) {
 	t.Parallel()
 	def := Definition{ID: "empty", Type: "expression", Name: "Empty", Enabled: true, Logic: "and"}
 
-	got, err := Matches(def, createTestEntityState("test.entity.id", nil), nil)
+	got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", nil), nil)
 	if err != nil {
 		t.Fatalf("Matches returned error: %v", err)
 	}
@@ -344,7 +346,7 @@ func TestMatches_CooldownIsNotAppliedAndNotRefused(t *testing.T) {
 	}
 
 	// Matches answers the OBLIGATION question: yes, the hop is still owed.
-	got, err := Matches(def, createTestEntityState("test.entity.id", triples), nil)
+	got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", triples), nil)
 	if err != nil {
 		t.Fatalf("a cooldown-declaring definition must not be refused, got error: %v", err)
 	}
@@ -373,7 +375,7 @@ func TestMatches_LeavesEngineStateUntouched(t *testing.T) {
 	beforeTrigger := stateful.shouldTrigger
 	beforeLast := stateful.lastTriggered
 
-	if _, err := Matches(def, createTestEntityState("test.entity.id", triples), nil); err != nil {
+	if _, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", triples), nil); err != nil {
 		t.Fatalf("Matches returned error: %v", err)
 	}
 
@@ -382,5 +384,231 @@ func TestMatches_LeavesEngineStateUntouched(t *testing.T) {
 	}
 	if !stateful.lastTriggered.Equal(beforeLast) {
 		t.Errorf("lastTriggered changed: %v -> %v", beforeLast, stateful.lastTriggered)
+	}
+}
+
+// --- Reviewer findings F2/F3/F4/F5 ---
+
+// TestMatches_DisabledDefinitionOwesNothing — F3. Production refuses a disabled
+// rule first (expression_factory.go). Cooldown is the ONLY divergence Matches
+// claims, so every other firing gate must be mirrored or that claim is false.
+func TestMatches_DisabledDefinitionOwesNothing(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID: "disabled", Type: "expression", Name: "Disabled", Enabled: false, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "sensor.measurement.fahrenheit", Operator: "gte", Value: 40.0, Required: true},
+		},
+	}
+	triples := []message.Triple{{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 41.2}}
+
+	got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", triples), nil)
+	if err != nil {
+		t.Fatalf("a disabled definition is answerable, not an error: %v", err)
+	}
+	if got {
+		t.Error("a disabled rule cannot fire, so it owes nothing; reporting true makes a " +
+			"recovery pass defer or duplicate work for a rule that will never run")
+	}
+
+	// Parity: production agrees.
+	stateful, err := NewExpressionRule("disabled-parity-test", def)
+	if err != nil {
+		t.Fatalf("NewExpressionRule: %v", err)
+	}
+	if stateful.EvaluateEntityState(createTestEntityState("test.entity.id", triples)) {
+		t.Error("precondition: the engine must also refuse a disabled rule")
+	}
+}
+
+// failingLookup fails every lookup, standing in for a transient KV/graph failure.
+type failingLookup struct{ err error }
+
+func (f failingLookup) LookupByEntityID(_ context.Context, _ string) (lifecycle.Participant, error) {
+	return nil, f.err
+}
+func (f failingLookup) GetWorkflowDefinition(_ string) (lifecycle.WorkflowDef, error) {
+	return lifecycle.WorkflowDef{}, f.err
+}
+
+// blockingLookup blocks until its context is done — for the cancellation test.
+type blockingLookup struct{}
+
+func (blockingLookup) LookupByEntityID(ctx context.Context, _ string) (lifecycle.Participant, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+func (blockingLookup) GetWorkflowDefinition(_ string) (lifecycle.WorkflowDef, error) {
+	return lifecycle.WorkflowDef{}, nil
+}
+
+// TestMatches_SuppliedLookupThatFailsIsNotResolvedState — F2. "A lookup was
+// supplied" and "lifecycle state resolved" are different facts. Conflating them
+// let an optional lifecycle condition reach the evaluator with no state and come
+// back false — "could not resolve" wearing "nothing owed" as a disguise.
+func TestMatches_SuppliedLookupThatFailsIsNotResolvedState(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID: "lifecycle-optional", Type: "expression", Name: "LifecycleOptional", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			// Deliberately NOT Required — this is the case that silently returned false.
+			{Field: "$entity.lifecycle.phase", Operator: "eq", Value: "flying"},
+		},
+	}
+
+	errTransient := errors.New("kv unavailable")
+
+	cases := []struct {
+		name      string
+		lookup    LifecycleLookup
+		wantCause error // nil = any error; non-nil = must wrap this exact cause
+	}{
+		{
+			name:   "unregistered participant",
+			lookup: newFakeManager(), // seeded with nothing → LookupByEntityID errors
+		},
+		{
+			name:      "transient lookup failure",
+			lookup:    failingLookup{err: errTransient},
+			wantCause: errTransient,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := Matches(context.Background(), def,
+				createTestEntityState("test.entity.id", nil), tc.lookup)
+			if err == nil {
+				t.Fatal("expected an error: the lookup was supplied but did not resolve, so the " +
+					"lifecycle condition was never actually answered")
+			}
+			if got {
+				t.Errorf("verdict must be false alongside the error, got %v", got)
+			}
+			// Assert the REAL CAUSE surfaces. Without this the test passes on the
+			// generic pre-scan message, which tells a caller who DID supply a lookup
+			// to "pass one" — and the propagation could be deleted unnoticed.
+			if tc.wantCause != nil && !errors.Is(err, tc.wantCause) {
+				t.Errorf("error must wrap the underlying lookup failure so the caller can see "+
+					"WHY it was unanswerable; got %v", err)
+			}
+		})
+	}
+}
+
+// TestMatches_SuppliedLookupDoesNotBreakOrdinaryDefinitions is the other side of
+// F2, and it exists because fixing F2 first introduced exactly this regression:
+// LookupByEntityID errors for any entity that is not lifecycle-managed, which is
+// the ordinary case, so raising the lookup error unconditionally refused every
+// ordinary definition whenever a caller supplied a Manager.
+func TestMatches_SuppliedLookupDoesNotBreakOrdinaryDefinitions(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID: "ordinary", Type: "expression", Name: "Ordinary", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "sensor.measurement.fahrenheit", Operator: "gte", Value: 40.0},
+		},
+	}
+	entity := createTestEntityState("test.entity.id", []message.Triple{
+		{Subject: "test", Predicate: "sensor.measurement.fahrenheit", Object: 41.2},
+	})
+
+	got, err := Matches(context.Background(), def, entity, newFakeManager())
+	if err != nil {
+		t.Fatalf("a definition with no lifecycle conditions must not care that an unrelated "+
+			"lifecycle lookup failed: %v", err)
+	}
+	if !got {
+		t.Error("expected true — conditions hold and lifecycle is irrelevant here")
+	}
+}
+
+// TestMatches_UnresolvedValueTemplateErrors — F2b. A leftover token does not make
+// eq/contains error; they compare it as an ordinary string and return a confident
+// verdict.
+func TestMatches_UnresolvedValueTemplateErrors(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID: "unresolved-value", Type: "expression", Name: "UnresolvedValue", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			// Field is ordinary, so the pre-scan passes; the VALUE is a template
+			// that cannot resolve without match state.
+			{Field: "sensor.classification.type", Operator: "eq", Value: "$state.iteration"},
+		},
+	}
+	entity := createTestEntityState("test.entity.id", []message.Triple{
+		{Subject: "test", Predicate: "sensor.classification.type", Object: "temperature"},
+	})
+
+	got, err := Matches(context.Background(), def, entity, nil)
+	if err == nil {
+		t.Fatal("expected an error: an unresolved value template would be compared as the " +
+			"literal string \"$state.iteration\" and yield a confident wrong verdict")
+	}
+	if got {
+		t.Errorf("verdict must be false alongside the error, got %v", got)
+	}
+}
+
+// TestMatches_TypedNilLookupDoesNotPanic — F4. A typed nil is a non-nil interface,
+// so a plain `!= nil` answerability guard admits it and then panics inside
+// LookupByEntityID. The caller's manager genuinely IS absent and deserves the
+// absent-lookup behaviour.
+func TestMatches_TypedNilLookupDoesNotPanic(t *testing.T) {
+	t.Parallel()
+	var typedNil *lifecycle.Manager
+	def := Definition{
+		ID: "typed-nil", Type: "expression", Name: "TypedNil", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "$entity.lifecycle.phase", Operator: "eq", Value: "flying"},
+		},
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("panicked on a typed-nil lookup: %v", r)
+		}
+	}()
+
+	got, err := Matches(context.Background(), def, createTestEntityState("test.entity.id", nil), typedNil)
+	if err == nil {
+		t.Fatal("a typed-nil lookup is an ABSENT lookup, so a lifecycle condition is " +
+			"unanswerable and must error rather than return a verdict")
+	}
+	if got {
+		t.Errorf("verdict must be false alongside the error, got %v", got)
+	}
+}
+
+// TestMatches_HonoursContextCancellation — F5. Matches performs KV/graph I/O
+// through the lifecycle lookup; without a caller context a degraded backend wedges
+// a boot-time recovery pass indefinitely.
+func TestMatches_HonoursContextCancellation(t *testing.T) {
+	t.Parallel()
+	def := Definition{
+		ID: "ctx", Type: "expression", Name: "Ctx", Enabled: true, Logic: "and",
+		Conditions: []expression.ConditionExpression{
+			{Field: "$entity.lifecycle.phase", Operator: "eq", Value: "flying"},
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := Matches(ctx, def, createTestEntityState("test.entity.id", nil), blockingLookup{})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected an error once the context expired")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Matches did not observe context cancellation — a degraded backend would " +
+			"wedge the caller indefinitely")
 	}
 }

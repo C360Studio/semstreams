@@ -40,21 +40,19 @@
 - [x] 3.1 Extract steps 1, 2 and 4 of `EvaluateEntityState` into an unexported helper called by BOTH
       the existing method and the new entry point. **`EvaluateEntityState`'s observable behavior must
       not change** — see 5.1 for how that is proven, not asserted
-- [x] 3.2 Implement `Matches(def Definition, state *gtypes.EntityState, lifecycle LifecycleLookup)
-      (bool, error)` — no variadic, per §1. Touches no `shouldTrigger`, no `lastTriggered`, no
+- [ ] 3.2 **REOPENED by Codex finding 4 — the signature gate was self-approved and must not be.**
+      The task was checked complete while its own text said the deviation "needs Fable
+      confirmation"; that is the process defect, independent of whether the deviation is right.
+      Current signature: `Matches(ctx context.Context, def Definition, state *gtypes.EntityState,
+      lifecycle LifecycleLookup) (bool, error)`. Two departures from `design.md:199-212` now need an
+      explicit ruling: **(a)** `LifecycleLookup` (narrow, read-only) instead of the approved concrete
+      `*lifecycle.Manager`; **(b)** `ctx` added as the first parameter (Codex finding 5 — the call
+      does KV/graph I/O and the repo is context-first). The typed-nil hazard Codex identified is
+      FIXED regardless of which way (a) goes: `isNilLookup` treats a typed nil as absent instead of
+      passing the guard and panicking in `LookupByEntityID`. Original rationale for (a): resolution
+      performs two lookups while `LifecycleManager` also carries `TransitionWith`/`Complete`/`Fail`,
+      so the concrete type makes a read demand a write capability. **Stays open until Fable rules.** Touches no `shouldTrigger`, no `lastTriggered`, no
       cooldown state, no `MatchState`.
-      **DEVIATION FROM §1's LITERAL SPELLING — needs Fable confirmation, flagged not buried.**
-      Fable wrote the third parameter as `*lifecycle.Manager` (concrete). Implemented instead as a
-      new narrow read-only interface `LifecycleLookup` (`LookupByEntityID` + `GetWorkflowDefinition`).
-      Reason: the resolution path performs only those two lookups, while the package's existing
-      `LifecycleManager` also carries `TransitionWith` / `Complete` / `Fail` / `AssertRuleWritable`.
-      Demanding either the concrete Manager or the wide interface makes a caller hand a **read** a
-      **write** capability just to ask a question — the inverse of the exported-surface rule that
-      motivated Fable's own answer. `*lifecycle.Manager` satisfies `LifecycleLookup`, so Fable's
-      intended call site compiles unchanged; §1's actual holding (a named parameter, not a variadic,
-      because it governs answerability) is preserved exactly. `ExecutionContext.Lifecycle` narrowed
-      to the same interface for the same reason. **If Fable prefers the concrete type, this reverts
-      in one line.**
 - [x] 3.3 Pre-scan conditions for `$state.*`, `$prev.*` and `transition`, returning an error naming
       the first unresolvable field before any evaluation runs. `evaluator.go` is NOT modified
 - [x] 3.4 Lifecycle resolution is opt-in via a supplied `Manager`; absent one, a
@@ -105,18 +103,58 @@
       test goes red, because a guard test that passes with the guard removed proves nothing
 - [x] 5.4 Engine-state non-observability: run a stateless match against a definition the engine holds
       state for, then assert match state, trigger latch and last-triggered are byte-identical
-- [x] 5.5 In-flight query: outstanding while unacked (across at least one heartbeat renewal), zero
-      after ack, UNKNOWN when no consumer exists. The no-consumer case is the one that matters most —
+- [x] 5.5 In-flight query: **nonzero under a real backlog**, zero after the acks, UNKNOWN when no
+      consumer exists. Rewritten per 7.8 — "unacked across a heartbeat renewal" does not apply to
+      this path and is not asserted rather than faked. The no-consumer case is the one that matters most —
       it is the defect gh#733 was filed about
 - [x] 5.6 Integration test drives the PRODUCTION wire for the in-flight query — a real request over
       NATS to a real component with a real consumer on a real stream, not a mock returning a canned
       count. A sync mock for an async seam proves nothing, and the wire IS the contract here
-- [x] 5.7 **No-responders test with the component actually stopped and task messages still on the
-      stream.** This is the failure mode Q4's answer introduced, and the one where a wrong answer is
+- [x] 5.7 **No-responders test with the component stopped and a backlog freshly published.** This is the failure mode Q4's answer introduced, and the one where a wrong answer is
       most costly. Assert the caller sees unknown, NOT zero — and mutation-check it: make the handler
       return a zero count on that path and confirm the test goes red
 - [x] 5.8 Assert the three `unknown ≠ zero` cases route through ONE rule (1.4) — e.g. one construction
       site — so a future fourth case cannot be added as a fourth coincidence that forgets it
+
+## 7. Codex round 1 findings (2026-07-31, `168f3311`) — 4 blocking, 2 high, 1 gap
+
+Every fix below is mutation-verified: the guard is broken, the test is confirmed RED, the guard is
+restored. A guard test that passes with the guard removed proves nothing.
+
+- [x] 7.1 **[blocking 1] Deployment-addressed subject.** `SubscribeForRequests` is a plain
+      subscribe, so one shared subject let every loop in the account reply and the requester kept
+      whichever landed first. Subject is now `agentic.query.inflight.<deployment>` via
+      `InFlightQuerySubjectFor`, keyed on `ConsumerNameSuffix` — the right discriminator rather than
+      a new invented one, because the suffix already determines WHICH durable consumer exists (same
+      suffix ⇒ same consumer ⇒ same count). Integration test runs two deployments with conflicting
+      state; mutating back to a shared subject turns it RED
+- [x] 7.2 **[blocking 2] Supplied lookup ≠ resolved state; unresolved templates.** Answerability now
+      derives from what ACTUALLY resolved; the lookup error is carried and reported when a lifecycle
+      condition needs it. Surviving `$`-templates in condition VALUES are refused via the existing
+      `unresolvedTemplateVarRe` (single source, not a second list). **The first fix was itself
+      wrong** and the mutation check caught it: raising the lookup error unconditionally refused
+      every ordinary definition whenever a Manager was supplied, because `LookupByEntityID` errors
+      for any entity that simply is not lifecycle-managed. Regression test added
+- [x] 7.3 **[blocking 3] `Definition.Enabled`.** `Matches` returned true for a disabled rule,
+      falsifying this change's own claim that cooldown is the only divergence. Now `false, nil`,
+      with production-parity coverage
+- [x] 7.4 **[blocking 4b] Typed-nil panic.** `lifecycle != nil` admitted a typed nil
+      (`var m *lifecycle.Manager`) as a live lookup, then panicked in `LookupByEntityID`.
+      `isNilLookup` treats it as absent. Test asserts no panic AND the absent-lookup refusal
+- [ ] 7.5 **[blocking 4a] Signature gate — see reopened task 3.2. NOT self-approvable.**
+- [x] 7.6 **[high 5] `context.Context`.** Now the first parameter, propagated to the lifecycle
+      lookup; cancellation test proves a blocked lookup returns instead of wedging the caller
+- [x] 7.7 **[high 6] Start-failure subscription leak** (introduced by this change's second
+      subscription). Both cleanup paths route through one `unsubscribeRequestHandlers`. Coverage
+      limit stated in the test: the teardown wiring and idempotency are asserted, direct failure
+      injection into the second subscribe is not — there is no seam without a client fake
+- [x] 7.8 **[gap 7] Wire test now exercises outstanding work.** Publishes a real backlog, observes a
+      nonzero count (258 in practice), and asserts the return to zero after the acks. Hardcoding the
+      known-answer path to zero turns it RED. **Measurement corrected the plan:** gh#733's premise
+      that a task "lives unacked while the model works" is false — `handleTaskMessage` returns nil
+      on error and `HandleTask` does not block, so a single task acks promptly. Depth, not duration,
+      is what makes the work observable, and the heartbeat-sustained assertion is recorded as NOT
+      applicable rather than faked. Tasks 5.5/5.7 rewritten accordingly
 
 ## 6. Review chain and gates
 

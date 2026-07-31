@@ -10,17 +10,43 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// InFlightQuerySubject is the NATS request/reply subject answering "does this
-// deployment currently have outstanding agentic-loop work for this task subject".
+// InFlightQuerySubjectPrefix is the root of the in-flight request/reply subject.
+// The full subject is deployment-addressed — see InFlightQuerySubjectFor.
+const InFlightQuerySubjectPrefix = "agentic.query.inflight"
+
+// DefaultDeployment is the address token for a loop configured with no
+// ConsumerNameSuffix.
+const DefaultDeployment = "default"
+
+// InFlightQuerySubjectFor returns the subject that addresses ONE deployment's
+// in-flight answer.
 //
-// The question is served on the wire rather than as an in-process call on purpose.
-// A caller needs the ANSWER, and every in-process shape would have made it supply
-// something it cannot legitimately know: a package-level function needs the stream
-// name and ConsumerNameSuffix (relocating the consumer-name reconstruction gh#733
-// exists to delete, into a parameter list), and a method needs a component handle a
-// boot-time recovery pass may not hold — and may not have in-process at all.
-// Components execute and do not know their caller; this keeps that true.
-const InFlightQuerySubject = "agentic.query.inflight"
+// The subject must carry deployment identity. `SubscribeForRequests` uses a plain
+// `conn.Subscribe`, so a single shared subject means every agentic-loop in the NATS
+// account receives the request and replies, and the requester keeps whichever reply
+// arrives first. That is a silently-wrong answer from an arbitrary deployment —
+// precisely the permissive failure this API exists to remove.
+//
+// `deployment` is the loop's ConsumerNameSuffix, and that is the correct
+// discriminator rather than a new invented one: the suffix already determines WHICH
+// durable consumer exists. Two loops sharing a suffix bind the SAME consumer, so
+// they necessarily report the same outstanding count and either may answer; two
+// loops with different suffixes are different deployments and now occupy different
+// subjects. The addressing therefore matches the thing actually being measured.
+//
+// The empty suffix maps to DefaultDeployment for the same reason — loops with no
+// suffix share one consumer and so share one answer.
+//
+// This is a SELECTOR the operator configures on both sides, not a derived internal
+// name: the caller states which deployment it is asking about, which is inherent to
+// the question. It never has to know the consumer name, the stream, or the
+// sanitizing rules.
+func InFlightQuerySubjectFor(deployment string) string {
+	if deployment == "" {
+		deployment = DefaultDeployment
+	}
+	return InFlightQuerySubjectPrefix + "." + sanitizeSubject(deployment)
+}
 
 // Bounded reasons an in-flight answer is UNKNOWN.
 const (
@@ -143,7 +169,7 @@ func (c *Component) outstandingForSubject(ctx context.Context, subject string) (
 	return outstanding, nil
 }
 
-// handleInFlightQuery serves InFlightQuerySubject.
+// handleInFlightQuery serves the deployment-addressed in-flight subject.
 //
 // A caller that receives no response at all — natsclient.IsNoResponders — is in the
 // third unknown case: this component is not running, which emphatically does not

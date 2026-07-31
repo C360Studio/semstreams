@@ -387,7 +387,8 @@ func (c *Component) Start(ctx context.Context) error {
 
 		// Set up in-flight query handler (gh#733). Same wire as the trajectory
 		// query: the answer is served, never the consumer name it is derived from.
-		inflightSub, err := c.natsClient.SubscribeForRequests(ctx, InFlightQuerySubject, c.handleInFlightQuery)
+		inflightSub, err := c.natsClient.SubscribeForRequests(ctx,
+			InFlightQuerySubjectFor(c.config.ConsumerNameSuffix), c.handleInFlightQuery)
 		if err != nil {
 			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to in-flight query")
@@ -443,6 +444,27 @@ func (c *Component) cleanupConsumersAfterStartFailure() {
 		}
 	}
 	c.consumerInfos = nil
+
+	// Request subscriptions must be torn down here too. Start installs them in
+	// sequence, so a failure on the Nth leaves the first N-1 live while `started`
+	// stays false — and Stop returns early when not started, so nothing ever
+	// reaps them. A Start retry would then install a SECOND responder on the same
+	// subject, and NATS would deliver requests to both.
+	c.unsubscribeRequestHandlers()
+}
+
+// unsubscribeRequestHandlers tears down every installed request/reply subscription
+// and nils it, so the operation is idempotent and safe on both the start-failure
+// and the normal-Stop path.
+func (c *Component) unsubscribeRequestHandlers() {
+	if c.trajectorySub != nil {
+		_ = c.trajectorySub.Unsubscribe()
+		c.trajectorySub = nil
+	}
+	if c.inflightSub != nil {
+		_ = c.inflightSub.Unsubscribe()
+		c.inflightSub = nil
+	}
 }
 
 // initPromptRegistry seeds the handler's prompt.Registry with
@@ -521,18 +543,9 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.mu.Lock()
 	}
 
-	// Unsubscribe from trajectory query handler
-	if c.trajectorySub != nil {
-		_ = c.trajectorySub.Unsubscribe()
-		c.trajectorySub = nil
-	}
-
-	// Unsubscribe from in-flight query handler. Once this returns, a caller
+	// Unsubscribe every request handler. Once the in-flight one is gone a caller
 	// sees no-responders — which is UNKNOWN, not zero (gh#733).
-	if c.inflightSub != nil {
-		_ = c.inflightSub.Unsubscribe()
-		c.inflightSub = nil
-	}
+	c.unsubscribeRequestHandlers()
 
 	// Cancel the component-owned consumer lifecycle before stopping consumers.
 	// In-flight deliveries observe this cancellation and are NAKed exactly once.

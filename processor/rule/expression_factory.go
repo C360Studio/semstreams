@@ -178,7 +178,7 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 	}
 
 	result, err := evaluateConditionsAgainstEntity(
-		r.evaluator, r.conditions, r.logic, entityState, r.lifecycleManager)
+		context.Background(), r.evaluator, r.conditions, r.logic, entityState, r.lifecycleManager)
 	if err != nil {
 		slog.Debug("ExpressionRule: evaluation error",
 			"rule", r.name,
@@ -215,6 +215,7 @@ func (r *ExpressionRule) EvaluateEntityState(entityState *gtypes.EntityState) bo
 // Cooldown is deliberately NOT here: it is a property of a rule instance's
 // history, not of its conditions, and only the stateful caller has one.
 func evaluateConditionsAgainstEntity(
+	ctx context.Context,
 	evaluator *expression.Evaluator,
 	conditions []expression.ConditionExpression,
 	logic string,
@@ -224,17 +225,48 @@ func evaluateConditionsAgainstEntity(
 	if len(conditions) == 0 {
 		return false, nil
 	}
+	// Tolerant disposition: a lookup failure leaves stateFields empty and the
+	// evaluator answers false for an optional lifecycle field. Correct for
+	// firing; Matches takes the strict disposition over the same steps.
+	stateFields := expression.StateFields{}
+	_ = populateLifecycleStateFields(ctx, lifecycleLookup, entityState.ID, stateFields)
+	expr := substituteConditionsForEntity(conditions, logic, entityState, lifecycleLookup)
+	return dispatchEvaluation(evaluator, entityState, stateFields, expr)
+}
 
+// substituteConditionsForEntity resolves `$`-templated condition VALUES against the
+// entity and returns the expression ready for the evaluator.
+//
+// Split out so the stateless path can INSPECT the substituted conditions before
+// evaluating them — an unresolved template that survives substitution is a
+// "could not resolve", and non-erroring operators like eq/contains would otherwise
+// compare the literal token as an ordinary string and return a confident verdict.
+// Both paths run this exact function, so the substitution itself cannot diverge.
+func substituteConditionsForEntity(
+	conditions []expression.ConditionExpression,
+	logic string,
+	entityState *gtypes.EntityState,
+	lifecycleLookup LifecycleLookup,
+) expression.LogicalExpression {
 	ec := &ExecutionContext{
 		EntityID:  entityState.ID,
 		Entity:    entityState,
 		Lifecycle: lifecycleLookup,
 	}
-	expr := expression.LogicalExpression{Conditions: conditions, Logic: logic}
-	expr.Conditions = SubstituteConditionValues(expr.Conditions, ec)
+	return expression.LogicalExpression{
+		Conditions: SubstituteConditionValues(conditions, ec),
+		Logic:      logic,
+	}
+}
 
-	stateFields := expression.StateFields{}
-	PopulateLifecycleStateFields(context.Background(), lifecycleLookup, entityState.ID, stateFields)
+// dispatchEvaluation picks the evaluator entry point based on whether any state
+// fields resolved. Shared by both paths so the dispatch rule cannot diverge.
+func dispatchEvaluation(
+	evaluator *expression.Evaluator,
+	entityState *gtypes.EntityState,
+	stateFields expression.StateFields,
+	expr expression.LogicalExpression,
+) (bool, error) {
 	if len(stateFields) > 0 {
 		return evaluator.EvaluateWithStateAndMessage(entityState, stateFields, nil, expr)
 	}

@@ -2,7 +2,9 @@
 package rule
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/processor/rule/expression"
@@ -65,20 +67,57 @@ import (
 // "nothing owed", and a recovery pass reads that as "stranded" and intervenes.
 // Treat an error as "cannot tell — leave it alone", which is the safe action in
 // both directions.
-func Matches(def Definition, state *gtypes.EntityState, lifecycle LifecycleLookup) (bool, error) {
+func Matches(ctx context.Context, def Definition, state *gtypes.EntityState, lifecycle LifecycleLookup) (bool, error) {
 	if state == nil {
 		return false, fmt.Errorf("rule.Matches: entity state is nil")
 	}
 
-	// Refuse before evaluating anything. A pre-scan keeps the stateful
-	// evaluator untouched — the alternative, a caller-mode branch inside
-	// evaluateConditionWithStateAndMessage, would put this cold path's
-	// concerns inside the hot rule-firing path.
-	haveLifecycle := lifecycle != nil
+	// A disabled rule owes nothing — it cannot fire, so it cannot be mid-delivery.
+	// Production refuses it first (expression_factory.go), and cooldown is the ONLY
+	// divergence this function claims, so anything else that gates firing has to be
+	// mirrored here or that claim is false.
+	if !def.Enabled {
+		return false, nil
+	}
+
+	if len(def.Conditions) == 0 {
+		return false, nil
+	}
+
+	// Resolve lifecycle state BEFORE deciding answerability. "A lookup was
+	// supplied" and "lifecycle state resolved" are different facts: a supplied
+	// lookup that fails leaves the fields unresolved, and the evaluator would then
+	// answer false for an optional `$entity.lifecycle.*` condition. Refusing on the
+	// lookup error is the whole point — an unregistered participant or a transient
+	// KV failure must not read as "nothing owed".
+	stateFields := expression.StateFields{}
+	lookupErr := populateLifecycleStateFields(ctx, lifecycle, state.ID, stateFields)
+
+	// The lookup error is CARRIED, not raised here. A failed lookup only matters if
+	// some condition actually needs lifecycle state — `LookupByEntityID` errors for
+	// any entity that simply is not lifecycle-managed, which is the ordinary case,
+	// so raising unconditionally would refuse every ordinary definition whenever a
+	// caller happened to supply a Manager. (Measured: it did. Caught by mutating
+	// the guard, not by reading the code.)
+	//
+	// Answerability is driven by what ACTUALLY resolved, not by whether a lookup was
+	// handed in. isNilLookup absorbs the typed-nil interface case.
+	lifecycleResolved := len(stateFields) > 0
 	for _, condition := range def.Conditions {
-		if err := expression.EnsureStatelessResolvable(condition, haveLifecycle); err != nil {
-			return false, fmt.Errorf("rule.Matches: definition %q: %w", def.ID, err)
+		err := expression.EnsureStatelessResolvable(condition, lifecycleResolved)
+		if err == nil {
+			continue
 		}
+		// When a lifecycle condition is unanswerable AND a supplied lookup failed,
+		// report the real cause. The generic message says "pass a Manager to resolve
+		// it", which is actively misleading for a caller that passed one.
+		if lookupErr != nil && strings.HasPrefix(condition.Field, lifecycleSubstitutionPrefix) {
+			return false, fmt.Errorf(
+				"rule.Matches: definition %q: condition on %q is unanswerable because the "+
+					"supplied lifecycle lookup failed for %q: %w",
+				def.ID, condition.Field, state.ID, lookupErr)
+		}
+		return false, fmt.Errorf("rule.Matches: definition %q: %w", def.ID, err)
 	}
 
 	logic := def.Logic
@@ -86,9 +125,40 @@ func Matches(def Definition, state *gtypes.EntityState, lifecycle LifecycleLooku
 		logic = "and"
 	}
 
-	// A fresh evaluator per call: it carries no cross-call state, and
-	// sharing one would be the first thread of exactly the stateful
-	// coupling this function exists to avoid.
-	return evaluateConditionsAgainstEntity(
-		expression.NewExpressionEvaluator(), def.Conditions, logic, state, lifecycle)
+	expr := substituteConditionsForEntity(def.Conditions, logic, state, lifecycle)
+
+	// A template that survived substitution is a "could not resolve", and it must
+	// not reach an operator. eq/contains do not error on a leftover token — they
+	// compare it as an ordinary string and return a confident verdict, which is
+	// this capability's defining defect wearing a different hat.
+	if err := ensureNoUnresolvedConditionValues(def.ID, expr.Conditions); err != nil {
+		return false, err
+	}
+
+	// A fresh evaluator per call: it carries no cross-call state, and sharing one
+	// would be the first thread of exactly the stateful coupling this function
+	// exists to avoid.
+	return dispatchEvaluation(expression.NewExpressionEvaluator(), state, stateFields, expr)
+}
+
+// ensureNoUnresolvedConditionValues refuses any condition whose Value still carries
+// a `$`-template after substitution.
+//
+// It reuses unresolvedTemplateVarRe — the same pattern the action path uses to warn
+// about surviving tokens — rather than a second literal list, for the same
+// single-source reason the stateful prefix set has one home.
+func ensureNoUnresolvedConditionValues(defID string, conditions []expression.ConditionExpression) error {
+	for _, condition := range conditions {
+		s, ok := condition.Value.(string)
+		if !ok {
+			continue
+		}
+		if token := unresolvedTemplateVarRe.FindString(s); token != "" {
+			return fmt.Errorf(
+				"rule.Matches: definition %q: condition on %q has an unresolved value template %q; "+
+					"it would be compared as a literal string and produce a confident wrong verdict",
+				defID, condition.Field, token)
+		}
+	}
+	return nil
 }

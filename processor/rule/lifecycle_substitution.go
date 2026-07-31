@@ -27,6 +27,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -71,16 +72,59 @@ type LifecycleLookup interface {
 // intended for the rule-fire path, not per-message-shaped. See
 // LookupByEntityID's contract.
 func PopulateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, entityID string, fields expression.StateFields) {
-	if manager == nil || entityID == "" || fields == nil {
-		return
+	// Tolerant wrapper: the stateful path treats a lookup failure as "no
+	// lifecycle state", which is correct for firing. populateLifecycleStateFields
+	// carries the error for callers that must not answer without it.
+	_ = populateLifecycleStateFields(ctx, manager, entityID, fields)
+}
+
+// populateLifecycleStateFields is PopulateLifecycleStateFields with the lookup
+// error RETAINED.
+//
+// The split exists because "the caller supplied a Manager" and "lifecycle state
+// resolved" are different facts, and conflating them reproduces this capability's
+// defining defect. A supplied-but-failing lookup leaves `$entity.lifecycle.*`
+// unresolved; the evaluator then returns `false, nil` for an optional field, and a
+// stateless caller reads that confident no-match as "nothing owed".
+//
+// The stateful path keeps swallowing the error — a rule that cannot resolve
+// lifecycle state must not fire, and false is the right answer for firing. The
+// stateless path refuses instead, but only when a condition actually needs the
+// state (see Matches). Same resolution, two dispositions, one implementation.
+func populateLifecycleStateFields(ctx context.Context, manager LifecycleLookup, entityID string, fields expression.StateFields) error {
+	if isNilLookup(manager) || entityID == "" || fields == nil {
+		return nil
 	}
 	p, err := manager.LookupByEntityID(ctx, entityID)
 	if err != nil {
-		return
+		return err
 	}
 	fields["$entity.lifecycle.phase"] = p.Phase()
 	fields["$entity.lifecycle.terminal"] = p.IsTerminal()
 	fields["$entity.lifecycle.workflow"] = p.Workflow()
+	return nil
+}
+
+// isNilLookup reports whether a LifecycleLookup is absent, including the TYPED-nil
+// case that a plain `== nil` misses.
+//
+// `var m *lifecycle.Manager; Matches(ctx, def, state, m)` produces an interface
+// value with a non-nil type and a nil pointer. `manager == nil` is false for it, so
+// an untreated typed nil passes an "is a lookup available" guard and then panics
+// inside LookupByEntityID. An exported API taking an interface has to handle this;
+// the caller's `m` genuinely IS absent and deserves the absent-lookup behavior, not
+// a crash.
+func isNilLookup(manager LifecycleLookup) bool {
+	if manager == nil {
+		return true
+	}
+	v := reflect.ValueOf(manager)
+	switch v.Kind() {
+	case reflect.Ptr, reflect.Interface, reflect.Map, reflect.Slice, reflect.Func, reflect.Chan:
+		return v.IsNil()
+	default:
+		return false
+	}
 }
 
 const lifecycleSubstitutionPrefix = "$entity.lifecycle."
