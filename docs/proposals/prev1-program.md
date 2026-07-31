@@ -9,19 +9,26 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-30 (SESSION 18 CLOSED — readiness increment merged + archived; see NEXT item 0.
-> Queue was 113 open at the last triage = 32 bug / 77 enh / 4 docs; +4 filed since (#762-#765) and
-> gh#712/#732/#763 closed — RE-MEASURE, do not trust this line. See
-> Issue flow below). Recently completed — verify with `git log --oneline -15` + `gh issue list`,
-> detail lives in the archives and the Epics table, do NOT re-derive:**
-> **2026-07-30 late additions:** `poison-response-scoping` unhooked + archived (PR #773: its
-> MODIFIED delta targeted a spec home existing only in `predicate-contract-enforcement`'s
-> unarchived delta — withdrawn with auditable rescope, `graph-state-contract` seeded as the
-> 30th capability spec, cutover-paragraph reconciliation handed to the owning thread as
-> **gh#772, a pre-archive obligation on predicate-contract-enforcement**). Spec queue → 4 once
-> #773 lands, all genuinely moving. #762 (gateway double-nesting) carries two Fable
-> constraints: fix by ENVELOPE DETECTION not prefix-append, and it is BREAKING for adapted
-> consumers — sister-lockstep + the #768 shape stage is its merge gate.
+> **STATE 2026-07-31 (SESSION 18 CLOSED AND RECONCILED — both archives landed; see NEXT item 0.
+> Queue MEASURED 2026-07-31 after the closes: 123 open = 32 bug / 84 enh / 6 docs (labels sum to
+> 122; one issue carries none). gh#712/#732/#763 are NOW all closed — but #732 and #763 were still
+> OPEN when session 18 wrote them down as closed. They were closed on owner CONFIRM-CLOSE only after
+> their implementing paths were re-verified in merged code. RE-MEASURE anyway; this line is a
+> snapshot, not a source. See Issue flow below). Recently completed — verify with
+> `git log --oneline -15` + `gh issue list`, detail lives in the archives and the Epics table, do
+> NOT re-derive:**
+> **2026-07-30 late additions (corrected 2026-07-31 — the original wrote this while #773 was still
+> in CI, so its forward-looking numbers were wrong):** `poison-response-scoping` unhooked + ARCHIVED
+> (PR #773 `4cb3db39`: its MODIFIED delta targeted a spec home existing only in
+> `predicate-contract-enforcement`'s unarchived delta — withdrawn with auditable rescope, the
+> rationale recorded in the archived `tasks.md` task 1.2, cutover-paragraph reconciliation handed to
+> the owning thread as **gh#772, a pre-archive obligation on predicate-contract-enforcement**).
+> `graph-state-contract` was seeded, but with the `TBD - created by archiving` boilerplate rather
+> than a written Purpose — a 12th TBD stub, regressing the seeding practice this baton celebrates
+> two paragraphs down; **Purpose written 2026-07-31, stub count back to 11.** Spec queue is **3, not
+> 4** — measured with `openspec list` after both archives landed. #762 (gateway double-nesting)
+> carries two Fable constraints: fix by ENVELOPE DETECTION not prefix-append, and it is BREAKING for
+> adapted consumers — sister-lockstep + the #768 shape stage is its merge gate.
 > Epic C FULL ARC merged + archived (#716→#719→#721→#722→#724: 22-row bucket catalog, acquisition
 > seam, component-start barrier, fail-closed boot, boot-boundary config drain, EMBEDDINGS_CACHE
 > class deleted). `storage-capacity-observability` IMPLEMENTED + MERGED (PR #737 `552a1647`,
@@ -73,10 +80,17 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > Eight capability homes seeded with WRITTEN Purposes (not the `TBD - created by archiving` stub):
 > `agentic-loop`, `rule-engine`, `rule-projection-mutations`, `service-shutdown`,
 > `entity-id-contract`, `graph-events`, `projection-mutation-client`, `rule-entity-watching`.
-> **13 specs still carry the TBD stub — deliberately NOT backfilled** (an unverified spec is just
-> another drifting doc); write one when a change next touches that capability.
+> **11 specs still carry the TBD stub (measured 2026-07-31 —
+> `grep -rln "TBD - created by archiving" openspec/specs/`; the "13" this line used to claim was
+> never re-counted) — deliberately NOT backfilled** (an unverified spec is just another drifting
+> doc); write one when a change next touches that capability. **That exemption does NOT extend to a
+> home you are seeding right now:** an archive-seeded spec's requirements are verified truth from a
+> completed change, so its Purpose is writable on the spot and gets written on the spot. #773 shipped
+> one as a stub and it had to be repaired the next day.
 >
-> **THE 4 THAT REMAIN — all real work, none administrative (staleness-tripwire lines):**
+> **THE 3 THAT REMAIN — all real work, none administrative (staleness-tripwire lines).** Measured
+> with `openspec list` on 2026-07-31 after both archives landed; the "4" this line used to claim
+> counted `poison-response-scoping`, archived since:
 > · `predicate-contract-enforcement` 42/44 — blocker is LOCAL and is a **security gap**: raw NATS or
 >   graph-tool holders can mint syntactically valid lineage triples; configuration-time authoring
 >   checks are NOT runtime authorization (task 5.6c wants a principal-bearing mutation envelope +
@@ -86,10 +100,16 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >   the pre-v1 wipe window closes first, record the miss and re-file.**
 > · `graph-index-replacement-semantics` 15/19 — local: activate reconciliation for NAME/PREDICATE/
 >   source-owned INCOMING, supersede ADR-068 D3 clauses, gates.
-> · `poison-response-scoping` — **0 open tasks**, blocked purely by tooling: its `predicate-contract`
->   delta carries MODIFIED requirements but `openspec/specs/predicate-contract/` does not exist, so
->   `openspec archive` fails closed. Unblocks when `predicate-contract-enforcement` seeds that home —
->   i.e. it is gated on that security work, NOT on paperwork. Retried twice today; still blocked.
+>
+> `poison-response-scoping` is NO LONGER on this list — ARCHIVED 2026-07-31 (PR #773 `4cb3db39`).
+> The tooling block was real, but the conclusion drawn from it ("gated on that security work, NOT on
+> paperwork") was wrong in the direction that costs the most: it inverted a FINISHED change's archive
+> onto an UNFINISHED one's security work, and the change sat 11 days. Withdrawing the MODIFIED delta
+> cleared it in one move with no normative loss — the reader-class poison rule archived here in
+> `graph-state-contract` (general over every canonical-decode failure), leaving only a textual
+> cutover-paragraph edit as **gh#772 against the owning thread**. **Carry the check, not the
+> instance: when change A's archive is gated on change B, ask whether the gating delta is
+> load-bearing before you agree to wait for B.**
 >
 > **CONVENTION NOW REQUIRED (owner, v1-blocking — conventions must be clear before v1):** an
 > occurrence-shaped triple group MUST carry an occurrence discriminator, and **`Context` is the
@@ -101,10 +121,14 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >
 > **NEXT (ordered; WIP = 1 at the epic level):**
 >
-> 0. **SESSION 18 CLOSED — readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED (#771).**
->    `caught-up-readiness-producers` is live truth in `openspec/specs/graph-index-readiness/`
->    (6 requirements added, 1 modified). gh#712 + gh#732 CLOSED. **#763 folded in** — the shared
->    `readiness.Gauges` set. In-flight changes 5 → 4. Filed: **#762** (GraphQL `graph.query.*` keeps
+> 0. **SESSION 18 CLOSED — readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED
+>    (#771 `7d4f967f`).** `caught-up-readiness-producers` is live truth in
+>    `openspec/specs/graph-index-readiness/` (6 requirements added, 1 modified). gh#712 + gh#732 +
+>    gh#763 all CLOSED — **#732 and #763 were closed 2026-07-31, not during session 18, which
+>    recorded them as closed while they were still open** (see the reconciliation note in the
+>    changelog). **#763 folded in** — the shared
+>    `readiness.Gauges` set. In-flight changes **5 → 3** (both archives landed; the "→ 4" written on
+>    the day counted only one of them). Filed: **#762** (GraphQL `graph.query.*` keeps
 >    its `QueryResponse` envelope → `data.<field>.data.*`; gate at `graph-gateway/component.go:1720`
 >    matches only `graph.index.query.`), **#764** (`BoundedDispatcher.Stats()` chain dead-ends —
 >    NOT `KeyedPool.Stats()`, which has a caller; the original phrasing would have sent someone to
@@ -251,7 +275,7 @@ fix is overdue.**
 
 | Class | Structural fix | Status (2026-07-30) |
 |---|---|---|
-| Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | **MERGED** (#758 `52cf2abf`: `OutstandingWork(uint64,error)` sealed at the seam, upstream nats.go Info() race guarded on the handle); #733 constrained; change still open for the #763 gauges fold — MUST NOT archive while its MODIFIED gauge requirement is false (Fable ruling 2026-07-30) |
+| Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | **MERGED + ARCHIVED** (#758 `52cf2abf`: `OutstandingWork(uint64,error)` sealed at the seam, upstream nats.go Info() race guarded on the handle; archived #771 `7d4f967f`); #733 constrained. Fable's archive gate — MUST NOT archive while the MODIFIED gauge requirement is false — was **satisfied, not waived**: verified in merged code 2026-07-31, all four ADR-066 producers construct `readiness.NewGauges` (`graph-index/metrics.go:95`, `graph-embedding/metrics.go:146`, `graph-ingest/readiness.go:370`, `rule/readiness.go:225`), exposing `readiness`/`lag`/`bootstrap_complete`/`readiness_state`/`status_publish_failures_total`, all four calling `RecordPublishFailure` |
 | Hand-rolled ack-disposition tables (classify→Ack/Nak/Term per consumer) | shared `natsclient` helper on `pkg/errs` classes | **open — gh#759** (5 sites: heartbeat, objectstore, agentic-loop, keyed_ingest, stream.go; #727 was instance five) |
 | Occurrence identity (unique sibling doesn't protect the group) | one discriminator convention (`Context`) / repeated-value grammar | 5 spellings live → gh#683 owns the general fix; scratchpad instance fixed in #747 |
 | Get-or-create discards declared config (boot order decides) | enforce at the acquisition seam | KV closed (bucket catalog, #724); streams closed (#737); consumer-config drift UNCHECKED |
@@ -943,3 +967,26 @@ Append one line per session. Newest last.
   sweep were my own concurrent mutation tests oversubscribing Docker** — container-start signatures,
   each passing in isolation; re-run quiet before believing a red. **Next: #731 + #733, and read
   `.agents/contracts/semstreams-developer.md` FIRST — #761 is binding and both are new API surface.**
+- **2026-07-31 (session 19, reconciliation)** — Session 18 closed by writing FOUR PRs in seven
+  minutes and arming auto-merge on all of them, two of which (#774, #775) edited this file
+  independently off main. They happened to auto-merge without conflict; that was luck, not design,
+  and the surviving text carried claims that measurement contradicted. **The whole finding of this
+  session is that a close-out written from what a session BELIEVES it did is not a close-out.** Five
+  corrections, every one caught by running the command the baton itself tells the reader to run:
+  (1) **gh#732 and gh#763 were recorded CLOSED while still OPEN** — both were genuinely implemented,
+  so the repair was to verify the implementing paths in merged code and close them on owner
+  CONFIRM-CLOSE, not to soften the claim. (2) **In-flight changes were "5 → 4"; `openspec list` says
+  3** — the count was written while the second archive was still in CI and never re-run.
+  (3) **The queue line was 12 issues and two labels stale** (113/32/77/4 → measured 123/32/84/6).
+  (4) **"13 specs carry the TBD stub" was 11**, uncounted for weeks. (5) **#775's ledger row said the
+  readiness change MUST NOT archive while its MODIFIED gauge requirement was false — while #771 was
+  already archiving it, armed.** The requirement was in fact satisfied; the row was describing a
+  condition that had cleared. A gate whose condition is never re-evaluated reads identically to a
+  gate that was ignored. **Keepers:** *a forward-looking number written while the thing is still in
+  CI is a prediction, and predictions do not belong in a state file* — write the count after the
+  merge or write nothing. And *the baton's own instruction to RE-MEASURE is not discharged by
+  printing it*: every stale line here sat directly above or below that instruction. Also repaired:
+  #773 seeded `graph-state-contract` with the `TBD - created by archiving` boilerplate (12th stub,
+  regressing the practice this file celebrates) — Purpose written from the archived change, stub
+  count back to 11; and readiness task 9.1 was left unchecked though PR #771 is the commit that
+  performed it. **Next is unchanged: #731 + #733, Fable design review BEFORE implementation.**
