@@ -27,6 +27,23 @@ import (
 // The consequence worth stating: a Matches verdict can differ from a live engine's
 // only by matching where the engine would be cooling down, never the reverse.
 //
+// # The enumeration behind that claim
+//
+// "Cooldown is the only divergence" is a claim about a CLASS — every gate that can
+// stop the engine firing — so here is the class, enumerated from
+// EvaluateEntityState rather than asserted:
+//
+//	!r.enabled                   -> mirrored (false, nil)
+//	entityState == nil           -> mirrored (error; a caller passing nil is a bug)
+//	cooldown window open         -> DELIBERATELY not mirrored; see above
+//	len(conditions) == 0         -> mirrored (false, nil)
+//	evaluation returned an error -> deliberately NOT collapsed to false; see below
+//
+// The `Enabled` row is why this enumeration is written down instead of trusted: it
+// was missing in the first implementation, which falsified this very claim while
+// the doc comment went on asserting it. Any new gate added to EvaluateEntityState
+// must be added here and mirrored, or the claim above is false again.
+//
 // Matches performs the same pre-processing the engine performs, by calling the same
 // code the engine calls (evaluateConditionsAgainstEntity) rather than reproducing
 // it. That is deliberate and load-bearing. A caller that reaches for
