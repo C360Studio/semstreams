@@ -26,6 +26,10 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > Then gh#736's fast-fail flake class root-caused and fixed (#793). See the Small-bug track.
 > **`predicate-contract-enforcement` ARCHIVED 2026-07-31 — the last of the three Codex-arc changes.
 > In-flight 3 → 2.** Its 5.6c blocker was rescoped (Fable), not built as written.
+> **NEXT ACTION IS gh#749, NOT the in-flight arc** — #801 set that from semdev's post-.159
+> feedback and two sisters are blocked on it. This file disagreed with itself for several PRs
+> (NEXT said "in-flight first" while the Tag-milestone section said "#749 FIRST"); reconciled
+> 2026-07-31. **A priority added anywhere but NEXT will be missed — the next session reads NEXT.**
 > **MEASURED at the tag:** 122 open = 33 bug / 82 enh / 6 docs · in-flight changes **2** ·
 > 11 TBD-stub specs · `openspec validate --all --strict` 34/0 · lint + `go vet` plain,
 > `-tags=integration` AND `-tags=live_llm` all clean · `-race ./...` 135 ok/0 FAIL ·
@@ -164,7 +168,24 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
 > milestone section below; everything here is sequenced against it.**
 >
-> **1. TWO IN-FLIGHT CHANGES REMAIN** (was three). WIP = 1; pick ONE and land it.
+> **1. gh#749 FIRST — canonical tool effect metadata. TWO SISTERS ARE BLOCKED ON IT.**
+> Set by #801 from semdev's post-.159 feedback, and it OUTRANKS the in-flight changes: both sisters
+> were told on the issue **NOT to hand-roll interim schemas**, so they are waiting rather than
+> working around it. Additive with a fail-safe `unknown`, so **no lockstep is required** — it ships
+> in the tag after .159. **Framework surface ⇒ Fable design gate BEFORE implementation.**
+> This is the standing rule applied, not an exception to it: a blocked sister is a worse state than
+> a stalled change, and the in-flight arc has sat for days without harm.
+> **(Corrected 2026-07-31 — this file carried #749's priority only in the Tag-milestone section
+> while NEXT still said "finish the in-flight changes"; the two disagreed for several PRs. When you
+> add a priority, put it in NEXT, not only where you were reading at the time.)**
+>
+> **THEN the front-door batch: #749 + #795 + #799** (consumer front door; SimpleOwner facade +
+> terminal-Bind builder). **#800** (owner-token heartbeater death visible only as a downstream
+> symptom — a bug, and it is the kind that costs an operator an hour) can go in parallel; it is
+> small and non-epic.
+>
+> **2. THE IN-FLIGHT ARC — its own track, not the head of the queue.** Two remain (was three).
+> WIP = 1 within this track.
 > **`predicate-contract-enforcement` is ARCHIVED** — 44/44, the last of the three Codex-arc changes.
 > `predicate-contract` is seeded live truth (8 requirements, Purpose written). Its blocker 5.6c was
 > **RESCOPED, not implemented as written** (Fable APPROVED 2026-07-31): the principal-bearing
@@ -185,6 +206,9 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > · **`graph-index-replacement-semantics` 15/19** — activate reconciliation for NAME/PREDICATE/
 >   source-owned INCOMING, supersede ADR-068 D3 clauses, gates. Oldest (10d); carries gh#527 and the
 >   ADR-073 Increment-0 fold-in.
+> · **gh#798 (derive ownership contracts from predicate registration) is the complexity-pivot DESIGN
+>   CENTER and HOLDS behind this arc** — semdev's .159 feedback, mechanical-derivation proof. It
+>   also makes gh#802's deferred envelope cheaper if a trigger ever fires.
 >
 > **2. THEN the complexity-pivot remainder** (item 4 below): adopter module contract, `--validate`
 > performing real registry composition (fold gh#734 — an unknown schema Type spelling silently
@@ -1301,7 +1325,9 @@ Append one line per session. Newest last.
   **The wave is released and gh#753 is active.** Post-tag queue re-sequenced: the three in-flight
   changes come FIRST (the 80-95% band is where this program's audit said the guardrail work
   hides), and `predicate-contract-enforcement`'s remaining blocker is a genuine SECURITY gap —
-  runtime authorization vs configuration-time authoring checks. **Release step 7 closed the same day: sisters are
+  runtime authorization vs configuration-time authoring checks. **SUPERSEDED the same day by #801:
+  gh#749 leads, two sisters blocked on it; the in-flight arc is its own track. Left as written
+  because a log records what was believed at the time — see the Next Action for current truth.** **Release step 7 closed the same day: sisters are
   adopting .159.** The wave is fully released — tag cut, guidance published, adopters moving.
   **Then, post-tag, two unplanned pieces that were both worth it.** (a) A "update NATS and make the
   Dockerfiles match" ask turned out to be **three regimes at once**, including `nats:latest` in
@@ -1338,5 +1364,27 @@ Append one line per session. Newest last.
   which is worse than a stated gap. Also filed the mechanism for gh#736's timeout class: the wait
   strategy burns its full 180s budget on an **unresolvable port mapping**, not on readiness — same
   root cause as the fast-fail class, on the port the strategy itself uses.
-  **Next: pick ONE of the two remaining in-flight changes. WIP = 1. Check
-  `predicate-raw-key-representation`'s HALT condition before implementing it.**
+  **Next: read the Next Action section — do NOT take a priority from a log entry.** This entry
+  originally said "pick one of the two remaining in-flight changes"; that was already wrong when
+  written, because #801 had set gh#749 ahead of them and I had not read that far down the file.
+  **Log entries record what happened; they must POINT AT the Next Action rather than restate it,
+  or they become a second place to read priorities from — and the stale one always looks current.**
+- **2026-07-31 (session 21 close)** — Closed `predicate-contract-enforcement` (44/44, ARCHIVED) by
+  **rescoping** its security blocker rather than building it — see the entry above and NEXT item 2.
+  In-flight **3 → 2**. Queue re-measured at close: **126 open**. `openspec validate --all --strict`
+  34/0. Filed gh#802 (deferred envelope, trigger-gated) and gh#790/#784/#786 earlier in the day.
+  **The session's real finding is a process one, and it cost three close-outs.** #801 landed
+  mid-session setting **gh#749 first** (two sisters blocked, told not to hand-roll interim schemas)
+  — but it wrote that into the **Tag-milestone section**, while **NEXT** still said "finish the
+  in-flight changes." Nothing was clobbered; the two statements simply coexisted ~250 lines apart,
+  and I read the one the protocol names. I then reported the wrong next action three times, and the
+  owner caught it by remembering a PR I had never seen.
+  **Two structural fixes, not just a correction.** (1) A priority belongs in **NEXT**; anywhere else
+  it is invisible, because the next session reads NEXT. The Tag-milestone section was the right
+  place to EXPLAIN #749 and the wrong place to SET it. (2) A log entry's `Next:` line must **point
+  at** the Next Action, never restate it — a restated priority becomes a second source of truth, and
+  the stale one always looks current. Both are now written into the file itself.
+  **Also worth carrying: reconcile-at-start must read the whole Next Action AND `git log` on the
+  baton for authors other than yourself.** Four commands were run at session start; none of them
+  would have surfaced #801, because it landed later and in a section I had no reason to re-read.
+  **Next: gh#749 — Fable design gate first (framework surface).**
