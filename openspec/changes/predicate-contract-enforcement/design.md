@@ -156,10 +156,20 @@ scan must both be clean before local zero-violation evidence is complete.
 - **File-wide invalid allowances can hide stale predicates:** bind every negative classification to one occurrence and
   its authoritative reason, and fail on stale or ambiguous entries.
 - **Authoring delegation is not runtime namespace authorization:** configuration-time checks prevent rules and
-  dispatch from inventing `agent.lineage.*`, but any holder of a raw graph-mutation lane or graph-writing tool can
-  still mint syntactically valid `agent.*` triples because the ENTITY_STATES seam authenticates no principal. This
-  is an explicit threat-model gap, not an implied trust guarantee. The named follow-up is a principal-bearing
-  mutation envelope plus seam-level denial of undeclared `agent.*` writes on every non-delegated lane.
+  dispatch from inventing `agent.lineage.*`, but any holder of a raw graph-mutation lane can still mint
+  syntactically valid `agent.*` triples because the ENTITY_STATES seam authenticates no principal. This is an
+  explicit threat-model gap, not an implied trust guarantee.
+
+  **Sharpened 2026-07-31 (rescope proposed in task 5.6c, pending Fable):** the original follow-up — a
+  principal-bearing mutation envelope plus seam-level denial of undeclared `agent.*` writes — is disproportionate
+  to the gap as it actually exists, on three counts. There is **no principal to bear** (NATS auth is
+  connection-level; no `Principal`/`Actor` concept exists in `graph/` or `pkg/projection/`), so the envelope is a
+  new identity subsystem rather than a guard. The gap **does not decompose into a privilege boundary**: a
+  `graph.mutation.*` publisher can write any triple, so denying `agent.*` protects one namespace and leaves every
+  other one forgeable by the same actor. And the **reachable** path — the LLM, the only semi-trusted principal
+  present — is already closed, because no agent tool accepts a caller-controlled predicate; that boundary is
+  intact but unasserted. The proportionate close is to state the trust boundary as a contract, test the
+  agent-tool boundary that exists, and defer the envelope to a real multi-principal requirement.
 
 ## Cutover Plan
 
