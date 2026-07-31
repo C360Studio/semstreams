@@ -79,6 +79,35 @@ implementation (baton model-roles rule).
 - Widen deliberately, never speculatively. When a real second consumer needs more than the
   current surface answers, that is the moment to extend — under the same review.
 
+## Guarantee, signal, and revision contracts
+
+Ported 2026-07-31 from the measured Codex record: 22 blocking findings across 8 PRs
+(#716–#758), 19 of 22 in the four classes below, rate flat because these rules previously
+lived only in owner-session memory. Baseline 2.75 blocking/PR; these exist to move it.
+
+- **Enumerate the hole class before claiming a guard.** A guard, sweep, gate, or coverage
+  claim protects a CLASS, never the motivating instance. Before claiming it, grep the guarded
+  primitive and enumerate EVERY seam, emitter, entry path, and creation site — including ones
+  added by this same change — and cite the enumeration where the claim is made. The recurring
+  shape: a second entry path (config lane, reconnect auto-create, escape-hatch branch, the
+  guard's own grammar) reopens what the first pass closed.
+- **Every failure, teardown, and absent path fails closed.** A failure path must produce the
+  negative or UNKNOWN signal; a positive signal (ready, complete, committed, provisioned)
+  requires its precondition provably held on that exact path. A zero value, nil map, empty
+  read, or given-up join is never an answer. Enum and grammar validation rejects unknown and
+  empty values explicitly — silent drop from a derived set is the fail-open shape.
+- **Bind every action to the revision it acted on.** A CAS reports its OWN resulting revision
+  — never a post-hoc live read that can capture a foreign writer's commit. Convergence and
+  repair marks clear CAUSALLY against the revision that created them, never on "any later
+  terminal". A baseline or cache of published state commits only AFTER the publish succeeds.
+  Identity keys must canonicalize across every representation the value takes (in-memory vs
+  persisted JSON) or restart re-fires the class.
+- **A filed issue does not discharge an in-PR guarantee.** If this PR asserts a guarantee, it
+  holds at execution time in this PR; filing the gap is recording, not satisfying.
+- **Remedies get the original's scrutiny.** Fix commits for review findings are new code with
+  less design time than what they replace — on #758 two of three Codex blockers were
+  introduced by the fixes for the prior round. Re-run the adversarial pass on your own fixes.
+
 ## Storage and retention contracts
 
 - Keep `windowed`, `entity-owned`, and `retained` storage classes distinct. Bounded admission and capacity rejection

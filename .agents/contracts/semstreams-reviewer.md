@@ -151,6 +151,19 @@ not replace this review.
 - New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` without recorded Fable
   design review is a BLOCKING finding.
 
+## Guarantee, signal, and revision review
+
+- A guard/coverage claim without an enumeration of the guarded primitive's seams (grep-derived,
+  cited at the claim) is a finding; verify the enumeration includes paths THIS change adds.
+- Any failure, teardown, or absent path that yields a positive signal — or a zero/nil/empty
+  value standing in for UNKNOWN — is a blocking finding.
+- A CAS whose reported revision comes from a post-hoc read, a mark cleared non-causally, or a
+  baseline mutated before its publish succeeds is a blocking finding.
+- An in-PR guarantee "satisfied" by a filed issue is a finding: the guarantee holds here or the
+  claim is removed.
+- Review fix commits as adversarially as the original diff — measured on #758, remedies are
+  where new blockers enter.
+
 ## Coverage review
 
 - A change adding operator-visible or cross-component behavior must include its e2e stage in

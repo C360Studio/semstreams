@@ -304,6 +304,12 @@ every critical-stage gate: does this PR close a row, or add an instance to an op
 issue that closes a row is always worth minting; a Nth instance on an open row means the row's
 fix is overdue.**
 
+**Codex blocking-rate baseline (measured 2026-07-31):** 22 blockers / 8 reviewed PRs
+(#716–#758), per-PR 3,4,2,2,4,3,1,3 — flat. 19 of 22 in four classes; all four ported to
+`.agents/contracts/` 2026-07-31 (hole-class enumeration, fail-closed paths, revision binding,
+gate integrity). **Success metric: blocking-per-PR declines over the next 3 code PRs.**
+Pedantry bucket measured: zero — every blocker carried a failure scenario.
+
 | Class | Structural fix | Status (2026-07-30) |
 |---|---|---|
 | Consumer-info-derived progress (`AckFloor` lies both directions — measured, #758 D0) | pending-sum (`NumPending+NumAckPending`) or producer-published readiness; never floor-derived | **MERGED + ARCHIVED** (#758 `52cf2abf`: `OutstandingWork(uint64,error)` sealed at the seam, upstream nats.go Info() race guarded on the handle; archived #771 `7d4f967f`); #733 constrained. Fable's archive gate — MUST NOT archive while the MODIFIED gauge requirement is false — was **satisfied, not waived**: verified in merged code 2026-07-31, all four ADR-066 producers construct `readiness.NewGauges` (`graph-index/metrics.go:95`, `graph-embedding/metrics.go:146`, `graph-ingest/readiness.go:370`, `rule/readiness.go:225`), exposing `readiness`/`lag`/`bootstrap_complete`/`readiness_state`/`status_publish_failures_total`, all four calling `RecordPublishFailure` |
