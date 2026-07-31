@@ -9,12 +9,20 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-07-31 (SESSION 20 — #731+#733 MERGED and ARCHIVED; **#762+#768 also MERGED
-> (`9b8a11d9`) and ARCHIVED**. The tag checklist's item 1 is DONE and the epic slot is OPEN —
-> **the next action is the TAG itself**, checklist items 2-5. See NEXT item 1.
-> **MEASURED at session 20 close:** in-flight changes **3** · 11 TBD-stub specs ·
-> `openspec validate --all --strict` 34/0 · #762, #768, #731, #733 all CLOSED. Re-measure the
-> issue queue at next session start — it moved during this one (gh#784 and gh#786 filed).
+> **STATE 2026-07-31 (SESSION 20 — THE TAG IS CUT. `v1.0.0-beta.159` is pushed
+> (`8813270c`), which makes this the first POST-TAG session. The sister-lockstep wave is
+> RELEASED and gh#753 is ACTIVE — sisters were pinned at .158 and could not compile against
+> main; they now can. Expect inbound adoption issues; per the residency rule they arrive as NEW
+> issues here, never as tasks in our change files.
+> **The whole pre-tag checklist is discharged** — see the Tag milestone section, now marked DONE.
+> **MEASURED at the tag:** 122 open = 33 bug / 82 enh / 6 docs · in-flight changes **3** ·
+> 11 TBD-stub specs · `openspec validate --all --strict` 34/0 · lint + `go vet` plain,
+> `-tags=integration` AND `-tags=live_llm` all clean · `-race ./...` 135 ok/0 FAIL ·
+> `-race -tags=integration -p 2 ./...` 136 ok/0 FAIL · **e2e statistical, semantic AND agentic
+> all GREEN at the tag commit**.
+> **The one thing a fresh session must not assume: the tag does NOT end the program.** The
+> program-exit gate is two consecutive increments with ZERO new P1+ finds, and the last two
+> increments each surfaced several — see the two keepers below.
 >
 > **SESSION 19'S CLOSE-OUT CARRIED A FALSE NEGATIVE ABOUT ITS OWN REVIEW CHAIN, and this file
 > repeated it.** It recorded §6.1 (`semstreams-reviewer`) and §6.3 (Codex) as NOT RUN, and §6.5 as
@@ -145,31 +153,56 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > **NEXT (ordered; WIP = 1 at the epic level). The tag is the organising goal — see the Tag
 > milestone section below; everything here is sequenced against it.**
 >
-> **1. THE EPIC SLOT IS OPEN — the next action is THE TAG, not another epic.**
-> #762+#768 MERGED (`9b8a11d9`) and ARCHIVED; `gateway-response-projection` is live truth.
-> **The tag checklist's item 1 is DONE — go to the Tag milestone section below and work items
-> 2-5:** tier evidence at the tag commit (`task e2e:semantic` + `task e2e:agentic` green at HEAD;
-> statistical is already green per-PR), the tagged vets (`-tags=integration` AND `-tags=live_llm`),
-> `/tag-release`, and never re-tag. The tag activates gh#753.
+> **1. FINISH THE THREE IN-FLIGHT CHANGES — they are the top of the queue now, not the
+> complexity pivot.** All three are real work stalled in the 80-95% band, and the band is exactly
+> where this program's own audit said the observability and guardrail work hides. WIP = 1; pick
+> ONE and land it.
+> · **`predicate-contract-enforcement` 42/44** — the blocker is a **SECURITY gap**, and it is the
+>   highest-value item on this list: raw NATS or graph-tool holders can mint syntactically valid
+>   lineage triples, because configuration-time authoring checks are NOT runtime authorization.
+>   Task 5.6c wants a principal-bearing mutation envelope + seam-level denial of undeclared
+>   `agent.*` on non-delegated lanes. **gh#772 is a pre-archive obligation on this change** (the
+>   cutover-paragraph reconciliation inherited from #773's rescope).
+> · **`predicate-raw-key-representation` 10/14** — membership-watch consumer identification, raw
+>   PREDICATE_INDEX in the announced wipe/reseed, docs, gates. **CHECK ITS HALT CONDITION FIRST
+>   (task 4.3): if the pre-v1 wipe window has closed, record the miss and re-file rather than
+>   implement.** .159 is still pre-v1 so the window is presumed open — verify, do not assume.
+> · **`graph-index-replacement-semantics` 15/19** — activate reconciliation for NAME/PREDICATE/
+>   source-owned INCOMING, supersede ADR-068 D3 clauses, gates. Oldest (10d); carries gh#527 and
+>   the ADR-073 Increment-0 fold-in.
 >
-> **Carry these two from the #762 increment — both were caught EXTERNALLY, neither by a gate:**
-> · **Enumerate a surface from the component that OWNS it.** I enumerated the gateway's reachable
->   subjects from graph-query's registration table and the static router, and got a phantom entry
->   (`graph.query.byName`, which the gateway does not route), a second phantom (`batch`), and a
->   MISS (`agentic.query.trajectory`, the router's first branch). The adopter note shipped telling
->   sisters to change a read path that does not exist. Codex and the reviewer found it
->   independently. The fix is now drift-proof: the test scrapes the routing function itself.
-> · **Three of five reviewer findings were guards that reported green without checking.** The
->   shipped path was sound. This is the standing finding relocated to verification code — a guard
->   is code, and it inherits the full defect rate.
+> **2. THEN the complexity-pivot remainder** (item 4 below): adopter module contract, `--validate`
+> performing real registry composition (fold gh#734 — an unknown schema Type spelling silently
+> skips validation, the validator-credibility bug), tutorial configs compiled in CI (gh#725 is the
+> motivating case), docs rewrite LAST against the simplified surface.
 >
-> **2. THEN THE TAG — v1.0.0-beta.159**, per the Tag milestone section below. #762 is its item 1;
-> once merged, the remaining gates are tier evidence at the tag commit, the tagged vets, and
-> `/tag-release`. The tag activates gh#753.
+> **3. Epic D coverage stages, now that the tiers are the release gate:** #766 (storage-observability
+> stage) · #767 (dedup cardinality stage) · **#769 (nightly semantic+agentic) is the one that pays
+> for itself** — this session ran both tiers by hand for the tag, and until that nightly exists
+> every tag costs a manual tier run and every regression between tags is invisible.
 >
-> **3. POST-TAG:** complexity-pivot remainder (item 4 below), Epic D stages #766/#767, #759
-> ack-disposition extraction, the hygiene batch, #772. Fable's ruling: sisters do not need any of
-> these to migrate, so none of them gates the tag.
+> **Small-bug track (parallel, non-epic, one focused PR each, dev+reviewer gates):**
+> #736 (integration suite oversubscribes Docker — gate-reliability leverage on EVERY future PR;
+> it did not bite this session, which is luck, not evidence) · #741 (raw-path key collision:
+> silent data loss in shipped `protocol-flow.json` at >1 msg/s) · #742 (MaxDeliver parking
+> visibility) · #759 (shared ack-disposition helper, 5 hand-rolled sites) · **#784** (GraphQL
+> `capabilities` routes to a subject nothing serves) · **#786** (`QueryResponse.RequestID`
+> phantom).
+>
+> **TWO KEEPERS FROM THE LAST INCREMENT — both caught EXTERNALLY, both about verification rather
+> than shipped code. The shipped paths were sound; the guards were not.**
+> · **Enumerate a surface from the component that OWNS it.** #787's inventory came from
+>   graph-query's registration table and the static router instead of the gateway's own routing
+>   function, producing two phantom entries, one miss, and an adopter note that told sister repos
+>   to change a GraphQL read path that does not exist. Codex and the reviewer found it
+>   INDEPENDENTLY. The fix is structural: the test now scrapes the routing function, so the
+>   inventory cannot drift. A hand-maintained enumeration is correct at most once.
+> · **A guard is code and inherits the full defect rate.** Three of five reviewer findings were
+>   guards that reported green WITHOUT CHECKING — a sync guard blind to `omitempty` (the exact
+>   re-entry path for the defect being fixed), an order test that pinned nothing, and a
+>   `checked != len(probes)` tautology that would have reported green on an empty probe set. New
+>   bug-class ledger row; distinct from "a test that reconstructs", because these guard OTHER
+>   tests' integrity.
 >
 > 0. **SESSION 18 CLOSED — readiness increment MERGED (#758 → `52cf2abf`) and ARCHIVED
 >    (#771 `7d4f967f`).** `caught-up-readiness-producers` is live truth in
@@ -290,10 +323,20 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ---
 
-## Tag milestone — v1.0.0-beta.159, the sister-lockstep wave (owner priority 2026-07-31)
+## Tag milestone — v1.0.0-beta.159 — ✅ **DONE 2026-07-31, tag pushed at `8813270c`**
 
-The tag is what unblocks downstream: sisters are pinned to .158 and cannot compile against
-main; every breaking merge since (projection-contract arc, Epic C catalog + EMBEDDINGS_CACHE
+**All five checklist items discharged; kept as the template for the NEXT tag.** Evidence at the
+tag commit: lint clean · `go vet` plain + `-tags=integration` + `-tags=live_llm` all clean ·
+`-race ./...` 135 ok/0 FAIL · `-race -tags=integration -p 2 ./...` 136 ok/0 FAIL ·
+**e2e statistical + semantic + agentic ALL GREEN** · tag verified pointing at HEAD before push.
+The annotated tag names every breaking change with its migration doc, so a sister team can work
+straight from `git show v1.0.0-beta.159` — 92 commits, 7 breaking merges.
+**Item 2 cost two manual tier runs; that is what gh#769 (nightly) exists to remove.**
+**Step 7 is OWNER-ONLY and is the one remaining action: hand each sister team the tag + its
+migration doc.**
+
+Original rationale, retained: the tag is what unblocks downstream — sisters were pinned to .158
+and could not compile against main; every breaking merge since (projection-contract arc, Epic C catalog + EMBEDDINGS_CACHE
 deletion, #737 stream bounds, #747 dedup, #758 readiness + natsclient Info serialization,
 #777 primitives) is guidance-published and waiting on ONE lockstep event. Gate checklist, in
 order — nothing else blocks the tag:
@@ -385,6 +428,12 @@ trip. Regenerate the table with:
 | 2026-W30 | 73 | 23 | +50 | deliberate: pre-v1 audit filing + Codex projection-arc asks |
 | 2026-W31* | 24 | 11 | +13 | partial week; #737 merge closes 2 more |
 
+**Composition 2026-07-31 (measured at the tag): 122 open = 33 bug / 82 enhancement / 6 docs-class.**
+Net +9 over the day: gh#784 and gh#786 filed from the #762 increment (both phantom-class, both
+dispositioned separately rather than folded into a breaking PR), against #731/#733/#762/#768
+closed. **Discovery is still running ahead of closure, which the dry criterion below says is the
+program working, not failing — but note BOTH recent increments surfaced P1-class finds, so the
+exit gate is not close.** Prior snapshot, retained:
 Composition 2026-07-30 (post-triage, post-confirm-close): 113 open = **32 bug / 77
 enhancement / 4 docs-class** (56 previously unlabeled triaged; owner CONFIRM-CLOSE executed
 same day: #622/#615/#617/#666/#654 closed with evidence comments against the merged epic
@@ -1201,4 +1250,14 @@ Append one line per session. Newest last.
   fixed), an order test that did not pin the order, and a probe-count check that was a tautology.
   The shipped path was sound; the verification was not. A guard is code and inherits the full defect
   rate. Owner ruled no Codex re-check (shipped behavior byte-identical to what was reviewed).
-  **Next: the .159 TAG — checklist items 2-5.**
+  **Then CUT THE TAG in the same session: `v1.0.0-beta.159` at `8813270c`, pushed.** All five
+  checklist items discharged in order — preconditions, the three-way vet sweep (plain,
+  `integration`, `live_llm`), BOTH owed e2e tiers green at the tag commit (semantic + agentic,
+  ~40min of manual running that gh#769 exists to automate), annotated tag in house format naming
+  every breaking change with its migration doc, tag-points-at-HEAD verified before the push.
+  **The wave is released and gh#753 is active.** Post-tag queue re-sequenced: the three in-flight
+  changes come FIRST (the 80-95% band is where this program's audit said the guardrail work
+  hides), and `predicate-contract-enforcement`'s remaining blocker is a genuine SECURITY gap —
+  runtime authorization vs configuration-time authoring checks. **Owner action outstanding: hand
+  the sisters the tag** (release step 7; the only part not doable from here).
+  **Next: pick ONE in-flight change and land it. WIP = 1.**
