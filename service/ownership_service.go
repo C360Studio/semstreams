@@ -114,17 +114,37 @@ func (s *OwnershipService) Stop(timeout time.Duration) error {
 	return s.BaseService.Stop(timeout)
 }
 
-// WireOwnership performs Phase-A ownership wiring (ADR-058): create buckets,
-// construct the Registry, attach it to the lifecycle Manager, and make exactly
-// one aggregate projection-client binding. Bootstrap or binding failure is a
-// boot error: built-in writers have no raw mutation fallback.
-func WireOwnership(
+// WireOwnershipSubstrate performs the Phase-A ownership substrate (ADR-058)
+// and nothing else: the retention backstop, ownership buckets, the Registry,
+// lifecycle attachment, and the shared heartbeater that later contract-bearing
+// owners enrol against.
+//
+// It binds NO projection client. That is the whole point of it existing
+// separately: a composition that has completed a framework-only ownership
+// cutover has no enabled static projection owner, so it has no contracts to
+// bind, yet it still needs every one of the steps above for ownership-aware
+// lifecycle and contract-bearing rule packs (gh#812).
+//
+// Two functions rather than one function that skips the bind on an empty
+// contract set: skip-when-empty would make behavior a silent mode switch on
+// input emptiness and return a maybe-nil mutation client — a capability that
+// appears or disappears with the input, which a caller eventually dereferences
+// on the wrong side of. Two intents, two functions; nothing returned here is
+// nil-able on success.
+//
+// Every failure is a boot error. Bootstrap failure has no raw mutation
+// fallback, and a substrate that returned partially wired would be a boot that
+// looks complete.
+//
+// Downstream binds its own owners against the returned heartbeater via
+// projection.BindMutationClient; framework binaries get the built-in static
+// binding by calling WireOwnership, which composes this.
+func WireOwnershipSubstrate(
 	ctx context.Context,
 	natsClient *natsclient.Client,
 	lcm *lifecycle.Manager,
 	logger *slog.Logger,
-	contracts ...projection.Contract,
-) (*ownership.Registry, *ownership.Heartbeater, *projection.MutationClient, error) {
+) (*ownership.Registry, *ownership.Heartbeater, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -143,23 +163,47 @@ func WireOwnership(
 	// this boot's create-races and post-boot dynamic re-acquisition (there is
 	// no post-start sweep anymore). This backstop is a DISTINCT concern from
 	// ADR-058 ownership; it is folded into this one shared boot function ON
-	// PURPOSE — both cmd/semstreams and cmd/e2e-semstreams call WireOwnership
-	// exactly once before StartAll, so wiring it here covers both binaries
-	// with no half-migration drift (the beta.18 lesson).
+	// PURPOSE — every composition reaches it through WireOwnershipSubstrate
+	// (directly, or via WireOwnership), so wiring it here covers both binaries
+	// AND downstream framework-only boots with no half-migration drift (the
+	// beta.18 lesson).
 	if err := graph.AssertOwnedBucketsClean(ctx, natsClient, logger); err != nil {
-		return nil, nil, nil, fmt.Errorf("assert framework-owned graph buckets retention-clean: %w", err)
+		return nil, nil, fmt.Errorf("assert framework-owned graph buckets retention-clean: %w", err)
 	}
 
 	reg, err := ownership.EnsureBuckets(ctx, natsClient, logger, vocabulary.InverseResolver)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("bootstrap ownership buckets: %w", err)
+		return nil, nil, fmt.Errorf("bootstrap ownership buckets: %w", err)
 	}
 	if lcm == nil {
-		return nil, nil, nil, fmt.Errorf("attach ownership: lifecycle manager is required")
+		return nil, nil, fmt.Errorf("attach ownership: lifecycle manager is required")
 	}
 	lcm.AttachOwnership(ctx, reg)
 
-	staticHB := reg.NewHeartbeater(ownership.HeartbeatInterval)
+	return reg, reg.NewHeartbeater(ownership.HeartbeatInterval), nil
+}
+
+// WireOwnership performs Phase-A ownership wiring (ADR-058): the substrate
+// (see WireOwnershipSubstrate) plus exactly one aggregate projection-client
+// binding for the built-in static owner. Bootstrap or binding failure is a
+// boot error: built-in writers have no raw mutation fallback.
+//
+// Requesting a bind with an empty contract set remains an ERROR rather than a
+// skip — that guard is correct precisely where a bind was actually requested.
+// A caller that wants the substrate WITHOUT a static bind is asking a different
+// question and calls WireOwnershipSubstrate.
+func WireOwnership(
+	ctx context.Context,
+	natsClient *natsclient.Client,
+	lcm *lifecycle.Manager,
+	logger *slog.Logger,
+	contracts ...projection.Contract,
+) (*ownership.Registry, *ownership.Heartbeater, *projection.MutationClient, error) {
+	reg, staticHB, err := WireOwnershipSubstrate(ctx, natsClient, lcm, logger)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	client, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
 		NATS:        natsClient,
 		Registry:    reg,
