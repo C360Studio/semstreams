@@ -238,6 +238,35 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ---
 
+## Tag milestone — v1.0.0-beta.159, the sister-lockstep wave (owner priority 2026-07-31)
+
+The tag is what unblocks downstream: sisters are pinned to .158 and cannot compile against
+main; every breaking merge since (projection-contract arc, Epic C catalog + EMBEDDINGS_CACHE
+deletion, #737 stream bounds, #747 dedup, #758 readiness + natsclient Info serialization,
+#777 primitives) is guidance-published and waiting on ONE lockstep event. Gate checklist, in
+order — nothing else blocks the tag:
+
+1. **Fold the LAST breaking item: #762 (gateway envelope) + #768 (its shape-stage gate).**
+   Tagging without it means semdragon adapts to the double-nested shape at .159 and gets
+   broken AGAIN at .160 — a second lockstep for one paragraph of code. Constraints already
+   recorded on the issue: envelope DETECTION not prefix-append; adopter note; the #768 stage
+   RED against main before the fix, green after.
+2. **Tier evidence at the tag commit** (manual until #769's nightly exists): `task
+   e2e:semantic` + `task e2e:agentic` green at HEAD, statistical already green per-PR.
+3. **Tagged vets**: full `go vet -tags=integration` AND `-tags=live_llm` (pre-tag sweep rule).
+4. **`/tag-release`** runs the gates; never re-tag.
+5. **Tag activates gh#753**: sisters begin migration against the published guides; further
+   problems arrive as new issues here, per the residency rule.
+
+**Explicitly POST-tag (sisters do not need them to migrate):** **#749 FIRST** (canonical tool
+effect metadata — semdev + a second sister both need it; additive with fail-safe `unknown` so
+no lockstep required; ships in the tag after .159; both sisters told on the issue NOT to
+hand-roll interim schemas; framework surface ⇒ Fable design gate first) · complexity-pivot remainder
+(module contract, `--validate`, #725/#734, docs), Epic D stages #766/#767, #759 ack-disposition
+extraction, hygiene batch, #772 (gates predicate-contract-enforcement's archive, not the tag).
+The three in-flight Codex-arc changes continue on their own track; the enforcement security gap
+predates the wave and does not worsen at .159.
+
 ## How to read this file
 
 Status words lie. That is the central finding of the audit that created this
