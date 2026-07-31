@@ -197,20 +197,30 @@ session re-litigating finished work, exactly as a file predicting success costs 
       shape stage asserted all three probes (`gateway_shape_probes_checked:3`).
       ORIGINAL: **BREAKING ⇒ a relevant e2e tier green before merge**, beyond the per-PR statistical. The
       gateway path is consumer-facing: run the tier covering it and state which
-- [ ] 7.6 Re-verify against main after any long merge queue — `strict_required_status_checks_policy`
+- [x] 7.6 Re-verified after the merge queue: gates re-run on the final commit, not on the
+      pre-review base
       is false, so checks can have run against a stale base
 
 ## 8. Review chain
 
-- [ ] 8.1 `semstreams-reviewer` on the full diff
-- [ ] 8.2 Owner-run Codex round; fix findings. **A fix is new code and inherits the full defect
+- [x] 8.1 `semstreams-reviewer` on the full diff — **RAN.** 1 HIGH + 4 MEDIUM + 4 NIT, all with
+      mutation evidence; all fixed at `fe46cd28`. Three of the five landed on VERIFICATION code
+      that reported green without checking (the omitempty-blind sync guard, an order test that did
+      not pin the order, a tautological probe-count check) — the shipped path was unchanged
+- [x] 8.2 Owner-run Codex round — **RAN.** 1 HIGH (the `byName` claim: a GraphQL path that does
+      not exist) + 1 MEDIUM (the collision table was not the exhaustive production-type enumeration
+      it claimed). Both fixed at `fe46cd28`. **Owner ruled no re-check required** — the shipped
+      behavior was byte-identical to what was reviewed; the corrections were docs, comments and
+      test code
       rate** — the remedy gets the same adversarial pass as the original. Codex reviews ONCE; a
       re-check is warranted only by a NEW blocking-class defect, a change to the reviewed CONTRACT,
       material scope growth, or a fix touching a SHARED primitive with callers outside the change
-- [ ] 8.3 **Do not arm `--auto` until the Codex round closes** — this is a CODE PR. The ruleset
+- [x] 8.3 `--auto` armed only AFTER the Codex round closed and its findings were fixed
       requires 0 approvals and does not dismiss stale reviews on push, so arming early means a
       post-review fix push auto-merges UNREVIEWED the moment checks go green
-- [ ] 8.4 One PR: detector + gateway + shape stage + adopter note (PR scope = complete system).
+- [x] 8.4 One PR — **#787 MERGED as `9b8a11d9`.** gh#762 and gh#768 closed on owner
+      CONFIRM-CLOSE
       Close gh#762 and gh#768 only on owner CONFIRM-CLOSE
-- [ ] 8.5 Apply the delta and archive; `gateway-response-projection` is a NEW capability home, so its
+- [x] 8.5 Delta applied and archived; `gateway-response-projection` seeded with a WRITTEN
+      Purpose, never the `TBD - created by archiving` stub
       Purpose is WRITTEN at seed time, never the `TBD - created by archiving` stub
