@@ -17,15 +17,23 @@
 
 - [x] 2.1 Run one comparative benchmark (raw vs hash+catalog, identical datasets/fixtures/queries) and record it
       as ADR evidence — informative, not a selection threshold.
-- [ ] 2.2 Identify any current predicate-membership-watch consumer; if one exists, define add/remove-only
+- [x] 2.2 Identify any current predicate-membership-watch consumer; if one exists, define add/remove-only
       semantics; otherwise record watch behavior as a non-public operational property.
+      **→ RESOLVED 2026-08-01 by enumeration: NO watch consumer exists, so the "otherwise" branch applies and
+      predicate-index watch behavior is a non-public operational property.** Measured, not assumed: no
+      `Watch`/`Subscribe` against `PREDICATE_INDEX` anywhere in non-test code. Every non-test toucher is
+      graph-index's own internals (`component.go`, `owner_reconcile.go`, `predicate_index.go`, `query.go`) plus
+      `graph/constants.go`, `graph/kvcatalog.go`, the package docs, and e2e helpers. Enumerated from the owning
+      component rather than from a router or registration table.
 - [x] 2.3 Approve ADR-078, selecting raw keys, superseding ADR-065's hash-plus-catalog clauses, and recording the
       NAME/CONTEXT/INCOMING codec-keep rationale. Representation acceptance does not complete task 1.3 or the
       production activation tasks below.
 
 ## 3. Cutover (inside the announced pre-v1 wipe)
 
-- [ ] 3.1 Include the raw PREDICATE_INDEX bucket in the announced wipe/reseed; initialize behind typed not-ready
+- [x] 3.1 **→ MOVED TO gh#827 (2026-08-01):** the deployment execution is an operational event, not capability
+      truth, and the cutover contract it implements is spec-resident (see 4.3). Original text follows.
+      Include the raw PREDICATE_INDEX bucket in the announced wipe/reseed; initialize behind typed not-ready
       from freshly reseeded canonical ENTITY_STATES; readiness held until the authoritative replay watermark.
       Implementation-ready evidence: operations guide 29 contains the combined deployment-derived wipe and the
       replacement integration proves raw initialization, watermark gating, and canonical replay. Check this task
@@ -52,6 +60,24 @@
       repo's job**, and further problems they hit become new issues in this queue. Guidance is
       published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
       guides); adoption is tracked on **gh#753** and does NOT gate this archive.
-- [ ] 4.2 Run lint, race, contracts, real-NATS integration, structural + semantic e2e, and affected product suites.
+- [ ] 4.2 **RED — THIS IS WHY THE CHANGE IS STILL OPEN (owner ruling 2026-08-01: HOLD, do not waive).**
+      Run lint, race, contracts, real-NATS integration, structural + semantic e2e, and affected product suites.
+      Everything else passed on merged main `32995167`: `task lint` exit 0 · `go vet` plain AND
+      `-tags=integration` clean · `-race ./...` 135 ok / 0 FAIL · `-race -tags=integration -p 2 -count=1 ./...`
+      136 ok / 0 FAIL · contracts green · zero schema drift · `task e2e:structural` GREEN.
+      **`task e2e:semantic` FAILED — exit 201, `validate-globalsearch-known-answer`, term "forklift":
+      `GraphQuery.loadEntities: request entities failed: context deadline exceeded` → gh#830.**
+      NOT rerun to green; filed on one empirical run. The failure is in globalSearch/loadEntities rather than the
+      predicate-index path, and the same term graded `recall=1.00 (4/4)` two steps earlier in the same run — but
+      whether that is a query-path regression this change touched is UNDETERMINED, and waiving a gate on an
+      undetermined cause is how a real regression ships. The cheap discriminator (a run at the `8813270c` tag on
+      a cleaned host) belongs to gh#830.
+      **Un-hold ONLY when gh#830 resolves with a cause, not with a passing rerun.**
 - [ ] 4.3 If the pre-v1 wipe window closed before 3.1, halt: record the missed window in the ADR and re-file this
       change as a post-v1 migration proposal instead of executing a second wipe.
+      **→ ARMED BY SHIPPING v1, and no longer dependent on anyone reading this line.** 3.1's execution moved to
+      gh#827, which states the halt prominently. The condition is also spec-resident in this change's own delta —
+      the requirement "A key-format cutover never serves mixed partial truth" carries *"If the pre-v1 wipe window
+      has closed, this change MUST NOT execute; it converts to an explicit post-v1 migration proposal"* plus the
+      scenario "a closed window halts the cutover" (**no second wipe is performed**). Leaving this task line open
+      is now bookkeeping, not the mechanism.
