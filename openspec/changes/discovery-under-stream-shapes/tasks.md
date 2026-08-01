@@ -9,13 +9,20 @@ into the spec delta: a `[~]` stops the implementer and does not stop the archive
 
 ## 0. Ruling needed before section 3
 
-- [ ] 0.1 **RULING REQUIRED — BLOCKED until answered; this gates section 3 and the tag scope.** Confirm the default-subject move is out of scope for v1.0.0-beta.160. The baton
-      states this issue's scope two ways: the Fable ruling (session 20) includes a
-      **default-subject move**; the tag roadmap (gh#840) replaces it with **gh#822 subject
-      export**. The move is breaking (gh#810 says so and asks for lockstep), and the roadmap
-      calls .160 additive with "no breaking wave planned". This change assumes the move was
-      dropped deliberately. **If that reading is wrong, stop** — it belongs in a breaking wave
-      with sister lockstep, not in an additive tag. Record the ruling either way.
+- [x] 0.1 **RULED 2026-08-01 (owner/Fable): the default-subject move is OUT of gh#810 and OUT of
+      v1.0.0-beta.160 — DEFERRED to the next breaking wave, not dropped. Filed as gh#842.**
+      The scoping divergence was real: the session-20 ruling had three parts, the tag roadmap
+      listed two while declaring .160 additive, and the supersession was never recorded.
+      **The reasoning that makes deferral correct rather than convenient — record it, because a
+      deferral without its argument is indistinguishable from an omission:** the provisioning
+      guard in section 1 *changes this item's urgency class*. The move was in the original ruling
+      because the failure was SILENT DATA LOSS; once the guard exists the same misconfiguration
+      fails loudly at boot with a one-line documented remedy. What remains is "defaults should
+      compose out of the box" — real, but a COORDINATION-COST item that breaks every existing
+      discovery caller, and it rides the next lockstep (v1.0.0 the natural boundary) at
+      essentially zero marginal cost. **Corollary recorded on gh#842: the deferral is only valid
+      BECAUSE the guard ships. If gh#810 does not land, this reverts to silent data loss and the
+      argument collapses.**
 
 ## 1. Provisioning guard — the seam that closes the class
 
@@ -72,6 +79,14 @@ into the spec delta: a `[~]` stops the implementer and does not stop the archive
       by this or remain open. Same class; do not leave a reader inferring it.
 
 ## 4. Restore the e2e stage to a live guard
+
+> **SEQUENCING (owner ruling 2026-08-01): gh#811 lands BEFORE gh#810's coverage gate is claimed,
+> preferably whole as its own tiny PR.** This fell out of task 4.3 below. Without that ordering
+> gh#810 would satisfy the E2E-coverage rule's *letter* while shipping the exact false-green class
+> gh#811 names — a restored stage inside a tier that structurally cannot fail. Claiming coverage
+> from an unfailable gate is worse than claiming none, because it retires the coverage gap on
+> paper.
+
 
 - [ ] 4.1 Remove the crud-tools config override so the stage runs on the **default** subject,
       and confirm it goes GREEN. The revert that put it back on the default was deliberate; this
