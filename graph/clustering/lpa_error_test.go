@@ -3,6 +3,8 @@ package clustering
 import (
 	"context"
 	"errors"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -309,6 +311,16 @@ type selectiveFailStorage struct {
 	err                  error
 }
 
+// permanentOversizeErr is the error production actually returns for an
+// over-ceiling community (storage.go). Tests must inject THIS shape, not a
+// plain error: the detector skips only record-local PERMANENT rejections, so a
+// bare errors.New would (correctly) propagate and the test would be asserting
+// against a case that cannot occur.
+func permanentOversizeErr() error {
+	return errs.WrapInvalid(nats.ErrMaxPayload, "NATSCommunityStorage", "SaveCommunity",
+		"community exceeds the NATS payload ceiling")
+}
+
 func (s *selectiveFailStorage) SaveCommunity(ctx context.Context, community *Community) error {
 	if len(community.Members) >= s.failAtOrAboveMembers {
 		return s.err
@@ -340,7 +352,7 @@ func TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel(t *testing.T) {
 	storage := &selectiveFailStorage{
 		MockCommunityStorage: NewMockCommunityStorage(),
 		failAtOrAboveMembers: 5,
-		err:                  errors.New("nats: maximum payload exceeded"),
+		err:                  permanentOversizeErr(),
 	}
 
 	detector := NewLPADetector(provider, storage)
@@ -378,7 +390,7 @@ func TestLPADetector_TotalSaveFailureStillErrors(t *testing.T) {
 	storage := &selectiveFailStorage{
 		MockCommunityStorage: NewMockCommunityStorage(),
 		failAtOrAboveMembers: 1, // every community fails
-		err:                  errors.New("store unreachable"),
+		err:                  permanentOversizeErr(),
 	}
 
 	detector := NewLPADetector(provider, storage)
@@ -386,5 +398,88 @@ func TestLPADetector_TotalSaveFailureStillErrors(t *testing.T) {
 
 	_, err := detector.DetectCommunities(context.Background())
 	require.Error(t, err, "a store that rejects EVERY community must still fail the pass")
-	assert.Contains(t, err.Error(), "store unreachable")
+
+	// The detector must NOT re-label the inner classification. errors.As finds
+	// the outermost ClassifiedError first, so wrapping transient here would undo
+	// the permanent classification storage.go establishes — one layer up, and
+	// invisibly. This assertion is the detector-level half of problem 2.
+	assert.False(t, errs.IsTransient(err),
+		"an all-oversized failure is permanent at the DETECTOR boundary too, not just inside storage")
+	assert.True(t, errs.IsInvalid(err), "inner permanent classification must survive the detector wrapper")
+}
+
+// transientFailStorage fails SaveCommunity for one named community with a
+// TRANSIENT error, and records everything else normally.
+type transientFailStorage struct {
+	*MockCommunityStorage
+	failMembersAtOrAbove int
+}
+
+func (s *transientFailStorage) SaveCommunity(ctx context.Context, community *Community) error {
+	if len(community.Members) >= s.failMembersAtOrAbove {
+		return errs.WrapTransient(errors.New("nats: connection lost"),
+			"NATSCommunityStorage", "SaveCommunity", "put community")
+	}
+	return s.MockCommunityStorage.SaveCommunity(ctx, community)
+}
+
+// TestLPADetector_TransientSaveFailureDoesNotPruneOrReportSuccess is the
+// regression the first draft of gh#838 was missing, and it is the one that
+// mattered.
+//
+// Skipping EVERY save error — not just permanent ones — meant a momentary NATS
+// blip produced an INCOMPLETE partition, which then drove the prune step. Prune
+// derives its keep-set from the returned result and deletes prior valid keys for
+// every member of the community that failed, so a transient blip became durable
+// query-visible loss, reported as a successful cycle.
+//
+// It also broke the graph-clustering spec's non-destructive rebuild contract,
+// which permits pruning precisely because "every community in the new partition
+// is already persisted at that point".
+func TestLPADetector_TransientSaveFailureDoesNotPruneOrReportSuccess(t *testing.T) {
+	ctx := context.Background()
+	provider := NewMockProvider()
+	big := []string{"b1", "b2", "b3", "b4", "b5"}
+	for _, e := range big {
+		provider.AddEntity(e)
+	}
+	for i := 0; i+1 < len(big); i++ {
+		provider.AddEdge(big[i], big[i+1], 1.0)
+	}
+	provider.AddEntity("s1")
+	provider.AddEntity("s2")
+	provider.AddEdge("s1", "s2", 1.0)
+
+	backing := NewMockCommunityStorage()
+
+	// Seed a PRIOR partition covering the members whose save will fail. This is
+	// the state that must survive: it is valid, query-visible, and the only copy.
+	priorID := "prior-community-holding-the-big-members"
+	require.NoError(t, backing.SaveCommunity(ctx, &Community{
+		ID: priorID, Level: 0, Members: big,
+	}))
+
+	storage := &transientFailStorage{MockCommunityStorage: backing, failMembersAtOrAbove: 5}
+	detector := NewLPADetector(provider, storage)
+	detector.WithLevels(1)
+
+	_, err := detector.DetectCommunities(ctx)
+
+	// 1. The cycle must FAIL, not report success — otherwise the component
+	//    records activity and emits cycle-complete on an incomplete partition.
+	// assert, not require: the prune damage below is a SEPARATE symptom, and a
+	// failing run should show both rather than stopping at the first.
+	assert.Error(t, err, "a transient save failure must fail the detection run, not be skipped")
+	assert.True(t, errs.IsTransient(err), "a connection blip must stay transient so the next cycle retries it")
+
+	// 2. The prior partition must be INTACT. This is the destructive half: if the
+	//    run continued, prune would have deleted these keys because the failed
+	//    community was absent from the keep-set.
+	_, stillThere := backing.communities[0][priorID]
+	assert.True(t, stillThere,
+		"prior valid community was pruned away by an incomplete partition — the exact data loss this guards")
+	for _, m := range big {
+		assert.Equal(t, priorID, backing.entityCommunity[0][m],
+			"prior entity->community mapping for %s was destroyed", m)
+	}
 }

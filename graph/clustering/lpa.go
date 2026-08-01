@@ -384,9 +384,34 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 		// summarization fetch and summary generation both warn and continue. A
 		// per-community storage fault is the same shape.
 		if err := d.storage.SaveCommunity(ctx, community); err != nil {
+			// ONLY a record-local PERMANENT rejection may be skipped.
+			//
+			// Anything else propagates, and the distinction is load-bearing
+			// rather than defensive. A transient failure means the store is
+			// fine and this write simply did not land — the community still
+			// belongs in the partition. Continuing past it would produce an
+			// INCOMPLETE partition that then drives the prune below, which
+			// derives its keep-set from the returned result and deletes the
+			// prior valid keys for every member of the community that failed.
+			// A momentary NATS blip would become durable, query-visible data
+			// loss reported as a successful cycle.
+			//
+			// That is also what the graph-clustering spec already requires:
+			// "A removal failure SHALL NOT fail the detection run: EVERY
+			// community in the new partition is already persisted at that
+			// point." Prune's safety rests on that premise, so a path that
+			// prunes against a partial partition breaks the contract rather
+			// than bending it.
+			//
+			// Permanent means the record itself cannot be stored — the input
+			// is identical on every retry, so no amount of waiting helps and
+			// the only alternative to skipping is discarding the level.
+			if ctx.Err() != nil || !errs.IsInvalid(err) {
+				return nil, errs.Wrap(err, "LPADetector", "detectCommunitiesAtLevel", "save community")
+			}
 			dropped = append(dropped, community.ID)
 			lastSaveErr = err
-			d.logger.Error("community save failed — skipping it and continuing the level",
+			d.logger.Error("community permanently rejected — skipping it and continuing the level",
 				"community_id", community.ID,
 				"level", level,
 				"members", len(community.Members),
@@ -406,7 +431,13 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 	// whole point — drop the community that cannot fit, not the store that is
 	// not working.
 	if len(dropped) > 0 && len(saved) == 0 {
-		return nil, errs.WrapTransient(lastSaveErr, "LPADetector", "detectCommunitiesAtLevel", "save community")
+		// errs.Wrap, NOT WrapTransient: it adds context via %w without minting a
+		// new ClassifiedError, so errs.IsTransient/IsInvalid still observe the
+		// INNER classification. Wrapping transient here would re-label a
+		// permanent max-payload rejection as retryable at the detector boundary
+		// — undoing, one layer up, the exact fix this change makes in storage —
+		// because errors.As finds the outermost ClassifiedError first.
+		return nil, errs.Wrap(lastSaveErr, "LPADetector", "detectCommunitiesAtLevel", "save community")
 	}
 	if len(dropped) > 0 {
 		d.logger.Error("level persisted with dropped communities — results are incomplete",
