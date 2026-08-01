@@ -1,5 +1,47 @@
 # Tasks — discovery-under-stream-shapes (gh#810, gh#822)
 
+> ## ⚠ REWORK REQUIRED — read before writing any code (Fable shape gate, 2026-08-01)
+>
+> The first implementation attempt is **PR #847, now DRAFT**. Its framework seams were built,
+> tested and mutation-checked — and two of them **do not do what they claim**. The Codex round
+> found it; the deferral of gh#842 had already been granted on the premise the guard falsified.
+>
+> **What went wrong, so it is not repeated rather than merely avoided:**
+> - `DecodeQueryReply` / `IsPublishAck` / `ErrPublishAck` shipped with **zero production callers**.
+>   The motivating `tool.list` path still unmarshals a publish ack into an empty catalog. The bug
+>   was not fixed for the caller that motivated it.
+> - A pub-ack detector **already existed** at `gateway/graph-gateway/component.go:1475`, in use,
+>   with a doc comment naming the same overlap problem. A second drifting definition was added
+>   without grepping for the first.
+> - The "provisioning guard" is a **detached goroutine with a discarded result**, wired into no
+>   provisioning seam. It does not fail at boot. gh#842's deferral was argued on the claim that it
+>   does.
+> - The ack key set was **hand-listed** and already stale against pinned `nats.go v1.52.0`, which
+>   defines `PubAck.Value` as `json:"val,omitempty"` — a value-bearing ack bypasses detection.
+> - Wildcard matching handles the **filter side only**, though task 1.2 required both sides.
+> - The subject-export test compares `QuerySubjects()` against its own backing slice — tautological,
+>   never drives `setupQueryHandlers`.
+>
+> **Binding constraints for the rework (Fable, recorded so this starts implementation-ready):**
+> 1. **ONE declared-subject registry**, derived from the same declarations the handlers register
+>    from, consulted **SYNCHRONOUSLY at all three provisioning seams**. A failed check is a **boot
+>    error, not a log line**.
+> 2. **ONE pub-ack detector.** Retire the gateway's private detector *into* the canonical decoder.
+>    The duplicate dies by consolidation, not coexistence.
+> 3. **Ack key set DERIVED from the pinned `jetstream.PubAck` type** (reflection over json tags),
+>    never hand-listed, so a nats.go upgrade shifts it automatically. Its test asserts against
+>    fixture ack **bytes**, not the same reflection — non-tautological.
+> 4. **Wildcard intersection in BOTH directions** (declared subject tokens × stream filter tokens).
+> 5. **`DecodeQueryReply` ships WITH its motivating caller wired** (`tool.list`) or does not ship.
+>    Zero-caller surface is the phantom rule; no exception for our own APIs.
+> 6. New exported `graph`/`natsclient` surface is core API and needs a **recorded Fable shape
+>    review** before invention — the gate skipped last time.
+>
+> **gh#842's deferral is now CONDITIONAL on this:** valid if and only if the synchronous
+> fail-at-boot guard lands in .160. Ship the guard advisory or warn-only and the default-subject
+> move returns to .160 scope as breaking-with-lockstep. Neither may be decided separately again.
+
+
 **Amend a task line when the work HAPPENS, not only when it succeeds.** An unamended
 line is indistinguishable from a skipped gate six weeks later — that misreading has
 cost three sessions. A deliberate not-done gets `[~]`, its reasoning, AND propagation
@@ -24,7 +66,16 @@ into the spec delta: a `[~]` stops the implementer and does not stop the archive
       BECAUSE the guard ships. If gh#810 does not land, this reverts to silent data loss and the
       argument collapses.**
 
+- [ ] 0.2 **BLOCKED — REWORK REQUIRED, read the banner at the top of this file before writing code.** PR #847 is DRAFT: its guard is a detached goroutine wired to no provisioning seam, its decoder shipped with zero production callers, and it added a second pub-ack detector beside the gateway's existing one. gh#842's deferral is CONDITIONAL on the synchronous fail-at-boot guard landing in .160.
+
 ## 1. Provisioning guard — the seam that closes the class
+
+> **ATTEMPTED IN PR #847, NOT LANDED.** The pure primitives (`SubjectFilterCaptures`,
+> `FindSubjectCaptures`) exist and are mutation-checked against the naive prefix test, but 1.2 is
+> incomplete (filter-side wildcards only) and 1.3's decision was made WRONG: it reports rather than
+> refuses, and asynchronously, which is what falsified gh#842's premise. Reuse the primitives;
+> redo the policy and the wiring.
+
 
 - [ ] 1.1 Enumerate the declared request/reply subjects from their **owning components**, not
       from a router or a registration table — those answer a different question, and this repo
