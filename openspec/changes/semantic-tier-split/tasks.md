@@ -53,6 +53,42 @@ does not stop the archiver.
       this repo has been bitten by repeatedly. Record which tiers lack one even if they
       are not fixed here.
 
+## 3b. Quality assertions — derived from adopter ground truth, and GATED on gh#829
+
+**Do not author anything in this section until gh#829 lands.** Today's grader reports
+`grounded=true, recall=1.00` on summaries composed entirely of entity-ID and predicate
+segments. Writing assertions against current output would pin the defect as the
+contract — the exact failure this repo keeps hitting, where a test encodes behaviour
+instead of the requirement.
+
+- [ ] 3b.1 **BLOCKED ON gh#829.** Assert a community summary contains corpus content, not
+      an ID taxonomy. Falsifiable form: a summary MUST NOT be composed solely of tokens
+      derivable from entity IDs and predicate names. Today's live output
+      (`Key themes: completed, content.classification.tag, maintenance.work.status`) is
+      the negative fixture — it must FAIL the new assertion, and that must be
+      demonstrated, not assumed.
+- [ ] 3b.2 Separate the two things the current grader conflates: **retrieval recall**
+      (did the expected entity IDs come back) from **generation groundedness** (is the
+      prose supported by corpus content). Reporting the first as the second is why gh#829
+      shipped under a green tier. The retrieval half belongs to the retrieval tier; the
+      generation half to `semantic-rag`.
+- [ ] 3b.3 Add a **sub-threshold** probe. Current probes return 0, 5 and 68 entities
+      against `DefaultSummarizeThreshold = 50`, so the at-or-below-threshold path — which
+      gh#823 measures as the common case on a normal corpus — is exercised but never
+      asserted end to end.
+- [ ] 3b.4 Cover the **agent-facing** path. Neither semantic scenario file references
+      `search_graph` (0 occurrences), so gh#823's second direction — the formatter
+      rendering only `EntityDigests` and silently dropping a populated `Entities` set — is
+      covered by no tier at all. Decide whether it belongs here or in the agentic tier,
+      and record the decision either way.
+- [ ] 3b.5 Assert `Strategy` reaches the wire (gh#819). Reproduced: `strategy=` is empty
+      on all five graded probes. Cheap, and it is a wire-contract assertion rather than a
+      quality one, so it can land in the retrieval tier ahead of gh#829.
+- [ ] 3b.6 Read semsource's tracker (`docs/upstream/semstreams-asks.md`) for adjacent
+      *candidate* asks before finalising the assertion set — solve the family, not the
+      instance. **Read only; semsource owns that file.** Confirm each ask is
+      framework-shaped rather than product-shaped before deriving an assertion from it.
+
 ## 4. Documentation — the plain-language tier ladder
 
 - [ ] 4.1 Rewrite the tier section of `docs/concepts/00-real-time-inference.md` in terms

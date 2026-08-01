@@ -58,6 +58,50 @@ the beta.159 tag and a regression could sit undetected for weeks. gh#830's
 failure rate is **2 in 5** — a rate that is invisible without automation and
 untrustworthy on any single hand-run observation.
 
+### The quality assertions we have today pass on output that is known to be useless
+
+This is the more serious finding, and it changes the shape of the change.
+
+A clean tier run grades its probes like this:
+
+```
+forklift-maintenance   strategy=  count=68  degraded=true  recall=1.00(4/4) grounded=true fab=false
+```
+
+`grounded=true`, `recall=1.00` — on a probe whose community summaries are:
+
+```
+Key themes: completed, content.classification.tag, maintenance.work.status, maintenance
+```
+
+Every token there is an **entity-ID or predicate segment**, not corpus content. That is gh#829
+(`ContentFetcher` is never wired, so the LLM is asked to summarize an ID taxonomy), reproduced
+inside this repo on the logistics corpus — unrelated to the Java corpus semsource measured it on,
+which rules out corpus-specific explanations.
+
+**The grader is measuring retrieval and reporting it as groundedness.** Nothing in the tier
+asserts that a generated summary contains anything from the corpus, so gh#829 has been shipping
+under a green tier. Two sibling issues reproduce in the same run: gh#819 (`strategy=` empty on all
+five graded probes) and gh#823 (the tier's probes hit 0/5/68 entities against a threshold of 50,
+and **neither scenario file references `search_graph` at all**, so the agent-facing formatter path
+is covered by no tier).
+
+Three issues, one shape — information exists and does not reach where it is needed — and in each
+case the gate that should have caught it was measuring something adjacent.
+
+### Ground truth comes from the adopter, not from us
+
+semsource is the primary dogfooding adopter and files evidence-backed issues from a real corpus
+(~21k entities). gh#829, gh#823 and gh#819 are measured, not speculative — gh#829 even isolates
+its cause by ruling out a clustering problem first. **These are the ground truth the generation
+tier's quality assertions should be derived from**, rather than inventing probes and grading them
+against whatever the system currently emits.
+
+**Hard sequencing constraint:** generation-quality assertions MUST NOT be authored until gh#829
+lands. Writing them now would baseline "expected output" against summaries composed of ID
+segments and enshrine the defect as the contract — the failure mode this repo has hit repeatedly,
+where a test pins the behaviour instead of the requirement.
+
 ## What Changes
 
 - **Split the compose profile by capability.** The scenario code is *already*
