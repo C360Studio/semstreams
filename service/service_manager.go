@@ -303,7 +303,7 @@ func (m *Manager) StartAll(ctx context.Context) error {
 	// Start, which the component-start barrier turns into a failed boot before
 	// completeHTTPSetup brings the surface up. The one class the seam cannot
 	// reach (a catalog bucket whose owner is absent from this composition) is
-	// covered by the pre-start legacy-drift backstop in WireOwnership.
+	// covered by the pre-start legacy-drift backstop in WireOwnershipSubstrate.
 
 	// Now that all services are started, register their HTTP handlers and start the server
 	logger.Debug("Manager.StartAll: Completing HTTP setup with service handlers")
