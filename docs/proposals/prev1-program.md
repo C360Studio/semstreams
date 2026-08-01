@@ -9,57 +9,58 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
-> **STATE 2026-08-01 (SESSION 22 CLOSE — gh#814 IS MERGED. Three review rounds on it, and
-> round 3 found a defect CREATED by round 2's fix.** The batch head is landing.
+> **STATE 2026-08-01 (SESSION 22 CLOSED AND MERGED. The whole batch head landed: gh#814,
+> gh#812, gh#749 are MERGED and their issues CLOSED. Main verified green as a WHOLE, not
+> just per-PR.)**
 >
-> **PR #816 (gh#814, lifecycle create lane) — MERGED `0d3095b4`.** `POST /workflows/{type}`
-> through `Manager.Create`. Three Codex rounds + two reviewer rounds; **every round found
-> real defects, and none of them were in the route — they were in the primitive being
-> projected.** Round 1: entity-ID pattern never enforced (measured orphan — commits, 201s,
-> invisible to List/Watch, unreclaimable by Despawn), a committed birth reporting as 500,
-> operator births attributed to the framework, an HTTP-reachable panic from an unchecked
-> `.(Participant)`. Round 2: **a comma in a `schema:` tag silently DELETED `max_body_bytes`
-> from the generated schema AND the runtime discovery surface** (ParseSchemaTag splits on
-> commas, GenerateConfigSchema `continue`s on error, drift-check only diffs — nothing guards
-> field PRESENCE); a pattern gate that validated shape but not the ID; and **a commit
-> message of mine asserting "test and guard both removed" when only the test was**. Round 3:
-> **the route-selected registration was not bound to the write** — a direct consequence of
-> round 2's fix, giving a false 404 on an alias-only route and cross-workflow writes when
-> both are registered.
+> **MEASURED on merged main `9c5049a3` (re-run these; do not trust the numbers):**
+> 136 open issues (35 bug-labelled / 88 enh / 13 other) · in-flight changes **4** ·
+> `openspec validate --all --strict` **36/0** · 11 TBD-stub specs · build + `task lint` clean ·
+> `go vet` plain AND `-tags=integration` AND `-tags=live_llm` clean ·
+> `-race ./...` **135 ok / 0 FAIL** · `-race -tags=integration -p 2 ./...` **135 ok**, one
+> unrelated container-start timeout (gh#736's open class, green standalone) ·
+> `task schema:generate` **zero drift** · contract tests ok · GitHub CI on head **success**.
+> Only open PR is #685 (Codex, draft).
 >
-> **STILL OPEN on the create lane, deliberately, and NOT tracked anywhere else:** a workflow
-> whose lifecycle ID field is `json:"-"` (the default `agent-run` workflow) cannot be created
-> through the route at all, yet `cmd/semstreams` advertises it there. Needs an
-> operator-creatable capability derived from lifecycle metadata — a design change. **File it
-> before it is forgotten.**
+> **MERGED THIS SESSION:** `1ee2053c` #816 (gh#814 lifecycle create lane) · `1f1745f2` #817
+> (baton) · `b4194059` #815 (gh#812 ownership substrate) · `9c5049a3` #809 (gh#749 tool effect
+> metadata). gh#812 / gh#749 / gh#814 all CLOSED on owner authorization, each with the
+> adopter-facing gotcha in the closing comment rather than a bare link.
 >
-> **PR #815 (gh#812, ownership substrate) — FIXED, GREEN, NOT MERGED.** Awaiting the owner's
-> merge word. Codex + reviewer both found the same blocking defect and the reviewer MEASURED
-> it: the adopter recipe never ran the returned heartbeater, so a downstream following it
-> verbatim gets `OWNER_PRESENCE` ageing out at `PresenceTTL` and its owning entry compacted
-> out of the epoch. Fixed at `209d67b7`; two mutations that had survived the test are now
-> killed.
+> **NEXT: #810** — `tool.list` is silently swallowed by JetStream whenever a stream covers
+> `tool.>`; the core-NATS subscription still succeeds, so nothing warns and discovery is
+> simply dead. Found BY the new e2e stage in #809. **#809's `verify-tool-effect-catalog` stage
+> in the crud-tools tier is RED ON PURPOSE and must stay red until #810 lands** — the red IS
+> the finding. An earlier revision of this session "fixed" it by overriding the subject in the
+> tier's flow config, which made the tier green while every default-subject deployment still
+> had no discovery at all. Do not do that again.
 >
-> **PR #809 (gh#749, tool effect metadata) — FIXED, GREEN, AWAITING CODEX.** Reviewer caught
-> `web_search` classified `read_only` while writing 7 triples per result, an
-> approval-blindness test that could not fail, and `research_graph` shipping unclassified.
-> **Its e2e stage is deliberately RED and MUST STAY RED until #810 lands** — the red IS the
-> finding. An earlier revision of this session "fixed" it into a config workaround that made
-> the tier green while every default-subject deployment still had no discovery.
+> **THEN:** #795 (graph/readiness consumer front door) · #799 / #800 (SimpleOwner facade;
+> owner-token heartbeater death visible only downstream).
 >
-> **NEXT: #810** (`tool.list` silently swallowed by JetStream when a stream covers `tool.>`;
-> the subscription succeeds so nothing warns) → **#809 completes** → **#795**. Also owed:
-> **#821** (fresh-volume create→transition→restart→history e2e, gh#814's acceptance — decide
-> whether it rides semdragon's beta.159 replay or becomes a tier stage) and **#811** (five
-> e2e tiers exit 0 on scenario failure).
+> **TWO IN-FLIGHT CHANGES ARE NEARLY DONE AND BLOCK NOTHING — finish or archive them:**
+> · `tool-effect-metadata` 31/37 — remainder is the archive plus #810-dependent items.
+> · `lifecycle-operator-create` 38/41 — remainder is **gh#821** (fresh-volume
+>   create→transition→restart→history acceptance: decide whether it rides semdragon's
+>   beta.159 replay or becomes a tier stage) and **gh#824** (workflows whose lifecycle ID
+>   field is `json:"-"` cannot be created through the route yet are advertised on it). Task
+>   4.2 is marked `[~]` NOT-DONE-deliberately with its reasoning — do not "complete" it
+>   without reading why.
+> · `predicate-raw-key-representation` 10/14 — **CHECK ITS HALT CONDITION (task 4.3) FIRST.**
+> · `graph-index-replacement-semantics` 15/19 — oldest (11d).
 >
-> **OpenSpec `lifecycle-operator-create` is IMPLEMENTED** (that is what #816's last two
-> rounds were). Remaining: the operator-creatable design item above, and the #821 decision.
-> Archive it once those are placed.
+> **ALSO OPEN, filed this session:** #811 (five e2e tiers exit 0 on scenario failure —
+> `ignore_error: true`; a gate that cannot go red is not a gate) · #808 (effect-derived
+> approval policy, deferred with its registry-not-wire constraint recorded).
 >
-> **THE SESSION'S LESSON, now a memory:** projecting an existing primitive onto a new surface
-> makes that primitive's gaps newly REACHABLE. Correctness did not change; reachability did.
-> Every defect was caught externally, across three PRs.
+> **THE SESSION'S LESSON — it repeated across three PRs and five review passes, and EVERY
+> defect was caught externally:** projecting an existing primitive onto a new surface makes
+> that primitive's gaps newly REACHABLE. Correctness did not change; reachability did. Not one
+> finding was in the new code — they were all in `Manager.Create`, `WireOwnership`'s Phase-B
+> half, and `ToolDefinition`'s write paths. **And round 3 found a defect CREATED by round 2's
+> fix:** withdrawing a guard that could never fire also removed the only thing binding the
+> route's registration to the write. Corollary now in memory: after a fix, ask what the removed
+> thing was HOLDING.
 >
 > **(Historical, retained below.)**
 >
