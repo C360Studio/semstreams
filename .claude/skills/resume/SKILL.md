@@ -20,7 +20,11 @@ measurement, never from prose.**
    - `git worktree list` (other agents' active trees — never touch them)
    - `gh pr list` (armed auto-merges, pending reviews)
    - `gh issue list --limit 15` (queue movement since the baton was written)
-   - `openspec list` (change queue vs the baton's claims)
+   - `task openspec:queue` — **use this, not bare `openspec list`.** `openspec list` renders a
+     change as a progress fraction, and a fraction cannot distinguish "four items of work
+     left" from "one of these four is a HALT condition deciding whether this change should
+     exist at all". The report reads the caveats out of `tasks.md` every run, so they cannot
+     drift from the baton and the baton does not have to re-narrate them.
 3. **Diff measurement against the baton.** Every mismatch is either the baton being stale
    (fix it — make the claim true or correct it, auditable) or work that happened untracked
    (record it). Do not proceed on top of unexplained drift.
@@ -34,7 +38,14 @@ measurement, never from prose.**
 ## Rules that bind here
 
 - The baton wins over memory files wherever they disagree; measurement wins over both.
-- A stalled change (>7 days) found in step 2 triggers the staleness tripwire: explain it in
-  the baton or rescope it.
+- **A memory or baton POINTER is not the fact it points at.** Quoting a filename, a slug, or a
+  remembered task number without opening the thing is how a retired premise gets repeated as
+  current. Twice in session 23: a memory file whose *body* said "this premise is retired" was
+  cited by its stale *filename*, and a task's halt condition was relayed from the baton rather
+  than read. Open the file.
+- A stalled change (>7 days) found in step 2 triggers the staleness tripwire — **but check
+  `task openspec:queue` before calling it stale.** A change blocked on an external event or a
+  recorded halt is correctly parked, not rotting; firing the tripwire on it every session is
+  how the tripwire gets ignored. Rescope only what has no written reason to be open.
 - End-of-session: update the baton FROM the same commands, never from the session's
   internal model — state files carry measurements, not predictions.
