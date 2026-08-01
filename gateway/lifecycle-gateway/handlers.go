@@ -14,11 +14,16 @@
 //
 // Error model: every non-2xx response is `{"error": "..."}` so
 // operator dashboards parse one envelope. The mapping from
-// pkg/lifecycle errors → HTTP status is centralized in
-// `errorToStatus`. Workflow-not-registered + entity-not-found map
-// to 404; field-not-operator-writable + invalid-transition +
-// terminal-phase map to 400 (client must fix); retries-exhausted
-// maps to 409 (race with another writer); anything else 500.
+// pkg/lifecycle errors → HTTP status is centralized in `errorToStatus`,
+// which is the single place to read it — this comment used to restate
+// the table and went stale the first time the table grew. 4xx keeps the
+// underlying message; only 500 is canned (details go to the log).
+//
+// Adding a route to this surface owes a re-audit of the sentinels its new
+// callee can raise: a sentinel unreachable before a route existed becomes
+// reachable the moment one does. Two instances so far — ErrAlreadyExists
+// (unmapped until a create route existed) and ErrOwnerQuiesced (reachable
+// via create's quiesce check).
 package lifecyclegateway
 
 import (

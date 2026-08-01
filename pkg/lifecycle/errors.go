@@ -121,7 +121,8 @@ var (
 	// on transient-vs-permanent.
 	ErrEmitFailed = errors.New("lifecycle: emit to graph-ingest failed")
 
-	// ErrEntityIDPatternMismatch is returned by Manager.Despawn / DespawnWith
+	// ErrEntityIDPatternMismatch is returned by Manager.Create (gh#814) and by
+	// Manager.Despawn / DespawnWith
 	// when the given entityID does not match the named (and registered)
 	// workflow's EntityIDPattern. Distinct from ErrWorkflowNotRegistered (the
 	// workflow itself is known) — this scopes a reclaim to a known workflow and

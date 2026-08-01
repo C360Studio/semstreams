@@ -29,6 +29,14 @@ type fakeEmitter struct {
 	// bucket — used to drive the DespawnWith partial-failure recovery path
 	// (transition committed, delete failed, entity terminal-but-present).
 	deleteErr error
+	// createDegraded makes create() report a COMMITTED-but-unreadable write:
+	// the mutation contract's Degraded shape. The bucket is still written, so
+	// the state genuinely exists — only the response carries no Entity.
+	createDegraded bool
+	// createResponseMutator rewrites the Entity on the create RESPONSE without
+	// touching what was stored, so a test can tell the causal response apart
+	// from a later Get of the same entity.
+	createResponseMutator func(*graph.EntityState)
 }
 
 // update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
@@ -95,9 +103,20 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state := *req.Entity
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
+	if f.createDegraded {
+		return &graph.CreateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{Degraded: true, DegradedReason: "read-back unavailable"},
+			TriplesAdded:     len(req.Triples),
+		}, nil
+	}
+	respState := state
+	if f.createResponseMutator != nil {
+		respState.Triples = append([]message.Triple(nil), state.Triples...)
+		f.createResponseMutator(&respState)
+	}
 	return &graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
-		Entity:           &state,
+		Entity:           &respState,
 		TriplesAdded:     len(req.Triples),
 	}, nil
 }
@@ -621,7 +640,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=624 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=643 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -907,8 +926,15 @@ func TestCreate_AcceptsEntityIDInsideThePattern(t *testing.T) {
 //
 // So this test deliberately pins the OBSERVABLE contract — an absent entity
 // yields ErrEntityNotFound and nothing is created — rather than any one layer's
-// check. It fails if the invariant is ever lost at BOTH layers, which is the
-// only way it can actually be lost.
+// check. Verified falsifiable: relaxing the Manager guards AND the emit layer's
+// must-exist arm together does flip the state-patch subtest.
+//
+// Two scope caveats, because the reasoning above is narrower than it looks. The
+// layer that holds it here is the FAKE emitter, which is documented to mirror
+// graph-ingest's handler — the claim generalizes only as far as that mirror
+// holds. And the TRANSITION subtest is not covered by this reasoning at all:
+// TransitionWith carries its own independent guards, so it survives both
+// relaxations for a different reason.
 func TestMustExistLanes_DoNotAutoVivify(t *testing.T) {
 	ctx := context.Background()
 	const ghost = "c360.platform1.lifecycle.gcs.mission.ghost"
@@ -961,4 +987,70 @@ func TestRegister_RejectsSchemaThatIsNotAParticipant(t *testing.T) {
 type notAParticipant struct {
 	ID     string `json:"entity_id" lifecycle:"id"`
 	PhaseF string `json:"phase" lifecycle:"phase,predicate=mission.lifecycle.phase"`
+}
+
+// TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead pins the remedy
+// for the "a committed birth can report as 500" blocker.
+//
+// The distinguishing fixture matters: the create RESPONSE carries a value the
+// stored entity does not, so a post-hoc Get cannot produce it. Without this, the
+// causal projection and the read it replaced are indistinguishable — review
+// mutation-proved exactly that by swapping the projection back to a Get and
+// keeping the whole suite green.
+func TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	emitter.createResponseMutator = func(e *graph.EntityState) {
+		for i := range e.Triples {
+			if e.Triples[i].Predicate == "mission.identity.owner-org-id" {
+				e.Triples[i].Object = "from-the-causal-response"
+			}
+		}
+	}
+
+	const id = "c360.platform1.lifecycle.gcs.mission.causal"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning","owner_org_id":"from-the-request"}`))
+	if err != nil {
+		t.Fatalf("CreateFromOperator: %v", err)
+	}
+	if result.Degraded {
+		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
+	}
+	got := result.Instance.(*fixtureMission).OwnerOrgID
+	if got != "from-the-causal-response" {
+		t.Errorf("OwnerOrgID = %q, want %q — the result must be projected from the mutation response for THIS request, not from a later read",
+			got, "from-the-causal-response")
+	}
+}
+
+// TestCreateFromOperator_DegradedCommitIsSuccess pins the other half: a write
+// that committed durably but could not be read back is a SUCCESS with a signal.
+// Reporting it as an error makes the operator retry a birth that already
+// happened, and the mutation contract forbids that retry.
+func TestCreateFromOperator_DegradedCommitIsSuccess(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+	emitter.createDegraded = true
+
+	const id = "c360.platform1.lifecycle.gcs.mission.degraded"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if err != nil {
+		t.Fatalf("a degraded commit must not be an error: %v", err)
+	}
+	if !result.Degraded {
+		t.Fatal("degraded commit was not signalled — the caller cannot tell it from a fully-read-back create")
+	}
+	if result.DegradedReason == "" {
+		t.Error("degraded commit carries no reason — an operator has nothing to act on")
+	}
+	if result.Instance != nil {
+		t.Error("degraded commit returned an Instance; there was nothing projectable")
+	}
+	// The write really did land — that is what makes retrying wrong.
+	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
+		t.Errorf("degraded create did not commit: %v", getErr)
+	}
 }

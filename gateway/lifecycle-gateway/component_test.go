@@ -1262,3 +1262,80 @@ func TestCreateInstance_MustExistLanesDoNotAutoVivify(t *testing.T) {
 		})
 	}
 }
+
+// TestBodyLimit_ReportsPayloadTooLarge covers the shared 413 helper on all
+// three body-carrying lanes.
+//
+// It was a named fix with no test: http.MaxBytesReader surfaces
+// *http.MaxBytesError through the same generic error path as a syntax error, so
+// every lane answered 400 while the published OpenAPI advertised 413 — two of
+// them since before the create lane existed.
+func TestBodyLimit_ReportsPayloadTooLarge(t *testing.T) {
+	srv, _ := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
+		Workflow:               "mission",
+		OperatorWritableFields: []string{"owner_org_id"},
+	})
+	defer srv.Close()
+
+	oversize := `{"pad":"` + strings.Repeat("x", 2*1024*1024) + `"}`
+	lanes := []struct{ name, path string }{
+		{"create", "/lifecycle/workflows/mission"},
+		{"state patch", "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.1/state"},
+		{"transition", "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.1/transition"},
+	}
+	for _, lane := range lanes {
+		t.Run(lane.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+lane.path, "application/json", strings.NewReader(oversize))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			if resp.StatusCode != http.StatusRequestEntityTooLarge {
+				body, _ := io.ReadAll(resp.Body)
+				t.Errorf("status = %d, want 413 (body: %.120s)", resp.StatusCode, body)
+			}
+		})
+	}
+}
+
+// TestErrorToStatus_MapsTheSentinelsCreateMadeReachable pins the mappings added
+// because a new route made previously-unreachable sentinels reachable. Without
+// these, each renders as a canned 500 that tells an operator the service is
+// broken when their request was refused for a knowable reason.
+func TestErrorToStatus_MapsTheSentinelsCreateMadeReachable(t *testing.T) {
+	srv, mgr := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{Workflow: "mission"})
+	defer srv.Close()
+
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantInBody string
+	}{
+		{"owner quiesced", fmt.Errorf("%w: superseded", lifecycle.ErrOwnerQuiesced), http.StatusConflict, "superseded"},
+		{"entity-id pattern mismatch", fmt.Errorf("%w: bad id", lifecycle.ErrEntityIDPatternMismatch), http.StatusBadRequest, "bad id"},
+		{"not lifecycle managed", fmt.Errorf("%w: no phase", lifecycle.ErrEntityNotLifecycleManaged), http.StatusNotFound, "no phase"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr.createErr = tc.err
+			defer func() { mgr.createErr = nil }()
+
+			resp, err := http.Post(srv.URL+"/lifecycle/workflows/mission", "application/json",
+				strings.NewReader(`{"entity_id":"acme.ops.gcs.mission.instance.1","workflow":"mission","phase":"planned"}`))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != tc.wantStatus {
+				t.Errorf("status = %d, want %d (body: %s)", resp.StatusCode, tc.wantStatus, body)
+			}
+			// 4xx must preserve the reason — a canned message leaves an
+			// ownership-strict operator with nothing actionable.
+			if !strings.Contains(string(body), tc.wantInBody) {
+				t.Errorf("body %s does not carry the reason %q", body, tc.wantInBody)
+			}
+		})
+	}
+}

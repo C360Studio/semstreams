@@ -16,6 +16,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/ownership"
+	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -616,7 +617,19 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 	// operator lane: an unreclaimable orphan is not better because app code made
 	// it. (Owner-lease enforcement does not cover this — an out-of-pattern write
 	// is UNCLAIMED, not stale, so the lease check passes it through.)
-	if !matchPattern(reg.workflow.EntityIDPattern, entityID) {
+	// semtypes.MatchEntityIDPattern, not the package-local matchPattern: the
+	// local glob compares segment counts and wildcards and validates NOTHING
+	// about the ID itself, so `..lifecycle.gcs.mission.` and IDs with spaces or
+	// uppercase match it, reach graph-ingest, and come back as a classified
+	// invalid — which surfaces to an operator as a canned 500. Rejecting the
+	// literal here keeps a malformed ID a stable 400 and keeps it away from
+	// every downstream side effect.
+	matched, err := semtypes.MatchEntityIDPattern(reg.workflow.EntityIDPattern, entityID)
+	if err != nil {
+		return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q: %s",
+			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern, err.Error())
+	}
+	if !matched {
 		return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q",
 			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern)
 	}
@@ -665,7 +678,7 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 			}
 			return createOutcome{}, err
 		}
-		return outcomeFromCreate(resp), nil
+		return outcomeFromCreate(resp)
 	case err != nil:
 		return createOutcome{}, err
 	}
@@ -697,25 +710,53 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 		}
 		return createOutcome{}, err
 	}
-	return outcomeFromUpdate(updateResp), nil
+	return outcomeFromUpdate(updateResp)
 }
 
 // outcomeFromCreate / outcomeFromUpdate project the causal mutation response
 // onto the outcome the caller needs. A nil response is treated as degraded
 // rather than as failure: the emit returned no error, so the write committed —
 // the only thing missing is the read-back, which is exactly what Degraded means.
-func outcomeFromCreate(resp *graph.CreateEntityWithTriplesResponse) createOutcome {
+func outcomeFromCreate(resp *graph.CreateEntityWithTriplesResponse) (createOutcome, error) {
 	if resp == nil {
-		return createOutcome{Degraded: true, DegradedReason: "mutation response was empty"}
+		return createOutcome{}, unprovableCommit()
 	}
-	return createOutcome{Entity: resp.Entity, Degraded: resp.Degraded || resp.Entity == nil, DegradedReason: resp.DegradedReason}
+	return outcomeFrom(resp.Degraded, resp.DegradedReason, resp.Entity)
 }
 
-func outcomeFromUpdate(resp *graph.UpdateEntityWithTriplesResponse) createOutcome {
+func outcomeFromUpdate(resp *graph.UpdateEntityWithTriplesResponse) (createOutcome, error) {
 	if resp == nil {
-		return createOutcome{Degraded: true, DegradedReason: "mutation response was empty"}
+		return createOutcome{}, unprovableCommit()
 	}
-	return createOutcome{Entity: resp.Entity, Degraded: resp.Degraded || resp.Entity == nil, DegradedReason: resp.DegradedReason}
+	return outcomeFrom(resp.Degraded, resp.DegradedReason, resp.Entity)
+}
+
+// outcomeFrom keeps "the handler SAID degraded" and "the handler returned
+// nothing" apart. Only the first is a committed write.
+//
+// A response that claims success with no Entity is not a degraded commit — it
+// is a reply we cannot prove committed anything, and ClassifyReply treats any
+// header-less reply as success, so a {} or null body decodes to exactly this
+// shape. Reporting it as a committed birth would invent a success. It fails
+// instead, which is the correct direction for an unprovable write.
+func outcomeFrom(degraded bool, reason string, entity *graph.EntityState) (createOutcome, error) {
+	if degraded {
+		if reason == "" {
+			// A degraded signal with no reason leaves an operator nothing to
+			// act on; a zero must not stand in for UNKNOWN.
+			reason = "committed, but the mutation handler reported no read-back reason"
+		}
+		return createOutcome{Entity: entity, Degraded: true, DegradedReason: reason}, nil
+	}
+	if entity == nil {
+		return createOutcome{}, unprovableCommit()
+	}
+	return createOutcome{Entity: entity}, nil
+}
+
+func unprovableCommit() error {
+	return fmt.Errorf("%w: mutation reply claimed success but carried no entity, so the write cannot be proven committed",
+		ErrEmitFailed)
 }
 
 // buildInitialTriples constructs the triple slice for Manager.Create:
@@ -1228,6 +1269,17 @@ type CreateResult struct {
 // A degraded commit (write landed, read-back could not complete) is reported as
 // SUCCESS via CreateResult.Degraded — never as an error, because the mutation
 // contract forbids retrying it.
+//
+// NOT CLOSED, and stated rather than left implicit: the LOST-REPLY case. The
+// emitter retries, so a create whose reply is lost after committing returns
+// ErrAlreadyExists on the retry — indistinguishable here from a genuine prior
+// duplicate, and rendered as 409 for a birth this very request committed.
+// Closing it needs request correlation (a RequestID echoed on the mutation
+// response, or an ErrAlreadyExists re-read comparing the audit source/at triple
+// against this request), which is a change to the mutation contract rather than
+// to this lane. Deliberately deferred: the failure is rare, self-limiting, and
+// reports a conflict rather than inventing a success — but it IS a wrong answer
+// and it is tracked, not forgotten.
 func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (CreateResult, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
@@ -1244,10 +1296,6 @@ func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initi
 			ErrInvalidInitialState, workflow, err.Error())
 	}
 
-	if got := target.Workflow(); got != workflow {
-		return CreateResult{}, fmt.Errorf("%w: initial state declares workflow %q but was submitted to %q",
-			ErrInvalidInitialState, got, workflow)
-	}
 	if target.EntityID() == "" {
 		return CreateResult{}, fmt.Errorf("%w: initial state for workflow %q has no entity ID",
 			ErrInvalidInitialState, workflow)

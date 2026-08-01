@@ -59,7 +59,7 @@ func TestNoCatalogBucketLiteralsOutsideTheCatalog(t *testing.T) {
 			name := d.Name()
 			// Skip VCS, vendor, and the test harness tree (fixtures + e2e
 			// clients legitimately spell bucket names).
-			if name == ".git" || name == "vendor" || name == "node_modules" {
+			if name == ".git" || name == ".claude" || name == "vendor" || name == "node_modules" {
 				return filepath.SkipDir
 			}
 			if rel, rerr := filepath.Rel(root, path); rerr == nil && rel == "test" {
