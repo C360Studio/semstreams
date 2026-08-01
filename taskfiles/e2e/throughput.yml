@@ -15,9 +15,19 @@ tasks:
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - 'echo "[OK] Services ready (pprof enabled on port 36060, GraphQL on port 38082)"'
       - 'echo "[THROUGHPUT] Running throughput scenario (10,000 messages + 15s query load)..."'
-      - cmd: cd cmd/e2e && ./e2e --scenario throughput --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario throughput --output-dir ./test/e2e/results) || rc=$?
+          docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+          exit $rc
       - 'echo ""'
       - 'echo "Profiles saved to test/e2e/results/profiles/"'
       - 'echo "Analyze CPU: go tool pprof test/e2e/results/profiles/throughput-query-cpu.pprof"'
@@ -31,9 +41,19 @@ tasks:
       - 'echo "[THROUGHPUT-QUICK] Quick throughput test (1,000 messages)..."'
       - docker compose -f docker/compose/e2e.yml up -d --wait --build
       - 'echo "[OK] Services ready"'
-      - cmd: cd cmd/e2e && ./e2e --scenario throughput --message-count 1000 --graphql-url ""
-        ignore_error: true
-      - docker compose -f docker/compose/e2e.yml down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario throughput --message-count 1000 --graphql-url "") || rc=$?
+          docker compose -f docker/compose/e2e.yml down -v --timeout 15
+          exit $rc
 
   heavy:
     desc: "Heavy throughput test (50,000 messages + query load)"
@@ -45,9 +65,19 @@ tasks:
       - 'echo "[THROUGHPUT-HEAVY] Heavy throughput test (50,000 messages + query load)..."'
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - 'echo "[OK] Services ready (pprof enabled)"'
-      - cmd: cd cmd/e2e && ./e2e --scenario throughput --message-count 50000 --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario throughput --message-count 50000 --output-dir ./test/e2e/results) || rc=$?
+          docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+          exit $rc
       - 'echo ""'
       - 'echo "Profiles saved to test/e2e/results/profiles/"'
 
@@ -61,9 +91,19 @@ tasks:
       - 'echo "[THROUGHPUT-PROFILE] Full profiling run (10,000 messages + 15s query load + block/mutex)..."'
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - 'echo "[OK] Services ready (pprof enabled)"'
-      - cmd: cd cmd/e2e && ./e2e --scenario throughput --output-dir ./test/e2e/results --profile-all
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario throughput --output-dir ./test/e2e/results --profile-all) || rc=$?
+          docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+          exit $rc
       - 'echo ""'
       - 'echo "Profiles saved to test/e2e/results/profiles/"'
       - 'echo "Includes: CPU, heap, goroutine, allocs, block, mutex profiles"'
@@ -78,15 +118,19 @@ tasks:
       - 'echo "[THROUGHPUT-SLA] 14K synthetic entities + concurrent query load with SLA assertions..."'
       - docker compose -f docker/compose/tiered.yml --profile statistical up -d --wait --build
       - 'echo "[OK] Services ready"'
-      - cmd: >
-          cd cmd/e2e && ./e2e --scenario throughput
-          --unique-entities 14000
-          --query-during-ingestion
-          --max-query-p99-ms 2000
-          --max-query-error-rate 0.05
-          --output-dir ./test/e2e/results
-        ignore_error: true
-      - docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario throughput --unique-entities 14000 --query-during-ingestion --max-query-p99-ms 2000 --max-query-error-rate 0.05 --output-dir ./test/e2e/results) || rc=$?
+          docker compose -f docker/compose/tiered.yml --profile statistical down -v --timeout 15
+          exit $rc
       - 'echo ""'
       - 'echo "Results saved to test/e2e/results/"'
 
