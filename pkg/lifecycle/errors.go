@@ -49,6 +49,19 @@ var (
 	// fresh entity."
 	ErrAlreadyExists = errors.New("lifecycle: entity already lifecycle-managed")
 
+	// ErrInvalidInitialState is returned by Manager.CreateFromOperator when
+	// the supplied initial state cannot be turned into a valid Participant
+	// for the named workflow: empty body, undecodable JSON, a body declaring
+	// a different workflow than the one it was submitted to, or no entity ID.
+	//
+	// Distinct from ErrInvalidTransition (which covers an undeclared initial
+	// PHASE, validated inside Create) so a caller can tell "your payload is
+	// malformed" from "your payload is well-formed but names a phase this
+	// workflow does not declare" — the two need different corrections, and
+	// an operator surface that collapsed them would send people to the wrong
+	// one.
+	ErrInvalidInitialState = errors.New("lifecycle: invalid initial state")
+
 	// ErrInvalidTransition is returned by Manager.Transition when the
 	// requested (from → to) edge is not declared in the registered
 	// Transitions table for the workflow. Surfaces misconfigured rules
@@ -108,7 +121,8 @@ var (
 	// on transient-vs-permanent.
 	ErrEmitFailed = errors.New("lifecycle: emit to graph-ingest failed")
 
-	// ErrEntityIDPatternMismatch is returned by Manager.Despawn / DespawnWith
+	// ErrEntityIDPatternMismatch is returned by Manager.Create (gh#814) and by
+	// Manager.Despawn / DespawnWith
 	// when the given entityID does not match the named (and registered)
 	// workflow's EntityIDPattern. Distinct from ErrWorkflowNotRegistered (the
 	// workflow itself is known) — this scopes a reclaim to a known workflow and

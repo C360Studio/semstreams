@@ -99,7 +99,12 @@ func TestConfig_EntityIDByteBoundaries(t *testing.T) {
 	t.Parallel()
 
 	prefix256 := strings.Repeat("a", semtypes.MaxEntityIDBytes)
-	id256 := "a.b.c.d.e." + strings.Repeat("x", semtypes.MaxEntityIDBytes-10)
+	// Pattern-conformant prefix: Validate now also matches FanOutInstanceID
+	// against FanOutEntityIDPattern, and this test's subject is byte
+	// boundaries, not pattern conformance — a generic a.b.c.d.e. prefix would
+	// fail for the wrong reason.
+	const fanOutPrefix = "a.b.gateddag.fanout.instance."
+	id256 := fanOutPrefix + strings.Repeat("x", semtypes.MaxEntityIDBytes-len(fanOutPrefix))
 	require.Len(t, prefix256, semtypes.MaxEntityIDBytes)
 	require.Len(t, id256, semtypes.MaxEntityIDBytes)
 

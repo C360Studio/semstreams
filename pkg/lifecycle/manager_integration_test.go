@@ -242,3 +242,118 @@ func TestIntegration_WatchEvents_DeliversUpsertAndDelete(t *testing.T) {
 		// no delivery — correct
 	}
 }
+
+// TestIntegration_CreateFromOperator_BirthLane drives gh#814's create lane
+// against the real graph-mutation wire: an operator-supplied JSON initial
+// state becomes a committed, readable, transitionable instance.
+//
+// This is the half the gateway's own tests cannot prove — they run against a
+// fake manager, so they pin the HTTP contract while this pins that the decode
+// → Create → read-back path actually round-trips through KV.
+func TestIntegration_CreateFromOperator_BirthLane(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	ctx := context.Background()
+	startKVBackedResponders(t, tc)
+
+	mgr := NewManager(tc.Client, nil)
+	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
+
+	const id = "c360.platform1.lifecycle.gcs.mission.int-create"
+	initial := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"acme"}`)
+
+	result, err := mgr.CreateFromOperator(ctx, "fixture", initial)
+	require.NoError(t, err, "create from an operator-supplied initial state")
+	require.False(t, result.Degraded, "unexpected degraded commit: %s", result.DegradedReason)
+	created := result.Instance
+	require.NotNil(t, created)
+	require.Equal(t, id, created.EntityID())
+	require.Equal(t, "planning", created.Phase())
+
+	// The returned value is the authoritative read-back, so an operator-
+	// writable field supplied on the envelope must be visible on it — if the
+	// create lane dropped the envelope and only wrote identity + phase, this
+	// is what catches it.
+	require.Equal(t, "acme", created.(*fixtureMission).OwnerOrgID,
+		"initial-state envelope did not survive the create lane")
+
+	// The returned instance is projected from the CAUSAL mutation response, not
+	// from a later read — so it reflects what THIS request committed.
+
+	// Independently readable through the normal Get path.
+	got, err := mgr.Get(ctx, "fixture", id)
+	require.NoError(t, err)
+	require.Equal(t, "planning", got.Phase())
+
+	// NOT COVERED HERE, deliberately: the subsequent transition and its
+	// history replay. startKVBackedResponders serves create_with_triples and
+	// entity.delete only — Transition emits update_with_triples, and standing
+	// up a fake responder for it would mean hand-rolling graph-ingest's
+	// per-predicate latest-wins merge. A fake merge that drifts from the real
+	// one proves nothing about the real one, so this test asserts the create
+	// lane and stops there.
+	//
+	// The full acceptance — fresh volume → create via the public route →
+	// transition → restart → history intact via KV revision replay — is an
+	// e2e-level obligation against a running stack (it is also semdragon's
+	// beta.159 replay path). Tracked as the coverage gap on gh#814 rather than
+	// simulated here.
+}
+
+// TestIntegration_CreateFromOperator_IsCreateOrFail proves a duplicate is
+// refused and does not clobber.
+//
+// SCOPE, corrected after review: this does NOT reach the CAS create-or-fail arm.
+// The first create Puts the entity, so the second create's pre-read finds it and
+// returns ErrAlreadyExists from the hasTriple check long before the emitter —
+// mutation-proved by review, which disabled the emitter's ErrAlreadyExists
+// classification and kept everything green. Reaching that arm needs a responder
+// returning a classified graph.ErrorCodeEntityExists, which this harness does
+// not have. What this test pins is the operator-visible contract: duplicate
+// refused, original intact.
+func TestIntegration_CreateFromOperator_IsCreateOrFail(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	ctx := context.Background()
+	startKVBackedResponders(t, tc)
+
+	mgr := NewManager(tc.Client, nil)
+	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
+
+	const id = "c360.platform1.lifecycle.gcs.mission.int-dup"
+	first := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"first"}`)
+	_, err := mgr.CreateFromOperator(ctx, "fixture", first)
+	require.NoError(t, err)
+
+	second := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"second"}`)
+	_, err = mgr.CreateFromOperator(ctx, "fixture", second)
+	require.ErrorIs(t, err, ErrAlreadyExists, "a duplicate create must fail, not upsert")
+
+	got, err := mgr.Get(ctx, "fixture", id)
+	require.NoError(t, err)
+	require.Equal(t, "first", got.(*fixtureMission).OwnerOrgID,
+		"the refused duplicate overwrote the original")
+}
+
+// TestIntegration_CreateFromOperator_RejectsUndeclaredInitialPhase pins that
+// the phase validation inside Create still applies on this lane, and that it
+// is reported as an invalid TRANSITION rather than an invalid initial state —
+// the payload was well formed; the phase it named is not declared. The two
+// need different corrections.
+func TestIntegration_CreateFromOperator_RejectsUndeclaredInitialPhase(t *testing.T) {
+	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	ctx := context.Background()
+	startKVBackedResponders(t, tc)
+
+	mgr := NewManager(tc.Client, nil)
+	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
+
+	const id = "c360.platform1.lifecycle.gcs.mission.int-badphase"
+	initial := []byte(`{"entity_id":"` + id + `","phase":"not-a-declared-phase"}`)
+
+	_, err := mgr.CreateFromOperator(ctx, "fixture", initial)
+	require.ErrorIs(t, err, ErrInvalidTransition)
+	require.NotErrorIs(t, err, ErrInvalidInitialState,
+		"an undeclared phase is not a malformed payload — collapsing them sends operators to the wrong fix")
+
+	_, getErr := mgr.Get(ctx, "fixture", id)
+	require.ErrorIs(t, getErr, ErrEntityNotFound, "a refused create must leave nothing behind")
+}

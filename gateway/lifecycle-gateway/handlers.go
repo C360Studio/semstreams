@@ -5,6 +5,7 @@
 //
 //	{root}                                  GET   → list workflow types + counts
 //	{root}/{type}                           GET   → list instances (query params for filters) — or WS upgrade when ?stream=true
+//	{root}/{type}                           POST  → create instance (birth lane; create-or-fail, 409 on duplicate)
 //	{root}/{type}/{id}                      GET   → instance state
 //	{root}/{type}/{id}/history              GET   → phase-transition history
 //	{root}/{type}/{id}/children             GET   → child instances
@@ -13,11 +14,16 @@
 //
 // Error model: every non-2xx response is `{"error": "..."}` so
 // operator dashboards parse one envelope. The mapping from
-// pkg/lifecycle errors → HTTP status is centralized in
-// `errorToStatus`. Workflow-not-registered + entity-not-found map
-// to 404; field-not-operator-writable + invalid-transition +
-// terminal-phase map to 400 (client must fix); retries-exhausted
-// maps to 409 (race with another writer); anything else 500.
+// pkg/lifecycle errors → HTTP status is centralized in `errorToStatus`,
+// which is the single place to read it — this comment used to restate
+// the table and went stale the first time the table grew. 4xx keeps the
+// underlying message; only 500 is canned (details go to the log).
+//
+// Adding a route to this surface owes a re-audit of the sentinels its new
+// callee can raise: a sentinel unreachable before a route existed becomes
+// reachable the moment one does. Two instances so far — ErrAlreadyExists
+// (unmapped until a create route existed) and ErrOwnerQuiesced (reachable
+// via create's quiesce check).
 package lifecyclegateway
 
 import (
@@ -25,6 +31,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -32,6 +39,23 @@ import (
 
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
+
+// writeBodyReadError renders a request-body read/decode failure. An oversize
+// body surfaces as *http.MaxBytesError through the same generic error path as a
+// syntax error, so without this every lane reported 400 while the published
+// interface advertised 413 — on all three body-carrying lanes, since before the
+// create lane existed.
+func (c *Component) writeBodyReadError(w http.ResponseWriter, err error, context string) {
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) {
+		c.writeError(w, http.StatusRequestEntityTooLarge,
+			fmt.Sprintf("request body exceeds the configured limit of %d bytes", maxBytes.Limit))
+		c.recordRequest(false, "body too large")
+		return
+	}
+	c.writeError(w, http.StatusBadRequest, fmt.Sprintf("%s: %s", context, err.Error()))
+	c.recordRequest(false, "invalid body")
+}
 
 // errorResponse is the uniform error envelope. Single field is
 // intentional — dashboards render `error` directly without per-error
@@ -62,11 +86,19 @@ func (c *Component) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	case 0:
 		c.handleListWorkflows(w, r)
 	case 1:
-		// {type} — list instances OR WebSocket upgrade when
-		// ?stream=true. The WS path stays under the same URL for
-		// CORS and discovery parity (operator dashboards point at
-		// the workflow type, add ?stream=true to subscribe).
-		if r.URL.Query().Get("stream") == "true" {
+		// {type} — create (POST), list instances (GET), OR WebSocket
+		// upgrade when ?stream=true. The WS path stays under the same
+		// URL for CORS and discovery parity (operator dashboards point
+		// at the workflow type, add ?stream=true to subscribe).
+		if r.Method == http.MethodPost {
+			c.handleCreateInstance(w, r, segments[0])
+			return
+		}
+		// The stream upgrade is a GET affordance. Checking it before the method
+		// let POST ?stream=true fall into the upgrade, skipping create and
+		// answering with the upgrader's plain-text body — which breaks the
+		// uniform {"error": ...} envelope this package guarantees.
+		if r.Method == http.MethodGet && r.URL.Query().Get("stream") == "true" {
 			c.handleWebSocket(w, r, segments[0])
 			return
 		}
@@ -175,8 +207,10 @@ func (c *Component) handleListWorkflows(w http.ResponseWriter, r *http.Request) 
 // coercion against the registered struct.
 func (c *Component) handleListInstances(w http.ResponseWriter, r *http.Request, workflow string) {
 	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
-		c.writeError(w, http.StatusMethodNotAllowed, "GET only")
+		// POST is routed to create before reaching here, so anything
+		// arriving is neither — advertise both real verbs.
+		w.Header().Set("Allow", "GET, POST")
+		c.writeError(w, http.StatusMethodNotAllowed, "GET (list) or POST (create) only")
 		c.recordRequest(false, "method not allowed")
 		return
 	}
@@ -321,9 +355,7 @@ func (c *Component) handleStatePatch(w http.ResponseWriter, r *http.Request, wor
 	r.Body = http.MaxBytesReader(w, r.Body, c.config.MaxBodyBytes)
 	var patch map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
-		c.writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("invalid JSON body: %s", err.Error()))
-		c.recordRequest(false, "invalid body")
+		c.writeBodyReadError(w, err, "invalid JSON body")
 		return
 	}
 	if err := c.manager.UpdateFromOperator(r.Context(), workflow, entityID, patch); err != nil {
@@ -331,6 +363,46 @@ func (c *Component) handleStatePatch(w http.ResponseWriter, r *http.Request, wor
 		return
 	}
 	c.writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	c.recordRequest(true, "")
+}
+
+// handleCreateInstance creates a workflow instance from an
+// operator-supplied initial state (gh#814).
+//
+// This is the BIRTH lane, and the only one carrying a full initial-state
+// envelope — the must-exist lanes (state patch, transition) stay
+// envelope-free and still require an existing entity. Nothing auto-vivifies.
+//
+// Create-or-fail: a duplicate ID is 409, never an overwrite. There is no
+// upsert lane on the operator surface, so a retried request is
+// distinguishable from a fresh one.
+//
+// Returns 201 with the authoritative committed state read back through the
+// Manager, not the request body echoed — a caller renders what landed.
+func (c *Component) handleCreateInstance(w http.ResponseWriter, r *http.Request, workflow string) {
+	r.Body = http.MaxBytesReader(w, r.Body, c.config.MaxBodyBytes)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		c.writeBodyReadError(w, err, "could not read request body")
+		return
+	}
+
+	result, err := c.manager.CreateFromOperator(r.Context(), workflow, body)
+	if err != nil {
+		c.writeErrorFromLifecycle(w, "create", err)
+		return
+	}
+	// A degraded commit is a SUCCESS: the write landed durably and the mutation
+	// contract forbids retrying it. 201 with the flag, never a 5xx.
+	if result.Degraded {
+		c.writeJSON(w, http.StatusCreated, map[string]any{
+			"degraded":        true,
+			"degraded_reason": result.DegradedReason,
+		})
+		c.recordRequest(true, "")
+		return
+	}
+	c.writeJSON(w, http.StatusCreated, result.Instance)
 	c.recordRequest(true, "")
 }
 
@@ -355,9 +427,7 @@ func (c *Component) handleOperatorTransition(w http.ResponseWriter, r *http.Requ
 	r.Body = http.MaxBytesReader(w, r.Body, c.config.MaxBodyBytes)
 	var req transitionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		c.writeError(w, http.StatusBadRequest,
-			fmt.Sprintf("invalid JSON body: %s", err.Error()))
-		c.recordRequest(false, "invalid body")
+		c.writeBodyReadError(w, err, "invalid JSON body")
 		return
 	}
 	if strings.TrimSpace(req.Phase) == "" {
@@ -511,6 +581,23 @@ func errorToStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, lifecycle.ErrUpdateRetriesExhausted):
 		return http.StatusConflict
+	case errors.Is(err, lifecycle.ErrAlreadyExists):
+		// Create-or-fail: a duplicate ID is a conflict, never an
+		// overwrite. Without this arm it fell through to 500 and read
+		// as a server fault instead of "that instance already exists".
+		return http.StatusConflict
+	case errors.Is(err, lifecycle.ErrInvalidInitialState):
+		return http.StatusBadRequest
+	case errors.Is(err, lifecycle.ErrEntityIDPatternMismatch):
+		return http.StatusBadRequest
+	case errors.Is(err, lifecycle.ErrOwnerQuiesced):
+		// Not a server fault: another incarnation took over this owner, and the
+		// caller should retry against the live one. Reported as 409 with the
+		// message preserved (see writeErrorFromLifecycle) — its own contract
+		// says the refusal is loud and surfaces to the caller.
+		return http.StatusConflict
+	case errors.Is(err, lifecycle.ErrEntityNotLifecycleManaged):
+		return http.StatusNotFound
 	}
 	return http.StatusInternalServerError
 }

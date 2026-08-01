@@ -78,7 +78,27 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 						"400": {Description: "Invalid query parameter"},
 						"403": {Description: "WebSocket streaming disabled (enable_websocket=false)"},
 						"404": {Description: "Workflow type not registered"},
-						"405": {Description: "Method not allowed (GET only)"},
+						"405": {Description: "Method not allowed (GET or POST only)"},
+					},
+				},
+				POST: &service.OperationSpec{
+					Summary:     "Create a workflow instance",
+					Description: "Creates a new instance of the registered workflow from an operator-supplied initial state, via the ownership-aware lifecycle Manager. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow's registered state struct, and must include the entity ID and an initial phase declared in the workflow's transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. A degraded commit (write landed durably, read-back could not complete) also responds 201, carrying `degraded` and `degraded_reason` instead of the instance — it is a success and must not be retried.",
+					Tags:        []string{"Lifecycle"},
+					Parameters: []service.ParameterSpec{
+						{Name: "type", In: "path", Required: true, Description: "Workflow type identifier (matches Participant.Workflow())", Schema: service.Schema{Type: "string"}},
+					},
+					RequestBody: &service.RequestBodySpec{
+						Description: "Initial state, shaped as the workflow's registered Participant struct",
+						Required:    true,
+						ContentType: "application/json",
+					},
+					Responses: map[string]service.ResponseSpec{
+						"201": {Description: "Created — authoritative committed instance state", ContentType: "application/json"},
+						"400": {Description: "Malformed initial state, missing entity ID, an entity ID outside the workflow's declared pattern, or an initial phase not declared in the transitions table"},
+						"404": {Description: "Workflow type not registered"},
+						"409": {Description: "An instance with that entity ID is already lifecycle-managed, or this process's ownership was superseded by another incarnation"},
+						"413": {Description: "Body exceeds max_body_bytes"},
 					},
 				},
 			},

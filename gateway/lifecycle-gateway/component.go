@@ -55,7 +55,7 @@ type Config struct {
 	// Operators that genuinely need larger patch bodies (uncommon —
 	// operator_writable surface should be narrow) raise this
 	// explicitly. Zero or negative means "no override" → default.
-	MaxBodyBytes int64 `json:"max_body_bytes,omitempty" schema:"type:int,description:Maximum bytes accepted in POST .../state and POST .../transition request bodies. Default 1048576 (1 MiB). Zero or negative means use default.,category:advanced"`
+	MaxBodyBytes int64 `json:"max_body_bytes,omitempty" schema:"type:int,description:Maximum bytes accepted in create / state-patch / transition request bodies (POST lanes). Default 1048576 (1 MiB). Zero or negative means use default. NOTE - no commas: ParseSchemaTag splits this tag on commas and silently drops the whole field on a parse error.,category:advanced"`
 
 	// AllowedOrigins is the WebSocket-upgrade origin allowlist
 	// (S7 reviewer fix — the gateway's POST surface mutates state,
@@ -150,6 +150,7 @@ type LifecycleManager interface {
 	History(ctx context.Context, workflow, entityID string) ([]lifecycle.TransitionEvent, error)
 	Children(ctx context.Context, parentEntityID string, opts lifecycle.ChildOptions) ([]lifecycle.ChildResult, error)
 	References(ctx context.Context, entityID string) ([]lifecycle.ReferenceStub, error)
+	CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (lifecycle.CreateResult, error)
 	UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error
 	Transition(ctx context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, note string) error
 	Watch(ctx context.Context, workflow string) (<-chan lifecycle.Participant, error)

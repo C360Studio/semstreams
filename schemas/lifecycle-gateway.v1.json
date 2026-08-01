@@ -20,7 +20,7 @@
     },
     "max_body_bytes": {
       "type": "integer",
-      "description": "Maximum bytes accepted in POST .../state and POST .../transition request bodies. Default 1048576 (1 MiB). Zero or negative means use default.",
+      "description": "Maximum bytes accepted in create / state-patch / transition request bodies (POST lanes). Default 1048576 (1 MiB). Zero or negative means use default. NOTE - no commas: ParseSchemaTag splits this tag on commas and silently drops the whole field on a parse error.",
       "category": "advanced"
     },
     "path_prefix": {

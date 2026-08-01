@@ -274,7 +274,7 @@ func TestGraphEventProducerSourceAudit(t *testing.T) {
 			return walkErr
 		}
 		if entry.IsDir() {
-			if entry.Name() == ".git" || entry.Name() == "vendor" || entry.Name() == ".worktrees" {
+			if entry.Name() == ".git" || entry.Name() == "vendor" || entry.Name() == ".worktrees" || entry.Name() == ".claude" {
 				return filepath.SkipDir
 			}
 			return nil

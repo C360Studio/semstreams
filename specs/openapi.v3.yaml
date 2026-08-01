@@ -996,7 +996,40 @@ paths:
                 "404":
                     description: Workflow type not registered
                 "405":
-                    description: Method not allowed (GET only)
+                    description: Method not allowed (GET or POST only)
+        post:
+            summary: Create a workflow instance
+            description: 'Creates a new instance of the registered workflow from an operator-supplied initial state, via the ownership-aware lifecycle Manager. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow''s registered state struct, and must include the entity ID and an initial phase declared in the workflow''s transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. A degraded commit (write landed durably, read-back could not complete) also responds 201, carrying `degraded` and `degraded_reason` instead of the instance — it is a success and must not be retried.'
+            tags:
+                - Lifecycle
+            parameters:
+                - name: type
+                  in: path
+                  required: true
+                  description: Workflow type identifier (matches Participant.Workflow())
+                  schema:
+                    type: string
+            requestBody:
+                description: Initial state, shaped as the workflow's registered Participant struct
+                required: true
+                content:
+                    application/json:
+                        schema: {}
+            responses:
+                "201":
+                    description: Created — authoritative committed instance state
+                    content:
+                        application/json:
+                            schema:
+                                type: object
+                "400":
+                    description: Malformed initial state, missing entity ID, an entity ID outside the workflow's declared pattern, or an initial phase not declared in the transitions table
+                "404":
+                    description: Workflow type not registered
+                "409":
+                    description: An instance with that entity ID is already lifecycle-managed, or this process's ownership was superseded by another incarnation
+                "413":
+                    description: Body exceeds max_body_bytes
     /workflows/{type}/{id}:
         get:
             summary: Get instance state

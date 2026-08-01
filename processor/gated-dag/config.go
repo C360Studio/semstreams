@@ -313,6 +313,23 @@ func (c Config) Validate() error {
 		if err := semtypes.ValidateEntityID(c.FanOutInstanceID); err != nil {
 			return fmt.Errorf("fan_out_instance_id must be a canonical six-part literal entity ID: %w", err)
 		}
+		// Must ALSO match the FanOut workflow's registered pattern. Lifecycle
+		// Create now refuses an out-of-pattern ID (gh#814), and this component
+		// warns-and-continues on a failed create — so without this check an
+		// operator ID outside the pattern silently costs the deployment its
+		// FanOut instance lifecycle: no operator-visible instance, and a Get
+		// failure logged on every completion. Fail at boot with a stable
+		// message instead.
+		matched, err := semtypes.MatchEntityIDPattern(FanOutEntityIDPattern, c.FanOutInstanceID)
+		if err != nil {
+			return fmt.Errorf("fan_out_instance_id %q could not be matched against %q: %w",
+				c.FanOutInstanceID, FanOutEntityIDPattern, err)
+		}
+		if !matched {
+			return fmt.Errorf("fan_out_instance_id %q does not match the FanOut workflow pattern %q — "+
+				"the lifecycle instance would be refused at create and the deployment would lose FanOut instance tracking",
+				c.FanOutInstanceID, FanOutEntityIDPattern)
+		}
 	}
 	// The framework-owned FanOut instance lifecycle uses the framework FanOut
 	// Participant type, whose Workflow() is the default name. Owning an instance

@@ -29,6 +29,19 @@ type fakeEmitter struct {
 	// bucket — used to drive the DespawnWith partial-failure recovery path
 	// (transition committed, delete failed, entity terminal-but-present).
 	deleteErr error
+	// createDegraded makes create() report a COMMITTED-but-unreadable write:
+	// the mutation contract's Degraded shape. The bucket is still written, so
+	// the state genuinely exists — only the response carries no Entity.
+	createDegraded bool
+	// createResponseMutator rewrites the Entity on the create RESPONSE without
+	// touching what was stored, so a test can tell the causal response apart
+	// from a later Get of the same entity.
+	createResponseMutator func(*graph.EntityState)
+	// createLosesReply commits the write and then reports ErrAlreadyExists —
+	// the shape the emitter's own retry produces when the first reply is lost.
+	createLosesReply bool
+	// forceRevisionMismatch makes update() fail CAS regardless of revision.
+	forceRevisionMismatch bool
 }
 
 // update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
@@ -42,6 +55,9 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
 	currentRev := f.bucket.revOf(req.Entity.ID)
+	if f.forceRevisionMismatch && f.bucket.exists(req.Entity.ID) {
+		return nil, fmt.Errorf("%w: forced", errs.ErrRevisionMismatch)
+	}
 	if !f.bucket.exists(req.Entity.ID) {
 		// ADR-060: production update() returns (nil, <error wrapping ErrEntityNotFound>).
 		return nil, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
@@ -95,9 +111,23 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state := *req.Entity
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
+	if f.createLosesReply {
+		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
+	}
+	if f.createDegraded {
+		return &graph.CreateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{Degraded: true, DegradedReason: "read-back unavailable"},
+			TriplesAdded:     len(req.Triples),
+		}, nil
+	}
+	respState := state
+	if f.createResponseMutator != nil {
+		respState.Triples = append([]message.Triple(nil), state.Triples...)
+		f.createResponseMutator(&respState)
+	}
 	return &graph.CreateEntityWithTriplesResponse{
 		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
-		Entity:           &state,
+		Entity:           &respState,
 		TriplesAdded:     len(req.Triples),
 	}, nil
 }
@@ -621,7 +651,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=624 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=654 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -847,5 +877,299 @@ func TestManager_DespawnWith_PartialFailureRecoverableViaDespawn(t *testing.T) {
 	}
 	if bucket.exists(id) {
 		t.Errorf("entity should be reclaimed after recovery Despawn")
+	}
+}
+
+// TestCreate_RefusesEntityIDOutsideTheWorkflowPattern pins gh#814's first
+// blocking finding, measured against real NATS during review: an out-of-pattern
+// create COMMITS, returns success, is readable by Get — and is invisible to
+// List and Watch (both filter by the pattern) and unreclaimable by Despawn
+// (which refuses a non-matching ID). The surface reports a birth it cannot then
+// discover or remove.
+//
+// Owner-lease enforcement does not cover this: an out-of-pattern write is
+// UNCLAIMED rather than stale, so the lease check passes it through.
+func TestCreate_RefusesEntityIDOutsideTheWorkflowPattern(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	const outside = "evil.corp.other.system.type.pwned"
+	err := mgr.Create(ctx, &fixtureMission{ID: outside, PhaseF: "planning"})
+	if !errors.Is(err, ErrEntityIDPatternMismatch) {
+		t.Fatalf("Create out-of-pattern err = %v, want ErrEntityIDPatternMismatch", err)
+	}
+	if n := len(emitter.requests); n != 0 {
+		t.Errorf("emitter saw %d write requests — the refusal must land before any write", n)
+	}
+	if _, getErr := mgr.Get(ctx, "fixture", outside); !errors.Is(getErr, ErrEntityNotFound) {
+		t.Errorf("Get after refused create = %v, want ErrEntityNotFound — a refused create must leave nothing behind", getErr)
+	}
+}
+
+// TestCreate_AcceptsEntityIDInsideThePattern is the other direction: the gate
+// must not refuse a legitimate ID. Without this the previous test is satisfied
+// by a Create that refuses everything.
+func TestCreate_AcceptsEntityIDInsideThePattern(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	const inside = "c360.platform1.lifecycle.gcs.mission.ok"
+	if err := mgr.Create(ctx, &fixtureMission{ID: inside, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create in-pattern: %v", err)
+	}
+	if _, err := mgr.Get(ctx, "fixture", inside); err != nil {
+		t.Fatalf("Get after in-pattern create: %v", err)
+	}
+}
+
+// TestMustExistLanes_DoNotAutoVivify pins the no-auto-vivify contract at the
+// PRODUCTION seam. The gateway test that carried this claim exercised a
+// hand-written fake and could not observe the real Manager at all.
+//
+// MEASURED, and stated precisely because the obvious claim would be wrong:
+// disabling BOTH guards in Manager.UpdateFromOperator does NOT flip this test.
+// That is not a hole — the emit layer enforces must-exist independently
+// (graph-ingest's update handler, mirrored by the fake emitter), so the
+// invariant survives the Manager's guards being removed. Review reported the
+// surviving mutation as "nothing guards the invariant"; the sharper reading is
+// that the Manager's checks are a second line that buys a clearer error, and the
+// contract itself is held one layer down.
+//
+// So this test deliberately pins the OBSERVABLE contract — an absent entity
+// yields ErrEntityNotFound and nothing is created — rather than any one layer's
+// check. Verified falsifiable: relaxing the Manager guards AND the emit layer's
+// must-exist arm together does flip the state-patch subtest.
+//
+// Two scope caveats, because the reasoning above is narrower than it looks. The
+// layer that holds it here is the FAKE emitter, which is documented to mirror
+// graph-ingest's handler — the claim generalizes only as far as that mirror
+// holds. And the TRANSITION subtest is not covered by this reasoning at all:
+// TransitionWith carries its own independent guards, so it survives both
+// relaxations for a different reason.
+func TestMustExistLanes_DoNotAutoVivify(t *testing.T) {
+	ctx := context.Background()
+	const ghost = "c360.platform1.lifecycle.gcs.mission.ghost"
+
+	t.Run("state patch", func(t *testing.T) {
+		mgr, _, _ := newTestManager(t)
+		err := mgr.UpdateFromOperator(ctx, "fixture", ghost, map[string]any{"owner_org_id": "acme"})
+		if !errors.Is(err, ErrEntityNotFound) {
+			t.Fatalf("UpdateFromOperator on an absent entity = %v, want ErrEntityNotFound", err)
+		}
+		if _, getErr := mgr.Get(ctx, "fixture", ghost); !errors.Is(getErr, ErrEntityNotFound) {
+			t.Error("the patch created the instance — only the create lane may")
+		}
+	})
+
+	t.Run("transition", func(t *testing.T) {
+		mgr, _, _ := newTestManager(t)
+		err := mgr.Transition(ctx, "fixture", ghost, "flying", TransitionSourceOperator, "")
+		if !errors.Is(err, ErrEntityNotFound) {
+			t.Fatalf("Transition on an absent entity = %v, want ErrEntityNotFound", err)
+		}
+		if _, getErr := mgr.Get(ctx, "fixture", ghost); !errors.Is(getErr, ErrEntityNotFound) {
+			t.Error("the transition created the instance — only the create lane may")
+		}
+	})
+}
+
+// TestRegister_RejectsSchemaThatIsNotAParticipant closes an unchecked assertion
+// that panics on the FIRST request to the create lane. Every projection path
+// does reflect.New(Schema).(Participant); the read paths reach it only for an
+// entity that already exists, so on a fresh volume they return not-found first.
+// The create lane reaches it with no precondition at all.
+func TestRegister_RejectsSchemaThatIsNotAParticipant(t *testing.T) {
+	mgr := newManagerForTest(nil, &fakeEmitter{bucket: newFakeBucket()}, newFakeBucket())
+	wf := lifecycle{}.fixtureWorkflow()
+	wf.Name = "notparticipant"
+	wf.Schema = reflect.TypeOf(notAParticipant{})
+
+	err := mgr.Register(wf)
+	if err == nil {
+		t.Fatal("Register accepted a Schema that does not implement Participant — the assertion panics at first request instead")
+	}
+	if !errors.Is(err, ErrInvalidWorkflow) {
+		t.Errorf("err = %v, want ErrInvalidWorkflow", err)
+	}
+}
+
+// notAParticipant has the lifecycle tags parseSchemaType requires but no
+// Participant methods — the exact shape Register previously accepted.
+type notAParticipant struct {
+	ID     string `json:"entity_id" lifecycle:"id"`
+	PhaseF string `json:"phase" lifecycle:"phase,predicate=mission.lifecycle.phase"`
+}
+
+// TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead pins the remedy
+// for the "a committed birth can report as 500" blocker.
+//
+// The distinguishing fixture matters: the create RESPONSE carries a value the
+// stored entity does not, so a post-hoc Get cannot produce it. Without this, the
+// causal projection and the read it replaced are indistinguishable — review
+// mutation-proved exactly that by swapping the projection back to a Get and
+// keeping the whole suite green.
+func TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	emitter.createResponseMutator = func(e *graph.EntityState) {
+		for i := range e.Triples {
+			if e.Triples[i].Predicate == "mission.identity.owner-org-id" {
+				e.Triples[i].Object = "from-the-causal-response"
+			}
+		}
+	}
+
+	const id = "c360.platform1.lifecycle.gcs.mission.causal"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning","owner_org_id":"from-the-request"}`))
+	if err != nil {
+		t.Fatalf("CreateFromOperator: %v", err)
+	}
+	if result.Degraded {
+		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
+	}
+	got := result.Instance.(*fixtureMission).OwnerOrgID
+	if got != "from-the-causal-response" {
+		t.Errorf("OwnerOrgID = %q, want %q — the result must be projected from the mutation response for THIS request, not from a later read",
+			got, "from-the-causal-response")
+	}
+}
+
+// TestCreateFromOperator_DegradedCommitIsSuccess pins the other half: a write
+// that committed durably but could not be read back is a SUCCESS with a signal.
+// Reporting it as an error makes the operator retry a birth that already
+// happened, and the mutation contract forbids that retry.
+func TestCreateFromOperator_DegradedCommitIsSuccess(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+	emitter.createDegraded = true
+
+	const id = "c360.platform1.lifecycle.gcs.mission.degraded"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if err != nil {
+		t.Fatalf("a degraded commit must not be an error: %v", err)
+	}
+	if !result.Degraded {
+		t.Fatal("degraded commit was not signalled — the caller cannot tell it from a fully-read-back create")
+	}
+	if result.DegradedReason == "" {
+		t.Error("degraded commit carries no reason — an operator has nothing to act on")
+	}
+	if result.Instance != nil {
+		t.Error("degraded commit returned an Instance; there was nothing projectable")
+	}
+	// The write really did land — that is what makes retrying wrong.
+	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
+		t.Errorf("degraded create did not commit: %v", getErr)
+	}
+}
+
+// TestCreateFromOperator_UsesTheRouteSelectedRegistration pins that the write
+// happens against the registration the CALLER chose, not one re-derived from
+// the Participant's own constant.
+//
+// The two selectors genuinely diverge, because Register deliberately permits
+// Name != Participant.Workflow() so a partial migration's cross-owner overlap
+// does not brick. Re-deriving let a request routed as one workflow write with
+// another's pattern, transitions, owner token, and audit predicates — and, with
+// only the alias registered, fail a valid advertised route with a false
+// not-found. That second case is what this test drives.
+func TestCreateFromOperator_UsesTheRouteSelectedRegistration(t *testing.T) {
+	ctx := context.Background()
+	// One shared bucket: the emitter writes to it and the manager reads from it.
+	bucket := newFakeBucket()
+	mgr := newManagerForTest(nil, &fakeEmitter{bucket: bucket}, bucket)
+
+	// Register ONLY the alias. fixtureMission.Workflow() returns "fixture",
+	// which is deliberately not registered here.
+	alias := lifecycle{}.fixtureWorkflow()
+	alias.Name = "fixture-alias"
+	if err := mgr.Register(alias); err != nil {
+		t.Fatalf("Register alias: %v", err)
+	}
+
+	const id = "c360.platform1.lifecycle.gcs.mission.aliased"
+	result, err := mgr.CreateFromOperator(ctx, "fixture-alias",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if err != nil {
+		t.Fatalf("create against the alias route: %v — the route's registration was discarded and re-looked-up by the Participant's own constant", err)
+	}
+	if result.Degraded {
+		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
+	}
+	if _, getErr := mgr.Get(ctx, "fixture-alias", id); getErr != nil {
+		t.Errorf("instance not readable under the route's workflow: %v", getErr)
+	}
+}
+
+// TestCreateFromOperator_RejectsUnknownFields pins the fail-closed decode. A
+// permissive decode accepts keys the workflow cannot persist, drops them, and
+// still answers 201 — losing an operator's submitted state behind a success.
+func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"c360.platform1.lifecycle.gcs.mission.unk","phase":"planning","not_a_field":"dropped"}`))
+	if !errors.Is(err, ErrInvalidInitialState) {
+		t.Fatalf("err = %v, want ErrInvalidInitialState — an unpersistable key must not be silently dropped behind a 201", err)
+	}
+}
+
+// TestCreate_LostReplyIsNotReportedAsADuplicate pins the correction to the
+// lost-reply path: the emitter retries, so an ErrAlreadyExists may be THIS
+// request's own committed write whose reply was lost. Reporting a conflict for
+// a birth this request just made is a wrong answer on a public surface.
+func TestCreate_LostReplyIsNotReportedAsADuplicate(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	// Commit, then report the failure the lost reply would produce.
+	emitter.createLosesReply = true
+
+	const id = "c360.platform1.lifecycle.gcs.mission.lostreply"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if errors.Is(err, ErrAlreadyExists) {
+		t.Fatal("a lost reply for this request's own committed write was reported as a duplicate")
+	}
+	if err != nil {
+		t.Fatalf("CreateFromOperator: %v", err)
+	}
+	if !result.Degraded {
+		t.Error("a recovered lost-reply commit should report as degraded so the caller knows the read-back did not happen")
+	}
+	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
+		t.Errorf("the write did not actually commit: %v", getErr)
+	}
+}
+
+// TestCreate_UnrelatedConcurrentUpdateIsNotADuplicateBirth pins the attach-path
+// correction: a CAS revision mismatch means something changed the entity, not
+// that a lifecycle birth happened. Any writer merging an unrelated predicate
+// produces one, and "already lifecycle-managed" would be a false answer.
+func TestCreate_UnrelatedConcurrentUpdateIsNotADuplicateBirth(t *testing.T) {
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+
+	// Entity exists with a NON-lifecycle triple, and the CAS will miss.
+	const id = "c360.platform1.lifecycle.gcs.mission.contended"
+	bucket.put(id, &graph.EntityState{
+		ID:      id,
+		Version: 1,
+		// Canonical predicate, unrelated to this workflow's lifecycle: the
+		// point is an entity that moved for a reason that is not a birth.
+		Triples: []message.Triple{{Subject: id, Predicate: "mission.identity.owner-org-id", Object: "acme"}},
+	})
+	emitter.forceRevisionMismatch = true
+
+	err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"})
+	if errors.Is(err, ErrAlreadyExists) {
+		t.Fatal("an unrelated concurrent update was reported as a duplicate lifecycle birth")
+	}
+	if !errors.Is(err, ErrUpdateRetriesExhausted) {
+		t.Errorf("err = %v, want a retryable contention error", err)
 	}
 }
