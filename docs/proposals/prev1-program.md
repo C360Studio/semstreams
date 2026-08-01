@@ -17,6 +17,15 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > #685 (draft) · in-flight changes **2** · open issues **147** · `-race ./...` **135 ok / 0 FAIL** ·
 > `task lint` 0 · zero schema drift.
 >
+> **CORRECTION, measured 2026-08-01T21:39Z at session-25 resume — the line above was written
+> three minutes stale.** **#846 MERGED at 21:33Z as `d07d4174`** (gh#741: objectstore raw-path
+> writes key from the decoded envelope, sub-second entropy closes the same-second collision), so
+> the count is **12 PRs merged today** and `origin/main` is one commit ahead of this branch.
+> **gh#741 itself is still OPEN** — correct under the CONFIRM-CLOSE gate, not an oversight — and
+> **gh#848 was filed against it**: the shipped `protocol-flow` raw storage lane has no e2e stage,
+> so the fix is validated only by a hand-built integration slice. The Small-bug-track line below
+> still lists #741 as pending work; it is code-complete on main, awaiting close plus #848.
+>
 > **NEXT: the gh#810 rework, fresh session.** Read
 > `openspec/changes/discovery-under-stream-shapes/tasks.md` FIRST — its banner and task 0.2 carry
 > Fable's six binding constraints. **Do not start from PR #847's code without reading why it was
