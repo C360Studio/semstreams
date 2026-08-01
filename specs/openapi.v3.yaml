@@ -999,7 +999,7 @@ paths:
                     description: Method not allowed (GET or POST only)
         post:
             summary: Create a workflow instance
-            description: 'Creates a new instance of the registered workflow from an operator-supplied initial state, via the ownership-aware lifecycle Manager. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow''s registered state struct, and must include the entity ID and an initial phase declared in the workflow''s transitions table. Responds 201 with the authoritative committed state read back through the Manager, not the submitted body echoed.'
+            description: 'Creates a new instance of the registered workflow from an operator-supplied initial state, via the ownership-aware lifecycle Manager. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow''s registered state struct, and must include the entity ID and an initial phase declared in the workflow''s transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. A degraded commit (write landed durably, read-back could not complete) also responds 201, carrying `degraded` and `degraded_reason` instead of the instance — it is a success and must not be retried.'
             tags:
                 - Lifecycle
             parameters:
@@ -1023,11 +1023,11 @@ paths:
                             schema:
                                 type: object
                 "400":
-                    description: Malformed initial state, workflow mismatch, missing entity ID, or an initial phase not declared in the transitions table
+                    description: Malformed initial state, missing entity ID, an entity ID outside the workflow's declared pattern, or an initial phase not declared in the transitions table
                 "404":
                     description: Workflow type not registered
                 "409":
-                    description: An instance with that entity ID is already lifecycle-managed
+                    description: An instance with that entity ID is already lifecycle-managed, or this process's ownership was superseded by another incarnation
                 "413":
                     description: Body exceeds max_body_bytes
     /workflows/{type}/{id}:

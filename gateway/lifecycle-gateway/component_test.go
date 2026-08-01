@@ -195,35 +195,32 @@ func (m *fakeManager) References(_ context.Context, _ string) ([]lifecycle.Refer
 // decode into the workflow's shape, refuse a body naming a different
 // workflow than the route, refuse a missing entity ID, 409-equivalent on a
 // duplicate, and return the STORED state rather than the submitted body.
-func (m *fakeManager) CreateFromOperator(_ context.Context, workflow string, initial json.RawMessage) (lifecycle.Participant, error) {
+func (m *fakeManager) CreateFromOperator(_ context.Context, workflow string, initial json.RawMessage) (lifecycle.CreateResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.createCalls++
 	if m.createErr != nil {
-		return nil, m.createErr
+		return lifecycle.CreateResult{}, m.createErr
 	}
 	if len(initial) == 0 {
-		return nil, fmt.Errorf("%w: empty body", lifecycle.ErrInvalidInitialState)
+		return lifecycle.CreateResult{}, fmt.Errorf("%w: empty body", lifecycle.ErrInvalidInitialState)
 	}
 	var p fakeParticipant
 	if err := json.Unmarshal(initial, &p); err != nil {
-		return nil, fmt.Errorf("%w: %s", lifecycle.ErrInvalidInitialState, err.Error())
-	}
-	if p.WorkflowF != workflow {
-		return nil, fmt.Errorf("%w: body workflow %q != route %q", lifecycle.ErrInvalidInitialState, p.WorkflowF, workflow)
+		return lifecycle.CreateResult{}, fmt.Errorf("%w: %s", lifecycle.ErrInvalidInitialState, err.Error())
 	}
 	if p.EntityIDF == "" {
-		return nil, fmt.Errorf("%w: no entity id", lifecycle.ErrInvalidInitialState)
+		return lifecycle.CreateResult{}, fmt.Errorf("%w: no entity id", lifecycle.ErrInvalidInitialState)
 	}
 	if m.entities[workflow] == nil {
 		m.entities[workflow] = make(map[string]*fakeParticipant)
 	}
 	if _, exists := m.entities[workflow][p.EntityIDF]; exists {
-		return nil, fmt.Errorf("%w: %s", lifecycle.ErrAlreadyExists, p.EntityIDF)
+		return lifecycle.CreateResult{}, fmt.Errorf("%w: %s", lifecycle.ErrAlreadyExists, p.EntityIDF)
 	}
 	stored := p
 	m.entities[workflow][p.EntityIDF] = &stored
-	return &stored, nil
+	return lifecycle.CreateResult{Instance: &stored}, nil
 }
 
 func (m *fakeManager) UpdateFromOperator(_ context.Context, workflow, entityID string, patch map[string]any) error {
@@ -1098,7 +1095,7 @@ func mustDecodeJSON(t *testing.T, r *http.Response, into any) {
 
 // TestCreateInstance_BirthLane is gh#814's acceptance path at the gateway
 // boundary: an external client creates the first instance on a fresh store,
-// then reads and transitions it.
+// then reads it back.
 //
 // Before this route existed the surface exposed list/get/history/children,
 // operator state patch, and transition — every operation EXCEPT the one that
@@ -1194,9 +1191,14 @@ func TestCreateInstance_IsCreateOrFail(t *testing.T) {
 }
 
 // TestCreateInstance_RejectsMalformedInitialState covers the 400 arm: a body
-// that cannot become a valid Participant for the routed workflow. Each case is
-// a distinct way an operator gets it wrong, and all of them must be 400 rather
-// than a 500 that reads as a server fault.
+// that cannot become a valid Participant for the routed workflow.
+//
+// A "workflow mismatch with the route" case lived here and was REMOVED with the
+// guard it exercised. The guard could never fire in production — the target type
+// is chosen by the route, and every production Participant returns Workflow()
+// from a package constant — so the case passed only because this file's fake
+// gives fakeParticipant a JSON-decodable workflow field. It tested the fake. The
+// wiring invariant it was reaching for is now enforced once, at Register.
 func TestCreateInstance_RejectsMalformedInitialState(t *testing.T) {
 	cases := []struct {
 		name string
@@ -1204,7 +1206,6 @@ func TestCreateInstance_RejectsMalformedInitialState(t *testing.T) {
 	}{
 		{"empty body", ``},
 		{"not JSON", `{`},
-		{"workflow mismatch with the route", `{"entity_id":"acme.ops.gcs.mission.instance.x","workflow":"other","phase":"planned"}`},
 		{"no entity id", `{"workflow":"mission","phase":"planned"}`},
 	}
 	for _, tc := range cases {

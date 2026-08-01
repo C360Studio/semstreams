@@ -261,8 +261,10 @@ func TestIntegration_CreateFromOperator_BirthLane(t *testing.T) {
 	const id = "c360.platform1.lifecycle.gcs.mission.int-create"
 	initial := []byte(`{"entity_id":"` + id + `","phase":"planning","owner_org_id":"acme"}`)
 
-	created, err := mgr.CreateFromOperator(ctx, "fixture", initial)
+	result, err := mgr.CreateFromOperator(ctx, "fixture", initial)
 	require.NoError(t, err, "create from an operator-supplied initial state")
+	require.False(t, result.Degraded, "unexpected degraded commit: %s", result.DegradedReason)
+	created := result.Instance
 	require.NotNil(t, created)
 	require.Equal(t, id, created.EntityID())
 	require.Equal(t, "planning", created.Phase())
@@ -273,6 +275,9 @@ func TestIntegration_CreateFromOperator_BirthLane(t *testing.T) {
 	// is what catches it.
 	require.Equal(t, "acme", created.(*fixtureMission).OwnerOrgID,
 		"initial-state envelope did not survive the create lane")
+
+	// The returned instance is projected from the CAUSAL mutation response, not
+	// from a later read — so it reflects what THIS request committed.
 
 	// Independently readable through the normal Get path.
 	got, err := mgr.Get(ctx, "fixture", id)
@@ -294,9 +299,17 @@ func TestIntegration_CreateFromOperator_BirthLane(t *testing.T) {
 	// simulated here.
 }
 
-// TestIntegration_CreateFromOperator_IsCreateOrFail proves the duplicate is
-// refused at the real CAS write rather than only at the gateway: no upsert
-// lane, and the refused second create must not have clobbered the first.
+// TestIntegration_CreateFromOperator_IsCreateOrFail proves a duplicate is
+// refused and does not clobber.
+//
+// SCOPE, corrected after review: this does NOT reach the CAS create-or-fail arm.
+// The first create Puts the entity, so the second create's pre-read finds it and
+// returns ErrAlreadyExists from the hasTriple check long before the emitter —
+// mutation-proved by review, which disabled the emitter's ErrAlreadyExists
+// classification and kept everything green. Reaching that arm needs a responder
+// returning a classified graph.ErrorCodeEntityExists, which this harness does
+// not have. What this test pins is the operator-visible contract: duplicate
+// refused, original intact.
 func TestIntegration_CreateFromOperator_IsCreateOrFail(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
 	ctx := context.Background()

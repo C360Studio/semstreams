@@ -849,3 +849,116 @@ func TestManager_DespawnWith_PartialFailureRecoverableViaDespawn(t *testing.T) {
 		t.Errorf("entity should be reclaimed after recovery Despawn")
 	}
 }
+
+// TestCreate_RefusesEntityIDOutsideTheWorkflowPattern pins gh#814's first
+// blocking finding, measured against real NATS during review: an out-of-pattern
+// create COMMITS, returns success, is readable by Get — and is invisible to
+// List and Watch (both filter by the pattern) and unreclaimable by Despawn
+// (which refuses a non-matching ID). The surface reports a birth it cannot then
+// discover or remove.
+//
+// Owner-lease enforcement does not cover this: an out-of-pattern write is
+// UNCLAIMED rather than stale, so the lease check passes it through.
+func TestCreate_RefusesEntityIDOutsideTheWorkflowPattern(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	const outside = "evil.corp.other.system.type.pwned"
+	err := mgr.Create(ctx, &fixtureMission{ID: outside, PhaseF: "planning"})
+	if !errors.Is(err, ErrEntityIDPatternMismatch) {
+		t.Fatalf("Create out-of-pattern err = %v, want ErrEntityIDPatternMismatch", err)
+	}
+	if n := len(emitter.requests); n != 0 {
+		t.Errorf("emitter saw %d write requests — the refusal must land before any write", n)
+	}
+	if _, getErr := mgr.Get(ctx, "fixture", outside); !errors.Is(getErr, ErrEntityNotFound) {
+		t.Errorf("Get after refused create = %v, want ErrEntityNotFound — a refused create must leave nothing behind", getErr)
+	}
+}
+
+// TestCreate_AcceptsEntityIDInsideThePattern is the other direction: the gate
+// must not refuse a legitimate ID. Without this the previous test is satisfied
+// by a Create that refuses everything.
+func TestCreate_AcceptsEntityIDInsideThePattern(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	const inside = "c360.platform1.lifecycle.gcs.mission.ok"
+	if err := mgr.Create(ctx, &fixtureMission{ID: inside, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create in-pattern: %v", err)
+	}
+	if _, err := mgr.Get(ctx, "fixture", inside); err != nil {
+		t.Fatalf("Get after in-pattern create: %v", err)
+	}
+}
+
+// TestMustExistLanes_DoNotAutoVivify pins the no-auto-vivify contract at the
+// PRODUCTION seam. The gateway test that carried this claim exercised a
+// hand-written fake and could not observe the real Manager at all.
+//
+// MEASURED, and stated precisely because the obvious claim would be wrong:
+// disabling BOTH guards in Manager.UpdateFromOperator does NOT flip this test.
+// That is not a hole — the emit layer enforces must-exist independently
+// (graph-ingest's update handler, mirrored by the fake emitter), so the
+// invariant survives the Manager's guards being removed. Review reported the
+// surviving mutation as "nothing guards the invariant"; the sharper reading is
+// that the Manager's checks are a second line that buys a clearer error, and the
+// contract itself is held one layer down.
+//
+// So this test deliberately pins the OBSERVABLE contract — an absent entity
+// yields ErrEntityNotFound and nothing is created — rather than any one layer's
+// check. It fails if the invariant is ever lost at BOTH layers, which is the
+// only way it can actually be lost.
+func TestMustExistLanes_DoNotAutoVivify(t *testing.T) {
+	ctx := context.Background()
+	const ghost = "c360.platform1.lifecycle.gcs.mission.ghost"
+
+	t.Run("state patch", func(t *testing.T) {
+		mgr, _, _ := newTestManager(t)
+		err := mgr.UpdateFromOperator(ctx, "fixture", ghost, map[string]any{"owner_org_id": "acme"})
+		if !errors.Is(err, ErrEntityNotFound) {
+			t.Fatalf("UpdateFromOperator on an absent entity = %v, want ErrEntityNotFound", err)
+		}
+		if _, getErr := mgr.Get(ctx, "fixture", ghost); !errors.Is(getErr, ErrEntityNotFound) {
+			t.Error("the patch created the instance — only the create lane may")
+		}
+	})
+
+	t.Run("transition", func(t *testing.T) {
+		mgr, _, _ := newTestManager(t)
+		err := mgr.Transition(ctx, "fixture", ghost, "flying", TransitionSourceOperator, "")
+		if !errors.Is(err, ErrEntityNotFound) {
+			t.Fatalf("Transition on an absent entity = %v, want ErrEntityNotFound", err)
+		}
+		if _, getErr := mgr.Get(ctx, "fixture", ghost); !errors.Is(getErr, ErrEntityNotFound) {
+			t.Error("the transition created the instance — only the create lane may")
+		}
+	})
+}
+
+// TestRegister_RejectsSchemaThatIsNotAParticipant closes an unchecked assertion
+// that panics on the FIRST request to the create lane. Every projection path
+// does reflect.New(Schema).(Participant); the read paths reach it only for an
+// entity that already exists, so on a fresh volume they return not-found first.
+// The create lane reaches it with no precondition at all.
+func TestRegister_RejectsSchemaThatIsNotAParticipant(t *testing.T) {
+	mgr := newManagerForTest(nil, &fakeEmitter{bucket: newFakeBucket()}, newFakeBucket())
+	wf := lifecycle{}.fixtureWorkflow()
+	wf.Name = "notparticipant"
+	wf.Schema = reflect.TypeOf(notAParticipant{})
+
+	err := mgr.Register(wf)
+	if err == nil {
+		t.Fatal("Register accepted a Schema that does not implement Participant — the assertion panics at first request instead")
+	}
+	if !errors.Is(err, ErrInvalidWorkflow) {
+		t.Errorf("err = %v, want ErrInvalidWorkflow", err)
+	}
+}
+
+// notAParticipant has the lifecycle tags parseSchemaType requires but no
+// Participant methods — the exact shape Register previously accepted.
+type notAParticipant struct {
+	ID     string `json:"entity_id" lifecycle:"id"`
+	PhaseF string `json:"phase" lifecycle:"phase,predicate=mission.lifecycle.phase"`
+}

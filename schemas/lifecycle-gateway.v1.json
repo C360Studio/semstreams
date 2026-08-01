@@ -18,11 +18,6 @@
       "description": "Enable WebSocket streaming on GET {prefix}/{type}?stream=true via Manager.Watch. Default true when omitted. Set to false to disable live-update streaming and keep the gateway poll-only.",
       "category": "basic"
     },
-    "max_body_bytes": {
-      "type": "integer",
-      "description": "Maximum bytes accepted in POST .../state and POST .../transition request bodies. Default 1048576 (1 MiB). Zero or negative means use default.",
-      "category": "advanced"
-    },
     "path_prefix": {
       "type": "string",
       "description": "URL path prefix mounted under the parent component prefix (e.g. \"workflows\" → /lifecycle-gateway/workflows). Default \"workflows\". Must be non-empty after stripping leading/trailing slashes.",

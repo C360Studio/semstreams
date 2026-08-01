@@ -194,6 +194,34 @@ func (m *Manager) Register(workflow Workflow) error {
 	if err != nil {
 		return err
 	}
+	// Every projection path allocates from Schema and converts to Participant
+	// with an UNCHECKED assertion. Validating conformance here turns a
+	// misconfiguration into a boot failure instead of a panic on whichever
+	// request reaches a projection first.
+	//
+	// Reachability is why this is validated rather than trusted: the read paths
+	// reach the conversion only for an entity that already exists, so on a fresh
+	// deployment they return not-found long before it — while the operator
+	// create lane reaches it with no precondition beyond a registered workflow
+	// and a non-empty body. That lane also removed the compile-time backstop:
+	// an app whose only creator is the HTTP route never writes a compile-checked
+	// mgr.Create(ctx, &T{}).
+	probe, ok := reflect.New(meta.GoType).Interface().(Participant)
+	if !ok {
+		return fmt.Errorf("%w: workflow %q Schema %s does not implement Participant on its pointer",
+			ErrInvalidWorkflow, workflow.Name, meta.GoType)
+	}
+	// NOT checked here, deliberately: that workflow.Name equals the type's own
+	// Workflow(). Review suggested it as the correct home for the withdrawn
+	// request-body guard, and the invariant is real — but enforcing it converts
+	// a DOCUMENTED runtime posture into a boot failure. Registering one schema
+	// under a second name is how a partial migration presents a cross-owner
+	// overlap, and the Manager is deliberately observe-only there so a partial
+	// migration does not brick (ADR-056 Decision 5; pinned by
+	// TestIntegration_ManagerOwnership_FirstConsumerEndToEnd). Changing that is
+	// a policy decision with its own blast radius — mid-migration deployments
+	// would stop booting — not something to smuggle in as a review fix.
+	_ = probe
 	// Disjointness needs the parsed projection predicates, so it runs here
 	// rather than inside validate() (gh#234).
 	if err := workflow.validateDisjointness(meta); err != nil {
@@ -536,27 +564,67 @@ func (m *Manager) GetRaw(ctx context.Context, entityID string) (*graph.EntitySta
 // Stamps the initial phase + all non-zero projection-mapped fields
 // as triples in one atomic AddTriplesBatch via graph-ingest.
 func (m *Manager) Create(ctx context.Context, initial Participant) error {
+	_, err := m.createWithSource(ctx, initial, TransitionSourceFramework)
+	return err
+}
+
+// createOutcome carries what the CAUSAL mutation response said about this
+// request's write. Entity is the committed state as the mutation handler saw
+// it; it is nil only when Degraded is set.
+//
+// Degraded means the write COMMITTED DURABLY but the post-write read-back could
+// not be completed (graph.MutationResponse). It is a SUCCESS with a signal —
+// never an error, and explicitly never a retry: retrying a degraded commit
+// produces a duplicate-detection conflict for a birth that already happened.
+type createOutcome struct {
+	Entity         *graph.EntityState
+	Degraded       bool
+	DegradedReason string
+}
+
+// createWithSource is Create with the audit attribution supplied by the caller
+// that knows the provenance. History recovers the source from the audit triple
+// this writes, so a birth initiated through the operator API must not record
+// itself as framework-authored — that is a false answer in the audit trail of
+// the highest-privilege operation the operator surface exposes.
+//
+// Unexported deliberately: CreateFromOperator is its only non-framework caller,
+// and a new exported symbol needs a named caller at birth. Export it when a
+// second provenance actually exists.
+func (m *Manager) createWithSource(ctx context.Context, initial Participant, source TransitionSource) (createOutcome, error) {
 	if initial == nil {
-		return errors.New("lifecycle: Create requires non-nil Participant")
+		return createOutcome{}, errors.New("lifecycle: Create requires non-nil Participant")
 	}
 	reg, err := m.lookupByWorkflow(initial.Workflow())
 	if err != nil {
-		return err
+		return createOutcome{}, err
 	}
 	// ADR-056 PR-4: refuse the write if this owner was superseded by another
 	// process (WatchRevival quiesce) — we are the stale writer, do not clobber.
 	if err := m.checkQuiesced(reg.workflow.Name); err != nil {
-		return err
+		return createOutcome{}, err
 	}
 	entityID := initial.EntityID()
 	if entityID == "" {
-		return errors.New("lifecycle: Create requires non-empty EntityID")
+		return createOutcome{}, errors.New("lifecycle: Create requires non-empty EntityID")
+	}
+	// An entity ID outside the workflow's declared pattern would COMMIT and then
+	// be undiscoverable: List and Watch filter by this pattern, and Despawn
+	// refuses to reclaim a non-matching ID — so the instance is readable only by
+	// a direct Get that already knows the ID, and can never be removed. Refused
+	// before any KV access, and refused for every caller rather than only the
+	// operator lane: an unreclaimable orphan is not better because app code made
+	// it. (Owner-lease enforcement does not cover this — an out-of-pattern write
+	// is UNCLAIMED, not stale, so the lease check passes it through.)
+	if !matchPattern(reg.workflow.EntityIDPattern, entityID) {
+		return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q",
+			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern)
 	}
 	// Validate the initial Phase is declared in the transitions
 	// table — typo at Create time is friendlier than typo discovered
 	// at first Transition attempt.
 	if _, declared := reg.workflow.Transitions[initial.Phase()]; !declared {
-		return fmt.Errorf("%w: initial phase %q not declared in transitions table for workflow %q",
+		return createOutcome{}, fmt.Errorf("%w: initial phase %q not declared in transitions table for workflow %q",
 			ErrInvalidTransition, initial.Phase(), reg.workflow.Name)
 	}
 
@@ -578,7 +646,7 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	state, rev, err := m.getEntity(ctx, entityID)
 	switch {
 	case errors.Is(err, ErrEntityNotFound):
-		delta := buildInitialTriples(reg, entityID, initial, now)
+		delta := buildInitialTriples(reg, entityID, initial, now, source)
 		createReq := &graph.CreateEntityWithTriplesRequest{
 			Entity: &graph.EntityState{
 				ID:          entityID,
@@ -589,23 +657,24 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 			Triples:    delta,
 			OwnerToken: ownerTok,
 		}
-		if _, err := m.emitter.create(ctx, createReq); err != nil {
+		resp, err := m.emitter.create(ctx, createReq)
+		if err != nil {
 			if errors.Is(err, ErrAlreadyExists) {
-				return fmt.Errorf("%w: workflow=%q entity_id=%q",
+				return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q",
 					ErrAlreadyExists, reg.workflow.Name, entityID)
 			}
-			return err
+			return createOutcome{}, err
 		}
-		return nil
+		return outcomeFromCreate(resp), nil
 	case err != nil:
-		return err
+		return createOutcome{}, err
 	}
 	// Entity exists — must not already have phase triple.
 	if hasTriple(state.Triples, entityID, reg.workflow.PhasePredicate) {
-		return fmt.Errorf("%w: workflow=%q entity_id=%q",
+		return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q",
 			ErrAlreadyExists, reg.workflow.Name, entityID)
 	}
-	delta := buildInitialTriples(reg, entityID, initial, now)
+	delta := buildInitialTriples(reg, entityID, initial, now, source)
 	updateReq := &graph.UpdateEntityWithTriplesRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
@@ -617,33 +686,52 @@ func (m *Manager) Create(ctx context.Context, initial Participant) error {
 		ExpectedRevision: rev,
 		OwnerToken:       ownerTok,
 	}
-	if _, err := m.emitter.update(ctx, updateReq); err != nil {
+	updateResp, err := m.emitter.update(ctx, updateReq)
+	if err != nil {
 		if errors.Is(err, errs.ErrRevisionMismatch) {
 			// Concurrent attach from a sibling — surface as
 			// ErrAlreadyExists since the most likely cause is
 			// a parallel lifecycle attach.
-			return fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
+			return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
 				ErrAlreadyExists, reg.workflow.Name, entityID)
 		}
-		return err
+		return createOutcome{}, err
 	}
-	return nil
+	return outcomeFromUpdate(updateResp), nil
+}
+
+// outcomeFromCreate / outcomeFromUpdate project the causal mutation response
+// onto the outcome the caller needs. A nil response is treated as degraded
+// rather than as failure: the emit returned no error, so the write committed —
+// the only thing missing is the read-back, which is exactly what Degraded means.
+func outcomeFromCreate(resp *graph.CreateEntityWithTriplesResponse) createOutcome {
+	if resp == nil {
+		return createOutcome{Degraded: true, DegradedReason: "mutation response was empty"}
+	}
+	return createOutcome{Entity: resp.Entity, Degraded: resp.Degraded || resp.Entity == nil, DegradedReason: resp.DegradedReason}
+}
+
+func outcomeFromUpdate(resp *graph.UpdateEntityWithTriplesResponse) createOutcome {
+	if resp == nil {
+		return createOutcome{Degraded: true, DegradedReason: "mutation response was empty"}
+	}
+	return createOutcome{Entity: resp.Entity, Degraded: resp.Degraded || resp.Entity == nil, DegradedReason: resp.DegradedReason}
 }
 
 // buildInitialTriples constructs the triple slice for Manager.Create:
-// phase + audit (source=framework, at=now, note="created") + non-zero
+// phase + audit (source supplied by the caller, at=now, note="created") + non-zero
 // projection fields.
 //
 // AuditPredicates.From is deliberately NOT stamped here — initial
 // creation has no prior phase. History reconstruction handles the
 // absent-From case by falling back to previousPhase="" for the first
 // revision (see Manager.History at manager_query.go:209).
-func buildInitialTriples(reg *registration, entityID string, initial Participant, now time.Time) []message.Triple {
+func buildInitialTriples(reg *registration, entityID string, initial Participant, now time.Time, source TransitionSource) []message.Triple {
 	delta := []message.Triple{
 		triple(entityID, reg.workflow.PhasePredicate, initial.Phase()),
 	}
 	if reg.workflow.AuditPredicates.Source != "" {
-		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Source, string(TransitionSourceFramework)))
+		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.Source, string(source)))
 	}
 	if reg.workflow.AuditPredicates.At != "" {
 		delta = append(delta, triple(entityID, reg.workflow.AuditPredicates.At, now.Format(time.RFC3339Nano)))
@@ -1088,6 +1176,18 @@ func (m *Manager) DespawnWith(ctx context.Context, workflow, entityID string, so
 	return m.Despawn(ctx, workflow, entityID)
 }
 
+// CreateResult is what an operator-initiated create committed. Instance is the
+// projection of the causal mutation response, and is nil ONLY when Degraded is
+// set — a degraded commit has committed state but nothing projectable.
+//
+// Callers render Degraded as success-with-a-signal. Reporting it as a failure
+// invites a retry the mutation contract forbids.
+type CreateResult struct {
+	Instance       Participant
+	Degraded       bool
+	DegradedReason string
+}
+
 // CreateFromOperator decodes an operator-supplied initial state into the
 // workflow's registered Schema and creates the instance, returning the
 // authoritative committed state (gh#814).
@@ -1111,45 +1211,61 @@ func (m *Manager) DespawnWith(ctx context.Context, workflow, entityID string, so
 // "allocate then remember to Create" contract puts a half-built Participant in
 // a caller's hands. One call in, committed state out.
 //
-// The returned Participant is read back through Get, not echoed from the
-// input — so a caller renders what was committed (including any framework-
-// derived fields) rather than its own request body.
+// The returned state is projected from the CAUSAL mutation response, not from
+// a separate read issued afterwards. A post-hoc read answers a different
+// question: it can fail after a durable commit (turning a committed birth into
+// a 500) and it can observe another writer's later state.
 //
-// The decoded state's Workflow() must match the workflow argument. A body
-// claiming a different workflow than the route it arrived on is refused rather
-// than silently trusted, since the route is what an authorization layer will
-// have gated on.
-func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (Participant, error) {
+// It does NOT check the decoded state's Workflow() against the argument. That
+// guard existed briefly and was withdrawn: the target type is chosen BY the
+// route, and every production Participant returns Workflow() from a package
+// constant, so a request body cannot declare a workflow at all and the check
+// could never fire. It passed its own test only because the test double had a
+// JSON-decodable workflow field — it tested the double. The real route/body
+// binding is the entity-ID pattern gate inside Create, and the wiring invariant
+// it was reaching for is enforced once, at Register.
+//
+// A degraded commit (write landed, read-back could not complete) is reported as
+// SUCCESS via CreateResult.Degraded — never as an error, because the mutation
+// contract forbids retrying it.
+func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (CreateResult, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
-		return nil, err
+		return CreateResult{}, err
 	}
 	if len(initial) == 0 {
-		return nil, fmt.Errorf("%w: initial state is required to create a %q instance",
+		return CreateResult{}, fmt.Errorf("%w: initial state is required to create a %q instance",
 			ErrInvalidInitialState, workflow)
 	}
 
 	target := reflect.New(reg.meta.GoType).Interface().(Participant)
 	if err := json.Unmarshal(initial, target); err != nil {
-		return nil, fmt.Errorf("%w: decode initial state for workflow %q: %s",
+		return CreateResult{}, fmt.Errorf("%w: decode initial state for workflow %q: %s",
 			ErrInvalidInitialState, workflow, err.Error())
 	}
 
 	if got := target.Workflow(); got != workflow {
-		return nil, fmt.Errorf("%w: initial state declares workflow %q but was submitted to %q",
+		return CreateResult{}, fmt.Errorf("%w: initial state declares workflow %q but was submitted to %q",
 			ErrInvalidInitialState, got, workflow)
 	}
 	if target.EntityID() == "" {
-		return nil, fmt.Errorf("%w: initial state for workflow %q has no entity ID",
+		return CreateResult{}, fmt.Errorf("%w: initial state for workflow %q has no entity ID",
 			ErrInvalidInitialState, workflow)
 	}
 
-	if err := m.Create(ctx, target); err != nil {
-		return nil, err
+	outcome, err := m.createWithSource(ctx, target, TransitionSourceOperator)
+	if err != nil {
+		return CreateResult{}, err
+	}
+	if outcome.Degraded || outcome.Entity == nil {
+		return CreateResult{Degraded: true, DegradedReason: outcome.DegradedReason}, nil
 	}
 
-	// Authoritative read-back. Create emits triples and graph-ingest merges
-	// them; returning the projection of what actually landed is the only
-	// answer that stays true if the merge dropped or defaulted anything.
-	return m.Get(ctx, workflow, target.EntityID())
+	instance := reflect.New(reg.meta.GoType).Interface().(Participant)
+	if err := projectTriples(reg.meta, target.EntityID(), outcome.Entity.Triples, instance); err != nil {
+		// The write committed; only projecting it failed. Same class as a
+		// degraded read-back, so it reports the same way rather than as an error.
+		return CreateResult{Degraded: true, DegradedReason: "committed, but the response could not be projected: " + err.Error()}, nil
+	}
+	return CreateResult{Instance: instance}, nil
 }
