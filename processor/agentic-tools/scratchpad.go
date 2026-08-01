@@ -107,6 +107,7 @@ func (e *ScratchpadExecutor) ListTools() []agentic.ToolDefinition {
 			"or note edge cases you considered — content is recorded in the trajectory " +
 			"and graph but not interpreted by any rule or consumer. Call this BEFORE the strict " +
 			"commit tool when the task involves decomposition or multi-step planning.",
+		Effect: agentic.ToolEffectMutating,
 		Parameters: map[string]any{
 			"type":                 "object",
 			"required":             []string{"text"},

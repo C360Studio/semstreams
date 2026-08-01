@@ -44,6 +44,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "query_entity",
 			Description: "Query an entity from the knowledge graph by its ID. Returns the entity's properties, relationships, and metadata as JSON.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -58,6 +59,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "query_entities",
 			Description: "Query multiple entities from the knowledge graph by their IDs in a single batch operation. More efficient than multiple query_entity calls.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -73,6 +75,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "query_relationships",
 			Description: "Query relationships for an entity, optionally filtering by direction and type.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -96,6 +99,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "query_neighbors",
 			Description: "Query neighboring entities within N hops of a given entity.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -120,6 +124,7 @@ func (e *GraphQueryExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "query_by_type",
 			Description: "Query all entities of a specific type with optional limit.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

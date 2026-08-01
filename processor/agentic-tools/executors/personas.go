@@ -37,6 +37,7 @@ func (e *PersonaExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "create_persona",
 			Description: "Create a new persona (prompt fragment for an agent role). The persona stores static content; runtime-only parts (dynamic content, conditions) stay in the assembler.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -51,6 +52,7 @@ func (e *PersonaExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "update_persona",
 			Description: "Update an existing persona. Replaces the stored persona; use get_persona first if you want to preserve fields you aren't changing.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -65,6 +67,7 @@ func (e *PersonaExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "delete_persona",
 			Description: "Delete a persona by ID. Flows that referenced it will fall back to code-defined default fragments once the assembler integration ships.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -79,6 +82,7 @@ func (e *PersonaExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "list_personas",
 			Description: "List all personas with their IDs, categories, and roles. Use get_persona for full content.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -87,6 +91,7 @@ func (e *PersonaExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "get_persona",
 			Description: "Get the full definition of a specific persona by ID.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

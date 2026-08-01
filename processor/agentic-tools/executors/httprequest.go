@@ -112,6 +112,7 @@ func (e *HTTPRequestExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "http_request",
 			Description: "Fetch a URL and return its content. HTML is converted to readable text. Use for reading documentation, APIs, and web content.",
+			Effect:      agentic.ToolEffectExternal,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

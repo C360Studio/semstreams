@@ -106,6 +106,13 @@ func (r *ExecutorRegistry) RegisterExecutor(executor ToolExecutor) error {
 		if def.Name == "" {
 			return errs.WrapInvalid(fmt.Errorf("tool definition has empty Name"), "ExecutorRegistry", "RegisterExecutor", "validate def name")
 		}
+		// An unrecognized effect spelling is a boot-time failure, not a
+		// silent demotion to unknown: enum validation rejects unknown
+		// values explicitly rather than dropping them from a derived
+		// set. Empty stays legal — a producer need not classify itself.
+		if def.Effect != "" && !def.Effect.Known() {
+			return errs.WrapInvalid(fmt.Errorf("tool %q declares unknown effect %q", def.Name, def.Effect), "ExecutorRegistry", "RegisterExecutor", "validate def effect")
+		}
 		if _, exists := r.executors[def.Name]; exists {
 			return errs.WrapInvalid(fmt.Errorf("tool %q is already registered", def.Name), "ExecutorRegistry", "RegisterExecutor", "check duplicate")
 		}
@@ -157,6 +164,33 @@ func (r *ExecutorRegistry) ListTools() []agentic.ToolDefinition {
 				continue
 			}
 			seen[def.Name] = true
+			// Normalize the effect on the SERVED COPY (def is a value
+			// copy; the producing executor's own definition is
+			// untouched). This — not the RegisterExecutor check — is
+			// what makes "every framework-served definition carries a
+			// recognized effect" total, for two reasons:
+			//
+			//  1. This registry stores EXECUTORS, not definitions, and
+			//     re-invokes executor.ListTools() live on every
+			//     aggregation. What boot validated is not necessarily
+			//     what is served now.
+			//  2. RegisterTool(name, executor) never inspects a
+			//     ToolDefinition at all, so executors registered that
+			//     way never pass the RegisterExecutor check.
+			//
+			// Every framework consumer of tool definitions reads through
+			// this one choke point. Enumerated, because the enumeration
+			// IS the evidence for the guarantee:
+			//   - agentic-dispatch/component.go resolveDefaultTools
+			//   - agentic-loop/handlers.go discoverTools
+			//   - rule/actions.go resolveToolNames (publish_agent's
+			//     default_tools resolver)
+			//   - agentic-tools/component.go Component.ListTools (both
+			//     the local and shared branches)
+			// Deliberate non-consumer: agentic-detonator/canary.go calls
+			// its own executor's ListTools directly and feeds a canary
+			// model, never a registry or a discovery catalog.
+			def.Effect = def.Effect.Canonical()
 			tools = append(tools, def)
 		}
 	}

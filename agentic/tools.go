@@ -57,6 +57,131 @@ type ToolDefinition struct {
 	// loop-side contract-violation warnings when has_more arrives from
 	// a tool that didn't declare Paginated.
 	Paginated bool `json:"paginated,omitempty"`
+
+	// Effect declares the worst effect this tool can have (gh#749,
+	// ADR-089). Descriptive input to discovery and to a consumer's own
+	// default approval policy — it does NOT alter what semstreams
+	// admits, gates, or refuses. The authoritative controls remain the
+	// configured approval-required and allowed-tool name sets and the
+	// per-loop advertised-tool admission check.
+	//
+	// Empty means undeclared, and undeclared resolves to
+	// ToolEffectUnknown — never to ToolEffectReadOnly. Read it through
+	// Canonical() rather than comparing the raw value.
+	//
+	// Does not cross the provider wire: no provider function schema has
+	// a slot for it, and the model is not a party this classification is
+	// for. Paginated is the precedent.
+	Effect ToolEffect `json:"effect,omitempty"`
+}
+
+// ToolEffect classifies the worst effect a tool can have. It is an
+// ordered severity claim, not a taxonomy of everything a tool does:
+// a tool that POSTs to a third party is ToolEffectExternal, full stop,
+// rather than "mutating and external". That is what lets one enum
+// answer the question, and it is also the answer to argument-dependence
+// — a tool whose severity varies with its arguments declares the worst
+// case it admits.
+//
+// The classification is framework-owned canonical metadata so that
+// downstream consumers (semdev and the second gh#749 consumer) share
+// one vocabulary instead of inventing parallel ones. It is DESCRIPTIVE:
+// see ToolDefinition.Effect for the enforcement boundary.
+//
+// OPEN FOR EXTENSION. Never switch exhaustively over the members
+// without a default arm resolving to ToolEffectUnknown — a later member
+// must be addable without a coordinated release across consumers.
+type ToolEffect string
+
+const (
+	// ToolEffectUnknown means NO CLAIM has been made about this tool's
+	// effect. It is not a middle rung between read_only and mutating:
+	// a consumer mapping effect onto policy must treat it as at least
+	// as restrictive as ToolEffectExternal.
+	//
+	// This is the resolution of an absent, empty, or unrecognized
+	// value. Absence of a classification is not evidence of safety —
+	// the tool counterpart of the framework rule that an absent
+	// measurement must never render as a measurement of absence.
+	ToolEffectUnknown ToolEffect = "unknown"
+
+	// ToolEffectReadOnly means the tool observes and changes no state
+	// anywhere, inside or outside the deployment. A GET against an
+	// external API is read_only: what a query discloses is a governance
+	// concern (processor/agentic-governance) and not an effect
+	// classification.
+	//
+	// Distinct from FilesystemPolicyReadOnly (exec_policy.go), which is
+	// a task-scoped filesystem WRITE SCOPE, not a tool classification.
+	// The two are orthogonal and legitimately disagree: a tool may be
+	// ToolEffectExternal while executing under filesystem policy
+	// read_only — one classifies effect on the world, the other governs
+	// worktree mutation. Same word, different subject.
+	ToolEffectReadOnly ToolEffect = "read_only"
+
+	// ToolEffectMutating means the tool can change state within the
+	// deployment's own boundary — graph, KV, workspace files, rules,
+	// flows, personas.
+	ToolEffectMutating ToolEffect = "mutating"
+
+	// ToolEffectExternal means the tool can change state or take
+	// irrevocable action OUTSIDE the deployment boundary: a third-party
+	// write, an email, a purchase. It DOMINATES ToolEffectMutating under
+	// worst-effect semantics.
+	//
+	// "Spend" here means an irrevocable COMMERCIAL ACTION the tool
+	// initiates — an order, a transfer, a booking. It does NOT mean the
+	// metered cost of an external read: a query against a paid search or
+	// data API consumes quota, and quota consumption is a cost, not an
+	// effect on the world. A metered external read stays read_only. (The
+	// two doc comments used to answer this differently; this is the
+	// ruling.)
+	//
+	// MEDIATION DOES NOT LAUNDER EFFECT, but one hop through the
+	// deployment is not itself external. bash is external_effect because
+	// the command it runs can reach anything. A tool that writes a rule
+	// or deploys a flow is mutating, even when the flow it deploys later
+	// performs an outbound HTTP POST: the tool's own effect is the
+	// configuration write, and the outbound action is the deployed
+	// component's effect, classified where that component is described.
+	// Classify what the tool does, not what a thing it configures might
+	// later do — otherwise every configuration tool collapses to
+	// external_effect and the enum stops discriminating.
+	ToolEffectExternal ToolEffect = "external_effect"
+)
+
+// Known reports whether e names a declared enum member.
+//
+// The empty string is NOT known — it is *undeclared*, which is a third
+// state with its own handling on each side: registration ACCEPTS it
+// (a producer need not classify itself) while resolution maps it to
+// ToolEffectUnknown. Callers must therefore spell out which of the two
+// they mean rather than relying on Known alone; overloading Known to
+// return true for empty would collapse "declared nothing" into
+// "declared something valid" at the one seam that must tell them apart.
+func (e ToolEffect) Known() bool {
+	switch e {
+	case ToolEffectUnknown, ToolEffectReadOnly, ToolEffectMutating, ToolEffectExternal:
+		return true
+	default:
+		return false
+	}
+}
+
+// Canonical resolves e to a declared enum member. Empty (undeclared)
+// and unrecognized values both yield ToolEffectUnknown; a declared
+// member returns itself.
+//
+// Total by construction, and the only correct way to read the field:
+// an unrecognized value must never degrade to a permissive answer
+// (the IsKnownFilesystemPolicy precedent), and here the fail-safe is
+// ToolEffectUnknown, which policy consumers treat as maximally
+// restrictive.
+func (e ToolEffect) Canonical() ToolEffect {
+	if e.Known() {
+		return e
+	}
+	return ToolEffectUnknown
 }
 
 // Validate checks if the ToolDefinition is valid
@@ -66,6 +191,14 @@ func (t ToolDefinition) Validate() error {
 	}
 	if len(t.Parameters) == 0 {
 		return fmt.Errorf("tool parameters required")
+	}
+	// Empty Effect is legal (undeclared, resolves to unknown); a
+	// non-empty value must name a member. Registration enforces the
+	// same rule directly rather than calling Validate, because
+	// Validate additionally requires Parameters and registration
+	// deliberately does not — see ExecutorRegistry.RegisterExecutor.
+	if t.Effect != "" && !t.Effect.Known() {
+		return fmt.Errorf("tool %q: unknown effect %q", t.Name, t.Effect)
 	}
 	return nil
 }

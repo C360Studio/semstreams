@@ -41,6 +41,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "create_flow_template",
 			Description: "Create a new parameterised flow template. The body is a flow-JSON with {{.ParamName}} placeholders; declare each placeholder in the parameters list.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -55,6 +56,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "update_flow_template",
 			Description: "Update an existing flow template. Last-writer-wins.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -69,6 +71,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "delete_flow_template",
 			Description: "Delete a flow template by ID. Does not affect flows already instantiated from this template.",
+			Effect:      agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -83,6 +86,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "list_flow_templates",
 			Description: "List all flow templates with ID, name, description, and parameter declarations.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type":       "object",
 				"properties": map[string]any{},
@@ -91,6 +95,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "get_flow_template",
 			Description: "Get the full definition of a specific flow template by ID, including body and parameters.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -105,6 +110,7 @@ func (e *FlowTemplateExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "instantiate_flow_template",
 			Description: "Render a flow template to a concrete flow definition using supplied parameters. Returns the rendered flow JSON — does NOT persist it. Use create_flow to save the rendered flow if it looks right.",
+			Effect:      agentic.ToolEffectReadOnly,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{

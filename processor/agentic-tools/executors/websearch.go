@@ -121,6 +121,19 @@ func (e *WebSearchExecutor) ListTools() []agentic.ToolDefinition {
 		{
 			Name:        "web_search",
 			Description: "Search the web for documentation, API references, libraries, or technical solutions. Returns titles, URLs, and descriptions for matching results.",
+			// mutating, NOT read_only, and deliberately divergent from the
+			// stub's read_only: this executor writes to the graph. Whenever a
+			// NATS client is present (both shipped binaries), registerWebSearch
+			// attaches a TriplePublisher and Execute calls emitObservations,
+			// which publishes 7 triples per result — a loop back-link plus six
+			// predicates on a minted agent.web.observation entity. Worst-effect
+			// classifies on what the tool CAN do, and in-deployment state
+			// mutation is exactly what mutating means.
+			//
+			// The outbound Brave query on its own would be read_only (an
+			// external READ is read_only; metered cost is not an effect — see
+			// ToolEffect docs). The graph write is what decides this.
+			Effect: agentic.ToolEffectMutating,
 			Parameters: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
