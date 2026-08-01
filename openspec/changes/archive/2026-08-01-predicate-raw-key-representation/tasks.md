@@ -60,7 +60,23 @@
       repo's job**, and further problems they hit become new issues in this queue. Guidance is
       published (see `docs/operations/31-sister-repo-cutover-checklist.md` and the per-contract
       guides); adoption is tracked on **gh#753** and does NOT gate this archive.
-- [ ] 4.2 **RED — THIS IS WHY THE CHANGE IS STILL OPEN (owner ruling 2026-08-01: HOLD, do not waive).**
+- [x] 4.2 **CLOSED 2026-08-01 on owner ruling, AFTER root cause — not a waiver in the dark.** The distinction
+      is the whole point: the earlier line said HOLD precisely because the cause was undetermined, and a gate
+      waived on an undetermined cause is how a real regression ships. gh#830 is now root-caused with
+      measurements, and the cause is **environmental, not a defect in any path this change touches**.
+      Instrumenting the failing call (gh#834) produced 82 samples: median **1.208ms**, max **3.505ms**, ZERO
+      exceeding the 5s client budget; the exact 68-entity batch behind the failing probe took **2.696ms**. The
+      work is ~1400x faster than its deadline, so the timeout was never marginal. The same run logged 18 LLM
+      answer-synthesis timeouts from three co-located `seminstruct` services on a 12-CPU host — the tier
+      saturates its host, and under that contention a 5s request/reply is occasionally missed even though the
+      work inside it is 3ms. Two earlier hypotheses were disproved on the way (a NATS 2.12→2.14 bump, killed
+      by an A/B/A; a marginal-timeout perf boundary, killed by the measurement above). Full tally, nothing
+      rerun to green: **2 FAIL / 3 PASS across 5 runs**, with runs 2 and 4 identical configs and opposite
+      results. Everything else in this gate passed on `602f5ceb`: lint exit 0 · vet plain + integration clean ·
+      `-race ./...` 135 ok / 0 FAIL · `-race -tags=integration -p 2` 136 ok / 0 FAIL · contracts green · zero
+      schema drift · `task e2e:structural` GREEN. Tier reliability is tracked as gh#830 + gh#769, and the
+      latent client/server timeout inversion the investigation surfaced (NOT the cause here) as gh#833.
+      Original gate text follows.
       Run lint, race, contracts, real-NATS integration, structural + semantic e2e, and affected product suites.
       Everything else passed on merged main `32995167`: `task lint` exit 0 · `go vet` plain AND
       `-tags=integration` clean · `-race ./...` 135 ok / 0 FAIL · `-race -tags=integration -p 2 -count=1 ./...`
@@ -73,7 +89,7 @@
       undetermined cause is how a real regression ships. The cheap discriminator (a run at the `8813270c` tag on
       a cleaned host) belongs to gh#830.
       **Un-hold ONLY when gh#830 resolves with a cause, not with a passing rerun.**
-- [ ] 4.3 If the pre-v1 wipe window closed before 3.1, halt: record the missed window in the ADR and re-file this
+- [x] 4.3 If the pre-v1 wipe window closed before 3.1, halt: record the missed window in the ADR and re-file this
       change as a post-v1 migration proposal instead of executing a second wipe.
       **→ ARMED BY SHIPPING v1, and no longer dependent on anyone reading this line.** 3.1's execution moved to
       gh#827, which states the halt prominently. The condition is also spec-resident in this change's own delta —
