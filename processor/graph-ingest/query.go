@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -124,11 +125,31 @@ func (c *Component) handleQueryBatchNATS(ctx context.Context, data []byte) ([]by
 		return []byte(`{"entities":[]}`), nil
 	}
 
-	// Fetch entities with bounded concurrency and cache
+	// Fetch entities with bounded concurrency and cache.
+	//
+	// Timed because this handler's budget and its CALLER's budget are set
+	// independently and were inverted: graph-query's loadEntities abandons the
+	// request at its QueryTimeout (default 5s) while this handler is allowed
+	// 10s, so a batch taking 5–10s is charged to the caller as an opaque
+	// "context deadline exceeded" that no server-side log records at all. That
+	// is how gh#830 presented — an intermittent e2e failure with nothing on the
+	// responder side to look at. Same reasoning as reportBatchMissing below:
+	// the symptom reaches the user several hops from the fact.
+	fetchStart := time.Now()
 	entities, missing, err := c.fetchEntitiesConcurrent(ctx, req.IDs, defaultMaxConcurrent)
+	fetchElapsed := time.Since(fetchStart)
 	if err != nil {
+		c.logger.Warn("entity batch fetch failed",
+			slog.Int("requested", len(req.IDs)),
+			slog.Duration("elapsed", fetchElapsed),
+			slog.String("error", err.Error()))
 		return nil, c.classifyEntityQueryError(err)
 	}
+	c.logger.Debug("entity batch fetch",
+		slog.Int("requested", len(req.IDs)),
+		slog.Int("returned", len(entities)),
+		slog.Int("missing", len(missing)),
+		slog.Duration("elapsed", fetchElapsed))
 	c.reportBatchMissing(req.IDs, missing)
 
 	resp := graph.EntityBatchResponse{Entities: entities}
