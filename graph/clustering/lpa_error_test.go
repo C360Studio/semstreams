@@ -294,3 +294,97 @@ func TestLPADetector_WithLevels_Validation(t *testing.T) {
 	detector.WithLevels(5)
 	assert.Equal(t, 5, detector.levels)
 }
+
+// selectiveFailStorage fails SaveCommunity only for communities whose member
+// count is at or above a threshold, and records everything that did save.
+//
+// This models gh#837 precisely: the member list is unbounded while the KV value
+// carrying it is not, so ONE community can be unwritable while its siblings are
+// fine. A mock that fails every save (FailingMockStorage) cannot express that
+// case, and it is the case that mattered — semsource measured 2 communities
+// surviving out of 11 because the first oversized one aborted the level.
+type selectiveFailStorage struct {
+	*MockCommunityStorage
+	failAtOrAboveMembers int
+	err                  error
+}
+
+func (s *selectiveFailStorage) SaveCommunity(ctx context.Context, community *Community) error {
+	if len(community.Members) >= s.failAtOrAboveMembers {
+		return s.err
+	}
+	return s.MockCommunityStorage.SaveCommunity(ctx, community)
+}
+
+// TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel pins gh#837's core
+// fix: one unwritable community must not take its siblings down with it.
+//
+// Before the fix this returned an error and zero communities, because the
+// persist loop returned on the first SaveCommunity failure and the caller
+// returns on any error — so every community after it in the loop, and every
+// higher level, was lost.
+func TestLPADetector_OversizedCommunityDoesNotDiscardTheLevel(t *testing.T) {
+	provider := NewMockProvider()
+	// Two disconnected groups => two communities. One is deliberately larger.
+	big := []string{"b1", "b2", "b3", "b4", "b5"}
+	for i := 0; i < len(big); i++ {
+		provider.AddEntity(big[i])
+	}
+	for i := 0; i+1 < len(big); i++ {
+		provider.AddEdge(big[i], big[i+1], 1.0)
+	}
+	provider.AddEntity("s1")
+	provider.AddEntity("s2")
+	provider.AddEdge("s1", "s2", 1.0)
+
+	storage := &selectiveFailStorage{
+		MockCommunityStorage: NewMockCommunityStorage(),
+		failAtOrAboveMembers: 5,
+		err:                  errors.New("nats: maximum payload exceeded"),
+	}
+
+	detector := NewLPADetector(provider, storage)
+	detector.WithLevels(1)
+
+	result, err := detector.DetectCommunities(context.Background())
+
+	// The level survives: detection succeeds and the small community persisted.
+	require.NoError(t, err, "one unwritable community must not fail the whole detection pass")
+	require.NotEmpty(t, result[0], "the writable community must still be returned")
+
+	// Every returned community is one that actually persisted — the return value
+	// must not advertise communities the store rejected, or a caller counts
+	// communities that cannot be read back.
+	for _, c := range result[0] {
+		assert.Less(t, len(c.Members), 5,
+			"a community that failed to save must not appear in the result")
+		saved, ok := storage.communities[0][c.ID]
+		assert.True(t, ok, "returned community %s was never persisted", c.ID)
+		assert.NotNil(t, saved)
+	}
+}
+
+// TestLPADetector_TotalSaveFailureStillErrors pins the other half of the gh#837
+// decision. Degrading on a completely broken store would turn "the store is
+// unreachable" into a silent "no communities found" — strictly worse than the
+// abort it replaces, because zero results are indistinguishable from an empty
+// graph. Partial results are useful; zero results with no error are a lie.
+func TestLPADetector_TotalSaveFailureStillErrors(t *testing.T) {
+	provider := NewMockProvider()
+	provider.AddEntity("A")
+	provider.AddEntity("B")
+	provider.AddEdge("A", "B", 1.0)
+
+	storage := &selectiveFailStorage{
+		MockCommunityStorage: NewMockCommunityStorage(),
+		failAtOrAboveMembers: 1, // every community fails
+		err:                  errors.New("store unreachable"),
+	}
+
+	detector := NewLPADetector(provider, storage)
+	detector.WithLevels(1)
+
+	_, err := detector.DetectCommunities(context.Background())
+	require.Error(t, err, "a store that rejects EVERY community must still fail the pass")
+	assert.Contains(t, err.Error(), "store unreachable")
+}

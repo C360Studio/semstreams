@@ -343,7 +343,12 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 		}
 	}
 
-	// Persist communities (with optional summarization and event publishing)
+	// Persist communities (with optional summarization and event publishing).
+	// saved/dropped are tracked separately so a per-community storage fault
+	// degrades the level rather than discarding it — see the Save block below.
+	saved := make([]*Community, 0, len(communities))
+	var dropped []string
+	var lastSaveErr error
 	for _, community := range communities {
 		// Generate summary if summarizer is configured
 		if d.summarizer != nil && d.entityProvider != nil {
@@ -365,16 +370,53 @@ func (d *LPADetector) detectCommunitiesAtLevel(
 			}
 		}
 
-		// Save community
+		// Save community.
+		//
+		// A single community that cannot be persisted does NOT discard the level
+		// (gh#837). One oversized community — members are unbounded while the KV
+		// value carrying them is not — used to abort here, and because the caller
+		// returns on any error, every community after it in the loop AND every
+		// higher level was lost. semsource measured the result on a 14,802-entity
+		// graph: 2 communities holding 4.4% of entities, where re-running with a
+		// larger payload ceiling produced 11 communities holding 12,810.
+		//
+		// Skipping matches what this loop already does for every other failure —
+		// summarization fetch and summary generation both warn and continue. A
+		// per-community storage fault is the same shape.
 		if err := d.storage.SaveCommunity(ctx, community); err != nil {
-			return nil, errs.WrapTransient(err, "LPADetector", "detectCommunitiesAtLevel", "save community")
+			dropped = append(dropped, community.ID)
+			lastSaveErr = err
+			d.logger.Error("community save failed — skipping it and continuing the level",
+				"community_id", community.ID,
+				"level", level,
+				"members", len(community.Members),
+				"error", err)
+			continue
 		}
+		saved = append(saved, community)
 
 		// Note: Communities saved with summary_status="statistical" will be picked up
 		// by EnhancementWorker via KV watcher for async LLM enhancement
 	}
 
-	return communities, nil
+	// TOTAL failure is still an error. Degrading here would convert a broken or
+	// unreachable store into a silent "no communities found", which is strictly
+	// worse than the abort this replaces: partial results are useful, zero
+	// results indistinguishable from an empty graph. The distinction is the
+	// whole point — drop the community that cannot fit, not the store that is
+	// not working.
+	if len(dropped) > 0 && len(saved) == 0 {
+		return nil, errs.WrapTransient(lastSaveErr, "LPADetector", "detectCommunitiesAtLevel", "save community")
+	}
+	if len(dropped) > 0 {
+		d.logger.Error("level persisted with dropped communities — results are incomplete",
+			"level", level,
+			"dropped", len(dropped),
+			"saved", len(saved),
+			"dropped_ids", dropped)
+	}
+
+	return saved, nil
 }
 
 // computeNewLabel determines the new label for an entity based on neighbor votes

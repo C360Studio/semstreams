@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -121,6 +122,24 @@ func (s *NATSCommunityStorage) SaveCommunity(ctx context.Context, community *Com
 		// Store community data
 		communityKey := communityKey(community.Level, community.ID)
 		if _, err := s.kv.Put(ctx, communityKey, data); err != nil {
+			// A value that exceeds the transport's payload ceiling is PERMANENT,
+			// not transient: the input is identical on every retry, so retrying
+			// burns budget and — worse — the failure reads as a retryable blip in
+			// logs and error-class metrics while being unfixable without changing
+			// the value (gh#837).
+			//
+			// The framework already classifies this class correctly one layer
+			// down: natsclient's own MaxValueSize check returns
+			// retry.NonRetryable ("should not retry as it will always fail").
+			// This path holds a raw jetstream.KeyValue rather than that wrapper,
+			// so it never sees that guard and takes the server's rejection
+			// instead — which is why the classification had to be restated here
+			// rather than inherited.
+			if stderrors.Is(err, nats.ErrMaxPayload) {
+				return errs.WrapInvalid(err, "NATSCommunityStorage", "SaveCommunity",
+					fmt.Sprintf("community %s exceeds the NATS payload ceiling at %d members (%d bytes) — membership is unbounded while the value carrying it is not",
+						community.ID, len(community.Members), len(data)))
+			}
 			return errs.WrapTransient(err, "NATSCommunityStorage", "SaveCommunity", "put community")
 		}
 
