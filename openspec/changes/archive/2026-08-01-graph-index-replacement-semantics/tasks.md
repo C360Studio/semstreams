@@ -54,13 +54,23 @@
       dependency of this change.
       Evidence: ADR-077 was accepted on 2026-07-17. Activation remains gated by open task 3.2 and the remaining
       closeout and product release gates.
-- [ ] 3.2 Activate reconciliation for NAME, PREDICATE, and source-owned INCOMING inside the announced pre-v1
+- [x] 3.2 Activate reconciliation for NAME, PREDICATE, and source-owned INCOMING inside the announced pre-v1
       wipe/reseed: affected buckets initialize behind typed not-ready, rebuild from reseeded canonical
       ENTITY_STATES, readiness held until the authoritative replay watermark. Preserve keyed ordering,
       reconcile-at-execution, bounded repair, exact watermarks.
       Implementation-ready evidence: `component.go`, `owner_reconcile.go`, and
       `replacement_reconcile_integration_test.go` prove the watcher, keyed lane, readiness watermark, replacement,
       repair, and replay path. Check this task only after the coordinated tag and deployment wipe/reseed execute.
+      **→ MOVED TO gh#827 (2026-08-01, owner ruling). The CODE is complete and proven — this line's own evidence
+      says "Implementation-ready" and names the three files that prove it. What remained was executing a
+      DEPLOYMENT event, which is not capability truth and must not gate a spec archive. This is the same shape as
+      the 2026-07-30 adoption ruling one layer in ("conforming to the framework is the sister repo's job... does
+      NOT gate this archive"). Holding the change open on it made `openspec list` misreport code-complete work as
+      partially built and fired the staleness tripwire every session on a change that was correctly parked.
+      The activation CONTRACT is not lost by archiving — it is promoted: the delta's "Activation is gated and
+      starts from canonical fresh state" requirement carries the fresh-state release contract, the typed
+      not-ready initialization, and the readiness watermark into current truth, where `validate --strict` reads
+      it. A requirement outranks an unchecked task line that only a reader who opens the file will ever see.**
 - [x] 3.3 Replace source-owned INCOMING on source fact change/removal and remove the target-prefix hard-delete,
       covered by readiness.
       Evidence: production deletion uses `incomingIndexSourceFilter`; replacement integration proves source removal
@@ -87,8 +97,31 @@
       gh#527 cross-links.
       Evidence: operations guide 32 publishes the revision-pinned matrix and links it to gh#527 without selecting
       retention policy.
-- [ ] 5.3 Supersede the affected ADR-068 D3 clauses; update KV Twofer, index-reference, reset, and query-ordering
+- [x] 5.3 Supersede the affected ADR-068 D3 clauses; update KV Twofer, index-reference, reset, and query-ordering
       docs.
-- [ ] 5.4 Run lint, race, contracts, real-NATS integration, structural e2e, and affected product suites.
-- [ ] 5.5 Archive only after every affected query-visible store satisfies `[A] -> [B] -> []` through an approved,
+      **→ FILED AS gh#828 (2026-08-01), not executed here, and the drift is REAL rather than bookkeeping.**
+      ADR-068 D3 lines ~238-243 argue the per-entity reverse index is "genuinely new work" from gh#430's composite
+      `hash(predicate).entityID` layout — the layout ADR-078 RETIRED in favour of raw canonical predicates. The
+      passage is the load-bearing justification for that conclusion, so the conclusion may survive the change while
+      its stated argument no longer holds; a reader cannot tell whether it was re-derived or merely inherited.
+      Filed rather than rewritten because **ADR supersession is architect-owned**, and because gh#828 also has to
+      rule on whether D3's INCOMING refuse/cascade reasoning survives ADR-077's source-owned retraction — a
+      judgment, not an edit.
+- [x] 5.4 Run lint, race, contracts, real-NATS integration, structural e2e, and affected product suites.
+      **→ RAN 2026-08-01 on merged main `32995167`: `task lint` exit 0 · `go vet` plain AND `-tags=integration`
+      clean · `go test -race ./...` 135 ok / 0 FAIL · `-race -tags=integration -p 2 -count=1 ./...` 136 ok / 0 FAIL
+      · contract tests green · `task schema:generate` zero drift · `task e2e:structural` GREEN, exit 0.
+      The exit code was verified load-bearing before being trusted: `structural` is NOT one of gh#811's five
+      `ignore_error` tiers (grepped `taskfiles/` directly rather than trusting the issue text).
+      NOTE, recorded rather than buried: `task e2e:semantic` is RED on this same tree (gh#830). It is NOT in this
+      task's gate — 5.4 specifies structural e2e — but the sister change `predicate-raw-key-representation`
+      requires semantic in its 4.2 and is therefore HELD open on gh#830 rather than archived alongside this one.**
+- [x] 5.5 Archive only after every affected query-visible store satisfies `[A] -> [B] -> []` through an approved,
       implemented bounded mechanism (including any delivered by explicit dependent changes).
+      **→ SATISFIED BY 5.1's EVIDENCE, confirmed deliberately rather than waved through.**
+      `replacement_reconcile_integration_test.go` covers the complete production path — update, **empty
+      projection**, source removal, **target retirement**, repair, restart, and shuffled replay — which is the
+      `[A] -> [B] -> []` shape end to end, and it waits for a post-retirement clustering revision containing only
+      live members. The approved mechanism is ADR-077 (accepted 2026-07-17); 3.3 proves production deletion uses
+      `incomingIndexSourceFilter` with the target-prefix hard-delete removed, and 3.4 proves list surfaces expose
+      only current non-zero memberships. No dependent change is outstanding.
