@@ -625,6 +625,36 @@ extraction, hygiene batch, #772 (gates predicate-contract-enforcement's archive,
 The three in-flight Codex-arc changes continue on their own track; the enforcement security gap
 predates the wave and does not worsen at .159.
 
+## Tag roadmap — sister re-entry decision points (owner-requested 2026-08-01)
+
+Sisters consume TAGS. semsource + SemMachina are active on .159; **semdev and semboids are HELD
+by owner** pending these gates. Each tag names its trigger and who it releases.
+
+**v1.0.0-beta.160 — continuation (trigger: gh#810 merges + tag gates; estimate: days).**
+Already on main: #812 substrate split, #814 create lane, #749 effect metadata, batch-fetch
+timing, archives. Adds: #810 (discovery under stream shapes — provisioning guard + #822 subject
+export + decoder pub-ack rejection) and #821 (create-lane e2e stage). **RELEASES semdev**: their
+ask (#749) plus the discovery surface it rides on both work. Standing guidance to semdev at
+re-entry: do NOT hand-roll effect schemas or contract derivation — #798 lands additively (below).
+
+**v1.0.0-beta.161 — high-volume correctness (estimate: ~one week after .160). RELEASES semboids.**
+Required: **#741** (raw-path same-second key collision — silent data loss at >1 msg/s; the
+highest-volume adopter must not re-enter aimed at this), **#742** (MaxDeliver parking visibility —
+outage exposure scales with volume), **#735** (capacity rejection vs shared circuit breaker — live
+now that #737 bounds exist; volume hits capacity paths first). Riders if ready: #795 readiness
+front door, #820 clustering readiness producer, the #736-remnant/#811 gate-integrity pair.
+**Decision rule: semboids re-enters at .161, not .160** — verify their filed issues against this
+list at re-entry ([[reference_semboids_adoption]] says re-verify).
+
+**v1.0.0-beta.162 — module/DX (the #798 derivation).** HOLD RELEASED 2026-08-01 (predicate arc
+archived #831/#835). Design starts now in parallel (ADR-scale, architect + Fable gate, no code
+collision with .160 tail); ships via the observe-only mismatch meter → enforce pattern; tag when
+observe-only is consumable. semdev's SECOND wave (restructure onto derived contracts) — not their
+re-entry blocker.
+
+Then v1 exit per the dry criterion. Additive tags need no lockstep; only breaking waves do, and
+none is planned — #762's envelope fix was the last, and it shipped in .159's window.
+
 ## How to read this file
 
 Status words lie. That is the central finding of the audit that created this
