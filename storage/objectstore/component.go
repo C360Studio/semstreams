@@ -438,8 +438,10 @@ func (c *Component) handleWriteRequest(msg *nats.Msg) {
 	}
 }
 
-// emitStoredMessage attempts to parse the incoming message and emit a StoredMessage
-// with StorageRef for downstream semantic processing.
+// emitStoredMessage emits a StoredMessage with StorageRef for downstream
+// semantic processing, from the decode result processWriteMessage already
+// holds (a single decode feeds both the storage key and this emit, so the
+// two can never disagree about what the message is — #741).
 //
 // Returns nil for by-design skips (no "stored" port configured, message not a
 // BaseMessage, payload not Graphable) — those messages never owe downstream a
@@ -448,16 +450,16 @@ func (c *Component) handleWriteRequest(msg *nats.Msg) {
 // qualifies, so downstream losing the reference is the same loss shape as a
 // failed store — the caller must not ack the delivery (#727). Errors are
 // returned, not logged here; the transport caller logs once.
-func (c *Component) emitStoredMessage(data []byte, storageKey string) error {
+func (c *Component) emitStoredMessage(
+	baseMsg *message.BaseMessage, decodeErr error, data []byte, storageKey string,
+) error {
 	if !c.hasPort("stored") {
 		return nil // No stored output port configured
 	}
 
-	// Try to parse as BaseMessage to extract Graphable payload
-	baseMsg, err := c.decoder.Decode(data)
-	if err != nil {
+	if decodeErr != nil {
 		c.logger.Debug("Message not a BaseMessage, skipping StoredMessage emit",
-			slog.String("error", err.Error()))
+			slog.String("error", decodeErr.Error()))
 		return nil
 	}
 
@@ -821,10 +823,17 @@ func classifyWriteDisposition(ctxErr, procErr error) writeDisposition {
 // the store commit AND any required StorageReference publication both succeed;
 // failures NAK (transient) or Term (structurally invalid) per
 // classifyWriteDisposition. Redelivery after a partial failure re-runs the
-// store: both write paths generate time/nonce-suffixed keys
-// (Store.generateContentKey appends UnixNano; DefaultKeyGenerator appends a
-// unix-seconds timestamp), so a redelivered message stores a NEW object rather
-// than overwriting — duplicates beat loss (#727).
+// store. On the raw lane, DefaultKeyGenerator keys every write with a
+// per-write UUID nonce (#741), so a redelivered raw message ALWAYS stores a
+// NEW object rather than overwriting — a visible duplicate; duplicates beat
+// loss (#727). (Before #741 the seconds-granularity key suffix made
+// same-second redelivery an idempotent overwrite only by the same collision
+// that silently LOST distinct same-second messages.) On the ContentStorable
+// lane, Store.generateContentKey still keys with UnixNano: a redelivery
+// landing on the same clock reading overwrites rather than duplicates — but
+// that key embeds the entity ID, so the casualty is the SAME entity's
+// just-written content with identical bytes (an idempotent overwrite), never
+// a distinct message.
 //
 // Retry is BOUNDED, not indefinite: the write consumer's default MaxDeliver=3
 // (component.GetConsumerConfigFromDefinitionWithDefault) caps delivery
@@ -894,7 +903,8 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 	c.reportStoring(ctx)
 
 	// Try to parse as BaseMessage to check for ContentStorable payload
-	if baseMsg, err := c.decoder.Decode(data); err == nil {
+	baseMsg, decodeErr := c.decoder.Decode(data)
+	if decodeErr == nil {
 		// Successfully parsed - check if payload is ContentStorable
 		if cs, ok := baseMsg.Payload().(message.ContentStorable); ok {
 			// Use StoreContent for proper key generation and StoredContent envelope
@@ -918,8 +928,21 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 		}
 	}
 
-	// Fallback: store raw bytes for non-ContentStorable messages
-	key, err := c.store.Store(ctx, data)
+	// Fallback: store raw bytes for non-ContentStorable messages. The stored
+	// payload stays the ORIGINAL wire bytes (re-marshaling the decoded
+	// envelope would base64-encode []byte fields and corrupt the JSON), but
+	// the KEY derives from the decoded envelope when decode succeeded:
+	// keying from the opaque bytes sent every decodable-but-not-
+	// ContentStorable message — the PRIMARY lane for JSONMap-style outputs —
+	// into message/.../unknown_<ts>, where two distinct messages in the same
+	// instant collided and ObjectStore Put silently replaced the first
+	// (#741). Only true undecodable bytes take the unknown key family, which
+	// DefaultKeyGenerator disambiguates with nanosecond entropy.
+	var keySource any = data
+	if decodeErr == nil {
+		keySource = baseMsg
+	}
+	key, err := c.store.storeWithKeySource(ctx, keySource, data)
 	if err != nil {
 		return err
 	}
@@ -935,7 +958,7 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 
 	// Emit StoredMessage if we have a "stored" output port — required
 	// publication when configured; decode/non-Graphable skips return nil.
-	return c.emitStoredMessage(data, key)
+	return c.emitStoredMessage(baseMsg, decodeErr, data, key)
 }
 
 // getPortSubject gets the subject for a named port, or generates a default

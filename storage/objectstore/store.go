@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -216,11 +218,32 @@ func (s *Store) Put(ctx context.Context, key string, data []byte) error {
 //   - json.RawMessage: stored directly as raw JSON bytes
 //   - other types: marshaled to JSON via json.Marshal
 func (s *Store) Store(ctx context.Context, msg any) (string, error) {
+	return s.storeWithKeySource(ctx, msg, msg)
+}
+
+// storeWithKeySource is Store with the key (and metadata) derived from
+// keySource rather than from the stored msg itself. The component's raw
+// write lane needs the split (#741): it must persist the ORIGINAL wire
+// bytes (re-marshaling a decoded envelope base64-encodes []byte fields and
+// corrupts the JSON), but keying from those opaque bytes sent every write
+// into the message/.../unknown key family — two distinct messages in the
+// same instant collided and ObjectStore Put silently replaced the first.
+// When the caller holds a decoded *message.BaseMessage it passes it as
+// keySource so DefaultKeyGenerator's type/ID extraction works, while msg
+// stays the raw bytes that get persisted. The MetadataExtractor sees the
+// same keySource: both it and the KeyGenerator derive index information
+// FROM the message, and the decoded envelope is strictly more informative
+// than bytes it cannot type-assert (on every other path keySource == msg,
+// so nothing changes for direct Store callers).
+//
+// Unexported deliberately: the only caller with a divergent keySource is
+// processWriteMessage in this package; Store remains the public surface.
+func (s *Store) storeWithKeySource(ctx context.Context, keySource, msg any) (string, error) {
 	start := time.Now()
 	s.metrics.recordWriteOp("store")
 
 	// Generate key using pluggable generator
-	key := s.keyGenerator.GenerateKey(msg)
+	key := s.keyGenerator.GenerateKey(keySource)
 
 	// Handle raw bytes directly to avoid double-encoding.
 	// json.Marshal([]byte) produces a base64-encoded string, which corrupts
@@ -243,7 +266,7 @@ func (s *Store) Store(ctx context.Context, msg any) (string, error) {
 	// Extract metadata if extractor is configured
 	var meta map[string][]string
 	if s.metadataExtractor != nil {
-		meta = s.metadataExtractor.ExtractMetadata(msg)
+		meta = s.metadataExtractor.ExtractMetadata(keySource)
 	}
 
 	// Store JSON bytes in ObjectStore with metadata
@@ -708,21 +731,47 @@ func (s *Store) FetchBinary(ctx context.Context, ref BinaryRef) ([]byte, error) 
 	return data, nil
 }
 
-// DefaultKeyGenerator provides time-based key generation.
-// Keys are formatted as: type/year/month/day/hour/identifier_timestamp
+// DefaultKeyGenerator provides time-bucketed key generation.
+// Keys are formatted as: type/year/month/day/hour/identifier_nonce
 //
-// The generator uses behavioral interfaces for optional enhancement:
-//   - message.Typeable: Provides type information for key prefix
-//   - message.Identifiable: Provides identifier for key uniqueness
-//
-// If interfaces aren't implemented, sensible defaults are used.
-type DefaultKeyGenerator struct{}
+// If the input implements message.Message, its Type and ID provide the key
+// prefix and identifier; anything else (raw []byte, json.RawMessage, plain
+// structs and maps) falls back to "message" / "unknown". Key uniqueness is
+// carried by the per-write UUID nonce in every case — never by the clock.
+type DefaultKeyGenerator struct {
+	// now overrides the wall-clock reading used for the date-partition path
+	// segments. nil = time.Now. Unexported test seam: the #741 regression
+	// tests force IDENTICAL clock readings to prove deterministically that
+	// key uniqueness comes from the nonce, not from clock granularity.
+	now func() time.Time
+}
 
 // GenerateKey creates a time-bucketed slash-based key.
-// Format: type/year/month/day/hour/identifier_timestamp
-// Example: sensor.temperature.v1/2024/01/19/14/device-123_1705677443
+// Format: type/year/month/day/hour/identifier_nonce
+// Example: sensor.temperature.v1/2024/01/19/14/device-123_6ba7b810-9dad-11d1-80b4-00c04fd430c8
+//
+// Wall time contributes ONLY the date-partition path segments; uniqueness is
+// carried by a per-write UUID nonce. A clock reading — at ANY granularity —
+// is not a uniqueness guarantee: this key originally carried a unix-SECONDS
+// suffix, which silently lost distinct same-second raw-path messages
+// (ObjectStore Put replaces — #741), and the first fix's UnixNano suffix
+// reproduced the same collision on hosts whose clock quantizes to coarser
+// steps (consecutive time.Now().UnixNano() calls returned identical values
+// under microsecond quantization in the #741 Codex review).
+//
+// generateContentKey and generateBinaryKey still carry a UnixNano suffix and
+// share that clock-collision residual, with a different consequence: their
+// identifier is the entity ID, so a collision requires the SAME entity
+// re-storing content within one clock step — overwriting that entity's own
+// content, not losing a DISTINCT message. Only this generator's shared
+// unknown-identifier family collides ACROSS messages, which is why the nonce
+// lives here. Their residual is recorded, not endorsed; changing them is
+// outside #741's scope.
 func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 	now := time.Now()
+	if g.now != nil {
+		now = g.now()
+	}
 
 	// Extract type if message implements Message interface
 	msgType := "message"
@@ -736,16 +785,14 @@ func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 		identifier = m.ID()
 	}
 
-	// Format: type/year/month/day/hour/identifier_timestamp
-	// Example: sensor.temperature.v1/2024/01/19/14/msg-uuid_1705677443
-	key := fmt.Sprintf("%s/%04d/%02d/%02d/%02d/%s_%d",
+	key := fmt.Sprintf("%s/%04d/%02d/%02d/%02d/%s_%s",
 		msgType,
 		now.Year(),
 		now.Month(),
 		now.Day(),
 		now.Hour(),
 		identifier,
-		now.Unix(),
+		uuid.NewString(),
 	)
 
 	return key
