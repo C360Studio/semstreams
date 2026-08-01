@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -589,4 +590,60 @@ func TestIntegration_CommunitySummaryFields(t *testing.T) {
 	assert.ElementsMatch(t, community.RepEntities, retrieved.RepEntities)
 	assert.Equal(t, community.SummaryStatus, retrieved.SummaryStatus)
 	assert.Equal(t, "robotics", retrieved.Metadata["domain"])
+}
+
+// TestIntegration_OversizedCommunityClassifiesPermanent pins gh#837's second
+// problem against a REAL NATS server, because the whole point is how the server
+// rejects an over-ceiling value — a hand-written double could return whatever
+// error the test wanted and would prove only the double.
+//
+// "Value exceeds max payload" cannot succeed on retry: the input is identical
+// every time. Classifying it transient made a permanent failure read as a
+// retryable blip in logs and error-class metrics. natsclient's own MaxValueSize
+// check already gets this right (retry.NonRetryable); this path holds a raw
+// jetstream.KeyValue, never sees that guard, and takes the server rejection.
+func TestIntegration_OversizedCommunityClassifiesPermanent(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	ctx := context.Background()
+
+	kv, err := natsClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketCommunityIndex,
+	})
+	require.NoError(t, err)
+	defer func() {
+		keys, _ := kv.Keys(ctx)
+		for _, key := range keys {
+			kv.Delete(ctx, key)
+		}
+	}()
+
+	storage := NewNATSCommunityStorage(kv)
+
+	// semsource measured community records at ~148 bytes/member, so ~7,070
+	// members fills a 1 MiB payload. 20,000 members clears it with margin
+	// without depending on that constant staying exact.
+	members := make([]string, 20000)
+	for i := range members {
+		members[i] = "c360.semsource.java.workspace.enum.entity-with-a-realistic-identifier-length-" +
+			string(rune('a'+(i%26))) + "-" + string(rune('a'+((i/26)%26)))
+	}
+
+	err = storage.SaveCommunity(ctx, &Community{
+		ID:      "oversized-community",
+		Level:   0,
+		Members: members,
+	})
+
+	require.Error(t, err, "a community exceeding the payload ceiling must fail")
+
+	// The classification is the assertion. Transient invites a retry that cannot
+	// ever succeed and hides a permanent fault behind retryable-looking telemetry.
+	assert.False(t, errs.IsTransient(err),
+		"an over-ceiling value is permanent — the same input fails identically on every retry")
+
+	// The message must name what an operator can act on: which community, how
+	// many members, how big. "put community failed" alone sent semsource digging
+	// through KV values by hand to find the ~148 bytes/member figure.
+	assert.Contains(t, err.Error(), "oversized-community")
+	assert.Contains(t, err.Error(), "20000")
 }
