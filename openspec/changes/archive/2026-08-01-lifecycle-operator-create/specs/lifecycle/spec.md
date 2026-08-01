@@ -100,9 +100,21 @@ for an entity that already exists, while a creation path reaches it with no
 precondition beyond a registered workflow and a non-empty body — so on a fresh
 deployment the first external request is the trigger.
 
-Registration MUST also verify that the declared workflow name matches the name
-the Schema's own `Workflow()` reports, since that is a wiring invariant knowable
-at registration and never per-request.
+Registration MUST NOT additionally require that the declared workflow name equal
+the name the Schema's own `Workflow()` reports. That equality is a real wiring
+invariant, but enforcing it at registration would convert a **documented
+observe-only runtime posture into a boot failure**: registering one schema under
+a second name is how a partial migration presents a cross-owner overlap, and the
+Manager is deliberately non-fatal there so a mid-migration deployment does not
+brick. Overlap rejection belongs to the ownership substrate, which refuses the
+claim, not to registration, which records it.
+
+The hazard that equality was reaching for is closed instead by binding a create
+to the registration the **caller selected**, rather than re-deriving one from the
+Participant's own constant. Re-deriving would let a request routed as one
+workflow write with another's pattern, transitions, owner token, and audit
+predicates — and, where only the alias is registered, fail a valid advertised
+route with a false not-found.
 
 #### Scenario: a Schema that does not implement the contract
 
@@ -113,9 +125,17 @@ at registration and never per-request.
 
 #### Scenario: a Schema whose reported workflow name disagrees with the declaration
 
-- **GIVEN** a workflow declared under one name whose Schema reports another
+- **GIVEN** a workflow registered under a name that its Schema's `Workflow()` does not report
 - **WHEN** the workflow is registered
-- **THEN** registration fails
+- **THEN** registration succeeds
+- **AND** the ownership substrate, not registration, is what refuses a genuine cross-owner overlap
+
+#### Scenario: a create is routed to an aliased registration
+
+- **GIVEN** a workflow registered only under an alias whose Schema reports a different, unregistered name
+- **WHEN** a create is routed to the alias
+- **THEN** the write uses the alias registration's pattern, transitions, and audit predicates
+- **AND** the create does not fail with not-found
 
 ### Requirement: Must-exist lanes MUST NOT create state
 

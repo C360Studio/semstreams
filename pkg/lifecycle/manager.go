@@ -1334,8 +1334,14 @@ type CreateResult struct {
 // constant, so a request body cannot declare a workflow at all and the check
 // could never fire. It passed its own test only because the test double had a
 // JSON-decodable workflow field — it tested the double. The real route/body
-// binding is the entity-ID pattern gate inside Create, and the wiring invariant
-// it was reaching for is enforced once, at Register.
+// binding is the entity-ID pattern gate inside Create.
+//
+// The wiring invariant it was reaching for (Name == Participant.Workflow()) is
+// NOT enforced anywhere, deliberately — Register permits the mismatch so a
+// partial migration does not brick (see Register, ADR-056 Decision 5). What
+// closes the hazard is that this lane writes against the registration the
+// CALLER selected rather than re-deriving one from the Participant's own
+// constant (TestCreateFromOperator_UsesTheRouteSelectedRegistration).
 //
 // A degraded commit (write landed, read-back could not complete) is reported as
 // SUCCESS via CreateResult.Degraded — never as an error, because the mutation
