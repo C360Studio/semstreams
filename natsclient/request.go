@@ -344,6 +344,15 @@ func (c *Client) SubscribeForRequests(
 	subject string,
 	handler func(ctx context.Context, data []byte) ([]byte, error),
 ) (*Subscription, error) {
+	// gh#810: a stream whose filters cover this subject answers requests with a
+	// publish ack, and the core-NATS subscribe below still SUCCEEDS — so nothing
+	// downstream can tell that no caller will ever reach this handler. Reported
+	// asynchronously: it is advisory, and listing streams is network I/O that
+	// must not run while the connection lock is held.
+	go func() {
+		c.ReportSubjectCaptures(context.WithoutCancel(ctx), []string{subject})
+	}()
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -15,49 +15,102 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+// QuerySubjects returns the request/reply subjects this component answers on.
+//
+// gh#822: a consumer composing graph-query into its own process had no
+// reachable answer to "which subjects does the framework already serve?".
+// The registration table was an unexported local, and InputPorts() does not
+// substitute — it reflects the CONFIGURED ports, which in a consumer
+// deployment the consumer itself supplies, so it answers "what did I
+// configure", not "what does the framework claim".
+//
+// Why it matters: NATS request/reply with two subscribers is not load
+// balancing. Both handlers receive the request and both publish to the reply
+// inbox; the requester keeps whichever arrives first and discards the other.
+// SemSource ran with source-manifest subscribed to graph.query.summary
+// alongside this component for an extended period, with entirely different
+// payload shapes on the two sides — and it survived a fully green suite,
+// because the only test touching that subject started graph-query in
+// isolation so no handler ever competed.
+//
+// The returned slice is a copy: this is a contract, and a consumer must not be
+// able to mutate the framework's declaration of its own surface.
+func QuerySubjects() []string {
+	return append([]string(nil), querySubjects...)
+}
+
+// querySubjects is the SINGLE declaration of this component's request/reply
+// surface. setupQueryHandlers drives its subscriptions from this list rather
+// than from a parallel table, so the exported contract and what is actually
+// served cannot drift: a subject here with no handler fails at startup, and a
+// handler not named here is a startup error too.
+var querySubjects = []string{
+	"graph.query.entity",
+	"graph.query.entityByAlias",
+	"graph.query.batch",
+	"graph.query.relationships",
+	"graph.query.pathSearch",
+	"graph.query.hierarchyStats",
+	"graph.query.prefix",
+	"graph.query.spatial",
+	"graph.query.temporal",
+	"graph.query.semantic",
+	"graph.query.similar",
+	"graph.query.globalSearch",
+	// graphSummary — composite discovery resolver (fans out to
+	// graph.ingest.query.prefix + graph.index.query.predicateList).
+	"graph.query.summary",
+	// searchGraph — wraps globalSearch with a semantic fallback
+	// when GraphRAG strategies return empty.
+	"graph.query.searchGraph",
+	// byName — deterministic name→ranked-IDs (gh#376), passthrough to graph-index.
+	"graph.query.byName",
+}
+
 // setupQueryHandlers subscribes to all query request subjects
 func (c *Component) setupQueryHandlers(ctx context.Context) error {
-	// Table-driven registration: each row is a NATS subject + its
-	// handler. Keeping this as a table rather than 12 inline blocks
-	// lets the function stay under the revive function-length cap
-	// AND makes the "what subjects this component owns" surface
-	// scannable at a glance. Order is preserved across iterations so
-	// the slog.Info call below reports subjects in declaration order.
-	type subRegistration struct {
-		subject string
-		handler func(ctx context.Context, data []byte) ([]byte, error)
+	// Handlers keyed by subject. querySubjects above is the authoritative
+	// declaration of the surface; this map supplies the implementations. The
+	// two are cross-checked below in BOTH directions, so the exported contract
+	// and what is actually served cannot drift apart silently — which is the
+	// whole point of gh#822.
+	handlers := map[string]func(ctx context.Context, data []byte) ([]byte, error){
+		"graph.query.entity":         c.handleQueryEntity,
+		"graph.query.entityByAlias":  c.handleQueryEntityByAlias,
+		"graph.query.batch":          c.handleQueryBatch,
+		"graph.query.relationships":  c.handleQueryRelationships,
+		"graph.query.pathSearch":     c.handlePathSearch,
+		"graph.query.hierarchyStats": c.handleQueryHierarchyStats,
+		"graph.query.prefix":         c.handleQueryPrefix,
+		"graph.query.spatial":        c.handleQuerySpatial,
+		"graph.query.temporal":       c.handleQueryTemporal,
+		"graph.query.semantic":       c.handleQuerySemantic,
+		"graph.query.similar":        c.handleQuerySimilar,
+		"graph.query.globalSearch":   c.handleGlobalSearch,
+		"graph.query.summary":        c.handleQueryGraphSummary,
+		"graph.query.searchGraph":    c.handleSearchGraph,
+		"graph.query.byName":         c.handleQueryByName,
 	}
-	registrations := []subRegistration{
-		{"graph.query.entity", c.handleQueryEntity},
-		{"graph.query.entityByAlias", c.handleQueryEntityByAlias},
-		{"graph.query.batch", c.handleQueryBatch},
-		{"graph.query.relationships", c.handleQueryRelationships},
-		{"graph.query.pathSearch", c.handlePathSearch},
-		{"graph.query.hierarchyStats", c.handleQueryHierarchyStats},
-		{"graph.query.prefix", c.handleQueryPrefix},
-		{"graph.query.spatial", c.handleQuerySpatial},
-		{"graph.query.temporal", c.handleQueryTemporal},
-		{"graph.query.semantic", c.handleQuerySemantic},
-		{"graph.query.similar", c.handleQuerySimilar},
-		{"graph.query.globalSearch", c.handleGlobalSearch},
-		// graphSummary — composite discovery resolver (fans out to
-		// graph.ingest.query.prefix + graph.index.query.predicateList).
-		{"graph.query.summary", c.handleQueryGraphSummary},
-		// searchGraph — wraps globalSearch with a semantic fallback
-		// when GraphRAG strategies return empty.
-		{"graph.query.searchGraph", c.handleSearchGraph},
-		// byName — deterministic name→ranked-IDs (gh#376), passthrough to graph-index.
-		{"graph.query.byName", c.handleQueryByName},
+	// A handler with no declared subject would be silently unreachable, and an
+	// unreachable handler is exactly the kind of thing a green suite hides.
+	if len(handlers) != len(querySubjects) {
+		return errs.WrapInvalid(errs.ErrMissingConfig, "GraphQuery", "setupQueryHandlers",
+			fmt.Sprintf("handler map (%d) and declared subjects (%d) disagree", len(handlers), len(querySubjects)))
 	}
 
-	subjects := make([]string, 0, len(registrations))
-	for _, r := range registrations {
-		sub, err := c.natsClient.SubscribeForRequests(ctx, r.subject, r.handler)
+	subjects := make([]string, 0, len(querySubjects))
+	for _, subject := range querySubjects {
+		handler, ok := handlers[subject]
+		if !ok {
+			return errs.WrapInvalid(errs.ErrMissingConfig, "GraphQuery", "setupQueryHandlers",
+				"declared subject has no handler: "+subject)
+		}
+		sub, err := c.natsClient.SubscribeForRequests(ctx, subject, handler)
 		if err != nil {
-			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+r.subject)
+			return errs.WrapTransient(err, "GraphQuery", "setupQueryHandlers", "subscribe to "+subject)
 		}
 		c.querySubscriptions = append(c.querySubscriptions, sub)
-		subjects = append(subjects, r.subject)
+		subjects = append(subjects, subject)
 	}
 
 	c.logger.Info("query handlers registered", "subjects", subjects)

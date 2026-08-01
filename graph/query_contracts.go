@@ -5,6 +5,7 @@ package graph
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -114,4 +115,88 @@ func UnwrapQueryResponse(raw []byte) ([]byte, bool) {
 	}
 
 	return data, true
+}
+
+// Marshalled field names of a JetStream publish acknowledgement. Same role as
+// the envelope key set above: the SINGLE source for "which keys make up an ack".
+//
+// `stream` and `seq` are always present; `domain` appears in a domain-scoped
+// deployment and `duplicate` when the server recognises a repeat.
+const (
+	publishAckStreamKey    = "stream"
+	publishAckSeqKey       = "seq"
+	publishAckDomainKey    = "domain"
+	publishAckDuplicateKey = "duplicate"
+)
+
+// ErrPublishAck reports that a reply body is a JetStream publish
+// acknowledgement rather than a query reply.
+//
+// It means a stream captured the request/reply subject: the request was
+// published into a stream and acked, and no responder ever saw it. That is a
+// DEPLOYMENT fault — a stream's subject filter overlapping a subject the
+// framework answers on — not a malformed reply, and the remedy is to move the
+// subject or narrow the stream (gh#810).
+var ErrPublishAck = errors.New("graph: reply is a JetStream publish ack — a stream captured the request/reply subject")
+
+// IsPublishAck reports whether raw is a JetStream publish acknowledgement.
+//
+// # Why this needs its own discriminator
+//
+// An ack is structurally valid JSON that carries none of the fields a caller
+// expects, so decoding it yields the ZERO value of the target type: an empty
+// catalog, an empty result set. Empty is indistinguishable from "nothing is
+// registered", which is how gh#810 stayed invisible — a deployment whose
+// streams covered `tool.>` served `{"stream":"TOOL","seq":1}` to every
+// discovery request and reported a zero-tool catalog with no error anywhere.
+//
+// # Closed key set, for the same reason the envelope uses one
+//
+// An ack has BOTH `stream` and `seq`, and every key is drawn from
+// {stream, seq, domain, duplicate}. Detecting on `stream` alone would be the
+// dangerous form: a legitimate reply that happens to carry a top-level `stream`
+// field would be rejected outright, trading a silent empty result for a hard
+// failure on valid data. The conjunction plus closure keeps that from firing on
+// anything but an actual ack.
+func IsPublishAck(raw []byte) bool {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return false
+	}
+	if _, ok := fields[publishAckStreamKey]; !ok {
+		return false
+	}
+	if _, ok := fields[publishAckSeqKey]; !ok {
+		return false
+	}
+	for key := range fields {
+		switch key {
+		case publishAckStreamKey, publishAckSeqKey, publishAckDomainKey, publishAckDuplicateKey:
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// DecodeQueryReply is the canonical entry point for a marshalled query reply:
+// it refuses a publish ack, then removes at most one QueryResponse envelope.
+//
+// UnwrapQueryResponse alone cannot express this. Its contract is
+// (payload, wasEnvelope) with no error channel, and an ack is simply "not an
+// envelope" — so it passes the ack through byte-for-byte and the caller decodes
+// it into a zero value. The missing piece was never the unwrapping; it was
+// having somewhere to say "this is not a reply at all".
+//
+// Callers that only need the envelope removed may keep using
+// UnwrapQueryResponse. Callers decoding a reply into a typed result should use
+// this, so a captured subject surfaces as an error naming the cause rather than
+// as an empty result several hops from the fact (gh#785 migrates the remaining
+// in-repo shape-knowers onto it).
+func DecodeQueryReply(raw []byte) ([]byte, error) {
+	if IsPublishAck(raw) {
+		return nil, ErrPublishAck
+	}
+	payload, _ := UnwrapQueryResponse(raw)
+	return payload, nil
 }

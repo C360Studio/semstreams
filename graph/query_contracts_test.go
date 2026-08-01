@@ -3,6 +3,7 @@ package graph
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -271,4 +272,77 @@ func TestQueryResponse_DeclaredFieldsMatchClosedKeySet(t *testing.T) {
 				"the discriminator is wider than the type it describes", key)
 		}
 	}
+}
+
+// TestIsPublishAck_ClosedKeySet pins the discriminator, including the direction
+// that matters more: a legitimate reply carrying a `stream` field must NOT be
+// rejected. Trading a silent empty result for a hard failure on valid data
+// would be a worse bug than the one gh#810 describes.
+func TestIsPublishAck_ClosedKeySet(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  string
+		want bool
+	}{
+		// The exact body observed in gh#810.
+		{"the gh#810 ack", `{"stream":"TOOL","seq":1}`, true},
+		{"domain-scoped ack", `{"stream":"TOOL","seq":7,"domain":"hub"}`, true},
+		{"duplicate ack", `{"stream":"TOOL","seq":7,"duplicate":true}`, true},
+
+		{"stream without seq", `{"stream":"TOOL"}`, false},
+		{"seq without stream", `{"seq":1}`, false},
+		// The dangerous form: detecting on `stream` alone would reject this.
+		{"legitimate reply that carries a stream field", `{"stream":"a","seq":1,"tools":[]}`, false},
+		{"empty object", `{}`, false},
+		{"an empty CATALOG is not an ack", `{"tools":[]}`, false},
+		{"a query envelope is not an ack", `{"data":{},"timestamp":"2026-01-01T00:00:00Z"}`, false},
+		{"array", `[]`, false},
+		{"malformed", `{`, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsPublishAck([]byte(tt.raw)); got != tt.want {
+				t.Fatalf("IsPublishAck(%s) = %v, want %v", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestDecodeQueryReply_AckVersusEmpty is the whole point of gh#810: an ack and
+// an empty result must not produce the same answer. Before this, both decoded
+// to a zero value and "a stream ate the request" was indistinguishable from
+// "nothing is registered".
+func TestDecodeQueryReply_AckVersusEmpty(t *testing.T) {
+	t.Run("an ack is refused, naming the cause", func(t *testing.T) {
+		_, err := DecodeQueryReply([]byte(`{"stream":"TOOL","seq":1}`))
+		if !errors.Is(err, ErrPublishAck) {
+			t.Fatalf("expected ErrPublishAck, got %v", err)
+		}
+	})
+
+	t.Run("a genuinely empty result still decodes", func(t *testing.T) {
+		payload, err := DecodeQueryReply([]byte(`{"tools":[]}`))
+		if err != nil {
+			t.Fatalf("an empty catalog is a valid reply, got %v", err)
+		}
+		var got struct {
+			Tools []string `json:"tools"`
+		}
+		if err := json.Unmarshal(payload, &got); err != nil {
+			t.Fatalf("unmarshal empty catalog: %v", err)
+		}
+		if len(got.Tools) != 0 {
+			t.Fatalf("expected empty catalog, got %v", got.Tools)
+		}
+	})
+
+	t.Run("an envelope is still unwrapped exactly once", func(t *testing.T) {
+		payload, err := DecodeQueryReply([]byte(`{"data":{"n":1},"timestamp":"2026-01-01T00:00:00Z"}`))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if string(payload) != `{"n":1}` {
+			t.Fatalf("expected one layer removed, got %s", payload)
+		}
+	})
 }
