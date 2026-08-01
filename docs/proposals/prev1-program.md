@@ -9,6 +9,61 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-01 (SESSION 24 CLOSED — gh#810 IS FURTHER FROM DONE THAN IT LOOKED. PR #847
+> is DRAFT pending a fresh-session rework against recorded constraints.)**
+>
+> **MEASURED at close (re-run these):** 11 PRs merged today · open PRs **#849** (rework
+> constraints, ready), **#847** (DRAFT, the rework), #846 (NOT mine — Fable's parallel work),
+> #685 (draft) · in-flight changes **2** · open issues **147** · `-race ./...` **135 ok / 0 FAIL** ·
+> `task lint` 0 · zero schema drift.
+>
+> **CORRECTION, measured 2026-08-01T21:39Z at session-25 resume — the line above was written
+> three minutes stale.** **#846 MERGED at 21:33Z as `d07d4174`** (gh#741: objectstore raw-path
+> writes key from the decoded envelope, sub-second entropy closes the same-second collision), so
+> the count is **12 PRs merged today** and `origin/main` is one commit ahead of this branch.
+> **gh#741 itself is still OPEN** — correct under the CONFIRM-CLOSE gate, not an oversight — and
+> **gh#848 was filed against it**: the shipped `protocol-flow` raw storage lane has no e2e stage,
+> so the fix is validated only by a hand-built integration slice. The Small-bug-track line below
+> still lists #741 as pending work; it is code-complete on main, awaiting close plus #848.
+>
+> **NEXT: the gh#810 rework, fresh session.** Read
+> `openspec/changes/discovery-under-stream-shapes/tasks.md` FIRST — its banner and task 0.2 carry
+> Fable's six binding constraints. **Do not start from PR #847's code without reading why it was
+> drafted.** `task openspec:queue` surfaces it as BLOCKED once #849 merges.
+>
+> **WHY #847 WAS DRAFTED — the lesson is sharper than the bug.** All three seams were built,
+> mutation-tested and confidently written up, and **two did not do what they claimed**. The
+> mutation checks were real; they tested the PRIMITIVES, not the WIRING. A guard whose result is
+> discarded passes every test you write about its matching logic. Specifically: `DecodeQueryReply`
+> shipped with **zero production callers** so the motivating `tool.list` path still turns a publish
+> ack into an empty catalog; a pub-ack detector **already existed** at
+> `gateway/graph-gateway/component.go:1475`, in use, and a second drifting one was added without
+> grepping; the "provisioning guard" is a **detached goroutine with a discarded result** wired into
+> no seam. See [[mutation-checking-the-primitive-does-not-prove-the-wiring]].
+>
+> **gh#842's DEFERRAL IS NOW CONDITIONAL** — valid **iff** the synchronous fail-at-boot guard lands
+> in .160. Ship it advisory or warn-only and the default-subject move returns to .160 as
+> breaking-with-lockstep. Fable re-ruled after I posted the falsification against my own work; the
+> deferral had been granted on a premise I had not verified against the implementation.
+>
+> **SHIPPED TODAY:** gh#837 quick wins (#838 — an oversized community no longer discards the
+> detection pass; permanent-vs-transient classification) · gh#811 (#845 — five e2e tiers can
+> actually fail; **immediately revealed gh#843 lifecycle and gh#844 ops had been failing while
+> reporting green**) · gh#834 batch-fetch timing · four archives (queue 4 → 1 → 2 with two new
+> proposals) · `task openspec:queue` + `/resume` wiring.
+>
+> **FILED TODAY:** #827 #828 #830 #833 #839 #842 #843 #844 (+ the semsource cluster #829/#823/#819
+> corroborated in our own tier on different data).
+>
+> **gh#843 ROOT-CAUSED AND RULED (Fable):** `Manager.History()` reconstructs from KV revisions;
+> ENTITY_STATES is `History=1`; **one revision ⇒ at most one derivable event.** The catalog's
+> recorded reason ("nothing reads deeper history") is **false as written** — Lifecycle reads
+> ENTITY_STATES itself. Ruling: durable transition records as occurrence-discriminated triples on
+> the Participant, read from the CURRENT revision. **#821 + this fix move to .161; .160 proceeds
+> with gh#810 only.**
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-08-01 (SESSION 23 CLOSED — THE IN-FLIGHT QUEUE IS 4 → 1, and the queue no
 > longer needs this file to explain itself.)**
 >
@@ -630,7 +685,9 @@ predates the wave and does not worsen at .159.
 Sisters consume TAGS. semsource + SemMachina are active on .159; **semdev and semboids are HELD
 by owner** pending these gates. Each tag names its trigger and who it releases.
 
-**v1.0.0-beta.160 — continuation (trigger: gh#810 merges + tag gates; estimate: days).**
+**v1.0.0-beta.160 — continuation (trigger: gh#810 merges + tag gates; estimate: ~~days~~ THE
+gh#810 REWORK, FRESH-SESSION SIZED — corrected 2026-08-01 after PR #847 was drafted; semdev's
+re-entry moves with it, which is better than releasing them onto a guard that does not guard).**
 Already on main: #812 substrate split, #814 create lane, #749 effect metadata, batch-fetch
 timing, archives. Adds: #810 (discovery under stream shapes — provisioning guard + #822 subject
 export + decoder pub-ack rejection) and #821 (create-lane e2e stage). **RELEASES semdev**: their
@@ -638,6 +695,10 @@ ask (#749) plus the discovery surface it rides on both work. Standing guidance t
 re-entry: do NOT hand-roll effect schemas or contract derivation — #798 lands additively (below).
 
 **v1.0.0-beta.161 — high-volume correctness (estimate: ~one week after .160). RELEASES semboids.**
+**ADDED 2026-08-01 by the gh#843 ruling: the lifecycle transition-record fix + gh#821's acceptance.**
+.161 was already the correctness tag and this is correctness — ENTITY_STATES `History=1` means
+`Manager.History()` can derive at most one event, so gh#821's create→transition→restart→history
+acceptance is unachievable until transitions are recorded durably in the entity's current value.
 Required: **#741** (raw-path same-second key collision — silent data loss at >1 msg/s; the
 highest-volume adopter must not re-enter aimed at this), **#742** (MaxDeliver parking visibility —
 outage exposure scales with volume), **#735** (capacity rejection vs shared circuit breaker — live
@@ -651,6 +712,17 @@ archived #831/#835). Design starts now in parallel (ADR-scale, architect + Fable
 collision with .160 tail); ships via the observe-only mismatch meter → enforce pattern; tag when
 observe-only is consumable. semdev's SECOND wave (restructure onto derived contracts) — not their
 re-entry blocker.
+
+### Deferred-items ledger (breaking work parked for the next wave)
+
+**Added 2026-08-01.** "No breaking wave planned" is true and was ALSO how a breaking item went
+missing: gh#810's default-subject move was in the session-20 ruling, absent from the tag roadmap,
+and no supersession was recorded. Anything deferred *because* a wave is not planned goes here, or
+it evaporates the same way.
+
+| Item | Deferred from | Condition |
+|---|---|---|
+| **gh#842** — move the default discovery subject off `tool.list` | gh#810 / .160 | **CONDITIONAL**: valid iff the synchronous fail-at-boot guard lands in .160. Advisory or warn-only ⇒ returns to .160 as breaking-with-lockstep. |
 
 Then v1 exit per the dry criterion. Additive tags need no lockstep; only breaking waves do, and
 none is planned — #762's envelope fix was the last, and it shipped in .159's window.
