@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -600,6 +601,27 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 	if err != nil {
 		return createOutcome{}, err
 	}
+	return m.createWithRegistration(ctx, reg, initial, source)
+}
+
+// createWithRegistration writes against a registration the CALLER selected.
+//
+// The distinction is load-bearing for any caller that chose a registration by
+// something other than the Participant's own Workflow(). Register deliberately
+// permits Name != Participant.Workflow() so a partial migration's cross-owner
+// overlap does not brick, which makes the two selectors genuinely divergent:
+// re-looking-up by initial.Workflow() would let a request routed and authorized
+// as one workflow write with another's entity pattern, transition table, owner
+// token, and audit predicates — and, where only the alias is registered, fail
+// a valid advertised route with a false not-found.
+//
+// So the registration is threaded, not re-derived. Create re-derives it from the
+// Participant (its only honest source); CreateFromOperator passes the one the
+// route selected.
+func (m *Manager) createWithRegistration(ctx context.Context, reg *registration, initial Participant, source TransitionSource) (createOutcome, error) {
+	if initial == nil {
+		return createOutcome{}, errors.New("lifecycle: Create requires non-nil Participant")
+	}
 	// ADR-056 PR-4: refuse the write if this owner was superseded by another
 	// process (WatchRevival quiesce) — we are the stale writer, do not clobber.
 	if err := m.checkQuiesced(reg.workflow.Name); err != nil {
@@ -673,6 +695,17 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 		resp, err := m.emitter.create(ctx, createReq)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyExists) {
+				// The emitter retries, so this may be OUR OWN committed write
+				// whose reply was lost — reporting a conflict for a birth this
+				// request just made is a wrong answer on a public surface.
+				// Distinguish by re-reading and comparing the audit stamp we
+				// were about to write: `now` is generated in this call, so an
+				// entity carrying it was written by this request and nothing
+				// else.
+				if own, ownErr := m.committedByThisRequest(ctx, reg, entityID, now); ownErr == nil && own {
+					return createOutcome{Degraded: true,
+						DegradedReason: "committed by this request; the mutation reply was lost and the retry observed the entity"}, nil
+				}
 				return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q",
 					ErrAlreadyExists, reg.workflow.Name, entityID)
 			}
@@ -702,15 +735,53 @@ func (m *Manager) createWithSource(ctx context.Context, initial Participant, sou
 	updateResp, err := m.emitter.update(ctx, updateReq)
 	if err != nil {
 		if errors.Is(err, errs.ErrRevisionMismatch) {
-			// Concurrent attach from a sibling — surface as
-			// ErrAlreadyExists since the most likely cause is
-			// a parallel lifecycle attach.
-			return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
-				ErrAlreadyExists, reg.workflow.Name, entityID)
+			// A revision mismatch means SOMETHING changed the entity — not
+			// that a lifecycle birth happened. Any writer merging an unrelated
+			// predicate produces one, and reporting that as "already
+			// lifecycle-managed" is a false answer on a public route. Re-read
+			// and let the phase triple decide.
+			latest, _, reErr := m.getEntity(ctx, entityID)
+			if reErr == nil && latest != nil && hasTriple(latest.Triples, entityID, reg.workflow.PhasePredicate) {
+				return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
+					ErrAlreadyExists, reg.workflow.Name, entityID)
+			}
+			// No phase triple: the entity moved for an unrelated reason. Report
+			// the contention as retryable rather than as a duplicate birth.
+			return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q: entity changed during lifecycle attach",
+				ErrUpdateRetriesExhausted, reg.workflow.Name, entityID)
 		}
 		return createOutcome{}, err
 	}
 	return outcomeFromUpdate(updateResp)
+}
+
+// committedByThisRequest reports whether the entity now carries the audit stamp
+// this create call was about to write. `now` is generated inside the call, so a
+// matching transition-at value identifies THIS request's write and no other.
+//
+// Conservative by construction: a workflow that declares no audit-at predicate,
+// an unreadable entity, or any mismatch all answer false, which falls back to
+// reporting the duplicate. It converts a known-wrong 409 into a correct success
+// where it can prove ownership, and changes nothing where it cannot.
+func (m *Manager) committedByThisRequest(ctx context.Context, reg *registration, entityID string, now time.Time) (bool, error) {
+	atPredicate := reg.workflow.AuditPredicates.At
+	if atPredicate == "" {
+		return false, nil
+	}
+	state, _, err := m.getEntity(ctx, entityID)
+	if err != nil || state == nil {
+		return false, err
+	}
+	// Must match buildInitialTriples exactly — it writes now.Format(...), not
+	// now.UTC().Format(...); a mismatched formatting would make this silently
+	// never match and quietly restore the wrong 409.
+	want := now.Format(time.RFC3339Nano)
+	for _, tr := range state.Triples {
+		if tr.Subject == entityID && tr.Predicate == atPredicate && tr.Object == want {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // outcomeFromCreate / outcomeFromUpdate project the causal mutation response
@@ -1291,7 +1362,14 @@ func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initi
 	}
 
 	target := reflect.New(reg.meta.GoType).Interface().(Participant)
-	if err := json.Unmarshal(initial, target); err != nil {
+	// DisallowUnknownFields: a permissive decode accepts keys this workflow
+	// cannot persist, drops them in projectStructToTriples, and still answers
+	// 201 — so an operator's submitted state is silently lost with a success.
+	// Rejecting is the fail-closed direction and makes the create contract
+	// falsifiable from the caller's side.
+	dec := json.NewDecoder(bytes.NewReader(initial))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(target); err != nil {
 		return CreateResult{}, fmt.Errorf("%w: decode initial state for workflow %q: %s",
 			ErrInvalidInitialState, workflow, err.Error())
 	}
@@ -1301,7 +1379,7 @@ func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initi
 			ErrInvalidInitialState, workflow)
 	}
 
-	outcome, err := m.createWithSource(ctx, target, TransitionSourceOperator)
+	outcome, err := m.createWithRegistration(ctx, reg, target, TransitionSourceOperator)
 	if err != nil {
 		return CreateResult{}, err
 	}

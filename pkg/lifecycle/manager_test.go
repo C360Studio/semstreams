@@ -37,6 +37,11 @@ type fakeEmitter struct {
 	// touching what was stored, so a test can tell the causal response apart
 	// from a later Get of the same entity.
 	createResponseMutator func(*graph.EntityState)
+	// createLosesReply commits the write and then reports ErrAlreadyExists —
+	// the shape the emitter's own retry produces when the first reply is lost.
+	createLosesReply bool
+	// forceRevisionMismatch makes update() fail CAS regardless of revision.
+	forceRevisionMismatch bool
 }
 
 // update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
@@ -50,6 +55,9 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
 	currentRev := f.bucket.revOf(req.Entity.ID)
+	if f.forceRevisionMismatch && f.bucket.exists(req.Entity.ID) {
+		return nil, fmt.Errorf("%w: forced", errs.ErrRevisionMismatch)
+	}
 	if !f.bucket.exists(req.Entity.ID) {
 		// ADR-060: production update() returns (nil, <error wrapping ErrEntityNotFound>).
 		return nil, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
@@ -103,6 +111,9 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state := *req.Entity
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
+	if f.createLosesReply {
+		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
+	}
 	if f.createDegraded {
 		return &graph.CreateEntityWithTriplesResponse{
 			MutationResponse: graph.MutationResponse{Degraded: true, DegradedReason: "read-back unavailable"},
@@ -640,7 +651,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=643 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=654 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -1052,5 +1063,113 @@ func TestCreateFromOperator_DegradedCommitIsSuccess(t *testing.T) {
 	// The write really did land — that is what makes retrying wrong.
 	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
 		t.Errorf("degraded create did not commit: %v", getErr)
+	}
+}
+
+// TestCreateFromOperator_UsesTheRouteSelectedRegistration pins that the write
+// happens against the registration the CALLER chose, not one re-derived from
+// the Participant's own constant.
+//
+// The two selectors genuinely diverge, because Register deliberately permits
+// Name != Participant.Workflow() so a partial migration's cross-owner overlap
+// does not brick. Re-deriving let a request routed as one workflow write with
+// another's pattern, transitions, owner token, and audit predicates — and, with
+// only the alias registered, fail a valid advertised route with a false
+// not-found. That second case is what this test drives.
+func TestCreateFromOperator_UsesTheRouteSelectedRegistration(t *testing.T) {
+	ctx := context.Background()
+	// One shared bucket: the emitter writes to it and the manager reads from it.
+	bucket := newFakeBucket()
+	mgr := newManagerForTest(nil, &fakeEmitter{bucket: bucket}, bucket)
+
+	// Register ONLY the alias. fixtureMission.Workflow() returns "fixture",
+	// which is deliberately not registered here.
+	alias := lifecycle{}.fixtureWorkflow()
+	alias.Name = "fixture-alias"
+	if err := mgr.Register(alias); err != nil {
+		t.Fatalf("Register alias: %v", err)
+	}
+
+	const id = "c360.platform1.lifecycle.gcs.mission.aliased"
+	result, err := mgr.CreateFromOperator(ctx, "fixture-alias",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if err != nil {
+		t.Fatalf("create against the alias route: %v — the route's registration was discarded and re-looked-up by the Participant's own constant", err)
+	}
+	if result.Degraded {
+		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
+	}
+	if _, getErr := mgr.Get(ctx, "fixture-alias", id); getErr != nil {
+		t.Errorf("instance not readable under the route's workflow: %v", getErr)
+	}
+}
+
+// TestCreateFromOperator_RejectsUnknownFields pins the fail-closed decode. A
+// permissive decode accepts keys the workflow cannot persist, drops them, and
+// still answers 201 — losing an operator's submitted state behind a success.
+func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	_, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"c360.platform1.lifecycle.gcs.mission.unk","phase":"planning","not_a_field":"dropped"}`))
+	if !errors.Is(err, ErrInvalidInitialState) {
+		t.Fatalf("err = %v, want ErrInvalidInitialState — an unpersistable key must not be silently dropped behind a 201", err)
+	}
+}
+
+// TestCreate_LostReplyIsNotReportedAsADuplicate pins the correction to the
+// lost-reply path: the emitter retries, so an ErrAlreadyExists may be THIS
+// request's own committed write whose reply was lost. Reporting a conflict for
+// a birth this request just made is a wrong answer on a public surface.
+func TestCreate_LostReplyIsNotReportedAsADuplicate(t *testing.T) {
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+
+	// Commit, then report the failure the lost reply would produce.
+	emitter.createLosesReply = true
+
+	const id = "c360.platform1.lifecycle.gcs.mission.lostreply"
+	result, err := mgr.CreateFromOperator(ctx, "fixture",
+		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+	if errors.Is(err, ErrAlreadyExists) {
+		t.Fatal("a lost reply for this request's own committed write was reported as a duplicate")
+	}
+	if err != nil {
+		t.Fatalf("CreateFromOperator: %v", err)
+	}
+	if !result.Degraded {
+		t.Error("a recovered lost-reply commit should report as degraded so the caller knows the read-back did not happen")
+	}
+	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
+		t.Errorf("the write did not actually commit: %v", getErr)
+	}
+}
+
+// TestCreate_UnrelatedConcurrentUpdateIsNotADuplicateBirth pins the attach-path
+// correction: a CAS revision mismatch means something changed the entity, not
+// that a lifecycle birth happened. Any writer merging an unrelated predicate
+// produces one, and "already lifecycle-managed" would be a false answer.
+func TestCreate_UnrelatedConcurrentUpdateIsNotADuplicateBirth(t *testing.T) {
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+
+	// Entity exists with a NON-lifecycle triple, and the CAS will miss.
+	const id = "c360.platform1.lifecycle.gcs.mission.contended"
+	bucket.put(id, &graph.EntityState{
+		ID:      id,
+		Version: 1,
+		// Canonical predicate, unrelated to this workflow's lifecycle: the
+		// point is an entity that moved for a reason that is not a birth.
+		Triples: []message.Triple{{Subject: id, Predicate: "mission.identity.owner-org-id", Object: "acme"}},
+	})
+	emitter.forceRevisionMismatch = true
+
+	err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"})
+	if errors.Is(err, ErrAlreadyExists) {
+		t.Fatal("an unrelated concurrent update was reported as a duplicate lifecycle birth")
+	}
+	if !errors.Is(err, ErrUpdateRetriesExhausted) {
+		t.Errorf("err = %v, want a retryable contention error", err)
 	}
 }
