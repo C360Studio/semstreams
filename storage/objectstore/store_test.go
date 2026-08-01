@@ -7,7 +7,6 @@ import (
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
 // TestDefaultKeyGenerator_WithMessage tests key generation with proper message.Message interface
@@ -83,9 +82,16 @@ func TestDefaultKeyGenerator_KeyFormat(t *testing.T) {
 	assert.Contains(t, key, "/")             // Path separators
 	assert.Contains(t, key, "_")             // Identifier_timestamp separator
 
-	// Key should match format: type/YYYY/MM/DD/HH/identifier_timestamp
-	// We can't test exact values due to timestamps, but we can verify structure
-	assert.Regexp(t, `^[^/]+/\d{4}/\d{2}/\d{2}/\d{2}/[^_]+_\d+$`, key)
+	// Key should match format: type/YYYY/MM/DD/HH/identifier_nonce.
+	// The suffix is a per-write UUID nonce — NOT a clock reading (a clock
+	// suffix at any granularity collides and silently loses writes, #741).
+	// This regexp previously pinned `_\d+$` (the colliding timestamp shape);
+	// updating it is the bug's own shadow, not a behavior-change smell.
+	assert.Regexp(
+		t,
+		`^[^/]+/\d{4}/\d{2}/\d{2}/\d{2}/[^_]+_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`,
+		key,
+	)
 }
 
 // TestDefaultKeyGenerator_MultipleCalls tests that each call generates unique keys
@@ -124,33 +130,26 @@ func TestDefaultKeyGenerator_ByteSlice(t *testing.T) {
 	assert.Contains(t, key, "/unknown_")
 }
 
-// TestDefaultKeyGenerator_RawBytesSameSecondDistinct pins the sub-second
-// entropy lane of #741: raw []byte inputs implement neither leg of
-// message.Message, so every such write shares the "unknown" identifier —
-// with a seconds-granularity timestamp suffix, two DISTINCT messages in the
-// same wall-clock second generated the IDENTICAL key, and ObjectStore Put
-// replace semantics silently discarded the first (no error, no log).
-//
-// The retry loop is a same-second window guard: the test only discriminates
-// when both GenerateKey calls land inside one wall-clock second, so a crossed
-// boundary retries rather than passing vacuously.
+// TestDefaultKeyGenerator_RawBytesSameSecondDistinct pins the uniqueness
+// carrier of #741: raw []byte inputs implement neither leg of
+// message.Message, so every such write shares the "unknown" identifier and
+// key uniqueness rests ENTIRELY on the per-write nonce. The clock seam
+// forces IDENTICAL wall-clock readings for both writes — deterministically
+// reproducing what real hosts do anyway (the original seconds suffix
+// collided within one second; the first fix's UnixNano suffix collided on
+// hosts with microsecond clock quantization, per the #741 Codex review) —
+// so a regression to ANY clock-derived suffix fails this test on every run,
+// not probabilistically.
 func TestDefaultKeyGenerator_RawBytesSameSecondDistinct(t *testing.T) {
-	gen := &DefaultKeyGenerator{}
+	frozen := time.Date(2026, 8, 1, 15, 4, 5, 0, time.UTC)
+	gen := &DefaultKeyGenerator{now: func() time.Time { return frozen }}
 
-	var k1, k2 string
-	sameSecond := false
-	for i := 0; i < 50 && !sameSecond; i++ {
-		before := time.Now().Unix()
-		k1 = gen.GenerateKey([]byte(`{"seq":"a"}`))
-		k2 = gen.GenerateKey([]byte(`{"seq":"b"}`))
-		sameSecond = time.Now().Unix() == before
-	}
-	require.True(t, sameSecond,
-		"could not land two GenerateKey calls inside one wall-clock second")
+	k1 := gen.GenerateKey([]byte(`{"seq":"a"}`))
+	k2 := gen.GenerateKey([]byte(`{"seq":"b"}`))
 
 	assert.NotEqual(t, k1, k2,
-		"two distinct raw-path messages in the same second must never share a key: "+
-			"ObjectStore Put replaces and the first object is silently lost (#741)")
+		"two distinct raw-path messages at the IDENTICAL clock reading must never share "+
+			"a key: ObjectStore Put replaces and the first object is silently lost (#741)")
 }
 
 // TestDefaultKeyGenerator_RawMessage tests key generation with json.RawMessage input

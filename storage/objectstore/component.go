@@ -823,14 +823,17 @@ func classifyWriteDisposition(ctxErr, procErr error) writeDisposition {
 // the store commit AND any required StorageReference publication both succeed;
 // failures NAK (transient) or Term (structurally invalid) per
 // classifyWriteDisposition. Redelivery after a partial failure re-runs the
-// store: both write paths generate time/nonce-suffixed keys
-// (Store.generateContentKey and DefaultKeyGenerator both append UnixNano —
-// #741), so a redelivered message ALWAYS stores a NEW object rather than
-// overwriting — duplicates beat loss (#727). Before #741, a same-second
-// redelivery happened to be an idempotent overwrite, but only by the same
-// seconds-granularity key collision that silently LOST distinct same-second
-// messages; with sub-second entropy every redelivery is a visible duplicate —
-// the honest at-least-once outcome.
+// store. On the raw lane, DefaultKeyGenerator keys every write with a
+// per-write UUID nonce (#741), so a redelivered raw message ALWAYS stores a
+// NEW object rather than overwriting — a visible duplicate; duplicates beat
+// loss (#727). (Before #741 the seconds-granularity key suffix made
+// same-second redelivery an idempotent overwrite only by the same collision
+// that silently LOST distinct same-second messages.) On the ContentStorable
+// lane, Store.generateContentKey still keys with UnixNano: a redelivery
+// landing on the same clock reading overwrites rather than duplicates — but
+// that key embeds the entity ID, so the casualty is the SAME entity's
+// just-written content with identical bytes (an idempotent overwrite), never
+// a distinct message.
 //
 // Retry is BOUNDED, not indefinite: the write consumer's default MaxDeliver=3
 // (component.GetConsumerConfigFromDefinitionWithDefault) caps delivery

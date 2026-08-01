@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -729,28 +731,47 @@ func (s *Store) FetchBinary(ctx context.Context, ref BinaryRef) ([]byte, error) 
 	return data, nil
 }
 
-// DefaultKeyGenerator provides time-based key generation.
-// Keys are formatted as: type/year/month/day/hour/identifier_timestamp
+// DefaultKeyGenerator provides time-bucketed key generation.
+// Keys are formatted as: type/year/month/day/hour/identifier_nonce
 //
 // If the input implements message.Message, its Type and ID provide the key
 // prefix and identifier; anything else (raw []byte, json.RawMessage, plain
-// structs and maps) falls back to "message" / "unknown" and relies entirely
-// on the timestamp suffix for uniqueness.
-type DefaultKeyGenerator struct{}
+// structs and maps) falls back to "message" / "unknown". Key uniqueness is
+// carried by the per-write UUID nonce in every case — never by the clock.
+type DefaultKeyGenerator struct {
+	// now overrides the wall-clock reading used for the date-partition path
+	// segments. nil = time.Now. Unexported test seam: the #741 regression
+	// tests force IDENTICAL clock readings to prove deterministically that
+	// key uniqueness comes from the nonce, not from clock granularity.
+	now func() time.Time
+}
 
 // GenerateKey creates a time-bucketed slash-based key.
-// Format: type/year/month/day/hour/identifier_timestampNanos
-// Example: sensor.temperature.v1/2024/01/19/14/device-123_1705677443123456789
+// Format: type/year/month/day/hour/identifier_nonce
+// Example: sensor.temperature.v1/2024/01/19/14/device-123_6ba7b810-9dad-11d1-80b4-00c04fd430c8
 //
-// The timestamp suffix is UnixNano (matching generateContentKey and
-// generateBinaryKey): with a seconds suffix, two unknown-identifier inputs
-// in the same wall-clock second generated the IDENTICAL key, and ObjectStore
-// Put replace semantics silently discarded the first object (#741).
-// Nanosecond granularity makes sequential same-instant keys distinct; the
-// same-nanosecond residual is accepted here exactly as it is for the two
-// content-key generators above.
+// Wall time contributes ONLY the date-partition path segments; uniqueness is
+// carried by a per-write UUID nonce. A clock reading — at ANY granularity —
+// is not a uniqueness guarantee: this key originally carried a unix-SECONDS
+// suffix, which silently lost distinct same-second raw-path messages
+// (ObjectStore Put replaces — #741), and the first fix's UnixNano suffix
+// reproduced the same collision on hosts whose clock quantizes to coarser
+// steps (consecutive time.Now().UnixNano() calls returned identical values
+// under microsecond quantization in the #741 Codex review).
+//
+// generateContentKey and generateBinaryKey still carry a UnixNano suffix and
+// share that clock-collision residual, with a different consequence: their
+// identifier is the entity ID, so a collision requires the SAME entity
+// re-storing content within one clock step — overwriting that entity's own
+// content, not losing a DISTINCT message. Only this generator's shared
+// unknown-identifier family collides ACROSS messages, which is why the nonce
+// lives here. Their residual is recorded, not endorsed; changing them is
+// outside #741's scope.
 func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 	now := time.Now()
+	if g.now != nil {
+		now = g.now()
+	}
 
 	// Extract type if message implements Message interface
 	msgType := "message"
@@ -764,14 +785,14 @@ func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 		identifier = m.ID()
 	}
 
-	key := fmt.Sprintf("%s/%04d/%02d/%02d/%02d/%s_%d",
+	key := fmt.Sprintf("%s/%04d/%02d/%02d/%02d/%s_%s",
 		msgType,
 		now.Year(),
 		now.Month(),
 		now.Day(),
 		now.Hour(),
 		identifier,
-		now.UnixNano(),
+		uuid.NewString(),
 	)
 
 	return key

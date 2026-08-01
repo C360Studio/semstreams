@@ -8,16 +8,18 @@ package objectstore
 //     envelope base64-encodes []byte fields and corrupts the JSON), so
 //     DefaultKeyGenerator's type/ID extraction was structurally unreachable
 //     on the whole fallback lane.
-//  2. DefaultKeyGenerator's timestamp suffix had seconds granularity, so the
-//     shared unknown-identifier keys collided across distinct messages in
-//     the same wall-clock second — ObjectStore Put replaces, and the first
-//     message was silently lost.
+//  2. DefaultKeyGenerator's key suffix was a clock reading (seconds; then
+//     UnixNano in the first fix round, which still collided on hosts with
+//     microsecond clock quantization), so the shared unknown-identifier keys
+//     collided across distinct messages landing on one clock step —
+//     ObjectStore Put replaces, and the first message was silently lost.
 //
 // These tests drive the PRODUCTION processWriteMessage seam with a
 // key-recording fake backend underneath the real Store type, pinning both
 // halves of the fix: keys derive from the decoded envelope when decode
 // succeeded (while the stored payload remains the original wire bytes), and
-// true undecodable bytes still get unique keys via sub-second entropy.
+// true undecodable bytes get unique keys from a per-write UUID nonce — never
+// from the clock.
 
 import (
 	"context"
@@ -70,12 +72,6 @@ func (f *keyRecordingObjectStore) recorded() []recordedPut {
 	return out
 }
 
-func (f *keyRecordingObjectStore) reset() {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.puts = nil
-}
-
 // newWriteKeyTestComponent builds a Component over the recording backend. No
 // ports are configured, so the "stored" emit is a by-design skip and every
 // write's key + payload land in the fake.
@@ -126,32 +122,27 @@ func TestProcessWriteMessage_DecodedEnvelopeKeysCarryTypeAndID(t *testing.T) {
 }
 
 // TestProcessWriteMessage_UndecodableSameSecondWritesGetDistinctKeys pins the
-// residual entropy lane: true undecodable bytes legitimately take the
-// unknown key family, so their uniqueness rests entirely on the timestamp
-// suffix — which must have sub-second granularity or same-second writes
-// collide and ObjectStore Put silently replaces the first (#741).
-//
-// Same-second window guard: the pair only discriminates when both writes
-// land inside one wall-clock second; a crossed boundary resets and retries.
+// residual lane: true undecodable bytes legitimately take the unknown key
+// family, so their uniqueness rests ENTIRELY on the per-write nonce. The
+// clock seam freezes the key generator's wall-clock reading, so both writes
+// observe the IDENTICAL time — deterministically reproducing what real hosts
+// do anyway (adjacent time.Now() calls collided under -count=25 on
+// microsecond-quantized clocks, per the #741 Codex review) — and a
+// regression to ANY clock-derived suffix fails on every run, not
+// probabilistically.
 func TestProcessWriteMessage_UndecodableSameSecondWritesGetDistinctKeys(t *testing.T) {
 	backend := &keyRecordingObjectStore{}
 	// Empty registry: every decode fails, forcing the raw fallback lane.
 	c := newWriteKeyTestComponent(message.NewDecoder(payloadregistry.New()), backend)
+	frozen := time.Date(2026, 8, 1, 15, 4, 5, 0, time.UTC)
+	c.store.keyGenerator = &DefaultKeyGenerator{now: func() time.Time { return frozen }}
 
-	sameSecond := false
-	for i := 0; i < 50 && !sameSecond; i++ {
-		backend.reset()
-		before := time.Now().Unix()
-		require.NoError(t, c.processWriteMessage(context.Background(), []byte(`not-json-a`)))
-		require.NoError(t, c.processWriteMessage(context.Background(), []byte(`not-json-b`)))
-		sameSecond = time.Now().Unix() == before
-	}
-	require.True(t, sameSecond,
-		"could not land two writes inside one wall-clock second")
+	require.NoError(t, c.processWriteMessage(context.Background(), []byte(`not-json-a`)))
+	require.NoError(t, c.processWriteMessage(context.Background(), []byte(`not-json-b`)))
 
 	puts := backend.recorded()
 	require.Len(t, puts, 2)
 	assert.NotEqual(t, puts[0].key, puts[1].key,
-		"two DISTINCT undecodable messages in the same second must never share a key: "+
-			"ObjectStore Put replaces and the first write is silently lost (#741)")
+		"two DISTINCT undecodable messages at the IDENTICAL clock reading must never "+
+			"share a key: ObjectStore Put replaces and the first write is silently lost (#741)")
 }
