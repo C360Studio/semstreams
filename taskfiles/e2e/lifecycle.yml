@@ -13,9 +13,19 @@ tasks:
       - docker compose -f docker/compose/lifecycle.yml up -d --wait --build
       - echo "[OK] All services are healthy"
       - echo "[E2E LIFECYCLE] Running lifecycle scenario..."
-      - cmd: cd cmd/e2e && ./e2e --scenario lifecycle
-        ignore_error: true
-      - docker compose -f docker/compose/lifecycle.yml down -v --timeout 15
+      # gh#811: capture the scenario's exit code, tear down, then exit with it.
+      # ignore_error:true made this task exit 0 on scenario failure, so the tier
+      # could not go red — a gate that cannot fail is a slow test, not a gate.
+      # `|| rc=$?` not `; rc=$?`: Task aborts the block on a failing command,
+      # so `;` skipped the teardown entirely and leaked the stack — verified by
+      # counting containers, not by reading the exit code. `||` is a condition
+      # context, which is exempt. The subshell keeps `cd` from leaking into the
+      # compose path, which resolves from the repo root.
+      - cmd: |
+          rc=0
+          (cd cmd/e2e && ./e2e --scenario lifecycle) || rc=$?
+          docker compose -f docker/compose/lifecycle.yml down -v --timeout 15
+          exit $rc
 
   debug:
     desc: Start lifecycle E2E environment for debugging (leaves containers running)
