@@ -9,6 +9,60 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-01 (SESSION 22 CLOSE — gh#814 IS MERGED. Three review rounds on it, and
+> round 3 found a defect CREATED by round 2's fix.** The batch head is landing.
+>
+> **PR #816 (gh#814, lifecycle create lane) — MERGED `0d3095b4`.** `POST /workflows/{type}`
+> through `Manager.Create`. Three Codex rounds + two reviewer rounds; **every round found
+> real defects, and none of them were in the route — they were in the primitive being
+> projected.** Round 1: entity-ID pattern never enforced (measured orphan — commits, 201s,
+> invisible to List/Watch, unreclaimable by Despawn), a committed birth reporting as 500,
+> operator births attributed to the framework, an HTTP-reachable panic from an unchecked
+> `.(Participant)`. Round 2: **a comma in a `schema:` tag silently DELETED `max_body_bytes`
+> from the generated schema AND the runtime discovery surface** (ParseSchemaTag splits on
+> commas, GenerateConfigSchema `continue`s on error, drift-check only diffs — nothing guards
+> field PRESENCE); a pattern gate that validated shape but not the ID; and **a commit
+> message of mine asserting "test and guard both removed" when only the test was**. Round 3:
+> **the route-selected registration was not bound to the write** — a direct consequence of
+> round 2's fix, giving a false 404 on an alias-only route and cross-workflow writes when
+> both are registered.
+>
+> **STILL OPEN on the create lane, deliberately, and NOT tracked anywhere else:** a workflow
+> whose lifecycle ID field is `json:"-"` (the default `agent-run` workflow) cannot be created
+> through the route at all, yet `cmd/semstreams` advertises it there. Needs an
+> operator-creatable capability derived from lifecycle metadata — a design change. **File it
+> before it is forgotten.**
+>
+> **PR #815 (gh#812, ownership substrate) — FIXED, GREEN, NOT MERGED.** Awaiting the owner's
+> merge word. Codex + reviewer both found the same blocking defect and the reviewer MEASURED
+> it: the adopter recipe never ran the returned heartbeater, so a downstream following it
+> verbatim gets `OWNER_PRESENCE` ageing out at `PresenceTTL` and its owning entry compacted
+> out of the epoch. Fixed at `209d67b7`; two mutations that had survived the test are now
+> killed.
+>
+> **PR #809 (gh#749, tool effect metadata) — FIXED, GREEN, AWAITING CODEX.** Reviewer caught
+> `web_search` classified `read_only` while writing 7 triples per result, an
+> approval-blindness test that could not fail, and `research_graph` shipping unclassified.
+> **Its e2e stage is deliberately RED and MUST STAY RED until #810 lands** — the red IS the
+> finding. An earlier revision of this session "fixed" it into a config workaround that made
+> the tier green while every default-subject deployment still had no discovery.
+>
+> **NEXT: #810** (`tool.list` silently swallowed by JetStream when a stream covers `tool.>`;
+> the subscription succeeds so nothing warns) → **#809 completes** → **#795**. Also owed:
+> **#821** (fresh-volume create→transition→restart→history e2e, gh#814's acceptance — decide
+> whether it rides semdragon's beta.159 replay or becomes a tier stage) and **#811** (five
+> e2e tiers exit 0 on scenario failure).
+>
+> **OpenSpec `lifecycle-operator-create` is IMPLEMENTED** (that is what #816's last two
+> rounds were). Remaining: the operator-creatable design item above, and the #821 decision.
+> Archive it once those are placed.
+>
+> **THE SESSION'S LESSON, now a memory:** projecting an existing primitive onto a new surface
+> makes that primitive's gaps newly REACHABLE. Correctness did not change; reachability did.
+> Every defect was caught externally, across three PRs.
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-07-31 (SESSION 20 — THE TAG IS CUT. `v1.0.0-beta.159` is pushed
 > (`8813270c`), which makes this the first POST-TAG session. The sister-lockstep wave is
 > RELEASED and **SISTERS ARE ADOPTING IT NOW** — release step 7 done 2026-07-31, so the tag
