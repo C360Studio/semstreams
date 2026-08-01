@@ -3,9 +3,11 @@ package objectstore
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/message"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestDefaultKeyGenerator_WithMessage tests key generation with proper message.Message interface
@@ -120,6 +122,35 @@ func TestDefaultKeyGenerator_ByteSlice(t *testing.T) {
 	// Should use defaults since []byte doesn't implement message.Message
 	assert.Contains(t, key, "message/")
 	assert.Contains(t, key, "/unknown_")
+}
+
+// TestDefaultKeyGenerator_RawBytesSameSecondDistinct pins the sub-second
+// entropy lane of #741: raw []byte inputs implement neither leg of
+// message.Message, so every such write shares the "unknown" identifier —
+// with a seconds-granularity timestamp suffix, two DISTINCT messages in the
+// same wall-clock second generated the IDENTICAL key, and ObjectStore Put
+// replace semantics silently discarded the first (no error, no log).
+//
+// The retry loop is a same-second window guard: the test only discriminates
+// when both GenerateKey calls land inside one wall-clock second, so a crossed
+// boundary retries rather than passing vacuously.
+func TestDefaultKeyGenerator_RawBytesSameSecondDistinct(t *testing.T) {
+	gen := &DefaultKeyGenerator{}
+
+	var k1, k2 string
+	sameSecond := false
+	for i := 0; i < 50 && !sameSecond; i++ {
+		before := time.Now().Unix()
+		k1 = gen.GenerateKey([]byte(`{"seq":"a"}`))
+		k2 = gen.GenerateKey([]byte(`{"seq":"b"}`))
+		sameSecond = time.Now().Unix() == before
+	}
+	require.True(t, sameSecond,
+		"could not land two GenerateKey calls inside one wall-clock second")
+
+	assert.NotEqual(t, k1, k2,
+		"two distinct raw-path messages in the same second must never share a key: "+
+			"ObjectStore Put replaces and the first object is silently lost (#741)")
 }
 
 // TestDefaultKeyGenerator_RawMessage tests key generation with json.RawMessage input

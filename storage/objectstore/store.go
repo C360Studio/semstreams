@@ -216,11 +216,32 @@ func (s *Store) Put(ctx context.Context, key string, data []byte) error {
 //   - json.RawMessage: stored directly as raw JSON bytes
 //   - other types: marshaled to JSON via json.Marshal
 func (s *Store) Store(ctx context.Context, msg any) (string, error) {
+	return s.storeWithKeySource(ctx, msg, msg)
+}
+
+// storeWithKeySource is Store with the key (and metadata) derived from
+// keySource rather than from the stored msg itself. The component's raw
+// write lane needs the split (#741): it must persist the ORIGINAL wire
+// bytes (re-marshaling a decoded envelope base64-encodes []byte fields and
+// corrupts the JSON), but keying from those opaque bytes sent every write
+// into the message/.../unknown key family — two distinct messages in the
+// same instant collided and ObjectStore Put silently replaced the first.
+// When the caller holds a decoded *message.BaseMessage it passes it as
+// keySource so DefaultKeyGenerator's type/ID extraction works, while msg
+// stays the raw bytes that get persisted. The MetadataExtractor sees the
+// same keySource: both it and the KeyGenerator derive index information
+// FROM the message, and the decoded envelope is strictly more informative
+// than bytes it cannot type-assert (on every other path keySource == msg,
+// so nothing changes for direct Store callers).
+//
+// Unexported deliberately: the only caller with a divergent keySource is
+// processWriteMessage in this package; Store remains the public surface.
+func (s *Store) storeWithKeySource(ctx context.Context, keySource, msg any) (string, error) {
 	start := time.Now()
 	s.metrics.recordWriteOp("store")
 
 	// Generate key using pluggable generator
-	key := s.keyGenerator.GenerateKey(msg)
+	key := s.keyGenerator.GenerateKey(keySource)
 
 	// Handle raw bytes directly to avoid double-encoding.
 	// json.Marshal([]byte) produces a base64-encoded string, which corrupts
@@ -243,7 +264,7 @@ func (s *Store) Store(ctx context.Context, msg any) (string, error) {
 	// Extract metadata if extractor is configured
 	var meta map[string][]string
 	if s.metadataExtractor != nil {
-		meta = s.metadataExtractor.ExtractMetadata(msg)
+		meta = s.metadataExtractor.ExtractMetadata(keySource)
 	}
 
 	// Store JSON bytes in ObjectStore with metadata
@@ -711,16 +732,23 @@ func (s *Store) FetchBinary(ctx context.Context, ref BinaryRef) ([]byte, error) 
 // DefaultKeyGenerator provides time-based key generation.
 // Keys are formatted as: type/year/month/day/hour/identifier_timestamp
 //
-// The generator uses behavioral interfaces for optional enhancement:
-//   - message.Typeable: Provides type information for key prefix
-//   - message.Identifiable: Provides identifier for key uniqueness
-//
-// If interfaces aren't implemented, sensible defaults are used.
+// If the input implements message.Message, its Type and ID provide the key
+// prefix and identifier; anything else (raw []byte, json.RawMessage, plain
+// structs and maps) falls back to "message" / "unknown" and relies entirely
+// on the timestamp suffix for uniqueness.
 type DefaultKeyGenerator struct{}
 
 // GenerateKey creates a time-bucketed slash-based key.
-// Format: type/year/month/day/hour/identifier_timestamp
-// Example: sensor.temperature.v1/2024/01/19/14/device-123_1705677443
+// Format: type/year/month/day/hour/identifier_timestampNanos
+// Example: sensor.temperature.v1/2024/01/19/14/device-123_1705677443123456789
+//
+// The timestamp suffix is UnixNano (matching generateContentKey and
+// generateBinaryKey): with a seconds suffix, two unknown-identifier inputs
+// in the same wall-clock second generated the IDENTICAL key, and ObjectStore
+// Put replace semantics silently discarded the first object (#741).
+// Nanosecond granularity makes sequential same-instant keys distinct; the
+// same-nanosecond residual is accepted here exactly as it is for the two
+// content-key generators above.
 func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 	now := time.Now()
 
@@ -736,8 +764,6 @@ func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 		identifier = m.ID()
 	}
 
-	// Format: type/year/month/day/hour/identifier_timestamp
-	// Example: sensor.temperature.v1/2024/01/19/14/msg-uuid_1705677443
 	key := fmt.Sprintf("%s/%04d/%02d/%02d/%02d/%s_%d",
 		msgType,
 		now.Year(),
@@ -745,7 +771,7 @@ func (g *DefaultKeyGenerator) GenerateKey(msg any) string {
 		now.Day(),
 		now.Hour(),
 		identifier,
-		now.Unix(),
+		now.UnixNano(),
 	)
 
 	return key
