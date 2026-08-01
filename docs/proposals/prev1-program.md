@@ -9,6 +9,74 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-01 (SESSION 23 — THE IN-FLIGHT QUEUE IS HALVED. Both nearly-done changes
+> are ARCHIVED: `tool-effect-metadata` (36/37) and `lifecycle-operator-create` (42/43).
+> In-flight 4 → 2.)**
+>
+> **MEASURED THIS SESSION (re-run these; do not trust the numbers):** `-race ./...`
+> **135 ok / 0 FAIL** exit 0 · `-race -tags=integration -p 2 -count=1 ./...` **136 ok / 0 FAIL**
+> exit 0 (the container-start timeout the last close-out attributed to gh#736 did NOT recur) ·
+> `task e2e:agentic` **green**, `Scenario completed successfully`, exit 0 · `gofmt` clean ·
+> `go vet` plain AND `-tags=integration` clean · `task lint` exit 0 · `task schema:generate`
+> **zero drift** · `openspec validate --all --strict` **35 passed / 0 failed** · in-flight
+> changes **2** · TBD-stub specs **11 → 10**.
+>
+> **⚠ PR #825 IS GREEN AND STILL UNMERGED — merge it first thing.** All five checks pass
+> (`gh pr merge 825 --squash --delete-branch`). My attempt was blocked by a local permission
+> classifier, not by anything about the PR.
+>
+> **CORRECTION TO AN IN-FLIGHT READ: #825 was never Test-red or stuck.** A relay proposed
+> promoting "Test-red triage" to the next item on the premise that #825 was wedged. Empirical
+> pull says otherwise: `Test` **passed at 14m54s** against #809's 13m27s baseline — normal
+> length, not a hang. It looked stuck because `gh pr checks` renders an in-progress job as
+> `pending 0`. **There is no Test-red instance to triage right now.** Do not open that work
+> on a failure that did not happen.
+>
+> **BUT THE STRUCTURAL POINT BEHIND IT STANDS, AND IT GAINED A DEPENDENT.** #736 (false-RED
+> on nothing) and #811 (false-GREEN on real failures) are one gate-integrity cluster — the
+> same disease from opposite sides — and should be fixed as a unit. New this session: **#811
+> is now a hard prerequisite for gh#821**, because `taskfiles/e2e/lifecycle.yml:17` carries
+> `ignore_error: true`, so the lifecycle create-lane acceptance would land in a tier that
+> structurally cannot go red. That is no longer a tidiness argument.
+>
+> **DECIDED AND RECORDED (was blocking the archive):** gh#821 becomes a **semstreams tier
+> stage, NOT a ride on semdragon's beta.159 replay** — sister repos are hands-off so a gate
+> we cannot run is not our gate, and the acceptance's clause 5 verifies a *semstreams*
+> contract (birth source `operator`, fixed as a blocking defect in #816). Posted on gh#821
+> with the #811 sequencing. gh#824 placed; the `lifecycle` spec's "does NOT cover" section
+> now states the hole so the capability's current truth does not read as complete.
+>
+> **THE FINDING THIS SESSION — a `[~]` deliberate not-done stops the implementer and does NOT
+> stop the archiver.** `lifecycle-operator-create` task 4.2 declined, with reasoning, to
+> enforce `Workflow.Name == Schema.Workflow()`. **Its spec delta still REQUIRED it**, with a
+> scenario asserting registration FAILS on mismatch — while `manager.go:216-226` refuses the
+> check by name (ADR-056 Decision 5) and `TestCreateFromOperator_UsesTheRouteSelectedRegistration`
+> registers an aliased workflow and asserts `Register` **succeeds**. Archiving as written would
+> have published a scenario a shipped test disproves into `openspec/specs/lifecycle/` as
+> *current truth*, permanently, where nothing re-checks it. Rewritten to the real posture
+> (**registration records, ownership refuses**) with positive scenarios. A sibling code comment
+> had drifted the same way — `CreateFromOperator` claimed the invariant "is enforced once, at
+> Register", contradicting `Register` ~1100 lines earlier; round 3's fix updated the site it
+> touched and left the sibling asserting the withdrawn behaviour. **Propagate a not-done
+> decision into the DELTA and the sibling comments, not only into the task line.**
+>
+> **AND THE S19 SHAPE RECURRED A THIRD TIME.** Five task lines were unchecked that had
+> already been discharged — 4.3 (the classification table IS in #809's body), 8.9 (gh#749 is
+> closed), and 8.8 (the Codex round **did** run; owner-confirmed, but it left no trace in
+> reviews, comments, or the merged squash, so the repo alone could not answer it). The gates
+> ran; the lines were never amended. For an owner-run gate the task line is the *only* durable
+> evidence — an unamended one is indistinguishable from a skipped gate six weeks later.
+> I also hit the pipeline-exit-code footgun **while discharging the task line that warns about
+> it**: `go test ... | tail -40 > log; echo $?` reported the redirect, and counting `^ok` in a
+> 40-line tail window gave "27 ok" for a 135-package suite. Recorded in 8.2 rather than hidden.
+>
+> **NEXT: #810** (unchanged — `tool.list` swallowed by JetStream when a stream covers `tool.>`;
+> #809's `verify-tool-effect-catalog` stage stays RED ON PURPOSE until it lands; do NOT mute it
+> with a config override again). **THEN the gate-integrity cluster #811 + #736 as one unit**
+> (now gating gh#821). **THEN** #795, #799/#800.
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-08-01 (SESSION 22 CLOSED AND MERGED. The whole batch head landed: gh#814,
 > gh#812, gh#749 are MERGED and their issues CLOSED. Main verified green as a WHOLE, not
 > just per-PR.)**
