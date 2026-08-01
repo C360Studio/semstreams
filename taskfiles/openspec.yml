@@ -1,0 +1,38 @@
+version: '3'
+
+tasks:
+  default:
+    desc: Show the in-flight OpenSpec queue with each change's blocking condition
+    cmds:
+      - task: queue
+
+  queue:
+    desc: |
+      Surface WHY each in-flight change is still open, not just how far
+      along it is. `openspec list` renders a bare fraction ("12/14"),
+      which reads "almost done" even when the remaining items are a HALT
+      condition, a deliberate not-done, or a red gate.
+
+      Read from tasks.md every run, so the program baton does not carry
+      these caveats and cannot drift from them.
+    cmds:
+      - scripts/openspec-queue.sh
+
+  queue-strict:
+    desc: |
+      Same report, but exits non-zero when any caveat is found. For a
+      pre-archive check or CI. Deliberately NOT wired into `task check`:
+      an in-flight change with a recorded halt is a normal, healthy state
+      and must not fail the everyday gate.
+    cmds:
+      - scripts/openspec-queue.sh --strict
+
+  queue-test:
+    desc: Verify the queue reporter catches the caveat shapes it claims to
+    cmds:
+      - scripts/openspec-queue_fixture_test.sh
+
+  validate:
+    desc: Validate all OpenSpec changes and specs strictly
+    cmds:
+      - openspec validate --all --strict

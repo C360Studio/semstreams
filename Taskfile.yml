@@ -41,6 +41,9 @@ includes:
   dev:
     taskfile: ./taskfiles/dev.yml
     aliases: [d]
+  openspec:
+    taskfile: ./taskfiles/openspec.yml
+    aliases: [os]
 
   # E2E test taskfiles
   e2e:

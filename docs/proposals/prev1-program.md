@@ -9,6 +9,61 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-01 (SESSION 23 CLOSED — THE IN-FLIGHT QUEUE IS 4 → 1, and the queue no
+> longer needs this file to explain itself.)**
+>
+> **MERGED:** `86e9f094` #825 (baton) · `32995167` #826 (archived `tool-effect-metadata` +
+> `lifecycle-operator-create`) · `6d02cdab` #831 (archived `graph-index-replacement-semantics`,
+> held `predicate-raw-key-representation`). All green on the ruleset's two required checks.
+>
+> **RUN `task openspec:queue`, NOT `openspec list`.** New this session. A fraction ("12/14")
+> cannot distinguish "four items of work left" from "one of these four decides whether this
+> change should exist at all". The report reads halt/hold/deliberate/red markers out of
+> `tasks.md` every run. **NEXT deliberately no longer enumerates per-change caveats** ("check
+> its halt condition first", "task 4.2 is not-done on purpose") — run the command instead.
+> Re-narrating them here is what let them drift from the files they describe; the historical
+> blocks below retain theirs as history, which is what history is for. Wired into `/resume`;
+> `task openspec:queue-test` proves it catches the shapes it claims (9/9), including the
+> lowercase `halt:` that defeated a purpose-built case-sensitive grep. Its first fixture run
+> caught a real false-positive in itself (`*fail*` matched "boot failure"), which is the
+> argument for the fixture test in one line.
+>
+> **THE ONE CHANGE LEFT IS HELD FOR A WRITTEN REASON, NOT STALLED:**
+> `predicate-raw-key-representation` 12/14 — its 4.2 requires semantic e2e and
+> **`task e2e:semantic` is RED (gh#830)**: `validate-globalsearch-known-answer`, term
+> "forklift", `GraphQuery.loadEntities: context deadline exceeded`. NOT rerun to green.
+> Un-hold only when gh#830 resolves **with a cause**, not with a passing rerun. The tier is
+> not in CI (gh#769), so its last known green is the beta.159 tag — the red could have landed
+> any time since. gh#819 is visible live in the failing output (`strategy=` empty on every
+> probe). **`CLAUDE.md` advertises this tier as "~90s"; it took 11m35s — stale by an order of
+> magnitude.**
+>
+> **THE RULING APPLIED:** a spec change must not be held open on an *execution* event. Both
+> archived-this-session changes were code-complete with cited production evidence; what held
+> them open was a deployment step, a doc task, and gate re-runs — no code surface. Archiving
+> does not lose a contract, it **promotes** it: the halt condition and the fresh-state
+> activation contract are now REQUIREMENTS that `validate --strict` reads, instead of prose
+> only a reader who opens the file would ever see.
+>
+> **FILED, not hand-waved:** #827 (execute the pre-v1 coordinated tag + wipe/reseed; carries
+> the halt-armed-by-v1 warning) · #828 (ADR-068 D3 argues from the hash+catalog layout ADR-078
+> retired — it is the load-bearing justification for "reverse index is new work", so it needs
+> an architect ruling, not an edit) · #830 (semantic RED; three candidate causes left
+> undiscriminated rather than guessed — the discriminator is a run at `8813270c` on a cleaned
+> host).
+>
+> **ALSO:** OpenSpec CLI **1.5.0 → 1.7.0**, deliberately BEFORE archiving — 1.6 fixed "blocked
+> archive operations now exit non-zero" and "stale MODIFIED requirements stop instead of
+> silently deleting scenarios". Running archives on 1.5.0 would have been a false-green in the
+> tool being used to close things out. 1.7 also carries authored Purposes into new specs
+> natively. **TBD-stub specs 11 → 9** (`lifecycle` and `graph-index` written).
+>
+> **NEXT: #810** (unchanged) → **#811 + #736 as ONE gate-integrity unit** (#811 now gates
+> gh#821) → #795 → #799/#800. **gh#830 outranks the additive lane** — it is the only thing
+> holding the last in-flight change, and an untested tier accumulates regressions silently.
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-08-01 (SESSION 23 — THE IN-FLIGHT QUEUE IS HALVED. Both nearly-done changes
 > are ARCHIVED: `tool-effect-metadata` (36/37) and `lifecycle-operator-create` (42/43).
 > In-flight 4 → 2.)**
