@@ -1,9 +1,9 @@
 # Design — discovery under stream shapes (gh#810, gh#822)
 
-**Status: DRAFT, awaiting Fable shape review.** Written by an execution session against the
-six binding constraints recorded in `tasks.md`. Constraint 6 requires a recorded Fable review
-of new exported `graph`/`natsclient` surface *before* invention — this document is the thing to
-review, so that the review happens against a grounded proposal rather than against code.
+**Status: REVIEWED — Fable rulings recorded in §6 (2026-08-01, PR #852).** Written by an
+execution session against the six binding constraints recorded in `tasks.md`. Constraint 6
+requires a recorded Fable review of new exported `graph`/`natsclient` surface *before*
+invention — this document is the thing reviewed; §§1–5 are left as submitted, §6 is the ruling.
 
 Every claim below is cited to `file:line` at `c05a11fb` (main) or to the pinned dependency
 source. **Three of the six constraints do not survive contact with the code as written** — that is
@@ -249,3 +249,124 @@ hand-listed ack key set; the tautological subject-export test.
 a synchronous fail-at-boot guard ships in .160. A guard that is synchronous at seams no deployment
 reaches before its components start (§2.2) would satisfy the letter and reproduce the exact
 false-premise that drafted #847.
+
+---
+
+## 6. Rulings (Fable, 2026-08-01, recorded on PR #852)
+
+Every §1 claim was independently re-verified before ruling — files opened, greps re-run, the
+server type read at the **deployed** version line (v2.14.4) rather than the doc's 2.12.4 read.
+The design survives review. Constraints 1, 2 and 5 are **amended as proposed**, with the
+refinements below; constraints 3, 4 and 6 stand. §6.3 records where the doc's own citations
+needed correction, so the implementer inherits measured numbers, not quoted ones.
+
+### 6.1 The seven questions, ruled
+
+1. **YES — "all three seams" means the union of four** (§2.1). Constraint 1's "three" was
+   transcribed from the stale in-code enumerations, not from a census; the census says four.
+   Both stale comments (`config/streams.go:357`, `natsclient/stream.go:567`) are corrected in
+   this change, and the correction states the count is a *union* so the next seam added updates
+   both.
+
+2. **YES — the capture check runs on `EnsureStream`'s bind path too**, unlike bounds. The
+   asymmetry argument is sound: bounds are an ownership question (the binder's config is
+   discarded, so refusing a non-owner is not its call); capture is a topology property of the
+   stream itself and is harmful whoever created it. **Refinement, binding:** on the bind path
+   the check runs against the **existing stream's server-side subject filters**
+   (`stream.CachedInfo().Config.Subjects`), not against `cfg.Subjects` — the caller's config is
+   exactly the thing the bind path discards, so checking it would check a fiction.
+
+3. **YES — the synchronous `SubscribeForRequests` check is in scope.** This formally **amends
+   constraint 1**: the class closes only with both directions — config-resolved registry
+   consulted at all four provisioning seams (catches stream-after-declaration), and
+   `SubscribeForRequests` returning an error when an existing stream captures its subject
+   (catches declaration-after-stream, e.g. `gated-dag`'s runtime `EnsureStream`). #847's
+   subscribe-time *location* was right and its *policy* (advisory, detached goroutine) was the
+   defect. Both checks are synchronous; neither is a log line.
+
+4. **Option (A), composed with the positive discriminator.** The consolidated detector is:
+   `stream` (string) + `seq` (number) present, **and** every key within the closed union
+   `{stream, seq, duplicate, domain, val, batch, count} ∪ {error}` — which is **exactly** the
+   server's set at the deployed v2.14.4 line (verified against
+   `nats-io/nats-server@v2.14.4 server/stream.go`: `PubAck` + `JSPubAckResponse`). Reflection
+   over pinned `jetstream.PubAck` must yield a subset of the union or a test goes red
+   (constraint 3's drift guard); fixtures are **bytes** and include a batch ack and an
+   `error`-bearing `JSPubAckResponse`. **The gateway detector's 256-byte cap is retired, not
+   consolidated** — see §6.2. Residual risk (a future server-only key) is accepted explicitly;
+   the restored e2e stage (section 4 of tasks.md) is the live guard for that class.
+
+5. **YES — the detector's home is `natsclient`, and specifically `ClassifyReply`,** not
+   `RequestClassified` per se. Both `RequestClassified` **and** `RequestWithRetryClassified`
+   funnel through `ClassifyReply` (`natsclient/errors.go`); placing the check there covers the
+   mutation-path siblings (19 further call sites, measured — §6.3) that a `RequestClassified`-
+   only placement would silently miss. Consequences, all accepted:
+   - **Constraint 2 is amended**: the gateway's `isPubAckResponse` retires *into* `natsclient`
+     by consolidation — once `ClassifyReply` rejects acks, the gateway call site at
+     `component.go:1699` is dead and is deleted, not kept as belt-and-braces.
+   - **Constraint 5 is dissolved, satisfied by the seam**: `graph.DecodeQueryReply` /
+     `IsPublishAck` / `ErrPublishAck` are **not built**; the zero-caller rule is met by placing
+     the behaviour where ~80 measured call sites already live, and `tool.list` is covered
+     because every requester — in-repo e2e client and sister repos alike — calls through
+     `natsclient`.
+   - **Error contract**: the rejection classifies **Fatal** (misconfiguration; a retry re-hits
+     the same captured subject) and must carry the three facts of task 1.4 — the ack's own
+     `stream` field names the capturing stream, the client knows the subject, and the message
+     names the override remedy. No stream listing needed at request time.
+   - **Safety, verified**: no production caller consumes ack bytes as a legitimate reply
+     (grepped for `PubAck`/ack-shape reads outside the JetStream publish path — the typed
+     publish API is the only consumer). The error-surface change at those call sites replaces a
+     silent wrong-empty decode with a typed error; lockstep-relevant, noted for the changelog,
+     not API-breaking.
+
+6. **The `PortDefinition` attribute, not a registration API.** A construction-time registration
+   API is **self-defeating on the stated ordering**: construction is step 8, provisioning is
+   step 5 — an instance-time API reproduces #847's empty-registry seam by design. The declared
+   set must be resolvable from `*config.Config` plus **static, component-type-level** port
+   declarations before the boot provisioner runs (reordering pure registry setup ahead of
+   step 5 in `main.go` is acceptable; it has no I/O dependency). `RequestReply bool` on
+   `component.PortDefinition` is additive surface — schema regeneration per task 5.3.
+   `graph-query`'s `QuerySubjects()` feeds the same registry rather than remaining a parallel
+   declaration (part C already says this; it is now binding). The resolution must honour
+   config-level **subject overrides** (the crud-tools override is the live example), and
+   `SubscribeForRequests` asserts its subject is declared, closing drift in both directions.
+
+7. **IN SCOPE.** This stops being adjacent the moment ruling 3 lands: once
+   `SubscribeForRequests` returns the capture error synchronously, `agentic-tools`'
+   `Warn`-and-continue (`component.go:171`) would swallow the new guard **for the exact subject
+   that motivated gh#810**. A subscribe failure on the discovery port becomes a component start
+   error in this change; leaving it out would ship ruling 3 with a hole punched through its
+   motivating case.
+
+### 6.2 Two defects found in the existing gateway detector during review
+
+Recorded because consolidation (ruling 5) must not inherit them:
+
+- **The in-use detector is stale the same way #847's was**: its closed set is
+  `{stream, seq, domain, duplicate}` — no `val` (`component.go:1502`). A counter-stream ack
+  passes it today. The union set of ruling 4 fixes this by construction.
+- **The 256-byte cap is a false-negative hole, not a safety margin**: a long stream name pushes
+  an ack over the cap and straight past the detector (`component.go:1477`). The closed key set
+  makes the cap redundant in the only direction it could help; it is dropped.
+
+### 6.3 Corrections to this document's own citations
+
+- **Call-site census**: "69 production call sites across 31 files" is not reproducible.
+  Measured at `c05a11fb`: **61** matches of `\.RequestClassified\(` outside `_test.go` across
+  **30** files (a few are doc-comment examples), plus **19** of `\.RequestWithRetryClassified\(`
+  across 10 files. The magnitude and every conclusion drawn from it hold; the doc's number was
+  quoted, not measured, and the reproducible command now lives here.
+- **Deployed server**: compose files pin `nats:2.14-alpine` (floating minor), not
+  `nats:2.14.4-alpine`. The claim's substance (deployed line newer than the 2.12.4 source read)
+  holds; the server type was re-verified at v2.14.4 for ruling 4.
+- **"Pinned dependency source"**: `nats-server` is in neither `go.mod` nor `go.sum` — the
+  server-side key claim rests on an upstream source read, which is fine as evidence and wrong
+  as a label. No in-repo reflection test over server types is possible without adopting a heavy
+  test dependency; ruling 4 accepts the documented-union-plus-e2e posture instead.
+
+### 6.4 gh#842's deferral, re-grounded
+
+With rulings 3 and 6 together, the .160 deployment gets a guard that fires at **boot** (registry
+resolved from config before step 5, consulted at all four seams) **and** at **subscribe time**
+(synchronous error, no advisory path), closing both orderings. That is the synchronous
+fail-at-boot guard the deferral was conditioned on — the premise #847 falsified is restored by
+construction, not by re-argument. The deferral stands, conditional as recorded in task 0.1.
