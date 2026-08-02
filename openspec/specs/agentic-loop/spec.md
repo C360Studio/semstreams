@@ -97,11 +97,15 @@ that must reconstruct a name has taken on a contract the framework never promise
 changes, the copy does not fail to compile, it fails to find a consumer, and a not-found consumer is
 indistinguishable from an idle one.
 
-The component SHALL derive the name internally, from the same helper its own consumer setup uses, so
-the query cannot address a different consumer than the component binds. Serving the answer on the wire
-rather than through an in-process call is what makes the derivation *deleted* from callers rather than
-relocated into their parameter lists: no name, no configuration, and no component handle crosses the
-boundary, and a caller in another process is served identically.
+The component SHALL answer from the binding it actually created: it records the subject→consumer
+association when its consumer setup runs and resolves the query against that record, so the query
+cannot address a different consumer than the component bound and no second derivation of the name
+exists anywhere. (Corrected 2026-08-02: an earlier text required deriving the name "from the same
+helper"; the implementation deliberately removed the derivation instead, which is stronger — a
+recorded binding cannot drift from the derivation because there is no derivation to drift from.)
+Serving the answer on the wire rather than through an in-process call is what makes the name
+*deleted* from callers rather than relocated into their parameter lists: no name, no configuration,
+and no component handle crosses the boundary, and a caller in another process is served identically.
 
 #### Scenario: A caller asks about in-flight work by subject
 
@@ -133,12 +137,18 @@ boundary, and a caller in another process is served identically.
 - **THEN** every already-installed request subscription is unsubscribed during start-failure cleanup
 - **AND** a subsequent start attempt leaves exactly one responder per subject
 
-#### Scenario: Outstanding work is visible while a task is being worked
+#### Scenario: Outstanding work is visible while tasks are pending or unacknowledged
 
-- **GIVEN** a task has been delivered to the loop and is not yet acked
+- **GIVEN** tasks queued for the loop's consumer or delivered and not yet acknowledged
 - **WHEN** a caller asks whether work is outstanding for that subject
-- **THEN** the answer reports work in flight
-- **AND** it continues to do so across the task's heartbeat renewals until the task is acked
+- **THEN** the answer reports work in flight, sourced from the consumer's pending and
+  unacknowledged counts
+- **AND** a subject whose consumer has nothing pending and nothing unacknowledged reports zero
+
+(Corrected 2026-08-02: an earlier scenario asserted visibility "across the task's heartbeat
+renewals until the task is acked" — the change that shipped this surface measured that premise as
+inapplicable to the loop's prompt-ack task handling and declined to assert it; the scenario text
+nonetheless survived to publication. This scenario states what the tests actually pin.)
 
 ### Requirement: An unknown in-flight state MUST be an error, never a report of no work
 An unobserved in-flight state MUST be reported as **unknown** and MUST NOT be reported as zero

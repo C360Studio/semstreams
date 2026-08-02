@@ -50,6 +50,19 @@ not replace this review.
 
 ## Contract and task-truth review
 
+- **Verify the conformance table, not the prose (binding, 2026-08-02 audit).** For a change with recorded rulings,
+  constraints, or approval conditions: require the per-ruling table (ruling → `file:line`, or DEVIATION row with
+  owner sign-off) and spot-check it against the diff. A commit message citing the ruling is a claim, not evidence.
+  **Any unrecorded deviation from a binding ruling is `BLOCKING` regardless of its blast-radius severity** — the
+  question is whose decision governs, not how much breaks today.
+- **Check correction propagation.** For every mid-flight correction visible in the change (review-fix commits,
+  amended tasks, repudiated mechanisms), grep the change's outer layers — commit message, spec deltas, doc comments,
+  adopter notes, earlier task lines, cited ruling conditions — for surviving pre-correction claims. A stale claim in
+  a published layer is a finding, not hygiene.
+- **Re-gate grown exported surface.** Diff the change's actual new exports against the set its shape review named;
+  any excess re-enters the gate before merge.
+- **Reject artifact-free evidence.** A gate/measurement claim with no in-tree or CI artifact is recorded UNVERIFIED;
+  flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
 - Confirm checked tasks are fully complete as worded. Split mixed tasks instead of treating partial evidence as done.
 - Trace applicable paths end to end:

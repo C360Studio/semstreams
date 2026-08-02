@@ -937,7 +937,8 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 	// into message/.../unknown_<ts>, where two distinct messages in the same
 	// instant collided and ObjectStore Put silently replaced the first
 	// (#741). Only true undecodable bytes take the unknown key family, which
-	// DefaultKeyGenerator disambiguates with nanosecond entropy.
+	// DefaultKeyGenerator disambiguates with a per-write UUID nonce (a clock
+	// is never a nonce — the wall clock feeds only the date partitions).
 	var keySource any = data
 	if decodeErr == nil {
 		keySource = baseMsg

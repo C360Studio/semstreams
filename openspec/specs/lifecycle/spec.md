@@ -29,6 +29,12 @@ Two postures recur across these requirements and are load-bearing rather than in
 
 ### What this capability does NOT cover
 
+- **The operator gateway has no authentication or authorization layer.** Every route —
+  including the mutating create/patch/transition lanes — is open to any caller who can reach
+  the HTTP listener. gh#814's acceptance named unauthorized-request behavior; that criterion
+  is unmet and was previously recorded nowhere (2026-08-02 audit). Deployments MUST gate the
+  listener at the network layer until an authorization layer exists; the gap is tracked as
+  gh#854, not implied to be closed.
 - **It is not a workflow engine.** No DSL, no state-machine runtime, no separate event bus.
   Apps own work logic, state schema, and which phase follows which; the harness owns
   storage, recovery, history, and the operator surface. Multi-step orchestration is

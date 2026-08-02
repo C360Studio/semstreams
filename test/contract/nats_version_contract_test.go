@@ -17,15 +17,23 @@ const expectedNATSMinor = "2.14"
 // uses, which is the point: they are NOT all spelled the same.
 //
 //	image: nats:2.14-alpine          compose, CI workflows
-//	nats:2.14.4-alpine@sha256:…      digest-pinned normative/evidence runs
 //	natsVersion: "2.14-alpine"       Go test-client defaults, built by
 //	                                 concatenation as "nats:" + version
+//	"2.14.4-alpine@sha256:…"         bare quoted fragments assigned to
+//	                                 arbitrarily-named constants
+//	                                 (…NATSServer…, WithNATSVersion args)
 //
-// The third form is why this guard exists — see the doc comment on the test.
+// The fragment forms are why this guard exists: a concatenated value has no
+// `nats:`-prefixed literal to grep for. The fourth form was ADDED 2026-08-02
+// after an audit found the previous patterns matched zero digest-pinned refs —
+// the doc comment claimed coverage the regexes did not have, and two evidence
+// gates in processor/graph-index sat on the OLD server pin, invisible to this
+// guard, while their docs claimed the new one.
 var (
-	natsImageRef   = regexp.MustCompile(`nats:(\d+\.\d+)(?:\.\d+)?-alpine`)
-	natsVersionVar = regexp.MustCompile(`natsVersion\s*[:=]\s*"(\d+\.\d+)(?:\.\d+)?-alpine"`)
-	floatingRef    = regexp.MustCompile(`nats:(latest|main|edge)\b`)
+	natsImageRef    = regexp.MustCompile(`nats:(\d+\.\d+)(?:\.\d+)?-alpine`)
+	natsVersionVar  = regexp.MustCompile(`natsVersion\s*[:=]\s*"(\d+\.\d+)(?:\.\d+)?-alpine"`)
+	natsFragmentRef = regexp.MustCompile(`"(\d+\.\d+)(?:\.\d+)?-alpine(?:@sha256:[0-9a-f]{64})?"`)
+	floatingRef     = regexp.MustCompile(`nats:(latest|main|edge)\b`)
 )
 
 // scanRoots are the trees that describe what we RUN. Deliberately excluded:
@@ -98,6 +106,14 @@ func TestNATSVersionIsConverged(t *testing.T) {
 			}
 			for _, m := range natsVersionVar.FindAllStringSubmatch(text, -1) {
 				refs = append(refs, ref{rel, m[1]})
+			}
+			// Bare quoted fragments (Go only — YAML image refs are unquoted
+			// and already covered above; quoting one would double-count it,
+			// which is harmless).
+			if filepath.Ext(path) == ".go" {
+				for _, m := range natsFragmentRef.FindAllStringSubmatch(text, -1) {
+					refs = append(refs, ref{rel, m[1]})
+				}
 			}
 			if floatingRef.MatchString(text) {
 				floating = append(floating, rel)

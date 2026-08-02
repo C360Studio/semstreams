@@ -25,8 +25,9 @@ import (
 )
 
 const (
-	predicateSmokeNATSServer = "2.12.4-alpine@sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea"
-	predicateSmokeNATSSDK    = "v1.48.0"
+	// Shared pins — see nats_pin_test.go.
+	predicateSmokeNATSServer = graphIndexNATSServerPin
+	predicateSmokeNATSSDK    = graphIndexNATSGoPin
 	predicateSmokeHot        = "robotics.status.ready"
 )
 
