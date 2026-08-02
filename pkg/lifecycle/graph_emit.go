@@ -115,8 +115,14 @@ var lifecycleEmitRetryConfig = natsclient.RetryConfig{
 // ExpectedRevision, so a duplicate-delivery after a lost response
 // surfaces as revision_mismatch, which Manager.Transition's outer CAS
 // loop re-reads and re-validates. A handler error-reply is a successful
-// round-trip (not a transport failure), so it is NOT retried — only
-// cold-start "no responders" consumes the retry budget.
+// round-trip (not a transport failure), so it is NOT retried.
+//
+// Note the retry budget is consumed by ANY transport failure here, not
+// only cold-start "no responders" — a per-attempt timeout re-sends too.
+// That is deliberate on this lane and unsafe on create (gh#861): CAS
+// makes a duplicate update self-correcting, and Transition's cold-start
+// protection depends on retrying a sub-case that presents as a timeout.
+// Do not "align" the two lanes without re-deriving that.
 //
 // ADR-060: a hard failure arrives as a non-nil *errs.ClassifiedError
 // reconstructed from the wire headers (X-Error-Class + X-Error-Code), not
@@ -239,6 +245,13 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 // that still retries.
 func (g *graphEmitterNATS) requestCreateRetryingNoResponders(ctx context.Context, body []byte) ([]byte, error) {
 	cfg := lifecycleEmitRetryConfig
+	// One trace for the whole logical request, matching requestMsgWithRetry.
+	// Without this each attempt would auto-generate its own trace ID inside
+	// RequestClassified and a retried create would be unreconstructable from
+	// logs — the exact path an operator most needs to follow.
+	if _, ok := natsclient.TraceContextFromContext(ctx); !ok {
+		ctx = natsclient.ContextWithTrace(ctx, natsclient.NewTraceContext())
+	}
 	var lastErr error
 	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
 		respBody, err := g.client.RequestClassified(ctx, graphSubjectCreateWithTriples, body, g.timeout)
