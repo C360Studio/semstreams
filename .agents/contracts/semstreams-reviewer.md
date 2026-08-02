@@ -67,6 +67,10 @@ not replace this review.
 - A proposal or design that introduces a new symbol, field, channel, resolver, or classifier without a cited
   existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's greps
   yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
+- For everything the diff ADDS (exported or not — symbols, fields, channels, resolvers, classifiers, ports,
+  subjects, buckets, config keys): run the owner-exists search yourself. An addition beside an existing owner of
+  the same responsibility is a finding even when the design's inventory missed it; the fix is consolidation into
+  one home, never a sibling.
 - Confirm checked tasks are fully complete as worded. Split mixed tasks instead of treating partial evidence as done.
 - Trace applicable paths end to end:
   producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
@@ -157,15 +161,14 @@ not replace this review.
 
 ## Exported-surface review
 
-- For every NEW exported symbol: name its caller. Zero present consumers is a finding (phantom
-  surface).
-- A return whose doc comment warns against part of its own affordance is a finding — require the
-  collapsed signature.
-- A capability return (handle, connection, map, internal context) where callers need a value is a
-  finding.
+- For every NEW exported symbol: name its present consumer. Zero present consumers is a finding
+  (phantom surface).
+- A return whose doc comment warns against part of its own affordance, or a capability return
+  (handle, connection, map, internal context) where callers need a value, is a finding — require
+  the collapsed signature.
 - Three or more correlated non-error returns without a named struct is a finding.
-- New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` without recorded Fable
-  design review is a BLOCKING finding.
+- New exported surface on `natsclient`, `graph`, `message`, or `pkg/*` without recorded owner
+  design review (model-roles rule) is a BLOCKING finding.
 
 ## Guarantee, signal, and revision review
 
@@ -177,8 +180,8 @@ not replace this review.
   baseline mutated before its publish succeeds is a blocking finding.
 - An in-PR guarantee "satisfied" by a filed issue is a finding: the guarantee holds here or the
   claim is removed.
-- Review fix commits as adversarially as the original diff — measured on #758, remedies are
-  where new blockers enter.
+- Review fix commits as adversarially as the original diff — remedies are where new blockers
+  enter.
 
 ## Coverage review
 
