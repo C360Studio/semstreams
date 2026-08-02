@@ -49,12 +49,8 @@ wrong, and wrong silently, because they are predicting a fact they do not hold. 
 outcome, and responds cannot be wrong about a value it never predicted. Where a design asks the caller to predict, the
 framework absorbing the failure IS the design, and the adopter-facing knob is what gets deleted.
 
-This is not a new idea — it is what our best work already did: gh#810 replaced hand-written `RequestReplySubjects()`
-with a declared port the framework reads; ADR-063 forbids a reader deriving a store handle from a `StorageRef`; the
-ADR-066 readiness envelope replaced consumers inferring readiness from an ack floor that lied in both directions.
-
-Full form — the **adopter seam inventory**, a mandatory design deliverable, with the failure that produced it — lives
-in `.agents/contracts/semstreams-architect.md`, mirrored as an implementation-time question in the developer contract
+Full form — the **adopter seam inventory**, a mandatory design deliverable — lives in
+`.agents/contracts/semstreams-architect.md`, mirrored as an implementation-time question in the developer contract
 and a diff-level check in the reviewer contract.
 
 Flow-based component architecture:

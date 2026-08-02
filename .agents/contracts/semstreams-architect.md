@@ -94,17 +94,9 @@ surface that acts, observes the real outcome, and responds cannot be wrong about
 Ask it directly: **is this asking the caller to predict something the framework could observe?** Where the answer is
 yes, the framework absorbing the failure IS the design, and the adopter-facing knob is what gets deleted.
 
-This is the rule behind our best existing work rather than a new idea, which is the argument for applying it
-everywhere:
-
-- gh#810 stopped adopters hand-writing `RequestReplySubjects()`; they declare a port and the framework derives the
-  subject.
-- ADR-063 forbids a reader deriving a store handle from a `StorageRef`; `storeregistry` resolves it lazily per fetch.
-- The ADR-066 readiness envelope replaced consumers inferring readiness from an ack floor that lied in both directions.
-
-And behind the failure that produced it: `payload-size-chokepoints` asked each component to predict the size of its
-own final wire carrier. A trim loop produced 1000 bytes, `BaseMessage` wrapping made it 1215, and the terminal event
-was dropped. No amount of care fixes a prediction-shaped API; only reshaping it does.
+The failure class that produced this rule: a surface asked each caller to predict the size of its own final wire
+carrier. The caller trimmed to the documented limit, the framework's own wrapping pushed the result over it, and the
+terminal event was silently dropped. No amount of caller care fixes a prediction-shaped API; only reshaping it does.
 
 ## Design discipline
 
@@ -127,6 +119,6 @@ was dropped. No amount of care fixes a prediction-shaped API; only reshaping it 
 ## Handoff
 
 Return, in order: the surface inventory; the adopter seam inventory; options considered with costs and the
-recommendation; every premise with its measurement; the artifact drafts as text; open questions that require an owner ruling, each stated so it can be
-answered by measurement or decision. Do not claim the design is approved, and do not soften a conflict the inventory
-surfaced — an overlap reported plainly now is a pivot avoided later.
+recommendation; every premise with its measurement; the artifact drafts as text; open questions that require an owner
+ruling, each stated so it can be answered by measurement or decision. Do not claim the design is approved, and do not
+soften a conflict the inventory surfaced — an overlap reported plainly now is a pivot avoided later.
