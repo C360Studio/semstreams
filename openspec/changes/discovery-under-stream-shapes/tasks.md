@@ -97,6 +97,21 @@ into the spec delta: a `[~]` stops the implementer and does not stop the archive
       **Implementation is unblocked and starts from `design.md` §3 + §6, not from PR #847's code.**
       PR #847 stays DRAFT; §4 of the design records what survives from it.
 
+- [ ] 0.3 **HOLD — the OWNER PULLED this change 2026-08-02. This supersedes 0.2's "implementation
+      is unblocked".** Do not implement sections 1–6 as written. The branch
+      `feat/gh810-discovery-under-stream-shapes` (21 commits, rebased on `2dce8258`) was never
+      pushed. Reason, verbatim: *"this entire chain around 810 smells so bad… it was spec'd wrong
+      twice and now I think we are just trying to commit it to get it out of the way so we can dig
+      it all out later. IMO we need to step back and fix our port handling first."* The payload is
+      a new framework field (`Registration.DefaultPorts`), a cross-repo adoption instruction, and
+      an all-or-nothing enforcement behaviour — all built on the port-declaration model **gh#862
+      supersedes inside the same pre-v1 window**. Too unstable to document ⇒ too unstable to
+      export. **The acute bug is separable and does not need this change**: nine shipped configs
+      carry `TOOL: ["tool.>"]` and have dead tool discovery today; that fix is nine config lines.
+      **Un-hold only after** gate integrity, gh#842, gh#859 and gh#862 land — then re-judge what
+      the guard's remaining job is. Ordered plan lives in the baton
+      (`docs/proposals/prev1-program.md`, Next Action, session 25).
+
 ## 1. Provisioning guard — the seam that closes the class
 
 > **ATTEMPTED IN PR #847, NOT LANDED.** The pure primitives (`SubjectFilterCaptures`,

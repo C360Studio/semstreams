@@ -23,6 +23,26 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > contract reshape; it salvaged the agent-setup commits off the gh#810 branch precisely because
 > that branch was being reset).
 >
+> **THREE CORRECTIONS MEASURED AT THE SESSION-26 RESUME (2026-08-02, on `8daf8b6f`):**
+> · **This close-out is not landed yet — PR #864 is OPEN.** Lint / Build / Schema Validation /
+>   e2e statistical all SUCCESS; `Test` still in progress at resume, so `mergeStateStatus` reads
+>   BLOCKED for that reason and no other. Merge it per the gate (Codex round, then `--auto`).
+> · **gh#861 is missing from this block and it is a defect on MAIN.** Filed 2026-08-02T14:26Z out
+>   of PR #858's Codex round, never recorded here. **Re-reproduced at resume, not relayed:**
+>   `go test -race -count=10 -cpu 1,2,4 ./pkg/lifecycle/ -run TestManager_ConcurrentCreateOnlyOneWins`
+>   → `expected exactly 1 successful concurrent Create, got 2 (already_exists=6, other=0)`.
+>   The "135 ok / 0 FAIL" above is NOT contradicted — a single-run `go test ./...` cannot see it;
+>   it needs `-count`/`-cpu` variation. This is Lifecycle substrate (ADR-047) and gh#807/gh#689
+>   build contract-bound claim semantics on exactly-one-winner, so **it belongs in item 1
+>   (gate integrity)**: a suite that passes at `-count=1` while the substrate races is the same
+>   false-green class as the three tiers that reported green while failing.
+> · **`discovery-under-stream-shapes` carried NO hold marker in its `tasks.md`**, so
+>   `task openspec:queue` reported it `ok — no halt/hold/deliberate marker` while the owner had
+>   pulled it. The park existed only in this prose — exactly the drift the queue report was built
+>   to prevent, in the direction that costs most (a parked change reading as ready). Fixed: task
+>   **0.3 HOLD** now carries the pull, the reason verbatim, and the un-hold condition; the queue
+>   reports it BLOCKED. **A park recorded only in the baton is not recorded.**
+>
 > **gh#810 IS PARKED UNMERGED and its branch was NEVER PUSHED.** Branch
 > `feat/gh810-discovery-under-stream-shapes`, rebased onto `2dce8258`, 21 commits, clean. Owner
 > pulled it: *"this entire chain around 810 smells so bad… it was spec'd wrong twice and now I
