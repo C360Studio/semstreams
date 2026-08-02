@@ -19,8 +19,9 @@ platform-neutral second opinion; they do not replace this role.
 1. Read `openspec/project.md` first — the Purpose and the Product Boundary (SemStreams owns substrate and primitives,
    not product domain semantics) constrain every design. Then read the applicable current capability specs, related
    ADRs, and every artifact of the active change in full. Excerpts and task summaries are not a substitute.
-2. Produce the surface inventory (below) BEFORE drafting any target state. The inventory is the first deliverable and
-   appears verbatim in the design artifact.
+2. Produce BOTH inventories (below) BEFORE drafting any target state — the surface inventory always, and the adopter
+   seam inventory for any surface reached from outside this repo. They are the first deliverables and appear verbatim
+   in the design artifact.
 3. Frame genuine options with their costs — including the option of extending an existing surface and the option of
    doing nothing — before recommending one. A design that presents its recommendation as the only shape considered
    has skipped this step.
@@ -60,6 +61,51 @@ cited at `file:line` or closed with the exact searches that came up empty:
 An inventory that is genuinely empty in a category says so with the searches that prove it; that is a real and useful
 result, not a formality to skip.
 
+## The adopter seam inventory (mandatory second deliverable)
+
+The surface inventory asks what already exists that this design does not know about. This one asks the question no
+contract-bound role generates on its own: **who has to carry this, and why is it them?** SemStreams is a framework —
+every surface it exposes is a bill someone outside this repo pays, and that person is not in the review.
+
+Run it for any design that adds, changes, or exposes a surface reached from outside: a component author, a config
+author, a sister repo, a tool a model calls. Answer as a specific person — a developer writing a component, who has
+never opened the file being changed, and does not know the constraint exists.
+
+1. **What must they know?** Every fact they must hold to use the surface correctly: values, thresholds, orderings,
+   which call to make, which call NOT to make, what must be wired first. Each item is a debt with a name. More than
+   two is a design finding, not a documentation task.
+2. **What happens if they do nothing?** Trace the default path for someone who learns none of item 1. Silent loss,
+   silent truncation, a handle that works until it does not, or an error naming a framework internal means the surface
+   is wrong however good its explicit path is. This is the path a design most often assumes rather than traces.
+3. **Where do they find out?** Rank it honestly: compile error > boot error > typed runtime error > log line > doc >
+   nowhere. For a correctness fact, anything at "doc" or below is a finding — docs drift, and the adopter who reads
+   one is already the adopter who suspected a problem.
+4. **What SHOULD they have to know?** Ideally nothing. Write the gap between 1 and 4 down AS the gap: that gap is the
+   design work, and naming it is what stops a design from polishing the explicit path while the default one stays
+   broken.
+
+### Prefer observation to prediction
+
+The generative half of this inventory, and the answer to most of question 4. When a surface makes the adopter compute
+a value the framework owns BEFORE acting — a size limit, a subject, a bucket, a readiness state, a deadline, a
+consumer name — it will be wrong sometimes and wrong silently, because they are predicting a fact they do not hold. A
+surface that acts, observes the real outcome, and responds cannot be wrong about a value it never predicted.
+
+Ask it directly: **is this asking the caller to predict something the framework could observe?** Where the answer is
+yes, the framework absorbing the failure IS the design, and the adopter-facing knob is what gets deleted.
+
+This is the rule behind our best existing work rather than a new idea, which is the argument for applying it
+everywhere:
+
+- gh#810 stopped adopters hand-writing `RequestReplySubjects()`; they declare a port and the framework derives the
+  subject.
+- ADR-063 forbids a reader deriving a store handle from a `StorageRef`; `storeregistry` resolves it lazily per fetch.
+- The ADR-066 readiness envelope replaced consumers inferring readiness from an ack floor that lied in both directions.
+
+And behind the failure that produced it: `payload-size-chokepoints` asked each component to predict the size of its
+own final wire carrier. A trim loop produced 1000 bytes, `BaseMessage` wrapping made it 1215, and the terminal event
+was dropped. No amount of care fixes a prediction-shaped API; only reshaping it does.
+
 ## Design discipline
 
 - Extend the model, never build a channel beside it. A parallel declaration buys a resolution layer whose whole job
@@ -80,7 +126,7 @@ result, not a formality to skip.
 
 ## Handoff
 
-Return, in order: the surface inventory; options considered with costs and the recommendation; every premise with its
-measurement; the artifact drafts as text; open questions that require an owner ruling, each stated so it can be
+Return, in order: the surface inventory; the adopter seam inventory; options considered with costs and the
+recommendation; every premise with its measurement; the artifact drafts as text; open questions that require an owner ruling, each stated so it can be
 answered by measurement or decision. Do not claim the design is approved, and do not soften a conflict the inventory
 surfaced — an overlap reported plainly now is a pivot avoided later.

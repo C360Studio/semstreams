@@ -34,6 +34,29 @@ Events → Graphable Interface → Knowledge Graph → Queries
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
 
+## The adopter seam rule (house rule)
+
+SemStreams is a framework other people build on. Every surface we expose is a bill an adopter pays, and the adopter is
+never in the review. So before any design that adds, changes, or exposes an outward-facing surface, answer it for a
+specific person — a developer outside this repo, writing a component, who has never opened the file being changed:
+
+**What must they know? What happens if they do nothing? Where do they find out? And what SHOULD they have to know —
+ideally nothing?**
+
+The generative half is **prefer observation to prediction.** When a surface makes an adopter compute a value the
+framework owns *before* acting — a size limit, a subject, a bucket, a readiness state, a deadline — they will get it
+wrong, and wrong silently, because they are predicting a fact they do not hold. A surface that acts, observes the real
+outcome, and responds cannot be wrong about a value it never predicted. Where a design asks the caller to predict, the
+framework absorbing the failure IS the design, and the adopter-facing knob is what gets deleted.
+
+This is not a new idea — it is what our best work already did: gh#810 replaced hand-written `RequestReplySubjects()`
+with a declared port the framework reads; ADR-063 forbids a reader deriving a store handle from a `StorageRef`; the
+ADR-066 readiness envelope replaced consumers inferring readiness from an ack floor that lied in both directions.
+
+Full form — the **adopter seam inventory**, a mandatory design deliverable, with the failure that produced it — lives
+in `.agents/contracts/semstreams-architect.md`, mirrored as an implementation-time question in the developer contract
+and a diff-level check in the reviewer contract.
+
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data
 - **Processor**: Graph, JSONMap, Rule — transform and enrich

@@ -74,9 +74,13 @@ evidence, and carry the evidence into the handoff:
    defect the instruction meant to prevent.
 3. **Who consumes it at birth?** Name the present consumer of every new surface. "For observability" or "for
    future use" with zero present consumers is a phantom — do not add it.
+4. **Am I asking a caller to predict something the framework could observe?** A new knob, threshold, limit, name, or
+   "remember to call X first" hands the caller a fact the framework already holds; they will get it wrong, and
+   silently. Prefer acting and handling the real outcome over making them compute it in advance. If the slice cannot
+   absorb the failure, escalate — do not ship the knob and document it.
 
-The architect's surface inventory answers these at design time. This check is the implementation-time re-run,
-scoped to the slice you touch — slices grow symbols the design never named.
+The architect's surface and adopter seam inventories answer these at design time. This check is the
+implementation-time re-run, scoped to the slice you touch — slices grow symbols the design never named.
 
 ## Semantic identity and graph contracts
 

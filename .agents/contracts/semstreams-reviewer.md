@@ -159,6 +159,19 @@ not replace this review.
 - Breaking changes have relevant e2e evidence before the commit lands, including the full ingest-to-query path.
 - Paid or prolonged operations use validated monitors plus active polling of authoritative state every 30-60 seconds.
 
+## Adopter seam review
+
+- A diff adding or changing a surface reached from outside this repo — component author, config author, sister repo,
+  a tool a model calls — without a cited adopter seam inventory is a finding.
+- **Trace the DO-NOTHING path yourself**, as an adopter who reads no doc and calls nothing extra. Silent loss, silent
+  truncation, a handle that works until it does not, or an error naming a framework internal is a blocking finding.
+  Do not accept the design's account of this path — it is the one designs assume rather than trace.
+- A new knob, threshold, limit, required call order, or derived name that hands the caller a value the framework owns
+  is a finding: require the observation-shaped alternative, or a recorded owner ruling that prediction is intended
+  here and why.
+- A correctness fact discoverable only from documentation is a finding — require a compile, boot, or typed runtime
+  failure instead.
+
 ## Exported-surface review
 
 - For every NEW exported symbol: name its present consumer. Zero present consumers is a finding
