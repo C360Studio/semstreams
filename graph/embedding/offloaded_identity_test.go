@@ -231,7 +231,7 @@ func TestOffloadedIdentityMetric_CountsStoredVectorsOnly(t *testing.T) {
 		defer cancel()
 
 		index := newWatchableKV()
-		s := NewStorage(index, newMemKV())
+		s := NewStorage(nil, index, newMemKV())
 		embedder := &stubEmbedder{model: "test-model", dimensions: 3, generate: gen}
 		resolver := fakeResolver{stores: map[string]storage.StreamableStore{"objectstore": readerStore{data: body}}}
 
@@ -334,7 +334,7 @@ func TestOffloadedIdentityMetric_DedupServedPathCountsBoth(t *testing.T) {
 
 		const body = "the device reports voltage and current at fixed intervals"
 		index := newWatchableKV()
-		s := NewStorage(index, newMemKV())
+		s := NewStorage(nil, index, newMemKV())
 		gen := &genCounter{}
 		embedder := &stubEmbedder{model: "test-model", dimensions: 3, generate: gen.generate}
 		resolver := fakeResolver{stores: map[string]storage.StreamableStore{"objectstore": readerStore{data: body}}}
@@ -417,7 +417,7 @@ func TestSavePendingWithStorageRef_OldWorkerSafeWire(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.a.b.c.wire"
 	const identity = "Distinctive Signature Identity"

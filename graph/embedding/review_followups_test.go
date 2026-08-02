@@ -73,7 +73,7 @@ func TestFetchTextFromStorage_UnderCapDoesNotCountTruncation(t *testing.T) {
 // ErrSupersededRevision sentinel is what lets it skip the callback.
 func TestSaveAndNotify_SupersededDropSkipsOnGenerated(t *testing.T) {
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.007"
 	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
@@ -121,7 +121,7 @@ func TestSaveAndNotify_SupersededDropSkipsOnGenerated(t *testing.T) {
 // churn and turned the semantic e2e tier red (dedup_hits 166 > generated 69).
 func TestSaveAndNotify_SupersededDedupHitDoesNotCount(t *testing.T) {
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.008"
 	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
@@ -152,7 +152,7 @@ func TestSaveAndNotify_SupersededDedupHitDoesNotCount(t *testing.T) {
 // actually stores DOES count, so real reuse is still measured.
 func TestSaveAndNotify_StoredDedupHitCounts(t *testing.T) {
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.009"
 	if err := s.SavePending(ctx, entityID, "", "text", 3); err != nil {

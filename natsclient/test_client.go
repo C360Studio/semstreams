@@ -103,6 +103,17 @@ func resolveMappedPort(ctx context.Context, resolve portResolver, port string) (
 	}
 }
 
+// SeedServerPayloadLimitForTest primes the cached server-advertised payload
+// limit as if a live connection had advertised it, so unit tests can drive
+// the size-guard seams without a server. TEST SUPPORT ONLY: production code
+// must never call this — the cache is populated exclusively by a live
+// connection's advertisement (serverPayloadLimit), which is what keeps an
+// unknown limit honest (0 = guard disabled, connection-state errors win).
+// Named callers at birth: the agentic-loop persist/publish durability tests.
+func (m *Client) SeedServerPayloadLimitForTest(limit int) {
+	m.advertisedPayloadLimit.Store(int64(limit))
+}
+
 // TestClient provides testcontainers-based NATS for testing
 type TestClient struct {
 	container     testcontainers.Container

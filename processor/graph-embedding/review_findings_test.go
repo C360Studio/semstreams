@@ -21,7 +21,7 @@ func newFindingsTestComponent(t *testing.T, index jetstream.KeyValue) *Component
 	return &Component{
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
+		storage:           embedding.NewStorage(nil, index, newMockKVBucket()),
 		watermark:         revlag.New(),
 		failed:            make(map[string]failureInfo),
 		failedGauge:       newEmbeddingFailedGauge(),

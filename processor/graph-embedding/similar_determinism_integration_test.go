@@ -43,7 +43,7 @@ func TestIntegration_FindSimilar_DeterministicTopKAtTie_BothPaths(t *testing.T) 
 	dedupBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{Bucket: graph.BucketEmbeddingDedup})
 	require.NoError(t, err)
 
-	st := embedding.NewStorage(indexBucket, dedupBucket)
+	st := embedding.NewStorage(nc, indexBucket, dedupBucket)
 	c := &Component{storage: st}
 
 	const k = 8

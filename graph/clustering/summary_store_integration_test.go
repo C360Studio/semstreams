@@ -29,7 +29,7 @@ func TestIntegration_SummaryStore_RoundTrip(t *testing.T) {
 		}
 	}()
 
-	store := NewNATSSummaryStore(kv)
+	store := NewNATSSummaryStore(natsClient, kv)
 
 	members := []string{"acme.ops.robotics.gcs.drone.001", "acme.ops.robotics.gcs.drone.002"}
 	hash := MembershipHash(members)

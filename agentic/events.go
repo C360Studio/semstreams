@@ -98,6 +98,15 @@ type LoopCompletedEvent struct {
 	ResultRef     *message.StorageReference `json:"storage_ref,omitempty"`
 	ResultPreview string                    `json:"preview,omitempty"`
 	ResultSize    int                       `json:"size,omitempty"`
+
+	// Result-not-durable marker (payload-size-chokepoints Blocker 3). When
+	// the COMPLETE_ persist finally fails, the PUBLISHED terminal event is
+	// mutated to this explicit shape — loop/task/outcome metadata kept,
+	// Result emptied, ResultNotDurable=true with the classified cause — so a
+	// waiting parent receives a typed terminal instead of a success whose
+	// result is unreadable. Additive; absent on every durably-stored event.
+	ResultNotDurable       bool   `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string `json:"result_not_durable_reason,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -165,6 +174,13 @@ type LoopFailedEvent struct {
 	// RunEntityID is the full 6-part chain execution entity ID for the run.
 	// Empty when RunID is empty.
 	RunEntityID string `json:"run_entity_id,omitempty"`
+
+	// Result-not-durable marker (payload-size-chokepoints Blocker 3): set on
+	// the PUBLISHED failure event when the COMPLETE_ persist finally failed,
+	// so watchers reading the event know the durable record is absent by
+	// failure, not by race. Additive; see LoopCompletedEvent.
+	ResultNotDurable       bool   `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string `json:"result_not_durable_reason,omitempty"`
 }
 
 // Validate implements message.Payload
@@ -215,6 +231,12 @@ type LoopCancelledEvent struct {
 	// RunEntityID is the full 6-part chain execution entity ID for the run.
 	// Empty when RunID is empty.
 	RunEntityID string `json:"run_entity_id,omitempty"`
+
+	// Result-not-durable marker (payload-size-chokepoints Blocker 3): set on
+	// the PUBLISHED cancellation event when the COMPLETE_ persist finally
+	// failed. Additive; see LoopCompletedEvent.
+	ResultNotDurable       bool   `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string `json:"result_not_durable_reason,omitempty"`
 }
 
 // Validate implements message.Payload

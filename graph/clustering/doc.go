@@ -108,6 +108,7 @@
 //	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 //	    LLMSummarizer:   llmSummarizer,
 //	    Querier:         queryManager,
+//	    NATSClient:      natsClient,      // guarded summary write lane (payload-bounds)
 //	    CommunityBucket: communityBucket, // COMMUNITY_INDEX — trigger only
 //	    SummaryBucket:   summaryBucket,   // COMMUNITY_SUMMARIES — worker-owned
 //	})

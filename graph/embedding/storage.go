@@ -11,6 +11,7 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -174,8 +175,18 @@ func ScoredEntityLess(a, b ScoredEntity) bool {
 // KV watcher on the index bucket, to serve similarity queries without
 // any network round-trips.
 type Storage struct {
-	indexBucket jetstream.KeyValue // EMBEDDING_INDEX
-	dedupBucket jetstream.KeyValue // EMBEDDING_DEDUP
+	indexBucket jetstream.KeyValue // EMBEDDING_INDEX — reads/watch/delete only
+	dedupBucket jetstream.KeyValue // EMBEDDING_DEDUP — reads only
+
+	// index/dedup are the GUARDED write lanes over the same buckets
+	// (payload-bounds spec): every write refuses oversized values with the
+	// classified permanent error before I/O, and server-side oversize
+	// residue classifies permanent instead of retrying forever — the raw
+	// handles' writes were among the enumerated gh#857 bypasses. All writes
+	// go through these; the raw handles above serve reads, watches, and
+	// deletes (no payload to guard).
+	index *natsclient.KVStore
+	dedup *natsclient.KVStore
 
 	// vectorCache is populated and maintained by StartVectorCache.
 	// Only StatusGenerated entries with non-empty vectors are stored.
@@ -190,14 +201,36 @@ type Storage struct {
 	cacheWatchHealthy bool // guarded by vectorCacheMu
 }
 
-// NewStorage creates a new embedding storage instance
-func NewStorage(indexBucket, dedupBucket jetstream.KeyValue) *Storage {
+// NewStorage creates a new embedding storage instance. client owns the
+// guarded write lanes (payload-bounds spec) — it carries the live/cached
+// server payload limit writes are checked against. A nil client (unit tests
+// with in-memory buckets) still routes writes through the SAME guarded lane,
+// just with no known limit: the lane, not the limit, is what must be
+// unavoidable.
+func NewStorage(client *natsclient.Client, indexBucket, dedupBucket jetstream.KeyValue) *Storage {
+	if client == nil {
+		client = &natsclient.Client{}
+	}
 	return &Storage{
 		indexBucket: indexBucket,
 		dedupBucket: dedupBucket,
+		index:       client.NewKVStore(indexBucket),
+		dedup:       client.NewKVStore(dedupBucket),
 		vectorCache: make(map[string][]float32),
 		cacheReady:  make(chan struct{}),
 	}
+}
+
+// wrapWriteErr classifies a guarded-lane write error: permanent
+// classifications (the seam guard's oversize refusal and classified
+// server-side residue) pass through unchanged — re-wrapping them transient
+// would re-open the retry-forever pathology the guard exists to close.
+// Everything else wraps transient as before.
+func wrapWriteErr(err error, op, action string) error {
+	if errs.IsInvalid(err) {
+		return err
+	}
+	return errs.WrapTransient(err, "Storage", op, action)
 }
 
 // SavePending saves a pending embedding request with source text (legacy mode).
@@ -221,8 +254,8 @@ func (s *Storage) SavePending(ctx context.Context, entityID, contentHash, source
 		return errs.WrapInvalid(err, "Storage", "SavePending", "marshal embedding record")
 	}
 
-	if _, err := s.indexBucket.Put(ctx, entityID, data); err != nil {
-		return errs.WrapTransient(err, "Storage", "SavePending", "put pending embedding")
+	if _, err := s.index.Put(ctx, entityID, data); err != nil {
+		return wrapWriteErr(err, "SavePending", "put pending embedding")
 	}
 
 	return nil
@@ -270,8 +303,8 @@ func (s *Storage) SavePendingWithStorageRef(
 		return errs.WrapInvalid(err, "Storage", "SavePendingWithStorageRef", "marshal embedding record")
 	}
 
-	if _, err := s.indexBucket.Put(ctx, entityID, data); err != nil {
-		return errs.WrapTransient(err, "Storage", "SavePendingWithStorageRef", "put pending embedding")
+	if _, err := s.index.Put(ctx, entityID, data); err != nil {
+		return wrapWriteErr(err, "SavePendingWithStorageRef", "put pending embedding")
 	}
 
 	return nil
@@ -320,19 +353,21 @@ func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved
 		}
 
 		if existing == nil {
-			if _, err := s.indexBucket.Create(ctx, record.EntityID, data); err != nil {
-				if errors.Is(err, jetstream.ErrKeyExists) {
+			if _, err := s.index.Create(ctx, record.EntityID, data); err != nil {
+				// The guarded lane maps the create conflict to ErrKVKeyExists;
+				// the raw sentinel is kept for parity.
+				if errors.Is(err, natsclient.ErrKVKeyExists) || errors.Is(err, jetstream.ErrKeyExists) {
 					continue // a concurrent writer created the key; re-read and re-decide
 				}
-				return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "create pending embedding")
+				return false, wrapWriteErr(err, "SavePendingGuarded", "create pending embedding")
 			}
 			return true, nil
 		}
-		if _, err := s.indexBucket.Update(ctx, record.EntityID, data, revision); err != nil {
+		if _, err := s.index.Update(ctx, record.EntityID, data, revision); err != nil {
 			if isRevisionMismatch(err) {
 				continue // the key moved since the guard decision; re-read and re-decide
 			}
-			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "update pending embedding")
+			return false, wrapWriteErr(err, "SavePendingGuarded", "update pending embedding")
 		}
 		return true, nil
 	}
@@ -412,11 +447,11 @@ func (s *Storage) SaveGenerated(
 			return errs.WrapInvalid(err, "Storage", "SaveGenerated", "marshal embedding record")
 		}
 
-		if _, err := s.indexBucket.Update(ctx, entityID, data, revision); err != nil {
+		if _, err := s.index.Update(ctx, entityID, data, revision); err != nil {
 			if isRevisionMismatch(err) {
 				continue // a concurrent writer moved the key; re-read and re-evaluate
 			}
-			return errs.WrapTransient(err, "Storage", "SaveGenerated", "update generated embedding")
+			return wrapWriteErr(err, "SaveGenerated", "update generated embedding")
 		}
 		return nil
 	}
@@ -476,11 +511,11 @@ func (s *Storage) SaveFailed(ctx context.Context, entityID, errorMsg, reason str
 			return errs.WrapInvalid(err, "Storage", "SaveFailed", "marshal embedding record")
 		}
 
-		if _, err := s.indexBucket.Update(ctx, entityID, data, revision); err != nil {
+		if _, err := s.index.Update(ctx, entityID, data, revision); err != nil {
 			if isRevisionMismatch(err) {
 				continue
 			}
-			return errs.WrapTransient(err, "Storage", "SaveFailed", "update failed embedding")
+			return wrapWriteErr(err, "SaveFailed", "update failed embedding")
 		}
 		return nil
 	}
@@ -495,7 +530,9 @@ func isRevisionMismatch(err error) bool {
 	if err == nil {
 		return false
 	}
-	if errors.Is(err, jetstream.ErrKeyExists) {
+	// The guarded KVStore lane maps CAS conflicts to its own sentinel; the
+	// raw jetstream sentinel is kept for reads/wrappers that carry it.
+	if errors.Is(err, natsclient.ErrKVRevisionMismatch) || errors.Is(err, jetstream.ErrKeyExists) {
 		return true
 	}
 	msg := err.Error()
@@ -625,8 +662,8 @@ func (s *Storage) SaveDedup(
 		return errs.WrapInvalid(err, "Storage", "SaveDedup", "marshal dedup record")
 	}
 
-	if _, err := s.dedupBucket.Put(ctx, contentHash, data); err != nil {
-		return errs.WrapTransient(err, "Storage", "SaveDedup", "put dedup record")
+	if _, err := s.dedup.Put(ctx, contentHash, data); err != nil {
+		return wrapWriteErr(err, "SaveDedup", "put dedup record")
 	}
 
 	return nil

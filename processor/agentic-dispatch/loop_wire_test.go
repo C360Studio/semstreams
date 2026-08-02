@@ -422,3 +422,72 @@ func TestLoopFromCompletion_InlineResult_NoTruncationMarker(t *testing.T) {
 			loop.Result, loop.ResultTruncated, loop.ResultSize)
 	}
 }
+
+// --- Blocker 3: not-durable marker projection (/loops + /activity) ---
+
+// TestLoopFromCompletion_NotDurableMarker pins the terminal-event projection:
+// a completion published after its COMPLETE_ persist failed carries
+// result_not_durable + reason, and the wire Loop surfaces both so a consumer
+// can distinguish absent-by-failure from success-with-empty-result.
+func TestLoopFromCompletion_NotDurableMarker(t *testing.T) {
+	ev := &agentic.LoopCompletedEvent{
+		LoopID:                 "loop-nd-1",
+		TaskID:                 "task-1",
+		Outcome:                agentic.OutcomeSuccess,
+		Result:                 "",
+		ResultNotDurable:       true,
+		ResultNotDurableReason: "invalid: payload exceeds the server's maximum payload size",
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	loop, ok := loopFromCompletion(payload)
+	if !ok {
+		t.Fatal("decode failed")
+	}
+	if !loop.ResultNotDurable {
+		t.Fatal("wire Loop must surface result_not_durable from the terminal event")
+	}
+	if loop.ResultNotDurableReason == "" {
+		t.Fatal("wire Loop must surface the classified reason")
+	}
+	if loop.Result != "" {
+		t.Fatalf("not-durable completion must not surface a result, got %q", loop.Result)
+	}
+}
+
+// TestLoopFromEntity_NotDurableMarker pins the entity projection: the loop
+// entity is the durable carrier of the marker when the COMPLETE_ event itself
+// could not land.
+func TestLoopFromEntity_NotDurableMarker(t *testing.T) {
+	e := &agentic.LoopEntity{
+		ID:                     "loop-nd-2",
+		TaskID:                 "task-2",
+		State:                  agentic.LoopStateComplete,
+		Outcome:                agentic.OutcomeSuccess,
+		ResultNotDurable:       true,
+		ResultNotDurableReason: "kv write exhausted retries",
+	}
+	loop := loopFromEntity(e, "c360", "ops")
+	if !loop.ResultNotDurable || loop.ResultNotDurableReason != "kv write exhausted retries" {
+		t.Fatalf("entity projection must carry the marker, got %+v", loop)
+	}
+}
+
+// TestLoopFromInfo_NotDurableMarker pins the live-tracker projection (the
+// /loops endpoint's in-memory source, recorded by handleAgentComplete).
+func TestLoopFromInfo_NotDurableMarker(t *testing.T) {
+	in := &LoopInfo{
+		LoopID:                 "loop-nd-3",
+		TaskID:                 "task-3",
+		State:                  "complete",
+		Outcome:                "success",
+		ResultNotDurable:       true,
+		ResultNotDurableReason: "persist failed permanently",
+	}
+	loop := loopFromInfo(in)
+	if !loop.ResultNotDurable || loop.ResultNotDurableReason != "persist failed permanently" {
+		t.Fatalf("tracker projection must carry the marker, got %+v", loop)
+	}
+}

@@ -110,7 +110,7 @@ func TestDedupKey_FieldsAreUnambiguous(t *testing.T) {
 func TestSaveDedup_RecordsVectorSpace(t *testing.T) {
 	ctx := context.Background()
 	dedup := newMemKV()
-	s := NewStorage(newMemKV(), dedup)
+	s := NewStorage(nil, newMemKV(), dedup)
 
 	ident := EmbedderIdentity{Type: "http", Model: "all-MiniLM-L6-v2", Dimensions: 384, MaxTextLen: 8000}
 	key := DedupKey(ident, "hello world")
@@ -154,7 +154,7 @@ func TestSaveDedup_RecordsVectorSpace(t *testing.T) {
 // and the stale vector must be unreachable.
 func TestDedupIdentityChange_NeverServesStaleVector(t *testing.T) {
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const text = "an entity description that is identical under both configs"
 	bm25 := EmbedderIdentity{Type: "bm25", Model: "bm25-384", Dimensions: 384, MaxTextLen: 4000}

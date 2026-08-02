@@ -70,7 +70,7 @@ func TestSimilarQueryPerEntityMissCarriesEmbeddingUnavailableCode(t *testing.T) 
 		t.Run(tt.name, func(t *testing.T) {
 			bucket := newMockKVBucket()
 			bucket.getFunc = tt.get
-			c := &Component{storage: embedding.NewStorage(bucket, nil)}
+			c := &Component{storage: embedding.NewStorage(nil, bucket, nil)}
 
 			_, err := c.handleQuerySimilarNATS(context.Background(),
 				[]byte(`{"entity_id":"acme.ops.robotics.gcs.drone.001"}`))
@@ -110,7 +110,7 @@ func TestSimilarQueryPropagatesCallerCancellation(t *testing.T) {
 		}
 		return &mockKVEntry{data: data}, nil
 	}
-	c := &Component{storage: embedding.NewStorage(bucket, nil)}
+	c := &Component{storage: embedding.NewStorage(nil, bucket, nil)}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -128,7 +128,7 @@ func TestSimilarityScanDoesNotReturnPartialResultsOnEntryFailure(t *testing.T) {
 	bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 		return nil, backendErr
 	}
-	c := &Component{storage: embedding.NewStorage(bucket, nil)}
+	c := &Component{storage: embedding.NewStorage(nil, bucket, nil)}
 
 	_, err := c.findSimilarEntities(context.Background(), "", []float32{1, 0}, nil, 10)
 	if !errors.Is(err, backendErr) {
@@ -143,7 +143,7 @@ func TestSimilarityScanRejectsMalformedEmbeddingRecord(t *testing.T) {
 	bucket.getFunc = func(context.Context, string) (jetstream.KeyValueEntry, error) {
 		return &mockKVEntry{data: []byte(`{"entity_id":`)}, nil
 	}
-	c := &Component{storage: embedding.NewStorage(bucket, nil)}
+	c := &Component{storage: embedding.NewStorage(nil, bucket, nil)}
 
 	if _, err := c.findSimilarEntities(context.Background(), "", []float32{1, 0}, nil, 10); err == nil {
 		t.Fatal("malformed embedding record was silently omitted from a successful response")
@@ -157,7 +157,7 @@ func TestSimilarityScanRejectsCancellationWithoutPartialResults(t *testing.T) {
 	bucket.getFunc = func(ctx context.Context, _ string) (jetstream.KeyValueEntry, error) {
 		return nil, ctx.Err()
 	}
-	c := &Component{storage: embedding.NewStorage(bucket, nil)}
+	c := &Component{storage: embedding.NewStorage(nil, bucket, nil)}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
@@ -173,7 +173,7 @@ func TestVectorCacheStopsBeingAuthoritativeAfterWatcherLoss(t *testing.T) {
 	watcher := &bootstrapWatcher{updates: make(chan jetstream.KeyValueEntry, 2)}
 	queryBucket := &embeddingQueryBucket{mockKVBucket: newMockKVBucket(), keys: []string{"entity-1"}}
 	bucket := &vectorCacheBucket{embeddingQueryBucket: queryBucket, watcher: watcher}
-	storage := embedding.NewStorage(bucket, nil)
+	storage := embedding.NewStorage(nil, bucket, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := storage.StartVectorCache(ctx); err != nil {
@@ -208,7 +208,7 @@ func TestVectorCacheStopsBeingAuthoritativeAfterMalformedLiveUpdate(t *testing.T
 	watcher := &bootstrapWatcher{updates: make(chan jetstream.KeyValueEntry, 3)}
 	queryBucket := &embeddingQueryBucket{mockKVBucket: newMockKVBucket(), keys: []string{"entity-1"}}
 	bucket := &vectorCacheBucket{embeddingQueryBucket: queryBucket, watcher: watcher}
-	storage := embedding.NewStorage(bucket, nil)
+	storage := embedding.NewStorage(nil, bucket, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	if err := storage.StartVectorCache(ctx); err != nil {

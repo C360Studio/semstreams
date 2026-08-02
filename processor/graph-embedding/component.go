@@ -918,7 +918,7 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 
 // initStorageAndWorker initializes storage and starts the embedding worker.
 func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedupBucket jetstream.KeyValue) error {
-	c.storage = embedding.NewStorage(indexBucket, dedupBucket)
+	c.storage = embedding.NewStorage(c.natsClient, indexBucket, dedupBucket)
 
 	// Seed the current-failed map from the durable EMBEDDING_INDEX BEFORE the worker
 	// starts, so FailedCount (and the degraded verdict) is accurate immediately rather

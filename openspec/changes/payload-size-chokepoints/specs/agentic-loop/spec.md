@@ -25,6 +25,16 @@ contract.
 - **THEN** the loop's state names result-not-durable with the classified cause, and a
   parent or operator reading the loop can distinguish this from both success and absence
 
+#### Scenario: The published terminal event causally reflects persistence
+
+- **WHEN** any terminal path (completion, failure, cancellation) publishes its event
+- **THEN** the durable COMPLETE_ record was written FIRST, and on a final persist failure
+  the PUBLISHED event itself carries the result-not-durable marker with the classified
+  cause — loop, task, and outcome metadata kept, the undurable result body omitted
+- **AND** every public reader of the loop (activity/loops projections, the result-reading
+  tool consulting the loop entity on an absent record) surfaces the marker as a typed
+  state distinct from success, from still-running, and from never-existed
+
 ### Requirement: An over-limit request MUST fail the loop loudly, never silently retry
 
 An `agent.request` publish refused at the wire limit MUST terminate the loop with a typed

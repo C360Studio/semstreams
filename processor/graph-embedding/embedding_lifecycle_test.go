@@ -37,7 +37,7 @@ func newTombstoneComponent(t *testing.T, index *mockKVBucket) *Component {
 	return &Component{
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
+		storage:           embedding.NewStorage(nil, index, newMockKVBucket()),
 		watermark:         revlag.New(),
 	}
 }
@@ -147,7 +147,7 @@ func TestQueueEntityForEmbedding_WritesEmptyContentHash(t *testing.T) {
 	c := &Component{
 		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
 		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
+		storage:           embedding.NewStorage(nil, index, newMockKVBucket()),
 		watermark:         revlag.New(),
 		embedder:          embedding.NewBM25Embedder(embedding.BM25Config{Dimensions: 384, K1: 1.5, B: 0.75}),
 		config:            Config{EmbedderType: "bm25"},

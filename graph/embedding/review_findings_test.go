@@ -42,7 +42,7 @@ func TestHandleKVEntry_SaveFailedPersistenceMissIsNonTerminal(t *testing.T) {
 	// alwaysConflictUpdateKV (pr628_followups_test.go) makes every Update conflict, so
 	// SaveFailed exhausts its CAS loop and returns ErrCASExhausted — a persistence miss.
 	index := &alwaysConflictUpdateKV{memKV: newMemKV()}
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.persistmiss"
 	const rev = uint64(5)
@@ -90,7 +90,7 @@ func TestHandleKVEntry_FailedRecordReprocessGatedByPhase(t *testing.T) {
 
 	newFailedWorker := func() (*Storage, jetstream.KeyValueEntry, *genCounter) {
 		index := newMemKV()
-		s := NewStorage(index, newMemKV())
+		s := NewStorage(nil, index, newMemKV())
 		seedFailedRecord(t, s, entityID, "recover me", failReasonConnectionRefused, rev)
 		entry, err := index.Get(ctx, entityID)
 		if err != nil {
@@ -140,7 +140,7 @@ func TestFailedRecordRecoveredByHop1RepublishBackstop(t *testing.T) {
 
 	const entityID = "acme.ops.robotics.gcs.drone.backstop"
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 	seedFailedRecord(t, s, entityID, "text", failReasonConnectionRefused, 5)
 
 	gen := &genCounter{}
@@ -193,7 +193,7 @@ func TestFailedSnapshotRecordReprocessed_MultiWorker(t *testing.T) {
 
 	base := newMemKV()
 	kv := &manualWatchKV{memKV: base, updates: make(chan jetstream.KeyValueEntry, 8)}
-	s := NewStorage(kv, newMemKV())
+	s := NewStorage(nil, kv, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.snapmulti"
 	seedFailedRecord(t, s, entityID, "recover me", failReasonConnectionRefused, 5)
@@ -300,7 +300,7 @@ func TestScanFailed_NormalizesReasonAndSeedsRevision(t *testing.T) {
 	ctx := context.Background()
 
 	kv := &replayKV{memKV: newMemKV()}
-	s := NewStorage(kv, newMemKV())
+	s := NewStorage(nil, kv, newMemKV())
 
 	save := func(rec *Record) {
 		data, err := json.Marshal(rec)

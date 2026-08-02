@@ -19,13 +19,15 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       covered (`%w` chains preserve the sentinel; `TestCheckPayloadSize` asserts
       `errs.IsInvalid` through the wrap). **Deviation row on the 6.1 table; owner sign-off
       pending.** Original text: map inside `errs.Classify`.
-- [x] 1.2 DONE (`natsclient/payload_size.go`: `checkPayloadSize`, `serverPayloadLimit`
-      live-read with 1MB fallback). AMENDED from original: no fake-conn unit seam exists on
-      `nats.Conn`; derivation-not-hardcoding is proven by (a) fallback + override tests
-      (`payload_size_test.go`) and (b) the offload integration test reading the REAL
-      server's advertised limit via `ServerPayloadLimit()` on live NATS
-      (`result_offload_integration_test.go`). Compiled-in value exists only as the
-      unexported no-conn fallback.
+- [x] 1.2 DONE, RE-AMENDED by the Codex round (Blocker 2): the compiled-in 1MB
+      fallback is DELETED — the payload-bounds spec forbids a framework copy of the wire
+      limit, and the fallback produced false-permanent verdicts pre-connect. The limit is
+      now live-read from the connection and CACHED causally (`Client.advertisedPayloadLimit`
+      atomic, stored only from a real advertisement); a never-connected client reports 0 =
+      UNKNOWN, every guard disables, and connection-state errors win
+      (`TestServerPayloadLimitUnknown_NoFalsePermanentVerdict`,
+      `TestSeamGuards_RaisedLimitPassesLargerPayload` — 8MiB cached passes a 2MiB payload).
+      Derivation still proven on live NATS by the offload integration test.
 - [x] 1.3 DONE: KV `Put`/`Create`/`Update` guarded (`natsclient/kv.go`),
       `UpdateWithRetry*` hardcoded 1MB replaced by `effectiveValueLimit()` (override > live
       > default; `DefaultKVOptions.MaxValueSize` now 0 = derive), publish surface
@@ -33,11 +35,17 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       `PublishToStreamWithMsgID`, `PublishToStreamAsync(+WithMsgID)` (shared funnels),
       `PublishBatchToStream` (pre-checks every message before enqueuing any),
       `RequestWithHeaders` (request payloads are publishes too). Guard runs BEFORE
-      conn/circuit gates: permanent outranks transient.
-- [x] 1.4 DONE: per-seam subtests (`TestSeamGuards_RefuseOversizedBeforeIO`, 10 seams +
-      KV lanes over nil bucket = guard-before-I/O ordering proof). Deleting one seam's
-      guard call fails exactly that seam's subtest by construction (zero-value client:
-      without the guard the seam returns ErrNotConnected/panics instead of
+      conn/circuit gates: permanent outranks transient. Codex round (Blocker 1):
+      `PublishToStreamWithAck` (stream.go) was a MISSED funnel — now guarded + residue
+      classified + excluded from breaker counting; per-seam subtest added; mutation check
+      run (guard call removed → its subtest fails; cp-backup, checksum-restored).
+- [x] 1.4 DONE, RE-AMENDED by the Codex round: per-seam subtests
+      (`TestSeamGuards_RefuseOversizedBeforeIO`, 11 seams incl. PublishToStreamWithAck +
+      KV lanes over nil bucket = guard-before-I/O ordering proof) now run on a
+      connection-less client with an explicitly SEEDED cached advertisement
+      (`newLimitedTestClient`) — under Blocker-2 semantics a zero client has NO limit and
+      must not refuse. Deleting one seam's guard call still fails exactly that seam's
+      subtest (without the guard the seam returns ErrNotConnected/panics instead of
       ErrPayloadTooLarge).
 
 ## 2. The respond seam
@@ -95,15 +103,40 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       publish (`component.go` offloadCompletionResult + rebuildCompletionMessage) so KV,
       entity, and stream lanes carry one shape — mutation check: dropped offload call →
       end-to-end test FAILS. Loop entity mirrors {result_ref, result_size, preview}
-      (`processor/agentic-loop/state.go` ApplyResultOffload).
+      (`processor/agentic-loop/state.go` applyResultOffload).
+      Codex round (Blocker 4): the fixed 2048 preview is now the INITIAL bound only —
+      `trimCompletionPreviewToFit` shrinks the preview (UTF-8-safe) until the SERIALIZED
+      carrier fits the live limit (floor: empty preview); `markResultNotDurable`'s entity
+      write and the post-offload entity persist trim the same way
+      (`trimEntityResultToFit`; only entities whose full body is durable elsewhere or
+      already marked are trimmed — a plain inline result is NEVER silently shrunk, the
+      guard rules loudly). The fake KV in `persist_durability_test.go` now ENFORCES its
+      configured payloadLimit like the real server (the review-proven false green); the
+      1000-byte end-to-end test passes through the trim path and asserts the stored value
+      fits the ceiling. DELIBERATE NARROWING of the review's startup-error suggestion:
+      no startup gate — under Blocker-2 semantics startup cannot know the limit before
+      connect, so the trim floor + the guarded write's classified refusal cover the
+      pathological empty-preview-still-too-big case. Offload threshold under an UNKNOWN
+      limit (`ServerPayloadLimit()` == 0) is 0 = offload disabled — no new compiled-in
+      numbers; by the first terminal write any real deployment has connected.
 - [x] 3.3 `read_loop_result` resolves refs transparently under its existing
       `max_bytes`/`offset` contract; enumerate ALL readers of `COMPLETE_*` values from the
       owning components and cover each.
       DONE 2026-08-02. Hydration: `processor/agentic-tools/loop_result.go`
       (LoopContentFetcher + hydrateResult; pages over HYDRATED content, fail-closed on
       absent fetcher/role/field; tests in `loop_result_test.go`); wired in
-      `executors/register_read_loop_result.go` + `executors/register.go` (new
-      ToolDependencies.ContentBucket, default AGENT_CONTENT). READER CENSUS (grepped
+      `executors/register_read_loop_result.go` + `executors/register.go`.
+      Codex round (HIGH 5): the hydration bucket now resolves PER-REF from
+      `StorageReference.StorageInstance` (`refResolvingContentFetcher`, stores cached per
+      bucket, open failures not cached) — the agentic-loop writer stamps no InstanceName,
+      so the stamped instance IS the configured content_bucket (verified:
+      `objectstore.NewStoreWithConfigAndMetrics` gh#400 default) and a non-default
+      deployment reads back with NO boot-time wiring; `ToolDependencies.ContentBucket` is
+      the FALLBACK for instance-less refs only, so no cmd/semstreams or e2e main change
+      was needed (the review's either/or resolved on the preferred arm).
+      Registration-level proof with a NON-default bucket:
+      `executors/register_read_loop_result_integration_test.go`
+      (TestIntegration_ReadLoopResult_NonDefaultContentBucket, byte-exact reassembly). READER CENSUS (grepped
       COMPLETE_/AGENT_LOOPS/LoopCompletedEvent tree-wide):
       (1) read_loop_result — ref-aware (above). (2) flow_monitor_executor — metadata-only
       aggregation, never reads Result; unaffected by additive fields; pinned by
@@ -204,7 +237,7 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       | Ruling | Status | Evidence |
       |---|---|---|
       | D1 one derived-limit guard, ≤5 chokepoints, Invalid refusal | CONFORMS | `natsclient/payload_size.go` (`checkPayloadSize`, `serverPayloadLimit`); wired: `kv.go` Put/Create/Update/UpdateWithRetry (`effectiveValueLimit`), `client.go` Publish + both stream funnels + batch pre-check, `request.go` RequestWithHeaders |
-      | D2 oversize classifies permanent | **DEVIATION — sign-off pending** | mechanism at natsclient boundary (`classifyMaxPayload`) — `pkg/errs` stays dependency-free. Post-review (6.6): residue classification now covers EVERY send lane — both stream funnels, async enqueue, `Request`/`RequestWithHeaders`/`RequestWithRetry`/`RequestReady` loops (which also stop retrying and stop counting breaker failures on oversize), `ReplyWithHeaders` — so "wherever it surfaces" holds without the earlier overclaim |
+      | D2 oversize classifies permanent | **DEVIATION — sign-off pending** | mechanism at natsclient boundary (`classifyMaxPayload`) — `pkg/errs` stays dependency-free. Post-review (6.6): residue classification now covers EVERY send lane — both stream funnels, `PublishToStreamWithAck` (Codex round), async enqueue, `Request`/`RequestWithHeaders`/`RequestWithRetry`/`RequestReady` loops (which also stop retrying and stop counting breaker failures on oversize), `ReplyWithHeaders` — so "wherever it surfaces" holds without the earlier overclaim |
       | D3 typed too-large reply, never timeout | CONFORMS | `request.go` respond path via `RespondError`; objectstore respond via `CheckReplySize` |
       | D4 COMPLETE_ loud + ref-bearing, reader census | CONFORMS (3.4 crash-injection half `[~]`) | `processor/agentic-loop/component.go` persist*/offload, `agentic/loop_result_entity.go`, `processor/agentic-tools/loop_result.go` hydration; census in 3.3 |
       | D5 request lane: loud interim, hydration behavior-neutral | CONFORMS-with-deferral (sanctioned by D5's own slip clause) | 4.1 shipped (`failLoopForOversizedPublish`); 4.2 hydration `[~]` DEFERRED, propagated into the agentic-loop delta |
@@ -214,7 +247,7 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       | Owner C2: paved path is default | CONFORMS for results; request lane pending 4.2 | offload automatic above threshold |
       | Owner C3: agentic lanes first | CONFORMS | groups 3–4 shipped in this slice |
       | Knob correction (ingestion vs wire) | CONFORMS | 4.3 + 4.4 |
-      | NEW EXPORTED SURFACE — **sign-off pending** | listed (review-verified complete) | `natsclient.ServerPayloadLimit`, `natsclient.CheckReplySize`, `natsclient.ErrPayloadTooLarge`, `agentic.LoopResultEntity` + `TryLoopResultEntityID`, `agentictools.LoopContentFetcher`, `NewReadLoopResultExecutor` signature widened (compile-breaking for out-of-tree callers; all in-repo callers updated), `ToolDependencies.ContentBucket`, additive fields on `LoopCompletedEvent`/`LoopEntity`/dispatch `Loop`. Review excess resolved: `LoopManager.ApplyResultOffload`/`MarkResultNotDurable` UNEXPORTED (zero out-of-package consumers) |
+      | NEW EXPORTED SURFACE — **sign-off pending** | listed (re-verified post-Codex) | `natsclient.ServerPayloadLimit` (now: 0 = unknown, callers must skip derivation), `natsclient.CheckReplySize`, `natsclient.ErrPayloadTooLarge`, `natsclient.Client.SeedServerPayloadLimitForTest` (test support; Codex round), `agentic.LoopResultEntity` + `TryLoopResultEntityID`, `agentictools.LoopContentFetcher`, `NewReadLoopResultExecutor` signature widened, `ToolDependencies.ContentBucket` (now fallback-only), additive fields on `LoopCompletedEvent`/`LoopFailedEvent`/`LoopCancelledEvent` (`result_not_durable(+_reason)`, Codex Blocker 3)/`LoopEntity`/dispatch `Loop`/`LoopInfo`. Signature changes (compile-breaking out-of-tree, all in-repo callers updated): `clustering.NewNATSSummaryStore(client, kv)`, `clustering.EnhancementWorkerConfig.NATSClient` (required), `embedding.NewStorage(client, index, dedup)`, dispatch `LoopTracker.RecordResultNotDurable`. Review excess resolved: `LoopManager.ApplyResultOffload`/`MarkResultNotDurable` UNEXPORTED |
 - [x] 6.2 DONE 2026-08-02: `gofmt` clean, `task lint` clean (revive+vet+fmt+port guard),
       `go vet` clean plain and `-tags=integration` on all touched trees.
 - [x] 6.3 DONE with an honest bound: full `go test -race ./...` GREEN (one failure found
@@ -241,7 +274,7 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       BLOCKING-2 header-residue `ErrMaxPayload` on both stream funnels +
       `RequestWithHeaders` now classified permanent and excluded from breaker counting;
       HIGH taxonomy-row/Impact pre-correction claims re-synced (the correction-propagation
-      class, caught on our own change); HIGH D3-branch-untested → 
+      class, caught on our own change); HIGH D3-branch-untested →
       `TestIntegration_OversizedReplyAnswersTyped` drives real NATS: typed Invalid error
       at the caller in 0.64s vs the 10s timeout pathology; MEDIUM surface excess →
       two LoopManager methods unexported, signature change added to the table; NIT kv.go
@@ -249,6 +282,35 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       no-conflict, offload atomicity, hydration fail-closed, retry classification,
       additive-fields round-trip) recorded in the review output.
 - [ ] 6.7 Owner-run Codex round; arm `--auto` only AFTER it closes.
+      HISTORY (2026-08-02, round 1 at b4f59c8): Codex returned 4 BLOCKERS + 2 HIGH +
+      MEDIUM/NIT; all fixed same-session on this branch per the coordinator's prescribed
+      designs. Blocker 2 (false-permanent from the compiled-in fallback) → fallback
+      DELETED, causal advertised-limit cache, unknown = no verdict (spec scenario added).
+      Blocker 1 (census not closed) → PublishToStreamWithAck guarded; summary_store +
+      embedding storage writes migrated onto guarded KVStore lanes (constructors widened:
+      `NewNATSSummaryStore(client, kv)`, `EnhancementWorkerConfig.NATSClient`,
+      `embedding.NewStorage(client, index, dedup)` — compile-breaking for out-of-tree
+      callers, all in-repo callers updated); objectstore's two raw core publishes routed
+      through `Client.Publish`; census contract test added
+      (`test/contract/payload_guard_census_test.go`). RECORDED DEVIATION: the design's
+      "allowlist = natsclient internals only" premise did not survive the code — ~50
+      production files hold raw KV handles for reads/watches/provisioning; the pinned
+      allowlist enumerates ALL of them with reasons (guard owner / read-watch / wraps
+      guarded lane / enumerated raw write lanes marked follow-up / conn-for-subscribe /
+      ingest core publishes), red on new bypasses AND stale entries. Blocker 3 →
+      persist-before-publish on all terminal paths + published-event mutation to the
+      result-not-durable shape + reader paving (see 3.1 amendment; includes closing the
+      FailureState lane that had NO COMPLETE_ write, a pre-existing gap on main).
+      Blocker 4 → trim-until-fits + enforcing fake KV (see 3.2 amendment; startup-gate
+      suggestion deliberately narrowed, reasoning recorded there). HIGH 5 → per-ref
+      bucket resolution (see 3.3 amendment). HIGH 6 + MEDIUM/NIT → this file re-synced to
+      post-fix truth; KV override refusal now names the "local admission bound", not the
+      server (`checkPayloadBound` + `KVStore.checkValueSize`); tasks.md trailing
+      whitespace fixed. NEW TEST-SUPPORT EXPORT:
+      `Client.SeedServerPayloadLimitForTest` (test_client.go, named callers = agentic-loop
+      durability tests) — surface row added to 6.1. Gates re-run post-fix; results in the
+      session report. entity-id-audit remains red with the SAME 13 pre-existing findings
+      as the branch baseline (diff empty; known condition, memory: rollout hub).
 - [ ] 6.8 Owner CONFIRM-CLOSE on gh#857; gh#855's deferred CONFIRM-CLOSE unblocks when the
       clustering-relevant chokepoints (1.x, 2.x) land — note it there.
 - [ ] 6.9 Archive: `payload-bounds` Purpose ships in the delta; confirm `agentic-loop`'s

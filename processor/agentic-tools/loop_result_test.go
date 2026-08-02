@@ -206,6 +206,90 @@ func TestReadLoopResultExecutor_NotFound(t *testing.T) {
 	}
 }
 
+// --- Blocker 3: absent COMPLETE_ consults the loop entity marker ---
+
+// seedEntity puts a LoopEntity into the mock KV under the bare loopID key,
+// exactly where the agentic-loop component persists it in production.
+func seedEntity(t *testing.T, kv *mockLoopsKV, loopID string, entity agentic.LoopEntity) {
+	t.Helper()
+	data, err := json.Marshal(&entity)
+	if err != nil {
+		t.Fatalf("marshal loop entity: %v", err)
+	}
+	kv.Put(loopID, data)
+}
+
+func execRead(t *testing.T, e *ReadLoopResultExecutor, loopID string) agentic.ToolResult {
+	t.Helper()
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "c1",
+		Name:      ReadLoopResultToolName,
+		Arguments: map[string]any{"loop_id": loopID},
+	})
+	if err != nil {
+		t.Fatalf("unexpected wrapped error: %v", err)
+	}
+	return res
+}
+
+// A missing COMPLETE_ with the loop entity carrying the result-not-durable
+// marker is a TYPED result-not-durable error — never a generic not-found the
+// caller would retry or misread as "still running".
+func TestReadLoopResult_MissingCompletion_NotDurableMarkerIsTyped(t *testing.T) {
+	kv := newMockLoopsKV()
+	seedEntity(t, kv, "loop-nd", agentic.LoopEntity{
+		ID: "loop-nd", TaskID: "t", State: agentic.LoopStateComplete,
+		Outcome:                agentic.OutcomeSuccess,
+		ResultNotDurable:       true,
+		ResultNotDurableReason: "invalid: payload exceeds the server's maximum payload size",
+	})
+	e := NewReadLoopResultExecutor(kv, nil)
+
+	res := execRead(t, e, "loop-nd")
+	if res.ErrorKind != agentic.ToolErrorInternal {
+		t.Fatalf("error kind = %v, want ToolErrorInternal (typed result-not-durable)", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "not durably stored") {
+		t.Fatalf("error must name the not-durable condition, got %q", res.Error)
+	}
+	if !strings.Contains(res.Error, "maximum payload size") {
+		t.Fatalf("error must carry the classified cause, got %q", res.Error)
+	}
+	if nd, _ := res.Metadata["result_not_durable"].(bool); !nd {
+		t.Fatal("metadata must carry result_not_durable=true for structured consumers")
+	}
+}
+
+// A missing COMPLETE_ with a live (non-terminal) loop entity is "still
+// running" — distinct from never-existed and from not-durable.
+func TestReadLoopResult_MissingCompletion_RunningLoopStaysDistinct(t *testing.T) {
+	kv := newMockLoopsKV()
+	seedEntity(t, kv, "loop-live", agentic.LoopEntity{
+		ID: "loop-live", TaskID: "t", State: agentic.LoopStateExecuting,
+	})
+	e := NewReadLoopResultExecutor(kv, nil)
+
+	res := execRead(t, e, "loop-live")
+	if res.ErrorKind != agentic.ToolErrorNotFound {
+		t.Fatalf("error kind = %v, want ToolErrorNotFound", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "still running") {
+		t.Fatalf("running loop must be named as such, got %q", res.Error)
+	}
+}
+
+// A missing COMPLETE_ with NO loop entity at all is "never existed".
+func TestReadLoopResult_MissingCompletion_NeverExistedStaysDistinct(t *testing.T) {
+	e := NewReadLoopResultExecutor(newMockLoopsKV(), nil)
+	res := execRead(t, e, "loop-ghost")
+	if res.ErrorKind != agentic.ToolErrorNotFound {
+		t.Fatalf("error kind = %v, want ToolErrorNotFound", res.ErrorKind)
+	}
+	if !strings.Contains(res.Error, "never existed") {
+		t.Fatalf("never-existed must be named as such, got %q", res.Error)
+	}
+}
+
 // TestReadLoopResultExecutor_InvalidArgs verifies missing or wrong-typed
 // loop_id surfaces an invalid-args error without trying the KV.
 func TestReadLoopResultExecutor_InvalidArgs(t *testing.T) {

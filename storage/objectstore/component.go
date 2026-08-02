@@ -556,8 +556,15 @@ func (c *Component) publishStoredMessage(
 		}
 		return nil
 	}
-	// Fallback to core NATS for non-JetStream ports
-	if err := c.natsClient.GetConnection().Publish(storedSubject, msgData); err != nil {
+	// Fallback to core NATS for non-JetStream ports — through the client's
+	// GUARDED publish lane (payload-bounds spec), never the raw connection:
+	// an oversized StoredMessage refuses with the classified permanent error
+	// instead of dying server-side, and that refusal must NOT be re-wrapped
+	// transient (retrying it cannot shrink the payload).
+	if err := c.natsClient.Publish(context.Background(), storedSubject, msgData); err != nil {
+		if errs.IsInvalid(err) {
+			return err
+		}
 		return errs.WrapTransient(err, "Component", "publishStoredMessage",
 			fmt.Sprintf("publish StoredMessage to subject %s", storedSubject))
 	}
@@ -578,7 +585,10 @@ func (c *Component) publishEvent(event Event) {
 		return
 	}
 
-	if err := c.natsClient.GetConnection().Publish(eventSubject, data); err != nil {
+	// Guarded publish lane (payload-bounds spec): events are small by
+	// construction, but the raw-connection bypass was one of the enumerated
+	// unguarded funnels — the census test pins that no new one appears.
+	if err := c.natsClient.Publish(context.Background(), eventSubject, data); err != nil {
 		c.logger.Error("Failed to publish event",
 			slog.String("subject", eventSubject),
 			slog.String("error", err.Error()))

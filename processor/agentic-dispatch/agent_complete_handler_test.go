@@ -179,3 +179,50 @@ func TestHandleAgentFailed_SetsTerminalStateAndError(t *testing.T) {
 		t.Errorf("isTerminalState(%q) = false, want true", info.State)
 	}
 }
+
+// TestHandleAgentComplete_NotDurableMarkerRecorded (Blocker 3): a terminal
+// event carrying result_not_durable must be recorded on the live tracker so
+// /loops consumers see absent-by-failure — and the user response must not
+// present the completion as a plain success.
+func TestHandleAgentComplete_NotDurableMarkerRecorded(t *testing.T) {
+	c, sink := newCompletionTestComponent(t)
+	const loopID = "loop-nd-live-1"
+	trackedLoop(c, loopID, "carol", "session-3")
+
+	c.handleAgentComplete(context.Background(), completionPayload(t, &agentic.LoopCompletedEvent{
+		LoopID:                 loopID,
+		TaskID:                 loopID + "-task",
+		Outcome:                agentic.OutcomeSuccess,
+		Role:                   "general",
+		Result:                 "", // emptied by the not-durable degradation
+		ResultNotDurable:       true,
+		ResultNotDurableReason: "invalid: payload exceeds the server's maximum payload size",
+		CompletedAt:            time.Now(),
+	}))
+
+	info := c.loopTracker.Get(loopID)
+	if info == nil {
+		t.Fatal("loop info missing after completion")
+	}
+	if !info.ResultNotDurable {
+		t.Fatal("tracker must record the result-not-durable marker from the terminal event")
+	}
+	if info.ResultNotDurableReason == "" {
+		t.Fatal("tracker must record the classified reason")
+	}
+
+	// The projection surfaces it on the wire shape /loops serves.
+	loop := loopFromInfo(info)
+	if !loop.ResultNotDurable {
+		t.Fatal("wire projection must carry the marker")
+	}
+
+	// The user-facing response must not read as a plain empty success.
+	if len(sink.responses) == 0 {
+		t.Fatal("expected a user response")
+	}
+	last := sink.responses[len(sink.responses)-1]
+	if last.Type != agentic.ResponseTypeError {
+		t.Fatalf("not-durable completion must respond as an error, got %q", last.Type)
+	}
+}

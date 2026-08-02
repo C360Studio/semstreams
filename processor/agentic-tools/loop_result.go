@@ -133,11 +133,12 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 	entry, err := e.kv.Get(ctx, completeKeyPrefix+loopID)
 	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
-			return agentic.ToolResult{
-				CallID:    call.ID,
-				Error:     fmt.Sprintf("no completion record for loop %s (loop may still be running or never existed)", loopID),
-				ErrorKind: agentic.ToolErrorNotFound,
-			}, nil
+			// Blocker 3: a missing COMPLETE_ is NOT one answer. Consult the
+			// loop entity (same bucket, key <loopID>): a result-not-durable
+			// marker means the loop TERMINATED but its record could not be
+			// stored — a typed error distinct from both "still running" and
+			// "never existed", which stay distinct from each other.
+			return e.absentCompletionResult(ctx, call, loopID), nil
 		}
 		return agentic.ToolResult{
 			CallID:    call.ID,
@@ -198,6 +199,66 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 			agentic.MetadataKeyTotalBytes: total,
 		},
 	}, nil
+}
+
+// absentCompletionResult answers a missing COMPLETE_ record by consulting the
+// loop entity (Blocker 3). Answers, in order of specificity:
+//   - entity carries the result-not-durable marker → typed result-not-durable
+//     error naming the classified cause (the loop IS terminal; retrying the
+//     read cannot help; the parent must branch on the failure).
+//   - entity exists and is non-terminal → "still running".
+//   - entity exists, terminal, no marker → record absent (likely a
+//     persist/read race); named as such.
+//   - no entity → "never existed".
+func (e *ReadLoopResultExecutor) absentCompletionResult(ctx context.Context, call agentic.ToolCall, loopID string) agentic.ToolResult {
+	entry, err := e.kv.Get(ctx, loopID)
+	if err != nil {
+		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+			return agentic.ToolResult{
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("no completion record and no loop entity for %s (loop never existed)", loopID),
+				ErrorKind: agentic.ToolErrorNotFound,
+			}
+		}
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("no completion record for loop %s and the loop entity could not be read: %v", loopID, err),
+			ErrorKind: agentic.ToolErrorNetwork,
+		}
+	}
+	var entity agentic.LoopEntity
+	if uerr := json.Unmarshal(entry.Value, &entity); uerr != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("no completion record for loop %s and its loop entity is malformed: %v", loopID, uerr),
+			ErrorKind: agentic.ToolErrorInternal,
+		}
+	}
+	if entity.ResultNotDurable {
+		return agentic.ToolResult{
+			CallID: call.ID,
+			Error: fmt.Sprintf("loop %s terminated but its result was not durably stored: %s",
+				loopID, entity.ResultNotDurableReason),
+			ErrorKind: agentic.ToolErrorInternal,
+			Metadata: map[string]any{
+				"loop_id":            loopID,
+				"result_not_durable": true,
+				"outcome":            entity.Outcome,
+			},
+		}
+	}
+	if !entity.State.IsTerminal() {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("loop %s is still running (state=%s); no completion record yet", loopID, entity.State),
+			ErrorKind: agentic.ToolErrorNotFound,
+		}
+	}
+	return agentic.ToolResult{
+		CallID:    call.ID,
+		Error:     fmt.Sprintf("loop %s is terminal (state=%s) but its completion record is absent", loopID, entity.State),
+		ErrorKind: agentic.ToolErrorNotFound,
+	}
 }
 
 // hydrateResult fetches an offloaded result body and resolves it through the

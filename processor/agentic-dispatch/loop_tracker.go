@@ -47,6 +47,12 @@ type LoopInfo struct {
 	Error       string    `json:"error,omitempty"`        // Error message on failure
 	CompletedAt time.Time `json:"completed_at,omitempty"` // When the loop completed
 
+	// Result-not-durable marker (payload-size-chokepoints Blocker 3):
+	// recorded from a terminal event that carried it, so live /loops
+	// consumers can distinguish absent-by-failure from success.
+	ResultNotDurable       bool   `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string `json:"result_not_durable_reason,omitempty"`
+
 	// PendingApproval is populated from agent.approval_pending events
 	// when the loop transitions to LoopStateAwaitingApproval. The
 	// approval HTTP handler reads this to recover the CallID it needs
@@ -291,6 +297,21 @@ func (t *LoopTracker) UpdateCompletion(loopID, outcome, result, errMsg string) e
 	}
 
 	return nil
+}
+
+// RecordResultNotDurable stamps the typed result-not-durable marker
+// (payload-size-chokepoints Blocker 3) on a tracked loop, after
+// UpdateCompletion, when the terminal event carried it. Unknown loops are a
+// no-op — the caller already warned on the unknown-loop path.
+func (t *LoopTracker) RecordResultNotDurable(loopID, reason string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	info, ok := t.loops[loopID]
+	if !ok {
+		return
+	}
+	info.ResultNotDurable = true
+	info.ResultNotDurableReason = reason
 }
 
 // SetPendingApproval records the gated tool-call info for a loop

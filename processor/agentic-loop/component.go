@@ -1362,11 +1362,23 @@ func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, er
 
 	// Persist failure to KV first so watchers (rules engine,
 	// execution-manager) see COMPLETE_{loopID} when they react to the
-	// failure event below.
+	// failure event below. On final persist failure the PUBLISHED event is
+	// mutated to the explicit result-not-durable shape and re-marshaled
+	// (Blocker 3): the publication must causally reflect persistence, so a
+	// watcher reading the event knows the durable record is absent by
+	// failure, not by race.
 	if failure != nil {
 		if err := c.persistFailureState(errorCtx, loopID, failure); err != nil {
 			c.logger.Error("failure state not durably stored",
 				"loop_id", loopID, "error", err)
+			degradeFailureToNotDurable(failure, err)
+			if rebuilt := marshalTerminalEvent(failure, c.logger, loopID); rebuilt != nil {
+				for i, msg := range failMsgs {
+					if msg.Subject == component.ResolveSubject(c.config.Ports.Outputs, "agent.failed", loopID) {
+						failMsgs[i].Data = rebuilt
+					}
+				}
+			}
 		}
 	}
 
@@ -1498,9 +1510,28 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 			if err := c.persistCompletionState(ctx, result.LoopID, result.CompletionState); err != nil {
 				c.logger.Error("completion result not durably stored",
 					"loop_id", result.LoopID, "error", err)
+				// Blocker 3: the PUBLISHED terminal must causally reflect
+				// persistence. Mutate the event to the explicit
+				// result-not-durable shape (metadata kept, result emptied,
+				// typed marker + reason) and re-marshal the queued
+				// agent.complete publish so a waiting parent receives a typed
+				// terminal — never success-with-absent-result.
+				degradeCompletionToNotDurable(result.CompletionState, err)
+				c.rebuildCompletionMessage(&result)
 			}
 			c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
 		} else if result.FailureState != nil {
+			// Persist COMPLETE_ BEFORE the queued agent.failed publish goes
+			// out (Blocker 3: terminal publication causally reflects
+			// persistence). This lane previously published its failure event
+			// with NO COMPLETE_ write at all — the third terminal path the
+			// reorder closes (pre-existing on main; recorded in tasks.md).
+			if err := c.persistFailureState(ctx, result.LoopID, result.FailureState); err != nil {
+				c.logger.Error("failure state not durably stored",
+					"loop_id", result.LoopID, "error", err)
+				degradeFailureToNotDurable(result.FailureState, err)
+				c.rebuildFailureMessage(&result)
+			}
 			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
 		}
 		c.writeTrajectoryToGraph(ctx, result.LoopID)
@@ -1832,6 +1863,48 @@ func (c *Component) writeLoopKV(ctx context.Context, key string, data []byte) er
 // the marker write can never itself become oversized.
 const maxNotDurableReasonBytes = 1024
 
+// degradeCompletionToNotDurable mutates a completion event to the explicit
+// result-not-durable shape (Blocker 3): loop/task/outcome metadata kept, the
+// result body emptied (it is exactly what could not be stored — publishing it
+// anyway would hand a parent a payload the durable record disagrees with),
+// typed marker + bounded classified reason added. The preview/ref triplet is
+// kept when present: an offloaded body in the content store is still valid
+// even when the KV pointer write failed.
+func degradeCompletionToNotDurable(completion *agentic.LoopCompletedEvent, cause error) {
+	completion.Result = ""
+	completion.ResultNotDurable = true
+	completion.ResultNotDurableReason = truncateUTF8(cause.Error(), maxNotDurableReasonBytes)
+}
+
+// degradeFailureToNotDurable mirrors degradeCompletionToNotDurable for the
+// failure event (no result body to empty; the marker says the durable
+// COMPLETE_ record is absent by failure, not by race).
+func degradeFailureToNotDurable(failure *agentic.LoopFailedEvent, cause error) {
+	failure.ResultNotDurable = true
+	failure.ResultNotDurableReason = truncateUTF8(cause.Error(), maxNotDurableReasonBytes)
+}
+
+// degradeCancellationToNotDurable mirrors degradeCompletionToNotDurable for
+// the cancellation event.
+func degradeCancellationToNotDurable(cancelled *agentic.LoopCancelledEvent, cause error) {
+	cancelled.ResultNotDurable = true
+	cancelled.ResultNotDurableReason = truncateUTF8(cause.Error(), maxNotDurableReasonBytes)
+}
+
+// marshalTerminalEvent wraps a terminal event in its BaseMessage envelope and
+// marshals it for publication. Returns nil (with a loud log) on marshal
+// failure — the caller then skips the publish rather than publishing a stale
+// pre-mutation shape.
+func marshalTerminalEvent(event message.Payload, logger *slog.Logger, loopID string) []byte {
+	msg := message.NewBaseMessage(event.Schema(), event, "agentic-loop")
+	data, err := json.Marshal(msg)
+	if err != nil {
+		logger.Error("failed to marshal terminal event", "loop_id", loopID, "error", err)
+		return nil
+	}
+	return data
+}
+
 // markResultNotDurable records the typed result-not-durable state on the
 // loop after a terminal KV write finally failed (gh#857 D4): the in-memory
 // entity gains ResultNotDurable + the classified cause, its inline Result is
@@ -1847,7 +1920,11 @@ func (c *Component) markResultNotDurable(ctx context.Context, loopID string, cau
 			"loop_id", loopID, "cause", cause)
 		return
 	}
-	data, err := json.Marshal(&entity)
+	// Blocker 4: the marker VALUE itself must fit the carrier — trim the
+	// inline result against the live limit (floor: empty), not a fixed
+	// preview budget; the guarded Put below rules loudly if even the
+	// empty-result marker exceeds a known limit.
+	data, err := c.trimEntityResultToFit(&entity)
 	if err != nil {
 		c.logger.Error("failed to marshal result-not-durable marker", "loop_id", loopID, "error", err)
 		return
@@ -1980,7 +2057,18 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
 		return err
 	}
 
-	data, err := json.Marshal(entity)
+	// Blocker 4: an entity whose full result body is durable ELSEWHERE (an
+	// offload ref) or already marked not-durable carries only a preview —
+	// trim that preview to fit the carrier, since shrinking it loses
+	// nothing. An entity with a plain INLINE result is never trimmed: a
+	// silent shrink would lose data, so the guarded write below rules
+	// loudly instead.
+	var data []byte
+	if entity.ResultRef != nil || entity.ResultNotDurable {
+		data, err = c.trimEntityResultToFit(&entity)
+	} else {
+		data, err = json.Marshal(entity)
+	}
 	if err != nil {
 		c.logger.Error("Failed to marshal loop entity", "error", err, "loop_id", loopID)
 		return errs.WrapInvalid(err, "agentic-loop", "persistLoopState", "marshal loop entity")
@@ -2059,6 +2147,14 @@ func (c *Component) offloadCompletionResult(ctx context.Context, completion *age
 	completion.ResultRef = ref
 	completion.Result = ""
 
+	// Blocker 4: the preview must fit the CARRIER, not a fixed byte budget.
+	// Trim the preview until the serialized ref-bearing event fits the live
+	// wire limit (floor: empty preview) — a fixed 2048 preview inside an
+	// event whose OTHER fields (prompt, metadata) already crowd the limit
+	// would turn the offload's own KV write into a refusal. Trimmed BEFORE
+	// the entity mirror below so both carriers agree on the preview.
+	c.trimCompletionPreviewToFit(completion)
+
 	if !c.handler.loopManager.applyResultOffload(completion.LoopID, completion.ResultPreview, ref, size) {
 		c.logger.Debug("loop entity not found for result-offload mirror", "loop_id", completion.LoopID)
 	}
@@ -2071,14 +2167,16 @@ func (c *Component) offloadCompletionResult(ctx context.Context, completion *age
 }
 
 // rebuildCompletionMessage re-marshals the queued agent.complete publish
-// after an offload so the STREAM lane carries the same ref-bearing shape as
-// the KV value. Without this, the pre-offload marshal (handlers.go
-// handleCompleteResponse) would put the full inline result back on the wire,
-// and a result above the server limit would fail at the publish guard after
-// the KV lane had already bounded itself — a coherence gap at the seam this
-// change creates.
+// after the completion event was MUTATED — by an offload (ref-bearing shape)
+// or by the result-not-durable degradation (Blocker 3) — so the STREAM lane
+// carries the same shape as the KV value. Without this, the pre-mutation
+// marshal (handlers.go handleCompleteResponse) would put the stale inline
+// result back on the wire: an oversized body would fail at the publish guard
+// after the KV lane had already bounded itself, and a not-durable terminal
+// would publish as plain success.
 func (c *Component) rebuildCompletionMessage(result *HandlerResult) {
-	if result.CompletionState == nil || result.CompletionState.ResultRef == nil {
+	if result.CompletionState == nil ||
+		(result.CompletionState.ResultRef == nil && !result.CompletionState.ResultNotDurable) {
 		return
 	}
 	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", result.LoopID)
@@ -2086,15 +2184,95 @@ func (c *Component) rebuildCompletionMessage(result *HandlerResult) {
 		if msg.Subject != subject {
 			continue
 		}
-		completionMsg := message.NewBaseMessage(result.CompletionState.Schema(), result.CompletionState, "agentic-loop")
-		data, err := json.Marshal(completionMsg)
-		if err != nil {
-			c.logger.Error("failed to re-marshal offloaded completion message; stream lane keeps the inline shape",
-				"loop_id", result.LoopID, "error", err)
+		data := marshalTerminalEvent(result.CompletionState, c.logger, result.LoopID)
+		if data == nil {
 			return
 		}
 		result.PublishedMessages[i].Data = data
 		return
+	}
+}
+
+// rebuildFailureMessage mirrors rebuildCompletionMessage for the queued
+// agent.failed publish after the failure event gained the result-not-durable
+// marker (Blocker 3).
+func (c *Component) rebuildFailureMessage(result *HandlerResult) {
+	if result.FailureState == nil || !result.FailureState.ResultNotDurable {
+		return
+	}
+	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.failed", result.LoopID)
+	for i, msg := range result.PublishedMessages {
+		if msg.Subject != subject {
+			continue
+		}
+		data := marshalTerminalEvent(result.FailureState, c.logger, result.LoopID)
+		if data == nil {
+			return
+		}
+		result.PublishedMessages[i].Data = data
+		return
+	}
+}
+
+// liveWireLimit reports the live/cached server payload limit, or 0 when no
+// server has ever advertised one (unknown — trims and thresholds disable
+// rather than inventing a number; payload-bounds spec).
+func (c *Component) liveWireLimit() int {
+	if c.payloadLimit == nil {
+		return 0
+	}
+	return c.payloadLimit()
+}
+
+// trimCompletionPreviewToFit shrinks a mutated completion event's preview
+// until its SERIALIZED carrier fits the live wire limit (Blocker 4), UTF-8
+// safe, floor = empty preview. When even the empty-preview carrier exceeds a
+// known limit the guarded write refuses with the typed classified error —
+// the deliberate narrowing of the review's startup-gate suggestion (startup
+// cannot know the limit before connect; recorded in tasks.md).
+func (c *Component) trimCompletionPreviewToFit(completion *agentic.LoopCompletedEvent) {
+	limit := c.liveWireLimit()
+	if limit <= 0 {
+		return
+	}
+	for {
+		data, err := json.Marshal(completion)
+		if err != nil || len(data) <= limit {
+			return
+		}
+		if completion.ResultPreview == "" {
+			return // floor: nothing left to trim; the seam guard rules loudly
+		}
+		newLen := len(completion.ResultPreview) - (len(data) - limit)
+		if newLen < 0 {
+			newLen = 0
+		}
+		completion.ResultPreview = truncateUTF8(completion.ResultPreview, newLen)
+	}
+}
+
+// trimEntityResultToFit shrinks a marker entity's inline Result until its
+// serialized value fits the live wire limit (Blocker 4 — same trim as the
+// completion carrier, applied to the markResultNotDurable entity write).
+// Returns the serialized value ready to persist.
+func (c *Component) trimEntityResultToFit(entity *agentic.LoopEntity) ([]byte, error) {
+	limit := c.liveWireLimit()
+	for {
+		data, err := json.Marshal(entity)
+		if err != nil {
+			return nil, err
+		}
+		if limit <= 0 || len(data) <= limit || entity.Result == "" {
+			return data, nil
+		}
+		newLen := len(entity.Result) - (len(data) - limit)
+		if newLen < 0 {
+			newLen = 0
+		}
+		if entity.ResultSize == 0 {
+			entity.ResultSize = len(entity.Result)
+		}
+		entity.Result = truncateUTF8(entity.Result, newLen)
 	}
 }
 
@@ -2292,32 +2470,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		RunEntityID:  c.handler.resolveRunEntityID(entity.RunID),
 	}
 
-	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
-	completionData, err := json.Marshal(completionMsg)
-	if err != nil {
-		c.logger.Error("Failed to marshal completion",
-			slog.String("error", err.Error()),
-			slog.String("loop_id", loopID))
-		return
-	}
-
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
-	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
-		c.logger.Error("Failed to publish completion",
-			slog.String("error", err.Error()),
-			slog.String("loop_id", loopID))
-		return
-	}
-
-	// Emit cancellation entity to graph (non-fatal)
-	if c.graphWriter != nil {
-		c.graphWriter.WriteLoopCancellation(ctx, &completion)
-	}
-
-	// Persist cancellation to KV so watchers detect it
-	if err := c.persistCancellationState(ctx, loopID, &completion); err != nil {
-		c.logger.Error("cancellation state not durably stored", "loop_id", loopID, "error", err)
-	}
+	c.finalizeCancellation(ctx, loopID, &completion)
 
 	c.finalizeTrajectory(ctx, loopID, agentic.LoopStateCancelled)
 	c.writeTrajectoryToGraph(ctx, loopID)
@@ -2325,6 +2478,39 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	c.logger.Info("Loop cancelled",
 		slog.String("loop_id", loopID),
 		slog.String("cancelled_by", signal.UserID))
+}
+
+// finalizeCancellation persists the cancellation COMPLETE_ record FIRST, then
+// publishes the agent.complete event (Blocker 3: terminal publication
+// causally reflects persistence). The pre-fix order published first and
+// RETURNED on publish failure, skipping persistence entirely — a watcher
+// reacting to the event could find no durable record, and a failed publish
+// left no record at all. On final persist failure the PUBLISHED event is
+// mutated to the explicit result-not-durable shape so the subscriber gets a
+// typed terminal, never an event whose durable record silently never landed.
+// Returns the marshaled published payload (nil when marshal failed) so tests
+// can assert the exact wire shape.
+func (c *Component) finalizeCancellation(ctx context.Context, loopID string, completion *agentic.LoopCancelledEvent) []byte {
+	if err := c.persistCancellationState(ctx, loopID, completion); err != nil {
+		c.logger.Error("cancellation state not durably stored", "loop_id", loopID, "error", err)
+		degradeCancellationToNotDurable(completion, err)
+	}
+
+	completionData := marshalTerminalEvent(completion, c.logger, loopID)
+	if completionData != nil && c.natsClient != nil {
+		subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
+		if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
+			c.logger.Error("Failed to publish completion",
+				slog.String("error", err.Error()),
+				slog.String("loop_id", loopID))
+		}
+	}
+
+	// Emit cancellation entity to graph (non-fatal)
+	if c.graphWriter != nil {
+		c.graphWriter.WriteLoopCancellation(ctx, completion)
+	}
+	return completionData
 }
 
 // handlePauseSignal handles a pause signal for a loop

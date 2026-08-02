@@ -1250,6 +1250,10 @@ components:
                                 type: string
                             result:
                                 type: string
+                            result_not_durable:
+                                type: boolean
+                            result_not_durable_reason:
+                                type: string
                             result_size:
                                 type: integer
                             result_truncated:
@@ -1616,6 +1620,10 @@ components:
                     type: string
                 result:
                     type: string
+                result_not_durable:
+                    type: boolean
+                result_not_durable_reason:
+                    type: string
                 result_size:
                     type: integer
                 result_truncated:
@@ -1690,6 +1698,10 @@ components:
                           type: object
                         - type: "null"
                 result:
+                    type: string
+                result_not_durable:
+                    type: boolean
+                result_not_durable_reason:
                     type: string
                 role:
                     type: string

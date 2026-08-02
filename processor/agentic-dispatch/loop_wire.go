@@ -34,12 +34,19 @@ type Loop struct {
 	// carried a storage_ref instead of inline text. The full content is
 	// retrievable via the read_loop_result tool; ResultSize is the original
 	// byte count. Both zero for inline results.
-	ResultTruncated bool   `json:"result_truncated,omitempty"`
-	ResultSize      int    `json:"result_size,omitempty"`
-	Error           string `json:"error,omitempty"`
-	Prompt          string `json:"prompt,omitempty"`
-	TokensIn        int    `json:"tokens_in,omitempty"`
-	TokensOut       int    `json:"tokens_out,omitempty"`
+	ResultTruncated bool `json:"result_truncated,omitempty"`
+	ResultSize      int  `json:"result_size,omitempty"`
+	// ResultNotDurable marks a terminal loop whose result could not be
+	// durably stored (payload-size-chokepoints Blocker 3): the COMPLETE_
+	// persist finally failed and the terminal event/entity carries the typed
+	// marker instead of a result. Consumers must treat Result as absent-by-
+	// failure (distinct from success and from still-running).
+	ResultNotDurable       bool   `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string `json:"result_not_durable_reason,omitempty"`
+	Error                  string `json:"error,omitempty"`
+	Prompt                 string `json:"prompt,omitempty"`
+	TokensIn               int    `json:"tokens_in,omitempty"`
+	TokensOut              int    `json:"tokens_out,omitempty"`
 	// PendingApproval is populated when the loop is in awaiting_approval state.
 	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
 }
@@ -59,14 +66,16 @@ func loopFromInfo(in *LoopInfo) Loop {
 		ParentLoopID:  "", // not tracked in LoopInfo today — scoped-out follow-up
 		RunID:         "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
 		RunEntityID:   "", // ditto
-		// entity-id-audit:classify intentional-sentinel "" line=61 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
-		Outcome:         in.Outcome,
-		Result:          in.Result,
-		Error:           in.Error,
-		Prompt:          "", // not on LoopInfo; populated only from completion events
-		TokensIn:        0,  // not on LoopInfo
-		TokensOut:       0,  // not on LoopInfo
-		PendingApproval: in.PendingApproval,
+		// entity-id-audit:classify intentional-sentinel "" line=68 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
+		Outcome:                in.Outcome,
+		Result:                 in.Result,
+		ResultNotDurable:       in.ResultNotDurable,
+		ResultNotDurableReason: in.ResultNotDurableReason,
+		Error:                  in.Error,
+		Prompt:                 "", // not on LoopInfo; populated only from completion events
+		TokensIn:               0,  // not on LoopInfo
+		TokensOut:              0,  // not on LoopInfo
+		PendingApproval:        in.PendingApproval,
 	}
 }
 
@@ -98,10 +107,14 @@ func loopFromEntity(e *agentic.LoopEntity, org, platform string) Loop {
 		RunEntityID:   runEntityID,
 		Outcome:       e.Outcome,
 		Result:        e.Result,
-		Error:         e.Error,
-		Prompt:        "", // not present on live LoopEntity
-		TokensIn:      0,  // not present on live LoopEntity
-		TokensOut:     0,  // not present on live LoopEntity
+		// Not-durable marker (Blocker 3): the entity is the durable carrier
+		// of the marker when the COMPLETE_ event itself could not land.
+		ResultNotDurable:       e.ResultNotDurable,
+		ResultNotDurableReason: e.ResultNotDurableReason,
+		Error:                  e.Error,
+		Prompt:                 "", // not present on live LoopEntity
+		TokensIn:               0,  // not present on live LoopEntity
+		TokensOut:              0,  // not present on live LoopEntity
 	}
 }
 
@@ -130,6 +143,10 @@ type completionWire struct {
 	Preview    string          `json:"preview"`
 	Size       int             `json:"size"`
 	StorageRef json.RawMessage `json:"storage_ref"`
+	// Not-durable marker (payload-size-chokepoints Blocker 3): present on a
+	// terminal event published after its COMPLETE_ persist finally failed.
+	ResultNotDurable       bool   `json:"result_not_durable"`
+	ResultNotDurableReason string `json:"result_not_durable_reason"`
 }
 
 // loopFromCompletion projects a COMPLETE_<loopID> terminal event payload onto Loop.
@@ -157,6 +174,10 @@ func loopFromCompletion(raw []byte) (Loop, bool) {
 		ParentLoopID: w.ParentLoopID,
 		RunID:        w.RunID,
 		RunEntityID:  w.RunEntityID,
+		// Not-durable marker (Blocker 3): surfaced verbatim so /loops and
+		// /activity consumers can distinguish absent-by-failure from success.
+		ResultNotDurable:       w.ResultNotDurable,
+		ResultNotDurableReason: w.ResultNotDurableReason,
 	}
 	// Offloaded result (payload-size-chokepoints D4): the completion value
 	// carries {storage_ref, preview, size} instead of inline text. Surface

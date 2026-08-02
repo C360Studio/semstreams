@@ -144,6 +144,93 @@ func TestLoopCompletedEvent_OffloadFields_OmittedWhenInline(t *testing.T) {
 	assert.NotContains(t, string(data), `"size"`)
 }
 
+// --- result-not-durable marker: production-decoder round-trips (Blocker 3) ---
+
+// TestTerminalEvents_NotDurableMarker_ProductionWireRoundTrip drives all
+// three terminal event types through the production payload decoder with the
+// result-not-durable marker set: the shape a parent receives when the
+// COMPLETE_ persist finally failed must survive BaseMessage marshal →
+// registry decode intact, and must be omitted entirely on durable events.
+func TestTerminalEvents_NotDurableMarker_ProductionWireRoundTrip(t *testing.T) {
+	t.Parallel()
+	const reason = "invalid: payload exceeds the server's maximum payload size"
+
+	t.Run("LoopCompletedEvent", func(t *testing.T) {
+		ev := &agentic.LoopCompletedEvent{
+			LoopID:                 "loop-nd-001",
+			TaskID:                 "task-001",
+			Outcome:                agentic.OutcomeSuccess,
+			Result:                 "", // emptied: exactly what could not be stored
+			ResultNotDurable:       true,
+			ResultNotDurableReason: reason,
+		}
+		data, err := json.Marshal(message.NewBaseMessage(ev.Schema(), ev, "test"))
+		require.NoError(t, err)
+		assert.Contains(t, string(data), `"result_not_durable":true`)
+
+		decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(data)
+		require.NoError(t, err)
+		got, ok := decoded.Payload().(*agentic.LoopCompletedEvent)
+		require.True(t, ok, "expected *agentic.LoopCompletedEvent, got %T", decoded.Payload())
+		assert.True(t, got.ResultNotDurable)
+		assert.Equal(t, reason, got.ResultNotDurableReason)
+		assert.Empty(t, got.Result)
+	})
+
+	t.Run("LoopFailedEvent", func(t *testing.T) {
+		ev := &agentic.LoopFailedEvent{
+			LoopID:                 "loop-nd-002",
+			TaskID:                 "task-002",
+			Outcome:                agentic.OutcomeFailed,
+			Reason:                 "max_iterations",
+			ResultNotDurable:       true,
+			ResultNotDurableReason: reason,
+		}
+		data, err := json.Marshal(message.NewBaseMessage(ev.Schema(), ev, "test"))
+		require.NoError(t, err)
+		decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(data)
+		require.NoError(t, err)
+		got, ok := decoded.Payload().(*agentic.LoopFailedEvent)
+		require.True(t, ok, "expected *agentic.LoopFailedEvent, got %T", decoded.Payload())
+		assert.True(t, got.ResultNotDurable)
+		assert.Equal(t, reason, got.ResultNotDurableReason)
+		assert.Equal(t, "max_iterations", got.Reason)
+	})
+
+	t.Run("LoopCancelledEvent", func(t *testing.T) {
+		ev := &agentic.LoopCancelledEvent{
+			LoopID:                 "loop-nd-003",
+			TaskID:                 "task-003",
+			Outcome:                agentic.OutcomeCancelled,
+			CancelledBy:            "user",
+			ResultNotDurable:       true,
+			ResultNotDurableReason: reason,
+		}
+		data, err := json.Marshal(message.NewBaseMessage(ev.Schema(), ev, "test"))
+		require.NoError(t, err)
+		decoded, err := payloadbuiltins.NewTestDecoder(t).Decode(data)
+		require.NoError(t, err)
+		got, ok := decoded.Payload().(*agentic.LoopCancelledEvent)
+		require.True(t, ok, "expected *agentic.LoopCancelledEvent, got %T", decoded.Payload())
+		assert.True(t, got.ResultNotDurable)
+		assert.Equal(t, reason, got.ResultNotDurableReason)
+		assert.Equal(t, "user", got.CancelledBy)
+	})
+
+	t.Run("omitted on durable events", func(t *testing.T) {
+		for _, ev := range []interface{ Schema() message.Type }{
+			&agentic.LoopCompletedEvent{LoopID: "l", TaskID: "t", Outcome: agentic.OutcomeSuccess},
+			&agentic.LoopFailedEvent{LoopID: "l", TaskID: "t", Outcome: agentic.OutcomeFailed},
+			&agentic.LoopCancelledEvent{LoopID: "l", TaskID: "t", Outcome: agentic.OutcomeCancelled},
+		} {
+			data, err := json.Marshal(ev)
+			require.NoError(t, err)
+			assert.NotContains(t, string(data), `"result_not_durable"`,
+				"durable events must not grow phantom marker fields (additive contract)")
+		}
+	})
+}
+
 // --- LoopEntity durability fields: JSON round-trip (KV state shape) ---
 
 // TestLoopEntity_ResultDurabilityFields_RoundTrip pins the KV-persisted

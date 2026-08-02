@@ -75,7 +75,7 @@ func TestWorkerPanicCostsOneEntryNotTheGoroutine(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const poisonID = "acme.ops.robotics.gcs.drone.poison"
 	const healthyID = "acme.ops.robotics.gcs.drone.healthy"
@@ -189,7 +189,7 @@ func TestWorkerTombstoneDuringGenerationIsNotAPanic(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.tombstoned"
 

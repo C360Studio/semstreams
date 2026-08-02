@@ -88,6 +88,7 @@ func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testin
 	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 		LLMSummarizer:   summarizer,
 		Querier:         oneEntityPerIDQuerier{},
+		NATSClient:      natsClient,
 		CommunityBucket: communityKV,
 		SummaryBucket:   summaryKV,
 		Logger:          logger,
@@ -116,7 +117,7 @@ func TestIntegration_EnhancementWorker_WiresThroughToGraphQuerySummary(t *testin
 
 	// (1) The worker enhances end-to-end: an llm-enhanced record lands in the real
 	// COMMUNITY_SUMMARIES bucket at exactly {level}.{membership_hash}.
-	store := clustering.NewNATSSummaryStore(summaryKV)
+	store := clustering.NewNATSSummaryStore(natsClient, summaryKV)
 	require.Eventually(t, func() bool {
 		rec, gerr := store.GetSummary(ctx, comm.Level, hash)
 		return gerr == nil && rec != nil && rec.Status == clustering.SummaryStatusEnhanced

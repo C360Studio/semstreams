@@ -40,7 +40,7 @@ func (r *replayKV) WatchAll(_ context.Context, _ ...jetstream.WatchOpt) (jetstre
 func TestScanFailed_SeedsFromSnapshot(t *testing.T) {
 	ctx := context.Background()
 	kv := &replayKV{memKV: newMemKV()}
-	s := NewStorage(kv, newMemKV())
+	s := NewStorage(nil, kv, newMemKV())
 
 	save := func(rec *Record) {
 		data, err := json.Marshal(rec)

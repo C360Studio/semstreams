@@ -2206,6 +2206,7 @@ func (c *Component) startEnhancementWorker(ctx context.Context) error {
 	worker, err := clustering.NewEnhancementWorker(&clustering.EnhancementWorkerConfig{
 		LLMSummarizer:   llmSummarizer,
 		Querier:         querier,
+		NATSClient:      c.natsClient,      // guarded summary write lane (payload-bounds spec)
 		CommunityBucket: c.communityBucket, // COMMUNITY_INDEX — trigger only
 		SummaryBucket:   c.summaryBucket,   // COMMUNITY_SUMMARIES — worker-owned
 		Logger:          c.logger,

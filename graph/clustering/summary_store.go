@@ -104,9 +104,13 @@ type SummaryStore interface {
 // guards against pathological churn.
 const summaryFailedCASMaxRetries = 8
 
-// NATSSummaryStore implements SummaryStore over a NATS KV bucket.
+// NATSSummaryStore implements SummaryStore over a NATS KV bucket, routed
+// through the client's GUARDED KVStore lane (payload-bounds spec): every
+// write refuses oversized values with the classified permanent error before
+// I/O instead of dying server-side — this store's raw-handle writes were one
+// of the enumerated gh#857 bypasses.
 type NATSSummaryStore struct {
-	kv jetstream.KeyValue
+	store *natsclient.KVStore
 
 	// afterFailedRead, when non-nil, is invoked inside PutFailedUnlessEnhanced
 	// AFTER reading the current record but BEFORE the conditional write. It is a
@@ -116,34 +120,44 @@ type NATSSummaryStore struct {
 	afterFailedRead func()
 }
 
-// NewNATSSummaryStore creates a NATS-backed summary store over the given bucket.
-func NewNATSSummaryStore(kv jetstream.KeyValue) *NATSSummaryStore {
-	return &NATSSummaryStore{kv: kv}
+// NewNATSSummaryStore creates a NATS-backed summary store over the given
+// bucket, on the owning client's guarded write lane. client carries the
+// live/cached server payload limit the writes are checked against; a nil
+// client is rejected at the worker's config seam (NewEnhancementWorker).
+func NewNATSSummaryStore(client *natsclient.Client, kv jetstream.KeyValue) *NATSSummaryStore {
+	if client == nil || kv == nil {
+		return &NATSSummaryStore{}
+	}
+	return &NATSSummaryStore{store: client.NewKVStore(kv)}
 }
 
 // GetSummary returns the stored record for {level}.{hash}, or (nil, nil) on miss.
 func (s *NATSSummaryStore) GetSummary(ctx context.Context, level int, membershipHash string) (*CommunitySummaryRecord, error) {
-	if s.kv == nil {
+	if s.store == nil {
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "NATSSummaryStore", "GetSummary", "kv is nil")
 	}
-	entry, err := s.kv.Get(ctx, SummaryKey(level, membershipHash))
+	entry, err := s.store.Get(ctx, SummaryKey(level, membershipHash))
 	if err != nil {
-		// Cover both not-found sentinels: a never-written key and a tombstoned key.
-		if natsclient.IsKVNotFoundError(err) {
+		// The guarded lane collapses both not-found sentinels (never-written and
+		// tombstoned) to ErrKVKeyNotFound.
+		if stderrors.Is(err, natsclient.ErrKVKeyNotFound) {
 			return nil, nil
 		}
 		return nil, errs.WrapTransient(err, "NATSSummaryStore", "GetSummary", "get summary")
 	}
 	var rec CommunitySummaryRecord
-	if err := json.Unmarshal(entry.Value(), &rec); err != nil {
+	if err := json.Unmarshal(entry.Value, &rec); err != nil {
 		return nil, errs.WrapInvalid(err, "NATSSummaryStore", "GetSummary", "unmarshal summary")
 	}
 	return &rec, nil
 }
 
-// PutSummary writes the record for its {level}.{hash} key.
+// PutSummary writes the record for its {level}.{hash} key through the guarded
+// lane. A size refusal (or server-side oversize residue) surfaces AS the
+// classified permanent error — never re-wrapped transient, which was the
+// gh#857 mis-classification this store carried.
 func (s *NATSSummaryStore) PutSummary(ctx context.Context, rec *CommunitySummaryRecord) error {
-	if s.kv == nil {
+	if s.store == nil {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "NATSSummaryStore", "PutSummary", "kv is nil")
 	}
 	if rec == nil {
@@ -153,7 +167,10 @@ func (s *NATSSummaryStore) PutSummary(ctx context.Context, rec *CommunitySummary
 	if err != nil {
 		return errs.WrapInvalid(err, "NATSSummaryStore", "PutSummary", "marshal summary")
 	}
-	if _, err := s.kv.Put(ctx, SummaryKey(rec.Level, rec.MembershipHash), data); err != nil {
+	if _, err := s.store.Put(ctx, SummaryKey(rec.Level, rec.MembershipHash), data); err != nil {
+		if errs.IsInvalid(err) {
+			return err // classified permanent (e.g. oversized) — do not launder to transient
+		}
 		return errs.WrapTransient(err, "NATSSummaryStore", "PutSummary", "put summary")
 	}
 	return nil
@@ -164,7 +181,7 @@ func (s *NATSSummaryStore) PutSummary(ctx context.Context, rec *CommunitySummary
 // doc for the full race-safety argument. It uses revision CAS so a concurrent
 // llm-enhanced success can never be downgraded to llm-failed.
 func (s *NATSSummaryStore) PutFailedUnlessEnhanced(ctx context.Context, rec *CommunitySummaryRecord) error {
-	if s.kv == nil {
+	if s.store == nil {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "NATSSummaryStore", "PutFailedUnlessEnhanced", "kv is nil")
 	}
 	if rec == nil {
@@ -177,8 +194,8 @@ func (s *NATSSummaryStore) PutFailedUnlessEnhanced(ctx context.Context, rec *Com
 	}
 
 	for attempt := 0; attempt < summaryFailedCASMaxRetries; attempt++ {
-		entry, getErr := s.kv.Get(ctx, key)
-		missing := getErr != nil && natsclient.IsKVNotFoundError(getErr)
+		entry, getErr := s.store.Get(ctx, key)
+		missing := getErr != nil && stderrors.Is(getErr, natsclient.ErrKVKeyNotFound)
 		if getErr != nil && !missing {
 			return errs.WrapTransient(getErr, "NATSSummaryStore", "PutFailedUnlessEnhanced", "get summary")
 		}
@@ -191,7 +208,7 @@ func (s *NATSSummaryStore) PutFailedUnlessEnhanced(ctx context.Context, rec *Com
 
 		if !missing {
 			var existing CommunitySummaryRecord
-			if uerr := json.Unmarshal(entry.Value(), &existing); uerr != nil {
+			if uerr := json.Unmarshal(entry.Value, &existing); uerr != nil {
 				return errs.WrapInvalid(uerr, "NATSSummaryStore", "PutFailedUnlessEnhanced", "unmarshal summary")
 			}
 			if existing.Status == SummaryStatusEnhanced {
@@ -204,20 +221,27 @@ func (s *NATSSummaryStore) PutFailedUnlessEnhanced(ctx context.Context, rec *Com
 		if missing {
 			// No record yet: Create fails if a concurrent writer beat us to the key,
 			// so we cannot blindly overwrite a success that landed since our read.
-			_, writeErr = s.kv.Create(ctx, key, data)
+			// The guarded lane maps that conflict to ErrKVKeyExists.
+			_, writeErr = s.store.Create(ctx, key, data)
 		} else {
 			// Existing (non-enhanced) record: revision-checked Update fails if a
-			// concurrent write changed the key since our read.
-			_, writeErr = s.kv.Update(ctx, key, data, entry.Revision())
+			// concurrent write changed the key since our read. The guarded lane
+			// maps that conflict to ErrKVRevisionMismatch.
+			_, writeErr = s.store.Update(ctx, key, data, entry.Revision)
 		}
 		if writeErr == nil {
 			return nil
 		}
-		if natsclient.IsKVConflictError(writeErr) {
+		if stderrors.Is(writeErr, natsclient.ErrKVKeyExists) ||
+			stderrors.Is(writeErr, natsclient.ErrKVRevisionMismatch) ||
+			natsclient.IsKVConflictError(writeErr) {
 			// A concurrent write changed the key under us. Re-read and re-decide: if
 			// it was an llm-enhanced success, the next iteration sees it and skips, so
 			// the success is preserved.
 			continue
+		}
+		if errs.IsInvalid(writeErr) {
+			return writeErr // classified permanent (e.g. oversized) — not transient
 		}
 		return errs.WrapTransient(writeErr, "NATSSummaryStore", "PutFailedUnlessEnhanced", "write failed record")
 	}
@@ -227,12 +251,15 @@ func (s *NATSSummaryStore) PutFailedUnlessEnhanced(ctx context.Context, rec *Com
 
 // CountSummaries returns the number of stored summary records.
 func (s *NATSSummaryStore) CountSummaries(ctx context.Context) (int, error) {
-	if s.kv == nil {
+	if s.store == nil {
 		return 0, errs.WrapInvalid(errs.ErrMissingConfig, "NATSSummaryStore", "CountSummaries", "kv is nil")
 	}
-	keys, err := s.kv.Keys(ctx)
+	keys, err := s.store.Keys(ctx)
 	if err != nil {
-		// An empty bucket reports a not-found / no-keys sentinel, which is a count of 0.
+		// An empty bucket reports a not-found / no-keys sentinel, which is a
+		// count of 0. The guarded lane resolves the common case itself; the
+		// checks here cover wrapped sentinel variants (parity with the raw
+		// handle this store migrated off).
 		if stderrors.Is(err, jetstream.ErrKeyNotFound) || stderrors.Is(err, jetstream.ErrNoKeysFound) ||
 			strings.Contains(err.Error(), "no keys found") {
 			return 0, nil

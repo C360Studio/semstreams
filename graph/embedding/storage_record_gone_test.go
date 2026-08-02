@@ -26,7 +26,7 @@ func TestSaveGenerated_NoIndexRecord_DoesNotPanicOrResurrect(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.001"
 
@@ -51,7 +51,7 @@ func TestSaveFailed_NoIndexRecord_DoesNotPanicOrResurrect(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.002"
 
@@ -77,7 +77,7 @@ func TestSaveGenerated_ConcurrentDeleteIsRaceFree(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const iterations = 200
 

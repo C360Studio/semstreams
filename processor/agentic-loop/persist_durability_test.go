@@ -32,6 +32,11 @@ import (
 )
 
 // fakeLoopsKV is an in-memory loopsKV with per-key programmable failures.
+// When payloadLimit > 0 it ENFORCES it exactly like the real guarded lane /
+// server: an oversized value is REJECTED with the classified permanent
+// refusal, never stored. The pre-upgrade fake accepted any size, which let a
+// value the real server would refuse read back as a green test (the Blocker-4
+// false green the Codex review proved).
 type fakeLoopsKV struct {
 	mu       sync.Mutex
 	values   map[string][]byte
@@ -41,6 +46,9 @@ type fakeLoopsKV struct {
 	failPrefix string
 	failTimes  int
 	failErr    error
+	// payloadLimit, when > 0, rejects any value larger than it (the
+	// enforced wire/KV ceiling).
+	payloadLimit int
 }
 
 func newFakeLoopsKV() *fakeLoopsKV {
@@ -55,6 +63,12 @@ func (f *fakeLoopsKV) Put(_ context.Context, key string, value []byte) (uint64, 
 		if f.failTimes < 0 || f.attempts[key] <= f.failTimes {
 			return 0, f.failErr
 		}
+	}
+	if f.payloadLimit > 0 && len(value) > f.payloadLimit {
+		return 0, errs.WrapInvalid(
+			fmt.Errorf("%w: %d bytes > %d-byte server limit for key %s",
+				natsclient.ErrPayloadTooLarge, len(value), f.payloadLimit, key),
+			"Client", "KVStore.Put", "refuse oversized payload")
 	}
 	f.values[key] = append([]byte(nil), value...)
 	return uint64(f.attempts[key]), nil
@@ -434,6 +448,11 @@ func TestOffloadCompletionResult_StoreFailure_LeavesInlineForTheGuard(t *testing
 // assertion here.
 func TestPersistHandlerResult_OversizedCompletion_EndToEndShape(t *testing.T) {
 	store := newFakeLoopsKV()
+	// The fake ENFORCES the 1000-byte ceiling like the real server (Blocker
+	// 4): the ref-bearing COMPLETE_ value only lands if the preview was
+	// trimmed until the serialized carrier fits — the pre-upgrade fake
+	// accepted a 2KB preview under a 1KB limit and read back green.
+	store.payloadLimit = 1000
 	c, loopID := newDurabilityComponent(t, store)
 	content := &fakeContentStore{}
 	c.resultOffloadStore = content
@@ -469,10 +488,15 @@ func TestPersistHandlerResult_OversizedCompletion_EndToEndShape(t *testing.T) {
 
 	c.persistHandlerResult(context.Background(), result)
 
-	// COMPLETE_ value carries the ref shape.
+	// COMPLETE_ value carries the ref shape AND fits the enforced carrier
+	// ceiling — it can only exist because the preview trimmed until the
+	// serialized value fit (Blocker 4 trim path, not a false green).
 	raw, ok := store.valueFor("COMPLETE_" + loopID)
 	if !ok {
-		t.Fatal("COMPLETE_ value missing")
+		t.Fatal("COMPLETE_ value missing — the trim path must shrink the preview until the carrier fits the enforced limit")
+	}
+	if len(raw) > 1000 {
+		t.Fatalf("stored COMPLETE_ value exceeds the enforced 1000-byte ceiling: %d bytes", len(raw))
 	}
 	var event agentic.LoopCompletedEvent
 	if uerr := json.Unmarshal(raw, &event); uerr != nil {
@@ -481,6 +505,9 @@ func TestPersistHandlerResult_OversizedCompletion_EndToEndShape(t *testing.T) {
 	if event.ResultRef == nil || event.Result != "" || event.ResultSize != len(body) {
 		t.Fatalf("COMPLETE_ value must be ref-bearing {storage_ref, preview, size}; got ref=%v inline=%d size=%d",
 			event.ResultRef, len(event.Result), event.ResultSize)
+	}
+	if event.ResultPreview == "" || !strings.HasPrefix(body, event.ResultPreview) {
+		t.Fatal("trimmed preview must remain a (possibly shorter) prefix of the original result")
 	}
 
 	// Entity value is slim.
@@ -520,10 +547,14 @@ func TestPublishResults_OversizedPublish_FailsLoopTerminally(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+	// Seed the cached advertisement (as a prior connection would have): an
+	// UNKNOWN limit must never produce a permanent verdict, so the conn-less
+	// zero client alone would surface ErrNotConnected, not the guard.
+	client.SeedServerPayloadLimitForTest(1 << 20)
 	c.natsClient = client
 	c.payloadLimit = client.ServerPayloadLimit
 
-	oversized := make([]byte, 2<<20) // 2MB > 1MB conn-less default limit
+	oversized := make([]byte, 2<<20) // 2MB > the 1MB seeded advertised limit
 	result := HandlerResult{
 		LoopID: loopID,
 		State:  agentic.LoopStateExecuting, // live loop: the refused message is its forward progress
@@ -566,6 +597,215 @@ func TestPublishResults_OversizedPublish_FailsLoopTerminally(t *testing.T) {
 	}
 }
 
+// --- Blocker 3: the PUBLISHED terminal causally reflects persistence ---
+
+// TestPersistHandlerResult_PersistFailure_PublishesNotDurableShape drives the
+// completion path with a permanently failing COMPLETE_ write and asserts the
+// event that GOES OUT is the explicit result-not-durable shape — metadata
+// kept, result emptied, typed marker + classified reason — never a plain
+// success whose durable record silently failed to land.
+func TestPersistHandlerResult_PersistFailure_PublishesNotDurableShape(t *testing.T) {
+	store := newFakeLoopsKV()
+	store.failPrefix = "COMPLETE_"
+	store.failTimes = -1
+	store.failErr = permanentErr()
+	c, loopID := newDurabilityComponent(t, store)
+
+	if err := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); err != nil {
+		t.Fatalf("TransitionLoop: %v", err)
+	}
+
+	completion := completionFor(loopID)
+	completionMsg := message.NewBaseMessage(completion.Schema(), completion, "agentic-loop")
+	inlineData, err := json.Marshal(completionMsg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result := HandlerResult{
+		LoopID:          loopID,
+		State:           agentic.LoopStateComplete,
+		CompletionState: completion,
+		PublishedMessages: []PublishedMessage{{
+			Subject: "agent.complete." + loopID,
+			Data:    inlineData,
+		}},
+	}
+
+	c.persistHandlerResult(context.Background(), result)
+
+	var published agentic.LoopCompletedEvent
+	decodePublishedPayload(t, result.PublishedMessages[0].Data, &published)
+	if !published.ResultNotDurable {
+		t.Fatal("published terminal event must carry result_not_durable=true after a permanent persist failure")
+	}
+	if published.ResultNotDurableReason == "" {
+		t.Fatal("published not-durable event must name the classified cause")
+	}
+	if published.Result != "" {
+		t.Fatal("published not-durable event must not carry the result the durable record disagrees with")
+	}
+	if published.LoopID != loopID || published.TaskID != "task-1" || published.Outcome != agentic.OutcomeSuccess {
+		t.Fatalf("not-durable event must keep loop/task/outcome metadata; got %+v", published)
+	}
+}
+
+// TestPersistHandlerResult_FailureState_WritesCompleteBeforePublish pins the
+// third terminal lane the Blocker-3 reorder closed: a FailureState-carrying
+// HandlerResult (failLoop path — max_iterations etc.) previously published
+// its agent.failed event with NO COMPLETE_ write at all. Now the durable
+// record lands, and on permanent persist failure the published event carries
+// the typed marker.
+func TestPersistHandlerResult_FailureState_WritesCompleteBeforePublish(t *testing.T) {
+	store := newFakeLoopsKV()
+	c, loopID := newDurabilityComponent(t, store)
+	if err := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
+		t.Fatalf("TransitionLoop: %v", err)
+	}
+
+	failure := &agentic.LoopFailedEvent{
+		LoopID: loopID, TaskID: "task-1", Outcome: agentic.OutcomeFailed, Reason: "max_iterations",
+	}
+	result := HandlerResult{
+		LoopID:       loopID,
+		State:        agentic.LoopStateFailed,
+		FailureState: failure,
+	}
+	c.persistHandlerResult(context.Background(), result)
+
+	raw, ok := store.valueFor("COMPLETE_" + loopID)
+	if !ok {
+		t.Fatal("FailureState terminal lane must write COMPLETE_ (it previously published with no durable record)")
+	}
+	var stored agentic.LoopFailedEvent
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("unmarshal COMPLETE_: %v", err)
+	}
+	if stored.Reason != "max_iterations" || stored.ResultNotDurable {
+		t.Fatalf("durable failure record wrong shape: %+v", stored)
+	}
+}
+
+func TestPersistHandlerResult_FailureStatePersistFails_PublishCarriesMarker(t *testing.T) {
+	store := newFakeLoopsKV()
+	store.failPrefix = "COMPLETE_"
+	store.failTimes = -1
+	store.failErr = permanentErr()
+	c, loopID := newDurabilityComponent(t, store)
+	if err := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); err != nil {
+		t.Fatalf("TransitionLoop: %v", err)
+	}
+
+	failure := &agentic.LoopFailedEvent{
+		LoopID: loopID, TaskID: "task-1", Outcome: agentic.OutcomeFailed, Reason: "max_iterations",
+	}
+	failureMsg := message.NewBaseMessage(failure.Schema(), failure, "agentic-loop")
+	inlineData, err := json.Marshal(failureMsg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	result := HandlerResult{
+		LoopID:       loopID,
+		State:        agentic.LoopStateFailed,
+		FailureState: failure,
+		PublishedMessages: []PublishedMessage{{
+			Subject: "agent.failed." + loopID,
+			Data:    inlineData,
+		}},
+	}
+	c.persistHandlerResult(context.Background(), result)
+
+	var published agentic.LoopFailedEvent
+	decodePublishedPayload(t, result.PublishedMessages[0].Data, &published)
+	if !published.ResultNotDurable || published.ResultNotDurableReason == "" {
+		t.Fatal("published failure event must carry the typed not-durable marker after a permanent persist failure")
+	}
+}
+
+// TestFinalizeCancellation_PersistsBeforePublish proves the reorder
+// behaviorally: the pre-fix code published FIRST and returned on publish
+// failure without persisting, so a persisted COMPLETE_ under a FAILING
+// publish is an outcome the old ordering cannot produce.
+func TestFinalizeCancellation_PersistsBeforePublish(t *testing.T) {
+	store := newFakeLoopsKV()
+	c, loopID := newDurabilityComponent(t, store)
+
+	// Conn-less client with a seeded limit: every publish fails with a
+	// connection-state error, exactly the condition that previously skipped
+	// persistence.
+	client, err := natsclient.NewClient("nats://127.0.0.1:4222")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client.SeedServerPayloadLimitForTest(1 << 20)
+	c.natsClient = client
+
+	completion := &agentic.LoopCancelledEvent{
+		LoopID: loopID, TaskID: "task-1", Outcome: agentic.OutcomeCancelled, CancelledBy: "user",
+	}
+	published := c.finalizeCancellation(context.Background(), loopID, completion)
+
+	raw, ok := store.valueFor("COMPLETE_" + loopID)
+	if !ok {
+		t.Fatal("COMPLETE_ must persist even when the publish fails — persist-before-publish")
+	}
+	var stored agentic.LoopCancelledEvent
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatalf("unmarshal COMPLETE_: %v", err)
+	}
+	if stored.ResultNotDurable {
+		t.Fatal("a successfully persisted cancellation must not claim not-durable")
+	}
+	var wire agentic.LoopCancelledEvent
+	decodePublishedPayload(t, published, &wire)
+	if wire.ResultNotDurable {
+		t.Fatal("published event must not carry the marker when persistence succeeded")
+	}
+}
+
+func TestFinalizeCancellation_PersistFails_PublishedEventCarriesMarker(t *testing.T) {
+	store := newFakeLoopsKV()
+	store.failPrefix = "COMPLETE_"
+	store.failTimes = -1
+	store.failErr = permanentErr()
+	c, loopID := newDurabilityComponent(t, store)
+
+	completion := &agentic.LoopCancelledEvent{
+		LoopID: loopID, TaskID: "task-1", Outcome: agentic.OutcomeCancelled, CancelledBy: "user",
+	}
+	published := c.finalizeCancellation(context.Background(), loopID, completion)
+	if published == nil {
+		t.Fatal("finalizeCancellation must still produce the publishable payload")
+	}
+	var wire agentic.LoopCancelledEvent
+	decodePublishedPayload(t, published, &wire)
+	if !wire.ResultNotDurable || wire.ResultNotDurableReason == "" {
+		t.Fatal("published cancellation must carry the typed not-durable marker after a permanent persist failure")
+	}
+	if wire.LoopID != loopID || wire.Outcome != agentic.OutcomeCancelled || wire.CancelledBy != "user" {
+		t.Fatalf("not-durable cancellation must keep its metadata; got %+v", wire)
+	}
+	// The loop entity carries the marker too, for readers that consult it.
+	entity, _ := c.handler.GetLoop(loopID)
+	if !entity.ResultNotDurable {
+		t.Fatal("loop entity must carry the result-not-durable state")
+	}
+}
+
+// decodePublishedPayload unwraps a published BaseMessage envelope through the
+// PRODUCTION decoder path shape (envelope payload field) into out.
+func decodePublishedPayload(t *testing.T, data []byte, out any) {
+	t.Helper()
+	var envelope struct {
+		Payload json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
+		t.Fatalf("unmarshal envelope: %v", err)
+	}
+	if err := json.Unmarshal(envelope.Payload, out); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+}
+
 // TestPublishResults_OversizedTerminalPublish_DoesNotReFail pins the
 // boundary: when the RESULT is already terminal (e.g. an agent.complete
 // publish), an oversized refusal logs loudly but must not recurse into a
@@ -578,6 +818,7 @@ func TestPublishResults_OversizedTerminalPublish_DoesNotReFail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
+	client.SeedServerPayloadLimitForTest(1 << 20)
 	c.natsClient = client
 
 	if terr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateComplete); terr != nil {

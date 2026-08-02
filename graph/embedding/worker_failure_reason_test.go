@@ -46,7 +46,7 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 	const entityID = "acme.ops.a.b.c.1"
 
 	t.Run("real failure persists reason, counts, returns OutcomeFailed", func(t *testing.T) {
-		s := NewStorage(newMemKV(), newMemKV())
+		s := NewStorage(nil, newMemKV(), newMemKV())
 		if err := s.SavePending(ctx, entityID, "", "text", 1); err != nil {
 			t.Fatalf("SavePending: %v", err)
 		}
@@ -72,7 +72,7 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 	})
 
 	t.Run("superseded failure returns OutcomeSkipped and does not count", func(t *testing.T) {
-		s := NewStorage(newMemKV(), newMemKV())
+		s := NewStorage(nil, newMemKV(), newMemKV())
 		// A newer generated outcome (revision 5) already landed.
 		if err := s.SavePending(ctx, entityID, "", "text", 5); err != nil {
 			t.Fatalf("SavePending: %v", err)
@@ -102,7 +102,7 @@ func TestGenerationFailureClassifiedThroughWorker(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	embedder := &stubEmbedder{model: "m", dimensions: 3, generate: func([]string) ([][]float32, error) {
 		return nil, errors.New("dial tcp: connect: connection refused")
@@ -239,7 +239,7 @@ func TestOverCapContentDedupsAcrossLanes(t *testing.T) {
 	embedder := &stubEmbedder{model: "test-model", dimensions: 3, generate: func([]string) ([][]float32, error) {
 		return [][]float32{{1, 2, 3}}, nil
 	}}
-	w := NewWorker(NewStorage(newMemKV(), newMemKV()), embedder, newWatchableKV(), discardLogger()).
+	w := NewWorker(NewStorage(nil, newMemKV(), newMemKV()), embedder, newWatchableKV(), discardLogger()).
 		WithMaxSourceTextLen(capLen).
 		WithEmbedderType("test").
 		WithStoreResolver(resolver)

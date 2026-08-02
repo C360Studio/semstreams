@@ -76,6 +76,15 @@ type Client struct {
 	js   jetstream.JetStream
 	subs []*nats.Subscription
 
+	// advertisedPayloadLimit caches the LAST server-advertised max_payload
+	// (bytes). Written only from a live connection's advertisement
+	// (serverPayloadLimit), read when the connection is down so guards keep
+	// the causally-known bound across disconnects. Zero = no server has ever
+	// advertised = UNKNOWN, which disables size guards rather than inventing
+	// a limit (payload-bounds spec: an unknown limit must never produce a
+	// permanent verdict).
+	advertisedPayloadLimit atomic.Int64
+
 	// Consumer management
 	consumers   map[string]consumerBinding
 	consumersMu sync.RWMutex

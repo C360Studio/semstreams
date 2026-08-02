@@ -112,7 +112,7 @@ func TestSavePendingGuarded_Decisions(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			s := NewStorage(newMemKV(), newMemKV())
+			s := NewStorage(nil, newMemKV(), newMemKV())
 			tc.seed(t, s)
 
 			saved, err := s.SavePendingGuarded(ctx, &Record{

@@ -163,7 +163,7 @@ func TestOffloadedLaneDedupsOnIdenticalBytes(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const body = "the quick brown fox jumps over the lazy dog"
 	gen := &genCounter{}
@@ -224,7 +224,7 @@ func TestOverwritingStableStorageKeyRegenerates(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	store := &mutableStore{}
 	store.set("alpha alpha alpha body one")
@@ -297,7 +297,7 @@ func TestDedupKeyIsOverTruncatedEmbeddedBytes(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const capLen = 20
 	// "commonprefixtext " is 17 chars with a trailing space at index 16, so both
@@ -380,7 +380,7 @@ func TestDedupSkippedIsCounted(t *testing.T) {
 	defer cancel()
 
 	index := newWatchableKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	// dimensions 0 == vector width unresolved == no dedup key.
 	embedder := &stubEmbedder{model: "m", dimensions: 0, generate: func([]string) ([][]float32, error) {

@@ -13,14 +13,24 @@ developer reads one spec instead of discovering twenty call sites.
 ### Requirement: The payload limit MUST be derived from the server, never compiled in
 
 Every framework size check MUST derive its limit from the connected server's advertised
-maximum payload at call time. No framework code or configuration MAY carry its own copy of
-the wire limit, and no component MAY expose a knob that restates it.
+maximum payload at call time, falling back only to the CACHED advertisement of a prior
+connection. No framework code or configuration MAY carry its own copy of the wire limit,
+and no component MAY expose a knob that restates it. An UNKNOWN limit (no server has ever
+advertised one) MUST NOT produce a permanent size verdict: the size check disables and
+connection-state errors win until a limit is advertised.
 
 #### Scenario: Operator raises the server limit
 
 - **WHEN** a deployment runs a NATS server with a raised maximum payload
 - **THEN** every framework seam guard honors the raised limit with no code or configuration
   change
+
+#### Scenario: Unknown limit never yields a permanent verdict
+
+- **WHEN** a send is attempted before any connection has advertised a payload limit
+- **THEN** no size check refuses the payload as permanently too large
+- **AND** the send surfaces the honest connection-state error until a server has advertised
+  a limit, after which the cached advertisement governs across disconnects
 
 ### Requirement: An oversized write MUST fail loud and permanent at the seam
 

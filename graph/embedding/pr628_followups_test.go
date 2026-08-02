@@ -68,7 +68,7 @@ func TestSaveAndNotify_CASExhaustedIsNotAFailure(t *testing.T) {
 
 	ctx := context.Background()
 	index := &alwaysConflictUpdateKV{memKV: newMemKV()}
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.cas"
 	const rev = uint64(5)
@@ -119,7 +119,7 @@ func TestSaveFailed_EqualRevisionDoesNotDowngradeSuccess(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.eqrev"
 	const rev = uint64(9)
@@ -155,7 +155,7 @@ func TestSaveGenerated_EqualRevisionWinsOverPriorFailure(t *testing.T) {
 	t.Parallel()
 
 	ctx := context.Background()
-	s := NewStorage(newMemKV(), newMemKV())
+	s := NewStorage(nil, newMemKV(), newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.eqrev2"
 	const rev = uint64(9)

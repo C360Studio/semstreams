@@ -13,6 +13,7 @@ import (
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/metric"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -86,6 +87,10 @@ type EnhancementWorker struct {
 type EnhancementWorkerConfig struct {
 	LLMSummarizer *LLMSummarizer
 	Querier       EntityQuerier
+	// NATSClient owns the guarded KV write lane the summary store rides
+	// (payload-bounds spec): it carries the live/cached server payload limit
+	// oversized summaries are refused against. Required.
+	NATSClient *natsclient.Client
 	// CommunityBucket is the COMMUNITY_INDEX bucket, watched as a trigger ONLY.
 	CommunityBucket jetstream.KeyValue
 	// SummaryBucket is the COMMUNITY_SUMMARIES bucket the worker owns and writes.
@@ -119,6 +124,10 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
 			"New", "summary bucket is required")
 	}
+	if config.NATSClient == nil {
+		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "EnhancementWorker",
+			"New", "nats client is required (guarded summary write lane)")
+	}
 
 	logger := config.Logger
 	if logger == nil {
@@ -140,7 +149,7 @@ func NewEnhancementWorker(config *EnhancementWorkerConfig) (*EnhancementWorker, 
 		llm:                config.LLMSummarizer,
 		querier:            config.Querier,
 		communityBucket:    config.CommunityBucket,
-		summaries:          NewNATSSummaryStore(config.SummaryBucket),
+		summaries:          NewNATSSummaryStore(config.NATSClient, config.SummaryBucket),
 		workers:            3, // Default concurrent workers
 		llmTimeout:         llmTimeout,
 		failedRetryBackoff: defaultSummaryFailedRetryBackoff,

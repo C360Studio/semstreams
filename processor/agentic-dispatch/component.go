@@ -808,6 +808,12 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 		// Continue: response building below should still happen so the
 		// user sees something even if our internal tracker is out of sync.
 	}
+	// Blocker 3: a terminal event carrying the result-not-durable marker is
+	// recorded on the tracker so live /loops consumers see absent-by-failure,
+	// not a plain success with an empty result.
+	if completion.ResultNotDurable {
+		c.loopTracker.RecordResultNotDurable(completion.LoopID, completion.ResultNotDurableReason)
+	}
 
 	// Record loop ended
 	c.metrics.recordLoopEnded()
@@ -835,6 +841,16 @@ func (c *Component) handleAgentComplete(ctx context.Context, data []byte) {
 	default:
 		respType = agentic.ResponseTypeStatus
 		content = fmt.Sprintf("Loop %s: %s", completion.LoopID, completion.Outcome)
+	}
+	// Blocker 3: never present a not-durable terminal as a plain success or
+	// bare status, whatever the outcome string — the result is absent by
+	// FAILURE and the user must not mistake the placeholder for "completed
+	// with empty output". Applied after the switch so every outcome branch
+	// inherits it.
+	if completion.ResultNotDurable {
+		respType = agentic.ResponseTypeError
+		content = fmt.Sprintf("Loop %s terminated but its result was not durably stored: %s",
+			completion.LoopID, completion.ResultNotDurableReason)
 	}
 
 	// Send response to user (skipped for workflow-initiated loops without user routing)

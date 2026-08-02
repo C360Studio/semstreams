@@ -172,5 +172,11 @@ group 1); everything else is ingestion or resource policy and stays. No knob met
 
 Deliberately NOT knobs (owner constraint: no new size knobs): the offload threshold
 (`resultOffloadThreshold` = ½ of the live `ServerPayloadLimit()`,
-`processor/agentic-loop/component.go`) and the inline preview bound
-(`resultPreviewBytes` = 2048, same file) are derived/const, not configuration.
+`processor/agentic-loop/component.go`; 0 = unknown limit = offload disabled) and the
+inline preview bound (`resultPreviewBytes` = 2048, same file — the INITIAL preview,
+then trimmed until the serialized terminal carrier fits the live limit per the Codex
+round's Blocker 4; floor = empty preview, at which point the seam guard rules loudly)
+are derived/const, not configuration. Post-Codex amendment (Blocker 2): there is no
+compiled-in fallback limit anywhere — an unknown limit (never-connected client) disables
+size checks rather than inventing a verdict; the advertised limit is cached causally on
+the client once a connection reports it.

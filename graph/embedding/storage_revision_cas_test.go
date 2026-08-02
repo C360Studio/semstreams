@@ -22,7 +22,7 @@ func TestSaveGenerated_NewerRevisionWinsOutOfOrderCompletion(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.001"
 	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
@@ -91,7 +91,7 @@ func TestSaveGenerated_ConcurrentCommitDoesNotClobberViaCAS(t *testing.T) {
 	ctx := context.Background()
 	base := newMemKV()
 	index := &racingKV{memKV: base}
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.002"
 	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
@@ -142,7 +142,7 @@ func TestSaveGenerated_ContentHashAndVectorFromSameGeneration(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.003"
 	if err := s.SavePending(ctx, entityID, "stale-hop1-hash", "text", 3); err != nil {
@@ -176,7 +176,7 @@ func TestSaveFailed_DoesNotClobberNewerSuccess(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.004"
 	if err := s.SavePending(ctx, entityID, "", "text", 0); err != nil {
@@ -208,7 +208,7 @@ func TestSaveGenerated_VanishedRecordStillErrRecordGone(t *testing.T) {
 
 	ctx := context.Background()
 	index := newMemKV()
-	s := NewStorage(index, newMemKV())
+	s := NewStorage(nil, index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.005"
 	if err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "hash", 1); !errors.Is(err, ErrRecordGone) {

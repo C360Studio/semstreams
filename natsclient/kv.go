@@ -47,17 +47,22 @@ type KVStore struct {
 	bucket  jetstream.KeyValue
 	options KVOptions
 	logger  *slog.Logger
-	// payloadLimit reports the live server wire limit (payload-bounds spec).
-	// Set by NewKVStore from the owning client; nil (hand-built stores) falls
-	// back to the NATS default inside effectiveValueLimit — never to "no
-	// check".
+	// payloadLimit reports the live/cached server wire limit (payload-bounds
+	// spec). Set by NewKVStore from the owning client; nil (hand-built
+	// stores) or a 0 answer means the limit is UNKNOWN and the pre-send check
+	// disables itself (effectiveValueLimit) — server-side oversize residue
+	// still classifies permanent on every lane.
 	payloadLimit func() int
 }
 
 // effectiveValueLimit resolves the value-size ceiling for this store's write
 // lanes: an explicit KVOptions.MaxValueSize override wins (tests, special
-// cases), else the live server-advertised limit, else the NATS default. There
-// is no "unlimited" resolution — silence at the limit is the gh#857 class.
+// cases), else the live/cached server-advertised limit, else 0 = no check.
+// The zero resolution is deliberate (payload-bounds spec): before any server
+// has advertised a limit, the limit is UNKNOWN and a guard must not invent a
+// permanent verdict — the write falls through to connection-state errors, and
+// server-side oversize residue still classifies permanent via
+// classifyMaxPayload on every lane.
 func (kv *KVStore) effectiveValueLimit() int {
 	if kv.options.MaxValueSize > 0 {
 		return kv.options.MaxValueSize
@@ -65,7 +70,20 @@ func (kv *KVStore) effectiveValueLimit() int {
 	if kv.payloadLimit != nil {
 		return kv.payloadLimit()
 	}
-	return defaultMaxPayloadBytes
+	return 0
+}
+
+// checkValueSize runs the shared seam guard against this store's effective
+// ceiling, naming the bound's real source in the refusal: the server's limit
+// when derived, or the local admission bound when KVOptions.MaxValueSize is
+// the explicit override — an override refusal must not blame the server for
+// a number the operator set locally.
+func (kv *KVStore) checkValueSize(size int, seam, key string) error {
+	if kv.options.MaxValueSize > 0 {
+		return checkPayloadBound(size, kv.options.MaxValueSize,
+			"local admission bound (KVOptions.MaxValueSize override)", seam, "key "+key)
+	}
+	return checkPayloadSize(size, kv.effectiveValueLimit(), seam, "key "+key)
 }
 
 // NewKVStore creates a new KV store with the given bucket
@@ -203,7 +221,7 @@ func (kv *KVStore) AssertNoLifecycleRetention(ctx context.Context, name string) 
 
 // Put creates or updates a key without revision check (last writer wins)
 func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, error) {
-	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Put", "key "+key); err != nil {
+	if err := kv.checkValueSize(len(value), "KVStore.Put", key); err != nil {
 		return 0, err
 	}
 	ctx, cancel := kv.applyTimeout(ctx)
@@ -223,7 +241,7 @@ func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, e
 
 // Create only creates if key doesn't exist (returns error if exists)
 func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64, error) {
-	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Create", "key "+key); err != nil {
+	if err := kv.checkValueSize(len(value), "KVStore.Create", key); err != nil {
 		return 0, err
 	}
 	ctx, cancel := kv.applyTimeout(ctx)
@@ -246,7 +264,7 @@ func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64
 
 // Update performs CAS update with explicit revision
 func (kv *KVStore) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
-	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Update", "key "+key); err != nil {
+	if err := kv.checkValueSize(len(value), "KVStore.Update", key); err != nil {
 		return 0, err
 	}
 	ctx, cancel := kv.applyTimeout(ctx)
@@ -378,7 +396,7 @@ func (kv *KVStore) UpdateWithRetryRev(ctx context.Context, key string,
 		// (bare non-retryable string) was invisible to errs and reported as
 		// transient by the default classifier. Still wrapped NonRetryable so
 		// the retry loop fails fast; the classified cause rides inside.
-		if err := checkPayloadSize(len(newValue), kv.effectiveValueLimit(), "KVStore.UpdateWithRetry", "key "+key); err != nil {
+		if err := kv.checkValueSize(len(newValue), "KVStore.UpdateWithRetry", key); err != nil {
 			return retry.NonRetryable(err)
 		}
 

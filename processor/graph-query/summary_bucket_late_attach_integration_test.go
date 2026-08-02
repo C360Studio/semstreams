@@ -75,7 +75,7 @@ func TestIntegration_GraphQuery_SummaryBucketCreatedLate_Attaches(t *testing.T) 
 
 	const wantSummary = "a coordinated drone survey"
 	hash := clustering.MembershipHash(comm.Members)
-	require.NoError(t, clustering.NewNATSSummaryStore(summaryKV).PutSummary(ctx, &clustering.CommunitySummaryRecord{
+	require.NoError(t, clustering.NewNATSSummaryStore(natsClient, summaryKV).PutSummary(ctx, &clustering.CommunitySummaryRecord{
 		MembershipHash: hash,
 		Level:          comm.Level,
 		LLMSummary:     wantSummary,

@@ -46,7 +46,7 @@ func TestIntegration_SummaryStore_FailedNeverReplacesEnhanced(t *testing.T) {
 	purgeKeys()
 	defer purgeKeys()
 
-	store := NewNATSSummaryStore(kv)
+	store := NewNATSSummaryStore(natsClient, kv)
 
 	// Scenario A — late failure after a committed success.
 	membersA := []string{"acme.ops.a.gcs.x.001", "acme.ops.a.gcs.x.002"}
@@ -75,7 +75,7 @@ func TestIntegration_SummaryStore_FailedNeverReplacesEnhanced(t *testing.T) {
 		MemberCount: len(membersB), GeneratedAt: time.Now().Add(-time.Hour),
 	}))
 
-	casStore := NewNATSSummaryStore(kv)
+	casStore := NewNATSSummaryStore(natsClient, kv)
 	var once sync.Once
 	casStore.afterFailedRead = func() {
 		once.Do(func() {
@@ -128,7 +128,7 @@ func TestIntegration_EnhancementWorker_Start_InitializesSizeGaugeFromStore(t *te
 
 	// Pre-populate the summary store BEFORE the worker starts (simulating a restart
 	// onto a populated store).
-	store := NewNATSSummaryStore(summaryKV)
+	store := NewNATSSummaryStore(natsClient, summaryKV)
 	const wantCount = 3
 	for i := 0; i < wantCount; i++ {
 		members := []string{
@@ -147,6 +147,7 @@ func TestIntegration_EnhancementWorker_Start_InitializesSizeGaugeFromStore(t *te
 	worker, err := NewEnhancementWorker(&EnhancementWorkerConfig{
 		LLMSummarizer:   summarizer,
 		Querier:         stubQuerier{},
+		NATSClient:      natsClient,
 		CommunityBucket: communityKV,
 		SummaryBucket:   summaryKV,
 		Registry:        registry,

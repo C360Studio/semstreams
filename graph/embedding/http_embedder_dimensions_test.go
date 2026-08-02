@@ -190,7 +190,7 @@ func TestWorkerSkipsDedupWhenEmbedderUnresolved(t *testing.T) {
 
 	ctx := context.Background()
 	dedup := newMemKV()
-	s := NewStorage(newMemKV(), dedup)
+	s := NewStorage(nil, newMemKV(), dedup)
 
 	const staleKey = "a-key-from-a-previous-process"
 	if err := s.SaveDedup(ctx, staleKey, []float32{9, 9, 9}, "acme.ops.a.b.c.1", "bm25-384", 384); err != nil {

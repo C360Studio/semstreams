@@ -622,6 +622,13 @@ func (c *Client) PublishToStreamWithAck(
 	subject string,
 	data []byte,
 ) (*jetstream.PubAck, error) {
+	// Size guard before any connection-state gate (payload-bounds spec) —
+	// the same funnel discipline as publishToStream: permanent beats
+	// transient, and refusing here means nothing reaches the server.
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "PublishToStreamWithAck", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	if c.Status() == StatusCircuitOpen {
 		return nil, ErrCircuitOpen
 	}
@@ -649,6 +656,12 @@ func (c *Client) PublishToStreamWithAck(
 
 	ack, err := js.PublishMsg(ctx, msg)
 	if err != nil {
+		// Header residue past the guard is a permanent payload condition,
+		// not connection health: classify, and do NOT count it against the
+		// breaker or the transport error metric.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "PublishToStreamWithAck", "subject "+subject)
+		}
 		c.recordFailure()
 		c.jsMetrics.recordError("publish_to_stream")
 		return nil, errs.WrapTransient(err, "Client", "PublishToStreamWithAck",

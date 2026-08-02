@@ -69,7 +69,7 @@ func TestSaveDedup_ReplacesRecordFromAnotherVectorSpace(t *testing.T) {
 
 	ctx := context.Background()
 	dedup := newMemKV()
-	s := NewStorage(newMemKV(), dedup)
+	s := NewStorage(nil, newMemKV(), dedup)
 
 	const key = "legacy-content-hash"
 	legacyVector := []float32{9, 9, 9}
