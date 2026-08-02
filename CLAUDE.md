@@ -16,10 +16,16 @@ Events → Graphable Interface → Knowledge Graph → Queries
 
 ## Semantic Agent Routing
 
+- Design-time work — proposals, designs, spec deltas, ADR drafts, OpenSpec target state — uses
+  `semstreams-architect`. Its mandatory first deliverable is a file:line surface inventory of what already exists on
+  the touched surface; binding rulings and approval stay with the owner.
 - Nontrivial SemStreams backend implementation uses `semstreams-developer`.
 - Every nontrivial change is reviewed by `semstreams-reviewer` before integration.
-- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace either role.
-- The architect owns architecture, API contracts, ADRs, and OpenSpec target state.
+- Spawning these three project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
+  user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
+  to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
+- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace any of the
+  three roles.
 - The technical writer owns durable documentation and conservative OpenSpec task truth.
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream

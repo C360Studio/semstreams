@@ -5,6 +5,10 @@ thin and must point to exactly one canonical contract.
 
 ## Role and platform mapping
 
+- SemStreams architect
+  - Canonical: `.agents/contracts/semstreams-architect.md`
+  - Claude: `.claude/agents/semstreams-architect.md`
+  - Codex: `.codex/agents/semstreams-architect.toml`
 - SemStreams developer
   - Canonical: `.agents/contracts/semstreams-developer.md`
   - Claude: `.claude/agents/semstreams-developer.md`
@@ -32,12 +36,12 @@ Claude-workflow tooling and remain platform-specific by design — do not mirror
 
 Run this procedure after changing a contract, adapter, or repository routing rule. It only reads tracked files.
 
-1. Confirm both canonical contracts and all four adapters exist.
+1. Confirm all three canonical contracts and all six adapters exist.
 2. Confirm each adapter names exactly its matching `.agents/contracts/...` path and says to read it fully first.
-3. Confirm the Claude reviewer tool list contains `Read`, `Bash`, `Grep`, `Glob`, and `Skill`, but not `Edit`, `Write`,
-   `Task`, or another delegation tool.
-4. Confirm the Codex reviewer sets `sandbox_mode = "read-only"`; the developer has no sandbox override and therefore
-   inherits the parent workspace permissions.
+3. Confirm the Claude reviewer and architect tool lists contain `Read`, `Bash`, `Grep`, `Glob`, and `Skill`, but not
+   `Edit`, `Write`, `Task`, or another delegation tool.
+4. Confirm the Codex reviewer and architect set `sandbox_mode = "read-only"`; the developer has no sandbox override
+   and therefore inherits the parent workspace permissions.
 5. Confirm `AGENTS.md` and `CLAUDE.md` route the same logical roles.
 6. Inspect adapter size with `wc -l .claude/agents/semstreams-*.md .codex/agents/semstreams-*.toml`; adapters should
    remain short and contain no copied checklist.
@@ -49,7 +53,8 @@ Use these semantic fixtures when reading the routing text:
 
 - "Implement a nontrivial graph-index change" routes first to SemStreams developer and then SemStreams reviewer.
 - "Review a nontrivial SemStreams change" routes to SemStreams reviewer in read-only mode.
-- "Design an API contract or OpenSpec target" remains architect-owned.
+- "Design an API contract or OpenSpec target" routes to SemStreams architect (surface inventory first, drafts as
+  text); binding rulings and approval stay with the owner session.
 - "Update durable docs or reconcile task truth" remains technical-writer-owned.
 - "Check an isolated Go idiom" may use a generic Go agent only as a second pass.
 

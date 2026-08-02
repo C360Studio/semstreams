@@ -64,6 +64,9 @@ not replace this review.
 - **Reject artifact-free evidence.** A gate/measurement claim with no in-tree or CI artifact is recorded UNVERIFIED;
   flag any such claim asserted as fact.
 - Confirm code matches the active OpenSpec target, and the target is consistent with current specs and approved ADRs.
+- A proposal or design that introduces a new symbol, field, channel, resolver, or classifier without a cited
+  existing-surface inventory (architect contract, four categories) is a finding. Spot-check the inventory's greps
+  yourself on the seams the diff touches — an asserted inventory is a claim, not evidence.
 - Confirm checked tasks are fully complete as worded. Split mixed tasks instead of treating partial evidence as done.
 - Trace applicable paths end to end:
   producer -> graph-ingest -> `ENTITY_STATES` -> KV watchers -> derived indexes -> query/search/clustering.
