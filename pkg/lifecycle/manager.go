@@ -1348,8 +1348,8 @@ type CreateResult struct {
 // it properly needs request-scoped idempotency on the graph mutation seam
 // (graph.CreateEntityWithTriplesRequest.RequestID is echoed by graph-ingest but
 // this lane does not set it, and a claim primitive is the real answer);
-// deliberately deferred as engine work with three consumers, tracked not
-// forgotten.
+// deliberately deferred as engine work with three consumers named — gh#869,
+// tracked not forgotten.
 func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (CreateResult, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
