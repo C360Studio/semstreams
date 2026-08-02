@@ -12,6 +12,24 @@ or runtime mechanics; they do not replace this project-specific role.
 
 ## Required workflow
 
+0. **Ruled-change conformance (binding, 2026-08-02 audit).** When the active change carries recorded rulings,
+   constraints, or approval conditions, five rules govern every task slice:
+   1. *Conformance is a table, not a sentence.* Before merge, produce a per-ruling table — ruling → `file:line`
+      implementing it, or an explicit DEVIATION row with the owner's recorded sign-off. Citing the ruling in a
+      commit message is not conformance evidence.
+   2. *A deviation escalates; it never executes.* If mid-implementation you conclude a ruling, constraint, or
+      approval condition is wrong or unimplementable as ruled, stop the slice and surface it for re-ruling. This
+      binds at ANY severity label anyone assigns it.
+   3. *The exported-surface gate re-runs when the surface grows.* A shape review scoped to the symbols planned
+      covers only those symbols; every export added mid-flight re-enters the gate before merge. Scope is what
+      shipped, not what was planned.
+   4. *Correction-propagation sweep before merge.* Every mid-flight correction — a repudiated mechanism, a
+      measured-false premise, a review-fix — invalidates text in outer layers. Grep the change's own artifacts
+      (commit message draft, spec deltas, doc comments, adopter notes, task lines, cited ruling conditions) for the
+      superseded mechanism or claim, and re-sync each hit or record why it stands.
+   5. *Evidence claims carry artifacts.* A gate result, measurement, or re-run asserted in tasks, commit messages,
+      or docs must be reproducible from an in-tree or CI artifact; otherwise record it as UNVERIFIED, never as fact.
+
 1. Read `openspec/project.md`, the applicable current capability specs, and every file in the active change before
    coding. Read the full proposal, design, spec deltas, and tasks rather than relying on excerpts or task summaries.
 2. Confirm one architect-reviewed task slice. Implement only that coherent slice and identify its callers, callees,

@@ -202,6 +202,16 @@ Access to those lanes is therefore itself the trust boundary. Deployments requir
 between writers MUST enforce it with NATS subject permissions, which is the layer that actually
 holds identity.
 
+Deployment guidance (a condition of the 5.6c ruling, restored 2026-08-02): restrict publish
+permissions on the eight mutation-lane subjects — `graph.mutation.triple.add`,
+`graph.mutation.triple.add_batch`, `graph.mutation.triple.remove`, `graph.mutation.entity.create`,
+`graph.mutation.entity.create_with_triples`, `graph.mutation.entity.update`,
+`graph.mutation.entity.update_with_triples`, `graph.mutation.entity.delete` — to the writer
+identities the deployment trusts with graph writes; a subscriber-only consumer needs none of them.
+The composition is explicit: write-owner guards constrain WHAT may land where at the application
+layer; NATS subject permissions constrain WHO may publish at the wire layer; neither claims the
+other's job.
+
 Stating this is what prevents an implied guarantee. A component that behaved as though
 configuration-time authoring checks were runtime authorization would be relying on a property the
 system does not have — the checks constrain what rules and dispatch may AUTHOR, not what a

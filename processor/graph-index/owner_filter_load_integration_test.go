@@ -24,8 +24,11 @@ import (
 )
 
 const (
-	ownerLoadNATSServer = "2.12.4-alpine@sha256:31c6ed3b2da61645aaa3ad9217b5a52b34b6ebd555ecb71259cd7723c59ae1ea"
-	ownerLoadNATSSDK    = "v1.48.0"
+	// Server and SDK pins are shared with the predicate-layout smoke gate —
+	// see nats_pin_test.go for why one source, and for the unit-tier
+	// assertion that keeps the reported SDK honest against go.mod.
+	ownerLoadNATSServer = graphIndexNATSServerPin
+	ownerLoadNATSSDK    = graphIndexNATSGoPin
 	ownerLoadPredicate  = "robotics.status.ready"
 )
 

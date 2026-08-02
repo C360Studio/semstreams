@@ -49,10 +49,8 @@ func scanForCallerControlledPredicate(path string, schema map[string]any) []stri
 			if path != "" {
 				here = path + "." + name
 			}
-			for _, banned := range predicateBearingParams {
-				if strings.EqualFold(name, banned) {
-					found = append(found, here)
-				}
+			if isPredicateBearingName(name) && typeCanCarryGrammar(raw) {
+				found = append(found, here)
 			}
 			if sub, ok := raw.(map[string]any); ok {
 				found = append(found, scanForCallerControlledPredicate(here, sub)...)
@@ -62,7 +60,66 @@ func scanForCallerControlledPredicate(path string, schema map[string]any) []stri
 	if items, ok := schema["items"].(map[string]any); ok {
 		found = append(found, scanForCallerControlledPredicate(path+"[]", items)...)
 	}
+	// Schema combinators and shared definitions hide properties from a
+	// properties-only walk — the spec bans the grammar-bearing value wherever
+	// it appears, so a `oneOf` arm or a `$defs` entry is the same surface
+	// (2026-08-02 audit: the previous walk missed all of these).
+	for _, combinator := range []string{"oneOf", "anyOf", "allOf"} {
+		if arms, ok := schema[combinator].([]any); ok {
+			for i, raw := range arms {
+				if sub, ok := raw.(map[string]any); ok {
+					found = append(found, scanForCallerControlledPredicate(
+						fmt.Sprintf("%s{%s[%d]}", path, combinator, i), sub)...)
+				}
+			}
+		}
+	}
+	for _, defs := range []string{"$defs", "definitions"} {
+		if m, ok := schema[defs].(map[string]any); ok {
+			for name, raw := range m {
+				if sub, ok := raw.(map[string]any); ok {
+					found = append(found, scanForCallerControlledPredicate(path+"{"+defs+"."+name+"}", sub)...)
+				}
+			}
+		}
+	}
+	if ap, ok := schema["additionalProperties"].(map[string]any); ok {
+		found = append(found, scanForCallerControlledPredicate(path+"{additionalProperties}", ap)...)
+	}
 	return found
+}
+
+// isPredicateBearingName matches by SUBSTRING, not exact equality: the spec
+// bans "a predicate, triple, or equivalent grammar-bearing value", and
+// `predicate_uri` or `target_predicate` is the same authority handed over
+// under a name the old exact-match list (2026-08-02 audit) waved through.
+func isPredicateBearingName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, banned := range predicateBearingParams {
+		if strings.Contains(lower, banned) {
+			return true
+		}
+	}
+	return false
+}
+
+// typeCanCarryGrammar reports whether a property's declared JSON-schema type
+// can convey a grammar-bearing VALUE. The spec bans accepting "a predicate,
+// triple, or equivalent grammar-bearing value" — a boolean or numeric toggle
+// whose NAME mentions predicates (summarize_graph's `include_predicates`
+// verbosity flag) carries no grammar and is not the banned surface. Absent or
+// string/array/object types are conservatively treated as carriers.
+func typeCanCarryGrammar(raw any) bool {
+	schema, ok := raw.(map[string]any)
+	if !ok {
+		return true
+	}
+	switch schema["type"] {
+	case "boolean", "number", "integer":
+		return false
+	default:
+		return true
+	}
 }
 
 // auditRegistryForPredicateAuthority is the check itself, run over a registry
@@ -156,6 +213,20 @@ func TestAgentToolsCannotMintPredicates(t *testing.T) {
 	if len(tools) < 5 {
 		t.Fatalf("only %d builtin tools registered; the audit is running against a nearly empty "+
 			"registry and proves nothing. Tools: %v", len(tools), toolNames(tools))
+	}
+	// The floor alone is vacuous the moment five graph-free tools register
+	// (2026-08-02 audit): assert the graph-WRITING tools — the ones this
+	// contract exists for — are individually present, so a future gating
+	// change in RegisterBuiltins cannot silently drop them from the audit.
+	registered := make(map[string]bool, len(tools))
+	for _, name := range toolNames(tools) {
+		registered[name] = true
+	}
+	for _, required := range []string{"decide", "emit_diagnosis", "emit_lesson", "scratchpad", "write_todos"} {
+		if !registered[required] {
+			t.Fatalf("graph-writing tool %q did not register — the predicate-authority audit is "+
+				"no longer covering the surface it exists for. Registered: %v", required, toolNames(tools))
+		}
 	}
 
 	if violations := auditRegistryForPredicateAuthority(reg); len(violations) > 0 {

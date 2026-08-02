@@ -6,11 +6,11 @@
 
 ## What changed
 
-Two GraphQL fields returned their payload wrapped in the internal `QueryResponse` envelope, so
+One GraphQL field returned its payload wrapped in the internal `QueryResponse` envelope, so
 callers had to take an extra `.data` hop that the other fields never required. The gateway now
 removes that envelope uniformly, by detecting it on the reply rather than matching the subject.
 
-**If you read either field below, your read path changes. Nothing else does.**
+**If you read the field below, your read path changes. Nothing else does.**
 
 ## 1. Fields that CHANGE — update these read paths
 
@@ -86,9 +86,10 @@ Query handlers proxy. graph-query's `semantic`, `spatial`, `similar` and `byName
 a downstream subject and return that reply verbatim, so an envelope produced under
 `graph.index.query.*` reaches the gateway under a `graph.query.*` subject. Whether a reply carries
 the envelope is a property of the **reply**, not of the subject that served it — so a
-subject-keyed rule is wrong for some reply no matter how the list is maintained. That is why
-`graph.query.byName` was broken in exactly the same way as `graph.query.summary` despite being a
-pure passthrough to a family that worked.
+subject-keyed rule is wrong for some reply no matter how the list is maintained. Detection-by-reply
+also protects proxied subjects the gateway does not route today (such as `graph.query.byName`) if
+they are ever added — a soundness property of the fix, not a second live bug; see the correction
+note in §1.
 
 Detection is deliberately conservative: a reply is the envelope only if it carries both `data` and
 `timestamp` **and** every one of its keys is drawn from `{data, request_id, timestamp}`. A payload
