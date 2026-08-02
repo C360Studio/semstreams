@@ -52,9 +52,13 @@ was never recorded is indistinguishable from one that was skipped. A deliberate 
 - [x] 4.3 `TestIntegration_CreateDoesNotResendOnTimeout` — real NATS, a handler slower than the
       per-attempt deadline receives the create EXACTLY ONCE. Mutation-checked by deleting the
       `IsNoResponders` guard CALL (the wiring, not the primitive).
-- [x] 4.4 `TestIntegration_ConcurrentCreateOnlyOneWins` — the real-wire form: eight concurrent
-      births arbitrated by an atomic KV create answering the production classified
-      `entity_already_exists`, driving the production emitter rather than a mutex in a fake.
+- [x] 4.4 `TestIntegration_ConcurrentCreateOnlyOneWins` — eight concurrent births arbitrated by
+      an atomic KV create answering the production classified `entity_already_exists`, driving
+      the production emitter rather than a mutex in a fake. **Recorded as a contract pin, NOT a
+      regression gate**: measured green 3/3 against the pre-fix manager, because a real NATS
+      round trip spreads each goroutine's timestamp and the deleted re-read only false-positives
+      on a stamp collision. The gate that fails without the fix is 4.1 (in-process, no I/O
+      between the stamps).
 - [x] 4.5 Verify the consumers. `agentic/agentrun.Mint` takes its idempotent
       `ErrAlreadyExists → Get` branch (`TestMint_Idempotent_ErrAlreadyExistsFallsBackToGet`);
       the lifecycle gateway renders the conflict as 409 via the existing
@@ -65,10 +69,19 @@ was never recorded is indistinguishable from one that was skipped. A deliberate 
 
 - [x] 5.1 Correct the stale concurrent-mint comment in `agentic/agentrun/agentrun.go` — it
       described a fallback the code did not reach when a loser was told it had succeeded.
-- [x] 5.2 File the follow-ups rather than widening this change: the request-scoped idempotency
-      primitive (three consumers: this residual, gh#689, gh#807 — ADR deferred because gh#807
-      has four open shape questions); the attach-path false-409 mirror-image bug; the two other
-      content-equality-as-ownership sites; and the e2e coverage gap (no tier exercises
-      concurrent lifecycle creates).
-- [x] 5.3 Record on gh#178 that its proposed mechanism is the one being removed, so the issue
-      does not re-license the defect.
+- [x] 5.2 File the follow-ups rather than widening this change: **gh#869** request-scoped
+      idempotency primitive on the graph mutation seam (three consumers: this residual, gh#689,
+      gh#807 — ADR deferred because gh#807 has four open shape questions); **gh#870** the
+      attach-path false-409 mirror-image bug; **gh#871** the two other
+      content-equality-as-ownership sites; **gh#872** the e2e coverage gap (no tier exercises
+      concurrent lifecycle creates or the 409 a loser now receives).
+- [x] 5.3 Record on gh#178 that its proposed mechanism — the audit-triple re-read — is the one
+      being removed, so the issue does not re-license the defect
+      (github.com/C360Studio/semstreams/issues/178#issuecomment-5160832936).
+- [x] 5.4 Re-sync the retry doctrine that now licenses the defect. `docs/operations/07-nats-request-retry.md`
+      said mutations use `RequestWithRetry` (retry on ANY error) and separately said "never
+      optimize the loop to retry only `IsNoResponders`" — read straight, that instructs the next
+      implementer to rebuild this bug on the next non-idempotent create. Added the create
+      carve-out, scoped the never-narrow rule to READS (re-reading is free; re-sending is not),
+      and recorded what the narrowing costs on a server that does not fast-fail. Durable-doc
+      ownership stays with the technical writer — flagged in the handoff.

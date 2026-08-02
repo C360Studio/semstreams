@@ -81,7 +81,13 @@ residual (a create whose single delivery times out has a genuinely unknown outco
 and gh#807. That is one primitive with cross-repo wire semantics, i.e. ADR-shaped; gh#807
 enumerates four unanswered questions about its shape. A shape with four open questions is too
 unstable to document, therefore too unstable to export, therefore too unstable to build into
-a bug fix. Filed as engine work with its consumers named.
+a bug fix. Filed as engine work with its consumers named: **gh#869**.
+
+Three further follow-ups are filed rather than folded in: **gh#870** (the attach path carries
+the mirror-image bug — a real fence that errs conservative and invents a 409 for a birth this
+request just made), **gh#871** (the two other content-equality-as-ownership sites, one of them
+spec-blessed), and **gh#872** (the e2e coverage gap — no tier fires concurrent lifecycle
+creates, and the 409 above is a live behavior change no tier observes).
 
 This change **does not unblock gh#689**. `pkg/projection/mutation_client.go` returns
 `CommitVerified` for two concurrent identical claimers and

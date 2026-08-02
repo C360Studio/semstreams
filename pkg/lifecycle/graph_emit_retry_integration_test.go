@@ -129,16 +129,20 @@ func TestIntegration_CreateDoesNotResendOnTimeout(t *testing.T) {
 		deliveries.Load())
 }
 
-// TestIntegration_ConcurrentCreateOnlyOneWins is the real-wire form of the
-// gh#861 regression gate: concurrent births of the SAME entity ID, arbitrated by
-// an atomic KV create rather than by a fake's mutex, answering the classified
-// entity_already_exists the production handler answers (ADR-060).
+// TestIntegration_ConcurrentCreateOnlyOneWins drives concurrent births of the
+// SAME entity ID through the production graphEmitterNATS, the wire envelope, and
+// the classified entity_already_exists path that becomes ErrAlreadyExists — the
+// seam the lifecycle gateway maps to 409 — arbitrated by an atomic KV create
+// rather than by a mutex in a fake.
 //
-// The unit gate (TestManager_ConcurrentCreateOnlyOneWins) proves the manager no
-// longer manufactures a second winner; this proves the same thing through the
-// production graphEmitterNATS, the wire envelope, and the classified error path
-// that turns entity_already_exists into ErrAlreadyExists — the seam the
-// lifecycle gateway maps to 409.
+// It is a CONTRACT PIN, NOT the gh#861 regression gate, and the difference is
+// measured rather than assumed: against the pre-fix manager this test is green
+// 3/3, because each goroutine's `now` is spread by a real NATS round trip and the
+// deleted re-read only false-positives when two writers' RFC3339Nano stamps
+// collide. The gate that fails without the fix is the unit-level
+// TestManager_ConcurrentCreateOnlyOneWins (in-process, no I/O between the
+// stamps), run in its powered form — see the change's tasks.md. Reporting this
+// test as the gate would be claiming coverage it does not have.
 func TestIntegration_ConcurrentCreateOnlyOneWins(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
 	ctx := context.Background()

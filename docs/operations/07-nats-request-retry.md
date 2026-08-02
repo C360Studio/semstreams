@@ -3,9 +3,12 @@
 ## TL;DR
 
 ```
-If the call writes state (mutation):
+If the call writes state (mutation) AND is idempotent on the responder side:
   → use RequestWithRetry with DefaultRetryConfig
-  → MUST be idempotent on the responder side
+
+If the call writes state and is NOT idempotent (create-or-fail, claim):
+  → one classified attempt per delivery; re-send ONLY on IsNoResponders
+  → every other failure is an UNKNOWN outcome — surface it (gh#861)
 
 If the call reads state (query) in STEADY STATE (responder already up):
   → use bare Request / RequestClassified
@@ -73,7 +76,10 @@ reintroducing the query anti-pattern:
   retry on a plain probe **timeout** too — fast-fail is server-config
   dependent (see `request_integration_test.go`), so a no-fast-fail
   server surfaces an absent responder as a timeout, not `ErrNoResponders`.
-  Never "optimize" the loop to retry only `IsNoResponders`.
+  Never "optimize" the loop to retry only `IsNoResponders`. **This rule is
+  about READS.** Re-reading is free, so tolerate the ambiguity and retry
+  wider. For a non-idempotent WRITE the trade inverts — re-sending is not
+  free — and the narrowing is required; see the create carve-out below.
 
 **Only the OUTERMOST lifecycle-triggered reader uses `RequestReady*`.**
 A steady-state handler that *forwards* to a downstream responder (e.g.
@@ -114,6 +120,52 @@ already-removed = no-op success. New mutation responders should
 preserve this property — if a responder needs to count requests or
 log every receive, add a request-ID dedup cache before relying on
 the retry path.
+
+### The carve-out: a CREATE is not idempotent, so it does not get the wide retry (gh#861)
+
+`create_with_triples` is create-**or-fail**. Re-delivering it is not a no-op:
+the second delivery answers `entity_already_exists`, and if the first delivery
+is still executing, the request has manufactured a conflict **with itself**. The
+client cannot tell that apart from a real concurrent birth.
+
+This is not exotic. The caller's per-attempt deadline is typically far shorter
+than the responder's: `pkg/lifecycle` uses 5s against graph-ingest's 30s
+`DefaultRequestHandlerTimeout`, so the client can give up six times over while
+the handler is still working, and `RequestWithRetry` re-sends on **any** non-nil
+error including a plain timeout.
+
+So for a **non-idempotent mutation**, retry only the class that proves
+non-delivery — `natsclient.IsNoResponders` — and surface everything else as an
+unknown outcome:
+
+```go
+// NON-IDEMPOTENT MUTATION (create-or-fail): one classified attempt per delivery,
+// re-sent ONLY when the server says nothing was subscribed.
+respBody, err := c.RequestClassified(ctx, createSubject, body, timeout)
+if err != nil && !natsclient.IsNoResponders(err) {
+    return nil, err // outcome unknown — the caller reads authoritative state
+}
+```
+
+Two things this deliberately accepts:
+
+- **The caller gets "I don't know" instead of an answer.** That is the point. The
+  alternative shipped for months as a re-read that compared entity content to
+  decide "did I write that?", and under concurrency the loser matched the
+  winner's write and was told it had succeeded (gh#861). Content two writers can
+  produce identically is not an identity.
+- **Cold-start protection narrows.** Whether an absent responder fast-fails as
+  `ErrNoResponders` or burns the deadline is server-config dependent — measured
+  on the repo-pinned `nats:2.14-alpine` it fast-fails in well under a
+  millisecond, and `pkg/lifecycle` keeps its ~13s budget for that class. On a
+  server that does **not** fast-fail, a create issued before its responder
+  subscribes fails honestly instead of converging. An honest failure beats a
+  wrong answer; a *correct* answer needs request-scoped idempotency on the
+  mutation seam (gh#869), not a wider retry.
+
+The must-exist lanes keep the wide retry, for the reason stated above: an update
+carrying `ExpectedRevision` turns a duplicate delivery into a revision mismatch
+its caller re-reads, and delete is idempotent at the handler.
 
 ## Concrete shape
 
