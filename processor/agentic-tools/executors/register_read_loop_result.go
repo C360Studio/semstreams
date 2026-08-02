@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/retry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
+	"github.com/c360studio/semstreams/storage/objectstore"
 )
 
 // newLoopResultBucketConfig mirrors agentic-loop/component.go initializeKVBuckets
@@ -49,7 +50,7 @@ func newLoopResultBucketConfig(bucket string) jetstream.KeyValueConfig {
 // The bucket name is frozen at registration time (boot). One bucket per
 // process; products wanting isolated buckets wire different ToolDependencies
 // per process.
-func registerReadLoopResult(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger, bucketName string) error {
+func registerReadLoopResult(ctx context.Context, tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, logger *slog.Logger, bucketName, contentBucketName string) error {
 	bucket, err := retry.DoWithResult(ctx, retry.Quick(), func() (jetstream.KeyValue, error) {
 		return natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
 	})
@@ -60,12 +61,30 @@ func registerReadLoopResult(ctx context.Context, tools *agentictools.ExecutorReg
 		return nil
 	}
 
+	// Content store for OFFLOADED results (payload-size-chokepoints D4).
+	// Unavailability degrades, not disables: inline results still serve, and
+	// a storage_ref-bearing value returns a typed hydration error naming the
+	// gap — loud for the operator, never a preview passed off as the whole.
+	var content agentictools.LoopContentFetcher
+	contentStore, cerr := objectstore.NewStoreWithConfig(ctx, natsClient, objectstore.Config{
+		BucketName: contentBucketName,
+	})
+	if cerr != nil {
+		logger.Warn("read_loop_result: content store unavailable; offloaded results will return a typed error until it is",
+			slog.String("bucket", contentBucketName),
+			slog.Any("error", cerr))
+	} else {
+		content = contentStore
+	}
+
 	store := natsClient.NewKVStore(bucket)
-	executor := agentictools.NewReadLoopResultExecutor(store)
+	executor := agentictools.NewReadLoopResultExecutor(store, content)
 	if err := tools.RegisterTool(agentictools.ReadLoopResultToolName, executor); err != nil {
 		return fmt.Errorf("register read_loop_result: %w", err)
 	}
 	logger.Info("Registered read_loop_result tool",
-		slog.String("bucket", bucketName))
+		slog.String("bucket", bucketName),
+		slog.String("content_bucket", contentBucketName),
+		slog.Bool("hydration_enabled", content != nil))
 	return nil
 }

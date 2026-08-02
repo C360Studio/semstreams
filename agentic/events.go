@@ -83,6 +83,21 @@ type LoopCompletedEvent struct {
 	// RunEntityID is the full 6-part chain execution entity ID for the run.
 	// Empty when RunID is empty.
 	RunEntityID string `json:"run_entity_id,omitempty"`
+
+	// Offload triplet (payload-size-chokepoints D4). When Result exceeds the
+	// offload threshold derived from the server payload limit, the result
+	// body is stored in the content ObjectStore and the event carries these
+	// ADDITIVE fields instead of the inline Result:
+	//   - ResultRef references the stored body (AGENT_CONTENT).
+	//   - ResultPreview is a bounded inline preview for operators and
+	//     small-context consumers.
+	//   - ResultSize is the original result byte count.
+	// Readers that decode old inline values keep working — a nil ResultRef
+	// means Result is the full inline body. read_loop_result resolves the
+	// ref transparently under its paging contract.
+	ResultRef     *message.StorageReference `json:"storage_ref,omitempty"`
+	ResultPreview string                    `json:"preview,omitempty"`
+	ResultSize    int                       `json:"size,omitempty"`
 }
 
 // Validate implements message.Payload

@@ -840,6 +840,12 @@ func (m *Client) Subscribe(ctx context.Context, subject string, handler func(con
 
 // Publish publishes a message to a NATS subject
 func (m *Client) Publish(ctx context.Context, subject string, data []byte) error {
+	// Size guard FIRST: a permanent refusal outranks a transient
+	// connection state, and the guard needs no connection to answer.
+	if err := checkPayloadSize(len(data), m.serverPayloadLimit(), "Publish", "subject "+subject); err != nil {
+		return err
+	}
+
 	m.mu.RLock()
 	conn := m.conn
 	m.mu.RUnlock()
@@ -856,7 +862,10 @@ func (m *Client) Publish(ctx context.Context, subject string, data []byte) error
 	msg := &nats.Msg{Subject: subject, Data: data}
 	InjectTrace(ctx, msg)
 
-	return conn.PublishMsg(msg)
+	// classifyMaxPayload: headers can push a message past the limit the
+	// guard measured against data alone — the residue must not classify
+	// transient (payload-bounds spec).
+	return classifyMaxPayload(conn.PublishMsg(msg), "Publish", "subject "+subject)
 }
 
 // JetStream returns the JetStream context
@@ -952,6 +961,12 @@ func (m *Client) PublishToStreamWithMsgID(ctx context.Context, subject string, d
 // PublishToStreamWithMsgID. A non-empty msgID is stamped as the Nats-Msg-Id
 // header for server-side duplicate detection.
 func (m *Client) publishToStream(ctx context.Context, subject string, data []byte, msgID string) error {
+	// Size guard before any connection-state gate: permanent beats transient,
+	// and refusing here means nothing is enqueued or retried.
+	if err := checkPayloadSize(len(data), m.serverPayloadLimit(), "PublishToStream", "subject "+subject); err != nil {
+		return err
+	}
+
 	// Check circuit breaker first
 	if m.Status() == StatusCircuitOpen {
 		return ErrCircuitOpen
@@ -1051,6 +1066,11 @@ func (m *Client) PublishToStreamAsyncWithMsgID(ctx context.Context, subject stri
 // PublishMsgAsync. A successful enqueue resets the circuit breaker (the
 // connection-health signal); an enqueue error records a failure.
 func (m *Client) publishToStreamAsync(ctx context.Context, subject string, data []byte, msgID string) (jetstream.PubAckFuture, error) {
+	// Size guard before any gate — same ordering rationale as the sync path.
+	if err := checkPayloadSize(len(data), m.serverPayloadLimit(), "PublishToStreamAsync", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	// Check circuit breaker first (the breaker is the outermost gate, as on the
 	// sync path).
 	if m.Status() == StatusCircuitOpen {
@@ -1159,6 +1179,16 @@ func (m *Client) PublishBatchToStream(ctx context.Context, subject string, msgs 
 	// Fail fast on an already-cancelled context so nothing is enqueued.
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("PublishBatchToStream: context already cancelled: %w", err)
+	}
+	// Pre-check EVERY message before enqueuing ANY: a mid-batch size refusal
+	// would leave a partial batch in flight for a batch that can never
+	// complete as submitted.
+	limit := m.serverPayloadLimit()
+	for i, data := range msgs {
+		if err := checkPayloadSize(len(data), limit, "PublishBatchToStream",
+			fmt.Sprintf("subject %s (message %d of %d)", subject, i+1, len(msgs))); err != nil {
+			return err
+		}
 	}
 
 	futures := make([]jetstream.PubAckFuture, 0, len(msgs))

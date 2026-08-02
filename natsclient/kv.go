@@ -36,7 +36,7 @@ func DefaultKVOptions() KVOptions {
 		MaxRetries:            10, // Increased for high-contention scenarios
 		RetryDelay:            10 * time.Millisecond,
 		Timeout:               5 * time.Second,
-		MaxValueSize:          1024 * 1024, // 1MB default max value size
+		MaxValueSize:          0, // 0 = derive from the server's live max_payload (payload-bounds spec); >0 is an explicit override
 		UseExponentialBackoff: true,
 		MaxRetryDelay:         time.Second,
 	}
@@ -47,6 +47,25 @@ type KVStore struct {
 	bucket  jetstream.KeyValue
 	options KVOptions
 	logger  *slog.Logger
+	// payloadLimit reports the live server wire limit (payload-bounds spec).
+	// Set by NewKVStore from the owning client; nil (hand-built stores) falls
+	// back to the NATS default inside effectiveValueLimit — never to "no
+	// check".
+	payloadLimit func() int
+}
+
+// effectiveValueLimit resolves the value-size ceiling for this store's write
+// lanes: an explicit KVOptions.MaxValueSize override wins (tests, special
+// cases), else the live server-advertised limit, else the NATS default. There
+// is no "unlimited" resolution — silence at the limit is the gh#857 class.
+func (kv *KVStore) effectiveValueLimit() int {
+	if kv.options.MaxValueSize > 0 {
+		return kv.options.MaxValueSize
+	}
+	if kv.payloadLimit != nil {
+		return kv.payloadLimit()
+	}
+	return defaultMaxPayloadBytes
 }
 
 // NewKVStore creates a new KV store with the given bucket
@@ -55,11 +74,15 @@ func (c *Client) NewKVStore(bucket jetstream.KeyValue, opts ...func(*KVOptions))
 	for _, opt := range opts {
 		opt(&options)
 	}
-
 	return &KVStore{
 		bucket:  bucket,
 		options: options,
 		logger:  c.logger,
+		// Derive the value-size ceiling from the owning client's LIVE
+		// connection (payload-bounds spec) unless an explicit MaxValueSize
+		// override is set — a raised server max_payload propagates here
+		// with no code or config change.
+		payloadLimit: c.serverPayloadLimit,
 	}
 }
 
@@ -180,12 +203,15 @@ func (kv *KVStore) AssertNoLifecycleRetention(ctx context.Context, name string) 
 
 // Put creates or updates a key without revision check (last writer wins)
 func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, error) {
+	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Put", "key "+key); err != nil {
+		return 0, err
+	}
 	ctx, cancel := kv.applyTimeout(ctx)
 	defer cancel()
 
 	rev, err := kv.bucket.Put(ctx, key, value)
 	if err != nil {
-		return 0, fmt.Errorf("kv put %s: %w", key, err)
+		return 0, classifyMaxPayload(fmt.Errorf("kv put %s: %w", key, err), "KVStore.Put", "key "+key)
 	}
 
 	if kv.logger != nil {
@@ -197,6 +223,9 @@ func (kv *KVStore) Put(ctx context.Context, key string, value []byte) (uint64, e
 
 // Create only creates if key doesn't exist (returns error if exists)
 func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64, error) {
+	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Create", "key "+key); err != nil {
+		return 0, err
+	}
 	ctx, cancel := kv.applyTimeout(ctx)
 	defer cancel()
 
@@ -205,7 +234,7 @@ func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64
 		if IsKVConflictError(err) {
 			return 0, ErrKVKeyExists
 		}
-		return 0, fmt.Errorf("kv create %s: %w", key, err)
+		return 0, classifyMaxPayload(fmt.Errorf("kv create %s: %w", key, err), "KVStore.Create", "key "+key)
 	}
 
 	if kv.logger != nil {
@@ -217,6 +246,9 @@ func (kv *KVStore) Create(ctx context.Context, key string, value []byte) (uint64
 
 // Update performs CAS update with explicit revision
 func (kv *KVStore) Update(ctx context.Context, key string, value []byte, revision uint64) (uint64, error) {
+	if err := checkPayloadSize(len(value), kv.effectiveValueLimit(), "KVStore.Update", "key "+key); err != nil {
+		return 0, err
+	}
 	ctx, cancel := kv.applyTimeout(ctx)
 	defer cancel()
 
@@ -225,7 +257,7 @@ func (kv *KVStore) Update(ctx context.Context, key string, value []byte, revisio
 		if IsKVConflictError(err) {
 			return 0, ErrKVRevisionMismatch
 		}
-		return 0, fmt.Errorf("kv update %s: %w", key, err)
+		return 0, classifyMaxPayload(fmt.Errorf("kv update %s: %w", key, err), "KVStore.Update", "key "+key)
 	}
 
 	if kv.logger != nil {
@@ -342,12 +374,12 @@ func (kv *KVStore) UpdateWithRetryRev(ctx context.Context, key string,
 			return retry.NonRetryable(fmt.Errorf("update function error: %w", err))
 		}
 
-		// Check value size limit
-		if kv.options.MaxValueSize > 0 && len(newValue) > kv.options.MaxValueSize {
-			// Validation error - should not retry as it will always fail
-			// Wrapped as non-retryable to fail fast
-			return retry.NonRetryable(fmt.Errorf("value size validation failed: size %d exceeds maximum %d",
-				len(newValue), kv.options.MaxValueSize))
+		// Value size limit: derived, and CLASSIFIED — the pre-gh#857 shape
+		// (bare non-retryable string) was invisible to errs and reported as
+		// transient by the default classifier. Still wrapped NonRetryable so
+		// the retry loop fails fast; the classified cause rides inside.
+		if err := checkPayloadSize(len(newValue), kv.effectiveValueLimit(), "KVStore.UpdateWithRetry", "key "+key); err != nil {
+			return retry.NonRetryable(err)
 		}
 
 		// Create or update based on whether key exists

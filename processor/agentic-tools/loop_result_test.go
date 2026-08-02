@@ -9,7 +9,10 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/storage/objectstore"
 )
 
 // mockLoopsKV is an in-memory LoopsKVReader for unit tests. Keys use the
@@ -47,7 +50,7 @@ func seedCompletion(t *testing.T, kv *mockLoopsKV, loopID string, event agentic.
 }
 
 func TestReadLoopResultExecutor_ListTools(t *testing.T) {
-	e := NewReadLoopResultExecutor(newMockLoopsKV())
+	e := NewReadLoopResultExecutor(newMockLoopsKV(), nil)
 	tools := e.ListTools()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
@@ -77,7 +80,7 @@ func TestReadLoopResultExecutor_HappyPath(t *testing.T) {
 		CompletedAt: now,
 	})
 
-	e := NewReadLoopResultExecutor(kv)
+	e := NewReadLoopResultExecutor(kv, nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
 		Name: ReadLoopResultToolName,
@@ -119,7 +122,7 @@ func TestReadLoopResultExecutor_Paging(t *testing.T) {
 		Result:  body,
 	})
 
-	e := NewReadLoopResultExecutor(kv)
+	e := NewReadLoopResultExecutor(kv, nil)
 
 	// First page: default max_bytes (4KB) from offset 0.
 	first, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -184,7 +187,7 @@ func TestReadLoopResultExecutor_Paging(t *testing.T) {
 // TestReadLoopResultExecutor_NotFound verifies a missing completion record
 // returns a structured not-found error that the agent can react to.
 func TestReadLoopResultExecutor_NotFound(t *testing.T) {
-	e := NewReadLoopResultExecutor(newMockLoopsKV())
+	e := NewReadLoopResultExecutor(newMockLoopsKV(), nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
 		Name: ReadLoopResultToolName,
@@ -206,7 +209,7 @@ func TestReadLoopResultExecutor_NotFound(t *testing.T) {
 // TestReadLoopResultExecutor_InvalidArgs verifies missing or wrong-typed
 // loop_id surfaces an invalid-args error without trying the KV.
 func TestReadLoopResultExecutor_InvalidArgs(t *testing.T) {
-	e := NewReadLoopResultExecutor(newMockLoopsKV())
+	e := NewReadLoopResultExecutor(newMockLoopsKV(), nil)
 
 	tests := []struct {
 		name string
@@ -241,7 +244,7 @@ func TestReadLoopResultExecutor_MalformedRecord(t *testing.T) {
 	kv := newMockLoopsKV()
 	kv.Put(completeKeyPrefix+"loop-bad", []byte("not json"))
 
-	e := NewReadLoopResultExecutor(kv)
+	e := NewReadLoopResultExecutor(kv, nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
 		Name: ReadLoopResultToolName,
@@ -264,7 +267,7 @@ func TestReadLoopResultExecutor_MalformedRecord(t *testing.T) {
 func TestReadLoopResultExecutor_NATSTransportError(t *testing.T) {
 	kv := &errKV{err: errors.New("nats: connection closed")}
 
-	e := NewReadLoopResultExecutor(kv)
+	e := NewReadLoopResultExecutor(kv, nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
 		Name: ReadLoopResultToolName,
@@ -291,7 +294,7 @@ func (e *errKV) Get(_ context.Context, _ string) (*natsclient.KVEntry, error) {
 // TestReadLoopResultExecutor_UnknownTool verifies the executor rejects calls
 // for tools other than read_loop_result.
 func TestReadLoopResultExecutor_UnknownTool(t *testing.T) {
-	e := NewReadLoopResultExecutor(newMockLoopsKV())
+	e := NewReadLoopResultExecutor(newMockLoopsKV(), nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:        "c1",
 		Name:      "not_the_right_tool",
@@ -351,7 +354,7 @@ func TestReadLoopResultExecutor_FullEntityIDLoopArg(t *testing.T) {
 		Result:  "research findings",
 	})
 
-	e := NewReadLoopResultExecutor(kv)
+	e := NewReadLoopResultExecutor(kv, nil)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:   "c1",
 		Name: ReadLoopResultToolName,
@@ -370,5 +373,181 @@ func TestReadLoopResultExecutor_FullEntityIDLoopArg(t *testing.T) {
 	}
 	if got := res.Metadata["loop_id"]; got != bareLoopID {
 		t.Errorf("metadata.loop_id = %v, want bare uuid %q (normalize must apply before downstream uses)", got, bareLoopID)
+	}
+}
+
+// --- Offloaded-result hydration (payload-size-chokepoints D4) ---
+
+// fakeContentFetcher is an in-memory LoopContentFetcher.
+type fakeContentFetcher struct {
+	byKey   map[string]*objectstore.StoredContent
+	failErr error
+}
+
+func (f *fakeContentFetcher) FetchContent(_ context.Context, ref *message.StorageReference) (*objectstore.StoredContent, error) {
+	if f.failErr != nil {
+		return nil, f.failErr
+	}
+	sc, ok := f.byKey[ref.Key]
+	if !ok {
+		return nil, errs.WrapInvalid(errors.New("no such content"), "fake", "FetchContent", "lookup")
+	}
+	return sc, nil
+}
+
+// seedOffloadedCompletion writes a ref-bearing completion value plus its
+// content-store body, mirroring exactly what the agentic-loop component
+// persists after an offload.
+func seedOffloadedCompletion(t *testing.T, kv *mockLoopsKV, fetcher *fakeContentFetcher, loopID, body string) {
+	t.Helper()
+	key := "content_c360.ops.agent.agentic-loop.result." + loopID
+	seedCompletion(t, kv, loopID, agentic.LoopCompletedEvent{
+		LoopID:        loopID,
+		Role:          "researcher",
+		Outcome:       "success",
+		Result:        "", // offloaded
+		ResultRef:     &message.StorageReference{StorageInstance: "objectstore", Key: key},
+		ResultPreview: body[:10],
+		ResultSize:    len(body),
+	})
+	if fetcher.byKey == nil {
+		fetcher.byKey = map[string]*objectstore.StoredContent{}
+	}
+	fetcher.byKey[key] = &objectstore.StoredContent{
+		EntityID:      "c360.ops.agent.agentic-loop.result." + loopID,
+		Fields:        map[string]string{"result": body},
+		ContentFields: map[string]string{message.ContentRoleBody: "result"},
+	}
+}
+
+// TestReadLoopResult_OffloadedResult_PagesOverHydratedContent proves the
+// paging contract is unchanged for ref-bearing values: max_bytes/offset walk
+// the HYDRATED body, total_bytes reports the full size, and the pages
+// reassemble to the exact original content.
+func TestReadLoopResult_OffloadedResult_PagesOverHydratedContent(t *testing.T) {
+	kv := newMockLoopsKV()
+	fetcher := &fakeContentFetcher{}
+	body := strings.Repeat("abcdefghij", 100) // 1000 bytes
+	seedOffloadedCompletion(t, kv, fetcher, "loop-off-1", body)
+
+	e := NewReadLoopResultExecutor(kv, fetcher)
+
+	var rebuilt strings.Builder
+	offset := 0
+	pages := 0
+	for {
+		res, err := e.Execute(context.Background(), agentic.ToolCall{
+			ID:   "c1",
+			Name: ReadLoopResultToolName,
+			Arguments: map[string]any{
+				"loop_id":   "loop-off-1",
+				"max_bytes": 256,
+				"offset":    offset,
+			},
+		})
+		if err != nil {
+			t.Fatalf("page at offset %d: %v", offset, err)
+		}
+		if res.Error != "" {
+			t.Fatalf("page at offset %d returned tool error: %s", offset, res.Error)
+		}
+		if res.Metadata["result_offloaded"] != true {
+			t.Fatal("metadata must mark the result as offloaded")
+		}
+		if got := res.Metadata[agentic.MetadataKeyTotalBytes]; got != len(body) {
+			t.Fatalf("total_bytes must report the HYDRATED size, got %v want %d", got, len(body))
+		}
+		rebuilt.WriteString(res.Content)
+		pages++
+		hasMore, _ := res.Metadata[agentic.MetadataKeyHasMore].(bool)
+		if !hasMore {
+			break
+		}
+		next, ok := res.Metadata[agentic.MetadataKeyNextOffset].(int)
+		if !ok {
+			t.Fatalf("next_offset missing or wrong type: %v", res.Metadata[agentic.MetadataKeyNextOffset])
+		}
+		offset = next
+	}
+	if pages < 2 {
+		t.Fatalf("expected multiple pages for 1000 bytes at 256/page, got %d", pages)
+	}
+	if rebuilt.String() != body {
+		t.Fatal("paged reads must reassemble to the exact original content")
+	}
+}
+
+// TestReadLoopResult_OffloadedResult_NoFetcherIsTypedError: without a
+// content store the tool must fail loud with a typed error — never serve the
+// preview as if it were the full result, never return empty content.
+func TestReadLoopResult_OffloadedResult_NoFetcherIsTypedError(t *testing.T) {
+	kv := newMockLoopsKV()
+	fetcher := &fakeContentFetcher{}
+	seedOffloadedCompletion(t, kv, fetcher, "loop-off-2", strings.Repeat("x", 100))
+
+	e := NewReadLoopResultExecutor(kv, nil) // no content store wired
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "c1",
+		Name:      ReadLoopResultToolName,
+		Arguments: map[string]any{"loop_id": "loop-off-2"},
+	})
+	if err == nil {
+		t.Fatal("expected classified error when hydration is impossible")
+	}
+	if res.Error == "" || res.ErrorKind != agentic.ToolErrorInternal {
+		t.Fatalf("expected internal tool error naming the gap, got kind=%s err=%q", res.ErrorKind, res.Error)
+	}
+	if res.Content != "" {
+		t.Fatal("no content may be served when the body cannot be hydrated (preview is not the result)")
+	}
+}
+
+// TestReadLoopResult_OffloadedResult_TransientFetchFailure maps a transient
+// store failure onto the network error kind so the agent retries rather than
+// concluding the result is gone.
+func TestReadLoopResult_OffloadedResult_TransientFetchFailure(t *testing.T) {
+	kv := newMockLoopsKV()
+	fetcher := &fakeContentFetcher{failErr: errs.WrapTransient(errors.New("objectstore timeout"), "fake", "FetchContent", "fetch")}
+	seedOffloadedCompletion(t, kv, fetcher, "loop-off-3", strings.Repeat("x", 100))
+	// Re-arm failure AFTER seeding (seed writes to the same fetcher).
+	fetcher.failErr = errs.WrapTransient(errors.New("objectstore timeout"), "fake", "FetchContent", "fetch")
+
+	e := NewReadLoopResultExecutor(kv, fetcher)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "c1",
+		Name:      ReadLoopResultToolName,
+		Arguments: map[string]any{"loop_id": "loop-off-3"},
+	})
+	if err == nil {
+		t.Fatal("expected classified error on fetch failure")
+	}
+	if res.ErrorKind != agentic.ToolErrorNetwork {
+		t.Fatalf("transient fetch failure must map to network kind, got %s", res.ErrorKind)
+	}
+}
+
+// TestReadLoopResult_OffloadedResult_MissingBodyRoleFailsClosed: a stored
+// envelope without the body role is a broken contract — typed error, not an
+// empty-string result.
+func TestReadLoopResult_OffloadedResult_MissingBodyRoleFailsClosed(t *testing.T) {
+	kv := newMockLoopsKV()
+	fetcher := &fakeContentFetcher{}
+	seedOffloadedCompletion(t, kv, fetcher, "loop-off-4", strings.Repeat("x", 100))
+	// Corrupt the stored envelope: drop the body role mapping.
+	for _, sc := range fetcher.byKey {
+		sc.ContentFields = map[string]string{}
+	}
+
+	e := NewReadLoopResultExecutor(kv, fetcher)
+	res, err := e.Execute(context.Background(), agentic.ToolCall{
+		ID:        "c1",
+		Name:      ReadLoopResultToolName,
+		Arguments: map[string]any{"loop_id": "loop-off-4"},
+	})
+	if err == nil {
+		t.Fatal("expected classified error for missing body role")
+	}
+	if res.ErrorKind != agentic.ToolErrorInternal || res.Content != "" {
+		t.Fatalf("missing role must fail closed with internal kind, got kind=%s content=%q", res.ErrorKind, res.Content)
 	}
 }

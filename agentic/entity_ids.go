@@ -120,6 +120,42 @@ func TrajectoryStepEntityID(org, platform, loopID string, stepIndex int) string 
 	return id
 }
 
+// TryLoopResultEntityID constructs a 6-part entity ID for a loop's offloaded
+// terminal result body (payload-size-chokepoints D4).
+// Format: {org}.{platform}.agent.agentic-loop.result.{loopID}
+//
+// Example: TryLoopResultEntityID("c360", "ops", "abc123")
+// Returns: "c360.ops.agent.agentic-loop.result.abc123"
+//
+// Error-returning only (no panicking variant): the sole caller is the
+// completion-persistence hot path, where a panic would silently kill the
+// consumer callback and the loop would fail opaquely — the same panic-class
+// concern that motivated TryLoopExecutionEntityID. The `result` type segment
+// keeps the content key disjoint from the loop execution entity and the
+// per-step trajectory entities, which store their own content.
+//
+// Returns ("", error) when any input part is empty or contains a dot, or
+// when the constructed ID fails IsValidEntityID.
+func TryLoopResultEntityID(org, platform, loopID string) (string, error) {
+	if err := validatePart("org", org); err != nil {
+		return "", fmt.Errorf("LoopResultEntityID: %w", err)
+	}
+	if err := validatePart("platform", platform); err != nil {
+		return "", fmt.Errorf("LoopResultEntityID: %w", err)
+	}
+	if err := validatePart("loopID", loopID); err != nil {
+		return "", fmt.Errorf("LoopResultEntityID: %w", err)
+	}
+
+	id := fmt.Sprintf("%s.%s.agent.agentic-loop.result.%s", org, platform, loopID)
+
+	if !message.IsValidEntityID(id) {
+		return "", fmt.Errorf("LoopResultEntityID: constructed id %q failed IsValidEntityID — check input values", id)
+	}
+
+	return id, nil
+}
+
 // ChainExecutionEntityID constructs a 6-part entity ID for a cross-arc agent chain.
 // Format: {org}.{platform}.agent.chain.execution.{chainID}
 //

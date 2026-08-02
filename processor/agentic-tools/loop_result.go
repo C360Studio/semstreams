@@ -8,8 +8,10 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/storage/objectstore"
 )
 
 // ReadLoopResultToolName is the name agents use to invoke the read_loop_result tool.
@@ -35,19 +37,34 @@ type LoopsKVReader interface {
 	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
 }
 
+// LoopContentFetcher resolves an offloaded result body from the content
+// ObjectStore (payload-size-chokepoints D4): completion values whose result
+// exceeded the offload threshold carry a storage_ref instead of the inline
+// text. *objectstore.Store satisfies this interface; tests supply a fake.
+type LoopContentFetcher interface {
+	FetchContent(ctx context.Context, ref *message.StorageReference) (*objectstore.StoredContent, error)
+}
+
 // ReadLoopResultExecutor fetches a completed loop's full Result from the
 // AGENT_LOOPS KV bucket so downstream agents can read another loop's output
 // without having it injected into their prompt. Supports paging (max_bytes,
 // offset) so small-context-window agents can consume large outputs a slice
-// at a time.
+// at a time. Offloaded results (storage_ref-bearing completion values) are
+// hydrated from the content store transparently — the paging contract is
+// unchanged and pages over the hydrated content.
 type ReadLoopResultExecutor struct {
-	kv LoopsKVReader
+	kv      LoopsKVReader
+	content LoopContentFetcher
 }
 
 // NewReadLoopResultExecutor constructs the executor against a KV reader
-// scoped to the loops bucket (AGENT_LOOPS by default).
-func NewReadLoopResultExecutor(kv LoopsKVReader) *ReadLoopResultExecutor {
-	return &ReadLoopResultExecutor{kv: kv}
+// scoped to the loops bucket (AGENT_LOOPS by default) and a content fetcher
+// for offloaded result bodies (AGENT_CONTENT by default). content may be nil
+// when no content store is available — inline results still work and
+// ref-bearing results return a typed error naming the gap instead of
+// silently serving the preview as if it were the whole result.
+func NewReadLoopResultExecutor(kv LoopsKVReader, content LoopContentFetcher) *ReadLoopResultExecutor {
+	return &ReadLoopResultExecutor{kv: kv, content: content}
 }
 
 // ListTools describes the read_loop_result tool.
@@ -138,10 +155,31 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 		}, errs.WrapInvalid(err, "ReadLoopResultExecutor", "readLoopResult", "unmarshal completion event")
 	}
 
-	total := len(event.Result)
+	// Offloaded results (D4): hydrate the full body from the content store,
+	// then page over the HYDRATED content — max_bytes/offset semantics are
+	// identical to the inline case.
+	resultText := event.Result
+	offloaded := event.ResultRef != nil
+	if offloaded {
+		full, err := e.hydrateResult(ctx, event.ResultRef)
+		if err != nil {
+			kind := agentic.ToolErrorNetwork
+			if errs.Classify(err) != errs.ErrorTransient {
+				kind = agentic.ToolErrorInternal
+			}
+			return agentic.ToolResult{
+				CallID:    call.ID,
+				Error:     fmt.Sprintf("result for loop %s is offloaded but could not be hydrated: %v", loopID, err),
+				ErrorKind: kind,
+			}, err
+		}
+		resultText = full
+	}
+
+	total := len(resultText)
 	start := min(offset, total)
 	end := min(start+maxBytes, total)
-	slice := event.Result[start:end]
+	slice := resultText[start:end]
 
 	return agentic.ToolResult{
 		CallID:  call.ID,
@@ -154,11 +192,42 @@ func (e *ReadLoopResultExecutor) readLoopResult(ctx context.Context, call agenti
 			"returned_bytes":              len(slice),
 			"offset":                      start,
 			"task_id":                     event.TaskID,
+			"result_offloaded":            offloaded,
 			agentic.MetadataKeyHasMore:    end < total,
 			agentic.MetadataKeyNextOffset: end,
 			agentic.MetadataKeyTotalBytes: total,
 		},
 	}, nil
+}
+
+// hydrateResult fetches an offloaded result body and resolves it through the
+// stored ContentFields map (body role → field name) — the same contract the
+// writer's ContentStorable declared. Fails CLOSED on every absent path: a
+// missing fetcher, role, or field is a typed error, never a silent empty
+// result or a preview masquerading as the whole.
+func (e *ReadLoopResultExecutor) hydrateResult(ctx context.Context, ref *message.StorageReference) (string, error) {
+	if e.content == nil {
+		return "", errs.WrapInvalid(
+			errors.New("result is offloaded but no content store is configured for read_loop_result"),
+			"ReadLoopResultExecutor", "hydrateResult", "check content fetcher")
+	}
+	stored, err := e.content.FetchContent(ctx, ref)
+	if err != nil {
+		return "", err
+	}
+	fieldName, ok := stored.ContentFields[message.ContentRoleBody]
+	if !ok || fieldName == "" {
+		return "", errs.WrapInvalid(
+			fmt.Errorf("stored content %s has no %q role mapping", ref.Key, message.ContentRoleBody),
+			"ReadLoopResultExecutor", "hydrateResult", "resolve body role")
+	}
+	body, ok := stored.Fields[fieldName]
+	if !ok {
+		return "", errs.WrapInvalid(
+			fmt.Errorf("stored content %s is missing field %q", ref.Key, fieldName),
+			"ReadLoopResultExecutor", "hydrateResult", "read body field")
+	}
+	return body, nil
 }
 
 // normalizeLoopID accepts a loop_id argument in either of the two shapes

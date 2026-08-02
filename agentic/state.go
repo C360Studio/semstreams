@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/c360studio/semstreams/message"
 )
 
 // LoopState represents the current state of an agentic loop
@@ -93,6 +95,24 @@ type LoopEntity struct {
 	Result      string    `json:"result,omitempty"`       // LLM response content
 	Error       string    `json:"error,omitempty"`        // Error message on failure
 	CompletedAt time.Time `json:"completed_at,omitempty"` // When the loop completed
+
+	// Result durability state (payload-size-chokepoints D4). All additive.
+	//
+	// When the terminal result is offloaded to the content ObjectStore,
+	// Result is slimmed to a bounded preview and ResultRef/ResultSize carry
+	// the reference and the original byte count — so the entity KV value
+	// stays under the wire limit while SSE/KV-watch consumers still see a
+	// preview and where the full body lives (read_loop_result hydrates it).
+	//
+	// When a terminal KV write fails permanently, ResultNotDurable=true with
+	// the classified cause in ResultNotDurableReason — a parent or operator
+	// reading the loop can distinguish "completed but result not durably
+	// stored" from both success and absence. Never set on a loop whose
+	// result was stored (inline or by reference).
+	ResultRef              *message.StorageReference `json:"result_ref,omitempty"`
+	ResultSize             int                       `json:"result_size,omitempty"`
+	ResultNotDurable       bool                      `json:"result_not_durable,omitempty"`
+	ResultNotDurableReason string                    `json:"result_not_durable_reason,omitempty"`
 
 	// Domain context propagated from TaskMessage through lifecycle events
 	Metadata map[string]any `json:"metadata,omitempty"`

@@ -158,12 +158,12 @@ func (c *Component) handleListTrajectories(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if c.loopsBucket == nil {
+	if c.loopsStore == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "loop storage not available"})
 		return
 	}
 
-	keys, err := c.loopsBucket.Keys(r.Context())
+	keys, err := c.loopsStore.Keys(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list loops"})
 		return
@@ -174,12 +174,12 @@ func (c *Component) handleListTrajectories(w http.ResponseWriter, r *http.Reques
 		if strings.HasPrefix(key, "COMPLETE_") {
 			continue
 		}
-		entry, err := c.loopsBucket.Get(r.Context(), key)
+		entry, err := c.loopsStore.Get(r.Context(), key)
 		if err != nil {
 			continue
 		}
 		var entity agentic.LoopEntity
-		if err := json.Unmarshal(entry.Value(), &entity); err != nil {
+		if err := json.Unmarshal(entry.Value, &entity); err != nil {
 			continue
 		}
 		if !filter.matches(&entity) {

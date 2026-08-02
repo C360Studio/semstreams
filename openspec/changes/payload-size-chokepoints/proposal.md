@@ -52,8 +52,10 @@ knowledge must not float inside components.
   is re-documented as such; its implied wire-size-defense job moves to the seams. The sweep
   in this change classifies every size-adjacent knob by **which limit it defends** before
   touching it.
-- **Dead guard removed**: `maxPrefixResponseBytes` (declared, never read) is deleted; the
-  respond-seam guard is the real mechanism.
+- **Dead-guard deletion CANCELED** (amended 2026-08-02): between the audit read and this
+  implementation, main gained real enforcement of `maxPrefixResponseBytes` (trim-until-fits
+  byte budget + regression test), so there is nothing dead to delete — the respond-seam
+  guard is now the backstop behind a live per-handler budget. See tasks.md 2.2.
 - **GOVERNANCE_VERDICTS discard ruling** (owner decision task): an audit stream on
   `DiscardOld` silently evicts its oldest verdicts at the ceiling — options and a
   recommendation are in the design; the ruling is recorded before that task closes.

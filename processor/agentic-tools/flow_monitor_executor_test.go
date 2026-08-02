@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -510,5 +511,42 @@ func TestFlowMonitorExecutor_PolymorphicEventShapes(t *testing.T) {
 	}
 	if r.Recent[2].LoopID != "poly-success" {
 		t.Errorf("recent[2]: want poly-success (oldest), got %q", r.Recent[2].LoopID)
+	}
+}
+
+// TestDecodeTerminalEvent_OffloadedCompletion pins the census reasoning for
+// monitor_flow under payload-size-chokepoints D4: the tool aggregates
+// METADATA only (outcome, role, timestamps, iterations, tokens) and never
+// reads Result, so a ref-bearing completion value must decode identically —
+// the additive {storage_ref, preview, size} fields are invisible to it.
+func TestDecodeTerminalEvent_OffloadedCompletion(t *testing.T) {
+	ev := &agentic.LoopCompletedEvent{
+		LoopID:  "loop-off-fm",
+		TaskID:  "task-1",
+		Role:    "researcher",
+		Outcome: agentic.OutcomeSuccess,
+		Result:  "", // offloaded
+		ResultRef: &message.StorageReference{
+			StorageInstance: "objectstore",
+			Key:             "content_c360.ops.agent.agentic-loop.result.loop-off-fm",
+		},
+		ResultPreview: "preview",
+		ResultSize:    9999,
+		Iterations:    7,
+		TokensIn:      100,
+		TokensOut:     200,
+		CompletedAt:   time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+	data, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got, ok := decodeTerminalEvent(data)
+	if !ok {
+		t.Fatal("decodeTerminalEvent must accept a ref-bearing completion")
+	}
+	if got.loopID != "loop-off-fm" || got.outcome != agentic.OutcomeSuccess ||
+		got.iterations != 7 || got.tokensIn != 100 || got.tokensOut != 200 {
+		t.Fatalf("metadata aggregation fields must be unaffected by the offload shape: %+v", got)
 	}
 }

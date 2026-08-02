@@ -29,10 +29,17 @@ type Loop struct {
 	RunEntityID string `json:"run_entity_id,omitempty"`
 	Outcome     string `json:"outcome,omitempty"`
 	Result      string `json:"result,omitempty"`
-	Error       string `json:"error,omitempty"`
-	Prompt      string `json:"prompt,omitempty"`
-	TokensIn    int    `json:"tokens_in,omitempty"`
-	TokensOut   int    `json:"tokens_out,omitempty"`
+	// ResultTruncated marks Result as a bounded PREVIEW of an offloaded
+	// result body (payload-size-chokepoints D4): the completion value
+	// carried a storage_ref instead of inline text. The full content is
+	// retrievable via the read_loop_result tool; ResultSize is the original
+	// byte count. Both zero for inline results.
+	ResultTruncated bool   `json:"result_truncated,omitempty"`
+	ResultSize      int    `json:"result_size,omitempty"`
+	Error           string `json:"error,omitempty"`
+	Prompt          string `json:"prompt,omitempty"`
+	TokensIn        int    `json:"tokens_in,omitempty"`
+	TokensOut       int    `json:"tokens_out,omitempty"`
 	// PendingApproval is populated when the loop is in awaiting_approval state.
 	PendingApproval *PendingApprovalInfo `json:"pending_approval,omitempty"`
 }
@@ -52,7 +59,7 @@ func loopFromInfo(in *LoopInfo) Loop {
 		ParentLoopID:  "", // not tracked in LoopInfo today — scoped-out follow-up
 		RunID:         "", // not tracked in LoopInfo today — /activity (loopFromEntity) carries it
 		RunEntityID:   "", // ditto
-		// entity-id-audit:classify intentional-sentinel "" line=54 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
+		// entity-id-audit:classify intentional-sentinel "" line=61 column=18 surface=go-field:Loop.RunEntityID entity_id_invalid:empty optional projection unavailable from LoopInfo
 		Outcome:         in.Outcome,
 		Result:          in.Result,
 		Error:           in.Error,
@@ -117,6 +124,12 @@ type completionWire struct {
 	ParentLoopID string `json:"parent_loop"`   // events.go uses "parent_loop"; normalised onto Loop.ParentLoopID
 	RunID        string `json:"run_id"`        // ADR-053: present on terminal events
 	RunEntityID  string `json:"run_entity_id"` // ADR-053: 6-part, present on terminal events
+	// Offload triplet (payload-size-chokepoints D4): present when the
+	// result body was offloaded to the content ObjectStore. HasRef is
+	// detected via storage_ref being any non-null JSON value.
+	Preview    string          `json:"preview"`
+	Size       int             `json:"size"`
+	StorageRef json.RawMessage `json:"storage_ref"`
 }
 
 // loopFromCompletion projects a COMPLETE_<loopID> terminal event payload onto Loop.
@@ -129,7 +142,7 @@ func loopFromCompletion(raw []byte) (Loop, bool) {
 	if w.LoopID == "" {
 		return Loop{}, false
 	}
-	return Loop{
+	loop := Loop{
 		LoopID:       w.LoopID,
 		TaskID:       w.TaskID,
 		State:        w.State,
@@ -144,5 +157,16 @@ func loopFromCompletion(raw []byte) (Loop, bool) {
 		ParentLoopID: w.ParentLoopID,
 		RunID:        w.RunID,
 		RunEntityID:  w.RunEntityID,
-	}, true
+	}
+	// Offloaded result (payload-size-chokepoints D4): the completion value
+	// carries {storage_ref, preview, size} instead of inline text. Surface
+	// the preview WITH the truncation marker — never a bare preview a
+	// consumer could mistake for the whole result. Full content is the
+	// read_loop_result tool's job.
+	if loop.Result == "" && len(w.StorageRef) > 0 && string(w.StorageRef) != "null" {
+		loop.Result = w.Preview
+		loop.ResultTruncated = true
+		loop.ResultSize = w.Size
+	}
+	return loop, true
 }

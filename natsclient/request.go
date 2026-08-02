@@ -235,6 +235,12 @@ func (c *Client) RequestWithHeaders(
 	headers map[string]string,
 	timeout time.Duration,
 ) (*nats.Msg, error) {
+	// Size guard first: a request the server will never accept is a permanent
+	// refusal, and it outranks transient connection state.
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "RequestWithHeaders", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -388,6 +394,24 @@ func (c *Client) SubscribeForRequests(
 
 		// Send successful response
 		if msg.Reply != "" {
+			// An oversized reply cannot be sent — but going quiet turns it
+			// into a caller-side TIMEOUT several seconds later, which is how
+			// the gh#857 class presented to sisters. Answer with the small
+			// classified error instead: the caller gets a typed permanent
+			// "too large" in normal reply latency (payload-bounds spec).
+			if szErr := checkPayloadSize(len(response), c.serverPayloadLimit(),
+				"SubscribeForRequests", "reply on "+subject); szErr != nil {
+				c.logger.Error("natsclient: handler reply exceeds server payload limit",
+					"subject", subject,
+					"reply_bytes", len(response),
+					"err", szErr.Error())
+				if respErr := RespondError(msg, szErr); respErr != nil && !errors.Is(respErr, errMissingReplySubject) {
+					c.logger.Error("natsclient: failed to publish reply-too-large error",
+						"subject", subject,
+						"publish_err", respErr.Error())
+				}
+				return
+			}
 			if respErr := msg.Respond(response); respErr != nil {
 				c.logger.Error("natsclient: failed to publish handler success reply",
 					"subject", subject,

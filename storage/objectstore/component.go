@@ -596,6 +596,21 @@ func (c *Component) respond(msg *nats.Msg, resp Response) {
 		return
 	}
 
+	// An oversized reply would surface to the caller as a timeout; answer
+	// with the small error response instead (payload-bounds spec). The raw
+	// responder cannot use natsclient's classified reply path, so the typed
+	// contract here is the component's own error Response shape.
+	if c.natsClient != nil {
+		if szErr := c.natsClient.CheckReplySize(len(data), msg.Subject); szErr != nil {
+			c.logger.Error("ObjectStore reply exceeds server payload limit",
+				"subject", msg.Subject,
+				"reply_bytes", len(data),
+				"error", szErr)
+			c.respondWithError(msg, szErr)
+			return
+		}
+	}
+
 	if err := msg.Respond(data); err != nil {
 		c.logger.Error("Failed to send response",
 			"error", err,

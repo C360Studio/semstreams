@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"os"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/c360studio/semstreams/persona"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
 	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/nats-io/nats.go/jetstream"
@@ -34,6 +36,25 @@ const (
 	taskIntakeRejectionLane   = "decoded-task"
 	taskIntakeRejectionReason = "structural-invalid"
 )
+
+// loopsKV is the minimal loops-bucket surface the component consumes.
+// *natsclient.KVStore satisfies it — the GUARDED write lane whose Put refuses
+// oversized values with a permanent classified error (payload-bounds spec).
+// The raw jetstream.KeyValue handle was retired here (gh#857 D4): writes
+// through it bypassed the seam guard and their errors were logged-and-dropped.
+// Unit tests inject an in-memory fake.
+type loopsKV interface {
+	Put(ctx context.Context, key string, value []byte) (uint64, error)
+	Get(ctx context.Context, key string) (*natsclient.KVEntry, error)
+	Keys(ctx context.Context) ([]string, error)
+}
+
+// resultContentStorer is the offload seam for oversized completion results
+// (gh#857 D4). *objectstore.Store satisfies it via StoreContent; unit tests
+// inject a fake.
+type resultContentStorer interface {
+	StoreContent(ctx context.Context, cs message.ContentStorable) (*message.StorageReference, error)
+}
 
 // Component implements the agentic-loop processor
 type Component struct {
@@ -52,8 +73,21 @@ type Component struct {
 	started   bool
 	startTime time.Time
 
-	// KV buckets
-	loopsBucket jetstream.KeyValue
+	// loopsStore is the guarded loops-bucket lane (see loopsKV). Set from the
+	// owning client in initializeKVBuckets; nil only in NATS-less unit tests.
+	loopsStore loopsKV
+
+	// resultOffloadStore stores oversized completion results in the
+	// AGENT_CONTENT ObjectStore (gh#857 D4). Shares the store instance with
+	// graphWriter's trajectory content path. nil disables offload — the seam
+	// guard then rules on the inline write, which fails loud, never silent.
+	resultOffloadStore resultContentStorer
+
+	// payloadLimit reports the live server wire limit; the offload threshold
+	// derives from it (a fraction, not a knob — payload-bounds spec). Set
+	// from natsClient at construction; unit tests inject a fixed value; nil
+	// disables offload.
+	payloadLimit func() int
 
 	// Trajectory cache (replaces KV bucket — durable content in ObjectStore + graph)
 	trajectoryCache cache.Cache[*agentic.Trajectory]
@@ -236,6 +270,13 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 			platform:      deps.Platform,
 			logger:        deps.GetLogger(),
 		},
+	}
+
+	// Offload threshold derives from the LIVE server payload limit (gh#857
+	// D4) — read per use, so an operator's raised max_payload propagates
+	// with no code or config change.
+	if deps.NATSClient != nil {
+		comp.payloadLimit = deps.NATSClient.ServerPayloadLimit
 	}
 
 	return comp, nil
@@ -635,7 +676,10 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 			return errs.Wrap(err, "agentic-loop", "initializeKVBuckets", "create loops bucket")
 		}
 	}
-	c.loopsBucket = loopsBucket
+	// Wrap the raw handle in the guarded KV lane (payload-bounds spec):
+	// every loops-bucket write now refuses oversized values with a
+	// permanent classified error instead of dying server-side.
+	c.loopsStore = c.natsClient.NewKVStore(loopsBucket)
 
 	// Initialize trajectory cache. Durable content is in ObjectStore + graph entities.
 	trajCacheTTL := 4 * time.Hour // default
@@ -683,8 +727,13 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 		// and continue. Non-fatal only — the content store is OPTIONAL.
 		c.logger.Warn("Failed to create content store for trajectory steps, content storage disabled",
 			"bucket", contentBucket, "error", err)
-	case c.graphWriter != nil:
-		c.graphWriter.contentStore = contentStore
+	default:
+		// The same store instance serves trajectory step content and the
+		// oversized-completion-result offload (gh#857 D4).
+		c.resultOffloadStore = contentStore
+		if c.graphWriter != nil {
+			c.graphWriter.contentStore = contentStore
+		}
 	}
 
 	return nil
@@ -1083,7 +1132,9 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	c.publishResults(ctx, result)
 
 	// Persist loop state to KV
-	c.persistLoopState(ctx, result.LoopID)
+	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+		c.logger.Error("spawned loop state not persisted", "loop_id", result.LoopID, "error", err)
+	}
 	return nil
 }
 
@@ -1271,7 +1322,9 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 	// (execution-manager) never see the terminal state.
 	if transErr := c.handler.loopManager.TransitionLoop(loopID, agentic.LoopStateFailed); transErr == nil {
 		c.handler.loopManager.UpdateCompletion(loopID, agentic.OutcomeFailed, "", err.Error())
-		c.persistLoopState(ctx, loopID)
+		if perr := c.persistLoopState(ctx, loopID); perr != nil {
+			c.logger.Error("failed loop state not persisted", "loop_id", loopID, "error", perr)
+		}
 	}
 
 	if c.metrics != nil && entity.ID != "" {
@@ -1311,7 +1364,10 @@ func (c *Component) publishFailureEvents(ctx context.Context, loopID, reason, er
 	// execution-manager) see COMPLETE_{loopID} when they react to the
 	// failure event below.
 	if failure != nil {
-		c.persistFailureState(errorCtx, loopID, failure)
+		if err := c.persistFailureState(errorCtx, loopID, failure); err != nil {
+			c.logger.Error("failure state not durably stored",
+				"loop_id", loopID, "error", err)
+		}
 	}
 
 	// Stamp graph triples second (under budget). The reorder is the
@@ -1420,12 +1476,29 @@ const graphWritePublishBudget = 2 * time.Second
 // agent.complete.* event downstream rules wait on. On budget timeout,
 // publish proceeds with a loud log and Prom counter increment.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
-	c.persistLoopState(ctx, result.LoopID)
+	terminal := result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed
 
-	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
+	// Offload BEFORE the entity write (gh#857 D4): the loop entity's inline
+	// Result copy is slimmed by the same offload, so the entity value (key
+	// <loopID>) never carries the oversized body the COMPLETE_ value just
+	// shed. The queued agent.complete publish is re-marshaled to match.
+	if terminal && result.CompletionState != nil {
+		c.offloadCompletionResult(ctx, result.CompletionState)
+		c.rebuildCompletionMessage(&result)
+	}
+
+	if err := c.persistLoopState(ctx, result.LoopID); err != nil {
+		c.logger.Error("loop state write failed in persistHandlerResult",
+			"loop_id", result.LoopID, "error", err)
+	}
+
+	if terminal {
 		c.finalizeTrajectory(ctx, result.LoopID, result.State)
 		if result.CompletionState != nil {
-			c.persistCompletionState(ctx, result.LoopID, result.CompletionState)
+			if err := c.persistCompletionState(ctx, result.LoopID, result.CompletionState); err != nil {
+				c.logger.Error("completion result not durably stored",
+					"loop_id", result.LoopID, "error", err)
+			}
 			c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
 		} else if result.FailureState != nil {
 			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
@@ -1633,14 +1706,27 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 // Defensive against nil natsClient — pure unit tests construct
 // Components without one, and the approval-timeout sweeper goroutine
 // can race with Stop's natsClient teardown. Mirrors the existing
-// persistLoopState's loopsBucket-nil guard pattern.
+// persistLoopState's loopsStore-nil guard pattern.
 func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
 	if c.natsClient == nil {
 		return
 	}
+	failedForSize := false
 	for _, msg := range result.PublishedMessages {
 		// Use JetStream for publishing to ensure delivery
 		if err := c.natsClient.PublishToStream(ctx, msg.Subject, msg.Data); err != nil {
+			// An over-limit publish is PERMANENT (payload-bounds spec): for a
+			// live loop the refused message is its forward progress (the
+			// agent.request continuation), and no retry can ever deliver it.
+			// Fail the loop TERMINALLY with the size and limit in the reason
+			// (gh#857 D5 interim loudness) — never a silent stall, never a
+			// retry loop. Terminal results skip this: the loop is already
+			// terminal and the refusal is operator-loud via the log below.
+			if errors.Is(err, natsclient.ErrPayloadTooLarge) && !result.State.IsTerminal() && !failedForSize {
+				failedForSize = true
+				c.failLoopForOversizedPublish(ctx, result.LoopID, msg.Subject, err)
+				continue
+			}
 			c.logger.Error("Failed to publish message", "error", err, "subject", msg.Subject)
 		}
 	}
@@ -1654,6 +1740,29 @@ func (c *Component) publishResults(ctx context.Context, result HandlerResult) {
 
 	// Emit context management metrics from events
 	c.emitContextMetrics(result)
+}
+
+// oversizedPublishReason is the typed failure reason for a loop whose
+// forward-progress publish was refused at the payload seam. The paired
+// error text carries the byte count and the server limit (checkPayloadSize's
+// three operator facts).
+const oversizedPublishReason = "payload_too_large"
+
+// failLoopForOversizedPublish terminally fails a live loop whose publish was
+// refused as over-limit (gh#857 D5 interim loudness). Routes through
+// handleLoopFailure so the loop transitions to failed, the state persists,
+// and the failure events (small by construction) publish — a parent or rule
+// watching COMPLETE_<loopID> sees a typed failure naming size and limit
+// instead of a wedged loop.
+func (c *Component) failLoopForOversizedPublish(ctx context.Context, loopID, subject string, cause error) {
+	c.logger.Error("publish refused at payload seam; failing loop terminally",
+		"loop_id", loopID, "subject", subject, "error", cause)
+	entity, err := c.handler.GetLoop(loopID)
+	if err != nil {
+		c.logger.Error("cannot load loop for oversized-publish failure; failure events may lack identity",
+			"loop_id", loopID, "error", err)
+	}
+	c.handleLoopFailure(ctx, loopID, entity, oversizedPublishReason, cause)
 }
 
 // publishContextEvent publishes a context management event
@@ -1692,106 +1801,313 @@ func (c *Component) emitContextMetrics(result HandlerResult) {
 	}
 }
 
+// loopKVWriteRetry bounds transient retries on loops-bucket writes (gh#857
+// D4 "bounded retry"). Three attempts spanning ~350ms ride out a NATS hiccup
+// without wedging the consumer callback persistHandlerResult runs on.
+// Permanent classifications (Invalid/Fatal — e.g. the seam guard's oversize
+// refusal) never retry: a payload the server will never accept is not
+// transient by any retry.
+var loopKVWriteRetry = retry.Config{
+	MaxAttempts:  3,
+	InitialDelay: 50 * time.Millisecond,
+	MaxDelay:     500 * time.Millisecond,
+	Multiplier:   2.0,
+	AddJitter:    true,
+}
+
+// writeLoopKV writes one loops-bucket value through the guarded lane with
+// bounded retry on transient failures. Returns the final classified error;
+// callers own the durability decision (markResultNotDurable).
+func (c *Component) writeLoopKV(ctx context.Context, key string, data []byte) error {
+	return retry.Do(ctx, loopKVWriteRetry, func() error {
+		_, err := c.loopsStore.Put(ctx, key, data)
+		if err != nil && errs.Classify(err) != errs.ErrorTransient {
+			return retry.NonRetryable(err)
+		}
+		return err
+	})
+}
+
+// maxNotDurableReasonBytes bounds the persisted result-not-durable reason so
+// the marker write can never itself become oversized.
+const maxNotDurableReasonBytes = 1024
+
+// markResultNotDurable records the typed result-not-durable state on the
+// loop after a terminal KV write finally failed (gh#857 D4): the in-memory
+// entity gains ResultNotDurable + the classified cause, its inline Result is
+// slimmed to a preview so the marker VALUE fits the wire, and the marker is
+// written directly (single attempt — the caller's retries are already
+// spent). "Completed but result not durably stored" becomes a state a parent
+// or operator can read, not a log line.
+func (c *Component) markResultNotDurable(ctx context.Context, loopID string, cause error) {
+	reason := truncateUTF8(cause.Error(), maxNotDurableReasonBytes)
+	entity, ok := c.handler.loopManager.MarkResultNotDurable(loopID, reason, resultPreviewBytes)
+	if !ok {
+		c.logger.Error("loop result not durable and loop entity unknown; cannot mark",
+			"loop_id", loopID, "cause", cause)
+		return
+	}
+	data, err := json.Marshal(&entity)
+	if err != nil {
+		c.logger.Error("failed to marshal result-not-durable marker", "loop_id", loopID, "error", err)
+		return
+	}
+	if _, err := c.loopsStore.Put(ctx, loopID, data); err != nil {
+		c.logger.Error("failed to persist result-not-durable marker; state is in-memory only",
+			"loop_id", loopID, "error", err, "cause", cause)
+		return
+	}
+	c.logger.Warn("loop result not durable; typed marker persisted on loop entity",
+		"loop_id", loopID, "reason", reason)
+}
+
 // persistCompletionState persists the enriched completion state to KV.
 // Key pattern: COMPLETE_{loopID} for rules engine to watch.
 // The rules engine can then trigger follow-up actions based on completion data.
-func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) {
-	if c.loopsBucket == nil || completion == nil {
-		return
+//
+// Returns the write error (gh#857 D4 — the void log-and-drop shape was the
+// defect class); any final failure marks the loop result-not-durable before
+// the error propagates, so no loop reports plain completion while its result
+// is unreadable.
+func (c *Component) persistCompletionState(ctx context.Context, loopID string, completion *agentic.LoopCompletedEvent) error {
+	if c.loopsStore == nil || completion == nil {
+		return nil
 	}
 
 	data, err := json.Marshal(completion)
 	if err != nil {
+		wrapped := errs.WrapInvalid(err, "agentic-loop", "persistCompletionState", "marshal completion state")
 		c.logger.Error("Failed to marshal completion state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, wrapped)
+		return wrapped
 	}
 
 	// Key pattern: COMPLETE_{loopID} for rules engine to watch
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
+	if err := c.writeLoopKV(ctx, key, data); err != nil {
 		c.logger.Error("Failed to persist completion state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, err)
+		return err
 	}
 
 	c.logger.Debug("Persisted completion state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("role", completion.Role))
+	return nil
 }
 
 // persistFailureState persists the failure state to KV.
 // Key pattern: COMPLETE_{loopID} — same as success, so watchers don't need
 // to distinguish between success/failure key patterns. The outcome field
 // in the serialized event tells them what happened.
-func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) {
-	if c.loopsBucket == nil || failure == nil {
-		return
+//
+// Returns the write error; final failure marks the loop result-not-durable
+// (see persistCompletionState).
+func (c *Component) persistFailureState(ctx context.Context, loopID string, failure *agentic.LoopFailedEvent) error {
+	if c.loopsStore == nil || failure == nil {
+		return nil
 	}
 
 	data, err := json.Marshal(failure)
 	if err != nil {
+		wrapped := errs.WrapInvalid(err, "agentic-loop", "persistFailureState", "marshal failure state")
 		c.logger.Error("Failed to marshal failure state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, wrapped)
+		return wrapped
 	}
 
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
+	if err := c.writeLoopKV(ctx, key, data); err != nil {
 		c.logger.Error("Failed to persist failure state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, err)
+		return err
 	}
 
 	c.logger.Debug("Persisted failure state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("reason", failure.Reason))
+	return nil
 }
 
 // persistCancellationState persists the cancellation state to KV.
 // Uses same COMPLETE_{loopID} key pattern so watchers handle all terminal states uniformly.
-func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) {
-	if c.loopsBucket == nil || cancelled == nil {
-		return
+//
+// Returns the write error; final failure marks the loop result-not-durable
+// (see persistCompletionState).
+func (c *Component) persistCancellationState(ctx context.Context, loopID string, cancelled *agentic.LoopCancelledEvent) error {
+	if c.loopsStore == nil || cancelled == nil {
+		return nil
 	}
 
 	data, err := json.Marshal(cancelled)
 	if err != nil {
+		wrapped := errs.WrapInvalid(err, "agentic-loop", "persistCancellationState", "marshal cancellation state")
 		c.logger.Error("Failed to marshal cancellation state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, wrapped)
+		return wrapped
 	}
 
 	key := fmt.Sprintf("COMPLETE_%s", loopID)
-	if _, err := c.loopsBucket.Put(ctx, key, data); err != nil {
+	if err := c.writeLoopKV(ctx, key, data); err != nil {
 		c.logger.Error("Failed to persist cancellation state", "error", err, "loop_id", loopID)
-		return
+		c.markResultNotDurable(ctx, loopID, err)
+		return err
 	}
 
 	c.logger.Debug("Persisted cancellation state",
 		slog.String("loop_id", loopID),
 		slog.String("key", key),
 		slog.String("cancelled_by", cancelled.CancelledBy))
+	return nil
 }
 
-// persistLoopState persists the loop state to KV
-func (c *Component) persistLoopState(ctx context.Context, loopID string) {
-	if c.loopsBucket == nil {
-		return
+// persistLoopState persists the loop state to KV.
+//
+// Returns the write error (gh#857 D4). Only a TERMINAL entity carries a
+// result whose loss needs the typed result-not-durable marker; a mid-loop
+// state-write failure is loud via the returned error but must not claim a
+// result was lost that never existed.
+func (c *Component) persistLoopState(ctx context.Context, loopID string) error {
+	if c.loopsStore == nil {
+		return nil
 	}
 
 	entity, err := c.handler.GetLoop(loopID)
 	if err != nil {
 		c.logger.Error("Failed to get loop for persistence", "error", err, "loop_id", loopID)
-		return
+		return err
 	}
 
 	data, err := json.Marshal(entity)
 	if err != nil {
 		c.logger.Error("Failed to marshal loop entity", "error", err, "loop_id", loopID)
+		return errs.WrapInvalid(err, "agentic-loop", "persistLoopState", "marshal loop entity")
+	}
+
+	if err := c.writeLoopKV(ctx, loopID, data); err != nil {
+		c.logger.Error("Failed to persist loop state", "error", err, "loop_id", loopID)
+		if entity.State.IsTerminal() || entity.Outcome != "" {
+			c.markResultNotDurable(ctx, loopID, err)
+		}
+		return err
+	}
+	return nil
+}
+
+// resultPreviewBytes is the inline preview retained when a result offloads
+// (or a terminal write fails permanently). 2KB fits any KV/wire budget and
+// gives operators and small-window parents enough to identify the content;
+// the full body pages through read_loop_result.
+const resultPreviewBytes = 2048
+
+// resultOffloadThreshold derives the offload bound from the live server
+// payload limit: half the wire limit (D4 — a fraction of MaxPayload(), not
+// a knob). Half leaves headroom for the JSON envelope around Result (event
+// fields, BaseMessage wrapper) so the guard stays a backstop, not the
+// common case. Zero (no wire) disables offload.
+func (c *Component) resultOffloadThreshold() int {
+	if c.payloadLimit == nil {
+		return 0
+	}
+	return c.payloadLimit() / 2
+}
+
+// offloadCompletionResult moves an oversized Result into the AGENT_CONTENT
+// ObjectStore and rewrites the completion event to the ref-bearing shape
+// {storage_ref, preview, size} (gh#857 D4). Mutates the event in place — the
+// same pointer is persisted to COMPLETE_ and stamped to the graph, so every
+// KV-side consumer sees one shape — and mirrors the slimming onto the loop
+// entity so the entity KV value (key <loopID>) fits the wire too.
+//
+// Best-effort by design: when the content store is unavailable or the store
+// fails, the inline result stays and the seam guard downstream rules on it
+// (refusal → result-not-durable marker) — the honest fallback, never a
+// silent drop.
+func (c *Component) offloadCompletionResult(ctx context.Context, completion *agentic.LoopCompletedEvent) {
+	threshold := c.resultOffloadThreshold()
+	if completion == nil || threshold <= 0 || len(completion.Result) <= threshold {
+		return
+	}
+	size := len(completion.Result)
+	if c.resultOffloadStore == nil {
+		c.logger.Warn("completion result exceeds offload threshold but content store is unavailable; inline write faces the seam guard",
+			"loop_id", completion.LoopID, "result_bytes", size, "threshold", threshold)
 		return
 	}
 
-	if _, err := c.loopsBucket.Put(ctx, loopID, data); err != nil {
-		c.logger.Error("Failed to persist loop state", "error", err, "loop_id", loopID)
+	var org, platform string
+	if c.graphWriter != nil {
+		org, platform = c.graphWriter.platform.Org, c.graphWriter.platform.Platform
 	}
+	entity, err := agentic.NewLoopResultEntity(org, platform, completion.LoopID, completion.Result)
+	if err != nil {
+		c.logger.Warn("cannot offload completion result: invalid entity identity; inline write faces the seam guard",
+			"loop_id", completion.LoopID, "error", err)
+		return
+	}
+	ref, err := c.resultOffloadStore.StoreContent(ctx, entity)
+	if err != nil {
+		c.logger.Warn("failed to offload completion result to content store; inline write faces the seam guard",
+			"loop_id", completion.LoopID, "result_bytes", size, "error", err)
+		return
+	}
+
+	completion.ResultPreview = truncateUTF8(completion.Result, resultPreviewBytes)
+	completion.ResultSize = size
+	completion.ResultRef = ref
+	completion.Result = ""
+
+	if !c.handler.loopManager.ApplyResultOffload(completion.LoopID, completion.ResultPreview, ref, size) {
+		c.logger.Debug("loop entity not found for result-offload mirror", "loop_id", completion.LoopID)
+	}
+
+	c.logger.Info("offloaded oversized completion result to content store",
+		"loop_id", completion.LoopID,
+		"result_bytes", size,
+		"threshold", threshold,
+		"storage_key", ref.Key)
+}
+
+// rebuildCompletionMessage re-marshals the queued agent.complete publish
+// after an offload so the STREAM lane carries the same ref-bearing shape as
+// the KV value. Without this, the pre-offload marshal (handlers.go
+// handleCompleteResponse) would put the full inline result back on the wire,
+// and a result above the server limit would fail at the publish guard after
+// the KV lane had already bounded itself — a coherence gap at the seam this
+// change creates.
+func (c *Component) rebuildCompletionMessage(result *HandlerResult) {
+	if result.CompletionState == nil || result.CompletionState.ResultRef == nil {
+		return
+	}
+	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", result.LoopID)
+	for i, msg := range result.PublishedMessages {
+		if msg.Subject != subject {
+			continue
+		}
+		completionMsg := message.NewBaseMessage(result.CompletionState.Schema(), result.CompletionState, "agentic-loop")
+		data, err := json.Marshal(completionMsg)
+		if err != nil {
+			c.logger.Error("failed to re-marshal offloaded completion message; stream lane keeps the inline shape",
+				"loop_id", result.LoopID, "error", err)
+			return
+		}
+		result.PublishedMessages[i].Data = data
+		return
+	}
+}
+
+// truncateUTF8 cuts s to at most maxBytes without splitting a UTF-8 rune.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	cut := maxBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // writeTrajectoryToGraph reads the trajectory from the in-memory TrajectoryManager,
@@ -1951,7 +2267,9 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	}
 
 	// Persist loop state to KV
-	c.persistLoopState(ctx, loopID)
+	if err := c.persistLoopState(ctx, loopID); err != nil {
+		c.logger.Error("cancelled loop state not persisted", "loop_id", loopID, "error", err)
+	}
 
 	// Record metrics
 	if c.metrics != nil {
@@ -1997,7 +2315,9 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 	}
 
 	// Persist cancellation to KV so watchers detect it
-	c.persistCancellationState(ctx, loopID, &completion)
+	if err := c.persistCancellationState(ctx, loopID, &completion); err != nil {
+		c.logger.Error("cancellation state not durably stored", "loop_id", loopID, "error", err)
+	}
 
 	c.finalizeTrajectory(ctx, loopID, agentic.LoopStateCancelled)
 	c.writeTrajectoryToGraph(ctx, loopID)
@@ -2040,7 +2360,9 @@ func (c *Component) handlePauseSignal(ctx context.Context, signal agentic.UserSi
 	}
 
 	// Persist loop state to KV
-	c.persistLoopState(ctx, loopID)
+	if err := c.persistLoopState(ctx, loopID); err != nil {
+		c.logger.Error("paused loop state not persisted", "loop_id", loopID, "error", err)
+	}
 
 	c.logger.Info("Pause requested for loop",
 		slog.String("loop_id", loopID),
@@ -2081,7 +2403,9 @@ func (c *Component) handleResumeSignal(ctx context.Context, signal agentic.UserS
 	}
 
 	// Persist loop state to KV
-	c.persistLoopState(ctx, loopID)
+	if err := c.persistLoopState(ctx, loopID); err != nil {
+		c.logger.Error("resumed loop state not persisted", "loop_id", loopID, "error", err)
+	}
 
 	c.logger.Info("Loop resumed",
 		slog.String("loop_id", loopID),

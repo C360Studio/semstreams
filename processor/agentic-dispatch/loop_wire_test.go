@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 )
 
 // TestLoopFromEntity_RoundTrip verifies that a LoopEntity survives a
@@ -354,5 +355,70 @@ func TestLoopFromInfo_Projection(t *testing.T) {
 	}
 	if got.Prompt != "" {
 		t.Errorf("expected empty Prompt from LoopInfo, got %q", got.Prompt)
+	}
+}
+
+// TestLoopFromCompletion_OffloadedResult drives the PRODUCTION event shape
+// (payload-size-chokepoints D4): a LoopCompletedEvent whose result was
+// offloaded carries {storage_ref, preview, size} and an empty inline result.
+// The Loop projection must surface the preview WITH the truncation marker —
+// never a bare preview a consumer could mistake for the whole result — and
+// must leave inline completions untouched.
+func TestLoopFromCompletion_OffloadedResult(t *testing.T) {
+	ev := &agentic.LoopCompletedEvent{
+		LoopID:  "loop-off-1",
+		TaskID:  "task-1",
+		Role:    "researcher",
+		Outcome: agentic.OutcomeSuccess,
+		Result:  "", // offloaded
+		ResultRef: &message.StorageReference{
+			StorageInstance: "objectstore",
+			Key:             "content_c360.ops.agent.agentic-loop.result.loop-off-1",
+		},
+		ResultPreview: "first bytes of the result",
+		ResultSize:    5 << 20,
+		CompletedAt:   time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC),
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	loop, ok := loopFromCompletion(payload)
+	if !ok {
+		t.Fatal("loopFromCompletion must decode a ref-bearing completion")
+	}
+	if loop.Result != "first bytes of the result" {
+		t.Fatalf("offloaded completion must surface the preview, got %q", loop.Result)
+	}
+	if !loop.ResultTruncated {
+		t.Fatal("preview must carry the truncation marker — a bare preview is a lie about completeness")
+	}
+	if loop.ResultSize != 5<<20 {
+		t.Fatalf("original size must surface, got %d", loop.ResultSize)
+	}
+}
+
+// TestLoopFromCompletion_InlineResult_NoTruncationMarker pins the additive
+// contract: inline completions (nil storage_ref) are byte-for-byte the old
+// behavior — no marker, no size.
+func TestLoopFromCompletion_InlineResult_NoTruncationMarker(t *testing.T) {
+	ev := &agentic.LoopCompletedEvent{
+		LoopID:  "loop-inline-1",
+		TaskID:  "task-1",
+		Outcome: agentic.OutcomeSuccess,
+		Result:  "the whole result",
+	}
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	loop, ok := loopFromCompletion(payload)
+	if !ok {
+		t.Fatal("decode failed")
+	}
+	if loop.Result != "the whole result" || loop.ResultTruncated || loop.ResultSize != 0 {
+		t.Fatalf("inline completion must be untouched: result=%q truncated=%v size=%d",
+			loop.Result, loop.ResultTruncated, loop.ResultSize)
 	}
 }

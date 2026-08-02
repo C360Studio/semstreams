@@ -145,3 +145,32 @@ entry for the error-surface honesty gains; sister notice on gh#857.
   review with a fixture; does not change specs or tasks.
 - Whether `flow_monitor`'s scan should surface preview-vs-ref distinction to operators —
   cosmetic, deferrable.
+
+## Knob taxonomy (task 4.4 sweep, 2026-08-02)
+
+Sweep method: grep the tree for size-adjacent json-tagged config/schema struct fields
+(`MaxBytes|MaxSize|MaxValueSize|max_bytes|max_size|Truncat|BufferSize|MaxRequestSize|
+MaxBodyBytes|ChunkSize`), classify each by WHICH limit it defends (D6). Result: exactly
+ONE knob was wire defense (`KVOptions.MaxValueSize`, already dissolved into the seam by
+group 1); everything else is ingestion or resource policy and stays. No knob met the
+"unambiguously wire-defense AND unused" retirement bar beyond it.
+
+| Knob | Location | Bounds | Class | Disposition |
+|---|---|---|---|---|
+| `tool_result_max_bytes` | `processor/agentic-loop/config.go:61` | Content one tool may inject into loop context from external sources | **Ingestion** | STAYS; re-documented per D6 (task 4.3); 0=unlimited safe because the seam guard backstops |
+| `KVOptions.MaxValueSize` | `natsclient/kv.go:28` | KV value size per store | **Was wire defense** (hardcoded 1MB) | DISSOLVED (group 1): default 0 = derive from server `max_payload`; >0 is an explicit override (tests/special cases), not a restatement of the wire limit |
+| `BucketConfig.MaxBytes` | `config/config.go:368` | Total KV bucket storage | Resource/retention | STAYS |
+| `StreamConfig.MaxBytes` | `config/streams.go:32` | Total stream storage (paired with `Discard`) | Resource/retention | STAYS |
+| `DispatchStreamMaxBytes` | `processor/gated-dag/config.go:114` | Dispatch stream storage ceiling (DiscardNew default) | Resource/retention | STAYS |
+| `MaxRequestSize` | `gateway/types.go:102` | Inbound HTTP request size at the gateway edge | **Ingestion** | STAYS |
+| `MaxBodyBytes` | `gateway/lifecycle-gateway/component.go:58` | Inbound HTTP POST body at the operator API edge | **Ingestion** | STAYS |
+| `fusion Budget.MaxBytes/MaxNodes` | `pkg/fusion/contract.go:37-39` | Caller-declared response budget (honest `Truncated` marker) | Resource (result budget) | STAYS |
+| `cache MaxSize` | `pkg/cache/config.go:38` | Entry COUNT (not bytes) | Resource | STAYS (not size-class at all) |
+| `Read/WriteBufferSize`, `BufferSize`, `LogStreamBufferSize` | `input/websocket/config.go:50-51`, `output/file/file.go:31`, `service/flow_service.go:38` | I/O buffer tuning | Resource | STAYS |
+| `MaxMemory` | `config/config.go:209` | Embedded-server memory ceiling | Resource | STAYS |
+| `maxPrefixResponseBytes` | `processor/graph-ingest/query.go` | Declared, never read | Dead wire-defense comfort | Deleted by task 2.2 (group 2's scope) |
+
+Deliberately NOT knobs (owner constraint: no new size knobs): the offload threshold
+(`resultOffloadThreshold` = ½ of the live `ServerPayloadLimit()`,
+`processor/agentic-loop/component.go`) and the inline preview bound
+(`resultPreviewBytes` = 2048, same file) are derived/const, not configuration.

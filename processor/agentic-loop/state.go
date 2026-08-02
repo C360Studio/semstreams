@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/google/uuid"
@@ -1029,6 +1030,52 @@ func (m *LoopManager) UpdateCompletion(loopID, outcome, result, errMsg string) e
 	entity.Error = errMsg
 	entity.CompletedAt = time.Now()
 	return nil
+}
+
+// ApplyResultOffload mirrors a completion-result offload (gh#857 D4) onto
+// the loop entity: the inline Result becomes the bounded preview, and
+// ResultRef/ResultSize record where the full body lives and how big it is —
+// so the entity KV value (key <loopID>) stays under the wire limit while
+// SSE/KV-watch consumers still see the preview and the reference. Returns
+// false when the loop is unknown (nothing to mirror).
+func (m *LoopManager) ApplyResultOffload(loopID, preview string, ref *message.StorageReference, size int) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return false
+	}
+	entity.Result = preview
+	entity.ResultRef = ref
+	entity.ResultSize = size
+	return true
+}
+
+// MarkResultNotDurable records the typed result-not-durable state (gh#857
+// D4) on the loop after a terminal KV write finally failed: the classified
+// cause lands in ResultNotDurableReason, and the inline Result is slimmed to
+// previewBytes (recording the original size) so the MARKER value itself can
+// never be refused for the same reason the result write was. Returns a COPY
+// of the updated entity for the caller to persist, and ok=false when the
+// loop is unknown.
+func (m *LoopManager) MarkResultNotDurable(loopID, reason string, previewBytes int) (agentic.LoopEntity, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entity, exists := m.loops[loopID]
+	if !exists {
+		return agentic.LoopEntity{}, false
+	}
+	entity.ResultNotDurable = true
+	entity.ResultNotDurableReason = reason
+	if previewBytes > 0 && len(entity.Result) > previewBytes {
+		if entity.ResultSize == 0 {
+			entity.ResultSize = len(entity.Result)
+		}
+		entity.Result = truncateUTF8(entity.Result, previewBytes)
+	}
+	return *entity, true
 }
 
 // isValidOutcome checks if the outcome is one of the valid constants.

@@ -25,25 +25,35 @@ contract.
 - **THEN** the loop's state names result-not-durable with the classified cause, and a
   parent or operator reading the loop can distinguish this from both success and absence
 
-### Requirement: The request lane MUST be bounded without changing what the model sees
+### Requirement: An over-limit request MUST fail the loop loudly, never silently retry
 
-Accumulated request content exceeding the offload threshold MUST ride the wire as content
-references and MUST be hydrated back to the identical full text before the provider call,
-so the wire is bounded while model behavior is unchanged. Until hydration bounds a given
-request, an over-limit request MUST fail the loop loudly with a typed reason naming the
-size and limit — never a silent retry loop.
+An `agent.request` publish refused at the wire limit MUST terminate the loop with a typed
+failure whose reason names the class and whose error names the request size and the
+limit — never a silent retry loop, never a wedged loop. This is the SHIPPED bound of this
+change (D5 interim loudness).
 
-#### Scenario: Deep loop crosses the wire limit
-
-- **WHEN** a loop's accumulated context exceeds the offload threshold mid-run
-- **THEN** subsequent requests carry references for bulky historical content, the provider
-  receives the identical hydrated text, and the loop proceeds
+> **Deferred in this change ([~] task 4.2):** request-lane hydration — bulky historical
+> message content riding the wire as content references, hydrated back to IDENTICAL full
+> text before the provider call — is the mechanism that LIFTS this ceiling without
+> changing what the model sees. It was deliberately not shipped in this slice (it adds a
+> content-store dependency and hydration seam to `agentic-model`, a full slice of its
+> own); the deferred requirement and scenario are recorded below and MUST return in a
+> follow-up change before the interim bound can be called the final request-lane
+> contract.
 
 #### Scenario: Over-limit without hydration is loud and terminal
 
 - **WHEN** a request exceeding the wire limit cannot be bounded
 - **THEN** the loop fails with a typed reason naming the request size and the limit, and no
   retry re-attempts the identical over-limit publish
+
+#### Scenario: Deep loop crosses the wire limit (DEFERRED — hydration, task 4.2 [~])
+
+- **WHEN** a loop's accumulated context exceeds the offload threshold mid-run
+- **THEN** subsequent requests carry references for bulky historical content, the provider
+  receives the identical hydrated text, and the loop proceeds
+- **NOTE**: not implemented in this change; until the hydration follow-up lands, this
+  situation resolves through the loud-terminal scenario above
 
 ### Requirement: The tool-result cap is an ingestion bound, not a wire defense
 

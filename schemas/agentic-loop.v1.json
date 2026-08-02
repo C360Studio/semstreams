@@ -154,7 +154,7 @@
     },
     "tool_result_max_bytes": {
       "type": "integer",
-      "description": "Maximum bytes for tool result content before truncation. 0 means no limit",
+      "description": "Ingestion bound: maximum bytes a single tool result may inject into loop context from external sources before truncation. Not a wire-size defense (the framework payload seam guard bounds the wire) — 0 means unlimited and is safe",
       "default": 32768,
       "category": "advanced"
     },

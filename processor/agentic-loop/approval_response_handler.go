@@ -182,5 +182,8 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 	}
 
 	c.publishResults(ctx, result)
-	c.persistLoopState(ctx, response.LoopID)
+	if err := c.persistLoopState(ctx, response.LoopID); err != nil {
+		c.logger.Error("approval-resolved loop state not persisted",
+			"loop_id", response.LoopID, "error", err)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -49,10 +50,15 @@ func TestKVStore_ErrorBoundaries(t *testing.T) {
 			return largeValue, nil
 		})
 
-		// Should fail with validation error
+		// Should fail with the CLASSIFIED refusal (payload-bounds spec): the
+		// sentinel + permanent class are the contract now, not prose — the
+		// pre-gh#857 bare string was invisible to errs and classified
+		// transient.
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "value size validation failed")
-		assert.Contains(t, err.Error(), "exceeds maximum")
+		assert.ErrorIs(t, err, ErrPayloadTooLarge)
+		assert.True(t, errs.IsInvalid(err), "oversize refusal must classify Invalid, got %v", errs.Classify(err))
+		assert.Contains(t, err.Error(), "200")
+		assert.Contains(t, err.Error(), "100")
 
 		// Value at the limit should work
 		limitValue := make([]byte, 100)

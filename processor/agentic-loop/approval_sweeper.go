@@ -92,7 +92,11 @@ func (c *Component) sweepExpiredApprovals(ctx context.Context) {
 			continue
 		}
 		c.publishResults(ctx, result)
-		c.persistLoopState(ctx, cand.LoopID)
+		if err := c.persistLoopState(ctx, cand.LoopID); err != nil {
+			c.logger.Error("timeout-rejected loop state not persisted",
+				slog.String("loop_id", cand.LoopID),
+				slog.String("error", err.Error()))
+		}
 		// Publish the ApprovalResponse onto agent.approval_response.<loopID> so
 		// wire observers (sister-repo dashboards, audit consumers) see timeout
 		// auto-rejects the same way they see human responses. The component's

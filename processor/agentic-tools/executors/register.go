@@ -59,6 +59,13 @@ type ToolDependencies struct {
 	// the name is frozen at RegisterBuiltins for the lifetime of the
 	// process.
 	LoopsBucket string
+	// ContentBucket is the NATS ObjectStore bucket holding offloaded loop
+	// content (payload-size-chokepoints D4): completion results above the
+	// offload threshold live here behind a storage_ref in the COMPLETE_
+	// value, and read_loop_result hydrates them from this bucket. Empty
+	// falls back to "AGENT_CONTENT" (the agentic-loop content_bucket
+	// default). Frozen at RegisterBuiltins like LoopsBucket.
+	ContentBucket string
 	// RestrictedDecideActions is the deployment-level decide-action
 	// restriction policy (gh#239): decide action names barred for EVERY
 	// coordinator task (front-door and rule-spawned), composing with and
@@ -150,6 +157,10 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	if loopsBucket == "" {
 		loopsBucket = "AGENT_LOOPS"
 	}
+	contentBucket := deps.ContentBucket
+	if contentBucket == "" {
+		contentBucket = "AGENT_CONTENT"
+	}
 
 	skip, err := resolveSkipSet(deps.SkipBuiltins)
 	if err != nil {
@@ -183,7 +194,9 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, emit_lesson, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
-		gate("read_loop_result", func() error { return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket) })
+		gate("read_loop_result", func() error {
+			return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket, contentBucket)
+		})
 		gate("decide", func() error {
 			return registerDecide(reg, deps.NATSClient, deps.Platform, deps.RestrictedDecideActions, logger)
 		})
