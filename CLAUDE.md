@@ -16,10 +16,16 @@ Events → Graphable Interface → Knowledge Graph → Queries
 
 ## Semantic Agent Routing
 
+- Design-time work — proposals, designs, spec deltas, ADR drafts, OpenSpec target state — uses
+  `semstreams-architect`. Its mandatory first deliverable is a file:line surface inventory of what already exists on
+  the touched surface; binding rulings and approval stay with the owner.
 - Nontrivial SemStreams backend implementation uses `semstreams-developer`.
 - Every nontrivial change is reviewed by `semstreams-reviewer` before integration.
-- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace either role.
-- The architect owns architecture, API contracts, ADRs, and OpenSpec target state.
+- Spawning these three project role agents is the DEFAULT execution path for nontrivial and spec-based work — no
+  user permission needed. (Only massively-parallel Workflow orchestration is opt-in; that restriction does not apply
+  to role agents. There is no "don't spawn agents unless asked" rule in this repo.)
+- Generic Go agents are only an isolated idiom, concurrency, or runtime second pass; they do not replace any of the
+  three roles.
 - The technical writer owns durable documentation and conservative OpenSpec task truth.
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
@@ -27,6 +33,25 @@ Events → Graphable Interface → Knowledge Graph → Queries
   new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS Direct). Read the
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
+
+## The adopter seam rule (house rule)
+
+SemStreams is a framework other people build on. Every surface we expose is a bill an adopter pays, and the adopter is
+never in the review. So before any design that adds, changes, or exposes an outward-facing surface, answer it for a
+specific person — a developer outside this repo, writing a component, who has never opened the file being changed:
+
+**What must they know? What happens if they do nothing? Where do they find out? And what SHOULD they have to know —
+ideally nothing?**
+
+The generative half is **prefer observation to prediction.** When a surface makes an adopter compute a value the
+framework owns *before* acting — a size limit, a subject, a bucket, a readiness state, a deadline — they will get it
+wrong, and wrong silently, because they are predicting a fact they do not hold. A surface that acts, observes the real
+outcome, and responds cannot be wrong about a value it never predicted. Where a design asks the caller to predict, the
+framework absorbing the failure IS the design, and the adopter-facing knob is what gets deleted.
+
+Full form — the **adopter seam inventory**, a mandatory design deliverable — lives in
+`.agents/contracts/semstreams-architect.md`, mirrored as an implementation-time question in the developer contract
+and a diff-level check in the reviewer contract.
 
 Flow-based component architecture:
 - **Input**: UDP, WebSocket, File — ingest external data

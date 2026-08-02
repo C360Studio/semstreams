@@ -57,6 +57,31 @@ or runtime mechanics; they do not replace this project-specific role.
    Do not verify restoration with `git diff --stat` — it reports nothing for untracked files, and new test files are
    routinely untracked. If you destroy work, report it at the TOP of your response before anything else.
 
+## Before adding anything new
+
+Most defects in this repository's record entered as ADDITIONS duplicating something nobody had inventoried — a
+second pub-ack detector beside the gateway's existing one, a resolver re-deriving a classification FlowGraph already
+performed, a bool spelling a fact an existing port type already carried. Before adding ANY new symbol, field,
+channel, resolver, classifier, port, subject, bucket, or config key — exported or not — answer three questions with
+evidence, and carry the evidence into the handoff:
+
+1. **Who owns this responsibility today?** Search the concept under every plausible spelling: exported and
+   unexported names, config keys, port types, payload kinds, subject grammars. If an owner exists, extend it or
+   escalate — never add a sibling. A second interpreter or second spelling of an existing fact is wrong at birth
+   even when it works.
+2. **Is the premise true?** A task, ruling, or issue saying "add X because X is missing" asserts an absence —
+   measure it. If the search finds X, stop and escalate with `file:line`; implementing as written re-commits the
+   defect the instruction meant to prevent.
+3. **Who consumes it at birth?** Name the present consumer of every new surface. "For observability" or "for
+   future use" with zero present consumers is a phantom — do not add it.
+4. **Am I asking a caller to predict something the framework could observe?** A new knob, threshold, limit, name, or
+   "remember to call X first" hands the caller a fact the framework already holds; they will get it wrong, and
+   silently. Prefer acting and handling the real outcome over making them compute it in advance. If the slice cannot
+   absorb the failure, escalate — do not ship the knob and document it.
+
+The architect's surface and adopter seam inventories answer these at design time. This check is the
+implementation-time re-run, scoped to the slice you touch — slices grow symbols the design never named.
+
 ## Semantic identity and graph contracts
 
 - Predicates are exactly three canonical parts. Validate at the authoritative boundary and do not let hashing or
@@ -77,31 +102,22 @@ or runtime mechanics; they do not replace this project-specific role.
 
 ## Exported-surface contracts
 
-Derived from the 2026-07-30 surface incidents (raw-handle accessor, two-counter return,
-zero-consumer "observability" split). These bind every NEW exported symbol; framework packages
-(`natsclient`, `graph`, `message`, `pkg/*`) additionally require Fable design review BEFORE
-implementation (baton model-roles rule).
+These bind every NEW exported symbol. New exported surface on the framework packages (`natsclient`, `graph`,
+`message`, `pkg/*`) additionally requires owner design review BEFORE implementation (model-roles rule).
 
-- Return the answer, not the components. If the doc comment must warn callers against using part
-  of the return — or against deriving the real quantity themselves — collapse the signature until
-  the warning is unnecessary. A signature's affordances are its contract; prose does not override
-  them.
-- Never return a capability where the caller needs a value. Handles, connections, maps, and
-  internal contexts stay private; expose the question's answer. A leaked handle offers its whole
-  wider surface to every future caller.
-- Three or more correlated non-error returns are a named struct. Values that travel together get
-  a type; positional tuples drift and misbind at call sites.
-- A new exported symbol needs a named caller at birth. Grep-for-the-consumer applies to API
-  surface exactly as to signals: "for observability" or "for future use" with zero present
-  consumers is a phantom — do not export it.
-- Widen deliberately, never speculatively. When a real second consumer needs more than the
-  current surface answers, that is the moment to extend — under the same review.
+- Return the answer, not the components and not a capability. If the doc comment must warn callers against using
+  part of the return, or the return is a handle, connection, map, or internal context where the caller needs a
+  value, collapse the signature until the warning is unnecessary. A signature's affordances are its contract;
+  prose does not override them, and a leaked handle offers its whole wider surface to every future caller.
+- Three or more correlated non-error returns are a named struct. Values that travel together get a type;
+  positional tuples drift and misbind at call sites.
+- Widen deliberately, never speculatively. When a real second consumer needs more than the current surface
+  answers, that is the moment to extend — under the same review.
 
 ## Guarantee, signal, and revision contracts
 
-Ported 2026-07-31 from the measured Codex record: 22 blocking findings across 8 PRs
-(#716–#758), 19 of 22 in the four classes below, rate flat because these rules previously
-lived only in owner-session memory. Baseline 2.75 blocking/PR; these exist to move it.
+Distilled from the measured Codex blocking-finding record: nineteen of twenty-two blocking findings across eight
+PRs fell into the four classes below.
 
 - **Enumerate the hole class before claiming a guard.** A guard, sweep, gate, or coverage
   claim protects a CLASS, never the motivating instance. Before claiming it, grep the guarded
@@ -122,9 +138,8 @@ lived only in owner-session memory. Baseline 2.75 blocking/PR; these exist to mo
   persisted JSON) or restart re-fires the class.
 - **A filed issue does not discharge an in-PR guarantee.** If this PR asserts a guarantee, it
   holds at execution time in this PR; filing the gap is recording, not satisfying.
-- **Remedies get the original's scrutiny.** Fix commits for review findings are new code with
-  less design time than what they replace — on #758 two of three Codex blockers were
-  introduced by the fixes for the prior round. Re-run the adversarial pass on your own fixes.
+- **Remedies get the original's scrutiny.** Fix commits for review findings are new code with less design time
+  than what they replace — remedies are where new blockers enter. Re-run the adversarial pass on your own fixes.
 
 ## Storage and retention contracts
 
