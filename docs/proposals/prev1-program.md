@@ -9,6 +9,84 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-02 (SESSION 25 CLOSED — gh#810 IS PULLED, NOT LANDED. The next increment is
+> GATE INTEGRITY, then ports. Read this whole block before touching gh#810.)**
+>
+> **MEASURED, and WHERE, because these were nearly recorded against the wrong base:**
+> · **On MAIN at `2dce8258`** (this baton's base): build ok · `go test ./...` **135 ok / 0 FAIL** ·
+>   `openspec validate --all --strict` **35/0** · in-flight changes **2**.
+> · **On the PARKED gh#810 BRANCH, not on main** — do NOT read these as main's numbers:
+>   `-race ./...` 137 ok/0 FAIL · `-race -tags=integration -p 2 -count=1 ./...` 138 ok/0 FAIL ·
+>   lint 0 · `go vet` plain + `-tags=integration` + `-tags=live_llm` clean · schema zero drift ·
+>   `e2e:agentic` GREEN · `e2e:crud-tools` red on gh#860 only.
+> Merged today: **#856** (`af19111b` audit remediation) and **#863** (`2dce8258` architect role +
+> contract reshape; it salvaged the agent-setup commits off the gh#810 branch precisely because
+> that branch was being reset).
+>
+> **gh#810 IS PARKED UNMERGED and its branch was NEVER PUSHED.** Branch
+> `feat/gh810-discovery-under-stream-shapes`, rebased onto `2dce8258`, 21 commits, clean. Owner
+> pulled it: *"this entire chain around 810 smells so bad… it was spec'd wrong twice and now I
+> think we are just trying to commit it to get it out of the way so we can dig it all out later.
+> IMO we need to step back and fix our port handling first."*
+>
+> **The argument that settled it, recorded because it generalises:** the session argued AGAINST
+> writing an ADR for the change because gh#862 supersedes the port-declaration model inside the
+> same pre-v1 window — then recommended LANDING the same change, whose payload is a new framework
+> field (`Registration.DefaultPorts`), a cross-repo adoption instruction, and an all-or-nothing
+> enforcement behaviour built on that model. **The churn test was applied to the cheapest artifact
+> and not the most expensive one. Too unstable to document ⇒ too unstable to export.**
+>
+> **And the acute bug is SEPARABLE from the guard, measured:** nine shipped configs on main carry
+> `TOOL: ["tool.>"]` and have dead tool discovery today (`agentic.json`,
+> `examples/research-graph-pipeline.json`, `research-graph-e2e.json`, six `flows/*.json`). Fixing
+> that is **nine config lines** and needs none of the framework layer.
+>
+> **NEXT, in order:**
+> **1. GATE INTEGRITY — nothing downstream is verifiable until this is done.** Four tiers are
+> known-broken: **gh#860** (crud-tools `verify-fire-every-n-events`, PRE-EXISTING — bisected to
+> identical failure at `b4194059` with `tool.>` intact, which also FALSIFIES PR #847's claim that
+> narrowing the TOOL stream causes it), **gh#844** (ops) and **gh#843** (lifecycle) — both were
+> *failing while reporting green* until gh#811 — and **gh#830** (semantic, RED, not in CI). Plus
+> gh#769 (nightly), gh#848/gh#767 (uncovered shipped lanes), gh#821.
+> **⚠ OWNER CAVEAT, do not file another one of these without reading it: we keep asking for e2e
+> items in CI that will not actually run until the `semantic-tier-split` change lands.** That tier
+> tests Tier-2 retrieval AND GraphRAG answer synthesis under one name and saturates its host —
+> which is why gh#830 took five runs and two disproved hypotheses to diagnose. **Sequence the
+> split before promising CI coverage.** Getting e2e green must be a natural step in every
+> increment, and green must mean green — three tiers were reporting success while failing.
+> **2. gh#842 + the nine config narrowings.** gh#842 (move the default discovery subject off
+> `tool.list`) was deferred **because gh#810's guard would make the collision loud**; with the
+> guard parked that premise collapses, so **gh#842 is back IN SCOPE**. It is the durable fix —
+> removes the collision at the source, where the guard only detects it — and needs no port model.
+> Breaking, fine pre-v1. Not yet posted on the issue.
+> **3. SALVAGE PR from the parked branch — port-model-INDEPENDENT pieces only:** the pub-ack
+> rejection at `natsclient.ClassifyReply` (the most valuable piece — the only part protecting a
+> requester that declared NOTHING, and it deletes the gateway's stale duplicate detector), the
+> nine config narrowings, gh#822's subject export, and the two port-type defects already fixed
+> (`agentic-loop`, `agentic-tools`). **Do NOT salvage** `Registration.DefaultPorts`,
+> `ResolveRequestReplySubjects`, the boot wire, the four provisioning seams, or the config scan.
+> **4. PORT HANDLING — gh#859** (port-type interpretation re-derived in ~57 string sites + ~49
+> type-switch arms across 33 files, three copies provably wrong; owner ruled `portsToCapabilities`
+> and `extractPortDetail` are features to SUPPORT not dead code to delete, and `PortKind` must
+> carry granularity the current `Portable.Type()` collapse discards) **then gh#862** (seal
+> `Discoverable` so components declare ports and the framework renders them — owner ruled this
+> **PRE-V1**, BREAKING, because deferring forces a post-v1 break).
+> **5. RE-JUDGE the guard** on the fixed foundation; after gh#842 its remaining job is much rarer.
+>
+> **FILED THIS SESSION:** gh#859 (port-type divergence, later corrected — its "no shared
+> primitive" premise was FALSE; `BuildPortFromDefinition` has 15 consumers and `Portable.Type()`
+> already bridges Go-type→string, so the fix is adoption + one alias-normalizer, not invention) ·
+> **gh#860** (the pre-existing crud-tools failure) · **gh#862** (seal `Discoverable`).
+>
+> **TWO CORRECTIONS THIS SESSION MADE TO ITSELF, both worth the space:** a HOLD was written on the
+> false premise that `engine/validator.go:202` "builds a FlowGraph from (registry, config) alone
+> outside any boot sequence" — it builds from a `flowstore.Flow` with a LIVE NATS client at
+> flow-deploy time, and the false premise had already propagated to gh#859 and memory. And an M2
+> obligation was recorded as required-before-merge and then not done; an external review caught it
+> still outstanding. **Recording an obligation is not discharging it.**
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-08-01 (SESSION 24 CLOSED — gh#810 IS FURTHER FROM DONE THAN IT LOOKED. PR #847
 > is DRAFT pending a fresh-session rework against recorded constraints.)**
 >
