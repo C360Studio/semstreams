@@ -164,15 +164,34 @@ func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWi
 // create-or-fail: ErrAlreadyExists when graph-ingest reports
 // ErrorCodeEntityExists.
 //
-// Uses RequestWithRetry with lifecycleEmitRetryConfig to survive the
-// graph-ingest cold-start race (gh#170). The retry path can in
-// principle expose a false-positive ErrAlreadyExists if a first
-// attempt succeeded but its response was lost in transit; on cold-
-// start (the actual race the issue captures) the error is
-// "no responders" before graph-ingest receives anything, so the retry
-// is the correct atomic create. Callers that hit ErrAlreadyExists on
-// what they expected to be a fresh create should re-read the entity
-// rather than treating the error as fatal.
+// CONTRACT (gh#861): create is NOT idempotent, so it retries exactly one
+// failure class — "no responders", where the server itself reports that
+// nothing was subscribed and therefore nothing was delivered. That is the
+// provably-pre-commit class, and it is the class gh#170 actually captured
+// (graph-ingest's SubscribeForRequests lagging a fast-boot lifecycle
+// participant); the ~13s cold-start budget is preserved for it.
+//
+// EVERY OTHER transport failure is an UNKNOWN outcome and is returned as
+// an error without re-sending. In particular a per-attempt timeout does
+// not mean the create failed: the lifecycle per-attempt deadline is 5s
+// while graph-ingest's handler deadline is 30s (natsclient.
+// DefaultRequestHandlerTimeout), so the client can give up six times over while
+// the handler is still executing the create. Re-sending there races a
+// non-idempotent create against its own in-flight self, and the second
+// delivery answers entity_already_exists for a birth this same request
+// made — a request manufacturing a conflict with itself.
+//
+// Callers resolve an unknown outcome by reading authoritative state; the
+// emitter must not guess on their behalf, and Manager.Create must not
+// reconstruct ownership from stored state (openspec/specs/lifecycle:
+// the answer is derived from the causal mutation response, never from a
+// separate read that can observe another writer).
+//
+// update/delete deliberately keep the wider retry: update's CAS
+// (ExpectedRevision) makes a duplicate delivery surface as
+// revision_mismatch into Transition's re-read loop, and delete is
+// idempotent at the handler. Only create can turn a re-send into a
+// wrong answer.
 //
 // No outer context.WithTimeout: see update() rationale.
 func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
@@ -181,7 +200,7 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	respBody, err := g.client.RequestWithRetryClassified(ctx, graphSubjectCreateWithTriples, body, g.timeout, lifecycleEmitRetryConfig)
+	respBody, err := g.requestCreateRetryingNoResponders(ctx, body)
 	if err != nil {
 		// ADR-060: entity_already_exists arrives as a classified error
 		// (Code on the wire header), not an in-body Success=false.
@@ -200,6 +219,55 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 		return nil, fmt.Errorf("%w: validate create response: %w", ErrEmitFailed, err)
 	}
 	return &resp, nil
+}
+
+// requestCreateRetryingNoResponders runs the create request under
+// lifecycleEmitRetryConfig's schedule but with a retry PREDICATE:
+// only natsclient.IsNoResponders re-sends.
+//
+// It cannot be RequestWithRetryClassified — that loop's continue
+// condition is "any non-nil error" (natsclient.requestMsgWithRetry),
+// which is correct for the idempotent lanes and wrong for a create.
+// RequestClassified is the single-attempt classified request, so each
+// attempt still returns handler errors as *errs.ClassifiedError (the
+// ADR-060 contract create() branches on) and still drives the client's
+// circuit breaker.
+//
+// The backoff schedule intentionally reproduces requestMsgWithRetry's:
+// InitialBackoff * BackoffMultiplier^attempt capped at MaxBackoff, ~13s
+// cumulative, so the gh#170 cold-start budget is unchanged for the class
+// that still retries.
+func (g *graphEmitterNATS) requestCreateRetryingNoResponders(ctx context.Context, body []byte) ([]byte, error) {
+	cfg := lifecycleEmitRetryConfig
+	var lastErr error
+	for attempt := 0; attempt <= cfg.MaxRetries; attempt++ {
+		respBody, err := g.client.RequestClassified(ctx, graphSubjectCreateWithTriples, body, g.timeout)
+		if err == nil {
+			return respBody, nil
+		}
+		// Anything that is not a server-reported "no responders" leaves the
+		// outcome unknown — surface it, never re-send.
+		if !natsclient.IsNoResponders(err) {
+			return nil, err
+		}
+		lastErr = err
+		if attempt == cfg.MaxRetries {
+			break
+		}
+		backoff := cfg.InitialBackoff
+		for i := 0; i < attempt; i++ {
+			backoff = time.Duration(float64(backoff) * cfg.BackoffMultiplier)
+		}
+		if backoff > cfg.MaxBackoff {
+			backoff = cfg.MaxBackoff
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(lastErr, ctx.Err())
+		case <-time.After(backoff):
+		}
+	}
+	return nil, lastErr
 }
 
 func validateMutationResponseEntity(entity *graph.EntityState) error {

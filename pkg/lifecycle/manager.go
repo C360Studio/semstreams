@@ -695,17 +695,30 @@ func (m *Manager) createWithRegistration(ctx context.Context, reg *registration,
 		resp, err := m.emitter.create(ctx, createReq)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyExists) {
-				// The emitter retries, so this may be OUR OWN committed write
-				// whose reply was lost — reporting a conflict for a birth this
-				// request just made is a wrong answer on a public surface.
-				// Distinguish by re-reading and comparing the audit stamp we
-				// were about to write: `now` is generated in this call, so an
-				// entity carrying it was written by this request and nothing
-				// else.
-				if own, ownErr := m.committedByThisRequest(ctx, reg, entityID, now); ownErr == nil && own {
-					return createOutcome{Degraded: true,
-						DegradedReason: "committed by this request; the mutation reply was lost and the retry observed the entity"}, nil
-				}
+				// Reported straight through: the entity was born by SOMEONE
+				// ELSE. The emitter retries create only on "no responders" —
+				// the provably-pre-commit class, where nothing was delivered —
+				// so this request cannot be observing its own committed write
+				// through a retry (graph_emit.go create()).
+				//
+				// This deliberately does NOT re-read to ask "did I write that?"
+				// (gh#861). A separate read answers a different question than
+				// "what did this request commit": it observes whatever state
+				// exists NOW, including another writer's. The re-read that used
+				// to live here proved ownership by matching the RFC3339Nano
+				// audit stamp this call was about to write — but wall-clock
+				// granularity is coarser than that format's precision, so two
+				// concurrent Creates build byte-identical deltas, and the LOSER
+				// matched the WINNER's stamp and returned success for a birth it
+				// did not make. openspec/specs/lifecycle/spec.md requires the
+				// answer be derived from the causal mutation response for
+				// exactly this reason.
+				//
+				// A transport failure whose outcome is genuinely unknown (a
+				// per-attempt timeout against a live handler) now surfaces as a
+				// transport error rather than as this sentinel, so an honest
+				// "could not determine the outcome" is never dressed up as a
+				// conflict OR as a success.
 				return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q",
 					ErrAlreadyExists, reg.workflow.Name, entityID)
 			}
@@ -753,35 +766,6 @@ func (m *Manager) createWithRegistration(ctx context.Context, reg *registration,
 		return createOutcome{}, err
 	}
 	return outcomeFromUpdate(updateResp)
-}
-
-// committedByThisRequest reports whether the entity now carries the audit stamp
-// this create call was about to write. `now` is generated inside the call, so a
-// matching transition-at value identifies THIS request's write and no other.
-//
-// Conservative by construction: a workflow that declares no audit-at predicate,
-// an unreadable entity, or any mismatch all answer false, which falls back to
-// reporting the duplicate. It converts a known-wrong 409 into a correct success
-// where it can prove ownership, and changes nothing where it cannot.
-func (m *Manager) committedByThisRequest(ctx context.Context, reg *registration, entityID string, now time.Time) (bool, error) {
-	atPredicate := reg.workflow.AuditPredicates.At
-	if atPredicate == "" {
-		return false, nil
-	}
-	state, _, err := m.getEntity(ctx, entityID)
-	if err != nil || state == nil {
-		return false, err
-	}
-	// Must match buildInitialTriples exactly — it writes now.Format(...), not
-	// now.UTC().Format(...); a mismatched formatting would make this silently
-	// never match and quietly restore the wrong 409.
-	want := now.Format(time.RFC3339Nano)
-	for _, tr := range state.Triples {
-		if tr.Subject == entityID && tr.Predicate == atPredicate && tr.Object == want {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // outcomeFromCreate / outcomeFromUpdate project the causal mutation response
@@ -1347,16 +1331,25 @@ type CreateResult struct {
 // SUCCESS via CreateResult.Degraded — never as an error, because the mutation
 // contract forbids retrying it.
 //
-// NOT CLOSED, and stated rather than left implicit: the LOST-REPLY case. The
-// emitter retries, so a create whose reply is lost after committing returns
-// ErrAlreadyExists on the retry — indistinguishable here from a genuine prior
-// duplicate, and rendered as 409 for a birth this very request committed.
-// Closing it needs request correlation (a RequestID echoed on the mutation
-// response, or an ErrAlreadyExists re-read comparing the audit source/at triple
-// against this request), which is a change to the mutation contract rather than
-// to this lane. Deliberately deferred: the failure is rare, self-limiting, and
-// reports a conflict rather than inventing a success — but it IS a wrong answer
-// and it is tracked, not forgotten.
+// The LOST-REPLY case is no longer REACHABLE THROUGH A RETRY (gh#861): the
+// emitter re-sends a create only on "no responders", where the server reports
+// nothing was subscribed and so nothing was delivered. A create cannot observe
+// its own committed write as ErrAlreadyExists via that path, and this lane
+// therefore never reconstructs ownership from stored state — a re-read observes
+// whatever exists now, including another writer's identical concurrent birth,
+// which is how the previous attempt at closing this returned success to the
+// LOSER of a concurrent create.
+//
+// What remains open, and is stated rather than left implicit: a create whose
+// single delivery times out (lifecycle's 5s per-attempt deadline against
+// graph-ingest's 30s handler deadline) has a GENUINELY UNKNOWN outcome. It
+// surfaces as a transport error — never as ErrAlreadyExists and never as
+// success — and the caller resolves it by reading authoritative state. Closing
+// it properly needs request-scoped idempotency on the graph mutation seam
+// (graph.CreateEntityWithTriplesRequest.RequestID is echoed by graph-ingest but
+// this lane does not set it, and a claim primitive is the real answer);
+// deliberately deferred as engine work with three consumers, tracked not
+// forgotten.
 func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (CreateResult, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {

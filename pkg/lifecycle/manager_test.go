@@ -37,11 +37,34 @@ type fakeEmitter struct {
 	// touching what was stored, so a test can tell the causal response apart
 	// from a later Get of the same entity.
 	createResponseMutator func(*graph.EntityState)
-	// createLosesReply commits the write and then reports ErrAlreadyExists —
-	// the shape the emitter's own retry produces when the first reply is lost.
-	createLosesReply bool
+	// createScript, when non-empty, drives create() one ATTEMPT AT A TIME:
+	// each call consumes the next entry. It replaces the old createLosesReply
+	// bool, which collapsed "committed" and "answered a failure" into a single
+	// call and so could not represent — or falsify — a retry policy at all
+	// (gh#861).
+	createScript []createAttempt
+	// createCalls counts every create() delivery, scripted or not, so a test
+	// can pin that a NON-idempotent create was sent exactly once.
+	createCalls int
 	// forceRevisionMismatch makes update() fail CAS regardless of revision.
 	forceRevisionMismatch bool
+}
+
+// createAttempt scripts ONE delivery of create(). The two fields are
+// deliberately independent, because the failure this exists to model is
+// precisely the one where they disagree: commit=true with a non-nil err is the
+// LOST REPLY — the write landed durably and the answer never came back. A fake
+// that can only return "committed and said so" or "did nothing and said so"
+// cannot represent that state, and a test built on it proves nothing about how
+// the caller handles it.
+type createAttempt struct {
+	// commit applies the write to the bucket before answering.
+	commit bool
+	// err is what this delivery answers. nil is a normal success.
+	err error
+	// onDeliver, when non-nil, runs when this attempt is consumed — used to
+	// fail a test the moment a delivery happens that must never happen.
+	onDeliver func()
 }
 
 // update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
@@ -104,6 +127,31 @@ func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTripl
 func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.createCalls++
+	// A scripted attempt outranks the default behaviour: it is how a test says
+	// "this delivery committed and then lost its reply", which no combination of
+	// the flags below can express.
+	if len(f.createScript) > 0 {
+		attempt := f.createScript[0]
+		f.createScript = f.createScript[1:]
+		if attempt.onDeliver != nil {
+			attempt.onDeliver()
+		}
+		if attempt.commit && !f.bucket.exists(req.Entity.ID) {
+			state := *req.Entity
+			state.Triples = req.Triples
+			f.bucket.put(req.Entity.ID, &state)
+		}
+		if attempt.err != nil {
+			return nil, attempt.err
+		}
+		stored := f.bucket.get(req.Entity.ID)
+		return &graph.CreateEntityWithTriplesResponse{
+			MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
+			Entity:           stored,
+			TriplesAdded:     len(req.Triples),
+		}, nil
+	}
 	if f.bucket.exists(req.Entity.ID) {
 		// ADR-060: production create() returns (nil, <error wrapping ErrAlreadyExists>).
 		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
@@ -111,9 +159,6 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state := *req.Entity
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
-	if f.createLosesReply {
-		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
-	}
 	if f.createDegraded {
 		return &graph.CreateEntityWithTriplesResponse{
 			MutationResponse: graph.MutationResponse{Degraded: true, DegradedReason: "read-back unavailable"},
@@ -1118,31 +1163,93 @@ func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
 	}
 }
 
-// TestCreate_LostReplyIsNotReportedAsADuplicate pins the correction to the
-// lost-reply path: the emitter retries, so an ErrAlreadyExists may be THIS
-// request's own committed write whose reply was lost. Reporting a conflict for
-// a birth this request just made is a wrong answer on a public surface.
-func TestCreate_LostReplyIsNotReportedAsADuplicate(t *testing.T) {
-	mgr, emitter, _ := newTestManager(t)
-	ctx := context.Background()
+// TestCreate_LostReplyIsNeitherADuplicateNorASuccess pins the gh#861 answer on
+// the lost-reply path: an outcome this request cannot prove is reported as
+// UNKNOWN — never as a success it cannot show it made, and never reconstructed
+// from stored state.
+//
+// The predecessor of this test asserted the OPPOSITE — that the manager RECOVER
+// a lost reply as a degraded success — by re-reading the entity and matching the
+// RFC3339Nano audit stamp this call was about to write. Wall-clock granularity
+// is coarser than that format's precision, so two concurrent creates build
+// byte-identical deltas and the LOSER reads the WINNER's write as proof of its
+// own birth. openspec/specs/lifecycle/spec.md already required the answer be
+// derived from the causal mutation response rather than a separate read, and
+// named that exact failure mode.
+//
+// The fake scripts ATTEMPTS rather than one collapsed call, because a policy
+// about re-sending cannot be tested by a fake that cannot represent a second
+// delivery.
+func TestCreate_LostReplyIsNeitherADuplicateNorASuccess(t *testing.T) {
+	lostReplyTransport := fmt.Errorf("%w: NATS request to %s: context deadline exceeded",
+		ErrEmitFailed, graphSubjectCreateWithTriples)
+	alreadyExists := fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
 
-	// Commit, then report the failure the lost reply would produce.
-	emitter.createLosesReply = true
+	cases := []struct {
+		name string
+		// attemptErr is what the ONE delivery answers after committing.
+		attemptErr error
+		wantErrIs  error
+		why        string
+	}{
+		{
+			// The regression gate for the DELETED reconciliation. The entity in
+			// the bucket carries this very request's audit stamp — exactly the
+			// "proof of ownership" the removed re-read accepted — and the answer
+			// must still be a conflict, because a stamp two writers can share
+			// proves nothing about who wrote it.
+			name:       "already-exists for a write carrying this request's own stamp is still a conflict",
+			attemptErr: alreadyExists,
+			wantErrIs:  ErrAlreadyExists,
+			why:        "ownership was reconstructed from stored state and a conflict became a success",
+		},
+		{
+			// The emitter's new contract: a create whose reply is lost is a
+			// transport failure with an UNKNOWN outcome. It is not dressed up as
+			// a conflict (which blames the caller for something that may not
+			// exist) and not as a success.
+			name:       "a transport failure after a durable commit stays an unknown outcome",
+			attemptErr: lostReplyTransport,
+			wantErrIs:  ErrEmitFailed,
+			why:        "an unprovable outcome was converted into a definite answer",
+		},
+	}
 
-	const id = "c360.platform1.lifecycle.gcs.mission.lostreply"
-	result, err := mgr.CreateFromOperator(ctx, "fixture",
-		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
-	if errors.Is(err, ErrAlreadyExists) {
-		t.Fatal("a lost reply for this request's own committed write was reported as a duplicate")
-	}
-	if err != nil {
-		t.Fatalf("CreateFromOperator: %v", err)
-	}
-	if !result.Degraded {
-		t.Error("a recovered lost-reply commit should report as degraded so the caller knows the read-back did not happen")
-	}
-	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
-		t.Errorf("the write did not actually commit: %v", getErr)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mgr, emitter, _ := newTestManager(t)
+			ctx := context.Background()
+			emitter.createScript = []createAttempt{
+				{commit: true, err: tc.attemptErr},
+				{commit: true, onDeliver: func() {
+					t.Error("the create was re-sent after an ambiguous failure — a " +
+						"non-idempotent create must not be delivered twice; the second " +
+						"delivery is what answers already-exists for this request's own birth")
+				}},
+			}
+
+			const id = "c360.platform1.lifecycle.gcs.mission.lostreply"
+			result, err := mgr.CreateFromOperator(ctx, "fixture",
+				[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
+
+			if err == nil {
+				t.Fatalf("reported SUCCESS (degraded=%v, reason=%q): %s",
+					result.Degraded, result.DegradedReason, tc.why)
+			}
+			if !errors.Is(err, tc.wantErrIs) {
+				t.Errorf("err = %v, want errors.Is(err, %v): %s", err, tc.wantErrIs, tc.why)
+			}
+			if emitter.createCalls != 1 {
+				t.Errorf("create was delivered %d times, want exactly 1", emitter.createCalls)
+			}
+			// The write DID land in both cases: this is the genuinely-ambiguous
+			// state, not a no-op failure. Resolving it is the caller's move
+			// against authoritative state — which is exactly what the manager
+			// must not do on the caller's behalf.
+			if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
+				t.Errorf("fixture is wrong: the scripted attempt should have committed: %v", getErr)
+			}
+		})
 	}
 }
 

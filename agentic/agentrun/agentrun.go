@@ -210,13 +210,18 @@ func Register(mgr *lifecycle.Manager) error {
 // already minted — common on JetStream redelivery or concurrent rule firings),
 // Mint treats it as success and returns the existing run via Manager.Get.
 //
-// NOTE: there is a narrow concurrent-create race (gh#178) where two goroutines
-// both call Mint for the same ID simultaneously; both may observe ErrAlreadyExists
-// but only one wrote the initial "dispatched" phase. The second caller falls back
-// to Manager.Get which returns the already-minted run — this is correct: the run
-// exists and is in a valid state. The gh#178 concern (which caller's Create "won")
-// does not apply here because all callers want the same initial phase ("dispatched")
-// and the run entity is immutable in terms of identity.
+// Concurrent mints of the same ID resolve through that same branch: exactly one
+// caller's Create commits and returns the run it built, every other caller gets
+// ErrAlreadyExists and reads the winner's run back with Get (gh#861 — before it,
+// a loser could be told its own birth succeeded and would return the struct it
+// submitted, never read back). Which caller won does not matter here: every
+// caller asks for the same initial phase ("dispatched") and the run entity's
+// identity is fixed by rootLoopID.
+//
+// A create whose outcome is genuinely UNKNOWN — the single delivery timed out
+// against a handler that may still be running — surfaces as a wrapped transport
+// error, NOT as a mint. Mint returns it rather than guessing; a caller that
+// retries lands on the idempotent branch above if the write did commit.
 func Mint(ctx context.Context, mgr MintableManager, org, platform, rootLoopID string) (*AgentRun, error) {
 	entityID, err := agentic.TryChainExecutionEntityID(org, platform, rootLoopID)
 	if err != nil {
