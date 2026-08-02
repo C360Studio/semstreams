@@ -90,6 +90,21 @@ func TestSeamGuards_RefuseOversizedBeforeIO(t *testing.T) {
 		_, err := c.RequestWithHeaders(ctx, "t.subject", oversized, nil, 0)
 		assertPayloadRefusal(t, err)
 	})
+	t.Run("Request", func(t *testing.T) {
+		_, err := c.Request(ctx, "t.subject", oversized, 0)
+		assertPayloadRefusal(t, err)
+	})
+	t.Run("RequestWithRetry", func(t *testing.T) {
+		_, err := c.requestMsgWithRetry(ctx, "t.subject", oversized, 0, DefaultRetryConfig())
+		assertPayloadRefusal(t, err)
+	})
+	t.Run("RequestReady", func(t *testing.T) {
+		_, err := c.requestMsgReady(ctx, "t.subject", oversized, 0, 0)
+		assertPayloadRefusal(t, err)
+	})
+	t.Run("ReplyWithHeaders", func(t *testing.T) {
+		assertPayloadRefusal(t, c.ReplyWithHeaders(ctx, "_INBOX.t", oversized, nil))
+	})
 	t.Run("CheckReplySize", func(t *testing.T) {
 		assertPayloadRefusal(t, c.CheckReplySize(len(oversized), "t.subject"))
 	})

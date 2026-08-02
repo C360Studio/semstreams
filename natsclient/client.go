@@ -1003,6 +1003,11 @@ func (m *Client) publishToStream(ctx context.Context, subject string, data []byt
 
 	_, err = js.PublishMsg(ctx, msg)
 	if err != nil {
+		// Header residue past the guard (Nats-Msg-Id, trace headers) is a
+		// permanent payload condition, not connection health.
+		if stderrors.Is(err, nats.ErrMaxPayload) {
+			return classifyMaxPayload(err, "PublishToStream", "subject "+subject)
+		}
 		m.recordFailure()
 		return err
 	}
@@ -1115,6 +1120,10 @@ func (m *Client) publishToStreamAsync(ctx context.Context, subject string, data 
 
 	future, err := js.PublishMsgAsync(msg)
 	if err != nil {
+		// Header residue: permanent, not a connection-liveness failure.
+		if stderrors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "PublishToStreamAsync", "subject "+subject)
+		}
 		m.recordFailure()
 		return nil, err
 	}

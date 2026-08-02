@@ -76,10 +76,13 @@ knowledge must not float inside components.
 
 ## Impact
 
-- `natsclient` (kv.go, client.go, request.go), `pkg/errs` (one classification arm),
+- `natsclient` (kv.go, client.go, request.go, payload_size.go — classification lives at
+  this boundary; `pkg/errs` deliberately untouched, see tasks 1.1),
   `processor/agentic-loop` + `processor/agentic-tools` (completion offload + ref-following
-  read), `processor/agentic-model` (hydration), `processor/graph-ingest/query.go` (dead
-  constant), `config/streams.go` (governance ruling outcome only).
+  read), `storage/objectstore` (reply guard). `processor/agentic-model` joins only when
+  the deferred hydration slice (task 4.2) lands; `graph-ingest` untouched (2.2 canceled);
+  `config/streams.go` only via the governance ruling outcome. (Impact amended 2026-08-02
+  to the shipped footprint.)
 - Behavior changes, all in the honest direction: silent drops → typed errors; timeouts →
   fast classified "too large"; infinite retries → permanent refusal. Lockstep-relevant for
   sisters reading error classes; changelog entry required.

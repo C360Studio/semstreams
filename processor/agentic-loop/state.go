@@ -1032,13 +1032,13 @@ func (m *LoopManager) UpdateCompletion(loopID, outcome, result, errMsg string) e
 	return nil
 }
 
-// ApplyResultOffload mirrors a completion-result offload (gh#857 D4) onto
+// applyResultOffload mirrors a completion-result offload (gh#857 D4) onto
 // the loop entity: the inline Result becomes the bounded preview, and
 // ResultRef/ResultSize record where the full body lives and how big it is —
 // so the entity KV value (key <loopID>) stays under the wire limit while
 // SSE/KV-watch consumers still see the preview and the reference. Returns
 // false when the loop is unknown (nothing to mirror).
-func (m *LoopManager) ApplyResultOffload(loopID, preview string, ref *message.StorageReference, size int) bool {
+func (m *LoopManager) applyResultOffload(loopID, preview string, ref *message.StorageReference, size int) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1052,14 +1052,14 @@ func (m *LoopManager) ApplyResultOffload(loopID, preview string, ref *message.St
 	return true
 }
 
-// MarkResultNotDurable records the typed result-not-durable state (gh#857
+// markLoopResultNotDurable records the typed result-not-durable state (gh#857
 // D4) on the loop after a terminal KV write finally failed: the classified
 // cause lands in ResultNotDurableReason, and the inline Result is slimmed to
 // previewBytes (recording the original size) so the MARKER value itself can
 // never be refused for the same reason the result write was. Returns a COPY
 // of the updated entity for the caller to persist, and ok=false when the
 // loop is unknown.
-func (m *LoopManager) MarkResultNotDurable(loopID, reason string, previewBytes int) (agentic.LoopEntity, bool) {
+func (m *LoopManager) markLoopResultNotDurable(loopID, reason string, previewBytes int) (agentic.LoopEntity, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

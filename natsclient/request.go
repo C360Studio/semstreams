@@ -106,6 +106,12 @@ func (c *Client) RequestReady(
 func (c *Client) requestMsgReady(
 	ctx context.Context, subject string, data []byte, probeTimeout, budget time.Duration,
 ) (*nats.Msg, error) {
+	// Size guard first: an oversized probe would otherwise be re-attempted
+	// until the readiness budget exhausts (payload-bounds spec).
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "RequestReady", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -146,6 +152,10 @@ func (c *Client) requestMsgReady(
 			c.resetCircuit()
 			return reply, nil
 		}
+		// Header residue: permanent, not a readiness condition to keep probing.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "RequestReady", "subject "+subject)
+		}
 		lastErr = err
 		// Deliberately do NOT recordFailure() here. A readiness miss (no-responder
 		// / probe timeout) is the EXPECTED condition this primitive tolerates — the
@@ -182,6 +192,11 @@ func (c *Client) requestMsgReady(
 // races / responder restarts cause silent data loss. See
 // docs/operations/07-nats-request-retry.md for the full rule.
 func (c *Client) Request(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
+	// A request payload is a publish (payload-bounds spec): size guard first.
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "Request", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -217,6 +232,11 @@ func (c *Client) Request(ctx context.Context, subject string, data []byte, timeo
 	// Perform the request using NATS request/reply
 	reply, err := conn.RequestMsgWithContext(reqCtx, msg)
 	if err != nil {
+		// Header residue past the guard is a permanent payload condition,
+		// not connection health: classify, don't count against the breaker.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "Request", "subject "+subject)
+		}
 		c.recordFailure()
 		return nil, err
 	}
@@ -286,6 +306,10 @@ func (c *Client) RequestWithHeaders(
 	// Perform the request
 	reply, err := conn.RequestMsgWithContext(reqCtx, msg)
 	if err != nil {
+		// Header residue: permanent payload condition, not connection health.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "RequestWithHeaders", "subject "+subject)
+		}
 		c.recordFailure()
 		return nil, err
 	}
@@ -308,6 +332,12 @@ func (c *Client) Reply(ctx context.Context, replyTo string, data []byte) error {
 func (c *Client) ReplyWithHeaders(ctx context.Context, replyTo string, data []byte, headers map[string]string) error {
 	if replyTo == "" {
 		return nil // No reply requested
+	}
+
+	// An oversized reply that goes quiet becomes a caller-side timeout — the
+	// D3 pathology. Refuse typed instead (payload-bounds spec).
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "ReplyWithHeaders", "reply "+replyTo); err != nil {
+		return err
 	}
 
 	c.mu.RLock()
@@ -337,7 +367,7 @@ func (c *Client) ReplyWithHeaders(ctx context.Context, replyTo string, data []by
 	// Inject trace headers
 	InjectTrace(ctx, msg)
 
-	return conn.PublishMsg(msg)
+	return classifyMaxPayload(conn.PublishMsg(msg), "ReplyWithHeaders", "reply "+replyTo)
 }
 
 // SubscribeForRequests subscribes to a subject and handles request/reply patterns.
@@ -490,6 +520,12 @@ func (c *Client) requestMsgWithRetry(
 	timeout time.Duration,
 	retry RetryConfig,
 ) (*nats.Msg, error) {
+	// Size guard first: retrying an impossible payload wastes the whole retry
+	// budget AND poisons the shared breaker (payload-bounds spec).
+	if err := checkPayloadSize(len(data), c.serverPayloadLimit(), "RequestWithRetry", "subject "+subject); err != nil {
+		return nil, err
+	}
+
 	c.mu.RLock()
 	conn := c.conn
 	c.mu.RUnlock()
@@ -526,6 +562,12 @@ func (c *Client) requestMsgWithRetry(
 		if err == nil {
 			c.resetCircuit()
 			return reply, nil
+		}
+
+		// Header residue is permanent: no retry can shrink the payload, and
+		// counting it against the breaker degrades unrelated calls.
+		if errors.Is(err, nats.ErrMaxPayload) {
+			return nil, classifyMaxPayload(err, "RequestWithRetry", "subject "+subject)
 		}
 
 		lastErr = err

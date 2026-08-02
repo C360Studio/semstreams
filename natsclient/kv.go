@@ -25,7 +25,7 @@ type KVOptions struct {
 	MaxRetries            int           // Maximum CAS retry attempts
 	RetryDelay            time.Duration // Initial delay between retries
 	Timeout               time.Duration // Operation timeout
-	MaxValueSize          int           // Maximum size for values (default: 1MB)
+	MaxValueSize          int           // Explicit value-size override; 0 (default) = derive from the server's live max_payload
 	UseExponentialBackoff bool          // Enable exponential backoff with jitter
 	MaxRetryDelay         time.Duration // Maximum delay between retries
 }

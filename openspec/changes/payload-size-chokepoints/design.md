@@ -168,7 +168,7 @@ group 1); everything else is ingestion or resource policy and stays. No knob met
 | `cache MaxSize` | `pkg/cache/config.go:38` | Entry COUNT (not bytes) | Resource | STAYS (not size-class at all) |
 | `Read/WriteBufferSize`, `BufferSize`, `LogStreamBufferSize` | `input/websocket/config.go:50-51`, `output/file/file.go:31`, `service/flow_service.go:38` | I/O buffer tuning | Resource | STAYS |
 | `MaxMemory` | `config/config.go:209` | Embedded-server memory ceiling | Resource | STAYS |
-| `maxPrefixResponseBytes` | `processor/graph-ingest/query.go` | Declared, never read | Dead wire-defense comfort | Deleted by task 2.2 (group 2's scope) |
+| `maxPrefixResponseBytes` | `processor/graph-ingest/query.go` | Prefix-reply byte budget | Wire-adjacent, LIVE (trim-until-fits + regression test on main; the audit-era "never read" expired) | STAYS — respond-seam guard is the backstop behind it (task 2.2 canceled) |
 
 Deliberately NOT knobs (owner constraint: no new size knobs): the offload threshold
 (`resultOffloadThreshold` = ½ of the live `ServerPayloadLimit()`,

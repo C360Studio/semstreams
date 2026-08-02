@@ -58,7 +58,10 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       the BACKSTOP behind a real per-handler budget. Proposal amended to match.
 - [x] 2.3 DONE, amended location: no changelog FILE exists in-tree — the sister-facing
       behavior-change notice (timeout→typed too-large; remedy: narrow/page/offload) rides
-      the PR body, gh#857, and the release-tag notes per repo convention.
+      the PR body, gh#857, and the release-tag notes per repo convention. Post-review
+      addition: the notice MUST name the offload window — results in (½·limit, limit]
+      previously arrived inline in `COMPLETE_*` values and now arrive ref-bearing; sisters
+      with their own COMPLETE_ decoders must check themselves (in-tree census is 3.3).
 
 ## 3. Agentic: COMPLETE_ values loud and ref-bearing (D4)
 
@@ -201,7 +204,7 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       | Ruling | Status | Evidence |
       |---|---|---|
       | D1 one derived-limit guard, ≤5 chokepoints, Invalid refusal | CONFORMS | `natsclient/payload_size.go` (`checkPayloadSize`, `serverPayloadLimit`); wired: `kv.go` Put/Create/Update/UpdateWithRetry (`effectiveValueLimit`), `client.go` Publish + both stream funnels + batch pre-check, `request.go` RequestWithHeaders |
-      | D2 oversize classifies permanent | **DEVIATION — sign-off pending** | mechanism moved to natsclient boundary (`classifyMaxPayload`) — `pkg/errs` stays dependency-free; spec behavior met (task 1.1) |
+      | D2 oversize classifies permanent | **DEVIATION — sign-off pending** | mechanism at natsclient boundary (`classifyMaxPayload`) — `pkg/errs` stays dependency-free. Post-review (6.6): residue classification now covers EVERY send lane — both stream funnels, async enqueue, `Request`/`RequestWithHeaders`/`RequestWithRetry`/`RequestReady` loops (which also stop retrying and stop counting breaker failures on oversize), `ReplyWithHeaders` — so "wherever it surfaces" holds without the earlier overclaim |
       | D3 typed too-large reply, never timeout | CONFORMS | `request.go` respond path via `RespondError`; objectstore respond via `CheckReplySize` |
       | D4 COMPLETE_ loud + ref-bearing, reader census | CONFORMS (3.4 crash-injection half `[~]`) | `processor/agentic-loop/component.go` persist*/offload, `agentic/loop_result_entity.go`, `processor/agentic-tools/loop_result.go` hydration; census in 3.3 |
       | D5 request lane: loud interim, hydration behavior-neutral | CONFORMS-with-deferral (sanctioned by D5's own slip clause) | 4.1 shipped (`failLoopForOversizedPublish`); 4.2 hydration `[~]` DEFERRED, propagated into the agentic-loop delta |
@@ -211,7 +214,7 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       | Owner C2: paved path is default | CONFORMS for results; request lane pending 4.2 | offload automatic above threshold |
       | Owner C3: agentic lanes first | CONFORMS | groups 3–4 shipped in this slice |
       | Knob correction (ingestion vs wire) | CONFORMS | 4.3 + 4.4 |
-      | NEW EXPORTED SURFACE — **sign-off pending** | listed | `natsclient.ServerPayloadLimit`, `natsclient.CheckReplySize`, `natsclient.ErrPayloadTooLarge`, `agentic.LoopResultEntity` + `TryLoopResultEntityID`, `agentictools.LoopContentFetcher`, `ToolDependencies.ContentBucket`, additive fields on `LoopCompletedEvent`/`LoopEntity`/dispatch `Loop` |
+      | NEW EXPORTED SURFACE — **sign-off pending** | listed (review-verified complete) | `natsclient.ServerPayloadLimit`, `natsclient.CheckReplySize`, `natsclient.ErrPayloadTooLarge`, `agentic.LoopResultEntity` + `TryLoopResultEntityID`, `agentictools.LoopContentFetcher`, `NewReadLoopResultExecutor` signature widened (compile-breaking for out-of-tree callers; all in-repo callers updated), `ToolDependencies.ContentBucket`, additive fields on `LoopCompletedEvent`/`LoopEntity`/dispatch `Loop`. Review excess resolved: `LoopManager.ApplyResultOffload`/`MarkResultNotDurable` UNEXPORTED (zero out-of-package consumers) |
 - [x] 6.2 DONE 2026-08-02: `gofmt` clean, `task lint` clean (revive+vet+fmt+port guard),
       `go vet` clean plain and `-tags=integration` on all touched trees.
 - [x] 6.3 DONE with an honest bound: full `go test -race ./...` GREEN (one failure found
@@ -231,7 +234,20 @@ not-done gets `[~]`, its reasoning, AND propagation into the spec delta. Run
       through the modified completion path. `task e2e:core` GREEN — `passed=2 failed=0`,
       TASK_RC=0 captured directly (not a pipeline tail). Both tiers post-#845, i.e. tiers
       that CAN fail.
-- [ ] 6.6 `semstreams-reviewer` pass on the full diff, including the conformance table.
+- [x] 6.6 DONE 2026-08-02: `semstreams-reviewer` full-diff pass, CHANGES REQUESTED, all
+      findings fixed same-session: BLOCKING-1 four unguarded request/reply lanes
+      (`Request`, readiness probe, retry lane — which retried the impossible write and
+      poisoned the breaker — `ReplyWithHeaders`) now guarded + residue-classified;
+      BLOCKING-2 header-residue `ErrMaxPayload` on both stream funnels +
+      `RequestWithHeaders` now classified permanent and excluded from breaker counting;
+      HIGH taxonomy-row/Impact pre-correction claims re-synced (the correction-propagation
+      class, caught on our own change); HIGH D3-branch-untested → 
+      `TestIntegration_OversizedReplyAnswersTyped` drives real NATS: typed Invalid error
+      at the caller in 0.64s vs the 10s timeout pathology; MEDIUM surface excess →
+      two LoopManager methods unexported, signature change added to the table; NIT kv.go
+      comment fixed. Reviewer's clean list (guard-vs-breaker ordering, gh#810
+      no-conflict, offload atomicity, hydration fail-closed, retry classification,
+      additive-fields round-trip) recorded in the review output.
 - [ ] 6.7 Owner-run Codex round; arm `--auto` only AFTER it closes.
 - [ ] 6.8 Owner CONFIRM-CLOSE on gh#857; gh#855's deferred CONFIRM-CLOSE unblocks when the
       clustering-relevant chokepoints (1.x, 2.x) land — note it there.

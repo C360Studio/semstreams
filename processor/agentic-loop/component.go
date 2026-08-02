@@ -1841,7 +1841,7 @@ const maxNotDurableReasonBytes = 1024
 // or operator can read, not a log line.
 func (c *Component) markResultNotDurable(ctx context.Context, loopID string, cause error) {
 	reason := truncateUTF8(cause.Error(), maxNotDurableReasonBytes)
-	entity, ok := c.handler.loopManager.MarkResultNotDurable(loopID, reason, resultPreviewBytes)
+	entity, ok := c.handler.loopManager.markLoopResultNotDurable(loopID, reason, resultPreviewBytes)
 	if !ok {
 		c.logger.Error("loop result not durable and loop entity unknown; cannot mark",
 			"loop_id", loopID, "cause", cause)
@@ -2059,7 +2059,7 @@ func (c *Component) offloadCompletionResult(ctx context.Context, completion *age
 	completion.ResultRef = ref
 	completion.Result = ""
 
-	if !c.handler.loopManager.ApplyResultOffload(completion.LoopID, completion.ResultPreview, ref, size) {
+	if !c.handler.loopManager.applyResultOffload(completion.LoopID, completion.ResultPreview, ref, size) {
 		c.logger.Debug("loop entity not found for result-offload mirror", "loop_id", completion.LoopID)
 	}
 
