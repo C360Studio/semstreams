@@ -62,6 +62,33 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > that is **nine config lines** and needs none of the framework layer.
 >
 > **NEXT, in order:**
+> **0. THE OWNERSHIP-INFERENCE CLASS — gh#869 IS PROMOTED OUT OF DEFERRAL (owner, 2026-08-02).
+> New ledger row; read it before starting.** gh#861 (lifecycle `Manager.Create` let two concurrent
+> creates both report success — it proved "this write is mine" with a wall-clock stamp that is not
+> unique) was FIXED, but **the fix did not build the primitive — it removed the NEED for one on a
+> single path** by narrowing the create retry so a create is delivered at most once. Four other
+> paths still ask "did I commit that?" and still answer by comparing content. **Three of the five
+> issues that fix spawned are the same class** (gh#869 the primitive, gh#870 the mirror-image
+> instance in the same function, gh#871 two further sites).
+> **The rule that fired is the bug-class ledger's own:** *"a Nth instance on an open row means the
+> row's fix is overdue."* Note precisely which rule did NOT fire, so this is not justified with a
+> gate that never opened: **gh#802's trigger conditions have NOT fired** (multi-tenancy, untrusted
+> `graph.mutation.*` wire, caller-chosen predicates, non-repudiation — none apply; that issue is
+> authorization, a different concern wanting a similar-looking envelope).
+> **The argument that promoted it, recorded because it generalises:** the deferral was argued as
+> *"a shape with four open questions is too unstable to document, therefore too unstable to build"*
+> — which answers **should the ADR be written now** and never puts the question **is the primitive
+> needed**. Owner put the second: SemStreams already has the CQRS shape (graph-ingest is the write
+> side, KV/projections the read side, the write IS the event) and the CQRS vocabulary
+> (`CommitNotCommitted`/`Unknown`/`Committed`/`Verified` in `pkg/projection/mutation_types.go`) —
+> **but not the CQRS correlation primitive.** So gh#807's four open questions are the design work,
+> not the reason to wait. **Two bundled questions, one argued: check for that shape.**
+> Sequencing within the class: gh#870 errs CONSERVATIVE (a false 409, no state corruption) where
+> gh#861 errs liberal (a false success), so it follows the primitive rather than racing it.
+> **gh#689 is blocked on this row** — its "two concurrent claimers cannot both receive committed
+> success" cannot be met by a client whose spec (`projection-mutation-client/spec.md:293-294`)
+> rules matching content to BE idempotent success. That spec clause needs an owner ruling, and
+> gh#861's fix is explicitly NOT recorded as unblocking gh#689.
 > **1. GATE INTEGRITY — nothing downstream is verifiable until this is done.** Four tiers are
 > known-broken: **gh#860** (crud-tools `verify-fire-every-n-events`, PRE-EXISTING — bisected to
 > identical failure at `b4194059` with `tool.>` intact, which also FALSIFIES PR #847's claim that
@@ -923,6 +950,7 @@ Pedantry bucket measured: zero — every blocker carried a failure scenario.
 | Cross-repo gates written into local task lists | task-list residency rule (standing rules) + gh#753 | 5 instances rescoped 2026-07-30; guard live |
 | **Guard reports green without checking** (a verification that cannot fail) | mutation-check every guard, and prefer a LITERAL expectation over one derived from the thing being checked | **open — 3 new instances in #787 alone** (sync guard blind to `omitempty`; order test that did not pin order; `checked != len(probes)` tautology). Distinct from "a test that reconstructs": these are guards on OTHER tests' integrity. All 3 found by review, none by CI |
 | Enumerating a surface from the wrong owner | derive from the component that OWNS the surface, and scrape it rather than hand-maintain | **1 instance (#787)**: gateway subjects enumerated from graph-query's registrations → 2 phantom entries + 1 miss + a wrong adopter instruction. Fixed drift-proof |
+| **Ownership inference at the write seam** (content equality read as authorship — "the stored state looks like what I was about to write, therefore I wrote it") | request-scoped idempotency / claim primitive on the graph mutation seam, so authorship is OBSERVED from the causal response rather than reconstructed — **gh#869** | **open — 5 spellings, 3 unsound, ledger row added 2026-08-02.** Sound: the causal mutation response (`pkg/lifecycle/manager.go` `outcomeFromCreate`/`outcomeFromUpdate`). Unsound: wall-clock audit stamp (**gh#861, FIXED** — not by building the primitive but by narrowing the retry so the question stops being asked on that path); phase-triple presence in the attach branch (**gh#870**, mirror image — errs conservative, invents a 409 for its own birth); `MessageType` equality (`processor/graph-ingest`… `agentic-loop/graph_writer.go:254-289`) and full-triple-multiset equality (`pkg/projection/mutation_client.go:586-589`, **spec-BLESSED** at `projection-mutation-client/spec.md:293-294`) — both **gh#871**. **gh#689 is blocked on this row**: "two concurrent claimers cannot both receive committed success" cannot be met by a client whose spec rules matching content to be idempotent success |
 
 ---
 
