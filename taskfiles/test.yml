@@ -13,40 +13,18 @@ tasks:
 
   integration:
     desc: Run integration tests (uses testcontainers for Docker infra)
-    env:
-      # Disable Ryuk (testcontainers resource reaper) to avoid known bugs:
-      # - Race condition with session IDs (#2445)
-      # - Container removed before starting (#2596)
-      # Container cleanup is handled by t.Cleanup() and defer container.Terminate()
-      TESTCONTAINERS_RYUK_DISABLED: "true"
     cmds:
-      - echo "[INTEGRATION] Running integration tests with real NATS (via testcontainers)..."
-      # -p 2 caps concurrent test packages so at most 2 testcontainer-booting
-      # packages run at once — mirrors CI. Unbounded parallelism (default
-      # -p=GOMAXPROCS, e.g. 12 on a dev laptop) thrashes the Docker host and makes
-      # contention-sensitive full-stack tests / container starts flake (gh#511/#199).
-      # -timeout=20m is an explicit per-package budget for serial Docker-backed
-      # evidence; -count=1 prevents cached results from masquerading as a fresh run.
-      - go test -race -tags=integration -p 2 -timeout=20m -count=1 ./...
-      - echo "[OK] Integration tests complete"
+      - scripts/run-integration-tests.sh
 
   integration:iot:
     desc: Run IoT sensor integration tests only
-    env:
-      TESTCONTAINERS_RYUK_DISABLED: "true"
     cmds:
-      - echo "[INTEGRATION] Running IoT sensor integration tests..."
-      - go test -race -tags=integration -v ./examples/processors/iot_sensor/...
-      - echo "[OK] IoT sensor integration tests complete"
+      - scripts/run-integration-tests.sh ./examples/processors/iot_sensor/...
 
   integration:graph:
     desc: Run graph processor integration tests
-    env:
-      TESTCONTAINERS_RYUK_DISABLED: "true"
     cmds:
-      - echo "[INTEGRATION] Running graph processor integration tests..."
-      - go test -race -tags=integration -v ./processor/graph/...
-      - echo "[OK] Graph processor integration tests complete"
+      - scripts/run-integration-tests.sh ./processor/graph/...
 
   live:
     desc: Run all live_llm tests (real providers — needs .env keys / local Ollama)

@@ -1,3 +1,5 @@
+//go:build integration
+
 package natsclient
 
 import (
@@ -15,8 +17,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestNewTestClient_BasicConnection(t *testing.T) {
-	testClient := NewTestClient(t)
+func TestIntegration_NewTestClient_BasicConnection(t *testing.T) {
+	testClient := NewTestClient(t, WithMonitoring())
 	require.NotNil(t, testClient)
 	require.NotNil(t, testClient.Client)
 	assert.True(t, testClient.IsReady())
@@ -35,7 +37,7 @@ func TestNewTestClient_BasicConnection(t *testing.T) {
 	require.Equal(t, 4222, server.Port, "monitoring URL must address the started test container")
 }
 
-func TestNewTestClient_WithFastStartup(t *testing.T) {
+func TestIntegration_NewTestClient_WithFastStartup(t *testing.T) {
 	start := time.Now()
 	testClient := NewTestClient(t, WithFastStartup())
 	elapsed := time.Since(start)
@@ -47,7 +49,7 @@ func TestNewTestClient_WithFastStartup(t *testing.T) {
 	assert.Less(t, elapsed, 15*time.Second, "Fast startup should complete quickly")
 }
 
-func TestNewTestClient_WithJetStream(t *testing.T) {
+func TestIntegration_NewTestClient_WithJetStream(t *testing.T) {
 	testClient := NewTestClient(t, WithJetStream())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -73,7 +75,7 @@ func TestNewTestClient_WithJetStream(t *testing.T) {
 	require.NotNil(t, stream)
 }
 
-func TestNewTestClient_WithKV(t *testing.T) {
+func TestIntegration_NewTestClient_WithKV(t *testing.T) {
 	testClient := NewTestClient(t, WithKV())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -95,7 +97,7 @@ func TestNewTestClient_WithKV(t *testing.T) {
 	assert.Equal(t, []byte("test-value"), entry.Value())
 }
 
-func TestNewTestClient_WithKVBuckets(t *testing.T) {
+func TestIntegration_NewTestClient_WithKVBuckets(t *testing.T) {
 	buckets := []string{"bucket1", "bucket2", "bucket3"}
 	testClient := NewTestClient(t, WithKVBuckets(buckets...))
 	require.NotNil(t, testClient)
@@ -116,7 +118,7 @@ func TestNewTestClient_WithKVBuckets(t *testing.T) {
 	}
 }
 
-func TestNewTestClient_WithStreams(t *testing.T) {
+func TestIntegration_NewTestClient_WithStreams(t *testing.T) {
 	streams := []TestStreamConfig{
 		{Name: "STREAM1", Subjects: []string{"stream1.>"}},
 		{Name: "STREAM2", Subjects: []string{"stream2.>"}},
@@ -141,7 +143,7 @@ func TestNewTestClient_WithStreams(t *testing.T) {
 	}
 }
 
-func TestNewTestClient_CreateStreamHelper(t *testing.T) {
+func TestIntegration_NewTestClient_CreateStreamHelper(t *testing.T) {
 	testClient := NewTestClient(t, WithJetStream())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -165,7 +167,7 @@ func TestNewTestClient_CreateStreamHelper(t *testing.T) {
 	require.NotNil(t, retrieved)
 }
 
-func TestNewTestClient_PubSub(t *testing.T) {
+func TestIntegration_NewTestClient_PubSub(t *testing.T) {
 	testClient := NewTestClient(t, WithMinimalFeatures())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -205,7 +207,7 @@ func TestNewTestClient_PubSub(t *testing.T) {
 	}
 }
 
-func TestNewTestClient_ParallelExecution(t *testing.T) {
+func TestIntegration_NewTestClient_ParallelExecution(t *testing.T) {
 	// Test that multiple test clients can run in parallel
 	const numClients = 3
 	var wg sync.WaitGroup
@@ -270,7 +272,7 @@ func TestNewTestClient_ParallelExecution(t *testing.T) {
 	assert.Equal(t, numClients, successCount, "All parallel clients should succeed")
 }
 
-func TestNewTestClient_CleanupOnFailure(t *testing.T) {
+func TestIntegration_NewTestClient_CleanupOnFailure(t *testing.T) {
 	// This test verifies that resources are cleaned up even if test setup fails
 	// We can't easily trigger a real failure, so we test the cleanup path directly
 	testClient := NewTestClient(t, WithFastStartup())
@@ -287,7 +289,7 @@ func TestNewTestClient_CleanupOnFailure(t *testing.T) {
 	})
 }
 
-func TestNewTestClient_GetNativeConnection(t *testing.T) {
+func TestIntegration_NewTestClient_GetNativeConnection(t *testing.T) {
 	testClient := NewTestClient(t, WithFastStartup())
 	require.NotNil(t, testClient)
 
@@ -302,7 +304,7 @@ func TestNewTestClient_GetNativeConnection(t *testing.T) {
 	assert.Greater(t, rtt, time.Duration(0))
 }
 
-func TestNewTestClient_IntegrationDefaults(t *testing.T) {
+func TestIntegration_NewTestClient_IntegrationDefaults(t *testing.T) {
 	testClient := NewTestClient(t, WithIntegrationDefaults())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -313,7 +315,7 @@ func TestNewTestClient_IntegrationDefaults(t *testing.T) {
 	require.NotNil(t, js)
 }
 
-func TestNewTestClient_E2EDefaults(t *testing.T) {
+func TestIntegration_NewTestClient_E2EDefaults(t *testing.T) {
 	testClient := NewTestClient(t, WithE2EDefaults())
 	require.NotNil(t, testClient)
 	assert.True(t, testClient.IsReady())
@@ -333,16 +335,26 @@ func TestNewTestClient_E2EDefaults(t *testing.T) {
 }
 
 // Benchmark tests for performance analysis
-func BenchmarkNewTestClient_Minimal(b *testing.B) {
+func BenchmarkIntegration_NewTestClient_Minimal(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		testClient := NewTestClient(&testing.T{}, WithMinimalFeatures())
-		_ = testClient.Terminate()
+		testClient, err := NewSharedTestClient(WithMinimalFeatures())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := testClient.Terminate(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }
 
-func BenchmarkNewTestClient_WithJetStream(b *testing.B) {
+func BenchmarkIntegration_NewTestClient_WithJetStream(b *testing.B) {
 	for i := 0; i < b.N; i++ {
-		testClient := NewTestClient(&testing.T{}, WithJetStream())
-		_ = testClient.Terminate()
+		testClient, err := NewSharedTestClient(WithJetStream())
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := testClient.Terminate(); err != nil {
+			b.Fatal(err)
+		}
 	}
 }

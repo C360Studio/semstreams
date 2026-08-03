@@ -4,6 +4,7 @@ package graphingest
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -23,19 +24,28 @@ func TestMain(m *testing.M) {
 	vocabulary.Register("test.anyproducer.hosted-by")
 	vocabulary.Register("test.strict.hosted-by")
 
-	// Setup shared NATS client for all integration tests
-	t := &testing.T{}
 	streams := []natsclient.TestStreamConfig{
 		{Name: "ENTITY", Subjects: []string{"entity.>"}},
 	}
-	sharedLifecycleNATSClient = natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
+	var err error
+	sharedLifecycleNATSClient, err = natsclient.NewSharedTestClient(
+		natsclient.WithKV(),
+		natsclient.WithStreams(streams...),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create shared lifecycle NATS client: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Run tests
 	code := m.Run()
 
 	// Cleanup
-	if sharedLifecycleNATSClient != nil {
-		sharedLifecycleNATSClient.Terminate()
+	if err := sharedLifecycleNATSClient.Terminate(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to clean up shared lifecycle NATS client: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
 	}
 	os.Exit(code)
 }

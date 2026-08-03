@@ -601,6 +601,10 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 >   `ForListeningPort("4222/tcp")` for polling cost — correct about cost, but it was the only thing
 >   waiting on that mapping, so an optimisation deleted a guarantee. Fixed with a bounded retry at
 >   the point of use.
+> · **PRE-V1 TEST-HELPER BREAK:** monitoring is now an explicit capability. `NewTestClient` starts,
+> exposes, and requires only 4222/tcp by default, so `MonitoringURL` is empty. Tests that consume
+> NATS monitoring endpoints must pass `WithMonitoring()`, which adds 8222/tcp to the command,
+> exposure, single-snapshot observation, and one-replacement eligibility.
 > · **Timeout class — STILL OPEN.** The 120-180s `wait until ready: context deadline exceeded`.
 >   Fires INSIDE `GenericContainer`, so #793 does not touch it.
 > · **Container consolidation is REJECTED (owner, 2026-07-31):** shared containers mean shared

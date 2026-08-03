@@ -4,7 +4,6 @@ package natsclient
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
@@ -13,15 +12,14 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 // TestIntegration_KeyValueBuckets_RealServer tests KV operations against a real NATS server.
 // Extracted from TestKeyValueBuckets subtest "operations work with real KV server".
 func TestIntegration_KeyValueBuckets_RealServer(t *testing.T) {
 	ctx := context.Background()
-	natsContainer, natsURL := startTestNATSContainerWithJS(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t, WithJetStream())
+	natsURL := testClient.URL
 
 	// Create and connect client
 	client, err := NewClient(natsURL,
@@ -86,8 +84,8 @@ func TestIntegration_KeyValueBuckets_RealServer(t *testing.T) {
 // Extracted from TestContextAwareMethods subtest "with real NATS server".
 func TestIntegration_ContextAwareMethods_RealServer(t *testing.T) {
 	ctx := t.Context()
-	natsContainer, natsURL := startTestNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t)
+	natsURL := testClient.URL
 
 	// Create and connect client
 	client, err := NewClient(natsURL,
@@ -131,8 +129,8 @@ func TestIntegration_ContextAwareMethods_RealServer(t *testing.T) {
 // Extracted from TestJetStreamMethods subtest "with real JetStream server".
 func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 	ctx := context.Background()
-	natsContainer, natsURL := startTestNATSContainerWithJS(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t, WithJetStream())
+	natsURL := testClient.URL
 
 	// Create and connect client
 	client, err := NewClient(natsURL,
@@ -184,69 +182,17 @@ func TestIntegration_JetStreamMethods_RealServer(t *testing.T) {
 	}
 }
 
-// Helper function to start NATS container for integration tests.
-//
-// Wait strategy mirrors test_client.go: combined port + HTTP health on the
-// monitoring port with an explicit startup timeout. The bare ForListeningPort
-// strategy (without timeout) flakes under Docker API pressure when many
-// containers spawn in parallel — testcontainers' container-inspect call
-// can hit its default deadline before the port mapping resolves.
-func startTestNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
+// startTestNATSContainer retains the package test helper contract while
+// delegating lifecycle and readiness to the canonical TestClient.
+func startTestNATSContainer(_ context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
-
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.14-alpine",
-		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		Cmd:          []string{"--http_port", "8222"},
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
-		),
-	}
-
-	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
-
-	host, err := natsContainer.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := natsContainer.MappedPort(ctx, "4222")
-	require.NoError(t, err)
-
-	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-	return natsContainer, natsURL
+	testClient := NewTestClient(t)
+	return &managedTestContainer{Container: testClient.container, testClient: testClient}, testClient.URL
 }
 
-// Helper function to start NATS container with JetStream for integration tests.
-// Wait strategy rationale: see startTestNATSContainer above.
-func startTestNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
+// startTestNATSContainerWithJS is the JetStream form of startTestNATSContainer.
+func startTestNATSContainerWithJS(_ context.Context, t *testing.T) (testcontainers.Container, string) {
 	t.Helper()
-
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.14-alpine",
-		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		Cmd:          []string{"--js", "--http_port", "8222"}, // Enable JetStream + monitoring
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
-		),
-	}
-
-	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
-
-	host, err := natsContainer.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := natsContainer.MappedPort(ctx, "4222")
-	require.NoError(t, err)
-
-	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-	return natsContainer, natsURL
+	testClient := NewTestClient(t, WithJetStream())
+	return &managedTestContainer{Container: testClient.container, testClient: testClient}, testClient.URL
 }

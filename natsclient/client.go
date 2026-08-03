@@ -736,6 +736,13 @@ func (m *Client) unsubscribeAll() []error {
 	return errs
 }
 
+// isBenignDrainError reports whether Drain reached the desired terminal state
+// before this client asked it to. Other failures remain observable so cleanup
+// cannot silently hide deadline, cancellation, or transport errors.
+func isBenignDrainError(err error) bool {
+	return stderrors.Is(err, nats.ErrConnectionClosed)
+}
+
 // drainAndCloseConnection drains and closes the NATS connection.
 func (m *Client) drainAndCloseConnection(ctx context.Context) error {
 	if m.conn == nil {
@@ -759,7 +766,7 @@ func (m *Client) drainAndCloseConnection(ctx context.Context) error {
 	var drainErr error
 	select {
 	case err := <-drainDone:
-		if err != nil {
+		if err != nil && !isBenignDrainError(err) {
 			drainErr = errs.Wrap(err, "Client", "Close", "drain connection")
 			m.logger.Error("Drain error", slog.Any("error", err))
 		}

@@ -1,6 +1,7 @@
 package udp
 
 import (
+	"net"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -10,7 +11,14 @@ import (
 // createTestComponent creates a test instance for lifecycle testing.
 func createTestComponent() component.LifecycleComponent {
 	// Find an available port for testing
-	port := findAvailablePort(&testing.T{})
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		panic("failed to reserve lifecycle UDP port: " + err.Error())
+	}
+	port := conn.LocalAddr().(*net.UDPAddr).Port
+	if err := conn.Close(); err != nil {
+		panic("failed to release lifecycle UDP port: " + err.Error())
+	}
 
 	mockClient := &natsclient.Client{}
 	deps := InputDeps{

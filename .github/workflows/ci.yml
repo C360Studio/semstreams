@@ -88,9 +88,13 @@ jobs:
         # Fast-feedback duplicate of the coverage in the Test job's go test.
         run: go test ./test/natsclient/
 
+      - name: Test-infrastructure policy guard
+        run: go test ./test/testinfra/
+
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
@@ -101,23 +105,8 @@ jobs:
           go-version: ${{ env.GO_VERSION }}
           cache: true
 
-      - name: Pull NATS image
-        run: docker pull nats:2.14-alpine
-
-      - name: Run unit tests
-        run: go test -v -race ./...
-
-      - name: Run integration tests
-        # -p 2 caps concurrent test PACKAGES so at most 2 testcontainer-booting
-        # integration packages run at once. Unbounded parallelism (default
-        # -p=GOMAXPROCS=4 on ubuntu-latest) CPU/IO-starves the shared Docker host,
-        # slowing every NATS round-trip until contention-sensitive full-stack tests
-        # exhaust their wait windows or containers miss their start deadline
-        # (gh#511, gh#199, and the gated-dag fullstack comment's "systemic lever").
-        # The explicit 20m timeout is per package, so serial Docker-backed evidence
-        # within a package is not killed by Go's 10m default. -count=1 keeps this an
-        # uncached integration run suitable for release evidence.
-        run: go test -v -race -tags=integration -p 2 -timeout=20m -count=1 ./...
+      - name: Run additive unit and integration suite
+        run: scripts/run-integration-tests.sh
 
   build:
     name: Build
