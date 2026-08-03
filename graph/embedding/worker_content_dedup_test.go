@@ -25,8 +25,17 @@ type recordingWorkerMetrics struct {
 	dedupSkipped     int
 	identityIncluded int
 	identityAbsent   int
+	excluded         int
+	excludedRefs     []excludedRef
 	skipReasons      []string
 	failedReasons    []string
+}
+
+// excludedRef records one ReportContentExcluded call so a test can assert WHICH
+// instance was reported, not merely that something was (gh#875).
+type excludedRef struct {
+	entityID string
+	instance string
 }
 
 func (m *recordingWorkerMetrics) IncDedupHits()      { m.inc(&m.dedupHits) }
@@ -43,6 +52,13 @@ func (m *recordingWorkerMetrics) IncTruncated()           { m.inc(&m.truncated) 
 
 func (m *recordingWorkerMetrics) IncOffloadedIdentityIncluded() { m.inc(&m.identityIncluded) }
 func (m *recordingWorkerMetrics) IncOffloadedIdentityAbsent()   { m.inc(&m.identityAbsent) }
+
+func (m *recordingWorkerMetrics) ReportContentExcluded(entityID, storageInstance string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.excluded++
+	m.excludedRefs = append(m.excludedRefs, excludedRef{entityID: entityID, instance: storageInstance})
+}
 
 func (m *recordingWorkerMetrics) IncDedupSkipped(reason string) {
 	m.mu.Lock()
@@ -69,6 +85,8 @@ type metricsSnapshot struct {
 	dedupSkipped     int
 	identityIncluded int
 	identityAbsent   int
+	excluded         int
+	excludedRefs     []excludedRef
 	skipReasons      []string
 	failedReasons    []string
 }
@@ -85,6 +103,8 @@ func (m *recordingWorkerMetrics) snapshot() metricsSnapshot {
 		dedupSkipped:     m.dedupSkipped,
 		identityIncluded: m.identityIncluded,
 		identityAbsent:   m.identityAbsent,
+		excluded:         m.excluded,
+		excludedRefs:     append([]excludedRef(nil), m.excludedRefs...),
 		skipReasons:      append([]string(nil), m.skipReasons...),
 		failedReasons:    append([]string(nil), m.failedReasons...),
 	}

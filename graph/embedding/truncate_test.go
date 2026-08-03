@@ -123,10 +123,21 @@ func TestGetSourceText_NoTruncation_WhenZero(t *testing.T) {
 
 // --- StreamableStore / fetchTextFromStorage tests ---
 
+// ownedStoreInstance is the StorageInstance the fake OWNED stores below serve. The
+// worker's owned-store fallback answers only for the instance its store actually
+// serves (gh#875), so a fake standing in for a wired store-read port must state one —
+// the production *objectstore.Store does (InstanceName(), gh#400). A fake that could
+// not would let the fallback be exercised on a reference it must refuse.
+const ownedStoreInstance = "objectstore"
+
 type mockStreamableStore struct {
 	data      map[string][]byte
 	openCalls int
 }
+
+// InstanceName makes the fake match the production store's narrow capability: it
+// serves exactly ownedStoreInstance.
+func (m *mockStreamableStore) InstanceName() string { return ownedStoreInstance }
 
 func (m *mockStreamableStore) Put(_ context.Context, key string, data []byte) error {
 	m.data[key] = data
@@ -174,7 +185,7 @@ func TestFetchTextFromStorage_StreamsLimitedBytes(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/safety-001"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/safety-001"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -215,7 +226,7 @@ func TestFetchTextFromStorage_ShortContent(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/short"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/short"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage error: %v", err)
 	}
@@ -231,7 +242,7 @@ func TestFetchTextFromStorage_NilStore(t *testing.T) {
 		maxSourceTextLen: 4000,
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/any"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/any"})
 	if err == nil {
 		t.Error("expected error when content store is nil")
 	}
@@ -251,7 +262,7 @@ func TestFetchTextFromStorage_KeyNotFound(t *testing.T) {
 		ctx:              ctx,
 	}
 
-	_, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/missing"})
+	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/missing"})
 	if err == nil {
 		t.Error("expected error for missing key")
 	}
@@ -274,7 +285,7 @@ func TestGetSourceText_StorageRef_UsesStreaming(t *testing.T) {
 	}
 
 	record := &Record{
-		StorageRef: &StorageRef{Key: "doc/safety"},
+		StorageRef: &StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/safety"},
 	}
 
 	text, err := w.getSourceText(record)
@@ -316,7 +327,7 @@ func TestGetSourceText_OffloadedWithIdentity_ConcatenatesIdentityFirst(t *testin
 
 	record := &Record{
 		IdentityText: "triple-based text",
-		StorageRef:   &StorageRef{Key: "doc/safety"},
+		StorageRef:   &StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/safety"},
 	}
 
 	text, err := w.getSourceText(record)

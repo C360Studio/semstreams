@@ -2,16 +2,20 @@ package graphembedding
 
 import (
 	"context"
+	"io"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/storage/objectstore"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 )
 
 // Regression guard for the gh#354-session find: #264 (ADR-055 Wave 0) began
@@ -36,10 +40,15 @@ func TestShouldFetchViaStorageRef(t *testing.T) {
 		want         bool
 	}{
 		{
-			name:         "StorageRef + content store wired -> fetch offloaded content",
+			// gh#875: the owned store's InstanceName is "" here (a zero-value store),
+			// so it is NOT the "objstore" instance the reference names. Answering true
+			// would open the reference against an unrelated bucket, fail the read, and
+			// record a DURABLE failed embedding that re-seeds on every restart and pins
+			// the index Degraded — for what is a deployment wiring fact.
+			name:         "StorageRef naming an instance the owned store does NOT serve -> inline fallback",
 			hasRef:       true,
 			contentStore: &objectstore.Store{},
-			want:         true,
+			want:         false,
 		},
 		{
 			name:         "StorageRef but NO content store -> fall back to inline (the regression)",
@@ -71,6 +80,51 @@ func TestShouldFetchViaStorageRef(t *testing.T) {
 			assert.Equal(t, tc.want, c.shouldFetchViaStorageRef(es))
 		})
 	}
+}
+
+// TestShouldFetchViaStorageRef_RegistryArmUnchanged proves the ADR-063 federated arm
+// is untouched by the gh#875 bound: an instance the shared registry resolves still
+// takes the offloaded fetch path, whether or not the component owns a store of its
+// own. Only the owned-store fallback became instance-bounded.
+func TestShouldFetchViaStorageRef_RegistryArmUnchanged(t *testing.T) {
+	reg := storeregistry.New()
+	require.NoError(t, reg.Register("content", stubStreamableStore{}))
+
+	es := &graph.EntityState{
+		ID:         "c360.platform.test.sys.widget.001",
+		StorageRef: &message.StorageReference{StorageInstance: "content", Key: "k/1"},
+	}
+
+	t.Run("registered instance resolves with no owned store", func(t *testing.T) {
+		c := &Component{storeRegistry: reg}
+		assert.True(t, c.shouldFetchViaStorageRef(es))
+	})
+
+	t.Run("registered instance resolves ahead of an unrelated owned store", func(t *testing.T) {
+		c := &Component{storeRegistry: reg, contentStore: &objectstore.Store{}}
+		assert.True(t, c.shouldFetchViaStorageRef(es))
+	})
+
+	t.Run("an instance the registry does not hold does not resolve", func(t *testing.T) {
+		other := &graph.EntityState{
+			ID:         es.ID,
+			StorageRef: &message.StorageReference{StorageInstance: "AGENT_CONTENT", Key: "k/1"},
+		}
+		c := &Component{storeRegistry: reg, contentStore: &objectstore.Store{}}
+		assert.False(t, c.shouldFetchViaStorageRef(other))
+	})
+}
+
+// stubStreamableStore is a registrable store standing in for a live storage
+// component; the gate only asks the registry whether the instance resolves.
+type stubStreamableStore struct{}
+
+func (stubStreamableStore) Put(context.Context, string, []byte) error      { return nil }
+func (stubStreamableStore) Get(context.Context, string) ([]byte, error)    { return nil, nil }
+func (stubStreamableStore) List(context.Context, string) ([]string, error) { return nil, nil }
+func (stubStreamableStore) Delete(context.Context, string) error           { return nil }
+func (stubStreamableStore) Open(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 // TestExtractTextForEmbedding_RecoversInlineContentForStorageRefEntity locks the

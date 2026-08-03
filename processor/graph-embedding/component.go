@@ -938,7 +938,7 @@ func (c *Component) initStorageAndWorker(ctx context.Context, indexBucket, dedup
 		WithWorkers(c.config.Workers).
 		WithMaxSourceTextLen(c.maxSourceTextLen()).
 		WithEmbedderType(c.config.EmbedderType).
-		WithMetrics(newWorkerMetricsAdapter(c.metrics, c.failuresVec)).
+		WithMetrics(newWorkerMetricsAdapter(c.metrics, c.failuresVec, c.reportOffloadedContentExcluded)).
 		WithOnGenerated(func(entityID string, _ []float32) {
 			if c.metrics != nil {
 				c.metrics.recordEmbeddingGenerated()
@@ -1963,14 +1963,30 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 
 // shouldFetchViaStorageRef reports whether an entity's offloaded content should
 // be fetched via its StorageRef. It requires a StorageRef AND a store that can
-// serve it — either (ADR-063) the shared registry can resolve the ref's owning
-// StorageInstance (federated: ANY registered instance), or the legacy single
-// wired content store is present as a fallback. Without either, the worker's
-// fetchTextFromStorage hard-fails ("content store not configured") and markFailed
-// fires, silently collapsing all embedding/search for offloaded entities; so we
-// fall back to inline text extraction instead and report the exclusion loudly
-// (gh#414, see queueEntityForEmbedding). Configs that can serve the ref are
-// unaffected.
+// serve THAT REFERENCE'S instance — either (ADR-063) the shared registry resolves
+// the ref's owning StorageInstance (federated: ANY registered instance), or the
+// legacy single wired content store IS that instance. Without either, the worker's
+// fetchTextFromStorage cannot reach the body and markFailed would fire, silently
+// collapsing all embedding/search for offloaded entities; so we fall back to
+// inline text extraction instead and report the exclusion loudly (gh#414, see
+// queueEntityForEmbedding). Configs that can serve the ref are unaffected.
+//
+// The owned-store arm is INSTANCE-BOUNDED (gh#875). It used to answer `c.contentStore
+// != nil` — "some store is wired", not "the store this reference names" — so a
+// reference to an instance this process has no handle for was opened against an
+// unrelated bucket, failed, and was recorded as a DURABLE failed embedding. That
+// record re-seeds on every restart and pins the index Degraded unconditionally
+// (graph/index_status.go: FailedCount>0 precedes the ready arm), and re-delivery
+// cannot repair it, because nothing about re-delivery registers a missing store. A
+// deployment wiring fact must not become a permanent health verdict on the index.
+//
+// The fallback is bounded rather than deleted: a store constructed WITHOUT an
+// instance name stamps StorageInstance = bucket name (storage/objectstore/store.go),
+// which is exactly what this equality preserves — the single-bucket deploy shape
+// ADR-063 named. It does NOT preserve references stamped by the objectstore
+// *Component* (whose instance name is its component instance, never a bucket name);
+// nothing is lost there, because that component is a StoreProvider and the registry
+// arm above resolves it.
 func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 	if state.StorageRef == nil {
 		return false
@@ -1980,7 +1996,8 @@ func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 			return true
 		}
 	}
-	return c.contentStore != nil
+	return c.contentStore != nil &&
+		c.contentStore.InstanceName() == state.StorageRef.StorageInstance
 }
 
 // reportOffloadedContentExcluded makes the silent-loss case observable (gh#414):

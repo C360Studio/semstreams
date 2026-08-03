@@ -401,9 +401,15 @@ func (m *embeddingMetrics) setPending(count float64) {
 // separately from the process-global embeddingMetrics singleton so it resolves against
 // the component's own registry (register-or-get). It is the ONE metric the worker reports
 // that must not go through the singleton.
+//
+// reportExcluded is the component's own reportOffloadedContentExcluded (gh#414). Hop 2
+// reaches the SAME reporter through here rather than growing a second one (gh#875), so
+// the counter and the one-shot operator warning have exactly one home regardless of
+// which hop observed the unresolvable instance.
 type workerMetricsAdapter struct {
-	metrics     *embeddingMetrics
-	failuresVec *prometheus.CounterVec
+	metrics        *embeddingMetrics
+	failuresVec    *prometheus.CounterVec
+	reportExcluded func(entityID, storageInstance string)
 }
 
 // IncDedupHits implements embedding.WorkerMetrics.
@@ -450,6 +456,16 @@ func (a *workerMetricsAdapter) IncContentResolved() {
 	}
 }
 
+// ReportContentExcluded implements embedding.WorkerMetrics by routing hop 2's
+// unresolvable-instance observation into the component's single exclusion reporter
+// (gh#875) — the same content_unresolved_total counter and one-shot warning hop 1's
+// gate uses. A nil reporter (a directly-constructed adapter in a test) is a no-op.
+func (a *workerMetricsAdapter) ReportContentExcluded(entityID, storageInstance string) {
+	if a.reportExcluded != nil {
+		a.reportExcluded(entityID, storageInstance)
+	}
+}
+
 // IncDedupSkipped implements embedding.WorkerMetrics.
 func (a *workerMetricsAdapter) IncDedupSkipped(reason string) {
 	if a.metrics != nil {
@@ -479,7 +495,12 @@ func (a *workerMetricsAdapter) IncOffloadedIdentityAbsent() {
 }
 
 // newWorkerMetricsAdapter creates an adapter for the embedding.WorkerMetrics interface.
-// failuresVec is the per-registry failures_total{reason} counter (#613).
-func newWorkerMetricsAdapter(m *embeddingMetrics, failuresVec *prometheus.CounterVec) *workerMetricsAdapter {
-	return &workerMetricsAdapter{metrics: m, failuresVec: failuresVec}
+// failuresVec is the per-registry failures_total{reason} counter (#613);
+// reportExcluded is the component's reportOffloadedContentExcluded (gh#414/gh#875).
+func newWorkerMetricsAdapter(
+	m *embeddingMetrics,
+	failuresVec *prometheus.CounterVec,
+	reportExcluded func(entityID, storageInstance string),
+) *workerMetricsAdapter {
+	return &workerMetricsAdapter{metrics: m, failuresVec: failuresVec, reportExcluded: reportExcluded}
 }

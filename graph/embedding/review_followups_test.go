@@ -28,7 +28,7 @@ func TestFetchTextFromStorage_OverCapCountsTruncation(t *testing.T) {
 		ctx:              context.Background(),
 	}
 
-	text, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/big"})
+	text, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/big"})
 	if err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}
@@ -57,7 +57,7 @@ func TestFetchTextFromStorage_UnderCapDoesNotCountTruncation(t *testing.T) {
 		ctx:              context.Background(),
 	}
 
-	if _, _, err := w.fetchTextFromStorage(&StorageRef{Key: "doc/exact"}); err != nil {
+	if _, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: ownedStoreInstance, Key: "doc/exact"}); err != nil {
 		t.Fatalf("fetchTextFromStorage: %v", err)
 	}
 	if got := m.snapshot().truncated; got != 0 {

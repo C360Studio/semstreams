@@ -153,6 +153,17 @@ type WorkerMetrics interface {
 	// a rising value is that inclusion happening, not merely content_unresolved
 	// falling (the cost-ledger "make the delta observable" discipline).
 	IncContentResolved()
+	// ReportContentExcluded reports one offloaded body EXCLUDED from its embedding
+	// because no store in this process serves the StorageInstance its reference names
+	// (gh#875) — the FETCH-time half of the gh#414 exclusion path, reached when a store
+	// that resolved at the queue-time gate was deregistered before the read.
+	//
+	// A report, not merely a counter: the implementation owns BOTH the
+	// content_unresolved_total counter and the one-shot operator warning that names the
+	// remedy, so there is exactly one place that interprets this condition rather than a
+	// second spelling of it in the worker. entityID and storageInstance identify the
+	// exclusion in that log line; NEITHER is a metric label (entity IDs are unbounded).
+	ReportContentExcluded(entityID, storageInstance string)
 }
 
 // StoreResolver resolves a StorageReference.StorageInstance to its live
@@ -539,7 +550,23 @@ func (w *Worker) handleKVEntry(
 
 	// Get source text - either from record or from ObjectStore via StorageRef
 	sourceText, err := w.getSourceText(&record)
-	if err != nil {
+	switch {
+	case err == nil:
+		// fall through
+
+	case errors.Is(err, errNoStoreForInstance):
+		// gh#875: no store in this process serves the instance this reference names.
+		// That is a deployment WIRING fact, not an embedding failure: re-delivery
+		// cannot register a missing store, so a durable failed record here would pin
+		// the index Degraded forever with no exit but deleting the entity. Report the
+		// exclusion (metric + the operator-actionable warning, the same gh#414 path
+		// hop 1 uses) and carry on with whatever INLINE identity text the record holds,
+		// so the entity still reaches a terminal outcome below — generated from its
+		// identity text, or the no-text delete when it has none.
+		w.reportContentExcluded(entityID, &record)
+		sourceText = w.capText(record.IdentityText)
+
+	default:
 		w.logger.Error("Failed to get source text", "entity_id", entityID, "error", err)
 		outcome, reason, terminal = w.markFailed(entityID, fmt.Sprintf("text extraction failed: %v", err), failReasonContentError, sourceRevision)
 		return
@@ -909,23 +936,48 @@ func (w *Worker) getSourceText(record *Record) (string, error) {
 		return text, nil
 	}
 
-	// Inline lane: SourceText is the whole text. Truncate at the cap through the SAME
-	// rune-safe routine the offloaded lane uses, so identical content embeds byte-identical
-	// text (and derives the same hop-2 dedup key) regardless of lane. This is the inline
-	// lane's single truncation-detection site — emit a signal only when it actually
-	// shortens the text so the bytes embedded stay discoverable (#602).
-	text := record.SourceText
-	if w.maxSourceTextLen > 0 {
-		truncated := truncateAtWord(text, w.maxSourceTextLen)
-		if len(truncated) < len(text) {
-			if w.metrics != nil {
-				w.metrics.IncTruncated()
-			}
-		}
-		text = truncated
-	}
+	// Inline lane: SourceText is the whole text, capped through the SAME rune-safe
+	// routine the offloaded lane uses, so identical content embeds byte-identical text
+	// (and derives the same hop-2 dedup key) regardless of lane.
+	return w.capText(record.SourceText), nil
+}
 
-	return text, nil
+// capText applies the effective source-text cap and counts the truncation exactly
+// once when it actually shortens the text, so the bytes embedded stay discoverable
+// (#602). It is the inline lane's single truncation-detection site, and the site for
+// the identity-only text an unresolvable storage instance falls back to (gh#875).
+//
+// The offloaded lane does NOT use it: that lane's cap application must suppress the
+// count when fetchTextFromStorage already counted the body truncation, so the two
+// clamps never double-count (see getSourceText).
+func (w *Worker) capText(text string) string {
+	if w.maxSourceTextLen <= 0 {
+		return text
+	}
+	truncated := truncateAtWord(text, w.maxSourceTextLen)
+	if len(truncated) < len(text) && w.metrics != nil {
+		w.metrics.IncTruncated()
+	}
+	return truncated
+}
+
+// reportContentExcluded reports one offloaded body EXCLUDED from its embedding
+// because no store in this process serves the instance its reference names (gh#875).
+//
+// It does NOT own the reporting: it forwards to the metrics reporter, whose
+// component-side implementation is the single place that interprets this condition
+// (the content_unresolved_total counter and the one-shot operator warning naming the
+// remedy — the gh#414 path hop 1 already uses). A worker with no reporter wired still
+// behaves correctly; only the report is lost.
+func (w *Worker) reportContentExcluded(entityID string, record *Record) {
+	if w.metrics == nil {
+		return
+	}
+	instance := ""
+	if record != nil && record.StorageRef != nil {
+		instance = record.StorageRef.StorageInstance
+	}
+	w.metrics.ReportContentExcluded(entityID, instance)
 }
 
 // truncateAtWord truncates text to at most maxLen RUNES (characters), preferring the
@@ -978,18 +1030,68 @@ func truncateAtWord(text string, maxLen int) string {
 	return truncated
 }
 
+// errNoStoreForInstance is the distinguishable condition "no store in this process
+// can serve the StorageInstance this reference names" (gh#875). It is a CLASS the
+// caller branches on with errors.Is — never a message match, which would make the
+// decision by predicting text instead of observing a type.
+//
+// It is deliberately separate from every other fetch error: a resolved store's Open
+// or read failure is an infra fault that genuinely recovers on re-delivery, so it
+// stays failReasonContentError with its recovery guarantee. This class cannot recover
+// on re-delivery — re-delivery does not register a missing store — so recording it as
+// a failed embedding would convert a deployment wiring fact into a permanent Degraded
+// verdict. handleKVEntry routes it to the excluded-content path instead.
+var errNoStoreForInstance = errors.New("no store for storage instance")
+
+// instanceNamer is the narrow method set a store implements to state which
+// StorageInstance its references carry (storage.StreamableStore does not require it;
+// *objectstore.Store provides it). Asserted rather than required so the store
+// interface stays about I/O.
+type instanceNamer interface {
+	InstanceName() string
+}
+
+// ownedStoreServes reports whether the worker's OWNED fallback store is the store
+// that instance names.
+//
+// Fail-closed on an unknown answer: a fallback store that cannot state its instance
+// cannot be shown to serve this reference, so it does not answer for it. The
+// alternative (assume it serves) is the gh#875 defect itself — a store answering for
+// an instance it never held, whose read then fails and latches a durable failure.
+// Excluding is non-destructive by comparison: the entity still embeds its inline text.
+func (w *Worker) ownedStoreServes(instance string) bool {
+	if w.contentStore == nil || instance == "" {
+		return false
+	}
+	namer, ok := w.contentStore.(instanceNamer)
+	if !ok {
+		return false
+	}
+	return namer.InstanceName() == instance
+}
+
 // resolveStore returns the store that backs a StorageInstance: the shared
 // registry first (federated — resolves ANY registered storage instance), then
-// the worker's OWNED fallback store (single wired store-read bucket). Resolves
-// per-fetch and returns a BORROWED handle from the registry path — callers must
-// not close it. Returns nil when neither path can serve the instance.
+// the worker's OWNED fallback store, but ONLY when that store IS the named
+// instance (gh#875). Resolves per-fetch and returns a BORROWED handle from the
+// registry path — callers must not close it. Returns nil when neither path can
+// serve the instance.
+//
+// The re-check here is not redundant with the component's hop-1 gate. The registry
+// contract is explicitly per-fetch with no caching, and deregistration on component
+// Stop is a live path — so a store that resolved when hop 1 decided to fetch can be
+// gone by the time hop 2 reads. Gating alone would leave that race producing the
+// same permanent durable-failed latch, reached by a narrower door.
 func (w *Worker) resolveStore(instance string) storage.StreamableStore {
 	if w.storeResolver != nil && instance != "" {
 		if s, ok := w.storeResolver.Streamable(instance); ok {
 			return s
 		}
 	}
-	return w.contentStore // owned fallback (may be nil)
+	if w.ownedStoreServes(instance) {
+		return w.contentStore
+	}
+	return nil
 }
 
 // fetchTextFromStorage streams raw content from the store, reading only up to
@@ -1004,7 +1106,10 @@ func (w *Worker) resolveStore(instance string) storage.StreamableStore {
 func (w *Worker) fetchTextFromStorage(ref *StorageRef) (text string, bodyTruncated bool, err error) {
 	store := w.resolveStore(ref.StorageInstance)
 	if store == nil {
-		return "", false, fmt.Errorf("content store not configured")
+		// Distinguishable CLASS, not a message (gh#875): the caller routes this to the
+		// excluded-content path instead of a durable failed record. Wrapped with %w so
+		// errors.Is matches through the caller's error chain.
+		return "", false, fmt.Errorf("%w: %q", errNoStoreForInstance, ref.StorageInstance)
 	}
 
 	reader, err := store.Open(w.ctx, ref.Key)
