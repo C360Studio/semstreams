@@ -9,6 +9,131 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ## Next action
 
+> **STATE 2026-08-02 (SESSION 25 CLOSED — gh#810 IS PULLED, NOT LANDED. The next increment is
+> GATE INTEGRITY, then ports. Read this whole block before touching gh#810.)**
+>
+> **MEASURED, and WHERE, because these were nearly recorded against the wrong base:**
+> · **On MAIN at `2dce8258`** (this baton's base): build ok · `go test ./...` **135 ok / 0 FAIL** ·
+>   `openspec validate --all --strict` **35/0** · in-flight changes **2**.
+> · **On the PARKED gh#810 BRANCH, not on main** — do NOT read these as main's numbers:
+>   `-race ./...` 137 ok/0 FAIL · `-race -tags=integration -p 2 -count=1 ./...` 138 ok/0 FAIL ·
+>   lint 0 · `go vet` plain + `-tags=integration` + `-tags=live_llm` clean · schema zero drift ·
+>   `e2e:agentic` GREEN · `e2e:crud-tools` red on gh#860 only.
+> Merged today: **#856** (`af19111b` audit remediation) and **#863** (`2dce8258` architect role +
+> contract reshape; it salvaged the agent-setup commits off the gh#810 branch precisely because
+> that branch was being reset).
+>
+> **THREE CORRECTIONS MEASURED AT THE SESSION-26 RESUME (2026-08-02, on `8daf8b6f`):**
+> · **This close-out is not landed yet — PR #864 is OPEN.** Lint / Build / Schema Validation /
+>   e2e statistical all SUCCESS; `Test` still in progress at resume, so `mergeStateStatus` reads
+>   BLOCKED for that reason and no other. Merge it per the gate (Codex round, then `--auto`).
+> · **gh#861 is missing from this block and it is a defect on MAIN.** Filed 2026-08-02T14:26Z out
+>   of PR #858's Codex round, never recorded here. **Re-reproduced at resume, not relayed:**
+>   `go test -race -count=10 -cpu 1,2,4 ./pkg/lifecycle/ -run TestManager_ConcurrentCreateOnlyOneWins`
+>   → `expected exactly 1 successful concurrent Create, got 2 (already_exists=6, other=0)`.
+>   The "135 ok / 0 FAIL" above is NOT contradicted — a single-run `go test ./...` cannot see it;
+>   it needs `-count`/`-cpu` variation. This is Lifecycle substrate (ADR-047) and gh#807/gh#689
+>   build contract-bound claim semantics on exactly-one-winner, so **it belongs in item 1
+>   (gate integrity)**: a suite that passes at `-count=1` while the substrate races is the same
+>   false-green class as the three tiers that reported green while failing.
+> · **`discovery-under-stream-shapes` carried NO hold marker in its `tasks.md`**, so
+>   `task openspec:queue` reported it `ok — no halt/hold/deliberate marker` while the owner had
+>   pulled it. The park existed only in this prose — exactly the drift the queue report was built
+>   to prevent, in the direction that costs most (a parked change reading as ready). Fixed: task
+>   **0.3 HOLD** now carries the pull, the reason verbatim, and the un-hold condition; the queue
+>   reports it BLOCKED. **A park recorded only in the baton is not recorded.**
+>
+> **gh#810 IS PARKED UNMERGED and its branch was NEVER PUSHED.** Branch
+> `feat/gh810-discovery-under-stream-shapes`, rebased onto `2dce8258`, 21 commits, clean. Owner
+> pulled it: *"this entire chain around 810 smells so bad… it was spec'd wrong twice and now I
+> think we are just trying to commit it to get it out of the way so we can dig it all out later.
+> IMO we need to step back and fix our port handling first."*
+>
+> **The argument that settled it, recorded because it generalises:** the session argued AGAINST
+> writing an ADR for the change because gh#862 supersedes the port-declaration model inside the
+> same pre-v1 window — then recommended LANDING the same change, whose payload is a new framework
+> field (`Registration.DefaultPorts`), a cross-repo adoption instruction, and an all-or-nothing
+> enforcement behaviour built on that model. **The churn test was applied to the cheapest artifact
+> and not the most expensive one. Too unstable to document ⇒ too unstable to export.**
+>
+> **And the acute bug is SEPARABLE from the guard, measured:** nine shipped configs on main carry
+> `TOOL: ["tool.>"]` and have dead tool discovery today (`agentic.json`,
+> `examples/research-graph-pipeline.json`, `research-graph-e2e.json`, six `flows/*.json`). Fixing
+> that is **nine config lines** and needs none of the framework layer.
+>
+> **NEXT, in order:**
+> **0. THE OWNERSHIP-INFERENCE CLASS — gh#869 IS PROMOTED OUT OF DEFERRAL (owner, 2026-08-02).
+> New ledger row; read it before starting.** gh#861 (lifecycle `Manager.Create` let two concurrent
+> creates both report success — it proved "this write is mine" with a wall-clock stamp that is not
+> unique) was FIXED, but **the fix did not build the primitive — it removed the NEED for one on a
+> single path** by narrowing the create retry so a create is delivered at most once. Four other
+> paths still ask "did I commit that?" and still answer by comparing content. **Three of the five
+> issues that fix spawned are the same class** (gh#869 the primitive, gh#870 the mirror-image
+> instance in the same function, gh#871 two further sites).
+> **The rule that fired is the bug-class ledger's own:** *"a Nth instance on an open row means the
+> row's fix is overdue."* Note precisely which rule did NOT fire, so this is not justified with a
+> gate that never opened: **gh#802's trigger conditions have NOT fired** (multi-tenancy, untrusted
+> `graph.mutation.*` wire, caller-chosen predicates, non-repudiation — none apply; that issue is
+> authorization, a different concern wanting a similar-looking envelope).
+> **The argument that promoted it, recorded because it generalises:** the deferral was argued as
+> *"a shape with four open questions is too unstable to document, therefore too unstable to build"*
+> — which answers **should the ADR be written now** and never puts the question **is the primitive
+> needed**. Owner put the second: SemStreams already has the CQRS shape (graph-ingest is the write
+> side, KV/projections the read side, the write IS the event) and the CQRS vocabulary
+> (`CommitNotCommitted`/`Unknown`/`Committed`/`Verified` in `pkg/projection/mutation_types.go`) —
+> **but not the CQRS correlation primitive.** So gh#807's four open questions are the design work,
+> not the reason to wait. **Two bundled questions, one argued: check for that shape.**
+> Sequencing within the class: gh#870 errs CONSERVATIVE (a false 409, no state corruption) where
+> gh#861 errs liberal (a false success), so it follows the primitive rather than racing it.
+> **gh#689 is blocked on this row** — its "two concurrent claimers cannot both receive committed
+> success" cannot be met by a client whose spec (`projection-mutation-client/spec.md:293-294`)
+> rules matching content to BE idempotent success. That spec clause needs an owner ruling, and
+> gh#861's fix is explicitly NOT recorded as unblocking gh#689.
+> **1. GATE INTEGRITY — nothing downstream is verifiable until this is done.** Four tiers are
+> known-broken: **gh#860** (crud-tools `verify-fire-every-n-events`, PRE-EXISTING — bisected to
+> identical failure at `b4194059` with `tool.>` intact, which also FALSIFIES PR #847's claim that
+> narrowing the TOOL stream causes it), **gh#844** (ops) and **gh#843** (lifecycle) — both were
+> *failing while reporting green* until gh#811 — and **gh#830** (semantic, RED, not in CI). Plus
+> gh#769 (nightly), gh#848/gh#767 (uncovered shipped lanes), gh#821.
+> **⚠ OWNER CAVEAT, do not file another one of these without reading it: we keep asking for e2e
+> items in CI that will not actually run until the `semantic-tier-split` change lands.** That tier
+> tests Tier-2 retrieval AND GraphRAG answer synthesis under one name and saturates its host —
+> which is why gh#830 took five runs and two disproved hypotheses to diagnose. **Sequence the
+> split before promising CI coverage.** Getting e2e green must be a natural step in every
+> increment, and green must mean green — three tiers were reporting success while failing.
+> **2. gh#842 + the nine config narrowings.** gh#842 (move the default discovery subject off
+> `tool.list`) was deferred **because gh#810's guard would make the collision loud**; with the
+> guard parked that premise collapses, so **gh#842 is back IN SCOPE**. It is the durable fix —
+> removes the collision at the source, where the guard only detects it — and needs no port model.
+> Breaking, fine pre-v1. Not yet posted on the issue.
+> **3. SALVAGE PR from the parked branch — port-model-INDEPENDENT pieces only:** the pub-ack
+> rejection at `natsclient.ClassifyReply` (the most valuable piece — the only part protecting a
+> requester that declared NOTHING, and it deletes the gateway's stale duplicate detector), the
+> nine config narrowings, gh#822's subject export, and the two port-type defects already fixed
+> (`agentic-loop`, `agentic-tools`). **Do NOT salvage** `Registration.DefaultPorts`,
+> `ResolveRequestReplySubjects`, the boot wire, the four provisioning seams, or the config scan.
+> **4. PORT HANDLING — gh#859** (port-type interpretation re-derived in ~57 string sites + ~49
+> type-switch arms across 33 files, three copies provably wrong; owner ruled `portsToCapabilities`
+> and `extractPortDetail` are features to SUPPORT not dead code to delete, and `PortKind` must
+> carry granularity the current `Portable.Type()` collapse discards) **then gh#862** (seal
+> `Discoverable` so components declare ports and the framework renders them — owner ruled this
+> **PRE-V1**, BREAKING, because deferring forces a post-v1 break).
+> **5. RE-JUDGE the guard** on the fixed foundation; after gh#842 its remaining job is much rarer.
+>
+> **FILED THIS SESSION:** gh#859 (port-type divergence, later corrected — its "no shared
+> primitive" premise was FALSE; `BuildPortFromDefinition` has 15 consumers and `Portable.Type()`
+> already bridges Go-type→string, so the fix is adoption + one alias-normalizer, not invention) ·
+> **gh#860** (the pre-existing crud-tools failure) · **gh#862** (seal `Discoverable`).
+>
+> **TWO CORRECTIONS THIS SESSION MADE TO ITSELF, both worth the space:** a HOLD was written on the
+> false premise that `engine/validator.go:202` "builds a FlowGraph from (registry, config) alone
+> outside any boot sequence" — it builds from a `flowstore.Flow` with a LIVE NATS client at
+> flow-deploy time, and the false premise had already propagated to gh#859 and memory. And an M2
+> obligation was recorded as required-before-merge and then not done; an external review caught it
+> still outstanding. **Recording an obligation is not discharging it.**
+>
+> **(Historical, retained below.)**
+>
 > **STATE 2026-08-01 (SESSION 24 CLOSED — gh#810 IS FURTHER FROM DONE THAN IT LOOKED. PR #847
 > is DRAFT pending a fresh-session rework against recorded constraints.)**
 >
@@ -825,6 +950,7 @@ Pedantry bucket measured: zero — every blocker carried a failure scenario.
 | Cross-repo gates written into local task lists | task-list residency rule (standing rules) + gh#753 | 5 instances rescoped 2026-07-30; guard live |
 | **Guard reports green without checking** (a verification that cannot fail) | mutation-check every guard, and prefer a LITERAL expectation over one derived from the thing being checked | **open — 3 new instances in #787 alone** (sync guard blind to `omitempty`; order test that did not pin order; `checked != len(probes)` tautology). Distinct from "a test that reconstructs": these are guards on OTHER tests' integrity. All 3 found by review, none by CI |
 | Enumerating a surface from the wrong owner | derive from the component that OWNS the surface, and scrape it rather than hand-maintain | **1 instance (#787)**: gateway subjects enumerated from graph-query's registrations → 2 phantom entries + 1 miss + a wrong adopter instruction. Fixed drift-proof |
+| **Ownership inference at the write seam** (content equality read as authorship — "the stored state looks like what I was about to write, therefore I wrote it") | request-scoped idempotency / claim primitive on the graph mutation seam, so authorship is OBSERVED from the causal response rather than reconstructed — **gh#869** | **open — 5 spellings, 3 unsound, ledger row added 2026-08-02.** Sound: the causal mutation response (`pkg/lifecycle/manager.go` `outcomeFromCreate`/`outcomeFromUpdate`). Unsound: wall-clock audit stamp (**gh#861, FIXED** — not by building the primitive but by narrowing the retry so the question stops being asked on that path); phase-triple presence in the attach branch (**gh#870**, mirror image — errs conservative, invents a 409 for its own birth); `MessageType` equality (`processor/graph-ingest`… `agentic-loop/graph_writer.go:254-289`) and full-triple-multiset equality (`pkg/projection/mutation_client.go:586-589`, **spec-BLESSED** at `projection-mutation-client/spec.md:293-294`) — both **gh#871**. **gh#689 is blocked on this row**: "two concurrent claimers cannot both receive committed success" cannot be met by a client whose spec rules matching content to be idempotent success |
 
 ---
 
