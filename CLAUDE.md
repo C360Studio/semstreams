@@ -2,6 +2,27 @@
 
 A stream processor that builds semantic knowledge graphs from event data using NATS JetStream.
 
+## What this is for — read before changing anything
+
+SemStreams is the **governed graph substrate and framework** for the C360 `sem*` family. It is a **framework,
+not a product**: it owns primitives and contracts, never a consumer's domain semantics.
+
+**Read `openspec/project.md` (Purpose + Product Boundary) before scoping anything** — and especially before
+concluding that something is unused, dead, or safe to delete. This file tells you *how* the repo works; that
+one tells you *what it is for*. **A capability nothing in this tree reads may still be a first-class purpose**
+whose consumer is a sister repo, a product above us, or a path that is simply broken — a `grep` for callers
+answers "is this wired", never "is this wanted". When the answer matters, read the commit that introduced it
+(`git log -S`) and the ADR that governs it.
+
+**Why the graph holds everything, including agent runs.** Every step an agent takes is recorded as graph
+entities with its evidence in ObjectStore, because an agentic harness you cannot audit is the black hole this
+substrate exists to close: a transcript at best, nothing verifiable, and no answer to "what did that tool
+actually return". Agent execution evidence is a **first-class capability, not trace exhaust** — SemStreams runs
+the loops, so it owns the audit primitives; how they are consumed belongs to the product above. Evidence is not
+regenerable, so expiry is never its reclamation mechanism (ADR-068). Note the distinction that governs both:
+indexing profiles decide what gets **embedded** (ADR-054), which is not the same question as what gets
+**retained**.
+
 ## Tech Stack
 
 - Go 1.25 + NATS JetStream (KV, ObjectStore)
