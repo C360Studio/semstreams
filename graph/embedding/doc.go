@@ -62,7 +62,8 @@
 //
 //	worker := embedding.NewWorker(storage, embedder, indexBucket, logger).
 //	    WithWorkers(5).
-//	    WithContentStore(objectStore). // For ContentStorable entities
+//	    WithStoreResolver(storeRegistry).  // preferred: resolves ANY registered instance
+//	    WithContentStore(objectStore).     // optional fallback; must be a NamedStore
 //	    WithOnGenerated(func(entityID string, vector []float32) {
 //	        // Update vector index cache
 //	    })
@@ -122,6 +123,30 @@
 //	    },
 //	    sourceRevision, // ENTITY_STATES revision for the readiness watermark (0 if unknown)
 //	)
+//
+// # Resolving an offloaded body — which store answers
+//
+// A StorageRef names a storage INSTANCE, not an address, and the worker resolves it in
+// two steps:
+//
+//  1. The shared store resolver ([StoreResolver], ADR-063) — the preferred path. It
+//     resolves ANY registered instance, so a deployment that runs its storage components
+//     in-process needs nothing else.
+//  2. The worker's own fallback store ([Worker.WithContentStore]) — and ONLY when that
+//     store IS the instance the reference names. It answers for its own instance, never
+//     for any other.
+//
+// Because of step 2, the fallback store must be able to state which instance it serves,
+// so [Worker.WithContentStore] takes a [NamedStore] (a [storage.StreamableStore] plus
+// InstanceName) rather than a bare store. Implementing a custom backend means adding one
+// method that returns whatever the producing side stamps into
+// StorageReference.StorageInstance; *objectstore.Store already provides it.
+//
+// When NEITHER step can serve the reference, the body is not an error: the entity is
+// embedded from whatever inline text it carries and its record is marked with the
+// [ReasonContentExcluded] qualifier, so the affected entities stay enumerable and
+// re-embed automatically once the instance becomes resolvable. An entity with no inline
+// text reaches the ordinary no-text terminal and stores no record at all.
 //
 // # Vector Operations
 //

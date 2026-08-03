@@ -99,8 +99,16 @@ Retracted and enumerated (review finding, gh#875; the gate re-runs when the surf
 | `embedding.NamedStore` + `embedding.Worker.WithContentStore` | new exported interface; the setter narrows from `storage.StreamableStore` to `NamedStore` (adds `InstanceName() string`) | **Compile break** for an adopter whose own backend implements the backend-neutral `storage.StreamableStore` and nothing more — a sister repo's filestore is exactly that. Deliberately a compile break: the previous shape probed for the method at runtime and silently excluded EVERY offloaded body when it was absent, which is this change's own defect one layer up. In-tree it costs nothing (`*objectstore.Store` already satisfies it). The fix for an adopter is one method returning whatever their producer stamps into `StorageReference.StorageInstance`. |
 | `objectstore.DefaultInstanceName` | new exported constant | Additive. Exported because graph-embedding's operator remedy reasons about that exact value; a shared constant makes it a compile-visible edit if the name ever becomes configurable, instead of stale advice nothing checks. |
 
-All four are pre-v1 breaks taken deliberately under the clean-beta policy. The first three fail loudly at
-compile time; the fourth is documented on the field itself and in the capability spec.
+Six rows, five of them breaks, all taken deliberately under the clean-beta policy. **Four fail loudly at
+compile time** — `WorkerMetrics.ReportContentExcluded`, `Storage.SaveGenerated`'s new parameter,
+`Worker.WithContentStore`'s narrowing to `NamedStore`, and (for an implementer of the interface) `NamedStore`
+itself. **One is silent**: `Record.Reason`'s widened meaning, which no compiler can catch, so it is documented
+on the field itself and in the capability spec. The sixth row, `objectstore.DefaultInstanceName`, is purely
+additive and breaks nothing.
+
+The count was wrong here for one round — the prose said "all four … the first three fail loudly" after the
+table had grown to six. Corrected at final review, and worth the note: an exported-surface gate that
+undercounts is the same failure as not running it.
 
 **What is lost, stated here rather than discovered later** — this is the cost ledger for a silent-exclusion
 flip, and it is why the change is not a pure improvement:

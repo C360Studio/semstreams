@@ -65,11 +65,23 @@
       match on the message.
       `errNoStoreForInstance` (`graph/embedding/worker.go`, unexported — the branch is in-package), wrapped
       with `%w` at the single `store == nil` return so `errors.Is` matches through the caller's chain.
-      `resolveStore` now returns nil for an instance it cannot serve, including the owned fallback, which is
-      bounded by `ownedStoreServes` (narrow `InstanceName() string` assertion; **fail-closed** when the store
-      cannot state its instance). Tests: `TestFetchText_OwnedStoreDoesNotAnswerForAForeignInstance`,
-      `TestFetchText_OwnedStoreThatCannotNameItsInstanceDoesNotAnswer`, `TestFetchText_NoStoreConfigured`,
-      `TestResolveStore_BoundsTheOwnedFallback` (4 cases).
+      `resolveStore` returns nil for an instance it cannot serve, including the owned fallback, which is
+      bounded by `ownedStoreServes`.
+      **Mechanism CORRECTED (final review).** This line first described that bound as a "narrow
+      `InstanceName() string` assertion; **fail-closed** when the store cannot state its instance". That
+      runtime assertion WAS the BLOCKING defect of the final round: `storage.StreamableStore` is the
+      documented backend-neutral adopter seam, so for an adopter whose store implements it and nothing more,
+      "fail-closed" meant every offloaded body silently excluded — no compile error, no boot error. The
+      requirement is now a COMPILE-TIME fact: `WithContentStore` takes `NamedStore`
+      (`storage.StreamableStore` + `InstanceName() string`), so `ownedStoreServes` simply asks the store, and
+      a store that cannot answer can no longer be wired at all.
+      Tests: `TestFetchText_OwnedStoreDoesNotAnswerForAForeignInstance`, `TestFetchText_NoStoreConfigured`,
+      `TestResolveStore_BoundsTheOwnedFallback` (4 cases), plus the compile-time assertion
+      `var _ NamedStore = readerStore{}`.
+      ~~`TestFetchText_OwnedStoreThatCannotNameItsInstanceDoesNotAnswer`~~ — **DELETED, not renamed.** It fed
+      a nameless store in and asserted the fetch was refused; it passed, and the behaviour it locked was the
+      defect. Struck rather than edited away, because a deleted test quietly dropped from an evidence list
+      reads as coverage that never existed.
 - [x] 3.2 Route only that condition to `reportOffloadedContentExcluded` + a terminal outcome from inline text;
       no durable failed record is written.
       `handleKVEntry` switches on `errors.Is(err, errNoStoreForInstance)` and, only there, reports the
@@ -190,6 +202,13 @@
         `SaveGenerated accepted an out-of-enum qualifier; the bounded set must be enforced, not documented`.
         Recorded because a mutation that fails to COMPILE proves nothing about the test.
       storage.go md5 `8b809ec2…` before and after both mutations.
+      **STALE for the final-review round — superseded by 4.6.** MUTATION 8 was measured against the
+      quality-ONLY guard (`existing.Reason == record.Reason && existing.SourceRevision >= …`), which the
+      final round replaced with revision-first ordering. Its result still tells you the ruled "unqualified"
+      form is defeated, but it was not measured on the code that ships, and the revision-first mechanism the
+      round ADDED has no line here at all. Marked stale rather than rewritten, for the same reason 5.8 was:
+      a mutation result silently re-pointed at different code is indistinguishable from one that was never
+      re-run.
 
 ## 5. Gates
 
@@ -456,6 +475,18 @@
       **Not owner-signed off at time of writing** — surfaced to the owner in the round that produced it, and
       the issue comment still carries the ruled wording. The correction is owed on the issue; this row is the
       in-tree record of it. Nothing else in the ruling deviates.
+
+      **TWO sign-offs are open and neither is mine to give.** Recorded here so they cannot be lost between
+      an APPROVE and a merge:
+      1. **The guard supersession above** — the ruled form replaced by revision-first + quality-at-equal.
+      2. **`embedding.NamedStore`** — new exported surface on a framework package (`graph/*`), which the
+         developer contract routes through owner design review BEFORE implementation. It was implemented
+         first, as the remedy for a BLOCKING adopter-seam defect found at review, so the review order is
+         itself the deviation: the design gate ran after the code rather than before it. The alternatives
+         (keep the runtime assertion, or delete the fallback entirely) are recorded in the proposal's
+         exported-surface table and design.md Decision 2.
+      Both are carried on the PR as explicit outstanding items rather than treated as closed by any review
+      approval, which cannot substitute for owner sign-off.
 - [ ] 6.1 `semstreams-reviewer` on the full diff.
 - [ ] 6.2 Codex round, then `--auto`. Record that it ran on this line.
 - [x] 6.3 Confirm the spec delta's MODIFIED requirement matches the archived text exactly apart from the

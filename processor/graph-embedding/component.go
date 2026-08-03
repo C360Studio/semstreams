@@ -2001,8 +2001,7 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 // instance name stamps StorageInstance = bucket name (storage/objectstore/store.go),
 // which is exactly what this equality preserves — the single-bucket deploy shape
 // ADR-063 named. It does NOT preserve references stamped by the objectstore
-// *Component*, which stamps "objectstore" (storage/objectstore/component.go:152,
-// hardcoded) and never a bucket name.
+// *Component*, which stamps objectstore.DefaultInstanceName and never a bucket name.
 //
 // That second case is a REAL LOSS for one deployment shape, and saying otherwise here
 // was wrong (review, gh#875): the registry resolves an objectstore Component only IN
@@ -2088,10 +2087,11 @@ func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance str
 
 // ownedStoreInstanceForLog reports which StorageInstance this component's own content
 // store serves, for the exclusion warning. It is the single most useful fact for
-// diagnosing the mismatch — an operator seeing storage_instance="objectstore" beside
-// owned_store_instance="MESSAGES" can see immediately that the store-read port names a
-// bucket while the reference names a component instance. "(none)" when no store-read
-// port is configured at all, which is a different (and simpler) wiring gap.
+// diagnosing the mismatch — an operator seeing a storage_instance equal to
+// objectstore.DefaultInstanceName beside owned_store_instance="MESSAGES" can see
+// immediately that the store-read port names a bucket while the reference names a
+// component instance. "(none)" when no store-read port is configured at all, which is a
+// different (and simpler) wiring gap.
 func (c *Component) ownedStoreInstanceForLog() string {
 	if c.contentStore == nil {
 		return "(none)"
