@@ -96,6 +96,8 @@ Retracted and enumerated (review finding, gh#875; the gate re-runs when the surf
 | `embedding.Storage.SaveGenerated` | gains a trailing `qualifier string` parameter | **Compile break** for any out-of-tree caller. Deliberate: it forces every writer to state whether it produced a complete or a degraded vector. |
 | `embedding.ReasonContentExcluded` | new exported constant | Additive. Exported because enumeration is its purpose — a scanner outside the package needs the value by name, not as a bare literal. |
 | `embedding.Record.Reason` | **semantic** widening: a bounded qualifier of the terminal state, valid on any `Status`, not a failure-only classification | **Silent break** for an out-of-tree reader assuming `reason != "" ⇒ failed`. The representation is unchanged — same string, same `omitempty`, nothing fails to decode — only the interpretation. This is the one break a compiler cannot catch, which is why it is stated here. |
+| `embedding.NamedStore` + `embedding.Worker.WithContentStore` | new exported interface; the setter narrows from `storage.StreamableStore` to `NamedStore` (adds `InstanceName() string`) | **Compile break** for an adopter whose own backend implements the backend-neutral `storage.StreamableStore` and nothing more — a sister repo's filestore is exactly that. Deliberately a compile break: the previous shape probed for the method at runtime and silently excluded EVERY offloaded body when it was absent, which is this change's own defect one layer up. In-tree it costs nothing (`*objectstore.Store` already satisfies it). The fix for an adopter is one method returning whatever their producer stamps into `StorageReference.StorageInstance`. |
+| `objectstore.DefaultInstanceName` | new exported constant | Additive. Exported because graph-embedding's operator remedy reasons about that exact value; a shared constant makes it a compile-visible edit if the name ever becomes configurable, instead of stale advice nothing checks. |
 
 All four are pre-v1 breaks taken deliberately under the clean-beta policy. The first three fail loudly at
 compile time; the fourth is documented on the field itself and in the capability spec.
@@ -108,9 +110,13 @@ flip, and it is why the change is not a pure improvement:
    how many entities are currently affected. Filed as gh#881 rather than fixed here. Softened by the qualifier
    (item 2): the current count is now derivable from KV without a new gauge.
 2. ~~**The durable record disappears.**~~ **DISSOLVED by the qualified-success reframe (owner ruling,
-   2026-08-03).** The stored record is `generated + content_excluded`, so "which entities have unreachable
-   bodies" is answerable by scanning the qualifier — and answerable *better* than before, because the entity
-   also has a usable vector rather than none.
+   2026-08-03) — for entities that carry inline text.** Those store `generated + content_excluded`, so "which
+   entities have unreachable bodies" is answerable by scanning the qualifier, and answerable *better* than
+   before, because the entity also has a usable vector rather than none.
+   **Bound added at re-review:** an entity with an unreachable body and NO inline text has nothing to embed,
+   so it takes the ordinary no-text terminal and stores no record at all. It is reported only by
+   `content_unresolved_total` and is not enumerable from the index. For that subpopulation the original cost
+   stands undissolved, and the spec now says so rather than claiming otherwise.
 3. **A mis-wired deployment gets quieter** — but the signal it replaces is currently *wrong*, and the exclusion
    path is loud by construction (a one-shot warning plus a per-entity metric). This one stands.
 4. ~~**Fixing the wiring no longer re-embeds the body on restart alone.**~~ **DISSOLVED by the same reframe.**
@@ -123,8 +129,11 @@ flip, and it is why the change is not a pure improvement:
    `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives it with no ENTITY_STATES write.
    **Re-review correction:** the first version of this compared against "unqualified", which a hop-2 failure
    defeated permanently — see cost-ledger item 6.
-5. **A cross-process producer/indexer split loses body embedding** — found by review, and this one is real and
-   stands. An objectstore *Component* stamps its component instance name; a reader's `store-read` port can only
+5. **A cross-process producer/indexer split loses body embedding — and for text-less entities loses the
+   entity from the index entirely.** Found by review, and this one is real and stands. The second half was
+   added at re-review: an entity in that deployment with no inline text goes from *body embedded and
+   searchable* to *no vector, no record, one counter tick*. That is a larger loss than "loses body embedding"
+   implied, and it is the strongest argument for the store-read-port-declares-its-instance open question. An objectstore *Component* stamps its component instance name; a reader's `store-read` port can only
    ever produce a store named after the BUCKET. Such a deployment embeds bodies today through the instance-blind
    fallback and will be excluded after this change. It is the unavoidable price of the bound (there is no way to
    keep serving it without also serving instances we cannot serve), so what it is owed instead is an executable

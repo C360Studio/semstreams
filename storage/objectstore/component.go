@@ -97,6 +97,19 @@ var _ component.Discoverable = (*Component)(nil)
 var _ component.LifecycleComponent = (*Component)(nil)
 var _ component.StoreProvider = (*Component)(nil)
 
+// DefaultInstanceName is the StorageInstance an objectstore Component registers under
+// and stamps into every StorageReference it writes. It is currently the ONLY name such
+// a component can have: NewComponent does not read a configured InstanceName, and the
+// ComponentManager the comment there anticipates does not supply one either.
+//
+// It is exported because readers act on it. graph-embedding's exclusion warning tells
+// an operator that a reference naming this value is served by running an objectstore
+// component in their process — a remedy that silently becomes wrong the day this name
+// becomes configurable. Exporting it means that day produces a compile-visible edit at
+// every site that reasons about it, rather than stale operator advice nothing checks
+// (gh#875 review).
+const DefaultInstanceName = "objectstore"
+
 // ProvidedStores exposes this component's live store to the ComponentManager for
 // registration in the shared StoreRegistry (ADR-063). Keyed by the store's
 // stamped StorageInstance (store.InstanceName()) — the same value it writes into
@@ -149,7 +162,7 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	// Default instance name - would be provided by ComponentManager
-	instanceName := "objectstore"
+	instanceName := DefaultInstanceName
 
 	return &Component{
 		instanceName:    instanceName,

@@ -206,6 +206,63 @@ func TestSavePendingGuarded_SkipsOnTerminalQualityNotOnPresence(t *testing.T) {
 	}
 }
 
+// TestSavePendingGuarded_StrictlyNewerVectorStandsWhateverItsQuality closes the hole a
+// quality-only comparison would open (review MEDIUM 1): at a STRICTLY NEWER stored
+// revision the incoming write is stale, and a quality mismatch must not be allowed to
+// overrule that. Downgrading there is worse than the transient dip the equal-revision
+// rows accept — the fresh record becomes PENDING at an OLDER revision, and hop 2's own
+// ordering guard cannot recover it because it compares against the pending record this
+// write just left behind. #722 B2 covers the same-quality case; this covers the rest.
+func TestSavePendingGuarded_StrictlyNewerVectorStandsWhateverItsQuality(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	cases := []struct {
+		name         string
+		storedReason string
+		incoming     string
+	}{
+		{"newer complete vs older qualified re-queue", "", ReasonContentExcluded},
+		{"newer qualified vs older complete re-queue", ReasonContentExcluded, ""},
+		{"newer complete vs older complete re-queue", "", ""},
+		{"newer qualified vs older qualified re-queue", ReasonContentExcluded, ReasonContentExcluded},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			const entityID = "acme.ops.docs.sys.doc.ordering"
+			s := NewStorage(newMemKV(), newMemKV())
+			if err := s.SavePending(ctx, entityID, "", "text", 6); err != nil {
+				t.Fatalf("SavePending: %v", err)
+			}
+			if err := s.SaveGenerated(ctx, entityID, []float32{1}, "m", 1, "h", 6, tc.storedReason); err != nil {
+				t.Fatalf("SaveGenerated(rev 6): %v", err)
+			}
+
+			// A stale re-drive at revision 5 against a generated vector at 6.
+			saved, err := s.SavePendingGuarded(ctx, &Record{
+				EntityID: entityID, SourceText: "stale", SourceRevision: 5, Reason: tc.incoming,
+			})
+			if err != nil {
+				t.Fatalf("SavePendingGuarded: %v", err)
+			}
+			if saved {
+				t.Fatal("a STRICTLY NEWER generated vector was downgraded to pending at an older " +
+					"revision: durable content regression, and hop 2's ordering guard cannot recover it")
+			}
+			rec, err := s.GetEmbedding(ctx, entityID)
+			if err != nil || rec == nil {
+				t.Fatalf("GetEmbedding: rec=%v err=%v", rec, err)
+			}
+			if rec.Status != StatusGenerated || rec.SourceRevision != 6 {
+				t.Fatalf("record = %q at rev %d, want the rev-6 generated vector intact",
+					rec.Status, rec.SourceRevision)
+			}
+		})
+	}
+}
+
 // TestSaveGenerated_RejectsAnUnboundedQualifier locks the bound the field doc and the
 // capability spec both assert. The qualifier is a CONTROL input (SavePendingGuarded's
 // skip compares it), so an arbitrary persisted value is not a cosmetic label: it would

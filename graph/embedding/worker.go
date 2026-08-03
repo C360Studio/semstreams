@@ -174,6 +174,29 @@ type StoreResolver interface {
 	Streamable(instance string) (storage.StreamableStore, bool)
 }
 
+// NamedStore is a streaming store that can state which StorageInstance its references
+// carry — the requirement for being the worker's OWNED fallback (WithContentStore).
+//
+// It is a distinct type from storage.StreamableStore, which is deliberately
+// backend-neutral (NATS ObjectStore, filesystem, S3, …) and says nothing about
+// federation naming. The fallback arm resolves by comparing the reference's instance
+// against the store's own, so a store that cannot answer that question cannot serve a
+// reference through it. Requiring it in the SIGNATURE rather than probing for it at
+// runtime is the whole point: the probe answered "no" silently, and the caller learned
+// nothing until every offloaded body had quietly vanished from the index.
+//
+// *objectstore.Store satisfies it (InstanceName, gh#400). An adopter with their own
+// backend adds one method that returns whatever their producer stamps into
+// StorageReference.StorageInstance.
+type NamedStore interface {
+	storage.StreamableStore
+
+	// InstanceName reports the StorageInstance this store's references carry. It must
+	// equal what the producing side stamps into StorageReference.StorageInstance, or the
+	// fallback will (correctly) refuse to serve those references.
+	InstanceName() string
+}
+
 // Worker processes pending embedding requests asynchronously
 type Worker struct {
 	mu sync.RWMutex
@@ -205,7 +228,11 @@ type Worker struct {
 	// Content store for fetching body text from ObjectStore via streaming.
 	// This is the OWNED fallback (built from a store-read port, closed by the
 	// component). Federated resolution goes through storeResolver first.
-	contentStore storage.StreamableStore
+	//
+	// NamedStore, not storage.StreamableStore: the fallback arm can only serve a
+	// reference whose instance matches this store's own, so naming is a requirement
+	// of the role rather than an optional capability (gh#875).
+	contentStore NamedStore
 
 	// storeResolver resolves a StorageRef's StorageInstance to the live store
 	// that owns it (ADR-063 shared registry). Primary path; per-fetch; the
@@ -277,7 +304,16 @@ func (w *Worker) WithWorkers(n int) *Worker {
 // retrieval. Used only when the shared resolver cannot resolve a ref's
 // StorageInstance (single-bucket / legacy store-read deploys). The component owns
 // and closes this store.
-func (w *Worker) WithContentStore(store storage.StreamableStore) *Worker {
+//
+// The fallback serves a reference ONLY when the store IS the instance that reference
+// names (gh#875), so the store must be able to say which instance that is — hence
+// NamedStore rather than the bare storage.StreamableStore this took before. The
+// requirement is enforced by the compiler on purpose: a store that cannot name its
+// instance can never serve a reference here, and expressing that as a runtime type
+// assertion made it a SILENT total exclusion for any adopter implementing the
+// documented backend-neutral interface (a sister repo's filestore is exactly that).
+// A compile error is a bill an adopter can pay; a silently empty index is not.
+func (w *Worker) WithContentStore(store NamedStore) *Worker {
 	w.contentStore = store
 	return w
 }
@@ -1072,31 +1108,21 @@ func truncateAtWord(text string, maxLen int) string {
 // verdict. handleKVEntry routes it to the excluded-content path instead.
 var errNoStoreForInstance = errors.New("no store for storage instance")
 
-// instanceNamer is the narrow method set a store implements to state which
-// StorageInstance its references carry (storage.StreamableStore does not require it;
-// *objectstore.Store provides it). Asserted rather than required so the store
-// interface stays about I/O.
-type instanceNamer interface {
-	InstanceName() string
-}
-
 // ownedStoreServes reports whether the worker's OWNED fallback store is the store
 // that instance names.
 //
-// Fail-closed on an unknown answer: a fallback store that cannot state its instance
-// cannot be shown to serve this reference, so it does not answer for it. The
-// alternative (assume it serves) is the gh#875 defect itself — a store answering for
-// an instance it never held, whose read then fails and latches a durable failure.
-// Excluding is non-destructive by comparison: the entity still embeds its inline text.
+// It cannot fail for lack of an answer: NamedStore makes stating the instance a
+// COMPILE-TIME requirement of being wired as the fallback (see WithContentStore). An
+// earlier version type-asserted an optional method and returned false when the
+// assertion failed — which silently excluded every offloaded body for any adopter
+// whose store implemented the documented backend-neutral storage.StreamableStore and
+// nothing more. That is this change's own defect one layer up: a silent exclusion
+// resting on an assumption the code could not verify.
 func (w *Worker) ownedStoreServes(instance string) bool {
 	if w.contentStore == nil || instance == "" {
 		return false
 	}
-	namer, ok := w.contentStore.(instanceNamer)
-	if !ok {
-		return false
-	}
-	return namer.InstanceName() == instance
+	return w.contentStore.InstanceName() == instance
 }
 
 // resolveStore returns the store that backs a StorageInstance: the shared

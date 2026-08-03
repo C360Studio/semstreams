@@ -1831,18 +1831,22 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		return
 	}
 
-	// ContentStorable path: prefer the StorageRef → ObjectStore fetch, but ONLY
-	// when a content store is actually wired (a store-read port is configured).
+	// ContentStorable path: prefer the StorageRef → ObjectStore fetch, but ONLY when a
+	// store that serves THIS reference's instance is reachable (the shared registry, or
+	// an owned store-read port that IS that instance).
 	//
-	// #264 (ADR-055 Wave 0) began lifting StorageRef onto the EntityState at the
-	// ingest seam. Without a content store, the worker's fetchTextFromStorage
-	// hard-fails ("content store not configured") and markFailed fires — which
-	// silently collapses ALL embedding (and therefore BM25/search) for every
-	// entity whose content was offloaded. Configs without a content store (e.g.
-	// the BM25 statistical tier, which wires no store-read port) have no way to
-	// honour a StorageRef, so degrade gracefully to inline text extraction from
-	// the entity's content triples instead of failing. Configs WITH a content
-	// store keep the offloaded-content fetch path unchanged.
+	// #264 (ADR-055 Wave 0) began lifting StorageRef onto the EntityState at the ingest
+	// seam. With no store able to serve the reference, hop 2 cannot reach the body, and
+	// before gh#414 that collapsed ALL embedding (and therefore BM25/search) for every
+	// entity whose content was offloaded. Configs that cannot honour a StorageRef (e.g.
+	// the BM25 statistical tier, which wires no store-read port) degrade gracefully to
+	// inline text extraction instead. Configs that CAN serve the ref are unchanged.
+	//
+	// Reaching hop 2 with an unservable reference is no longer a failure at all: it
+	// returns errNoStoreForInstance and becomes a qualified success (gh#875). The older
+	// wording here named a `"content store not configured"` error string that no longer
+	// exists in the tree — corrected at re-review rather than left to mislead the next
+	// reader into grepping for it.
 	if c.shouldFetchViaStorageRef(&entityState) {
 		c.queueEmbeddingWithStorageRef(ctx, entityID, sourceRevision, &entityState)
 		return
@@ -2040,12 +2044,11 @@ func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 // What an operator can actually do depends on which of exactly two shapes stamped the
 // reference, because an instance name is not free-form in this tree:
 //
-//   - storage_instance == "objectstore" — an objectstore COMPONENT stamped it. The
-//     component hardcodes that name (storage/objectstore/component.go:152, "would be
-//     provided by ComponentManager", which never does) and NewComponent never reads a
-//     configured InstanceName, so it is the only name such a component can ever have.
-//     Remedy: run an objectstore component in THIS process against the same bucket; it
-//     self-registers under "objectstore" at Start (ADR-063) and resolves.
+//   - storage_instance == objectstore.DefaultInstanceName — an objectstore COMPONENT
+//     stamped it. That is the only name such a component can have: NewComponent never
+//     reads a configured InstanceName, and the ComponentManager its comment anticipates
+//     does not supply one. Remedy: run an objectstore component in THIS process against
+//     the same bucket; it self-registers under that name at Start (ADR-063) and resolves.
 //   - storage_instance == some BUCKET name — a bare store stamped it (no instance name
 //     configured, so the bucket name is used). Remedy: a store-read port on that bucket,
 //     which the owned-store fallback then serves.
@@ -2064,15 +2067,20 @@ func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance str
 		c.logger.Warn("offloaded body EXCLUDED from embeddings: no store in this process "+
 			"serves the StorageInstance this entity's reference names, so its body cannot be "+
 			"embedded (inline text, if any, still is, and the record is marked "+
-			"content_excluded). REMEDY depends on storage_instance: if it is \"objectstore\", "+
-			"run an objectstore component in THIS process against the same bucket — it "+
-			"self-registers under that name; if it is a BUCKET name, wire a store-read port "+
-			"for that bucket. A store-read port cannot help otherwise, because it declares a "+
-			"bucket and not an instance, and no component can be configured to own an "+
-			"arbitrary instance name today (gh#414, gh#875)",
+			"content_excluded). REMEDY depends on storage_instance: if it equals "+
+			"objectstore_component_instance below, run an objectstore component in THIS "+
+			"process against the same bucket — it self-registers under that name; if it is a "+
+			"BUCKET name, wire a store-read port for that bucket. A store-read port cannot "+
+			"help otherwise, because it declares a bucket and not an instance, and no "+
+			"component can be configured to own an arbitrary instance name today "+
+			"(gh#414, gh#875)",
 			slog.String("entity", entityID),
 			slog.String("storage_instance", storageInstance),
-			slog.String("owned_store_instance", c.ownedStoreInstanceForLog()))
+			slog.String("owned_store_instance", c.ownedStoreInstanceForLog()),
+			// Read from the owning package rather than repeated as a literal: if that
+			// name ever becomes configurable, this remedy must change with it, and a
+			// shared constant makes that a compile-visible edit instead of stale advice.
+			slog.String("objectstore_component_instance", objectstore.DefaultInstanceName))
 	})
 	c.logger.Debug("entity has StorageRef but no store serves its instance; inline fallback",
 		slog.String("entity", entityID))

@@ -31,14 +31,17 @@ resolve SHALL NOT be recorded as a failed embedding. Re-delivery cannot repair a
 deployment wiring gap, so counting it as failed would convert a configuration fact
 into a permanent health verdict with no exit. It SHALL instead be reported through
 the excluded-content path with its own metric, and the entity SHALL still reach a
-terminal outcome from whatever inline text it carries. That outcome SHALL be recorded
-as a QUALIFIED SUCCESS — a stored, servable vector carrying the bounded qualifier for
-an unreachable body — so the affected entities are enumerable from the index. A
-re-queue SHALL be skipped only when the stored vector already carries the same
-qualifier the re-queue would produce, so any entity whose outcome would change —
-because its body became reachable, or because a failure erased its qualifier and left
-it looking complete — re-embeds on its next delivery and recovers without operator
-intervention. The producer SHALL consult the shared store registry for the
+terminal outcome from whatever inline text it carries. WHEN the entity carries inline
+text, that outcome SHALL be recorded as a QUALIFIED SUCCESS — a stored, servable vector
+carrying the bounded qualifier for an unreachable body — so those entities are
+enumerable from the index. An entity with NO inline text has nothing to embed and
+SHALL reach the ordinary no-text terminal, which stores no record at all; it is
+therefore counted by the exclusion metric but NOT enumerable from the index, and only
+the metric reports it. A re-queue SHALL be skipped only when the stored vector is
+strictly newer, or is at the same revision and already carries the same qualifier the
+re-queue would produce — so any entity whose outcome would change, because its body
+became reachable or because a failure erased its qualifier and left it looking
+complete, re-embeds on its next delivery and recovers without operator intervention. The producer SHALL consult the shared store registry for the
 instance the reference names, and SHALL fall back to a store it owns only when that
 store is the instance named. Resolution SHALL be re-checked at fetch time rather than
 assumed from the earlier gate, because store registration and deregistration are live
@@ -86,6 +89,15 @@ during operation.
   enumerable from the index rather than indistinguishable from a complete one
 - **AND** re-delivering the entity produces the same outcome rather than
   accumulating repeated failures
+
+#### Scenario: An unreachable body with no inline text leaves no record
+- **GIVEN** an entity whose reference names a storage instance this producer cannot
+  resolve, and which carries no inline text to embed
+- **WHEN** its embedding is processed
+- **THEN** it reaches the ordinary no-text terminal and no embedding record is stored,
+  so it is NOT enumerable from the index and the exclusion metric is the only report
+  of it
+- **AND** it is still not counted as a failure, so readiness is not degraded
 
 #### Scenario: A qualified success never enters failure accounting
 - **GIVEN** a stored embedding that is successful but carries the unreachable-body

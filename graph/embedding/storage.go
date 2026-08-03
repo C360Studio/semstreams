@@ -349,9 +349,11 @@ func (s *Storage) SavePendingWithStorageRef(
 // OLDER revision (a genuinely newer source state being queued), is
 // overwritten as before.
 //
-// The QUALITY match is load-bearing (gh#875). The skip compares the stored record's
-// terminal-state qualifier against the one this write would produce, not against
-// "unqualified":
+// Revision first, then QUALITY (gh#875). A STRICTLY NEWER stored vector always stands,
+// whatever its quality — this write is simply stale, and letting quality override that
+// would downgrade a fresh record to a pending one at an OLDER revision, where hop 2's
+// own ordering guard cannot save it (that guard compares against the pending record
+// this write just left behind). At the SAME revision, quality decides:
 //
 //	existing generated + ""      vs incoming ""      → skip (protects a complete vector)
 //	existing generated + excl.   vs incoming excl.   → skip (nothing would change)
@@ -394,9 +396,12 @@ func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved
 		if err != nil {
 			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "get existing record")
 		}
-		if existing != nil && existing.Status == StatusGenerated && existing.Reason == record.Reason &&
-			existing.SourceRevision >= record.SourceRevision {
-			// A same-or-newer generated vector of the SAME terminal quality stands.
+		if existing != nil && existing.Status == StatusGenerated &&
+			(existing.SourceRevision > record.SourceRevision ||
+				(existing.SourceRevision == record.SourceRevision && existing.Reason == record.Reason)) {
+			// A STRICTLY NEWER generated vector always stands, whatever its quality: this
+			// write is stale, and the ordering guard is about revisions, not quality. At the
+			// SAME revision the quality decides — see the table above.
 			return false, nil
 		}
 

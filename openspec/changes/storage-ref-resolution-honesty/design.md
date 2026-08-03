@@ -197,10 +197,17 @@ need, which is why they are sequential and not merged.
   `content_unresolved_total` already exists and the warning is one-shot per instance. The "how many entities
   are currently affected" gauge is filed as gh#881, not built — it is cross-repo readiness surface with no
   consumer at birth. Note the qualifier makes that count DERIVABLE from KV even without the gauge.
-- ~~**"Which entities have unreachable bodies" stops being answerable from KV**~~ → **DISSOLVED by Decision 4.**
-  The stored record carries `generated + content_excluded`, so the population is enumerable by scanning the
-  qualifier — strictly better than the failed-scan it replaces, because these records are also servable
-  vectors rather than absent ones.
+- ~~**"Which entities have unreachable bodies" stops being answerable from KV**~~ → **DISSOLVED by Decision 4
+  FOR ENTITIES CARRYING INLINE TEXT, and only for them.** Those store `generated + content_excluded`, so they
+  are enumerable by scanning the qualifier — strictly better than the failed-scan they replace, because the
+  records are also servable vectors rather than absent ones.
+  **Bounded at re-review:** an entity with an unreachable body AND no inline text has nothing to embed, so it
+  takes the ordinary no-text terminal and stores NO record (hop 1 deletes any stale one; hop 2 does the same,
+  pinned by `TestHop2_UnresolvableInstanceWithNoInlineTextIsTerminalNotFailed`). That subpopulation is
+  reported ONLY by `content_unresolved_total` and is not enumerable from the index at all. The earlier
+  unqualified "DISSOLVED" was wrong for them, and the spec's `SHALL` now carries the same bound. Storing a
+  record for them was considered and rejected: it would contradict the no-text invariant that deletes stale
+  records so a live entity cannot keep serving a vector it no longer earns.
 - ~~**Wiring the store no longer re-embeds the body on restart alone**~~ → **DISSOLVED by Decision 4.** The
   guard's skip is quality-aware, so a record whose outcome would change re-queues on its next delivery and
   heals. `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives exactly that, with no write

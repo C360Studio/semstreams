@@ -33,18 +33,17 @@ type readerStore struct {
 
 func (s readerStore) InstanceName() string { return s.instance }
 
-// namelessStore is a StreamableStore that does NOT implement InstanceName — a
-// custom backend wired through WithContentStore. The fallback cannot prove it serves
-// any given instance, so it must not answer for one.
-type namelessStore struct{ data string }
-
-func (s namelessStore) Put(context.Context, string, []byte) error      { return nil }
-func (s namelessStore) Get(context.Context, string) ([]byte, error)    { return []byte(s.data), nil }
-func (s namelessStore) List(context.Context, string) ([]string, error) { return nil, nil }
-func (s namelessStore) Delete(context.Context, string) error           { return nil }
-func (s namelessStore) Open(context.Context, string) (io.ReadCloser, error) {
-	return io.NopCloser(strings.NewReader(s.data)), nil
-}
+// A store wired as the OWNED fallback must be able to name its instance, and that is
+// a COMPILE-TIME requirement (WithContentStore takes NamedStore, gh#875) rather than a
+// runtime probe. This assertion is the positive half; the negative half needs no test
+// because it cannot be written — a store implementing only the backend-neutral
+// storage.StreamableStore does not compile as an argument to WithContentStore.
+//
+// It replaces a test that fed such a store in and asserted the fetch was refused. That
+// test passed, and the behaviour it locked was the defect: an adopter's conforming
+// store was silently excluded from every offloaded body, with no compile error and no
+// boot error. The compiler now refuses it at the call site instead.
+var _ NamedStore = readerStore{}
 
 func (s readerStore) Put(context.Context, string, []byte) error      { return nil }
 func (s readerStore) Get(context.Context, string) ([]byte, error)    { return []byte(s.data), nil }
@@ -154,23 +153,6 @@ func TestFetchText_OwnedStoreDoesNotAnswerForAForeignInstance(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "AGENT_CONTENT") {
 		t.Errorf("error must name the unresolvable instance for the operator; got %v", err)
-	}
-}
-
-// TestFetchText_OwnedStoreThatCannotNameItsInstanceDoesNotAnswer pins the fail-closed
-// branch: a fallback store that cannot state which instance it serves cannot be SHOWN
-// to serve this reference, so it does not answer for it. Assuming it does is the
-// gh#875 defect itself.
-func TestFetchText_OwnedStoreThatCannotNameItsInstanceDoesNotAnswer(t *testing.T) {
-	w := &Worker{
-		ctx:              context.Background(),
-		maxSourceTextLen: 100,
-		contentStore:     namelessStore{data: "FALLBACK"},
-	}
-
-	_, _, err := w.fetchTextFromStorage(&StorageRef{StorageInstance: "objectstore", Key: "k"})
-	if !errors.Is(err, errNoStoreForInstance) {
-		t.Fatalf("err = %v, want errNoStoreForInstance for a store that cannot name its instance", err)
 	}
 }
 

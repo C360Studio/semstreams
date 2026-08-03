@@ -302,13 +302,29 @@
         (`go test ./test/testinfra/` ok 5.776s). It ratchets `time.Sleep` in integration tests against a
         baseline; this change's three new test files contain **zero** sleeps and correctly appear nowhere in
         `policy_baseline.json`.
-- [x] 5.7 Not BREAKING and no wire-surface change, so no e2e tier is owed. **If that judgement is wrong, say so
-      rather than skipping quietly** — the touched path is embedding readiness, which `task e2e:semantic`
-      covers.
-      **Judgement re-derived after the rework, and it holds with two caveats stated rather than skipped.** No
-      payload, subject, bucket, config field, or envelope field changed; the readiness envelope's SHAPE is
-      untouched (only which events reach `FailedCount`). `schemas/`+`specs/` show zero drift, which is the
-      mechanical check for wire surface.
+      - **STALE for the final-review round — superseded by 5.8c.** Everything above was measured on the code
+        as of `d3b84a8a`. The final-review round then changed production code again (`WithContentStore`
+        narrowed to `NamedStore`, the pending guard's revision ordering strengthened, the exclusion warning and
+        the objectstore instance constant), so that green run no longer covers what ships. It is kept, not
+        edited, because a green result on superseded code must not be allowed to read as coverage of the code
+        that replaced it.
+
+- [x] 5.8c **Integration re-run on the FINAL-review code**, via the sanctioned runner (raw
+      `go test -tags=integration` is no longer the supported entry point):
+      - Touched packages: `bash scripts/run-integration-tests.sh ./graph/embedding/... ./processor/graph-embedding/...`
+        → `graph/embedding` **ok 1.688s**, `processor/graph-embedding` **ok 20.864s**. The four
+        `TestIntegration_GH875_*` tests are inside that pass.
+      - Full suite: see the counts recorded below at the point it was run.
+- [x] 5.7 ~~Not BREAKING and no wire-surface change, so no e2e tier is owed.~~ **RETRACTED — this change IS
+      BREAKING and an e2e tier IS owed.** The original task line said otherwise and survived two rounds after
+      the change had already grown four breaking surface changes; the commit trail says
+      `fix(graph-embedding)!:` with a `BREAKING:` footer, and CLAUDE.md's hard rule is that a BREAKING commit
+      needs a relevant e2e tier green BEFORE it lands. The task line asserting the opposite is exactly the
+      shape that lets a tier get skipped quietly, so it is struck rather than edited away.
+      Still true and still worth recording: no payload, subject, bucket, config field, or envelope field
+      changed, and `schemas/`+`specs/` show zero drift — the mechanical wire-surface check passes. What makes
+      it BREAKING is the exported Go surface and the persisted-state semantics, neither of which that check
+      can see. See 5.9 for the tier result.
       **Caveat A — the rework added a PERSISTED-state semantic change**, which is the closest thing here to a
       wire change: `Record.Reason` on an `EMBEDDING_INDEX` record is now a terminal-state qualifier rather
       than a failure-only field. It is not a schema or envelope change (same string, same `omitempty`,
@@ -334,9 +350,13 @@
         a THIRD axis to a two-axis model already misaligned with the runtime.
       - **6.0b Enumerability.** The stored record is `generated + content_excluded`, so the population is a
         scan away. Cost-ledger item 2 DISSOLVED rather than accepted.
-      - **6.0c Repair.** `SavePendingGuarded`'s skip is now "a same-or-newer **unqualified** generated vector
-        stands" (`graph/embedding/storage.go:362`), so a qualified record re-queues and self-heals when the
-        store is wired. Cost-ledger item 4 DISSOLVED. Proven end-to-end by
+      - **6.0c Repair.** `SavePendingGuarded`'s skip stands only for a strictly newer generated vector, or a
+        same-revision one of the SAME terminal quality (`graph/embedding/storage.go`, the guard in
+        `SavePendingGuarded`), so a record whose outcome would change re-queues and self-heals when the store
+        is wired. Cost-ledger item 4 DISSOLVED.
+        **Superseded wording, kept visible on purpose:** this line first read "a same-or-newer **unqualified**
+        generated vector stands", which was the owner's ruled form and is repudiated — see the DEVIATION row
+        in 6.0.3. Proven end-to-end by
         `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord`, which writes NOTHING to
         ENTITY_STATES — only the restart's same-revision re-delivery heals it.
       - **6.0d Safety re-measured, not inherited** (the ruling said to confirm it myself). Three production
@@ -385,6 +405,28 @@
         failed gate. Since the qualifier is a CONTROL input to the guard's comparison, an arbitrary value is
         not a cosmetic label. Enforced at the single write site (`validSuccessQualifier`), failing closed.
       - **Coverage gap filed** as gh#888 (see 5.7 caveat B).
+- [x] 6.0.3 **Ruling-conformance table.** One DEVIATION, recorded as a row rather than buried in prose.
+
+      | Ruling (gh#875 comment 5166387449) | Status | Where |
+      |---|---|---|
+      | `Reason` generalizes to a bounded qualifier of the terminal state, valid on any `Status` | AS RULED | `graph/embedding/storage.go` — `Record.Reason` doc, `ReasonContentExcluded` |
+      | No new field, no boolean, no new `Status` value | AS RULED | nothing added; the `ContentExcluded bool` was not implemented |
+      | Enumeration falls out (scan the qualifier) | AS RULED, one bound | qualified records carry it; **entities with no inline text store no record** — see HIGH 1 above and the spec's bounded `SHALL` |
+      | Repair: the skip becomes *"a same-or-newer **unqualified** generated vector stands"* | **DEVIATION** | see below |
+      | Safety confirmed independently, not taken from the ruling | AS RULED | 6.0d; `TestQualifiedSuccess_NeverReachesFailureAccounting` |
+      | Do NOT expand into the `Status`/`TerminalOutcome` asymmetry (gh#887) | AS RULED | no `Status` value, no `TerminalOutcome` change, no callback-contract change |
+
+      **DEVIATION — the guard is quality-matched, not "unqualified stands".** The ruled form is defeated by a
+      chain the ruling did not consider: `SaveFailed` overwrites `Reason` with the failure reason, so any
+      ordinary hop-2 failure erases the qualifier; the restart reprocess of that failed record writes
+      `generated + ""` (it has no `StorageRef` left to re-observe from); and against "unqualified stands" that
+      laundered record is then **permanently** frozen — re-opening both properties the ruling exists to
+      create. Implemented instead as *strictly-newer stands, else same-revision same-quality stands*. Evidence
+      the ruled form fails: **MUTATION 8** (4.5) reverts the guard to the ruled form and
+      `TestQualifier_HopTwoFailureDoesNotLaunderAQualifiedSuccess` goes red at exactly that step.
+      **Not owner-signed off at time of writing** — surfaced to the owner in the round that produced it, and
+      the issue comment still carries the ruled wording. The correction is owed on the issue; this row is the
+      in-tree record of it. Nothing else in the ruling deviates.
 - [ ] 6.1 `semstreams-reviewer` on the full diff.
 - [ ] 6.2 Codex round, then `--auto`. Record that it ran on this line.
 - [x] 6.3 Confirm the spec delta's MODIFIED requirement matches the archived text exactly apart from the
