@@ -83,6 +83,16 @@ flip, and it is why the change is not a pure improvement:
    inspectability.
 3. **A mis-wired deployment gets quieter** — but the signal it replaces is currently *wrong*, and the exclusion
    path is loud by construction (a one-shot warning plus a per-entity metric).
+4. **Fixing the wiring no longer re-embeds the body on restart alone** — found at implementation time, not at
+   design time, so it is recorded here rather than discovered later. The exclusion reaches a *successful*
+   terminal (a generated vector from inline text), and `SavePendingGuarded` SKIPS a re-queue when a generated
+   record stands at a same-or-newer source revision (`graph/embedding/storage.go`; the decision table is
+   `TestSavePendingGuarded_Decisions` — "generated at SAME revision skipped (restart re-delivery)"). Today's
+   *failed* record is overwritten by that same guard ("failed record overwritten (re-queue recovers)"), so an
+   operator who wires the missing store and restarts currently does get the body. After this change they need
+   a new ENTITY_STATES revision for the entity (or to delete its embedding record). This is not new behaviour
+   for the exclusion path — every gh#414 exclusion has had it since that path existed — but this change moves
+   a population into it, and that population is the one an operator is most likely to be actively repairing.
 
 **Adopters**: no surface changes. An operator running a correctly-wired deployment sees no difference. An
 operator with a mis-wired one stops seeing a permanently degraded index and starts seeing

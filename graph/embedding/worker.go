@@ -552,7 +552,7 @@ func (w *Worker) handleKVEntry(
 	sourceText, err := w.getSourceText(&record)
 	switch {
 	case err == nil:
-		// fall through
+		// Text in hand; nothing to classify. (Go switch cases do not fall through.)
 
 	case errors.Is(err, errNoStoreForInstance):
 		// gh#875: no store in this process serves the instance this reference names.
