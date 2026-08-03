@@ -30,7 +30,7 @@ func TestSaveGenerated_NoIndexRecord_DoesNotPanicOrResurrect(t *testing.T) {
 
 	const entityID = "acme.ops.robotics.gcs.drone.001"
 
-	err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "all-MiniLM-L6-v2", 3, "content-hash", 1)
+	err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "all-MiniLM-L6-v2", 3, "content-hash", 1, "")
 	if !errors.Is(err, ErrRecordGone) {
 		t.Fatalf("SaveGenerated on a missing key = %v, want ErrRecordGone", err)
 	}
@@ -102,7 +102,7 @@ func TestSaveGenerated_ConcurrentDeleteIsRaceFree(t *testing.T) {
 			defer wg.Done()
 			// The hop-2 completion lane. ErrRecordGone is an expected outcome when
 			// the delete won; anything else must be a clean success.
-			err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "hash", uint64(i))
+			err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "hash", uint64(i), "")
 			if err != nil && !errors.Is(err, ErrRecordGone) {
 				t.Errorf("SaveGenerated: unexpected error %v", err)
 			}

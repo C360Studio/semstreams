@@ -104,6 +104,16 @@ func TestHop2_UnresolvableInstanceExcludesAndEmbedsInlineText(t *testing.T) {
 	if stored == nil || stored.Status != StatusGenerated {
 		t.Fatalf("stored = %+v, want a generated vector from the record's INLINE identity text", stored)
 	}
+	// A QUALIFIED success: the vector is real and servable, and the record says what is
+	// missing from it. Without the qualifier the record is indistinguishable from a
+	// complete one — unenumerable, and frozen by SavePendingGuarded's skip.
+	if stored.Reason != ReasonContentExcluded {
+		t.Fatalf("stored reason = %q, want %q: a degraded success must record its qualifier",
+			stored.Reason, ReasonContentExcluded)
+	}
+	if len(stored.Vector) == 0 {
+		t.Fatal("the qualified success must still store its vector — the inline text WAS embedded")
+	}
 
 	snap := m.snapshot()
 	if snap.excluded != 1 {
@@ -152,6 +162,10 @@ func TestHop2_ResolvedStoreReadFailureStillFails(t *testing.T) {
 	}
 	if stored == nil || stored.Status != StatusFailed {
 		t.Fatalf("stored = %+v, want a DURABLE failed record so re-delivery re-processes it", stored)
+	}
+	if stored.Reason != failReasonContentError {
+		t.Fatalf("stored reason = %q, want %q: the failure classification is unchanged by the qualifier reframe",
+			stored.Reason, failReasonContentError)
 	}
 	snap := m.snapshot()
 	if len(snap.failedReasons) != 1 || snap.failedReasons[0] != failReasonContentError {
@@ -202,6 +216,10 @@ func TestHop2_StoreDeregisteredBetweenGateAndFetchExcludes(t *testing.T) {
 	}
 	if stored != nil && stored.Status == StatusFailed {
 		t.Fatalf("durable record is %q, want no failed record", stored.Status)
+	}
+	if stored == nil || stored.Reason != ReasonContentExcluded {
+		t.Fatalf("stored = %+v, want a generated record qualified %q — the race produces a degraded success too",
+			stored, ReasonContentExcluded)
 	}
 	if snap := m.snapshot(); snap.excluded != 1 {
 		t.Fatalf("excluded reports = %d, want 1: the race must be reported, not silent", snap.excluded)

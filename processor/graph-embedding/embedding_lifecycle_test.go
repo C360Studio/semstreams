@@ -72,14 +72,14 @@ func TestEntityTombstoneDeletesEmbedding(t *testing.T) {
 	// asserting that here keeps this test from re-encoding the bug as expected
 	// behaviour. See graph/embedding.ErrRecordGone and the tombstone-race coverage
 	// in graph/embedding/storage_record_gone_test.go.
-	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41); !errors.Is(err, embedding.ErrRecordGone) {
+	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41, ""); !errors.Is(err, embedding.ErrRecordGone) {
 		t.Fatalf("SaveGenerated with no pending record = %v, want ErrRecordGone (it must not panic or resurrect)", err)
 	}
 
 	if err := c.storage.SavePending(ctx, entityID, "hash-1", "some text", 41); err != nil {
 		t.Fatalf("seed pending: %v", err)
 	}
-	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41); err != nil {
+	if err := c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 41, ""); err != nil {
 		t.Fatalf("seed embedding: %v", err)
 	}
 	if rec, err := c.storage.GetEmbedding(ctx, entityID); err != nil || rec == nil {

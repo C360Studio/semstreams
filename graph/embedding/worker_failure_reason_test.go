@@ -77,7 +77,7 @@ func TestMarkFailed_PersistsBoundedReasonAndCounts(t *testing.T) {
 		if err := s.SavePending(ctx, entityID, "", "text", 5); err != nil {
 			t.Fatalf("SavePending: %v", err)
 		}
-		if err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "h", 5); err != nil {
+		if err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "h", 5, ""); err != nil {
 			t.Fatalf("SaveGenerated: %v", err)
 		}
 		m := &countingMetrics{}

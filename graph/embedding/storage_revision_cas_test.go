@@ -33,12 +33,12 @@ func TestSaveGenerated_NewerRevisionWinsOutOfOrderCompletion(t *testing.T) {
 	oldVec := []float32{5, 5, 5}
 
 	// Revision N+1 (=6) completes first.
-	if err := s.SaveGenerated(ctx, entityID, newVec, "m", 3, "hash-6", 6); err != nil {
+	if err := s.SaveGenerated(ctx, entityID, newVec, "m", 3, "hash-6", 6, ""); err != nil {
 		t.Fatalf("SaveGenerated(rev 6): %v", err)
 	}
 	// Revision N (=5, older text) completes LAST. It must be dropped and report the
 	// superseded sentinel (so the caller skips the generated callback), not persisted.
-	if err := s.SaveGenerated(ctx, entityID, oldVec, "m", 3, "hash-5", 5); !errors.Is(err, ErrSupersededRevision) {
+	if err := s.SaveGenerated(ctx, entityID, oldVec, "m", 3, "hash-5", 5, ""); !errors.Is(err, ErrSupersededRevision) {
 		t.Fatalf("SaveGenerated(rev 5) = %v, want ErrSupersededRevision (a late older revision is dropped as superseded)", err)
 	}
 
@@ -118,7 +118,7 @@ func TestSaveGenerated_ConcurrentCommitDoesNotClobberViaCAS(t *testing.T) {
 
 	// This older (rev 5) write must NOT win: it re-reads on the CAS conflict, then
 	// drops via the ordering guard, reporting the superseded sentinel.
-	if err := s.SaveGenerated(ctx, entityID, []float32{5, 5, 5}, "m", 3, "hash-5", 5); !errors.Is(err, ErrSupersededRevision) {
+	if err := s.SaveGenerated(ctx, entityID, []float32{5, 5, 5}, "m", 3, "hash-5", 5, ""); !errors.Is(err, ErrSupersededRevision) {
 		t.Fatalf("SaveGenerated(rev 5) = %v, want ErrSupersededRevision (re-read, then dropped by the ordering guard)", err)
 	}
 
@@ -149,7 +149,7 @@ func TestSaveGenerated_ContentHashAndVectorFromSameGeneration(t *testing.T) {
 		t.Fatalf("SavePending: %v", err)
 	}
 
-	if err := s.SaveGenerated(ctx, entityID, []float32{7, 8, 9}, "m", 3, "fresh-hop2-key", 3); err != nil {
+	if err := s.SaveGenerated(ctx, entityID, []float32{7, 8, 9}, "m", 3, "fresh-hop2-key", 3, ""); err != nil {
 		t.Fatalf("SaveGenerated: %v", err)
 	}
 
@@ -183,7 +183,7 @@ func TestSaveFailed_DoesNotClobberNewerSuccess(t *testing.T) {
 		t.Fatalf("SavePending: %v", err)
 	}
 	// Newer revision (6) succeeds.
-	if err := s.SaveGenerated(ctx, entityID, []float32{9, 9, 9}, "m", 3, "hash-6", 6); err != nil {
+	if err := s.SaveGenerated(ctx, entityID, []float32{9, 9, 9}, "m", 3, "hash-6", 6, ""); err != nil {
 		t.Fatalf("SaveGenerated(rev 6): %v", err)
 	}
 	// Older revision (5) fails and completes late; it must be dropped.
@@ -211,7 +211,7 @@ func TestSaveGenerated_VanishedRecordStillErrRecordGone(t *testing.T) {
 	s := NewStorage(index, newMemKV())
 
 	const entityID = "acme.ops.robotics.gcs.drone.005"
-	if err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "hash", 1); !errors.Is(err, ErrRecordGone) {
+	if err := s.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "m", 3, "hash", 1, ""); !errors.Is(err, ErrRecordGone) {
 		t.Fatalf("SaveGenerated on a vanished record = %v, want ErrRecordGone", err)
 	}
 	if index.has(entityID) {

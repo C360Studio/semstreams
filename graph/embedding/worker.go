@@ -548,7 +548,25 @@ func (w *Worker) handleKVEntry(
 
 	w.logger.Debug("Processing pending embedding", "worker_id", workerID, "entity_id", entityID)
 
-	// Get source text - either from record or from ObjectStore via StorageRef
+	// Get source text - either from record or from ObjectStore via StorageRef.
+	//
+	// qualifier records what this terminal state IS when it is not simply "complete"
+	// (gh#875). Two sites can observe the condition and neither re-derives the other's:
+	//
+	//   - HOP 1 already knew: its gate refused the offloaded lane because no store
+	//     serves the instance, so it queued the entity's inline text with the qualifier
+	//     on the PENDING record. Hop 2 cannot re-observe that — the pending record it
+	//     receives carries no StorageRef at all — so it carries the fact forward.
+	//   - HOP 2 observes it itself when the store resolved at the gate and was
+	//     deregistered before this fetch (the branch below).
+	//
+	// Only the known qualifier value is accepted, never an arbitrary inherited string:
+	// an unrecognized reason on a pending record fails closed to unqualified rather than
+	// propagating into the terminal record.
+	var qualifier string
+	if record.Reason == ReasonContentExcluded {
+		qualifier = ReasonContentExcluded
+	}
 	sourceText, err := w.getSourceText(&record)
 	switch {
 	case err == nil:
@@ -561,10 +579,16 @@ func (w *Worker) handleKVEntry(
 		// the index Degraded forever with no exit but deleting the entity. Report the
 		// exclusion (metric + the operator-actionable warning, the same gh#414 path
 		// hop 1 uses) and carry on with whatever INLINE identity text the record holds,
-		// so the entity still reaches a terminal outcome below — generated from its
-		// identity text, or the no-text delete when it has none.
+		// so the entity still reaches a terminal outcome below.
+		//
+		// The outcome is a QUALIFIED SUCCESS, not a plain one: the vector this produces
+		// is real and servable but MISSING ITS BODY, and a record that cannot say so is
+		// both unenumerable ("which entities are missing bodies?" has no field to scan)
+		// and unrepairable (SavePendingGuarded would skip the re-queue that wiring the
+		// store should trigger). The qualifier carries that fact to the stored record.
 		w.reportContentExcluded(entityID, &record)
 		sourceText = w.capText(record.IdentityText)
+		qualifier = ReasonContentExcluded
 
 	default:
 		w.logger.Error("Failed to get source text", "entity_id", entityID, "error", err)
@@ -608,7 +632,7 @@ func (w *Worker) handleKVEntry(
 	// identity pair are counted there, on the success path only, so they stay a subset
 	// of resolutions (the record is passed so saveAndNotify can derive the offloaded
 	// identity state at the successful-persistence site).
-	terminal, outcome, reason = w.saveAndNotify(entityID, &record, vector, dedupKey, sourceRevision, wasDedupHit)
+	terminal, outcome, reason = w.saveAndNotify(entityID, &record, vector, dedupKey, sourceRevision, wasDedupHit, qualifier)
 	return
 }
 
@@ -796,10 +820,15 @@ func (w *Worker) dedupRecordUsable(entityID, contentHash string, r *DedupRecord)
 // IdentityText set => identity was embedded). Those counters fire at the SAME
 // successful-persistence point as IncDedupHits so they count STORED vectors, not
 // attempts (#635 retro F3).
-func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool) (terminal bool, outcome TerminalOutcome, reason string) {
+//
+// qualifier is the terminal-state qualifier this generation produced (gh#875): "" for a
+// complete vector, ReasonContentExcluded when the body was unreachable and only the
+// entity's inline text was embedded. It is threaded from the one site that OBSERVED the
+// condition (handleKVEntry's fetch branch), never re-derived here.
+func (w *Worker) saveAndNotify(entityID string, record *Record, vector []float32, contentHash string, sourceRevision uint64, wasDedupHit bool, qualifier string) (terminal bool, outcome TerminalOutcome, reason string) {
 	dimensions := len(vector)
 	model := w.embedder.Model()
-	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision); err != nil {
+	if err := w.storage.SaveGenerated(w.ctx, entityID, vector, model, dimensions, contentHash, sourceRevision, qualifier); err != nil {
 		// The entity was tombstoned (or its pending record removed) while this
 		// vector was being generated. That is a normal race, not a failure: there
 		// is nothing to mark failed, and counting it would inflate the failure

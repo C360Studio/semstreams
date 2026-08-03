@@ -1,4 +1,4 @@
-# An unreachable body is an exclusion, not a failure
+# An unreachable body is a qualified success, not a failure
 
 ## Why
 
@@ -33,12 +33,21 @@ Reachability changes; correctness does not.
 - **An unresolvable instance is reported as excluded content, not as a failed embedding.** It routes to the
   existing excluded-content path (`reportOffloadedContentExcluded`, gh#414) with its existing
   `content_unresolved_total` metric, and does not enter `FailedCount`.
+- **The entity's stored record says so: it becomes a QUALIFIED SUCCESS** (owner ruling, 2026-08-03).
+  `Record.Reason` generalizes from "failure classification" to a bounded qualifier of the terminal state,
+  valid on any `Status` — `generated + content_excluded` means "a real, servable vector, embedded without its
+  unreachable body". Without it the record is indistinguishable from a complete one: the population is
+  unenumerable, and `SavePendingGuarded`'s skip freezes it so that wiring the store and restarting changes
+  nothing. Both fall out of the qualifier: enumeration is a scan, and repair is the skip becoming
+  "a same-or-newer **unqualified** generated vector stands".
 - **A *resolved* store's read failure is unchanged** — still a reason-classified failure that recovers on
   re-delivery. Only the unresolvable-instance class moves.
 - **The classification is made where the observation happens.** The registry contract is per-fetch and
   explicitly no-cache (`storage/storeregistry/storeregistry.go:83-91`) and deregistration on Stop is a live
   path (`service/component_manager.go:2168-2180`), so a store present at the hop-1 gate can be gone by the
-  hop-2 fetch. Gating alone would leave that race producing a permanent failed latch.
+  hop-2 fetch. Gating alone would leave that race producing a permanent failed latch. Both observation sites
+  write the qualifier — hop 1 onto the pending record it queues (its gate refused the offloaded lane, so hop 2
+  cannot see the condition), hop 2 onto the terminal it writes for the race.
 
 ## Capabilities
 
@@ -49,9 +58,12 @@ None.
 ### Modified Capabilities
 
 - `graph-embedding`: the requirement "Embedding failures are reason-classified and recover on re-delivery or
-  repair" currently asserts recovery-on-re-delivery for **all** failures. It gains the carve-out that an
-  entity whose body sits in a store this process cannot reach is excluded and reported, not failed — because
-  re-delivery cannot repair a wiring gap.
+  repair" currently asserts recovery-on-re-delivery for **all** failures, and scopes the reason classification
+  to failures. It gains two things: an entity whose body sits in a store this process cannot reach is a
+  **qualified success** — embedded from its inline text, recorded with a terminal-state qualifier, never
+  counted as failed, because re-delivery cannot repair a wiring gap — and the reason classification becomes a
+  bounded qualifier valid on any terminal state, which is what makes that population enumerable and
+  self-healing.
 
 ## Non-goals
 
@@ -68,35 +80,61 @@ None.
 
 ## Impact
 
-**Code**: `processor/graph-embedding/component.go` (the hop-1 gate), `graph/embedding/worker.go` (the hop-2
-fetch must return a distinguishable "no store for this instance" condition). No new exported symbol, no new
-port, no new subject, no new config field.
+**Code**: `processor/graph-embedding/component.go` (the hop-1 gate and its qualifier write),
+`graph/embedding/worker.go` (the hop-2 fetch must return a distinguishable "no store for this instance"
+condition), `graph/embedding/storage.go` (`Reason` generalizes to a terminal-state qualifier; the pending
+guard becomes qualifier-aware). No new port, no new subject, no new config field.
+
+**Exported-surface gate — the original text here claimed "No new exported symbol", and that was false.**
+Retracted and enumerated (review finding, gh#875; the gate re-runs when the surface grows):
+
+| Exported surface | Change | Who it breaks |
+|---|---|---|
+| `embedding.WorkerMetrics` | gains `ReportContentExcluded(entityID, storageInstance string)` | **Compile break** for any out-of-tree implementer of the interface. In-tree: the component's adapter and two test doubles. |
+| `embedding.Storage.SaveGenerated` | gains a trailing `qualifier string` parameter | **Compile break** for any out-of-tree caller. Deliberate: it forces every writer to state whether it produced a complete or a degraded vector. |
+| `embedding.ReasonContentExcluded` | new exported constant | Additive. Exported because enumeration is its purpose — a scanner outside the package needs the value by name, not as a bare literal. |
+| `embedding.Record.Reason` | **semantic** widening: a bounded qualifier of the terminal state, valid on any `Status`, not a failure-only classification | **Silent break** for an out-of-tree reader assuming `reason != "" ⇒ failed`. The representation is unchanged — same string, same `omitempty`, nothing fails to decode — only the interpretation. This is the one break a compiler cannot catch, which is why it is stated here. |
+
+All four are pre-v1 breaks taken deliberately under the clean-beta policy. The first three fail loudly at
+compile time; the fourth is documented on the field itself and in the capability spec.
 
 **What is lost, stated here rather than discovered later** — this is the cost ledger for a silent-exclusion
 flip, and it is why the change is not a pure improvement:
 
 1. **`FailedCount` stops reflecting this class**, so the index can report `ready` while a whole class of
    entities has no body embedded. `content_unresolved_total` is a counter — it records that it happened, not
-   how many entities are currently affected. Filed rather than fixed here.
-2. **The durable record disappears.** A failed record is enumerable from KV; an exclusion leaves none, so
-   "which entities have unreachable bodies" stops being answerable after the fact. A real loss of
-   inspectability.
+   how many entities are currently affected. Filed as gh#881 rather than fixed here. Softened by the qualifier
+   (item 2): the current count is now derivable from KV without a new gauge.
+2. ~~**The durable record disappears.**~~ **DISSOLVED by the qualified-success reframe (owner ruling,
+   2026-08-03).** The stored record is `generated + content_excluded`, so "which entities have unreachable
+   bodies" is answerable by scanning the qualifier — and answerable *better* than before, because the entity
+   also has a usable vector rather than none.
 3. **A mis-wired deployment gets quieter** — but the signal it replaces is currently *wrong*, and the exclusion
-   path is loud by construction (a one-shot warning plus a per-entity metric).
-4. **Fixing the wiring no longer re-embeds the body on restart alone** — found at implementation time, not at
-   design time, so it is recorded here rather than discovered later. The exclusion reaches a *successful*
-   terminal (a generated vector from inline text), and `SavePendingGuarded` SKIPS a re-queue when a generated
-   record stands at a same-or-newer source revision (`graph/embedding/storage.go`; the decision table is
-   `TestSavePendingGuarded_Decisions` — "generated at SAME revision skipped (restart re-delivery)"). Today's
-   *failed* record is overwritten by that same guard ("failed record overwritten (re-queue recovers)"), so an
-   operator who wires the missing store and restarts currently does get the body. After this change they need
-   a new ENTITY_STATES revision for the entity (or to delete its embedding record). This is not new behaviour
-   for the exclusion path — every gh#414 exclusion has had it since that path existed — but this change moves
-   a population into it, and that population is the one an operator is most likely to be actively repairing.
+   path is loud by construction (a one-shot warning plus a per-entity metric). This one stands.
+4. ~~**Fixing the wiring no longer re-embeds the body on restart alone.**~~ **DISSOLVED by the same reframe.**
+   Recorded here because it was found at implementation time and was the more serious of the two: the exclusion
+   reaches a *successful* terminal, and `SavePendingGuarded` skipped a re-queue over a same-or-newer generated
+   record — so an operator who wired the missing store and restarted would have got nothing, converting a
+   self-healing state (today's failed record, which that guard overwrites) into a stuck one. The guard's skip
+   is now qualifier-aware: only a same-or-newer **unqualified** generated vector stands, so a qualified record
+   re-queues on its next delivery and heals itself.
+   `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives it with no ENTITY_STATES write.
+5. **A cross-process producer/indexer split loses body embedding** — found by review, and this one is real and
+   stands. An objectstore *Component* stamps its component instance name; a reader's `store-read` port can only
+   ever produce a store named after the BUCKET. Such a deployment embeds bodies today through the instance-blind
+   fallback and will be excluded after this change. It is the unavoidable price of the bound (there is no way to
+   keep serving it without also serving instances we cannot serve), so what it is owed instead is an executable
+   remedy — run a storage component owning that instance in the reader's process, which registers it (ADR-063) —
+   and an enumerable, self-healing record. Both are now in place, and the exclusion warning names the remedy
+   and logs the owned store's instance beside the reference's so the mismatch is visible in one line. See
+   design.md Decision 2.
 
-**Adopters**: no surface changes. An operator running a correctly-wired deployment sees no difference. An
-operator with a mis-wired one stops seeing a permanently degraded index and starts seeing
-`content_unresolved_total` climb — which is the honest signal for what is actually a configuration gap.
+**Adopters**: one **silent** interpretation break — `Record.Reason` is now a bounded qualifier of the terminal
+state rather than a failure-only classification, so an out-of-tree reader assuming `reason != "" ⇒ failed` is
+wrong (nothing fails to decode; see the exported-surface gate above). Otherwise: an operator running a
+correctly-wired deployment sees no difference; one with a mis-wired deployment stops seeing a permanently
+degraded index, sees `content_unresolved_total` climb, and can now both enumerate the affected entities and fix
+them by wiring the store.
 
 **sem\* consumers**: none directly. The behaviour reached today only in deployments whose graph-embedding wires
 a `store-read` port — the recommended ADR-063 shape for document bodies — or omits `ports` entirely and takes

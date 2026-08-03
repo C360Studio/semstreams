@@ -116,6 +116,12 @@
       asserts a `+1` delta on `c.metrics.contentUnresolved` for the gate path, and
       `TestWorkerMetricsAdapter_ContentExcludedRoutesToTheComponentReporter` asserts `+2` for two hop-2
       reports through the production adapter.
+      **REWORK (review blocking item 1): the WIRING was unguarded.** Nilling the third argument to
+      `newWorkerMetricsAdapter` left every test green while hop 2's exclusion emitted no counter and no
+      warning — the silent skip the acceptance criteria forbid. The assertion now lives in
+      `TestIntegration_GH875_GateResolvableThenDeregisteredExcludes`, which snapshots the counter before hop
+      1's pending write and asserts `+1` after; that test never writes to ENTITY_STATES, so hop 1 cannot
+      contribute the increment. Mutation-checked — see 4.4.
       **DEVIATION, recorded not executed:** the counter carries NO label — it is a bare
       `prometheus.NewCounter` (`processor/graph-embedding/metrics.go:123-128`), and the instance is identified
       only in the one-shot warning's `storage_instance` attribute. Adding a `storage_instance` label would
@@ -125,18 +131,32 @@
       **gh#881** and left for the owner to re-decide.
 - [x] 4.2 Confirm the one-shot warning names the instance and the remedy (wire a `store-read` port for it),
       not just the failure.
-      Confirmed at `processor/graph-embedding/component.go:1994-2008` (unchanged by this change): the warning
-      carries `slog.String("storage_instance", …)` and the text "wire a store-read port for its
-      StorageInstance to embed offloaded bodies (inline text, if any, is still embedded) (gh#414)". Hop 2 now
-      reaches that same warning, so the remedy sentence covers the fetch-time class too;
-      `TestWorkerMetricsAdapter_ContentExcludedRoutesToTheComponentReporter` locks that it fires ONCE across
-      two hop-2 reports (no flood), and `TestReportOffloadedContentExcluded_LoudNotSilent` still locks the
-      hop-1 half.
+      Confirmed the warning carries `slog.String("storage_instance", …)`, fires once (no flood — locked by
+      `TestWorkerMetricsAdapter_ContentExcludedRoutesToTheComponentReporter` and
+      `TestReportOffloadedContentExcluded_LoudNotSilent`), and now covers hop 2 as well as hop 1.
+      **REWORK (review blocking item 2): the REMEDY it named was unexecutable.** "Wire a store-read port for
+      its StorageInstance" cannot be done — a store-read port declares a BUCKET, and `createContentStore`
+      passes only `BucketName`, so an owned store's `InstanceName()` is always the bucket name. It could never
+      match a reference stamped by an objectstore *Component* (which stamps its component instance name). The
+      warning now names the two remedies that work — run a storage component owning that instance in this
+      process (it self-registers, ADR-063; the only remedy for a cross-process split), or rely on the
+      bare-store case where the instance IS a bucket name — and logs `owned_store_instance` beside
+      `storage_instance` so the mismatch is one line, not an investigation.
 - [x] 4.3 Do NOT add a readiness gauge. **File** the "how many entities currently have unreachable bodies"
       question with the cost-ledger items from proposal.md — record the issue number on this line.
       Not added. Filed as **gh#881** ("graph-embedding: no current count of entities whose offloaded body is
       unreachable (the gh#875 cost ledger)") carrying all three cost-ledger items, the three options with
       their costs, and the note that gh#873 is what makes the population real enough to judge it.
+      **Post-rework note:** the qualifier makes the current count DERIVABLE from `EMBEDDING_INDEX` without any
+      new surface, which lowers gh#881's urgency but does not close it — a derived scan is not a gauge.
+
+- [x] 4.4 **Mutation-check the wiring guard added for blocking item 1.** Method: commit first, `cp` backup,
+      `[applied]` marker, md5-verified restore.
+      **MUTATION 4** — `newWorkerMetricsAdapter(c.metrics, c.failuresVec, nil)` at
+      `processor/graph-embedding/component.go:941` (the exact mutation review reported as invisible):
+      `TestIntegration_GH875_GateResolvableThenDeregisteredExcludes` **FAILED** on the counter assertion
+      (`hop 2's exclusion must increment content_unresolved_total through the wired reporter`), where before
+      the rework it passed. Restored by `cp`; md5 matched; `git status --porcelain` empty.
 
 ## 5. Gates
 
@@ -165,9 +185,24 @@
       fifth is a load-sensitive debounce timing assertion (`TestEntityWatcher_RuleTriggerDebouncing/deletion
       cancels pending evaluation`). (2) **All five pass in isolation**, re-run individually with `-race
       -tags=integration`: ownership 2.058s, rule 3.622s, agentic-loop 2.511s, graph-index 3.084s,
-      graph-ingest 2.767s. (3) **None of the five can even see the changed code** — `go list -deps -test`
-      reports 0 dependencies on `graph/embedding` or `processor/graph-embedding` for every one of them.
-      Recorded rather than re-run to green; the reviewer should still see this before merge.
+      graph-ingest 2.767s. (3) **Four of the five cannot see the changed code at all.**
+      **CORRECTED (review finding) — the original leg 3 claimed "none of the five", measured with `go list
+      -deps -test` and NO build tag, while the failures happened under `-tags=integration`. Re-measured under
+      the tag set that actually ran:**
+
+      | package | untagged | `-tags=integration` |
+      |---|---|---|
+      | pkg/ownership | 0 | 0 |
+      | processor/agentic-loop | 0 | 0 |
+      | **processor/graph-index** | 0 | **1** (via `graph/query`, an XTestImport) |
+      | processor/graph-ingest | 0 | 0 |
+      | processor/rule | 0 | 0 |
+
+      So `processor/graph-index` DOES link `graph/embedding` in its integration test binary. Its two failures
+      are still substrate: `Failed to get mapped port: resolve mapped port 4222 … the container is likely
+      gone` and `Failed to start NATS container: … port "8222/tcp" not found` — neither reaches assertion
+      code — and the package passes in isolation. The conclusion stands on legs 1 and 2; leg 3 is now correct
+      for the four packages it actually covers. Recorded rather than re-run to green.
 - [x] 5.5 `task schema:generate` then `git diff schemas/ specs/` showing zero drift.
       Ran; `git diff --stat schemas/ specs/` empty and `git status --porcelain` empty. Zero drift (expected —
       no operator-facing config field changed).
@@ -189,6 +224,37 @@
 
 ## 6. Review
 
+- [x] 6.0 **Rework after review (owner ruling, 2026-08-03 — gh#875 comment 5166387449).** Review found the fix
+      correct but the record it leaves a wart, and the owner ruled the wart is the MODEL. Recorded here because
+      the ruling changed the shape, not just the details:
+      - **6.0a Reframe: an unreachable body is a QUALIFIED SUCCESS.** `Record.Reason` generalizes from a
+        failure classification to a bounded qualifier of the terminal state, valid on any `Status`
+        (`graph/embedding/storage.go` — the field doc, `ReasonContentExcluded`, `SaveGenerated`'s new
+        `qualifier` argument). Rejected alternative, per the ruling: a `ContentExcluded bool`, which would add
+        a THIRD axis to a two-axis model already misaligned with the runtime.
+      - **6.0b Enumerability.** The stored record is `generated + content_excluded`, so the population is a
+        scan away. Cost-ledger item 2 DISSOLVED rather than accepted.
+      - **6.0c Repair.** `SavePendingGuarded`'s skip is now "a same-or-newer **unqualified** generated vector
+        stands" (`graph/embedding/storage.go:362`), so a qualified record re-queues and self-heals when the
+        store is wired. Cost-ledger item 4 DISSOLVED. Proven end-to-end by
+        `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord`, which writes NOTHING to
+        ENTITY_STATES — only the restart's same-revision re-delivery heals it.
+      - **6.0d Safety re-measured, not inherited** (the ruling said to confirm it myself). Three production
+        readers of `Record.Reason`, every one Status-gated first: `storage.go:362` (inside
+        `Status == StatusGenerated`), `storage.go:826` `ScanFailed` (inside `Status == StatusFailed`),
+        `processor/graph-embedding/component.go:1026` (reads only `FailedEntry` values produced inside that
+        gate). `incFailure` — the sole path to `failures_total{reason}` — is called from `markFailed` and
+        nowhere else (three call sites, all within it). Grep for anything inferring failure from a non-empty
+        reason across `graph/` and `processor/`: zero hits on an embedding record. Locked by
+        `TestQualifiedSuccess_NeverReachesFailureAccounting`, because a grep is not a regression guard.
+      - **6.0e A gap the rework itself found.** The first qualifier implementation wrote it only on hop 2's
+        race path. The self-heal integration test failed on the DOMINANT path and exposed why: hop 1's gate
+        refuses the offloaded lane, so hop 2 receives a pending record with no `StorageRef` and cannot observe
+        the condition. Hop 1 now writes the qualifier onto the pending record
+        (`processor/graph-embedding/component.go`) and hop 2 carries it forward, accepting only the known
+        value so an unrecognized reason fails closed to unqualified.
+      - **6.0f Not expanded into gh#887** (the `Status`/`TerminalOutcome` asymmetry), as ruled. No new
+        `Status` value, no change to `TerminalOutcome`, no change to the terminal callback's contract.
 - [ ] 6.1 `semstreams-reviewer` on the full diff.
 - [ ] 6.2 Codex round, then `--auto`. Record that it ran on this line.
 - [x] 6.3 Confirm the spec delta's MODIFIED requirement matches the archived text exactly apart from the

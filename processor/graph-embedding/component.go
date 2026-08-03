@@ -1850,8 +1850,17 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 	// NOT a terminal: reporting the excluded offload falls THROUGH to the inline-text
 	// path below, whose no-text return / SavePending owns the true terminal. Completing
 	// here would drain the watermark before hop 2 finishes (false-ready — ADR-066 §3 D2).
+	//
+	// qualifier carries the fact onto the record hop 2 will terminalize (gh#875). This
+	// is the DOMINANT exclusion path — the gate refuses the offloaded lane here, so hop 2
+	// never sees a StorageRef and cannot observe the condition for itself. Without this,
+	// the entity would store a plain `generated` record indistinguishable from a complete
+	// one: unenumerable, and frozen by SavePendingGuarded's skip so that wiring the store
+	// and restarting would never re-fetch the body.
+	var qualifier string
 	if entityState.StorageRef != nil {
 		c.reportOffloadedContentExcluded(entityID, entityState.StorageRef.StorageInstance)
+		qualifier = embedding.ReasonContentExcluded
 	}
 
 	// Legacy path: Extract text from triples
@@ -1925,6 +1934,10 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 		ContentHash:    "",
 		SourceText:     text,
 		SourceRevision: sourceRevision,
+		// Empty for an ordinary inline entity; ReasonContentExcluded when this inline
+		// text is a FALLBACK for a body this process cannot reach (gh#875). Hop 2
+		// carries it to the terminal record it writes.
+		Reason: qualifier,
 	})
 	if err != nil {
 		c.logger.Error("failed to queue embedding; leaving revision uncompleted for re-delivery",
@@ -2002,26 +2015,58 @@ func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 
 // reportOffloadedContentExcluded makes the silent-loss case observable (gh#414):
 // an entity carries a StorageRef (its BODY is offloaded to a store, NOT inline)
-// but no content store is wired, so the inline fallback cannot see that body and
-// it is EXCLUDED from the embedding (and thus BM25/search). The entity may still
-// be embedded from any inline text triples it carries — only the offloaded body
-// is lost. A per-entity metric carries the count; the warning fires once so the
-// log is a single actionable line, not a flood. Fix on the operator side: wire a
-// store-read port for the StorageInstance that produced the content.
+// but no store this process holds serves the instance that reference names, so the
+// inline fallback cannot see that body and it is EXCLUDED from the embedding (and
+// thus BM25/search). The entity is still embedded from any inline text triples it
+// carries — only the offloaded body is lost, and the stored record records that with
+// the ReasonContentExcluded qualifier (gh#875). A per-entity metric carries the count;
+// the warning fires once so the log is a single actionable line, not a flood.
+//
+// The REMEDIES the warning names must be executable, which is why it no longer says
+// "wire a store-read port for its StorageInstance" (gh#875 review): a store-read port
+// declares a BUCKET, not an instance, and createContentStore passes only BucketName —
+// so the owned store's instance name is always the bucket name. That remedy is
+// unexecutable whenever the reference was stamped by an objectstore Component, which
+// stamps its COMPONENT INSTANCE name (never a bucket name). The two that do work:
+//
+//   - Run a storage component that OWNS that instance in this process. It registers
+//     itself in the shared store registry at Start (ADR-063), which resolves any
+//     instance name regardless of bucket. This is the only remedy for a cross-process
+//     producer/indexer split.
+//   - If the producer writes through a BARE store (no component instance name), its
+//     references carry the BUCKET name as the instance — then a store-read port on
+//     that same bucket resolves them through the owned-store fallback.
 func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance string) {
 	if c.metrics != nil {
 		c.metrics.recordContentUnresolved()
 	}
 	c.noContentStoreWarn.Do(func() {
-		c.logger.Warn("offloaded body EXCLUDED from embeddings: entity carries a "+
-			"StorageRef but no content store is wired — wire a store-read port for its "+
-			"StorageInstance to embed offloaded bodies (inline text, if any, is still "+
-			"embedded) (gh#414)",
+		c.logger.Warn("offloaded body EXCLUDED from embeddings: no store in this process "+
+			"serves the StorageInstance this entity's reference names, so its body cannot be "+
+			"embedded (inline text, if any, still is, and the record is marked "+
+			"content_excluded). REMEDY: run a storage component whose instance name is this "+
+			"storage_instance in this process — it registers itself and resolves any bucket. "+
+			"A store-read port only helps when storage_instance IS a bucket name, because a "+
+			"store-read port declares a bucket, not an instance (gh#414, gh#875)",
 			slog.String("entity", entityID),
-			slog.String("storage_instance", storageInstance))
+			slog.String("storage_instance", storageInstance),
+			slog.String("owned_store_instance", c.ownedStoreInstanceForLog()))
 	})
-	c.logger.Debug("entity has StorageRef but no content store; inline fallback",
+	c.logger.Debug("entity has StorageRef but no store serves its instance; inline fallback",
 		slog.String("entity", entityID))
+}
+
+// ownedStoreInstanceForLog reports which StorageInstance this component's own content
+// store serves, for the exclusion warning. It is the single most useful fact for
+// diagnosing the mismatch — an operator seeing storage_instance="objectstore" beside
+// owned_store_instance="MESSAGES" can see immediately that the store-read port names a
+// bucket while the reference names a component instance. "(none)" when no store-read
+// port is configured at all, which is a different (and simpler) wiring gap.
+func (c *Component) ownedStoreInstanceForLog() string {
+	if c.contentStore == nil {
+		return "(none)"
+	}
+	return c.contentStore.InstanceName()
 }
 
 // queueEmbeddingWithStorageRef queues an embedding using ContentStorable pattern.

@@ -68,7 +68,7 @@ func TestSavePendingGuarded_Decisions(t *testing.T) {
 				if err := s.SavePending(ctx, entityID, "", "old", 4); err != nil {
 					t.Fatal(err)
 				}
-				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 4); err != nil {
+				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 4, ""); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -83,7 +83,7 @@ func TestSavePendingGuarded_Decisions(t *testing.T) {
 				if err := s.SavePending(ctx, entityID, "", "old", 5); err != nil {
 					t.Fatal(err)
 				}
-				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 5); err != nil {
+				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 5, ""); err != nil {
 					t.Fatal(err)
 				}
 			},
@@ -98,7 +98,7 @@ func TestSavePendingGuarded_Decisions(t *testing.T) {
 				if err := s.SavePending(ctx, entityID, "", "old", 6); err != nil {
 					t.Fatal(err)
 				}
-				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 6); err != nil {
+				if err := s.SaveGenerated(ctx, entityID, []float32{1}, "bm25-384", 384, "h", 6, ""); err != nil {
 					t.Fatal(err)
 				}
 			},

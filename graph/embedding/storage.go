@@ -60,6 +60,22 @@ const (
 	StatusFailed Status = "failed"
 )
 
+// ReasonContentExcluded qualifies a GENERATED record whose vector was embedded from
+// the entity's inline text ALONE because no store in this process serves the storage
+// instance its reference names (gh#875). The vector is real and servable — it is
+// simply missing the offloaded body.
+//
+// It is exported because enumeration is its point: "which entities have a vector
+// missing its body?" is answered by scanning EMBEDDING_INDEX for this qualifier, and
+// a scanner outside this package needs the value by name rather than as a bare string
+// literal. It is deliberately NOT a member of normalizeFailureReason's closed failure
+// enum — it never labels the failures metric, and a FAILED record must never carry it.
+//
+// It is also the repair signal: SavePendingGuarded refuses to skip a re-queue over a
+// QUALIFIED generated record, so the entity re-embeds on its next delivery and heals
+// itself the moment the missing store is wired.
+const ReasonContentExcluded = "content_excluded"
+
 // Record represents a stored embedding with metadata
 type Record struct {
 	EntityID    string    `json:"entity_id"`
@@ -93,14 +109,36 @@ type Record struct {
 	GeneratedAt  time.Time `json:"generated_at,omitempty"`
 	Status       Status    `json:"status"`
 	ErrorMsg     string    `json:"error_msg,omitempty"` // If status=failed
-	// Reason is a BOUNDED classification of a failure (status=failed), stored next to
-	// the raw ErrorMsg (#613). It is the value the failures metric is labelled by — the
-	// raw ErrorMsg is unbounded and must NEVER be a metric label (cardinality blowup).
+	// Reason is a BOUNDED QUALIFIER OF THE TERMINAL STATE — valid on ANY Status, not
+	// only failed (gh#875). Empty means unqualified: the terminal state is exactly what
+	// Status says.
+	//
+	//	generated + ""                 a complete vector
+	//	generated + content_excluded   a vector embedded WITHOUT its offloaded body,
+	//	                               because no store in this process serves the
+	//	                               instance the reference names
+	//	failed    + content_error      a failure, classified (unchanged, #613)
+	//
+	// It widened from "failure classification" because a degraded SUCCESS had nowhere to
+	// record itself: an entity whose body was unreachable embedded its inline text and
+	// stored a plain `generated` record, which is unenumerable (no field to scan) and
+	// unrepairable (SavePendingGuarded skips a re-queue over a generated record, so
+	// wiring the missing store and restarting changed nothing). A boolean would have
+	// added a THIRD axis to this model; a qualifier adds none, and the next degraded
+	// success is an enum value rather than another field.
+	//
+	// It stays BOUNDED: on the failure side it is the value the failures metric is
+	// labelled by (the raw ErrorMsg is unbounded and must NEVER be a metric label), and
+	// normalizeFailureReason collapses anything outside the closed failure enum at the
+	// scan boundary. Every consumer gates on Status FIRST — ScanFailed collects only
+	// StatusFailed records — so a qualifier on a success can never reach the failures
+	// metric or the readiness envelope.
+	//
 	// Additive/omitempty: a record written by a pre-#613 worker carries no reason, and a
 	// rolled-back worker ignores the field, so it is wire-compatible in both directions.
-	// It is also what the current-failed bootstrap scan reads to seed the reason
-	// breakdown after a restart.
-	Reason string `json:"reason,omitempty"` // Bounded reason enum when status=failed
+	// What DID change for an out-of-tree reader is the interpretation: `reason != ""` no
+	// longer implies failure. Read Status.
+	Reason string `json:"reason,omitempty"` // Bounded terminal-state qualifier; see above
 
 	// SourceRevision is the ENTITY_STATES stream revision that produced this record.
 	// It is threaded from the hop-1 watcher so hop-2 can complete the embedding
@@ -283,7 +321,7 @@ func (s *Storage) SavePendingWithStorageRef(
 // lanes (inline and storage-ref — the caller shapes the record; Status is
 // forced to StatusPending here).
 //
-// The guard: when the existing record is a GENERATED vector at a
+// The guard: when the existing record is an UNQUALIFIED GENERATED vector at a
 // same-or-newer source revision, the write is SKIPPED (returns saved=false,
 // nil). An unconditional Put here let a stale repair re-drive — whose
 // stranded entity hop 2 had generated and causally cleared between the repair
@@ -294,6 +332,17 @@ func (s *Storage) SavePendingWithStorageRef(
 // regeneration. A pending/failed existing record, or a generated record at an
 // OLDER revision (a genuinely newer source state being queued), is
 // overwritten as before.
+//
+// UNQUALIFIED is load-bearing (gh#875). A generated record carrying a terminal-state
+// qualifier — today ReasonContentExcluded, a vector embedded without its unreachable
+// body — is a DEGRADED success, so skipping over it would make the degradation
+// permanent: an operator who wires the missing store and restarts would get a
+// last-per-subject re-delivery that this guard swallows, and nothing would ever
+// re-fetch the body. Re-queueing it instead makes the entity self-heal on its next
+// delivery. The cost is real and bounded: the vector goes briefly pending (not
+// servable) while it regenerates, and if the store is still unreachable the entity
+// simply re-qualifies — the dedup bucket makes that re-embed cheap, and hop 1 only
+// runs on an ENTITY_STATES delivery, so it cannot spin.
 //
 // Writes are conditional on the revision the guard decision was read at: an
 // absent key uses CAS-create (which also succeeds over a delete marker), a
@@ -310,8 +359,9 @@ func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved
 		if err != nil {
 			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "get existing record")
 		}
-		if existing != nil && existing.Status == StatusGenerated && existing.SourceRevision >= record.SourceRevision {
-			return false, nil // a same-or-newer generated vector stands; do not downgrade
+		if existing != nil && existing.Status == StatusGenerated && existing.Reason == "" &&
+			existing.SourceRevision >= record.SourceRevision {
+			return false, nil // a same-or-newer UNQUALIFIED generated vector stands; do not downgrade
 		}
 
 		data, err := json.Marshal(record)
@@ -351,6 +401,12 @@ func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved
 //
 // The read of `existing` no longer exists to copy a field forward; it exists ONLY
 // for the CAS revision and the ordering guard.
+//
+// qualifier is the terminal-state qualifier stored on the record (gh#875): "" for a
+// complete vector, ReasonContentExcluded for one embedded without its unreachable
+// body. It is a required positional argument rather than an option so every writer
+// states which it is producing — a degraded success that silently looks complete is
+// the exact defect this qualifier exists to remove.
 func (s *Storage) SaveGenerated(
 	ctx context.Context,
 	entityID string,
@@ -359,6 +415,7 @@ func (s *Storage) SaveGenerated(
 	dimensions int,
 	contentHash string,
 	sourceRevision uint64,
+	qualifier string,
 ) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveGenerated", "entity_id is empty")
@@ -405,6 +462,7 @@ func (s *Storage) SaveGenerated(
 			Dimensions:     dimensions,
 			GeneratedAt:    time.Now(),
 			Status:         StatusGenerated,
+			Reason:         qualifier,
 			SourceRevision: sourceRevision,
 		}
 		data, err := json.Marshal(record)

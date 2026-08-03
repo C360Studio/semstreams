@@ -63,7 +63,7 @@ func TestIntegration_FindSimilar_DeterministicTopKAtTie_BothPaths(t *testing.T) 
 	}
 	for _, id := range ids {
 		require.NoError(t, st.SavePending(ctx, id, "hash-"+id, "text", 0))
-		require.NoError(t, st.SaveGenerated(ctx, id, []float32{1, 0, 0}, "test", 3, "hash-"+id, 0))
+		require.NoError(t, st.SaveGenerated(ctx, id, []float32{1, 0, 0}, "test", 3, "hash-"+id, 0, ""))
 	}
 
 	// Deterministic expectation: lexicographically smallest k IDs.

@@ -682,7 +682,7 @@ func TestStaleRepairSnapshot_CannotDowngradeGeneratedRecord(t *testing.T) {
 	// the stranding causally — all BEFORE the dispatch loop runs.
 	putFailing = false
 	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "survey the north field", 7))
-	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7))
+	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7, ""))
 	c.completeEmbedding(entityID, 7, embedding.OutcomeGenerated, "")
 	count, _, _ = c.failedSnapshot()
 	require.Zero(t, count, "precondition: hop 2 cleared the stranding causally")
@@ -720,7 +720,7 @@ func TestWatcherRedelivery_DoesNotDowngradeGeneratedRecord(t *testing.T) {
 
 	// Generated vector at revision 7 exists from before the restart.
 	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "survey the north field", 7))
-	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7))
+	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 7, ""))
 
 	// Restart re-delivery of the same revision through the watcher path.
 	states.set(entityID, textEntityJSON(entityID), 7)
@@ -771,7 +771,7 @@ func TestNoTextTransition_FailedDeleteMarksStrandedAndRepairs(t *testing.T) {
 	// A previously GENERATED (served) vector at revision 5 — the harmful residue,
 	// not the StatusFailed one the site's old comment named.
 	require.NoError(t, c.storage.SavePending(ctx, entityID, "", "old text", 5))
-	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 5))
+	require.NoError(t, c.storage.SaveGenerated(ctx, entityID, []float32{1, 2, 3}, "bm25-384", 384, "hash-1", 5, ""))
 
 	// The live entity transitions to no-text at revision 6, via the immediate
 	// watcher path; the derived-record delete fails transiently.

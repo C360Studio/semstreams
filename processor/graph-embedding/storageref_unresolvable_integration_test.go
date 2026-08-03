@@ -146,6 +146,13 @@ func TestIntegration_GH875_UnresolvableInstanceIsExcludedNotFailed(t *testing.T)
 	}, 20*time.Second, 200*time.Millisecond,
 		"an entity whose body is unreachable must still embed the inline text it carries")
 	require.NotEqual(t, embedding.StatusFailed, rec.Status)
+	// It is a QUALIFIED success, and this is the DOMINANT path (hop 1's gate refuses the
+	// offloaded lane, so hop 2 never sees a StorageRef). Enumeration depends on this:
+	// "which entities have a vector missing its body?" is answered by scanning for the
+	// qualifier, and repair depends on it too — SavePendingGuarded re-queues over a
+	// qualified record, so wiring the store heals the entity.
+	require.Equal(t, embedding.ReasonContentExcluded, rec.Reason,
+		"the record must record what is missing from the vector, not look complete")
 
 	status := c.computeEmbeddingStatus(ctx)
 	require.Zero(t, status.FailedCount,
@@ -245,6 +252,14 @@ func TestIntegration_GH875_GateResolvableThenDeregisteredExcludes(t *testing.T) 
 	require.True(t, c.shouldFetchViaStorageRef(&state),
 		"precondition: the instance must resolve at the gate")
 
+	// Snapshot the counter BEFORE hop 1's write. This test never writes to
+	// ENTITY_STATES, so hop 1's own exclusion path cannot contribute — every increment
+	// observed below came from HOP 2, through the adapter wiring in Start. Without this
+	// assertion, nilling the reporter argument to newWorkerMetricsAdapter leaves the
+	// whole suite green while hop 2's exclusion emits no counter and no warning: the
+	// silent skip gh#875's acceptance criteria forbid.
+	unresolvedBefore := testutil.ToFloat64(c.metrics.contentUnresolved)
+
 	// hop 1's own write, made here so the deregistration lands deterministically
 	// between the gate's decision and hop 2's read.
 	require.NoError(t, c.storage.SavePendingWithStorageRef(ctx, entityID, "",
@@ -264,7 +279,126 @@ func TestIntegration_GH875_GateResolvableThenDeregisteredExcludes(t *testing.T) 
 	require.True(t, ok)
 	require.NotEqual(t, embedding.StatusFailed, rec.Status,
 		"a store deregistered between the gate and the fetch must not latch a durable failure")
+	require.Equal(t, embedding.ReasonContentExcluded, rec.Reason,
+		"the race produces a QUALIFIED success: the record must say the body is missing")
 	require.Zero(t, c.computeEmbeddingStatus(ctx).FailedCount)
+
+	// The wiring assertion (see the snapshot above): hop 2's exclusion must reach the
+	// component's reporter. This is what makes newWorkerMetricsAdapter's third argument
+	// load-bearing in a test rather than only in production.
+	require.Equal(t, float64(1), testutil.ToFloat64(c.metrics.contentUnresolved)-unresolvedBefore,
+		"hop 2's exclusion must increment content_unresolved_total through the wired reporter; "+
+			"a silent skip is not acceptable (gh#875 acceptance)")
+}
+
+// TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord proves the repair
+// half of the qualified-success model, end to end, the way an operator experiences it:
+// an entity whose body was unreachable holds a QUALIFIED generated record; the operator
+// then wires the missing store and restarts; the entity re-embeds WITH its body and the
+// qualifier clears — with no write to ENTITY_STATES, so the restart's last-per-subject
+// re-delivery at the SAME revision is the only trigger.
+//
+// Without the qualifier, that re-delivery is swallowed by SavePendingGuarded's skip
+// ("a same-or-newer generated vector stands") and the body-less vector is permanent.
+// This is the regression review caught: the pre-reframe fix converted a self-healing
+// state (today's failed record, which the guard overwrites) into a stuck one.
+func TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord(t *testing.T) {
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	const instance = "content"
+	const bodyTerms = "peregrine falcon telemetry downlink budget"
+	store, err := objectstore.NewStoreWithConfig(ctx, nc, objectstore.Config{
+		BucketName: "GH875_HEAL_CONTENT", InstanceName: instance,
+	})
+	require.NoError(t, err)
+	require.NoError(t, store.Put(ctx, "loops/x/step/1", []byte(bodyTerms)))
+
+	configJSON := gh875Config(t, "GH875_HEAL_OWNED")
+
+	// Phase 1 — the store is NOT registered: the body is unreachable.
+	comp, err := CreateGraphEmbedding(configJSON, component.Dependencies{
+		NATSClient:    nc,
+		StoreRegistry: storeregistry.New(),
+	})
+	require.NoError(t, err)
+	c := comp.(*Component)
+	require.NoError(t, c.Initialize())
+
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	entityBucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: graph.BucketEntityStates, Description: "Test entity states",
+	})
+	require.NoError(t, err)
+
+	require.NoError(t, c.Start(ctx))
+	phase1Stopped := false
+	defer func() {
+		if !phase1Stopped {
+			_ = c.Stop(5 * time.Second)
+		}
+	}()
+
+	var embeddingBucket jetstream.KeyValue
+	require.Eventually(t, func() bool {
+		embeddingBucket, err = js.KeyValue(ctx, graph.BucketEmbeddingIndex)
+		return err == nil
+	}, 10*time.Second, 100*time.Millisecond, "EMBEDDING_INDEX bucket should be created")
+
+	const entityID = "c360.platform.docs.sys.doc.004"
+	state := gh875Entity(entityID, instance)
+	data, err := json.Marshal(state)
+	require.NoError(t, err)
+	_, err = entityBucket.Put(ctx, entityID, data)
+	require.NoError(t, err)
+
+	var qualified embedding.Record
+	require.Eventually(t, func() bool {
+		var ok bool
+		qualified, ok = gh875Record(ctx, t, embeddingBucket, entityID)
+		return ok && qualified.Status == embedding.StatusGenerated
+	}, 20*time.Second, 200*time.Millisecond, "the entity must embed its inline text")
+	require.Equal(t, embedding.ReasonContentExcluded, qualified.Reason,
+		"phase 1 must leave an ENUMERABLE record: generated, qualified content_excluded")
+
+	// Phase 2 — the operator wires the store and restarts. NOTHING is written to
+	// ENTITY_STATES, so only the restart's re-delivery at the same revision can heal it.
+	require.NoError(t, c.Stop(5*time.Second))
+	phase1Stopped = true
+
+	reg := storeregistry.New()
+	require.NoError(t, reg.Register(instance, store))
+	comp2, err := CreateGraphEmbedding(configJSON, component.Dependencies{
+		NATSClient:    nc,
+		StoreRegistry: reg,
+	})
+	require.NoError(t, err)
+	c2 := comp2.(*Component)
+	require.NoError(t, c2.Initialize())
+	require.NoError(t, c2.Start(ctx))
+	defer func() { _ = c2.Stop(5 * time.Second) }()
+
+	require.Eventually(t, func() bool {
+		rec, ok := gh875Record(ctx, t, embeddingBucket, entityID)
+		return ok && rec.Status == embedding.StatusGenerated && rec.Reason == ""
+	}, 30*time.Second, 250*time.Millisecond,
+		"wiring the store and restarting must clear the qualifier — the entity re-embeds WITH its body")
+
+	require.Zero(t, c2.computeEmbeddingStatus(ctx).FailedCount)
+
+	// The body is genuinely in the vector now: a query over body-only terms (absent from
+	// the entity's inline title) retrieves it.
+	queryVecs, err := c2.embedder.GenerateQuery(ctx, []string{bodyTerms})
+	require.NoError(t, err)
+	require.Len(t, queryVecs, 1)
+	results, err := c2.findSimilarEntities(ctx, "", queryVecs[0], nil, 10)
+	require.NoError(t, err)
+	require.NotEmpty(t, results, "the healed vector must contain the body terms")
+	require.Equal(t, entityID, results[0].EntityID)
 }
 
 // TestIntegration_GH875_OwnedStoreStillServesItsOwnInstance is the other half of

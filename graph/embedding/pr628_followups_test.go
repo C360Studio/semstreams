@@ -88,7 +88,7 @@ func TestSaveAndNotify_CASExhaustedIsNotAFailure(t *testing.T) {
 	// Every Update conflicts → SaveGenerated returns ErrCASExhausted. The terminal
 	// return is ignored on purpose. An inline record (no StorageRef) is passed for the
 	// offloaded-identity derivation; CAS exhaustion returns before that success-path block.
-	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "dedup-key", rev, false)
+	w.saveAndNotify(entityID, &Record{EntityID: entityID}, []float32{1, 2, 3}, "dedup-key", rev, false, "")
 
 	// The generation-failure metric is the discriminator: pre-fix counts 1, fixed 0.
 	if got := m.snapshot().failed; got != 0 {
@@ -128,7 +128,7 @@ func TestSaveFailed_EqualRevisionDoesNotDowngradeSuccess(t *testing.T) {
 	}
 
 	// Generated lands first at revision R.
-	if err := s.SaveGenerated(ctx, entityID, []float32{4, 5, 6}, "m", 3, "hash-R", rev); err != nil {
+	if err := s.SaveGenerated(ctx, entityID, []float32{4, 5, 6}, "m", 3, "hash-R", rev, ""); err != nil {
 		t.Fatalf("SaveGenerated(R): %v", err)
 	}
 
@@ -168,7 +168,7 @@ func TestSaveGenerated_EqualRevisionWinsOverPriorFailure(t *testing.T) {
 		t.Fatalf("SaveFailed(R): %v", err)
 	}
 	// A generation at the SAME revision then completes; it wins.
-	if err := s.SaveGenerated(ctx, entityID, []float32{7, 8, 9}, "m", 3, "hash-R", rev); err != nil {
+	if err := s.SaveGenerated(ctx, entityID, []float32{7, 8, 9}, "m", 3, "hash-R", rev, ""); err != nil {
 		t.Fatalf("SaveGenerated(R) after SaveFailed(R): %v", err)
 	}
 
