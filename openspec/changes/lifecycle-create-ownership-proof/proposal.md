@@ -83,7 +83,7 @@ built for.
 `ErrAlreadyExists → Get` branch and returns the winner's read-back run, instead of returning
 the un-read-back struct it submitted.
 
-## Deferred, deliberately
+## Deferred here, PROMOTED as engine work (owner ruling, 2026-08-02)
 
 Three consumers want request-scoped idempotency on the graph mutation seam — this issue's
 residual (a create whose single delivery times out has a genuinely unknown outcome), gh#689,
@@ -91,6 +91,23 @@ and gh#807. That is one primitive with cross-repo wire semantics, i.e. ADR-shape
 enumerates four unanswered questions about its shape. A shape with four open questions is too
 unstable to document, therefore too unstable to export, therefore too unstable to build into
 a bug fix. Filed as engine work with its consumers named: **gh#869**.
+
+**Correction, recorded because the original argument bundled two questions and only argued one.**
+"Too unstable to document" answers *should the ADR be written now*. It does NOT answer *is the
+primitive needed*, and the second question was never put. The owner put it: SemStreams already
+has the CQRS shape (graph-ingest is the write side, KV/projections the read side, the write is
+the event) and the CQRS vocabulary (`CommitNotCommitted` / `CommitUnknown` / `CommitCommitted` /
+`CommitVerified` in `pkg/projection/mutation_types.go`) — but not the CQRS correlation primitive.
+"Did my command take effect?" is load-bearing in that shape, and every consumer that asks it
+today answers by comparing content, which is a different question that coincides with the right
+answer only when no two callers can want the same thing at once.
+
+**gh#869 is therefore PROMOTED out of deferral**; gh#807's four open questions are the design
+work to do, not the reason to wait. **This change does not build the primitive and does not
+pretend to** — it removes the *need* for one on the absent→create path by narrowing the retry so
+a create is delivered at most once, after which "I hold no response" honestly means "I did not
+commit it." Four other paths still ask the question and still answer it by content (gh#870,
+gh#871). That is a scope reduction, not a capability.
 
 Four further follow-ups are filed rather than folded in: **gh#870** (the attach path carries
 the mirror-image bug — a real fence that errs conservative and invents a 409 for a birth this
