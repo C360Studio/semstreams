@@ -85,10 +85,26 @@ Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 > not the reason to wait. **Two bundled questions, one argued: check for that shape.**
 > Sequencing within the class: gh#870 errs CONSERVATIVE (a false 409, no state corruption) where
 > gh#861 errs liberal (a false success), so it follows the primitive rather than racing it.
-> **gh#689 is blocked on this row** — its "two concurrent claimers cannot both receive committed
-> success" cannot be met by a client whose spec (`projection-mutation-client/spec.md:293-294`)
-> rules matching content to BE idempotent success. That spec clause needs an owner ruling, and
-> gh#861's fix is explicitly NOT recorded as unblocking gh#689.
+> **CORRECTED 2026-08-03 by the gh#869 design pass — this block originally said "gh#689 is blocked
+> on this row". THAT WAS WRONG, and it was wrong in the direction that costs the most: it parked a
+> ready change behind work with no consumer.** **gh#689 is blocked on gh#851 →
+> `contract-bound-claim`, and BOTH ARE ALREADY DRAFTED on PR #853** (`entity-read-with-revision`,
+> `contract-bound-claim`, `durable-task-claims`, `immutable-birth-predicates`).
+> `contract-bound-claim` is exactly the claimant-identity + revision-CAS combination this row's
+> primitive was going to invent. **Measured:** the serialization point is REAL today —
+> `processor/graph-ingest/component.go:2969` is a genuine NATS KV CAS — and the only missing piece
+> is that `query.go:87-104` holds `entry.Revision` and returns `entry.Value` alone, so a public
+> caller cannot condition on it. That is gh#851, the smallest of the four drafts, additive, no new
+> subject. **Owner ruling 2026-08-03: the four drafts get a verification pass BEFORE they are
+> sequenced** — they were authored by a different session and their own file:line grounding has not
+> been re-derived.
+> The spec clause at `projection-mutation-client/spec.md:293-294` still needs an owner ruling, but
+> it is **narrower than recorded**: `pkg/projection` already stamps `triple.Context =
+> metadata.RequestID` (`mutation_client.go:421`) and requires RequestID on create/append, so two
+> claimers with distinct RequestIDs already diverge and get a conflict. It is unsound only for a
+> content-derived RequestID, or on `ReplaceOwned`, which passes `required=false` (`:1115`) — and
+> `ReplaceOwned` is the lane a claim rides. gh#861's fix is still explicitly NOT recorded as
+> unblocking gh#689.
 > **1. GATE INTEGRITY — nothing downstream is verifiable until this is done.** Four tiers are
 > known-broken: **gh#860** (crud-tools `verify-fire-every-n-events`, PRE-EXISTING — bisected to
 > identical failure at `b4194059` with `tool.>` intact, which also FALSIFIES PR #847's claim that
@@ -950,7 +966,7 @@ Pedantry bucket measured: zero — every blocker carried a failure scenario.
 | Cross-repo gates written into local task lists | task-list residency rule (standing rules) + gh#753 | 5 instances rescoped 2026-07-30; guard live |
 | **Guard reports green without checking** (a verification that cannot fail) | mutation-check every guard, and prefer a LITERAL expectation over one derived from the thing being checked | **open — 3 new instances in #787 alone** (sync guard blind to `omitempty`; order test that did not pin order; `checked != len(probes)` tautology). Distinct from "a test that reconstructs": these are guards on OTHER tests' integrity. All 3 found by review, none by CI |
 | Enumerating a surface from the wrong owner | derive from the component that OWNS the surface, and scrape it rather than hand-maintain | **1 instance (#787)**: gateway subjects enumerated from graph-query's registrations → 2 phantom entries + 1 miss + a wrong adopter instruction. Fixed drift-proof |
-| **Ownership inference at the write seam** (content equality read as authorship — "the stored state looks like what I was about to write, therefore I wrote it") | request-scoped idempotency / claim primitive on the graph mutation seam, so authorship is OBSERVED from the causal response rather than reconstructed — **gh#869** | **open — 5 spellings, 3 unsound, ledger row added 2026-08-02.** Sound: the causal mutation response (`pkg/lifecycle/manager.go` `outcomeFromCreate`/`outcomeFromUpdate`). Unsound: wall-clock audit stamp (**gh#861, FIXED** — not by building the primitive but by narrowing the retry so the question stops being asked on that path); phase-triple presence in the attach branch (**gh#870**, mirror image — errs conservative, invents a 409 for its own birth); `MessageType` equality (`processor/graph-ingest`… `agentic-loop/graph_writer.go:254-289`) and full-triple-multiset equality (`pkg/projection/mutation_client.go:586-589`, **spec-BLESSED** at `projection-mutation-client/spec.md:293-294`) — both **gh#871**. **gh#689 is blocked on this row**: "two concurrent claimers cannot both receive committed success" cannot be met by a client whose spec rules matching content to be idempotent success |
+| **Ownership inference at the write seam** (content equality read as authorship — "the stored state looks like what I was about to write, therefore I wrote it") | request-scoped idempotency / claim primitive on the graph mutation seam, so authorship is OBSERVED from the causal response rather than reconstructed — **gh#869** | **open — 5 spellings, 3 unsound, ledger row added 2026-08-02.** Sound: the causal mutation response (`pkg/lifecycle/manager.go` `outcomeFromCreate`/`outcomeFromUpdate`). Unsound: wall-clock audit stamp (**gh#861, FIXED** — not by building the primitive but by narrowing the retry so the question stops being asked on that path); phase-triple presence in the attach branch (**gh#870**, mirror image — errs conservative, invents a 409 for its own birth); `MessageType` equality (`processor/graph-ingest`… `agentic-loop/graph_writer.go:254-289`) and full-triple-multiset equality (`pkg/projection/mutation_client.go:586-589`, **spec-BLESSED** at `projection-mutation-client/spec.md:293-294`) — both **gh#871**. **SIXTH spelling found by the gh#869 design pass 2026-08-03, and it is the sharpest live one:** `processor/gated-dag/claim.go:56-110` writes a claim with NO claimant identity (subject and object both `unitID`, constant `Source`, `OwnerToken` deliberately empty, no `ExpectedRevision`) so only `time.Now()` distinguishes two claimers — and `Unclaim` is unconditional, so one worker can clear another's claim. **CORRECTION: gh#689 is NOT blocked on this row** (as first written) — it is blocked on **gh#851 → `contract-bound-claim`**, both already drafted on PR #853, which retires spelling 6. **The gh#869 ruling is RESCOPE, not build:** three distinct questions (election → CAS/write-once, already real at `graph-ingest/component.go:2969`; attribution → discriminator in the fact, `Context` already carries it on the `pkg/projection` lanes; replay → caller key ONLY on the agent task lane), and a new request-key ledger on `graph.mutation.*` has **zero present consumers** |
 
 ---
 
