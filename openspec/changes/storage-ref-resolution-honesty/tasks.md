@@ -210,6 +210,36 @@
       a mutation result silently re-pointed at different code is indistinguishable from one that was never
       re-run.
 
+- [x] 4.6 **Mutation ledger on the FINAL code** (rebased onto `origin/main` past #890/#891). Commit
+      `854fabf7` first; `cp` backups; `[applied]` markers; md5-verified restores; `git status --porcelain`
+      empty afterwards.
+      - **MUTATION 10 — the revision ordering this round ADDED.** Guard reverted to quality-only
+        (`existing.Reason == record.Reason && existing.SourceRevision >= …`):
+        `TestSavePendingGuarded_StrictlyNewerVectorStandsWhateverItsQuality` **FAILED** on both mixed-quality
+        rows — `a STRICTLY NEWER generated vector was downgraded to pending at an older revision: durable
+        content regression, and hop 2's ordering guard cannot recover it`.
+      - **MUTATION 11 — the owner's RULED form, re-measured on final code** (this is what M8 established
+        against the now-superseded shape). Guard reverted to `existing.Reason == ""`:
+        `TestQualifier_HopTwoFailureDoesNotLaunderAQualifiedSuccess` **FAILED** at the laundering step, plus
+        two rows of `TestSavePendingGuarded_SkipsOnTerminalQualityNotOnPresence` and the strictly-newer test.
+        The DEVIATION in 6.0.3 therefore rests on evidence from the code that ships, not from an intermediate
+        shape.
+      - **MUTATION 12 — the compile-time adopter guarantee**, which no ordinary test can assert (its subject
+        is a program that must NOT compile). Method: widen `WithContentStore` back to
+        `storage.StreamableStore` and restore the runtime `InstanceName` assertion, then build a probe file
+        containing `adopterStore` — a struct implementing exactly the documented backend-neutral
+        `storage.StreamableStore` and nothing more, i.e. a sister repo's filestore — wired via
+        `WithContentStore`.
+        - **Under the mutation: it COMPILES.** That is the BLOCKING defect reachable — the adopter's build is
+          green and every offloaded body is silently excluded at runtime.
+        - **On the final code: the compiler REFUSES it** — `cannot use adopterStore{…} as NamedStore value in
+          argument to … WithContentStore: adopterStore does not implement NamedStore (missing method
+          InstanceName)`.
+        The probe file was removed afterwards (`go build ./...` clean, tree empty); it is quoted here rather
+        than committed, because a file whose purpose is to fail compilation cannot live in the package.
+      md5s after restore: storage.go `41d0fc6e…`, worker.go `3d368f4c…` — both matched their pre-mutation
+      values.
+
 ## 5. Gates
 
 > Run what CI runs — BOTH suites. Check `^FAIL` rather than trusting a pipeline exit code.
@@ -328,6 +358,14 @@
         edited, because a green result on superseded code must not be allowed to read as coverage of the code
         that replaced it.
 
+- [x] 5.8d **Final gate set on the REBASED code** (`origin/main` past #890's e2e canary and #891's startup-
+      budget fix; rebase clean, 12 commits, no conflicts). Everything below was run after the rebase, so it
+      covers exactly what ships: `go build ./...` OK; `gofmt -l .` empty; `go vet ./...` and
+      `go vet -tags=integration ./...` both silent; `task lint` clean; **`go test -race ./...` → 136 `ok`,
+      0 `^FAIL`, exit 0**; `task schema:generate` → zero drift; `go test ./test/contract/...` ok 2.117s;
+      `go test ./test/testinfra/` ok 4.765s; `openspec validate --strict` valid;
+      **`scripts/run-integration-tests.sh` → exit 0, 137 `ok`, 0 `^FAIL`**; **`task e2e:statistical` → exit 0**
+      (see 5.9).
 - [x] 5.8c **Integration re-run on the FINAL-review code**, via the sanctioned runner (raw
       `go test -tags=integration` is no longer the supported entry point):
       - Touched packages: `bash scripts/run-integration-tests.sh ./graph/embedding/... ./processor/graph-embedding/...`
@@ -344,6 +382,17 @@
         So the class #889 addressed is reduced but not eliminated — one container start still timed out under
         full-suite load. Recorded as a residual rather than re-run to green, and worth passing to whoever owns
         the #889 follow-up.
+        **RESIDUAL CLOSED — do not carry this line forward.** That follow-up landed as **#891**
+        (`10d030f7`, `fix(natsclient): preserve container startup budget`, touching
+        `natsclient/test_options.go`) and this branch was rebased onto it. On the rebased code the full suite
+        is **exit 0, 137 `ok`, 0 `^FAIL`**, and the specific test that failed —
+        `TestIntegration_NewTestClient_PubSub` in `natsclient` — passes **in the full-suite configuration
+        that previously failed it** (`ok github.com/c360studio/semstreams/natsclient 97.193s`). That is the
+        meaningful comparison: it always passed in isolation, so isolation proved nothing; the failure only
+        ever appeared under full-suite load, and under full-suite load it is now green.
+        Stated at its true strength: this is ONE clean run of a previously intermittent failure, so it is
+        strong evidence rather than proof. If it recurs, #891 is the thing to look at, not this change —
+        `natsclient` has zero dependency on any package this change touches, and the direction is structural.
 - [x] 5.7 ~~Not BREAKING and no wire-surface change, so no e2e tier is owed.~~ **RETRACTED — this change IS
       BREAKING and an e2e tier IS owed.** The original task line said otherwise and survived two rounds after
       the change had already grown four breaking surface changes; the commit trail says
@@ -370,16 +419,31 @@
 - [x] 5.9 **`task e2e:statistical` — GREEN on the final code.** This is the tier the BREAKING classification
       owes (CLAUDE.md: a BREAKING commit needs a relevant e2e tier green BEFORE it lands). BM25 tier, so it
       exercises `graph-embedding` + `objectstore` on the real Docker stack with no LLM dependency.
-      **Result: exit 0, 42/42 steps, `Scenario completed successfully duration=29.5s`, `validation_errors:0`.**
-      The metrics that make it relevant rather than merely green:
+      **Result on the FINAL rebased code (past #890/#891): exit 0, `Scenario completed successfully`,
+      `validation_errors:0`.** The earlier run on pre-rebase code was also exit 0, 42/42 steps, 29.5s.
+      The metrics, with every run I have and the owner's, because they do not agree:
 
-      | metric | value | why it matters here |
-      |---|---|---|
-      | `embedding_resolved_total` | 96 | offloaded bodies actually FETCHED through a resolved store — the `resolveStore` path this change rewrote, exercised 96 times in a real stack |
-      | `embedding_failed_total` | 0 | no failed embeddings, so nothing pinned `IndexStateDegraded` |
-      | `embedding_fresh_generated_total` / `embedding_dedup_hits` | 68 / 28 | hop 2 terminalized every entity through the changed `SaveGenerated` signature |
-      | `embedding_pending_count` | 0 | the qualifier-aware `SavePendingGuarded` did not strand or loop anything |
-      | `known_answer_tests_passed` | 7/7 | the BM25 known-answer suite — the exact signal that collapsed 7/7 → 0/7 in the gh#354 regression this code path guards |
+      | metric | run 1 | run 2 (owner) | run 3 (final, rebased) | reading |
+      |---|---|---|---|---|
+      | `embedding_failed_total` | 0 | — | **0** | STABLE across runs. No failed embeddings, so nothing pinned `IndexStateDegraded`. This is the load-bearing one for this change. |
+      | `embedding_pending_count` | 0 | — | **0** | STABLE. The qualifier-aware `SavePendingGuarded` neither stranded nor looped anything. |
+      | `embedding_fresh_generated_total` | 68 | — | **68** | STABLE. Hop 2 terminalized every entity through the changed `SaveGenerated` signature. |
+      | `embedding_resolved_total` | 96 | 97 | **93** | **VARIES.** Offloaded bodies fetched through a resolved store — the rewritten `resolveStore` path is exercised ~90+ times either way, but the exact count is not reproducible. |
+      | `embedding_dedup_hits` | 28 | — | **25** | VARIES, and moves opposite to `resolved` — consistent with a differing ingest population, not with a behaviour change. |
+      | `entity_count` | 125 | — | **129** | **VARIES — this is the root of it.** The tier does not ingest the same population twice, so every count derived from it moves. |
+      | `known_answer_tests_passed` | 7/7 | **6/7** | 7/7 | **VARIES.** See below. |
+
+      **`known_answer_tests_passed` is NOT a stable tripwire, and that is the thing to record.** An earlier
+      version of this entry cited 7/7 as "the exact signal that collapsed 7/7 → 0/7 in the gh#354 regression",
+      which invited it to be read as a reproducible gate. It is not: the owner's independent run of the SAME
+      tier on the SAME code measured 6/7, and `entity_count` differs across runs (125 vs 129), so the runs did
+      not process the same population. A number cited as a regression tripwire must be stable or its
+      instability is the finding — so the citation is softened to what it can support: the suite exercises the
+      BM25 retrieval path that the gh#354 regression collapsed to 0/7, and a 6-or-7 out of 7 is nowhere near
+      that floor. A single-point difference between 6 and 7 proves nothing either way about this change.
+      Filing the tier's non-determinism is not in this change's scope, but it is worth someone's attention:
+      **`task e2e:statistical` is not currently reproducible run-to-run**, which limits what any BREAKING
+      change can prove with it.
 
       **What it does NOT prove, stated rather than implied:** the tier cannot construct an unresolvable
       instance (gh#888 — every in-tree config registers what it names), so it proves NO REGRESSION on the
