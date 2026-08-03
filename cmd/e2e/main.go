@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -126,7 +127,7 @@ func parseCommandLineFlags() *cliFlags {
 	flags := &cliFlags{}
 
 	flag.StringVar(&flags.scenarioName, "scenario", "",
-		"Run specific scenario (core-health, core-dataflow, core-federation, or 'all')")
+		"Run specific scenario (core-health, core-dataflow, core-graph-roundtrip, core-federation, or 'all')")
 	flag.BoolVar(&flags.verbose, "verbose", false, "Enable verbose logging")
 	flag.StringVar(&flags.baseURL, "base-url", config.DefaultEndpoints.HTTP, "SemStreams HTTP endpoint (edge)")
 	flag.StringVar(&flags.cloudURL, "cloud-url", "http://localhost:8081",
@@ -227,6 +228,7 @@ func handleListCommand(listScenarios bool) bool {
 	fmt.Println("  Core:")
 	fmt.Println("    core-health     - Component health checks")
 	fmt.Println("    core-dataflow   - UDP → Filter → Map → File pipeline")
+	fmt.Println("    core-graph-roundtrip - Projection write → ENTITY_STATES/index → GraphQL read")
 	fmt.Println("    core-federation - Edge → Cloud federation via WebSocket")
 	fmt.Println("")
 	fmt.Println("  Tiered (unified scenario with --variant flag):")
@@ -311,7 +313,7 @@ func runScenarios(
 
 	if flags.scenarioName == "" || flags.scenarioName == "all" {
 		logger.Info("Running all core scenarios...")
-		return runAllScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
+		return runAllScenarios(ctx, logger, edgeClient, flags.baseURL, flags.udpEndpoint)
 	} else if flags.scenarioName == "semantic" {
 		logger.Info("Running all semantic scenarios...")
 		return runSemanticScenarios(ctx, logger, edgeClient, flags.udpEndpoint)
@@ -360,6 +362,12 @@ func createScenario(
 		}
 		wsClient = client.NewWebSocketClient(wsURL)
 		return scenarios.NewCoreDataflowScenario(edgeClient, wsClient, flags.udpEndpoint, nil)
+	case "core-graph-roundtrip", "graph-roundtrip":
+		return scenarios.NewGraphRoundTripScenario(
+			config.DefaultEndpoints.NATS,
+			flags.baseURL,
+			strings.TrimRight(flags.baseURL, "/")+"/graph-gateway/graphql",
+		)
 	case "core-federation", "federation":
 		return scenarios.NewCoreFederationScenario(edgeClient, cloudClient, flags.udpEndpoint, flags.wsEndpoint, nil)
 
@@ -367,6 +375,7 @@ func createScenario(
 	case "tiered", "structural", "statistical", "semantic":
 		cfg := scenarios.DefaultTieredConfig()
 		cfg.MetricsURL = flags.metricsURL
+		cfg.ServiceManagerURL = flags.baseURL
 		cfg.GatewayURL = flags.baseURL + "/api-gateway"
 		cfg.OutputDir = flags.outputDir
 		// Set variant from flag or scenario name
@@ -553,6 +562,7 @@ func runAllScenarios(
 	ctx context.Context,
 	logger *slog.Logger,
 	obsClient *client.ObservabilityClient,
+	baseURL string,
 	udpEndpoint string,
 ) int {
 	// Create WebSocket client for dataflow scenario
@@ -562,6 +572,11 @@ func runAllScenarios(
 	tests := []scenarios.Scenario{
 		scenarios.NewCoreHealthScenario(obsClient, nil),
 		scenarios.NewCoreDataflowScenario(obsClient, wsClient, udpEndpoint, nil),
+		scenarios.NewGraphRoundTripScenario(
+			config.DefaultEndpoints.NATS,
+			baseURL,
+			strings.TrimRight(baseURL, "/")+"/graph-gateway/graphql",
+		),
 	}
 
 	passed := 0
