@@ -2,21 +2,25 @@
 
 // Integration coverage for the create-retry narrowing (gh#861).
 //
-// graphEmitterNATS.create retries ONLY the provably-pre-commit failure class —
-// "no responders", meaning the request was never delivered to a graph-ingest
-// handler. Every other transport failure (notably a per-attempt timeout against
-// a handler that is still running) leaves the outcome UNKNOWN, and re-sending a
+// graphEmitterNATS.create re-sends ONLY on failures that PROVE the request was
+// never delivered to a graph-ingest handler: "no responders" from the server,
+// and the client's own refusals to send (open circuit breaker, no connection).
+// Every other transport failure (notably a per-attempt timeout against a handler
+// that is still running) leaves the outcome UNKNOWN, and re-sending a
 // non-idempotent create against a live handler is how a request manufactures a
 // conflict with itself.
 //
-// Two facts have to hold on the real wire for that policy to be correct, and
-// both are pinned here rather than asserted in prose:
+// Three facts have to hold on the real wire for that policy to be correct, and
+// all three are pinned here rather than asserted in prose:
 //
 //  1. an absent responder really does surface as nats.ErrNoResponders on this
 //     server configuration (natsclient.IsNoResponders is documented as
-//     server-config dependent), and
+//     server-config dependent),
 //  2. a per-attempt timeout against a live-but-slow handler produces exactly
-//     one delivery.
+//     one delivery, and
+//  3. a create rides through the client's OWN breaker opening mid-loop — the
+//     class a per-attempt request re-checks and the replaced retry loop did
+//     not, so narrowing without it would silently drop the cold-start budget.
 //
 // Build-tagged; run with `go test -tags=integration -race ./pkg/lifecycle/...`.
 

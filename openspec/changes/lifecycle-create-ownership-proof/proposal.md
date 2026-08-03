@@ -45,7 +45,7 @@ structural, not exotic: it fires on cold start, KV contention, and load. The fra
 better-behaved sibling `pkg/projection/mutation_client.go` already retries **only**
 `natsclient.IsNoResponders`, and the emitter's own doc comment concedes that the gh#170 race
 it exists for is "no responders **before** graph-ingest receives anything" — the
-provably-pre-commit class, the only class a create retry is ever justified for.
+provably-pre-commit class — the only kind of failure a create retry is ever justified for.
 
 ## What Changes
 

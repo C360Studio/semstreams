@@ -39,12 +39,13 @@ was never recorded is indistinguishable from one that was skipped. A deliberate 
 
 ## 3. Narrow the create retry to the classes that PROVE non-delivery
 
-- [x] 3.1 `graphEmitterNATS.create` re-sends only on `natsclient.IsNoResponders`, preserving the
-      15 s gh#170 budget for that class (same schedule as `lifecycleEmitRetryConfig`).
+- [x] 3.1 `graphEmitterNATS.create` re-sends only on failures that prove non-delivery — first
+      `natsclient.IsNoResponders`, extended by 3.4 — preserving the 15 s gh#170 budget for those
+      classes (same schedule as `lifecycleEmitRetryConfig`).
 - [x] 3.2 `update` and `delete` are UNCHANGED — `Transition`'s cold-start protection depends on
       retrying a sub-case that presents as a timeout, and delete is idempotent at the handler.
-- [x] 3.3 Rewrite create's docstring to state the new contract: only the provably-pre-commit
-      failure is re-sent; every other transport failure is an unknown outcome the caller
+- [x] 3.3 Rewrite create's docstring to state the new contract: only a failure that proves
+      non-delivery is re-sent; every other transport failure is an unknown outcome the caller
       resolves by reading authoritative state.
 - [x] 3.4 **Review HIGH-3 — two more classes belong in the set.** A per-attempt
       `RequestClassified` re-checks connection and breaker state on EVERY call

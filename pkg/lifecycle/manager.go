@@ -715,10 +715,10 @@ func (m *Manager) createWithRegistration(ctx context.Context, reg *registration,
 		if err != nil {
 			if errors.Is(err, ErrAlreadyExists) {
 				// Reported straight through: the entity was born by SOMEONE
-				// ELSE. The emitter retries create only on "no responders" —
-				// the provably-pre-commit class, where nothing was delivered —
-				// so this request cannot be observing its own committed write
-				// through a retry (graph_emit.go create()).
+				// ELSE. The emitter re-sends a create only on failures that
+				// PROVE nothing was delivered (graph_emit.go
+				// createSafeToResend), so this request cannot be observing its
+				// own committed write through a retry.
 				//
 				// This deliberately does NOT re-read to ask "did I write that?"
 				// (gh#861). A separate read answers a different question than
