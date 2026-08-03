@@ -314,7 +314,17 @@
       - Touched packages: `bash scripts/run-integration-tests.sh ./graph/embedding/... ./processor/graph-embedding/...`
         → `graph/embedding` **ok 1.688s**, `processor/graph-embedding` **ok 20.864s**. The four
         `TestIntegration_GH875_*` tests are inside that pass.
-      - Full suite: see the counts recorded below at the point it was run.
+      - Full suite: `bash scripts/run-integration-tests.sh` → **exit 1, 136 `ok`, 1 `^FAIL` package** —
+        `natsclient`, on `TestIntegration_NewTestClient_PubSub`:
+        `start NATS container: started hook: wait until ready: context deadline exceeded`. Attribution
+        measured, not assumed: (1) the failure is inside testcontainers provisioning and reaches no assertion
+        code; (2) `go list -deps -test -tags=integration ./natsclient` shows **0** dependencies on
+        `graph/embedding`, `processor/graph-embedding`, or `storage/objectstore` — and the direction is
+        structural, since `natsclient` is what those packages are built ON; (3) re-run in isolation through
+        the same runner: `natsclient` **ok 68.329s**.
+        So the class #889 addressed is reduced but not eliminated — one container start still timed out under
+        full-suite load. Recorded as a residual rather than re-run to green, and worth passing to whoever owns
+        the #889 follow-up.
 - [x] 5.7 ~~Not BREAKING and no wire-surface change, so no e2e tier is owed.~~ **RETRACTED — this change IS
       BREAKING and an e2e tier IS owed.** The original task line said otherwise and survived two rounds after
       the change had already grown four breaking surface changes; the commit trail says
@@ -336,7 +346,26 @@
       filed issue rather than a paragraph in a task file: **gh#888**, which specifies the four assertions a
       closing tier needs (no degrade, the metric climbing, the qualified record, and the restart self-heal
       with no ENTITY_STATES write). gh#881 is the adjacent-but-different question (observability surface, not
-      coverage). Not run here — see 5.8 for the owner directive that also barred the integration suite.
+      coverage). See 5.9 — a tier WAS run, and what it can and cannot prove is stated there.
+
+- [x] 5.9 **`task e2e:statistical` — GREEN on the final code.** This is the tier the BREAKING classification
+      owes (CLAUDE.md: a BREAKING commit needs a relevant e2e tier green BEFORE it lands). BM25 tier, so it
+      exercises `graph-embedding` + `objectstore` on the real Docker stack with no LLM dependency.
+      **Result: exit 0, 42/42 steps, `Scenario completed successfully duration=29.5s`, `validation_errors:0`.**
+      The metrics that make it relevant rather than merely green:
+
+      | metric | value | why it matters here |
+      |---|---|---|
+      | `embedding_resolved_total` | 96 | offloaded bodies actually FETCHED through a resolved store — the `resolveStore` path this change rewrote, exercised 96 times in a real stack |
+      | `embedding_failed_total` | 0 | no failed embeddings, so nothing pinned `IndexStateDegraded` |
+      | `embedding_fresh_generated_total` / `embedding_dedup_hits` | 68 / 28 | hop 2 terminalized every entity through the changed `SaveGenerated` signature |
+      | `embedding_pending_count` | 0 | the qualifier-aware `SavePendingGuarded` did not strand or loop anything |
+      | `known_answer_tests_passed` | 7/7 | the BM25 known-answer suite — the exact signal that collapsed 7/7 → 0/7 in the gh#354 regression this code path guards |
+
+      **What it does NOT prove, stated rather than implied:** the tier cannot construct an unresolvable
+      instance (gh#888 — every in-tree config registers what it names), so it proves NO REGRESSION on the
+      resolvable path and proves nothing about the excluded path. The excluded path's evidence is the unit and
+      integration tests plus mutations 4-9. A tier that could prove it is specified in gh#888.
 
 ## 6. Review
 
