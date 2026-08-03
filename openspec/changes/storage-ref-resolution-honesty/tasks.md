@@ -150,13 +150,29 @@
       **Post-rework note:** the qualifier makes the current count DERIVABLE from `EMBEDDING_INDEX` without any
       new surface, which lowers gh#881's urgency but does not close it — a derived scan is not a gauge.
 
-- [x] 4.4 **Mutation-check the wiring guard added for blocking item 1.** Method: commit first, `cp` backup,
-      `[applied]` marker, md5-verified restore.
-      **MUTATION 4** — `newWorkerMetricsAdapter(c.metrics, c.failuresVec, nil)` at
-      `processor/graph-embedding/component.go:941` (the exact mutation review reported as invisible):
-      `TestIntegration_GH875_GateResolvableThenDeregisteredExcludes` **FAILED** on the counter assertion
-      (`hop 2's exclusion must increment content_unresolved_total through the wired reporter`), where before
-      the rework it passed. Restored by `cp`; md5 matched; `git status --porcelain` empty.
+- [x] 4.4 **Mutation-check the rework.** Method: commit first (`46557efc`), `cp` backups, `[applied]` markers,
+      md5-verified restores, `git status --porcelain` empty afterwards.
+      - **MUTATION 4 — the wiring (review blocking item 1).**
+        `newWorkerMetricsAdapter(c.metrics, c.failuresVec, nil)` at `component.go:941`, the exact mutation
+        review reported as invisible: `TestIntegration_GH875_GateResolvableThenDeregisteredExcludes` **FAILED**
+        on `hop 2's exclusion must increment content_unresolved_total through the wired reporter`. Before the
+        rework this mutation left the suite green.
+      - **MUTATION 5 — the repair half.** Guard skip made qualifier-blind again (`existing.Reason == ""`
+        removed): `TestQualifiedSuccess_ReQueuesSoItCanSelfHeal/qualified … re-queues (self-heal)` **FAILED**,
+        and `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` **FAILED** with
+        `wiring the store and restarting must clear the qualifier` after 30.7s. The self-heal is evidenced
+        end-to-end, not asserted.
+      - **MUTATION 6 — the dominant write site.** Hop 1 stops setting the qualifier: **both**
+        `TestIntegration_GH875_UnresolvableInstanceIsExcludedNotFailed` (`the record must record what is
+        missing from the vector, not look complete`) and the self-heal test's phase-1 precondition **FAILED**.
+        This is the gap the rework itself found; it now has a detector.
+      - **MUTATION 7 — the safety property.** `ScanFailed`'s Status gate replaced with
+        `rec.Status == StatusFailed || rec.Reason != ""` (i.e. inferring failure from a non-empty reason):
+        `TestQualifiedSuccess_NeverReachesFailureAccounting/ScanFailed collects the failure and NOT the
+        qualified success` **FAILED** with `it would seed FailedCount and pin the index degraded`. The
+        "every consumer gates on Status first" claim is now a guard, not a grep.
+      md5s after restore: `a80608fe…` (component.go), `6fcfa9b0…` (storage.go), `5e020776…` (worker.go) — all
+      matched their pre-mutation values.
 
 ## 5. Gates
 
@@ -203,6 +219,33 @@
       gone` and `Failed to start NATS container: … port "8222/tcp" not found` — neither reaches assertion
       code — and the package passes in isolation. The conclusion stands on legs 1 and 2; leg 3 is now correct
       for the four packages it actually covers. Recorded rather than re-run to green.
+
+- [x] 5.4b **Post-rework re-run** of `go test -race -tags=integration -p 2 -count=1 ./...`.
+      `docker info` 0.58s before, 0.84s after; one leftover `nats:2.14-alpine` container in `Created` state
+      (never started) left in place rather than removed — another session may be using Docker.
+      **Result: 130 `ok`, 6 `^FAIL` packages** — `graph/query`, `pkg/projection`,
+      `processor/agentic-tools/executors`, `processor/graph-ingest`, `processor/json_generic`,
+      `processor/rule`. **Both touched packages passed** (`ok graph/embedding 1.718s`,
+      `ok processor/graph-embedding 24.227s`).
+      Same substrate class, and this run carries stronger evidence than the first:
+      1. **The failure text names the substrate in 7 of the 8 failing tests** — `port "8222/tcp" not found`,
+         `resolve mapped port 4222 … the container is likely gone`, and decisively
+         `inspect: Get "http://%2Fvar%2Frun%2Fdocker.sock/…": context deadline exceeded` — the Docker DAEMON
+         itself stopped answering its API. None reaches assertion code.
+      2. **The 8th is a local-Ollama inference timeout**, not an assertion:
+         `TestLLMClassifier_Integration_PathQuery` → `llm classify query: context deadline exceeded` at
+         exactly 30.00s (the classifier's own HTTP deadline) while `qwen3:1.7b` competed for the host under
+         `-p 2`. Ollama was up and the model present (verified via `/api/tags`).
+      3. **All six packages pass in isolation**: graph/query 56.1s (full package, including the LLM test —
+         and 8.3s for that test alone), pkg/projection 13.1s, agentic-tools/executors 12.1s,
+         graph-ingest 89.1s, json_generic 3.2s, rule 52.5s.
+      4. **The failing SET changed between the two runs** — first run: ownership, agentic-loop, graph-index,
+         graph-ingest, rule; this run: query, projection, agentic-tools/executors, graph-ingest,
+         json_generic, rule. A deterministic code fault does not move; contention does.
+      5. Two of the six DO link the changed code under `-tags=integration` (`graph/query` and
+         `processor/agentic-tools/executors`, both 1; the other four 0) — measured with the tag set that
+         actually ran, per the 5.4 correction. Both pass in isolation, so linkage is not causation here, but
+         it is stated rather than hidden.
 - [x] 5.5 `task schema:generate` then `git diff schemas/ specs/` showing zero drift.
       Ran; `git diff --stat schemas/ specs/` empty and `git status --porcelain` empty. Zero drift (expected —
       no operator-facing config field changed).
@@ -211,16 +254,21 @@
 - [x] 5.7 Not BREAKING and no wire-surface change, so no e2e tier is owed. **If that judgement is wrong, say so
       rather than skipping quietly** — the touched path is embedding readiness, which `task e2e:semantic`
       covers.
-      **Judgement re-derived, and it holds with one caveat stated rather than skipped.** No payload, subject,
-      bucket, config field, or envelope field changed; the readiness envelope's SHAPE is untouched (only which
-      events reach `FailedCount`). `schemas/`+`specs/` show zero drift, which is the mechanical check for wire
-      surface. The exported-surface delta is one method added to `embedding.WorkerMetrics` — a compile-time
-      break for any out-of-tree implementer, loud rather than silent, and in-tree the only implementers are
-      the component's adapter and two test doubles, all updated.
-      **Caveat:** all four in-tree graph-embedding configs declare `ports` explicitly and register their
+      **Judgement re-derived after the rework, and it holds with two caveats stated rather than skipped.** No
+      payload, subject, bucket, config field, or envelope field changed; the readiness envelope's SHAPE is
+      untouched (only which events reach `FailedCount`). `schemas/`+`specs/` show zero drift, which is the
+      mechanical check for wire surface.
+      **Caveat A — the rework added a PERSISTED-state semantic change**, which is the closest thing here to a
+      wire change: `Record.Reason` on an `EMBEDDING_INDEX` record is now a terminal-state qualifier rather
+      than a failure-only field. It is not a schema or envelope change (same string, same `omitempty`,
+      decodes on any build), and the rollback direction is safe (see design.md Migration Plan), but it IS a
+      contract widening on durable state and it is recorded in the proposal's exported-surface gate.
+      **Caveat B:** all four in-tree graph-embedding configs declare `ports` explicitly and register their
       instances, so no e2e tier can observe this class at all (this is why the defect shipped) — running
       `task e2e:semantic` would prove no regression but could not prove the fix. Not run here; the reviewer
-      may still want it as a no-regression check on embedding readiness.
+      may still want it as a no-regression check on embedding readiness, and after the rework there is a
+      second reason to want it: the qualifier-aware guard makes hop 1 re-queue qualified records, which is a
+      path no in-tree config exercises.
 
 ## 6. Review
 
