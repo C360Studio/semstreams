@@ -49,12 +49,13 @@ func WithProductionLike() TestOption {
 	}
 }
 
-// WithMinimalFeatures configures NATS with only basic pub/sub (fastest startup)
+// WithMinimalFeatures configures NATS with only basic pub/sub and a short client
+// timeout. Docker container startup is orthogonal to the enabled NATS features,
+// so this option preserves the configured container startup timeout.
 func WithMinimalFeatures() TestOption {
 	return func(cfg *testConfig) {
 		cfg.jetstream = false
 		cfg.kv = false
 		cfg.timeout = 1 * time.Second
-		cfg.startTimeout = 5 * time.Second
 	}
 }
