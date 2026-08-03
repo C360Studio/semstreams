@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"sync"
@@ -71,10 +72,25 @@ const (
 // literal. It is deliberately NOT a member of normalizeFailureReason's closed failure
 // enum — it never labels the failures metric, and a FAILED record must never carry it.
 //
-// It is also the repair signal: SavePendingGuarded refuses to skip a re-queue over a
-// QUALIFIED generated record, so the entity re-embeds on its next delivery and heals
-// itself the moment the missing store is wired.
+// It is also the repair signal: SavePendingGuarded compares the stored qualifier against
+// the one an incoming write would produce, so a qualified record re-queues as soon as the
+// outcome would differ and heals itself the moment the missing store is wired.
 const ReasonContentExcluded = "content_excluded"
+
+// validSuccessQualifier reports whether q is a member of the bounded qualifier set for a
+// SUCCESSFUL terminal state: empty (complete) or a known qualifier.
+//
+// It is enforced at the SaveGenerated boundary rather than normalized at a read boundary
+// (as failure reasons are, in normalizeFailureReason) because the qualifier is
+// load-bearing for CONTROL, not only for reporting: SavePendingGuarded's skip compares
+// it. An arbitrary value persisted here would match nothing this build writes and would
+// re-queue forever, or — worse for a value that happens to collide — freeze the entity.
+// The field doc and the capability spec both call this set BOUNDED; this is what makes
+// that true rather than aspirational. Rejecting fails CLOSED: the caller sees an invalid
+// -config error instead of a durable record nobody can interpret.
+func validSuccessQualifier(q string) bool {
+	return q == "" || q == ReasonContentExcluded
+}
 
 // Record represents a stored embedding with metadata
 type Record struct {
@@ -321,9 +337,9 @@ func (s *Storage) SavePendingWithStorageRef(
 // lanes (inline and storage-ref — the caller shapes the record; Status is
 // forced to StatusPending here).
 //
-// The guard: when the existing record is an UNQUALIFIED GENERATED vector at a
-// same-or-newer source revision, the write is SKIPPED (returns saved=false,
-// nil). An unconditional Put here let a stale repair re-drive — whose
+// The guard: when the existing record is a GENERATED vector at a same-or-newer
+// source revision AND of the same terminal QUALITY this write would produce, the
+// write is SKIPPED (returns saved=false, nil). An unconditional Put here let a stale repair re-drive — whose
 // stranded entity hop 2 had generated and causally cleared between the repair
 // snapshot and its dispatch — DOWNGRADE the fresh StatusGenerated record to
 // StatusPending: the vector vanished from the cache until regeneration while
@@ -333,16 +349,35 @@ func (s *Storage) SavePendingWithStorageRef(
 // OLDER revision (a genuinely newer source state being queued), is
 // overwritten as before.
 //
-// UNQUALIFIED is load-bearing (gh#875). A generated record carrying a terminal-state
-// qualifier — today ReasonContentExcluded, a vector embedded without its unreachable
-// body — is a DEGRADED success, so skipping over it would make the degradation
-// permanent: an operator who wires the missing store and restarts would get a
-// last-per-subject re-delivery that this guard swallows, and nothing would ever
-// re-fetch the body. Re-queueing it instead makes the entity self-heal on its next
-// delivery. The cost is real and bounded: the vector goes briefly pending (not
-// servable) while it regenerates, and if the store is still unreachable the entity
-// simply re-qualifies — the dedup bucket makes that re-embed cheap, and hop 1 only
-// runs on an ENTITY_STATES delivery, so it cannot spin.
+// The QUALITY match is load-bearing (gh#875). The skip compares the stored record's
+// terminal-state qualifier against the one this write would produce, not against
+// "unqualified":
+//
+//	existing generated + ""      vs incoming ""      → skip (protects a complete vector)
+//	existing generated + excl.   vs incoming excl.   → skip (nothing would change)
+//	existing generated + excl.   vs incoming ""      → WRITE: the body is reachable now,
+//	                                                  so re-queue and let hop 2 fetch it
+//	existing generated + ""      vs incoming excl.   → WRITE: the record claims a complete
+//	                                                  vector for an entity whose body is
+//	                                                  unreachable; re-queue to re-qualify it
+//
+// The first version of this compared against `existing.Reason == ""`, and the last row
+// is why that was wrong (review, BLOCKING). A hop-2 failure at any point overwrites the
+// qualifier — SaveFailed sets Reason to the failure reason — and the restart reprocess
+// of that failed record cannot recover it (the pending record it re-reads carries a
+// FAILURE reason, and its StorageRef was already dropped by hop 1's inline fallback), so
+// hop 2 writes `generated + ""` for an entity whose body is still unreachable. Against
+// an "unqualified stands" test that laundered record is permanently frozen: not
+// enumerable, and not repairable. Matching on quality re-queues it instead.
+//
+// Comparing quality rather than presence also removes a cost the earlier version paid:
+// a still-excluded entity re-queued on EVERY delivery. Now it skips when nothing would
+// change, so the re-embed happens only when the outcome would actually differ.
+//
+// An unrecognized qualifier (a rolling upgrade writing a value this build does not know)
+// is self-correcting for the same reason: it never equals what this build produces, so
+// the entity re-queues and is rewritten with a qualifier this build owns, instead of
+// being frozen by it.
 //
 // Writes are conditional on the revision the guard decision was read at: an
 // absent key uses CAS-create (which also succeeds over a delete marker), a
@@ -359,9 +394,10 @@ func (s *Storage) SavePendingGuarded(ctx context.Context, record *Record) (saved
 		if err != nil {
 			return false, errs.WrapTransient(err, "Storage", "SavePendingGuarded", "get existing record")
 		}
-		if existing != nil && existing.Status == StatusGenerated && existing.Reason == "" &&
+		if existing != nil && existing.Status == StatusGenerated && existing.Reason == record.Reason &&
 			existing.SourceRevision >= record.SourceRevision {
-			return false, nil // a same-or-newer UNQUALIFIED generated vector stands; do not downgrade
+			// A same-or-newer generated vector of the SAME terminal quality stands.
+			return false, nil
 		}
 
 		data, err := json.Marshal(record)
@@ -419,6 +455,14 @@ func (s *Storage) SaveGenerated(
 ) error {
 	if entityID == "" {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Storage", "SaveGenerated", "entity_id is empty")
+	}
+	// The qualifier is a BOUNDED set, and it is enforced HERE — the single write site for
+	// a successful terminal — rather than trusted from the caller. It drives
+	// SavePendingGuarded's skip decision, so an unbounded value is not merely an odd
+	// label: it is a control input no reader can interpret. Fail closed.
+	if !validSuccessQualifier(qualifier) {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Storage", "SaveGenerated",
+			fmt.Sprintf("qualifier %q is not a member of the bounded terminal-state qualifier set", qualifier))
 	}
 
 	for attempt := 0; attempt < maxCASRetries; attempt++ {

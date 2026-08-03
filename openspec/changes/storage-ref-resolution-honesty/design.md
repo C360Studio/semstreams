@@ -129,9 +129,43 @@ failed    + content_error      unchanged
 ```
 
 No new field, no boolean, no new `Status` value — *less* surface than the boolean. Enumeration falls out
-(scan the qualifier). Repair falls out: the guard's skip becomes "a same-or-newer **unqualified** generated
-vector stands", so a qualified success re-queues on its next delivery and heals itself the moment the store
-is wired. The next case is an enum value, not another field.
+(scan the qualifier). Repair falls out: the guard's skip becomes "a same-or-newer generated vector **of the
+same terminal quality** stands", so anything that would change the outcome re-queues and heals itself. The
+next case is an enum value, not another field.
+
+**Corrected at re-review — the skip compares QUALITY, not presence (BLOCKING).** The first version tested
+"is the stored record unqualified", and that is defeated permanently by an ordinary hop-2 failure:
+
+1. Hop 1 queues `pending + content_excluded` at revision R (inline text, `StorageRef` dropped by the gate).
+2. Hop 2 fails for any unrelated reason. `SaveFailed` does `existing.Reason = reason`, so the qualifier is
+   GONE and the record is `failed + <failure reason>`.
+3. Restart. `reprocessFailed` re-processes that failed record — and hop 2 reaches EMBEDDING_INDEX before hop 1
+   reaches ENTITY_STATES *by construction*, since `initStorageAndWorker` runs before
+   `waitForDependenciesAndStartWatcher`. The carry-forward matches only the KNOWN qualifier, so a failure
+   reason fails closed to unqualified; `getSourceText` takes the inline branch (no `StorageRef`) and SUCCEEDS.
+   The record becomes `generated + ""` — a complete-looking vector for an entity whose body is unreachable.
+4. Hop 1's re-delivery at R then hits the guard, which sees an unqualified generated vector at a same-or-newer
+   revision and SKIPS. Permanent until a new ENTITY_STATES revision.
+
+That re-opens exactly the two properties this decision exists to create. Comparing terminal quality closes it
+— the laundered record no longer matches what hop 1 would write, so it re-queues and re-qualifies — and it
+also removes a cost the first version paid, re-queueing a still-excluded entity on every delivery:
+
+| stored | incoming | outcome |
+|---|---|---|
+| `generated + ""` | `""` | skip — protects a complete vector (#722 B2) |
+| `generated + content_excluded` | `content_excluded` | skip — nothing would change |
+| `generated + content_excluded` | `""` | write — the body is reachable now; self-heal |
+| `generated + ""` | `content_excluded` | write — the laundered record; re-qualify |
+
+The general lesson, worth carrying past this change: **a qualifier sharing a field with a failure
+classification will be erased by failure.** Anything that reads it must tolerate erasure rather than assume
+persistence — which is why the guard now asks "is this the outcome I would write?" instead of "was a
+qualifier ever set?".
+
+The qualifier is also enforced as BOUNDED at the `SaveGenerated` boundary rather than merely documented,
+because it is a CONTROL input to that comparison: an out-of-tree caller persisting an arbitrary value would
+match nothing this build writes.
 
 **Safety, re-measured at implementation rather than inherited.** Three production readers of `Record.Reason`
 exist, and every one gates on `Status` first: `SavePendingGuarded` (`storage.go:362`, inside
@@ -168,9 +202,16 @@ need, which is why they are sequential and not merged.
   qualifier — strictly better than the failed-scan it replaces, because these records are also servable
   vectors rather than absent ones.
 - ~~**Wiring the store no longer re-embeds the body on restart alone**~~ → **DISSOLVED by Decision 4.** The
-  guard's skip is now qualifier-aware, so a qualified record re-queues on its next delivery and heals.
-  `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives exactly that, with no write to
-  ENTITY_STATES — only the restart's re-delivery.
+  guard's skip is quality-aware, so a record whose outcome would change re-queues on its next delivery and
+  heals. `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives exactly that, with no write
+  to ENTITY_STATES — only the restart's re-delivery.
+- **A qualified record whose hop-2 failure erased the qualifier takes one extra delivery to re-qualify** →
+  accepted, and it is the residue of the BLOCKING fix rather than a new cost. The laundered `generated + ""`
+  record is repaired by hop 1's next delivery (including the restart's own same-revision re-delivery), not
+  instantly at the moment of laundering; hop 2 cannot repair it itself, because `SaveFailed` destroyed the
+  qualifier and the record carries no `StorageRef` to re-observe the condition from. During that window the
+  entity is enumerable as complete when it is not. Bounded by one delivery, and the alternative — a second
+  field surviving failure — is the rejected third axis.
 - **A genuinely mis-wired deployment gets quieter** → this is the silent-exclusion-flip shape, so the ledger
   above is mandatory rather than optional. The distinguishing fact is that the signal being removed is
   currently incorrect: it reports an entity problem for a deployment problem.

@@ -39,7 +39,9 @@ Reachability changes; correctness does not.
   unreachable body". Without it the record is indistinguishable from a complete one: the population is
   unenumerable, and `SavePendingGuarded`'s skip freezes it so that wiring the store and restarting changes
   nothing. Both fall out of the qualifier: enumeration is a scan, and repair is the skip becoming
-  "a same-or-newer **unqualified** generated vector stands".
+  "a same-or-newer generated vector **of the same terminal quality** stands" — it compares the stored
+  qualifier against the one the incoming write would produce, so anything that would change the outcome
+  re-queues.
 - **A *resolved* store's read failure is unchanged** — still a reason-classified failure that recovers on
   re-delivery. Only the unresolvable-instance class moves.
 - **The classification is made where the observation happens.** The registry contract is per-fetch and
@@ -116,9 +118,11 @@ flip, and it is why the change is not a pure improvement:
    reaches a *successful* terminal, and `SavePendingGuarded` skipped a re-queue over a same-or-newer generated
    record — so an operator who wired the missing store and restarted would have got nothing, converting a
    self-healing state (today's failed record, which that guard overwrites) into a stuck one. The guard's skip
-   is now qualifier-aware: only a same-or-newer **unqualified** generated vector stands, so a qualified record
-   re-queues on its next delivery and heals itself.
+   is now qualifier-aware: a stored generated vector stands only when it is of the same terminal QUALITY the
+   incoming write would produce, so anything that would change the outcome re-queues and heals itself.
    `TestIntegration_GH875_WiringTheStoreSelfHealsTheQualifiedRecord` drives it with no ENTITY_STATES write.
+   **Re-review correction:** the first version of this compared against "unqualified", which a hop-2 failure
+   defeated permanently — see cost-ledger item 6.
 5. **A cross-process producer/indexer split loses body embedding** — found by review, and this one is real and
    stands. An objectstore *Component* stamps its component instance name; a reader's `store-read` port can only
    ever produce a store named after the BUCKET. Such a deployment embeds bodies today through the instance-blind
@@ -128,6 +132,17 @@ flip, and it is why the change is not a pure improvement:
    and an enumerable, self-healing record. Both are now in place, and the exclusion warning names the remedy
    and logs the owned store's instance beside the reference's so the mismatch is visible in one line. See
    design.md Decision 2.
+6. **A hop-2 failure erases the qualifier, and the guard has to survive that** — found by re-review as a
+   BLOCKING defect, fixed rather than accepted, and recorded because the shape generalizes. `SaveFailed`
+   overwrites `Reason` with the failure reason, so a qualified entity that later fails ANY ordinary way
+   (embedder down, timeout) loses the qualifier; the restart reprocess of that failed record cannot recover
+   it (the record's `StorageRef` was already dropped by hop 1's inline fallback, so hop 2 has nothing to
+   re-observe) and writes `generated + ""`. Against a guard testing "is the stored record unqualified", that
+   laundered record was frozen permanently — re-opening both properties the qualifier exists to create. The
+   guard now compares terminal QUALITY, so the laundered record re-queues and re-qualifies. The general
+   lesson: a qualifier that shares a field with a failure classification will be erased by failure, so
+   anything reading it must tolerate erasure rather than assume persistence.
+
 
 **Adopters**: one **silent** interpretation break — `Record.Reason` is now a bounded qualifier of the terminal
 state rather than a failure-only classification, so an out-of-tree reader assuming `reason != "" ⇒ failed` is

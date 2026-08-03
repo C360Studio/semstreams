@@ -187,6 +187,12 @@
 - [x] 5.3 `go test -race ./...` — record ok/FAIL counts.
       **135 `ok`, 0 `^FAIL`** (26 packages with no test files); process exit 0. Counted with
       `grep -c "^ok"` / `grep "^FAIL"`, not from the pipeline exit code.
+- [x] 5.3b **Re-run after the re-review round** (the round that added the laundering fix, the bounded-qualifier
+      enforcement, and the corrected operator text): `go build ./...` OK; `gofmt -l .` empty; `go vet ./...`
+      and `go vet -tags=integration ./...` both silent; `task lint` clean (zero revive warnings);
+      `go test -race ./...` → **135 `ok`, 0 `^FAIL`**, exit 0; `task schema:generate` → zero drift on
+      `schemas/` and `specs/`; `go test ./test/contract/...` → ok 1.997s;
+      `openspec validate --strict` → valid.
 - [x] 5.4 `go test -race -tags=integration -p 2 -count=1 ./...` — record counts. Take a `docker info` latency
       reading first; >1s is host debt, not a code signal.
       `docker info` latency **0.56s** (and 0.61s at session start), 0 pre-existing containers — no host debt,
@@ -251,6 +257,25 @@
       no operator-facing config field changed).
 - [x] 5.6 `go test ./test/contract/...`.
       `ok github.com/c360studio/semstreams/test/contract 1.950s`.
+- [x] 5.8 **Integration suite NOT RUN for the re-review round — owner directive**, pending a separate substrate
+      stabilization effort (the two runs recorded in 5.4/5.4b are why). Everything below is therefore stated at
+      the level it was actually established:
+      - **VERIFIED (unit, this round):** the laundering chain and its fix
+        (`TestQualifier_HopTwoFailureDoesNotLaunderAQualifiedSuccess`), all four guard quality rows
+        (`TestSavePendingGuarded_SkipsOnTerminalQualityNotOnPresence`), the bounded-qualifier rejection
+        (`TestSaveGenerated_RejectsAnUnboundedQualifier`), and every pre-existing unit test in both touched
+        packages. Full `go test -race ./...` counts are on 5.3b.
+      - **UNVERIFIED (integration, this round):** that the four `TestIntegration_GH875_*` tests still pass with
+        the quality-matched guard. They passed against the previous guard, and the change makes the skip
+        strictly rarer in the direction those tests exercise — the self-heal test asserts a re-queue HAPPENS
+        (`existing content_excluded` vs `incoming ""` → still writes), and the other three assert terminal
+        state rather than skip behaviour. **What would settle it:** `go test -race -tags=integration -count=1
+        -run TestIntegration_GH875 ./processor/graph-embedding/`, ~10s, needs Docker. Do not read this
+        reasoning as a pass.
+      - **UNVERIFIED (integration, this round):** the rest of the integration suite. Nothing outside
+        `graph/embedding` and `processor/graph-embedding` changed in this round, and the only cross-package
+        surface touched is `Storage.SaveGenerated`'s signature, which the compiler checks — `go build ./...`
+        and `go vet -tags=integration ./...` both pass, so every integration-tagged caller compiles.
 - [x] 5.7 Not BREAKING and no wire-surface change, so no e2e tier is owed. **If that judgement is wrong, say so
       rather than skipping quietly** — the touched path is embedding readiness, which `task e2e:semantic`
       covers.
@@ -263,12 +288,13 @@
       than a failure-only field. It is not a schema or envelope change (same string, same `omitempty`,
       decodes on any build), and the rollback direction is safe (see design.md Migration Plan), but it IS a
       contract widening on durable state and it is recorded in the proposal's exported-surface gate.
-      **Caveat B:** all four in-tree graph-embedding configs declare `ports` explicitly and register their
-      instances, so no e2e tier can observe this class at all (this is why the defect shipped) — running
-      `task e2e:semantic` would prove no regression but could not prove the fix. Not run here; the reviewer
-      may still want it as a no-regression check on embedding readiness, and after the rework there is a
-      second reason to want it: the qualifier-aware guard makes hop 1 re-queue qualified records, which is a
-      path no in-tree config exercises.
+      **Caveat B — FILED as gh#888.** All four in-tree graph-embedding configs declare `ports` explicitly and
+      register their instances, so no e2e tier can observe this class at all (this is why the defect shipped)
+      — running `task e2e:semantic` would prove no regression but could not prove the fix. The gap is now a
+      filed issue rather than a paragraph in a task file: **gh#888**, which specifies the four assertions a
+      closing tier needs (no degrade, the metric climbing, the qualified record, and the restart self-heal
+      with no ENTITY_STATES write). gh#881 is the adjacent-but-different question (observability surface, not
+      coverage). Not run here — see 5.8 for the owner directive that also barred the integration suite.
 
 ## 6. Review
 
@@ -303,6 +329,36 @@
         value so an unrecognized reason fails closed to unqualified.
       - **6.0f Not expanded into gh#887** (the `Status`/`TerminalOutcome` asymmetry), as ruled. No new
         `Status` value, no change to `TerminalOutcome`, no change to the terminal callback's contract.
+- [x] 6.0.2 **Re-review round (CHANGES REQUESTED — one BLOCKING defect, five other items).** The reframe was
+      accepted; the guard it rests on was not sufficient.
+      - **BLOCKING — a hop-2 failure laundered a qualified success into a complete-looking one, permanently.**
+        Chain re-verified against the code before changing anything, link by link: `SaveFailed` overwrites
+        `Reason` (`storage.go`); `reprocessFailed` re-processes a failed record in the restart snapshot
+        (`worker.go`); the carry-forward matches the KNOWN qualifier exactly so a failure reason fails closed
+        to `""`; `getSourceText` takes the inline branch because the gate already dropped the `StorageRef`,
+        and SUCCEEDS → `generated + ""`; hop 1's re-delivery then hit the "unqualified stands" skip. Not
+        restart-order-luck: `initStorageAndWorker` runs before `waitForDependenciesAndStartWatcher`, so hop 2
+        reaches the failed record first by construction. **Fix:** the skip compares terminal QUALITY
+        (`existing.Reason == record.Reason`), so anything that would change the outcome re-queues.
+      - **HIGH — a retracted claim survived in code.** The gate's doc comment still asserted "nothing is lost
+        there, because that component is a StoreProvider and the registry arm above resolves it", 25 lines
+        above the comment that retracts it, in the same file. Removed and replaced with what is true: the
+        registry is process-local, so the cross-process split IS a real loss, and what it is owed is an
+        executable remedy plus an enumerable, self-healing record.
+      - **The metric Help text pointed at the wrong check.** It said the cause was "no content store is
+        wired"; post-fix the dominant cause is a store wired for a DIFFERENT instance. Corrected in the
+        scraped Help and in the field comment above it.
+      - **Remedy 1 implied an operator choice that does not exist.** `storage/objectstore/component.go:152`
+        hardcodes `instanceName := "objectstore"` ("would be provided by ComponentManager" — nothing does),
+        and `NewComponent` never reads a configured `InstanceName`. Verified myself, including that no
+        `SetInstanceName`-style seam exists anywhere. The warning now states the bound: the instance is either
+        `"objectstore"` (component-stamped) or a bucket name (bare store), with the remedy for each, and says
+        plainly that any other value has no in-process remedy today.
+      - **The "bounded" qualifier was unenforced.** The field doc and the spec both call the set bounded while
+        `SaveGenerated` accepted any string, and `normalizeFailureReason` only runs inside `ScanFailed`'s
+        failed gate. Since the qualifier is a CONTROL input to the guard's comparison, an arbitrary value is
+        not a cosmetic label. Enforced at the single write site (`validSuccessQualifier`), failing closed.
+      - **Coverage gap filed** as gh#888 (see 5.7 caveat B).
 - [ ] 6.1 `semstreams-reviewer` on the full diff.
 - [ ] 6.2 Codex round, then `--auto`. Record that it ran on this line.
 - [x] 6.3 Confirm the spec delta's MODIFIED requirement matches the archived text exactly apart from the

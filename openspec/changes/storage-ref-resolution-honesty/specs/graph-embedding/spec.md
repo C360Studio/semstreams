@@ -33,10 +33,12 @@ into a permanent health verdict with no exit. It SHALL instead be reported throu
 the excluded-content path with its own metric, and the entity SHALL still reach a
 terminal outcome from whatever inline text it carries. That outcome SHALL be recorded
 as a QUALIFIED SUCCESS — a stored, servable vector carrying the bounded qualifier for
-an unreachable body — so the affected entities are enumerable from the index, and a
-re-queue SHALL NOT be skipped over a qualified vector, so the entity re-embeds on its
-next delivery and recovers its body without operator intervention once the instance
-becomes resolvable. The producer SHALL consult the shared store registry for the
+an unreachable body — so the affected entities are enumerable from the index. A
+re-queue SHALL be skipped only when the stored vector already carries the same
+qualifier the re-queue would produce, so any entity whose outcome would change —
+because its body became reachable, or because a failure erased its qualifier and left
+it looking complete — re-embeds on its next delivery and recovers without operator
+intervention. The producer SHALL consult the shared store registry for the
 instance the reference names, and SHALL fall back to a store it owns only when that
 store is the instance named. Resolution SHALL be re-checked at fetch time rather than
 assumed from the earlier gate, because store registration and deregistration are live
@@ -103,9 +105,20 @@ during operation.
 
 #### Scenario: A complete vector is still protected from a stale re-queue
 - **GIVEN** an entity whose stored embedding is successful and unqualified
-- **WHEN** a re-queue arrives at the same or an older source revision
+- **WHEN** a re-queue that would also produce a complete embedding arrives at the same
+  or an older source revision
 - **THEN** it is skipped, so a stale re-drive cannot downgrade a complete vector to
   pending
+
+#### Scenario: A failure that erases the qualifier does not freeze the entity
+- **GIVEN** an entity queued as unreachable-bodied whose embedding then fails for an
+  unrelated reason, so the failure's own classification replaces the qualifier
+- **WHEN** the failed record is re-processed after a restart and succeeds from the
+  entity's inline text, leaving a stored embedding that appears complete
+- **THEN** the next re-queue for that entity is NOT skipped, because the outcome it
+  would produce differs from what is stored
+- **AND** the entity is re-recorded as a qualified success, so it becomes enumerable
+  again rather than remaining indistinguishable from a complete embedding
 
 #### Scenario: A resolved store's read failure still fails and still recovers
 - **GIVEN** an entity whose reference names an instance the producer CAN resolve

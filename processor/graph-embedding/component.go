@@ -1997,9 +1997,18 @@ func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string
 // instance name stamps StorageInstance = bucket name (storage/objectstore/store.go),
 // which is exactly what this equality preserves — the single-bucket deploy shape
 // ADR-063 named. It does NOT preserve references stamped by the objectstore
-// *Component* (whose instance name is its component instance, never a bucket name);
-// nothing is lost there, because that component is a StoreProvider and the registry
-// arm above resolves it.
+// *Component*, which stamps "objectstore" (storage/objectstore/component.go:152,
+// hardcoded) and never a bucket name.
+//
+// That second case is a REAL LOSS for one deployment shape, and saying otherwise here
+// was wrong (review, gh#875): the registry resolves an objectstore Component only IN
+// THIS PROCESS, because the registry is process-local. A producer/indexer split across
+// processes — the Component writing in one, graph-embedding reading the same bucket
+// through a store-read port in another — resolves nothing, embeds bodies correctly
+// today via the instance-blind fallback, and is excluded after this change. It is the
+// unavoidable price of the bound; what it is owed instead is an executable remedy and
+// an enumerable, self-healing record, which reportOffloadedContentExcluded and the
+// ReasonContentExcluded qualifier provide.
 func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 	if state.StorageRef == nil {
 		return false
@@ -2026,16 +2035,27 @@ func (c *Component) shouldFetchViaStorageRef(state *graph.EntityState) bool {
 // "wire a store-read port for its StorageInstance" (gh#875 review): a store-read port
 // declares a BUCKET, not an instance, and createContentStore passes only BucketName —
 // so the owned store's instance name is always the bucket name. That remedy is
-// unexecutable whenever the reference was stamped by an objectstore Component, which
-// stamps its COMPONENT INSTANCE name (never a bucket name). The two that do work:
+// unexecutable whenever the reference was stamped by an objectstore Component.
 //
-//   - Run a storage component that OWNS that instance in this process. It registers
-//     itself in the shared store registry at Start (ADR-063), which resolves any
-//     instance name regardless of bucket. This is the only remedy for a cross-process
-//     producer/indexer split.
-//   - If the producer writes through a BARE store (no component instance name), its
-//     references carry the BUCKET name as the instance — then a store-read port on
-//     that same bucket resolves them through the owned-store fallback.
+// What an operator can actually do depends on which of exactly two shapes stamped the
+// reference, because an instance name is not free-form in this tree:
+//
+//   - storage_instance == "objectstore" — an objectstore COMPONENT stamped it. The
+//     component hardcodes that name (storage/objectstore/component.go:152, "would be
+//     provided by ComponentManager", which never does) and NewComponent never reads a
+//     configured InstanceName, so it is the only name such a component can ever have.
+//     Remedy: run an objectstore component in THIS process against the same bucket; it
+//     self-registers under "objectstore" at Start (ADR-063) and resolves.
+//   - storage_instance == some BUCKET name — a bare store stamped it (no instance name
+//     configured, so the bucket name is used). Remedy: a store-read port on that bucket,
+//     which the owned-store fallback then serves.
+//
+// Any OTHER value can only come from a store constructed out-of-tree with an explicit
+// objectstore.Config.InstanceName (a Go-only field, `json:"-"`). There is no in-process
+// remedy for that today — no component can be told to own an arbitrary instance name —
+// so the warning does not pretend otherwise. Fixing it properly means letting a
+// store-read port declare the instance it serves; that is recorded as an open question
+// on this change, not implied here as an operator choice.
 func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance string) {
 	if c.metrics != nil {
 		c.metrics.recordContentUnresolved()
@@ -2044,10 +2064,12 @@ func (c *Component) reportOffloadedContentExcluded(entityID, storageInstance str
 		c.logger.Warn("offloaded body EXCLUDED from embeddings: no store in this process "+
 			"serves the StorageInstance this entity's reference names, so its body cannot be "+
 			"embedded (inline text, if any, still is, and the record is marked "+
-			"content_excluded). REMEDY: run a storage component whose instance name is this "+
-			"storage_instance in this process — it registers itself and resolves any bucket. "+
-			"A store-read port only helps when storage_instance IS a bucket name, because a "+
-			"store-read port declares a bucket, not an instance (gh#414, gh#875)",
+			"content_excluded). REMEDY depends on storage_instance: if it is \"objectstore\", "+
+			"run an objectstore component in THIS process against the same bucket — it "+
+			"self-registers under that name; if it is a BUCKET name, wire a store-read port "+
+			"for that bucket. A store-read port cannot help otherwise, because it declares a "+
+			"bucket and not an instance, and no component can be configured to own an "+
+			"arbitrary instance name today (gh#414, gh#875)",
 			slog.String("entity", entityID),
 			slog.String("storage_instance", storageInstance),
 			slog.String("owned_store_instance", c.ownedStoreInstanceForLog()))

@@ -28,11 +28,14 @@ type embeddingMetrics struct {
 	// bootstrap_complete; the shared set makes that omission unrepresentable
 	// (#763). Emitted metric names are unchanged, pinned by a test.
 	readiness *readiness.Gauges
-	// contentUnresolved counts entities whose offloaded BODY (a StorageRef)
-	// could not be fetched because no content store is wired, so that body was
-	// excluded from the embedding (gh#414). The entity may still be embedded from
-	// any inline text triples it carries; a rising value means offloaded body
-	// text is being dropped from embeddings — wire a store-read port.
+	// contentUnresolved counts entities whose offloaded BODY (a StorageRef) could not
+	// be fetched because no store in this process serves the StorageInstance the
+	// reference NAMES (gh#414, gh#875). Post-gh#875 the dominant cause is not "no store
+	// wired" but "a store is wired for a DIFFERENT instance" — an operator pointed at
+	// the old text checked whether a store-read port existed, which is the wrong check.
+	// The entity is still embedded from any inline text it carries, and its record
+	// carries the content_excluded qualifier, so the affected entities are enumerable.
+	// The one-shot warning names the instance and the remedy for it.
 	contentUnresolved prometheus.Counter
 	// contentResolveError counts body fetches that FAILED after a store was
 	// resolved (ADR-063 M1): the StorageInstance resolved to a live store, but the
@@ -124,7 +127,7 @@ func getMetrics(registry *metric.MetricsRegistry) *embeddingMetrics {
 				Namespace: "semstreams",
 				Subsystem: "graph_embedding",
 				Name:      "content_unresolved_total",
-				Help:      "Entities whose offloaded body (StorageRef) was excluded from embedding because no content store is wired; inline text, if any, is still embedded (gh#414)",
+				Help:      "Entities whose offloaded body (StorageRef) was excluded from embedding because no store in this process serves the StorageInstance the reference names — most often a store IS wired but for a different instance, not no store at all. Inline text, if any, is still embedded and the record is marked content_excluded. See the one-shot warning for the instance and its remedy (gh#414, gh#875)",
 			}),
 
 			contentResolveError: prometheus.NewCounter(prometheus.CounterOpts{
@@ -346,8 +349,9 @@ func (m *embeddingMetrics) recordDedupHit() {
 	m.embeddingDedupHits.Inc()
 }
 
-// recordContentUnresolved increments the counter for offloaded content that was
-// excluded from embedding because no content store is wired (gh#414).
+// recordContentUnresolved increments the counter for offloaded content excluded from
+// embedding because no store in this process serves the instance the reference names
+// (gh#414, gh#875 — usually a store wired for a DIFFERENT instance, not none at all).
 func (m *embeddingMetrics) recordContentUnresolved() {
 	m.contentUnresolved.Inc()
 }
