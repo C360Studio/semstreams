@@ -274,7 +274,7 @@
       no operator-facing config field changed).
 - [x] 5.6 `go test ./test/contract/...`.
       `ok github.com/c360studio/semstreams/test/contract 1.950s`.
-- [x] 5.8 **Integration suite NOT RUN for the re-review round — owner directive**, pending a separate substrate
+- [x] 5.8 **Integration suite — deferred during the re-review round by owner directive, then RUN after PR #889.** The deferral was pending a substrate
       stabilization effort (the two runs recorded in 5.4/5.4b are why). Everything below is therefore stated at
       the level it was actually established:
       - **VERIFIED (unit, this round):** the laundering chain and its fix
@@ -282,17 +282,26 @@
         (`TestSavePendingGuarded_SkipsOnTerminalQualityNotOnPresence`), the bounded-qualifier rejection
         (`TestSaveGenerated_RejectsAnUnboundedQualifier`), and every pre-existing unit test in both touched
         packages. Full `go test -race ./...` counts are on 5.3b.
-      - **UNVERIFIED (integration, this round):** that the four `TestIntegration_GH875_*` tests still pass with
-        the quality-matched guard. They passed against the previous guard, and the change makes the skip
-        strictly rarer in the direction those tests exercise — the self-heal test asserts a re-queue HAPPENS
-        (`existing content_excluded` vs `incoming ""` → still writes), and the other three assert terminal
-        state rather than skip behaviour. **What would settle it:** `go test -race -tags=integration -count=1
-        -run TestIntegration_GH875 ./processor/graph-embedding/`, ~10s, needs Docker. Do not read this
-        reasoning as a pass.
-      - **UNVERIFIED (integration, this round):** the rest of the integration suite. Nothing outside
-        `graph/embedding` and `processor/graph-embedding` changed in this round, and the only cross-package
-        surface touched is `Storage.SaveGenerated`'s signature, which the compiler checks — `go build ./...`
-        and `go vet -tags=integration ./...` both pass, so every integration-tagged caller compiles.
+      - ~~**UNVERIFIED (integration, this round)**~~ — **RESOLVED 2026-08-03, both items.** The substrate
+        stabilization landed as **PR #889** (`ae7ae4ac`, "test(integration): stabilize NATS test
+        infrastructure"), which adds `scripts/run-integration-tests.sh` with a host-level lock
+        (`/tmp/semstreams-integration.lock`) that fails fast on contention. This branch was **rebased onto
+        `origin/main`** to pick it up (rebase clean, 8 commits, `go build`/`go vet` both tags still clean).
+      - **VERIFIED (integration, via the stabilized runner):** touched packages —
+        `scripts/run-integration-tests.sh ./graph/embedding/... ./processor/graph-embedding/...` →
+        `graph/embedding` ok 1.709s, `processor/graph-embedding` ok 22.964s. Both ran under the `integration`
+        tag, so the four `TestIntegration_GH875_*` tests are included in that pass.
+      - **VERIFIED (integration, full suite):** `scripts/run-integration-tests.sh` → **exit 0, 137 ok,
+        0 `^FAIL`**.
+      - **The 5.4/5.4b flake attribution is now settled EMPIRICALLY, not by reasoning.** Those runs recorded
+        5 and 6 failing packages and attributed them to substrate on measured legs. With contention removed
+        by #889's lock the whole suite is green, which confirms the attribution — and supersedes it: this is
+        an observation, where the earlier entries were an inference. Recorded because an inference that later
+        turns out right is still an inference, and the distinction is the point of these lines.
+      - **Note for #889's own record:** the new `test/testinfra` policy guard passes on this branch
+        (`go test ./test/testinfra/` ok 5.776s). It ratchets `time.Sleep` in integration tests against a
+        baseline; this change's three new test files contain **zero** sleeps and correctly appear nowhere in
+        `policy_baseline.json`.
 - [x] 5.7 Not BREAKING and no wire-surface change, so no e2e tier is owed. **If that judgement is wrong, say so
       rather than skipping quietly** — the touched path is embedding readiness, which `task e2e:semantic`
       covers.
