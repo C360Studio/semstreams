@@ -174,6 +174,23 @@
       md5s after restore: `a80608fe…` (component.go), `6fcfa9b0…` (storage.go), `5e020776…` (worker.go) — all
       matched their pre-mutation values.
 
+- [x] 4.5 **Mutation-check the re-review round.** Commit `b8c78c91` first, then `cp` backups, `[applied]`
+      markers, md5-verified restores, `git status --porcelain` empty afterwards.
+      - **MUTATION 8 — the BLOCKING fix.** Guard reverted to `existing.Reason == ""`:
+        `TestQualifier_HopTwoFailureDoesNotLaunderAQualifiedSuccess` **FAILED** at the exact step the defect
+        describes — `hop-1's re-delivery was SKIPPED over a laundered "generated + \"\"" record: the entity is
+        frozen looking complete while its body is unreachable`. Two rows of
+        `TestSavePendingGuarded_SkipsOnTerminalQualityNotOnPresence` also went red: the laundered row
+        (`saved = false, want true`) and — worth noting — `qualified stands against an identical qualified
+        re-queue` (`saved = true, want false`), which is the re-queue-on-every-delivery cost the old guard
+        paid, now caught by a test rather than only described.
+      - **MUTATION 9 — the bounded qualifier.** First attempt (deleting the call) broke the build, so it was
+        redone as 9b, neutralizing `validSuccessQualifier` to always-true so the code still compiles and the
+        TEST is what fails: `TestSaveGenerated_RejectsAnUnboundedQualifier` **FAILED** with
+        `SaveGenerated accepted an out-of-enum qualifier; the bounded set must be enforced, not documented`.
+        Recorded because a mutation that fails to COMPILE proves nothing about the test.
+      storage.go md5 `8b809ec2…` before and after both mutations.
+
 ## 5. Gates
 
 > Run what CI runs — BOTH suites. Check `^FAIL` rather than trusting a pipeline exit code.
