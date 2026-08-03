@@ -65,7 +65,7 @@ population from here, so deleting is a silent behaviour change for it and boundi
 
 Recorded so the rationale is not mis-carried: this equality check does **not** preserve references produced by
 the objectstore *Component*, which stamps the hardcoded instance name `"objectstore"`
-(`storage/objectstore/component.go:152`). Those never equalled a bucket name, so "keeps the legacy shape
+(`objectstore.DefaultInstanceName`). Those never equalled a bucket name, so "keeps the legacy shape
 working" is true only for the bare-store case.
 
 **Corrected at implementation time (review finding, gh#875).** The original text continued "nothing is lost,

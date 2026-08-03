@@ -506,8 +506,9 @@
       - **The metric Help text pointed at the wrong check.** It said the cause was "no content store is
         wired"; post-fix the dominant cause is a store wired for a DIFFERENT instance. Corrected in the
         scraped Help and in the field comment above it.
-      - **Remedy 1 implied an operator choice that does not exist.** `storage/objectstore/component.go:152`
-        hardcodes `instanceName := "objectstore"` ("would be provided by ComponentManager" — nothing does),
+      - **Remedy 1 implied an operator choice that does not exist.** `storage/objectstore/component.go`
+        hardcoded `instanceName := "objectstore"` at the time (it is now the exported
+        `objectstore.DefaultInstanceName`, referenced rather than repeated), ("would be provided by ComponentManager" — nothing does),
         and `NewComponent` never reads a configured `InstanceName`. Verified myself, including that no
         `SetInstanceName`-style seam exists anywhere. The warning now states the bound: the instance is either
         `"objectstore"` (component-stamped) or a bucket name (bare store), with the remedy for each, and says
