@@ -16,16 +16,30 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
+
+// managedTestContainer preserves the package's historical helper return type
+// while routing termination through TestClient's bounded, error-reporting
+// cleanup. Embedded methods such as Stop and Start still reach the raw
+// container for the tests that intentionally simulate server failure.
+type managedTestContainer struct {
+	testcontainers.Container
+	testClient *TestClient
+}
+
+func (c *managedTestContainer) Terminate(
+	_ context.Context,
+	_ ...testcontainers.TerminateOption,
+) error {
+	return c.testClient.Terminate()
+}
 
 // TestIntegration_ConnectToRealNATS tests connection to a real NATS server
 func TestIntegration_ConnectToRealNATS(t *testing.T) {
 	ctx := context.Background()
 
-	// Start NATS container
-	natsContainer, natsURL := startNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t)
+	natsURL := testClient.URL
 
 	// Create manager and connect
 	manager, err := NewClient(natsURL)
@@ -52,9 +66,8 @@ func TestIntegration_Reconnection(t *testing.T) {
 
 	ctx := context.Background()
 
-	// Start NATS container
-	natsContainer, natsURL := startNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t)
+	natsContainer, natsURL := testClient.container, testClient.URL
 
 	// Track disconnection and reconnection
 	var disconnected, reconnected atomic.Bool
@@ -133,9 +146,8 @@ func TestIntegration_CircuitBreakerWithRealConnection(t *testing.T) {
 func TestIntegration_PublishSubscribe(t *testing.T) {
 	ctx := t.Context()
 
-	// Start NATS container
-	natsContainer, natsURL := startNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t)
+	natsURL := testClient.URL
 
 	// Create manager and connect
 	manager, err := NewClient(natsURL)
@@ -170,9 +182,8 @@ func TestIntegration_PublishSubscribe(t *testing.T) {
 func TestIntegration_JetStream(t *testing.T) {
 	ctx := context.Background()
 
-	// Start NATS container with JetStream
-	natsContainer, natsURL := startNATSContainerWithJS(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t, WithJetStream())
+	natsURL := testClient.URL
 
 	// Create manager and connect
 	manager, err := NewClient(natsURL)
@@ -222,9 +233,8 @@ func TestIntegration_JetStream(t *testing.T) {
 func TestIntegration_HealthMonitoring(t *testing.T) {
 	ctx := context.Background()
 
-	// Start NATS container
-	natsContainer, natsURL := startNATSContainer(ctx, t)
-	defer natsContainer.Terminate(ctx)
+	testClient := NewTestClient(t)
+	natsContainer, natsURL := testClient.container, testClient.URL
 
 	// Create manager with health monitoring
 	manager, err := NewClient(natsURL)
@@ -250,6 +260,11 @@ func TestIntegration_HealthMonitoring(t *testing.T) {
 		// Initial state might already be healthy
 	}
 
+	// The harness client is not the subject of this test. Close it while the
+	// server is healthy so intentional server loss cannot turn its expected
+	// drain failure into a harness-cleanup failure.
+	require.NoError(t, testClient.Client.Close(ctx))
+
 	// Stop container to simulate failure
 	err = natsContainer.Stop(ctx, nil)
 	require.NoError(t, err)
@@ -263,77 +278,27 @@ func TestIntegration_HealthMonitoring(t *testing.T) {
 	}
 }
 
-// Helper function to start NATS container.
-// Wait strategy mirrors test_client.go: combined port + HTTP health on the
-// monitoring port with an explicit startup timeout. Replaces the prior
-// bare ForListeningPort + arbitrary 100ms sleep — sleeps are not
-// synchronization (project test discipline), and the HTTP health check
-// is the authoritative "NATS ready to serve" signal.
-func startNATSContainer(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.14-alpine",
-		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		Cmd:          []string{"-m", "8222"}, // Enable monitoring
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
-		),
-	}
-
-	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
-
-	host, err := natsContainer.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := natsContainer.MappedPort(ctx, "4222")
-	require.NoError(t, err)
-
-	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-
-	return natsContainer, natsURL
+// startNATSContainer retains the package test helper contract while delegating
+// all lifecycle and readiness behavior to the canonical TestClient.
+func startNATSContainer(_ context.Context, t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+	testClient := NewTestClient(t)
+	return &managedTestContainer{Container: testClient.container, testClient: testClient}, testClient.URL
 }
 
-// Helper function to start NATS container with JetStream.
-// Wait strategy rationale: see startNATSContainer above.
-func startNATSContainerWithJS(ctx context.Context, t *testing.T) (testcontainers.Container, string) {
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.14-alpine",
-		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream and monitoring
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
-		),
-	}
-
-	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
-
-	host, err := natsContainer.Host(ctx)
-	require.NoError(t, err)
-
-	port, err := natsContainer.MappedPort(ctx, "4222")
-	require.NoError(t, err)
-
-	natsURL := fmt.Sprintf("nats://%s:%s", host, port.Port())
-
-	return natsContainer, natsURL
+// startNATSContainerWithJS is the JetStream form of startNATSContainer.
+func startNATSContainerWithJS(_ context.Context, t *testing.T) (testcontainers.Container, string) {
+	t.Helper()
+	testClient := NewTestClient(t, WithJetStream())
+	return &managedTestContainer{Container: testClient.container, testClient: testClient}, testClient.URL
 }
 
 // TestIntegration_JetStreamMetrics verifies that JetStream metrics are properly collected
 func TestIntegration_JetStreamMetrics(t *testing.T) {
 	ctx := context.Background()
 
-	// Start NATS with JetStream
-	container, natsURL := startNATSContainerWithJS(ctx, t)
-	defer container.Terminate(ctx)
+	testClient := NewTestClient(t, WithJetStream())
+	natsURL := testClient.URL
 
 	// Create metrics registry
 	metricsRegistry := metric.NewMetricsRegistry()

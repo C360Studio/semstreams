@@ -7,13 +7,10 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/gateway"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/stretchr/testify/require"
 )
 
 // createTestComponentForLifecycle creates a test instance for lifecycle testing.
 func createTestComponentForLifecycle() component.LifecycleComponent {
-	t := &testing.T{}
-
 	// Create a minimal valid configuration
 	config := gateway.Config{
 		Routes: []gateway.RouteMapping{
@@ -29,20 +26,30 @@ func createTestComponentForLifecycle() component.LifecycleComponent {
 	}
 
 	configJSON, err := json.Marshal(config)
-	require.NoError(t, err)
+	if err != nil {
+		panic("failed to marshal lifecycle config: " + err.Error())
+	}
 
 	// Create unconnected NATS client (won't actually connect)
 	natsClient, err := natsclient.NewClient("nats://localhost:4222")
-	require.NoError(t, err)
+	if err != nil {
+		panic("failed to create lifecycle NATS client: " + err.Error())
+	}
 
 	deps := component.Dependencies{
 		NATSClient: natsClient,
 	}
 
 	comp, err := NewGateway(configJSON, deps)
-	require.NoError(t, err)
+	if err != nil {
+		panic("failed to create lifecycle component: " + err.Error())
+	}
 
-	return comp.(component.LifecycleComponent)
+	lifecycleComponent, ok := comp.(component.LifecycleComponent)
+	if !ok {
+		panic("HTTP gateway does not implement component.LifecycleComponent")
+	}
+	return lifecycleComponent
 }
 
 // TestHTTPGateway_ComprehensiveLifecycle runs the complete lifecycle test suite

@@ -13,62 +13,17 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/wait"
 )
 
-// setupTestNATS starts a NATS server using testcontainers
+// setupTestNATS starts canonical JetStream-backed test infrastructure.
 func setupTestNATS(t *testing.T) (*natsclient.Client, func()) {
 	t.Helper()
 
-	ctx := context.Background()
-
-	// Start NATS container with JetStream.
-	// Wait strategy mirrors natsclient/test_client.go: combined port + HTTP
-	// health on the monitoring port with explicit startup timeout. Bare
-	// ForListeningPort (without timeout) flakes under Docker API pressure.
-	req := testcontainers.ContainerRequest{
-		Image:        "nats:2.14-alpine",
-		ExposedPorts: []string{"4222/tcp", "8222/tcp"},
-		Cmd:          []string{"-js", "-m", "8222"}, // Enable JetStream + monitoring
-		WaitingFor: wait.ForAll(
-			wait.ForListeningPort("4222/tcp"),
-			wait.ForHTTP("/").WithPort("8222/tcp").WithStartupTimeout(2*time.Minute),
-		),
-	}
-
-	natsContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
-		ContainerRequest: req,
-		Started:          true,
-	})
-	require.NoError(t, err)
-
-	// Get connection URL
-	host, err := natsContainer.Host(ctx)
-	require.NoError(t, err)
-
-	mappedPort, err := natsContainer.MappedPort(ctx, "4222")
-	require.NoError(t, err)
-
-	natsURL := "nats://" + host + ":" + mappedPort.Port()
-
-	// Create NATS client
-	client, err := natsclient.NewClient(natsURL,
-		natsclient.WithMaxReconnects(-1),
-		natsclient.WithReconnectWait(1*time.Second),
-	)
-	require.NoError(t, err)
-
-	// Connect
-	err = client.Connect(ctx)
-	require.NoError(t, err)
-
-	cleanup := func() {
-		client.Close(ctx)
-		_ = natsContainer.Terminate(ctx)
-	}
-
-	return client, cleanup
+	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	// NewTestClient owns and reports cleanup through t.Cleanup. The retained
+	// callback keeps the package helper contract used by sibling integration
+	// files without adding a second termination path.
+	return testClient.Client, func() {}
 }
 
 func TestIntegration_ComponentLifecycle(t *testing.T) {

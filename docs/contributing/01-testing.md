@@ -1,734 +1,392 @@
-# Testing Patterns
+# Testing Policy and Patterns
 
-Guidelines for writing unit tests, integration tests, and test helpers in SemStreams.
+This page is the canonical testing policy for SemStreams. It defines where evidence belongs, when Docker-backed
+infrastructure is justified, and the wall-clock and isolation rules for new tests. The
+[natsclient test-helper guide](../operations/23-natsclient-test-helpers.md) contains implementation examples and MUST
+not redefine this policy.
 
-## Test Organization
+## Choose the Lowest Sufficient Tier
 
-```
-project/
-├── pkg/
-│   └── example/
-│       ├── example.go
-│       └── example_test.go      # Unit tests
-├── processor/
-│   └── graph/
-│       ├── processor.go
-│       ├── processor_test.go    # Unit tests
-│       └── integration_test.go  # Integration tests
-└── test/
-    └── e2e/                     # End-to-end tests
-```
+- **Unit:** one function, type, or in-process component behavior. Use `*_test.go` and
+  `Test<Type>_<Behavior>`. Unit tests MUST NOT use Docker, real NATS, network services, or fixed ports.
+- **Integration:** one production boundary or component wire. Use `*_integration_test.go`,
+  `TestIntegration_<Behavior>`, and `//go:build integration`. A test MAY use one real dependency when its semantics
+  are the assertion.
+- **Live provider:** a real paid or local model provider. Use `*_live_test.go` and a provider-specific build tag such
+  as `live_llm`. Tests MUST skip cleanly when credentials or the service are absent.
+- **End to end:** deployed binaries and a cross-component path. Put these tests under `test/e2e` and invoke them
+  through `task e2e:*`. A tier MAY use the stack it declares.
 
-## Running Tests
+A test MUST use the lowest tier that can prove the behavior. Real NATS is justified for JetStream delivery, KV
+watch/replay, persistence, consumer, or production-wire behavior. JSON mapping, validation, state transitions, retry
+policy, and time calculations normally belong in unit tests with injected dependencies.
+
+Do not move a test upward merely because its production code uses NATS. Conversely, do not replace a production-wire
+regression with a mock that cannot reproduce the contract being protected.
+
+Breaking migrations have an additional hard requirement: run the relevant E2E tier before the breaking commit lands.
+See [End-to-End Testing](02-e2e-tests.md).
+
+## Canonical Commands
+
+Use repository tasks for full suites so local and CI behavior stay aligned:
 
 ```bash
-# Run all unit tests
-go test ./...
-
-# Run with race detection
-go test -race ./...
-
-# Run specific package
-go test ./processor/graph/...
-
-# Run integration tests (requires Docker for testcontainers)
-go test -tags=integration ./...
-
-# Run integration tests with race detection
-go test -race -tags=integration ./...
-
-# Run with coverage
-go test -cover ./...
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out
+task test                 # Unit suite
+task test:race            # Unit suite with the race detector
+task test:integration     # Docker-backed integration suite, race detector, fresh evidence
+task check:push           # Full pre-push gate
 ```
 
-## Table-Driven Tests
+The canonical integration runner uses `-race -failfast -tags=integration -timeout=20m -count=1 ./...`. The
+`integration` constraint is additive: this single command runs ordinary unit tests plus integration-tagged tests.
+CI therefore runs the canonical tagged suite once instead of first repeating `go test -race ./...`. `-failfast` stops
+avoidable work after a test failure. The runner does not override Go's package parallelism; changes to concurrency
+MUST be supported by measured container, CPU, memory, and duration evidence.
 
-Use table-driven tests for comprehensive coverage:
+For focused iteration, preserve the same flags:
+
+```bash
+scripts/run-integration-tests.sh ./processor/graph-index/...
+```
+
+Do not invoke focused integration packages with `go test` directly. The runner is the single owner of flags, Docker
+preflight, the host lock, and the Reaper policy. Go's `-timeout=20m` is a per-package timeout, not a whole-suite
+deadline. A local aggregate run has no additional whole-suite deadline and can be interrupted by the caller. CI's
+25-minute outer job timeout is the whole-job and process-tree bound, including setup and cleanup. The 20-minute
+per-package value is transitional and is not a budget for a new test.
+
+### Integration Runner Host Contract
+
+Every full or focused integration invocation acquires `/tmp/semstreams-integration.lock` before touching Docker. Lock
+contention fails immediately by default and reports the current owner. A caller that deliberately wants to wait MAY
+set `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS` to an integer from 1 through 3600; that value is a bounded wait budget,
+not permission to wait indefinitely. The fixed host path makes independent worktrees and shells contend on the same
+Docker resource.
+
+After acquiring the lock, the runner verifies Docker, exports `TESTCONTAINERS_RYUK_DISABLED=false`, and inspects the
+repository-pinned `nats:2.14-alpine` image. A cached image is used without a network pull. The runner pulls only when
+that exact tag is absent; it does not silently refresh an existing cache on every test run. To deliberately refresh a
+cached image, set `SEMSTREAMS_INTEGRATION_REFRESH_IMAGE=1`. The canonical runner performs that pull under the same host
+lock and bounds it to five minutes, so refresh cannot race another integration invocation or hang indefinitely.
+
+Helper cleanup remains the primary cleanup path. Ryuk is enabled as crash safety, not as a replacement for bounded,
+observable `t.Cleanup` teardown.
+
+## Test Independence
+
+Each test MUST be independently repeatable, order-independent, and safe after a preceding failure. A test MUST NOT
+depend on another test's stream, bucket, durable consumer, global logger, temporary file, or goroutine cleanup.
+
+Use table-driven tests when cases share one behavioral contract:
 
 ```go
-func TestConditionOperators(t *testing.T) {
+func TestCondition_Evaluate(t *testing.T) {
+    t.Parallel()
+
     tests := []struct {
-        name     string
-        operator string
-        value    any
-        actual   any
-        want     bool
+        name string
+        got  any
+        want bool
     }{
-        {
-            name:     "eq string match",
-            operator: "eq",
-            value:    "active",
-            actual:   "active",
-            want:     true,
-        },
-        {
-            name:     "eq string no match",
-            operator: "eq",
-            value:    "active",
-            actual:   "inactive",
-            want:     false,
-        },
-        {
-            name:     "lt int true",
-            operator: "lt",
-            value:    20,
-            actual:   15,
-            want:     true,
-        },
-        {
-            name:     "gt float true",
-            operator: "gt",
-            value:    50.0,
-            actual:   75.5,
-            want:     true,
-        },
-        {
-            name:     "in slice match",
-            operator: "in",
-            value:    []string{"a", "b", "c"},
-            actual:   "b",
-            want:     true,
-        },
+        {name: "matching value", got: "active", want: true},
+        {name: "different value", got: "idle", want: false},
     }
 
     for _, tt := range tests {
         t.Run(tt.name, func(t *testing.T) {
-            cond := Condition{
-                Operator: tt.operator,
-                Value:    tt.value,
-            }
-            got := cond.Evaluate(tt.actual)
-            if got != tt.want {
-                t.Errorf("got %v, want %v", got, tt.want)
-            }
+            t.Parallel()
+            condition := Condition{Operator: "eq", Value: "active"}
+            assert.Equal(t, tt.want, condition.Evaluate(tt.got))
         })
     }
 }
 ```
 
-### Guidelines
+Unit tests SHOULD use `t.Parallel()` when they do not mutate process globals. Integration tests MUST NOT use
+`t.Parallel()` unless every mutable external resource is independently named and the package remains within its
+approved container budget.
 
-- Each test case should be independent
-- Use descriptive names that explain the scenario
-- Test both success and failure cases
-- Test edge cases (nil, empty, boundary values)
+## Container Contract
 
-## Mock Implementations
+### Justification and Count
 
-### Mock KV Bucket
+Zero containers is preferred. A new top-level integration test MAY obtain one live, usable NATS container only when
+real NATS or JetStream behavior is part of the assertion. The test or PR MUST state which production semantic a fake
+could not prove.
 
-For testing KV-dependent code:
+A test MUST NOT have more than one live NATS container without an approved exception. The canonical helper has one
+narrow sequential recovery: after internal readiness, if at least one successful Docker Inspect snapshot showed
+a configured required mapped port absent during the single 10-second mapping budget, the parent context remains live,
+and cleanup succeeds, it may start one replacement. The default required set is only 4222/tcp. `WithMonitoring()` adds
+8222/tcp to the container command, exposed ports, required set, and recovery eligibility. Inspect failures alone do not
+authorize replacement. The helper permits at most two starts, never two live containers, and MUST NOT replace an
+attempt after startup, host lookup, connection, readiness, resource, cancellation, or cleanup failure. Callers cannot
+request or reproduce this recovery themselves. Reusing a package-wide container is also an exception, not the default
+optimization. State pollution is more damaging than container startup cost.
 
-```go
-type MockKV struct {
-    data    map[string][]byte
-    mu      sync.RWMutex
-    history map[string][]kv.KeyValueEntry
-}
+### Isolation and Naming
 
-func NewMockKV() *MockKV {
-    return &MockKV{
-        data:    make(map[string][]byte),
-        history: make(map[string][]kv.KeyValueEntry),
-    }
-}
+A fresh container is the default when production requires fixed bucket, stream, or ObjectStore names. When resources
+can be named without changing production behavior, derive their names from a canonical sanitized test name plus a
+run-unique suffix. This applies to:
 
-func (m *MockKV) Get(ctx context.Context, key string) (kv.KeyValueEntry, error) {
-    m.mu.RLock()
-    defer m.mu.RUnlock()
+- KV buckets and keys;
+- streams, subjects, durables, and consumer names;
+- ObjectStore buckets and object keys;
+- component, flow, and entity identifiers;
+- temporary directories and listener addresses.
 
-    data, ok := m.data[key]
-    if !ok {
-        return nil, kv.ErrKeyNotFound
-    }
-    return &MockEntry{key: key, value: data}, nil
-}
+Tests MUST ask the operating system for an available port, such as `127.0.0.1:0`. They MUST NOT predict a port from a
+fixed range, process ID, timestamp, or random number.
 
-func (m *MockKV) Put(ctx context.Context, key string, value []byte) (uint64, error) {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+A shared-container exception MUST prove one of these isolation strategies:
 
-    m.data[key] = value
-    return 1, nil
-}
+1. every mutable resource is uniquely named per test; or
+2. setup restores a known empty state and cleanup verifies that no state, consumer, subscription, or goroutine leaked.
 
-func (m *MockKV) Delete(ctx context.Context, key string) error {
-    m.mu.Lock()
-    defer m.mu.Unlock()
+Serial execution alone is not isolation. `WithBucketPrefix` alone is not proof when components also create fixed
+streams, subjects, consumers, or ObjectStores.
 
-    delete(m.data, key)
-    return nil
-}
-```
+### Readiness
 
-### Mock Graph Provider
+Container readiness MUST observe an internal service signal before resolving host-side ports. For NATS, the canonical
+helper owns the internal ready signal. Only after that signal may it resolve `Host`, then observe the configured
+required port set from one Docker Inspect snapshot per poll under a single 10-second budget with context cancellation.
+Unconfigured ports are ignored. Monitoring assertions MUST request `WithMonitoring()`; without it, the helper does not
+start or expose the monitoring listener and `TestClient.MonitoringURL` is empty.
 
-For testing clustering:
+Test code MUST NOT call `testcontainers.GenericContainer`, `ForListeningPort`, `ForHTTP`, `Host`, or `MappedPort`
+directly. Those calls belong in the canonical test substrate. Every helper setup failure reports its attempt, phase,
+original cause, parent-context state, container ID when one was returned, and any cleanup cause. A required-port
+observation failure MUST additionally report:
 
-```go
-type MockGraphProvider struct {
-    entities  []string
-    neighbors map[string][]string
-    weights   map[string]float64
-}
+- total observation attempts;
+- the shared mapping budget and elapsed time;
+- the last successful observation's attempt and missing ports, when one exists; and
+- the last Inspect error and its attempt, when one exists.
 
-func NewMockGraphProvider() *MockGraphProvider {
-    return &MockGraphProvider{
-        neighbors: make(map[string][]string),
-        weights:   make(map[string]float64),
-    }
-}
+An internal signal, mapped-port resolution, client connection, and application readiness are separate phases. A
+successful phase MUST NOT be treated as proof that a later phase is ready.
 
-func (m *MockGraphProvider) GetAllEntityIDs(ctx context.Context) ([]string, error) {
-    return m.entities, nil
-}
+### Cleanup and Reaper
 
-func (m *MockGraphProvider) GetNeighbors(ctx context.Context, id, direction string) ([]string, error) {
-    key := id + ":" + direction
-    return m.neighbors[key], nil
-}
+`natsclient.NewTestClient(t, ...)` owns its client and container and registers `t.Cleanup`. Callers MUST NOT add a
+second `defer tc.Terminate()` or terminate the underlying container directly. Tests remain responsible for component,
+subscription, file, and goroutine cleanup.
 
-func (m *MockGraphProvider) GetEdgeWeight(ctx context.Context, from, to string) (float64, error) {
-    key := from + "->" + to
-    if w, ok := m.weights[key]; ok {
-        return w, nil
-    }
-    return 1.0, nil
-}
+Explicit cleanup MUST close or drain the client, terminate the container under a bounded context, and report failures.
+The testcontainers Reaper is crash safety, not primary cleanup. Task and CI MUST use one documented Reaper policy.
+Disabling the Reaper requires an approved, expiring exception and a post-run container-leak check.
 
-// Helper methods for test setup
-func (m *MockGraphProvider) AddEntity(id string) {
-    m.entities = append(m.entities, id)
-}
+`NewTestClient(&testing.T{}, ...)` is forbidden. A rare approved `TestMain` owner MUST use the error-returning shared
+helper, preserve `m.Run()`'s exit code, and terminate its infrastructure on every reachable path.
 
-func (m *MockGraphProvider) AddEdge(from, to string, weight float64) {
-    m.neighbors[from+":outgoing"] = append(m.neighbors[from+":outgoing"], to)
-    m.neighbors[to+":incoming"] = append(m.neighbors[to+":incoming"], from)
-    m.weights[from+"->"+to] = weight
-}
-```
+## Synchronization and Contexts
 
-## Integration Tests
+Tests MUST NOT use `time.Sleep` to wait for readiness, delivery, retries, cleanup, or state convergence. A longer sleep
+does not make an observation causal.
 
-### Build Tag Convention
+Prefer, in order:
 
-Use `//go:build integration` for tests requiring external services like NATS:
+1. a channel, callback, `WaitGroup`, or explicit ready/done signal;
+2. an injected clock or retry hook for time-dependent unit behavior;
+3. bounded observation polling when the system exposes no signal.
+
+Polling MUST have a narrow deadline and report the last value and last error on failure. It MUST NOT silently turn a
+missing producer, subscriber, or component into a full-window timeout.
+
+Test I/O contexts MUST derive from `t.Context()` and then narrow the deadline:
 
 ```go
-//go:build integration
-
-package graph_test
-
-import (
-    "context"
-    "testing"
-    "time"
-
-    "github.com/c360studio/semstreams/natsclient"
-)
-
-func TestGraphProcessorIntegration(t *testing.T) {
-    // Create test client - testcontainers will start NATS automatically
-    testClient := natsclient.NewTestClient(t,
-        natsclient.WithJetStream(),
-        natsclient.WithKV())
-    natsClient := testClient.Client
-
-    // Test with real NATS
-    // ...
-}
-```
-
-### Running Integration Tests
-
-Integration tests are excluded from normal `go test ./...` runs. To run them:
-
-```bash
-# Run all integration tests
-go test -tags=integration ./...
-
-# Run with race detection (recommended)
-go test -race -tags=integration ./...
-
-# Run specific package integration tests
-go test -tags=integration -v ./processor/graph/...
-```
-
-### Shared Test Client Pattern
-
-For packages with multiple integration tests, use a shared NATS container via `TestMain`:
-
-```go
-//go:build integration
-
-package mypackage
-
-import (
-    "log"
-    "testing"
-    "time"
-
-    "github.com/c360studio/semstreams/natsclient"
-)
-
-var (
-    sharedTestClient *natsclient.TestClient
-    sharedNATSClient *natsclient.Client
-)
-
-func TestMain(m *testing.M) {
-    // Build tag ensures this only runs with -tags=integration
-    testClient, err := natsclient.NewSharedTestClient(
-        natsclient.WithJetStream(),
-        natsclient.WithKV(),
-        natsclient.WithTestTimeout(5*time.Second),
-        natsclient.WithStartTimeout(30*time.Second),
-    )
-    if err != nil {
-        log.Fatalf("Failed to create shared test client: %v", err)
-    }
-
-    sharedTestClient = testClient
-    sharedNATSClient = testClient.Client
-
-    exitCode := m.Run()
-
-    sharedTestClient.Terminate()
-
-    if exitCode != 0 {
-        log.Fatal("tests failed")
-    }
-}
-
-func getSharedNATSClient(t *testing.T) *natsclient.Client {
-    if sharedNATSClient == nil {
-        t.Fatal("Shared NATS client not initialized")
-    }
-    return sharedNATSClient
-}
-```
-
-## Concurrent Test Patterns
-
-### Using Channels for Synchronization
-
-```go
-func TestConcurrentUpdates(t *testing.T) {
-    processor := NewProcessor()
-    done := make(chan struct{})
-    errCh := make(chan error, 10)
-
-    // Start concurrent workers
-    for i := 0; i < 10; i++ {
-        go func(id int) {
-            defer func() { done <- struct{}{} }()
-
-            err := processor.Update(ctx, fmt.Sprintf("entity-%d", id))
-            if err != nil {
-                errCh <- err
-            }
-        }(i)
-    }
-
-    // Wait for all workers
-    for i := 0; i < 10; i++ {
-        <-done
-    }
-    close(errCh)
-
-    // Check for errors
-    for err := range errCh {
-        t.Errorf("worker error: %v", err)
-    }
-}
-```
-
-### Testing with WaitGroup
-
-```go
-func TestParallelProcessing(t *testing.T) {
-    var wg sync.WaitGroup
-    results := make([]string, 10)
-
-    for i := 0; i < 10; i++ {
-        wg.Add(1)
-        go func(idx int) {
-            defer wg.Done()
-            results[idx] = process(idx)
-        }(i)
-    }
-
-    wg.Wait()
-
-    // Verify results
-    for i, r := range results {
-        if r == "" {
-            t.Errorf("result[%d] is empty", i)
-        }
-    }
-}
-```
-
-### Avoid Sleep in Tests
-
-Instead of `time.Sleep`, use explicit synchronization:
-
-```go
-// BAD: Arbitrary sleep
-func TestBad(t *testing.T) {
-    go startWorker()
-    time.Sleep(100 * time.Millisecond)  // Flaky!
-    assertWorkerReady()
-}
-
-// GOOD: Explicit synchronization
-func TestGood(t *testing.T) {
-    ready := make(chan struct{})
-    go startWorkerWithSignal(ready)
-
-    select {
-    case <-ready:
-        assertWorkerReady()
-    case <-time.After(1 * time.Second):
-        t.Fatal("worker did not become ready")
-    }
-}
-```
-
-## Test Helpers
-
-### Test Context with Timeout
-
-```go
-func testContext(t *testing.T) context.Context {
-    ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func testContext(t *testing.T, timeout time.Duration) context.Context {
+    t.Helper()
+    ctx, cancel := context.WithTimeout(t.Context(), timeout)
     t.Cleanup(cancel)
     return ctx
 }
-
-func TestWithContext(t *testing.T) {
-    ctx := testContext(t)
-
-    result, err := processor.Process(ctx, input)
-    // ...
-}
 ```
 
-### Test Entity Builder
+Helpers MUST accept the caller's context. `NewTestClient` setup derives from `t.Context()` and narrows it for container
+startup, mapped-port resolution, connection, and initial resource creation.
+
+Cleanup is the intentional exception. The Go test runner cancels `t.Context()` before invoking registered cleanup
+functions, so client close and container termination cannot derive from it. Each cleanup operation receives its own
+bounded `context.Background()` child. Those independent contexts preserve the measured 10-second cleanup ceiling
+even after test cancellation; they are not a general license to use `context.Background()` for test I/O.
+
+## Budgets for New Tests
+
+Budgets make resource use reviewable. They are defaults for new evidence; existing packages are migrated by the
+ratchet policy below.
+
+| Scope | Target | Hard ceiling without exception |
+|---|---:|---:|
+| Unit top-level test under `-race` | 1s | 5s |
+| Integration top-level test on a warm host | 30s | 3m |
+| Live, usable NATS containers per top-level test | 0 | 1 |
+| Mapped-port resolution | immediate | 10s |
+| Cleanup | immediate | 10s |
+| Integration package | 3m | 5m |
+
+Container image download is measured separately from test execution. E2E tiers MUST declare their expected duration
+and CI ceiling in the task or workflow that owns the tier.
+
+A new test MUST NOT increase an existing package's container count or wall-clock baseline without explaining the new
+evidence and receiving exception approval. Raising a timeout is not an acceptable fix for an unexplained regression.
+
+## Failure Evidence
+
+Failures involving asynchronous or external state MUST identify the condition, elapsed time, attempts, last observed
+value, last error, and relevant resource names. Container-start failures SHOULD include bounded container logs. Tests
+using randomness MUST print the seed.
+
+CI duration and container-count reporting is migration work, described below. Until it is implemented, reviewers MUST
+request local timing evidence for tests that create containers, add polling, or approach a budget.
+
+## Exceptions
+
+An exception requires all of the following:
+
+- the exact test and rule being waived;
+- why the evidence cannot be produced within the default contract;
+- measured wall-clock and resource evidence;
+- the isolation and cleanup strategy;
+- a linked issue or decision, an owner, and an expiry or removal condition; and
+- approval from the owner and `semstreams-reviewer`.
+
+An exception MUST be narrow. It MUST NOT authorize blanket package serialization, unbounded contexts, arbitrary
+sleeps, or shared mutable state. Expired exceptions are invalid.
+
+## Existing-Suite Migration Policy
+
+The policy above applies immediately to new or substantially rewritten tests. Existing violations are migrated in
+priority order; touching a nearby test MUST NOT make the baseline worse.
+
+### P0: Substrate and Unit-Layer Integrity
+
+1. Complete internal-signal readiness and bounded mapped-port resolution in the canonical helper.
+2. Route legacy direct testcontainers helpers through that substrate.
+3. Move Docker-backed cases out of untagged unit files.
+4. Replace fabricated `testing.T` values and make cleanup bounded and observable.
+5. Reconcile the Task and CI Reaper policy.
+
+### P1: Highest-Churn Packages
+
+Measure container starts and duration, then address packages with the most startups and sleeps. First move cases that
+do not need real NATS down to unit tests. Next remove duplicate containers within one logical test. Replace sleeps with
+signals or bounded diagnostic observation.
+
+Audit shared containers for all mutable resource classes. Keep a fresh per-test container when reset cannot faithfully
+restore production state; do not consolidate merely to improve elapsed time.
+
+### P2: Suite Shape and Ratchets
+
+1. Normalize integration and live-provider file/test naming.
+2. Avoid rerunning the complete unit suite as integration evidence once selectors can be verified.
+3. Add resource-name helpers where they preserve production behavior.
+4. Ratchet package duration and container baselines downward from measured evidence.
+
+Blanket `-p 1` and blanket conversion to shared containers are explicitly out of scope.
+
+## Enforcement Status and Backlog
+
+The following AST-backed guards have landed and run directly in CI:
+
+- container starts in test files require an integration build constraint;
+- `GenericContainer`, `ForListeningPort`, `ForHTTP`, `Host`, and `MappedPort` calls are restricted to the canonical
+  container substrate;
+- fabricated `&testing.T{}` values are rejected; and
+- exact existing `time.Sleep` calls in integration files are ratcheted.
+
+The guard verifies that it scanned a non-trivial repository surface, and every category has positive and negative
+fixtures. A zero-match scan is therefore not accepted as proof that the repository is clean.
+
+Fabricated `testing.T` values, untagged container starts, and direct container APIs are zero-debt categories. They fail
+immediately and cannot be added to the baseline. The only recorded debt is 305 legacy integration sleeps.
+
+`test/testinfra/policy_baseline.json` identifies each of those sleeps by category, file, function, call, and ordinal.
+It is shrink-only and manually maintained: removing a live sleep requires removing its now-stale entry, while a new
+or moved sleep fails CI. The baseline MUST NOT acquire new entries.
+
+The following policy remains review-enforced rather than structurally enforced:
+
+- integration and live-provider file/test naming;
+- exception ownership and expiry;
+- per-test and per-package durations;
+- container counts and complete external-resource naming; and
+- general `t.Context()` use.
+
+A helper-specific test may structurally protect `NewTestClient` setup and cleanup context behavior, but it does not
+enforce context use across the wider test suite. Duration and container-count reporting remain migration backlog.
+
+## Focused Patterns
+
+### Graphable Implementations
+
+Test deterministic IDs and complete triples without infrastructure:
 
 ```go
-type EntityBuilder struct {
-    entity *EntityState
-}
+func TestSensorReading_Graphable(t *testing.T) {
+    t.Parallel()
 
-func NewEntityBuilder(id string) *EntityBuilder {
-    return &EntityBuilder{
-        entity: &EntityState{
-            ID:      id,
-            Triples: []Triple{},
-            Version: 1,
-        },
-    }
-}
-
-func (b *EntityBuilder) WithTriple(predicate string, object any) *EntityBuilder {
-    b.entity.Triples = append(b.entity.Triples, Triple{
-        Predicate: predicate,
-        Object:    object,
-    })
-    return b
-}
-
-func (b *EntityBuilder) Build() *EntityState {
-    return b.entity
-}
-
-// Usage
-entity := NewEntityBuilder("sensor-001").
-    WithTriple("entity.type", "sensor").
-    WithTriple("sensor.temperature", 25.5).
-    Build()
-```
-
-### Assert Helpers
-
-```go
-func assertEntityExists(t *testing.T, kv KVBucket, id string) {
-    t.Helper()
-
-    entry, err := kv.Get(context.Background(), id)
-    if err != nil {
-        t.Fatalf("entity %s not found: %v", id, err)
-    }
-    if entry == nil {
-        t.Fatalf("entity %s is nil", id)
-    }
-}
-
-func assertTripleValue(t *testing.T, entity *EntityState, predicate string, expected any) {
-    t.Helper()
-
-    for _, triple := range entity.Triples {
-        if triple.Predicate == predicate {
-            if triple.Object != expected {
-                t.Errorf("triple %s: got %v, want %v", predicate, triple.Object, expected)
-            }
-            return
-        }
-    }
-    t.Errorf("triple %s not found", predicate)
-}
-```
-
-## Testing Graphable Implementations
-
-When implementing the `Graphable` interface, test two key properties:
-
-### EntityID Determinism
-
-The same input must always produce the same ID:
-
-```go
-func TestSensorReading_EntityID(t *testing.T) {
-    s := &SensorReading{
+    reading := SensorReading{
         DeviceID:   "sensor-042",
         SensorType: "temperature",
         OrgID:      "acme",
         Platform:   "logistics",
     }
 
-    expected := "acme.logistics.environmental.sensor.temperature.sensor-042"
-    assert.Equal(t, expected, s.EntityID())
+    assert.Equal(t,
+        "acme.logistics.environmental.sensor.temperature.sensor-042",
+        reading.EntityID())
+    assert.Contains(t, reading.Triples(), Triple{
+        Subject:   reading.EntityID(),
+        Predicate: "sensor.type",
+        Object:    "temperature",
+    })
 }
 ```
 
-### Triple Completeness
+### Race Detection
 
-Verify all expected triples are generated:
-
-```go
-func TestSensorReading_Triples(t *testing.T) {
-    s := &SensorReading{
-        DeviceID:     "sensor-042",
-        SensorType:   "temperature",
-        Value:        23.5,
-        Unit:         "celsius",
-        ZoneEntityID: "acme.logistics.facility.zone.area.warehouse-7",
-        OrgID:        "acme",
-        Platform:     "logistics",
-    }
-
-    triples := s.Triples()
-
-    // Find measurement triple
-    var found bool
-    for _, tr := range triples {
-        if tr.Predicate == "sensor.measurement.celsius" {
-            assert.Equal(t, 23.5, tr.Object)
-            found = true
-        }
-    }
-    assert.True(t, found, "measurement triple not found")
-}
-```
-
-## Race Detection
-
-Always run tests with race detection:
+All changed concurrency paths MUST pass the race detector. Use atomics, mutexes, channels, or ownership transfer; do
+not make a race disappear by serializing the entire suite.
 
 ```bash
-go test -race ./...
+task test:race
+task test:integration
 ```
 
-### Common Race Patterns
+### Benchmarks and Coverage
 
-```go
-// BAD: Race on shared state
-type Counter struct {
-    value int
-}
-
-func (c *Counter) Inc() {
-    c.value++  // Race!
-}
-
-// GOOD: Use atomic or mutex
-type Counter struct {
-    value atomic.Int64
-}
-
-func (c *Counter) Inc() {
-    c.value.Add(1)
-}
-```
-
-## Benchmark Tests
-
-```go
-func BenchmarkConditionEvaluate(b *testing.B) {
-    cond := Condition{
-        Field:    "battery.level",
-        Operator: "lt",
-        Value:    20,
-    }
-    entity := &EntityState{
-        Triples: []Triple{{Predicate: "battery.level", Object: 15}},
-    }
-
-    b.ResetTimer()
-    for i := 0; i < b.N; i++ {
-        cond.Evaluate(entity)
-    }
-}
-
-func BenchmarkLPADetection(b *testing.B) {
-    // Setup large graph
-    provider := setupLargeGraph(1000)
-    detector := NewLPADetector(provider, NewMockStorage())
-
-    b.ResetTimer()
-    for i := 0; i < b.N; i++ {
-        _, _ = detector.DetectCommunities(context.Background())
-    }
-}
-```
-
-Run benchmarks:
+Benchmarks measure a stated operation and MUST exclude setup with `b.ResetTimer()` or `b.StopTimer()`. Coverage is a
+diagnostic, not a substitute for critical-path and edge-case evidence.
 
 ```bash
-go test -bench=. ./processor/graph/clustering/
-go test -bench=BenchmarkLPA -benchmem ./...
-```
-
-## Coverage
-
-### Generate Coverage Report
-
-```bash
-# Generate coverage profile
+go test -bench=. -benchmem ./processor/graph/clustering/...
 go test -coverprofile=coverage.out ./...
-
-# View in browser
-go tool cover -html=coverage.out
-
-# Show function coverage
 go tool cover -func=coverage.out
 ```
 
-### Coverage Guidelines
+Critical paths SHOULD retain at least 80% behavioral coverage, with explicit error, nil, empty, boundary, cancellation,
+and concurrency cases where relevant.
 
-- **Critical paths**: 80%+ coverage
-- **Edge cases**: Always test nil, empty, boundary values
-- **Error paths**: Test error handling
+## Review Checklist
 
-## Test Organization Tips
-
-### Naming Conventions
-
-```go
-// Test<Function>_<Scenario>
-func TestEvaluate_StringEquality(t *testing.T) {}
-func TestEvaluate_NumericLessThan(t *testing.T) {}
-func TestEvaluate_NilValue(t *testing.T) {}
-
-// Test<Type>_<Method>_<Scenario>
-func TestCondition_Evaluate_MatchingValue(t *testing.T) {}
-func TestCondition_Evaluate_NonMatchingValue(t *testing.T) {}
-```
-
-### Test File Organization
-
-```go
-// condition_test.go
-
-// === Helpers ===
-
-func newTestCondition(op string, val any) *Condition { ... }
-
-// === Unit Tests ===
-
-func TestCondition_Evaluate(t *testing.T) { ... }
-func TestCondition_Validate(t *testing.T) { ... }
-
-// === Integration Tests ===
-
-func TestCondition_WithRealEntities(t *testing.T) { ... }
-
-// === Benchmarks ===
-
-func BenchmarkCondition_Evaluate(b *testing.B) { ... }
-```
-
-## Agentic E2E Tests
-
-The agentic tier validates the LLM-powered agent loop with tool execution.
-
-### Running Agentic Tests
-
-```bash
-# Run agentic tier (~30s)
-task e2e:agentic
-
-# Start services for manual testing
-task e2e:agentic:up
-
-# Run tests against already-running services
-task e2e:agentic:test
-
-# View logs
-task e2e:agentic:logs
-
-# Clean up
-task e2e:agentic:clean
-```
-
-### Mock LLM Server
-
-The agentic E2E tests use a mock LLM server that simulates OpenAI-compatible responses:
-
-- Responds to `/v1/chat/completions` with predetermined responses
-- Simulates tool calls when prompted
-- Returns configurable delays for latency testing
-
-### Test Scenarios
-
-The agentic tests validate:
-
-1. **Loop Creation**: Task message spawns new loop
-2. **Tool Execution**: Model requests tools, tools execute, results returned
-3. **State Machine**: Loop progresses through states correctly
-4. **Completion**: Loop completes and trajectory is saved
-5. **Rule Trigger**: Rules can spawn agent tasks
-
-### Debugging Agentic E2E Failures
-
-```bash
-# Check loop state
-nats kv get AGENT_LOOPS <loop_id>
-
-# Check trajectory
-nats kv get AGENT_TRAJECTORIES <loop_id>
-
-# View mock LLM logs
-docker logs mock-llm
-
-# View agentic component logs
-docker logs semstreams-agentic-app 2>&1 | grep agentic
-```
-
-### Common Issues
-
-| Issue | Cause | Fix |
-|-------|-------|-----|
-| Loop never starts | Task message not published | Check rule trigger conditions |
-| Tool not found | Executor not registered | Verify tool registration in init() |
-| Model timeout | Mock LLM not responding | Restart mock-llm container |
-| State stuck | Pending tools never resolve | Check agentic-tools logs |
+- Is this the lowest sufficient tier?
+- If it creates a container, which real service semantic requires it?
+- Are all mutable resources isolated, including consumers and ObjectStores?
+- Does readiness observe facts in order rather than predict host state?
+- Are waits causal, bounded, and diagnostic?
+- Do setup and test I/O contexts derive from `t.Context()`, with independent bounded contexts reserved for cleanup?
+- Is cleanup single-owner, bounded, and observable?
+- Does the test stay within wall-clock, container, and concurrency budgets?
+- Is any exception narrow, measured, approved, and expiring?
 
 ## Related Documentation
 
-- [E2E Tests](02-e2e-tests.md) - End-to-end testing
-- [Agentic Quickstart](../basics/07-agentic-quickstart.md) - Getting started with agents
-- [Troubleshooting](../operations/02-troubleshooting.md) - Common issues
+- [natsclient Test Helpers](../operations/23-natsclient-test-helpers.md) — Docker-backed NATS implementation patterns
+- [End-to-End Testing](02-e2e-tests.md) — deployed-stack evidence and tier commands
+- [Contract Testing](04-contract-testing.md) — cross-package contract checks
+- [NATS Request and Retry](../operations/07-nats-request-retry.md) — classified request/reply behavior

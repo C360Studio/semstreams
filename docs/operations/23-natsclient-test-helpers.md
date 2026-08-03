@@ -1,262 +1,290 @@
-# natsclient Test-Client Helpers — Gateway Integration Test Patterns
+# natsclient Test-Client Helper Patterns
 
-When you're writing an integration test for a component that talks to
-NATS — request/reply, JetStream stream, KV bucket, ObjectStore — reach
-for `natsclient.NewTestClient(t, opts...)` and the patterns below
-rather than rolling local fakes. Gateways (semconnect, future CS API
-hosts) and sister-repo components have re-derived the same setup
-shapes enough times that gh#173 made it an explicit ask; this page is
-the canonical answer.
+This page shows how to use the SemStreams NATS test substrate. The normative rules for test placement, container
+justification, isolation, readiness, cleanup, budgets, parallelism, and exceptions live in the
+[Testing Policy](../contributing/01-testing.md). If an example here conflicts with that policy, the policy wins.
 
-## The substrate
+## Decide Before Starting Docker
 
-`natsclient.NewTestClient(t, opts...)` spins up a NATS 2.12-alpine
-container via testcontainers, returns a `*TestClient` with a connected
-`*natsclient.Client`, and registers `t.Cleanup` to tear the container
-down. Options compose:
+Use `natsclient.NewTestClient` only when the assertion depends on real NATS or JetStream behavior, such as KV history
+or watches, stream delivery, durable consumers, ObjectStore, persistence, or the production request/reply wire.
 
-```go
-import "github.com/c360studio/semstreams/natsclient"
+Keep validation, mapping, state-machine, retry-policy, and time-calculation tests in process. A component talking to
+NATS in production does not by itself justify a container in every test.
 
-// Plain core NATS
-tc := natsclient.NewTestClient(t)
-
-// JetStream
-tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
-
-// JetStream + KV
-tc := natsclient.NewTestClient(t, natsclient.WithKV())
-
-// JetStream + KV + pre-created buckets
-tc := natsclient.NewTestClient(t,
-    natsclient.WithKVBuckets("ENTITY_STATES", "AGENT_LOOPS"),
-)
-
-// JetStream + KV + pre-created streams
-tc := natsclient.NewTestClient(t,
-    natsclient.WithStreams(natsclient.TestStreamConfig{
-        Name:     "GRAPH_INGEST",
-        Subjects: []string{"graph.mutation.>"},
-    }),
-)
-
-// Test isolation: per-test bucket prefix
-tc := natsclient.NewTestClient(t,
-    natsclient.WithKV(),
-    natsclient.WithBucketPrefix(t.Name()+"_"),
-)
-
-// Run with: go test -tags=integration -race ./your-pkg/...
-```
-
-`tc.Client` is the production `*natsclient.Client` — pass it to your
-component constructor exactly as production main.go would. Build-tag
-your test file `//go:build integration` so the unit-test layer stays
-Docker-free.
-
-## Pattern: request/reply with classified error headers
-
-Post-#93, the canonical request shape is `RequestClassified` /
-`ClassifyReply`. Test handlers should mimic the production shape so
-your component's caller-side classification logic actually exercises.
+Every Docker-backed file MUST carry the integration constraint and naming convention:
 
 ```go
 //go:build integration
 
 package mypkg
+```
 
-import (
-    "context"
-    "encoding/json"
-    "testing"
+Run the full suite through the repository task:
 
-    "github.com/c360studio/semstreams/natsclient"
-    "github.com/c360studio/semstreams/pkg/errs"
-    "github.com/stretchr/testify/require"
+```bash
+task test:integration
+```
+
+For a focused package, pass the selector to the canonical runner:
+
+```bash
+scripts/run-integration-tests.sh ./path/to/package/...
+```
+
+Do not use direct `go test -tags=integration` commands. Both full and focused runs need the runner's host lock, image
+preflight, Ryuk policy, `-race`, `-failfast`, timeout, and fresh-count flags.
+
+## Canonical Runner Behavior
+
+The runner acquires the fixed host lock `/tmp/semstreams-integration.lock` before any Docker operation. Contention
+fails immediately by default. Set `SEMSTREAMS_INTEGRATION_LOCK_WAIT_SECONDS` to an integer from 1 through 3600 only
+when the caller deliberately accepts that bounded wait; lock diagnostics identify the current owner.
+
+Once it holds the lock, the runner verifies Docker and inspects the pinned `nats:2.14-alpine` image. It uses a cached
+copy without pulling and pulls only if the exact tag is missing. Ordinary test execution does not refresh an existing
+image. Set `SEMSTREAMS_INTEGRATION_REFRESH_IMAGE=1` for a deliberate refresh. The canonical runner performs that pull
+under the host lock and bounds it to five minutes.
+
+The runner sets `TESTCONTAINERS_RYUK_DISABLED=false`, while explicit helper cleanup remains primary. It invokes Go with
+`-race -failfast -tags=integration -timeout=20m -count=1` and does not override Go's package parallelism. Because the
+`integration` tag is additive, the default `./...` selection runs the unit and integration-tagged tests together once;
+CI does not run a duplicate untagged unit lane first.
+
+Go's `-timeout=20m` applies independently to each package; it does not bound the local aggregate suite. Local callers
+may interrupt an aggregate run. CI's 25-minute outer timeout supplies the whole-job and process-tree bound, including
+Docker preflight and cleanup. The per-package timeout is transitional, not a per-test budget; the normative measured
+budgets remain in the testing policy.
+
+## The Canonical Substrate
+
+`natsclient.NewTestClient(t, opts...)` starts the repository-pinned NATS image through testcontainers, connects a
+production `*natsclient.Client`, and registers test cleanup. Construct one client with the options the test needs;
+options compose on that single instance:
+
+```go
+tc := natsclient.NewTestClient(t,
+    natsclient.WithKVBuckets("ENTITY_STATES", "AGENT_LOOPS"),
+    natsclient.WithStreams(natsclient.TestStreamConfig{
+        Name:     "GRAPH_EVENTS",
+        Subjects: []string{"graph.>"},
+    }),
 )
+```
 
-func TestComponent_QueryHandler(t *testing.T) {
+Use no options when the test needs only core NATS, or only `WithJetStream` when it needs JetStream without pre-created
+resources. `WithKV`, `WithKVBuckets`, and `WithStreams` enable JetStream as needed. `WithFileStorage` is for tests whose
+volume would exceed memory-backed limits; it requires a resource-budget explanation. The default container starts and
+exposes only 4222/tcp, and `TestClient.MonitoringURL` is empty. A test that scrapes `/varz` or another NATS monitoring
+endpoint must add `WithMonitoring()`; that option starts `--http_port 8222`, exposes and requires 8222/tcp, and returns
+the usable mapped URL.
+
+Callers MUST NOT import testcontainers, start or replace a container, or resolve Docker host ports themselves. The
+canonical substrate owns those operations so readiness and cleanup fixes apply everywhere. It normally starts once.
+Its only sequential replacement follows a 10-second required-port observation budget in which at least one successful
+Docker Inspect snapshot showed a configured required port absent, the parent context remains live, and cleanup of the
+failed attempt succeeds. The configured set is 4222/tcp by default and adds 8222/tcp only with `WithMonitoring()`;
+absence of an unconfigured port is ignored. If every Inspect fails, it does not replace the attempt. It starts at most
+one replacement, never has two live containers, and never retries any other setup or cleanup failure.
+
+## Basic Integration Shape
+
+Derive I/O contexts from the test and keep the deadline narrower than the test budget:
+
+```go
+func TestIntegration_ComponentPublishes(t *testing.T) {
+    ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+    t.Cleanup(cancel)
+
+    tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
+    component := NewComponent(tc.Client)
+
+    require.NoError(t, component.Start(ctx))
+    t.Cleanup(func() {
+        require.NoError(t, component.Stop(5*time.Second))
+    })
+
+    require.NoError(t, component.Publish(ctx, payload))
+    require.EventuallyWithT(t, func(collect *assert.CollectT) {
+        got, err := readPublishedState(ctx, tc.Client)
+        assert.NoError(collect, err)
+        if err == nil {
+            assert.Equal(collect, want, got)
+        }
+    }, 5*time.Second, 50*time.Millisecond)
+}
+```
+
+Prefer a component-ready channel, subscription confirmation, or completion callback over polling. Bounded observation
+is acceptable only when the external service exposes no causal signal. It MUST report the last value or error when it
+times out.
+
+## Request/Reply With Classified Errors
+
+Test the same classified wire used by production callers:
+
+```go
+func TestIntegration_QueryRejectsMissingID(t *testing.T) {
+    ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+    t.Cleanup(cancel)
+
     tc := natsclient.NewTestClient(t)
-    ctx := context.Background()
-
-    // Stub responder. ReplyError stamps the classified header; the
-    // production caller side reads it via ClassifyReply.
     _, err := tc.Client.SubscribeForRequests(ctx, "mypkg.query.entity",
         func(_ context.Context, data []byte) ([]byte, error) {
-            var req QueryRequest
-            require.NoError(t, json.Unmarshal(data, &req))
-            if req.EntityID == "" {
+            var request QueryRequest
+            if err := json.Unmarshal(data, &request); err != nil {
+                return natsclient.ReplyError(errs.Invalid("invalid request"))
+            }
+            if request.EntityID == "" {
                 return natsclient.ReplyError(errs.Invalid("entity_id is required"))
             }
-            return json.Marshal(QueryResponse{Entity: ...})
+            return json.Marshal(QueryResponse{Entity: loadEntity(request.EntityID)})
         })
     require.NoError(t, err)
 
-    // Drive your component through its public API. Internally it
-    // calls natsclient.RequestClassified + ClassifyReply on the same
-    // subject; classification routes back through pkg/errs sentinels.
-    result, err := component.QueryEntity(ctx, "")
+    _, err = component.QueryEntity(ctx, "")
     require.True(t, errs.IsInvalid(err))
 }
 ```
 
-For new code, prefer `RequestClassified` over the legacy bare-`Request`
-path. The dual-encoding window from gh#93 Phase 1+2+3 stays open until
-Phase 4 (gh#161) drops the compat shim — write new tests to the
-post-Phase-4 shape so they don't need to change.
+Subscribe before publishing or requesting unless the test specifically proves retry behavior. A retry regression MUST
+observe a real first-attempt signal or use an injected retry hook or clock. It MUST NOT sleep in the hope that an
+attempt occurred.
 
-## Pattern: JetStream stream + KV bucket setup
+Use `RequestClassified` and `ClassifyReply` for new mutation and error-path tests. See
+[NATS Request and Retry](07-nats-request-retry.md).
 
-Components that own a stream-and-watch pair need both pre-created
-before the component starts. `WithStreams` + `WithKVBuckets` compose
-cleanly:
+## KV, Stream, and ObjectStore Isolation
+
+A fresh per-test container permits fixed production resource names without cross-test pollution. This is the default
+when the component owns names such as `ENTITY_STATES` or `GRAPH_EVENTS`.
+
+When the production API accepts names, derive all related resources from one per-test namespace:
 
 ```go
-func TestComponent_StreamConsumer(t *testing.T) {
-    tc := natsclient.NewTestClient(t,
-        natsclient.WithKVBuckets("ENTITY_STATES"),
-        natsclient.WithStreams(natsclient.TestStreamConfig{
-            Name:     "EVENTS",
-            Subjects: []string{"events.>"},
-        }),
-    )
-    ctx := context.Background()
-
-    comp := mypkg.NewComponent(tc.Client)
-    require.NoError(t, comp.Start(ctx))
-    t.Cleanup(func() { comp.Stop(0) })
-
-    // Publish to the stream; the component's JetStream consumer
-    // picks it up and writes to ENTITY_STATES.
-    payload := buildBaseMessage(t, ...)
-    require.NoError(t, tc.Client.PublishToStream(ctx, "events.entity", payload))
-
-    // Assert on KV state via the test client's GetKVBucket helper —
-    // it applies the bucket prefix automatically if you set one.
-    bucket, err := tc.Client.GetKeyValueBucket(ctx, "ENTITY_STATES")
-    require.NoError(t, err)
-    require.Eventually(t, func() bool {
-        entry, err := bucket.Get(ctx, "some.entity.id")
-        return err == nil && entry != nil
-    }, 5*time.Second, 50*time.Millisecond, "entity should land in ENTITY_STATES")
-}
+namespace := testNamespace(t) // Package-local, tested sanitizer plus a run-unique suffix.
+tc := natsclient.NewTestClient(t,
+    natsclient.WithKV(),
+    natsclient.WithBucketPrefix(namespace),
+)
+subject := namespace + "events.entity"
+consumer := namespace + "entity-reader"
 ```
 
-`require.Eventually` with explicit timeout + poll is the load-bearing
-pattern. Don't use `time.Sleep` to wait for async wires — flake risk.
+The namespace MUST cover streams, subjects, consumers, ObjectStores, and object keys as well as KV buckets. Do not use
+a prefix when doing so would stop the test from exercising fixed production names; use a fresh container instead.
 
-## Pattern: ObjectStore for StorageRef-backed payloads
-
-ObjectStore tests need JetStream enabled and the bucket created via
-the same client. There's no `WithObjectStore` option today — call
-`CreateObjectStore` on the client directly:
+Create ObjectStore through the production client with a test-owned name when configuration permits:
 
 ```go
-func TestComponent_StorageRef(t *testing.T) {
-    tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
-    ctx := context.Background()
-
-    // Production-shape: object-store bucket name comes from config.
-    osCfg := natsclient.ObjectStoreConfig{
-        Bucket:      "csapi-artifacts",
-        Description: "CS API artifact entities (gh#171)",
-    }
-    os, err := tc.Client.CreateObjectStore(ctx, osCfg)
-    require.NoError(t, err)
-
-    // Store a payload; the storage reference is what flows on triples.
-    ref, err := storage.PutContent(ctx, os, "swe/schemas/temp-celsius-v1.json",
-        []byte(`{"type":"DataRecord", ...}`),
-        storage.ContentType("application/swe+json"))
-    require.NoError(t, err)
-
-    // Drive your component; it reads the storage ref and fetches.
-    result, err := comp.ReadArtifact(ctx, ref)
-    require.NoError(t, err)
-    require.Equal(t, "DataRecord", result.Type)
-}
-```
-
-## Pattern: lifecycle-safe startup (subscriber-ready-before-publish)
-
-The gh#170 cold-start race illustrates the discipline: if you publish
-before the subscriber is ready, NATS returns "no responders." There
-are two correct patterns depending on what you control.
-
-**A. You control the subscriber.** Block until `SubscribeForRequests`
-returns, THEN publish:
-
-```go
-_, err := tc.Client.SubscribeForRequests(ctx, "subject", handler)
-require.NoError(t, err)  // subscription is live before this returns
-
-// Now safe to publish/request on this subject.
-resp, err := tc.Client.Request(ctx, "subject", payload, 5*time.Second)
-```
-
-**B. You're testing retry resilience (gh#170 style).** Fire the
-publish first, sync on a "started" channel inside the goroutine,
-small sleep so the first attempt definitely fails, THEN subscribe:
-
-```go
-createCh := make(chan error, 1)
-createStarted := make(chan struct{})
-go func() {
-    close(createStarted)
-    createCh <- mgr.Create(ctx, entity)  // emits via RequestWithRetry
-}()
-<-createStarted
-time.Sleep(50 * time.Millisecond)  // let the first emit attempt fail
-
-// Now subscribe the responder. Retry budget converges on the next attempt.
-_, err := tc.Client.SubscribeForRequests(ctx, subject, handler)
+store, err := tc.Client.CreateObjectStore(ctx, natsclient.ObjectStoreConfig{
+    Bucket:      namespace + "ARTIFACTS",
+    Description: "integration artifacts",
+})
 require.NoError(t, err)
-
-require.NoError(t, <-createCh)
 ```
 
-Pattern B is the regression-test shape for gh#170 — see
-`pkg/lifecycle/manager_integration_test.go` for the canonical example.
+## Readiness Order
 
-## Cleanup: it's automatic, but know the boundaries
+The canonical substrate MUST establish readiness in this order:
 
-`NewTestClient(t)` registers `t.Cleanup` to terminate the container
-and close the client. You don't need defer/Cleanup yourself unless
-you're managing additional resources (component lifecycle, file
-handles).
+1. observe the NATS process's internal ready signal;
+2. resolve the configured required mappings from one Docker Inspect snapshot per poll under one cancellable 10-second
+   budget;
+3. connect the NATS client under its own deadline; and
+4. wait for the component or subscription signal required by the assertion.
 
-For long-running test suites (testify `suite.Suite`), use the same
-container across tests via `t.Helper`-aware setup, but reset state
-between tests by purging KV buckets:
+Do not copy a `ForListeningPort`, `ForHTTP`, `Host`, or `MappedPort` sequence into a test. Host-port inspection during
+container startup adds Docker API pressure and predicts a fact the daemon owns. A mapped-port retry that can exceed its
+documented budget because one inspect call blocks is not truly bounded; the operation itself must receive the bounded
+context.
+
+If the helper violates this order, fix the substrate rather than adding a sleep or a second readiness strategy at the
+call site.
+
+## Cleanup Ownership
+
+`NewTestClient(t)` owns the NATS client and container through `t.Cleanup`. Do not add `defer tc.Terminate()`; double
+ownership makes cleanup order and failures ambiguous.
+
+Register resources that depend on NATS after creating the test client so cleanup runs in safe LIFO order:
 
 ```go
-func (s *MySuite) SetupTest() {
-    ctx := context.Background()
-    bucket, err := s.tc.Client.GetKeyValueBucket(ctx, "ENTITY_STATES")
-    s.Require().NoError(err)
-    s.Require().NoError(bucket.PurgeDeletes(ctx))
-}
+tc := natsclient.NewTestClient(t, natsclient.WithJetStream())
+
+component := NewComponent(tc.Client)
+require.NoError(t, component.Start(ctx))
+t.Cleanup(func() {
+    require.NoError(t, component.Stop(5*time.Second))
+})
 ```
 
-PR #169's commit `38af4393` reaps KV buckets between tests to keep
-consumer churn from killing the shared-container connection past
-minute one. Mirror that pattern if your suite races against
-container resource limits.
+Explicit cleanup is load-bearing even when the testcontainers Reaper is enabled. Reaper configuration MUST match
+between Task and CI. Any temporary disablement requires the exception evidence defined by the testing policy and a
+post-run check for leaked containers.
 
-## Anti-patterns
+`NewTestClient` derives setup work from `t.Context()` and applies narrower deadlines for container startup, mapped
+ports, connection, and initial resource creation. Cleanup intentionally does not derive from `t.Context()`: Go cancels
+that context before `t.Cleanup` callbacks run. Client close and container termination therefore each use a fresh,
+bounded `context.Background()` child so one blocked phase cannot consume the other's measured 10-second cleanup
+budget. This exception belongs to the canonical helper only; ordinary test I/O still derives from `t.Context()`.
 
-- **Hand-rolled `nats.Connect` in tests.** Skip the production retry/auth/TLS plumbing and you drift from production behavior. Use `NewTestClient` always.
-- **`time.Sleep` instead of `require.Eventually`** when waiting on async wire state. Sleeps are flake bait under host load; explicit polling has an explicit timeout that fails loud.
-- **Bare `Request` for mutation tests.** Use `RequestClassified` so the production error-classification path is exercised. See [07-nats-request-retry.md](07-nats-request-retry.md) for the mutation-vs-query rule.
-- **Subscribing AFTER publishing in non-retry tests.** Hidden race — passes locally, flakes under load. Subscribe first unless you're explicitly testing retry behavior.
-- **Hardcoded bucket names without prefix.** Breaks parallel test isolation. Either use `WithBucketPrefix` per test, or run tests with `t.Helper` enforcing serial container reuse.
+## Shared Containers Are an Exception
 
-## Cross-references
+`NewSharedTestClient` exists for rare package-level owners that can prove complete isolation. It is not the default for
+a large suite, and fewer startups alone are not sufficient justification.
 
-- [07-nats-request-retry.md](07-nats-request-retry.md) — when to use `RequestWithRetry` vs. bare `Request`.
-- `natsclient/test_client.go` — `NewTestClient` and option signatures.
-- `natsclient/integration_test.go` — `startNATSContainer` helper used by older tests.
-- `pkg/lifecycle/manager_integration_test.go` — Pattern B (retry-resilience) canonical example.
-- `pkg/dispatch/integration_test.go` — KV-twofer setup canonical example.
-- gh#93 — the classified-error wire shape these patterns build on.
-- gh#170 — the cold-start race Pattern B exists to regression-test.
+Before approval, document:
+
+- every mutable resource class used by the package;
+- unique naming or deterministic reset for each class;
+- how leaked subscriptions, consumers, goroutines, and files are detected;
+- why fresh containers are materially worse for this package; and
+- measured behavior under the intended parallelism.
+
+Do not pass a fabricated `&testing.T{}` to `NewTestClient`. An approved `TestMain` uses `NewSharedTestClient`, preserves
+the test exit code, and terminates the shared owner on every reachable path.
+
+## Failure Evidence
+
+A helper setup failure identifies its attempt, phase, original cause, parent-context state, container ID when one was
+returned, and any cleanup cause. A required-port observation failure additionally identifies total observation
+attempts, shared mapping budget, elapsed time, the last successful observation's attempt and missing ports when one
+exists, and the last Inspect error and its attempt when one exists. Ports outside the configured required set do not
+participate in this decision. A polling timeout must include the last observed state, not only
+`condition was never satisfied`.
+
+When diagnosing paid or long-running E2E work, also follow the active-polling rules in `AGENTS.md`: inspect
+authoritative state every 30–60 seconds and abort once a wedge is proven.
+
+## Anti-Patterns
+
+- Starting testcontainers outside the canonical `natsclient` helper.
+- Running Docker-backed behavior from an untagged unit file.
+- Having more than one live NATS container in a top-level test without approval.
+- Starting a replacement outside the canonical helper's exact mapped-port recovery policy.
+- Sharing a container because it appears faster without proving state isolation.
+- Waiting with `time.Sleep`, including retry and cleanup tests.
+- Using `context.Background()` for test I/O that can block.
+- Hardcoding or predicting host ports.
+- Adding both helper cleanup and direct `Terminate` calls.
+- Raising a timeout without evidence explaining the regression.
+
+## Enforcement Status
+
+CI now runs AST guards for untagged container starts, direct container/readiness APIs, fabricated `testing.T` values,
+and integration sleeps. Fabricated `testing.T`, untagged container starts, and direct container APIs are zero-debt
+categories and cannot be baselined. The only baseline entries are 305 exact legacy integration sleeps; that baseline
+is manually maintained and shrink-only. Positive and negative fixtures protect every category.
+
+Naming, exception expiry, duration, container counts, complete resource naming, and general context usage remain
+review-enforced. A helper-specific structural test, if present, covers only the canonical helper's context contract.
+See the policy's
+[Enforcement Status and Backlog](../contributing/01-testing.md#enforcement-status-and-backlog).
+
+## Cross-References
+
+- [Testing Policy](../contributing/01-testing.md) — canonical rules and budgets
+- [End-to-End Testing](../contributing/02-e2e-tests.md) — deployed-stack evidence
+- [NATS Request and Retry](07-nats-request-retry.md) — classified request/reply behavior
+- `natsclient/test_client.go` — helper implementation and options

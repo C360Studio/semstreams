@@ -1,19 +1,29 @@
 package graphquery
 
 import (
+	"log/slog"
 	"testing"
+	"time"
 
 	"github.com/c360studio/semstreams/component"
 )
 
 // createTestComponentForLifecycle creates a test instance for lifecycle testing.
 func createTestComponentForLifecycle() component.LifecycleComponent {
-	// Use the existing createTestComponent helper which creates a component
-	// with mock NATS client.
 	// The mock client returns StatusConnected, which allows Start() to proceed
 	// through initialization without requiring real NATS infrastructure.
-	comp := createTestComponent(&testing.T{})
-	return comp
+	config := DefaultConfig()
+	config.ApplyDefaults()
+	config.StartupAttempts = 1
+	config.StartupInterval = time.Millisecond
+	config.RecheckInterval = time.Hour
+
+	return &Component{
+		natsClient:       newMockNATSClient(),
+		config:           config,
+		logger:           slog.Default(),
+		lastMetricsReset: time.Now(),
+	}
 }
 
 // TestGraphQuery_ComprehensiveLifecycle runs the complete lifecycle test suite.

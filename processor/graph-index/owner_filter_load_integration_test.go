@@ -118,6 +118,7 @@ func TestIntegration_OwnerFilterLoadHarness(t *testing.T) {
 	testClient := natsclient.NewTestClient(t,
 		natsclient.WithKV(),
 		natsclient.WithFileStorage(),
+		natsclient.WithMonitoring(),
 		natsclient.WithNATSVersion(ownerLoadNATSServer),
 		natsclient.WithTestTimeout(15*time.Second),
 	)

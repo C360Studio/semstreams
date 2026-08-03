@@ -148,6 +148,7 @@ func runPredicateLayoutSmoke(t *testing.T, codec predicateSmokeCodec, profile pr
 	testClient := natsclient.NewTestClient(t,
 		natsclient.WithKV(),
 		natsclient.WithFileStorage(),
+		natsclient.WithMonitoring(),
 		natsclient.WithNATSVersion(predicateSmokeNATSServer),
 		natsclient.WithTestTimeout(15*time.Second),
 	)

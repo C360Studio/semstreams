@@ -4,6 +4,7 @@ package graphindextemporal
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -15,19 +16,25 @@ import (
 var sharedLifecycleNATSClient *natsclient.TestClient
 
 func TestMain(m *testing.M) {
-	// Setup shared NATS client for all integration tests
-	t := &testing.T{}
-	sharedLifecycleNATSClient = natsclient.NewTestClient(t,
+	var err error
+	sharedLifecycleNATSClient, err = natsclient.NewSharedTestClient(
 		natsclient.WithKV(),
 		natsclient.WithKVBuckets(graph.BucketEntityStates),
 	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create shared lifecycle NATS client: %v\n", err)
+		os.Exit(1)
+	}
 
 	// Run tests
 	code := m.Run()
 
 	// Cleanup
-	if sharedLifecycleNATSClient != nil {
-		sharedLifecycleNATSClient.Terminate()
+	if err := sharedLifecycleNATSClient.Terminate(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to clean up shared lifecycle NATS client: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
 	}
 	os.Exit(code)
 }

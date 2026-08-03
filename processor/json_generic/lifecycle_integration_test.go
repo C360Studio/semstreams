@@ -14,8 +14,11 @@ import (
 // Uses the shared NATS client from json_generic_integration_test.go TestMain.
 func createTestJSONGenericComponent() component.LifecycleComponent {
 	config := jsongeneric.DefaultConfig()
+	if sharedNATSClient == nil {
+		panic("shared NATS client not initialized")
+	}
 	deps := component.Dependencies{
-		NATSClient: getSharedNATSClient(&testing.T{}),
+		NATSClient: sharedNATSClient,
 	}
 
 	configJSON, err := json.Marshal(config)
@@ -28,7 +31,11 @@ func createTestJSONGenericComponent() component.LifecycleComponent {
 		panic("failed to create component: " + err.Error())
 	}
 
-	return comp.(component.LifecycleComponent)
+	lifecycleComponent, ok := comp.(component.LifecycleComponent)
+	if !ok {
+		panic("JSON generic processor does not implement component.LifecycleComponent")
+	}
+	return lifecycleComponent
 }
 
 // TestJSONGeneric_ComprehensiveLifecycle runs the complete lifecycle test suite

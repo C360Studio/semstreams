@@ -4,6 +4,7 @@ package graphgateway
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
 
@@ -14,11 +15,18 @@ import (
 var sharedLifecycleNATSClient *natsclient.TestClient
 
 func TestMain(m *testing.M) {
-	t := &testing.T{}
-	sharedLifecycleNATSClient = natsclient.NewTestClient(t, natsclient.WithKV())
+	var err error
+	sharedLifecycleNATSClient, err = natsclient.NewSharedTestClient(natsclient.WithKV())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "failed to create shared lifecycle NATS client: %v\n", err)
+		os.Exit(1)
+	}
 	code := m.Run()
-	if sharedLifecycleNATSClient != nil {
-		sharedLifecycleNATSClient.Terminate()
+	if err := sharedLifecycleNATSClient.Terminate(); err != nil {
+		fmt.Fprintf(os.Stderr, "failed to clean up shared lifecycle NATS client: %v\n", err)
+		if code == 0 {
+			code = 1
+		}
 	}
 	os.Exit(code)
 }
