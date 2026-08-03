@@ -7,7 +7,8 @@ If the call writes state (mutation) AND is idempotent on the responder side:
   → use RequestWithRetry with DefaultRetryConfig
 
 If the call writes state and is NOT idempotent (create-or-fail, claim):
-  → one classified attempt per delivery; re-send ONLY on IsNoResponders
+  → one classified attempt per delivery; re-send ONLY on proofs of
+    non-delivery: IsNoResponders, ErrCircuitOpen, ErrNotConnected
   → every other failure is an UNKNOWN outcome — surface it (gh#861)
 
 If the call reads state (query) in STEADY STATE (responder already up):
@@ -134,18 +135,35 @@ than the responder's: `pkg/lifecycle` uses 5s against graph-ingest's 30s
 the handler is still working, and `RequestWithRetry` re-sends on **any** non-nil
 error including a plain timeout.
 
-So for a **non-idempotent mutation**, retry only the class that proves
-non-delivery — `natsclient.IsNoResponders` — and surface everything else as an
-unknown outcome:
+So for a **non-idempotent mutation**, re-send only on failures that PROVE the
+request never reached a handler, and surface everything else as an unknown
+outcome. Three qualify, and the two client-side ones are easy to miss:
+
+| failure | why it proves non-delivery |
+|---|---|
+| `natsclient.IsNoResponders(err)` | the server reports nothing was subscribed |
+| `errors.Is(err, natsclient.ErrCircuitOpen)` | the client's breaker refused to send |
+| `errors.Is(err, natsclient.ErrNotConnected)` | there was no connection to send on |
 
 ```go
 // NON-IDEMPOTENT MUTATION (create-or-fail): one classified attempt per delivery,
-// re-sent ONLY when the server says nothing was subscribed.
+// re-sent ONLY on the three proofs of non-delivery above.
 respBody, err := c.RequestClassified(ctx, createSubject, body, timeout)
-if err != nil && !natsclient.IsNoResponders(err) {
+if err != nil && !provesNonDelivery(err, attempt) {
     return nil, err // outcome unknown — the caller reads authoritative state
 }
 ```
+
+**Do not drop the two client-side sentinels** (gh#861 review). `RequestClassified`
+goes through `RequestWithHeaders`, which re-checks connection and breaker state on
+**every** call, whereas `RequestWithRetry`'s loop checks them **once at entry**. A
+predicate that only asks `IsNoResponders` therefore aborts on a breaker that opens
+*during* the loop and throws away the rest of the cold-start budget. That is
+reachable: `circuitThreshold` is 15 **consecutive** failures on the **shared**
+client, and one cold-start create can burn 11 — so two concurrent creates trip it
+partway through the second. Fast-failing when the breaker is **already** open on
+the first attempt is fine and matches the retry loop's entry check; aborting on one
+that opens mid-flight is the regression.
 
 Two things this deliberately accepts:
 
@@ -157,7 +175,7 @@ Two things this deliberately accepts:
 - **Cold-start protection narrows.** Whether an absent responder fast-fails as
   `ErrNoResponders` or burns the deadline is server-config dependent — measured
   on the repo-pinned `nats:2.14-alpine` it fast-fails in well under a
-  millisecond, and `pkg/lifecycle` keeps its ~13s budget for that class. On a
+  millisecond, and `pkg/lifecycle` keeps its 15s budget for that class. On a
   server that does **not** fast-fail, a create issued before its responder
   subscribes fails honestly instead of converging. An honest failure beats a
   wrong answer; a *correct* answer needs request-scoped idempotency on the

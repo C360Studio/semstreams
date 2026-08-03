@@ -36,7 +36,7 @@ then guessed about** (all verified in code):
 | lifecycle create per-attempt deadline | **5 s** (`pkg/lifecycle/manager.go`) |
 | graph-ingest handler deadline | **30 s** (`natsclient.DefaultRequestHandlerTimeout`) |
 | retry-loop continue condition | **any** non-nil error, including a plain timeout (`natsclient.requestMsgWithRetry`) |
-| retries | 10, ~13 s cumulative |
+| retries | 10, 15 s cumulative |
 
 The client gives up six times sooner than the handler, then re-sends a **non-idempotent
 create** against a handler that may still be executing the first one — and the second
@@ -52,9 +52,18 @@ provably-pre-commit class, the only class a create retry is ever justified for.
 - **Delete the ownership reconstruction.** `Manager.committedByThisRequest` and its call site
   are removed; an `ErrAlreadyExists` from the emitter is reported as a conflict. No nonce, no
   new correlation field, no ADR — this increment adds no surface.
-- **Narrow `create`'s retry to the provably-pre-commit class.** Only
-  `natsclient.IsNoResponders` re-sends; the ~13 s gh#170 cold-start budget is preserved for
-  it. Every other transport failure is returned as an unknown outcome without a re-send.
+- **Narrow `create`'s retry to failures that PROVE non-delivery.** Three qualify, and all
+  three are decided before the request reaches the wire: `natsclient.IsNoResponders` (the
+  server reports nothing subscribed), `ErrCircuitOpen` and `ErrNotConnected` (the client
+  refused to send). Every other transport failure is returned as an unknown outcome without a
+  re-send. The 15 s gh#170 cold-start budget is preserved for the permitted classes.
+  - The two client-side sentinels are not decoration: a per-attempt `RequestClassified`
+    re-checks connection and breaker state on **every** call, where the replaced loop checked
+    once at entry. `circuitThreshold` is 15 consecutive failures on the *shared* client and one
+    cold-start create burns up to 11, so two concurrent creates trip it partway through the
+    second — and without them the loser would abandon its remaining cold-start budget, which is
+    the gh#170 failure re-entering through this fix. An already-open breaker still fails fast on
+    the first attempt, matching the replaced loop's entry check.
 - **`update` and `delete` keep the wider retry, deliberately.** `update`'s CAS surfaces a
   duplicate delivery as `revision_mismatch` into `Transition`'s re-read loop, and `delete` is
   idempotent at the handler. `Transition`'s cold-start protection genuinely depends on
@@ -83,11 +92,18 @@ enumerates four unanswered questions about its shape. A shape with four open que
 unstable to document, therefore too unstable to export, therefore too unstable to build into
 a bug fix. Filed as engine work with its consumers named: **gh#869**.
 
-Three further follow-ups are filed rather than folded in: **gh#870** (the attach path carries
+Four further follow-ups are filed rather than folded in: **gh#870** (the attach path carries
 the mirror-image bug — a real fence that errs conservative and invents a 409 for a birth this
-request just made), **gh#871** (the two other content-equality-as-ownership sites, one of them
-spec-blessed), and **gh#872** (the e2e coverage gap — no tier fires concurrent lifecycle
-creates, and the 409 above is a live behavior change no tier observes).
+request just made; recorded as a deviation in the spec delta, not only here, because the
+proposal is archived and the delta is not), **gh#871** (the two other
+content-equality-as-ownership sites, one of them spec-blessed), **gh#872** (the e2e coverage
+gap — no tier fires concurrent lifecycle creates, and the 409 above is a live behavior change
+no tier observes), and **gh#874** (this is now the FIFTH hand-rolled "retry only what proves
+non-delivery" loop — three in `pkg/projection/mutation_client.go`, one in
+`processor/gated-dag`, one added here. `natsclient` offers no primitive for the narrow policy
+and `pkg/projection`'s helpers are unexported and welded to its receipt model, so the copy was
+not avoidable — but each copy gets to be wrong about the class boundary independently, which
+is exactly what this change's review found).
 
 This change **does not unblock gh#689**. `pkg/projection/mutation_client.go` returns
 `CommitVerified` for two concurrent identical claimers and
@@ -97,8 +113,10 @@ surface.
 
 ## Impact
 
-- **Affected specs:** `lifecycle` (modified requirement on committed births; new requirement
-  on when a creation may be re-sent).
+- **Affected specs:** `lifecycle` — the committed-birth requirement is REMOVED and re-ADDED
+  under a title its own body no longer contradicts, carrying the ownership, concurrency and
+  unknown-outcome rules plus the recorded attach-branch deviation; and a new requirement on
+  when a creation may be re-sent.
 - **Affected code:** `pkg/lifecycle/manager.go`, `pkg/lifecycle/graph_emit.go`,
   `agentic/agentrun/agentrun.go` (comment only).
 - **Not affected:** `pkg/projection`, `graph/`, `natsclient`'s exported surface,

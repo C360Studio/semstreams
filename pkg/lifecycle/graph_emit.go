@@ -134,7 +134,7 @@ var lifecycleEmitRetryConfig = natsclient.RetryConfig{
 // is ErrEmitFailed. The per-consumer body-unmarshal + ErrorCode switch is
 // gone (it collapses into the framework's ClassifyReply).
 //
-// No outer context.WithTimeout: the retry budget (~13s) controls
+// No outer context.WithTimeout: the retry budget (15s) controls
 // total duration; each retry attempt is bounded internally by
 // g.timeout. Capping with an outer 5s deadline would truncate the
 // retry budget on cold-start paths — the very class gh#170 captures.

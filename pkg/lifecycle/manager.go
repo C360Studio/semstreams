@@ -565,6 +565,25 @@ func (m *Manager) GetRaw(ctx context.Context, entityID string) (*graph.EntitySta
 //
 // Stamps the initial phase + all non-zero projection-mapped fields
 // as triples in one atomic AddTriplesBatch via graph-ingest.
+//
+// THREE OUTCOMES, and the third is the one callers get wrong (gh#861):
+//
+//   - nil — this request's write committed. Exactly one concurrent Create of
+//     an ID gets this; the others get ErrAlreadyExists.
+//   - ErrAlreadyExists — SOMEONE committed that birth. Treat it as "the
+//     instance exists", not as "I created it": Create cannot tell you whether
+//     the writer was you, and deliberately does not guess by re-reading (the
+//     re-read that used to live here handed the LOSER of a concurrent create a
+//     success, because two writers build identical initial state).
+//   - any other error — the outcome is UNKNOWN, not failed. A create whose
+//     single delivery timed out may well have committed: the per-attempt
+//     deadline here is 5s while the graph-ingest handler's is 30s. Nothing is
+//     re-sent, because re-sending a non-idempotent create races the request's
+//     own in-flight self. A caller that must know reads authoritative state
+//     (Get) rather than retrying blind.
+//
+// Callers wanting idempotent "ensure it exists" semantics should branch on
+// ErrAlreadyExists and read the instance back — see agentic/agentrun.Mint.
 func (m *Manager) Create(ctx context.Context, initial Participant) error {
 	_, err := m.createWithSource(ctx, initial, TransitionSourceFramework)
 	return err
@@ -753,6 +772,18 @@ func (m *Manager) createWithRegistration(ctx context.Context, reg *registration,
 			// predicate produces one, and reporting that as "already
 			// lifecycle-managed" is a false answer on a public route. Re-read
 			// and let the phase triple decide.
+			//
+			// KNOWN GAP (gh#870), stated where it lives rather than only in the
+			// issue: this re-read is the same shape gh#861 removed from the
+			// create branch above — it reconstructs from stored state and cannot
+			// tell WHOSE phase triple it found. When the triple is the one this
+			// request just wrote (its own attach landed, the reply lost), the
+			// answer is a false 409. It errs conservative where the deleted code
+			// erred liberal, which is why it stands for now: unlike that code, it
+			// is a real fence — deleting it would call every unrelated concurrent
+			// update a duplicate birth (TestCreate_UnrelatedConcurrentUpdateIsNot
+			// ADuplicateBirth). The honest fix needs request identity, not a
+			// better comparison.
 			latest, _, reErr := m.getEntity(ctx, entityID)
 			if reErr == nil && latest != nil && hasTriple(latest.Triples, entityID, reg.workflow.PhasePredicate) {
 				return createOutcome{}, fmt.Errorf("%w: workflow=%q entity_id=%q (concurrent attach)",
@@ -1331,25 +1362,39 @@ type CreateResult struct {
 // SUCCESS via CreateResult.Degraded — never as an error, because the mutation
 // contract forbids retrying it.
 //
-// The LOST-REPLY case is no longer REACHABLE THROUGH A RETRY (gh#861): the
-// emitter re-sends a create only on "no responders", where the server reports
-// nothing was subscribed and so nothing was delivered. A create cannot observe
-// its own committed write as ErrAlreadyExists via that path, and this lane
-// therefore never reconstructs ownership from stored state — a re-read observes
-// whatever exists now, including another writer's identical concurrent birth,
-// which is how the previous attempt at closing this returned success to the
-// LOSER of a concurrent create.
+// On the ABSENT→CREATE branch the LOST-REPLY case is no longer REACHABLE
+// THROUGH A RETRY (gh#861): the emitter re-sends a create only on failures that
+// prove nothing was delivered, so a create cannot observe its own committed
+// write as ErrAlreadyExists via that path. That branch therefore never
+// reconstructs ownership from stored state — a re-read observes whatever exists
+// now, including another writer's identical concurrent birth, which is how the
+// previous attempt at closing this returned success to the LOSER of a
+// concurrent create.
 //
-// What remains open, and is stated rather than left implicit: a create whose
-// single delivery times out (lifecycle's 5s per-attempt deadline against
-// graph-ingest's 30s handler deadline) has a GENUINELY UNKNOWN outcome. It
-// surfaces as a transport error — never as ErrAlreadyExists and never as
-// success — and the caller resolves it by reading authoritative state. Closing
-// it properly needs request-scoped idempotency on the graph mutation seam
-// (graph.CreateEntityWithTriplesRequest.RequestID is echoed by graph-ingest but
-// this lane does not set it, and a claim primitive is the real answer);
-// deliberately deferred as engine work with three consumers named — gh#869,
-// tracked not forgotten.
+// TWO residuals remain open on this lane. Enumerated rather than implied,
+// because the code this replaced shipped an authoritative comment whose false
+// premise is how the defect survived review:
+//
+//  1. A create whose single delivery times out (lifecycle's 5s per-attempt
+//     deadline against graph-ingest's 30s handler deadline) has a GENUINELY
+//     UNKNOWN outcome. It surfaces as a transport error — never as
+//     ErrAlreadyExists and never as success — and the caller resolves it by
+//     reading authoritative state.
+//  2. The ATTACH branch (entity present without a phase triple) still
+//     reconstructs from stored state: on a CAS revision mismatch it re-reads
+//     once and, finding a phase triple, answers ErrAlreadyExists — which is a
+//     false 409 when the phase triple is the one THIS request just wrote. It is
+//     the mirror image of the defect gh#861 removed (that one erred liberal and
+//     invented a success; this errs conservative and invents a conflict), and it
+//     is NOT fixed here: unlike the create branch, the re-read there is a real
+//     fence that correctly refuses to call an unrelated concurrent update a
+//     duplicate birth. Tracked as gh#870.
+//
+// Closing either properly needs request-scoped idempotency on the graph
+// mutation seam (graph.CreateEntityWithTriplesRequest.RequestID is echoed by
+// graph-ingest but this lane does not set it, and a claim primitive is the real
+// answer); deliberately deferred as engine work with three consumers named —
+// gh#869, tracked not forgotten.
 func (m *Manager) CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (CreateResult, error) {
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {

@@ -39,8 +39,9 @@ type fakeEmitter struct {
 	createResponseMutator func(*graph.EntityState)
 	// createScript, when non-empty, drives create() one ATTEMPT AT A TIME:
 	// each call consumes the next entry. It replaces the old createLosesReply
-	// bool, which collapsed "committed" and "answered a failure" into a single
-	// call and so could not represent — or falsify — a retry policy at all
+	// bool, which DID commit and then answer a failure — but could answer only
+	// one hard-coded failure (ErrAlreadyExists) and could not represent a
+	// SECOND delivery, so no test built on it could falsify a re-send policy
 	// (gh#861).
 	createScript []createAttempt
 	// createCalls counts every create() delivery, scripted or not, so a test
@@ -128,23 +129,42 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.createCalls++
-	// A scripted attempt outranks the default behaviour: it is how a test says
-	// "this delivery committed and then lost its reply", which no combination of
-	// the flags below can express.
+	// A scripted attempt overrides how this delivery ANSWERS — it is how a test
+	// says "this delivery committed and then lost its reply", which no
+	// combination of the flags below can express. It does NOT override
+	// create-or-fail: the handler's atomicity is the property under test in the
+	// concurrency cases, and a fake that let a scripted success land on an
+	// existing key would be answering something production cannot answer.
 	if len(f.createScript) > 0 {
 		attempt := f.createScript[0]
 		f.createScript = f.createScript[1:]
 		if attempt.onDeliver != nil {
 			attempt.onDeliver()
 		}
-		if attempt.commit && !f.bucket.exists(req.Entity.ID) {
-			state := *req.Entity
-			state.Triples = req.Triples
-			f.bucket.put(req.Entity.ID, &state)
-		}
+		exists := f.bucket.exists(req.Entity.ID)
 		if attempt.err != nil {
+			// Scripted failure. commit says whether the write landed BEFORE the
+			// failure — the lost-reply shape — and create-or-fail still applies
+			// to whether it can land at all.
+			if attempt.commit && !exists {
+				state := *req.Entity
+				state.Triples = req.Triples
+				f.bucket.put(req.Entity.ID, &state)
+			}
 			return nil, attempt.err
 		}
+		// A scripted SUCCESS is still subject to create-or-fail: the handler
+		// cannot answer success for a key that is already there, and a re-sent
+		// create is exactly how that arises.
+		if exists {
+			return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
+		}
+		if !attempt.commit {
+			return nil, fmt.Errorf("%w: fixture error — a scripted success must commit", ErrEmitFailed)
+		}
+		state := *req.Entity
+		state.Triples = req.Triples
+		f.bucket.put(req.Entity.ID, &state)
 		stored := f.bucket.get(req.Entity.ID)
 		return &graph.CreateEntityWithTriplesResponse{
 			MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
@@ -1177,9 +1197,10 @@ func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
 // derived from the causal mutation response rather than a separate read, and
 // named that exact failure mode.
 //
-// The fake scripts ATTEMPTS rather than one collapsed call, because a policy
-// about re-sending cannot be tested by a fake that cannot represent a second
-// delivery.
+// The fake scripts ATTEMPTS rather than one hard-coded answer. Its predecessor
+// (createLosesReply) did commit and then fail — what it could not do is vary the
+// failure or represent a SECOND delivery, and a policy about re-sending cannot
+// be falsified by a fake with no second delivery to observe.
 func TestCreate_LostReplyIsNeitherADuplicateNorASuccess(t *testing.T) {
 	lostReplyTransport := fmt.Errorf("%w: NATS request to %s: context deadline exceeded",
 		ErrEmitFailed, graphSubjectCreateWithTriples)
