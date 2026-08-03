@@ -92,12 +92,14 @@ const (
 // subscription propagation latency, but the lifecycle Manager faces a
 // wider race surface (gh#170): graph-ingest may not have started yet
 // when Manager.Create / Manager.Transition fires from a fast-boot
-// path. ~13s total budget (10 retries × 200ms→2s backoff) covers
+// path. 15s total backoff budget (10 retries × 200ms→2s) covers
 // Docker cold-start times where graph-ingest's SubscribeForRequests
 // can be several seconds behind the lifecycle wire.
 //
-// Cumulative wait: 200+400+800+1600+2000+2000+2000+2000+2000+2000 ≈
-// 13s, capped per-attempt by g.timeout (default 5s).
+// Cumulative wait: 200+400+800+1600+2000+2000+2000+2000+2000+2000 =
+// 15s exactly, capped per-attempt by g.timeout (default 5s). (This
+// comment said "≈13s" from its first commit; the addends were always
+// these ten and they have always summed to 15s.)
 var lifecycleEmitRetryConfig = natsclient.RetryConfig{
 	MaxRetries:        10,
 	InitialBackoff:    200 * time.Millisecond,
@@ -170,12 +172,13 @@ func (g *graphEmitterNATS) update(ctx context.Context, req *graph.UpdateEntityWi
 // create-or-fail: ErrAlreadyExists when graph-ingest reports
 // ErrorCodeEntityExists.
 //
-// CONTRACT (gh#861): create is NOT idempotent, so it retries exactly one
-// failure class — "no responders", where the server itself reports that
-// nothing was subscribed and therefore nothing was delivered. That is the
-// provably-pre-commit class, and it is the class gh#170 actually captured
+// CONTRACT (gh#861): create is NOT idempotent, so it re-sends ONLY on
+// failures that prove the request never reached a handler — see
+// createSafeToResend for the exact set and why each qualifies. The
+// motivating member is "no responders", where the server itself reports
+// that nothing was subscribed; that is the class gh#170 captured
 // (graph-ingest's SubscribeForRequests lagging a fast-boot lifecycle
-// participant); the ~13s cold-start budget is preserved for it.
+// participant), and the 15s cold-start budget is preserved for it.
 //
 // EVERY OTHER transport failure is an UNKNOWN outcome and is returned as
 // an error without re-sending. In particular a per-attempt timeout does
@@ -227,9 +230,47 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 	return &resp, nil
 }
 
+// createSafeToResend reports whether err permits re-sending a create.
+//
+// Only failures that prove the request never reached a handler qualify — all
+// three below are decided BEFORE conn.RequestMsgWithContext is called, so no
+// bytes left the process:
+//
+//   - no responders — the server reports nothing was subscribed (gh#170's class)
+//   - circuit open — the client's own breaker refused to send
+//   - not connected — there is no connection to send on
+//
+// The attempt index separates ENTRY state from a MID-LOOP transition, which is
+// how requestMsgWithRetry behaved and what this loop must reproduce. That loop
+// evaluated connection and breaker state ONCE before its first attempt and never
+// again: an already-open breaker failed fast, while a breaker that opened during
+// the loop was ridden through. Attempt 0 here performs the identical entry check
+// (RequestClassified -> RequestWithHeaders re-runs both), so failing fast on
+// attempt 0 and continuing afterwards is PARITY with the replaced loop, not a
+// new policy — and it keeps an already-broken client from consuming a 15s budget
+// per create.
+//
+// The mid-loop transition is not hypothetical (gh#861 review): circuitThreshold
+// is 15 CONSECUTIVE failures on the SHARED client and one cold-start create
+// burns up to 11, so two concurrent creates — processor/gated-dag/executor.go
+// calls Manager.Create per node — trip the breaker partway through the second.
+// Without this the loser aborts with ErrCircuitOpen and discards its remaining
+// cold-start budget, which is exactly the gh#170 failure the budget exists to
+// prevent. The breaker self-closes about a second later (recordFailure schedules
+// testCircuit), well inside the budget.
+func createSafeToResend(err error, attempt int) bool {
+	if natsclient.IsNoResponders(err) {
+		return true
+	}
+	if attempt == 0 {
+		return false
+	}
+	return errors.Is(err, natsclient.ErrCircuitOpen) || errors.Is(err, natsclient.ErrNotConnected)
+}
+
 // requestCreateRetryingNoResponders runs the create request under
 // lifecycleEmitRetryConfig's schedule but with a retry PREDICATE:
-// only natsclient.IsNoResponders re-sends.
+// createSafeToResend.
 //
 // It cannot be RequestWithRetryClassified — that loop's continue
 // condition is "any non-nil error" (natsclient.requestMsgWithRetry),
@@ -240,9 +281,9 @@ func (g *graphEmitterNATS) create(ctx context.Context, req *graph.CreateEntityWi
 // circuit breaker.
 //
 // The backoff schedule intentionally reproduces requestMsgWithRetry's:
-// InitialBackoff * BackoffMultiplier^attempt capped at MaxBackoff, ~13s
-// cumulative, so the gh#170 cold-start budget is unchanged for the class
-// that still retries.
+// InitialBackoff * BackoffMultiplier^attempt capped at MaxBackoff, 15s
+// cumulative, so the gh#170 cold-start budget is unchanged for the classes
+// that still retry.
 func (g *graphEmitterNATS) requestCreateRetryingNoResponders(ctx context.Context, body []byte) ([]byte, error) {
 	cfg := lifecycleEmitRetryConfig
 	// One trace for the whole logical request, matching requestMsgWithRetry.
@@ -258,9 +299,9 @@ func (g *graphEmitterNATS) requestCreateRetryingNoResponders(ctx context.Context
 		if err == nil {
 			return respBody, nil
 		}
-		// Anything that is not a server-reported "no responders" leaves the
+		// Anything that does not PROVE the request was never sent leaves the
 		// outcome unknown — surface it, never re-send.
-		if !natsclient.IsNoResponders(err) {
+		if !createSafeToResend(err, attempt) {
 			return nil, err
 		}
 		lastErr = err

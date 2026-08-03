@@ -129,6 +129,86 @@ func TestIntegration_CreateDoesNotResendOnTimeout(t *testing.T) {
 		deliveries.Load())
 }
 
+// TestIntegration_CreateSurvivesBreakerOpeningMidColdStart pins the half of the
+// retry predicate that is NOT about the wire: a create must ride through the
+// client's OWN circuit breaker opening while it waits for graph-ingest.
+//
+// The breaker counts CONSECUTIVE failures on the SHARED client (threshold 15)
+// and each cold-start create burns up to 11, so two concurrent creates — the
+// shape processor/gated-dag/executor.go produces by calling Manager.Create per
+// node — trip it partway through the second. The replaced loop
+// (natsclient.requestMsgWithRetry) checked connection and breaker state ONCE
+// before its first attempt, so a breaker that opened mid-loop never terminated
+// it; a per-attempt RequestClassified re-checks both EVERY call
+// (natsclient/request.go RequestWithHeaders) and would abort with
+// ErrCircuitOpen, discarding the remaining cold-start budget. That is the gh#170
+// failure the budget exists to prevent, re-entering through the fix for gh#861.
+//
+// The breaker is driven to the threshold explicitly rather than by hoping a
+// concurrent create trips it: an unfired guard and a green test look identical.
+func TestIntegration_CreateSurvivesBreakerOpeningMidColdStart(t *testing.T) {
+	tc := natsclient.NewTestClient(t)
+	ctx := context.Background()
+
+	// Prime the shared client to one failure below the threshold. Each failed
+	// request records a failure; no success intervenes, so none of them reset.
+	const threshold = 15
+	for i := 0; i < threshold-1; i++ {
+		_, err := tc.Client.RequestClassified(ctx, "graph.mutation.entity.create_with_triples.nobody",
+			[]byte(`{}`), 500*time.Millisecond)
+		require.Error(t, err)
+	}
+	require.NotEqual(t, natsclient.StatusCircuitOpen, tc.Client.Status(),
+		"fixture is wrong: the breaker must still be closed when the create starts")
+
+	// The create's own first attempt is failure #15 and opens the breaker. Its
+	// SECOND attempt is the one that used to die on ErrCircuitOpen.
+	const entityID = "c360.platform1.lifecycle.gcs.mission.breaker"
+	emitter := newGraphEmitterNATS(tc.Client, 500*time.Millisecond)
+	createErr := make(chan error, 1)
+	go func() {
+		_, err := emitter.create(ctx, &graph.CreateEntityWithTriplesRequest{
+			Entity: &graph.EntityState{ID: entityID, Version: 1, UpdatedAt: time.Now(), MessageType: lifecycleMessageType},
+			Triples: []message.Triple{{
+				Subject: entityID, Predicate: "workflow.lifecycle.phase", Object: "planning", Confidence: 1.0,
+			}},
+		})
+		createErr <- err
+	}()
+
+	// Land the responder after the breaker has had time to open and self-close
+	// (recordFailure schedules testCircuit one backoff later, initial 1s), so
+	// the create can only converge by having ridden THROUGH the open breaker.
+	time.Sleep(1500 * time.Millisecond)
+	var deliveries atomic.Int32
+	_, err := tc.Client.SubscribeForRequests(ctx, graphSubjectCreateWithTriples,
+		func(_ context.Context, data []byte) ([]byte, error) {
+			deliveries.Add(1)
+			var req graph.CreateEntityWithTriplesRequest
+			if uerr := json.Unmarshal(data, &req); uerr != nil {
+				return nil, uerr
+			}
+			return json.Marshal(graph.CreateEntityWithTriplesResponse{
+				MutationResponse: graph.MutationResponse{KVRevision: 1},
+				Entity:           req.Entity,
+				TriplesAdded:     len(req.Triples),
+			})
+		})
+	require.NoError(t, err)
+
+	select {
+	case err := <-createErr:
+		require.NoErrorf(t, err,
+			"create abandoned its cold-start budget when the breaker opened mid-loop; "+
+				"the replaced loop rode through this and %d deliveries reached the handler", deliveries.Load())
+	case <-time.After(20 * time.Second):
+		t.Fatal("create did not complete within the retry budget")
+	}
+	require.Equalf(t, int32(1), deliveries.Load(),
+		"the converged create was delivered %d times; a non-idempotent create must land exactly once",
+		deliveries.Load())
+}
+
 // TestIntegration_ConcurrentCreateOnlyOneWins drives concurrent births of the
 // SAME entity ID through the production graphEmitterNATS, the wire envelope, and
 // the classified entity_already_exists path that becomes ErrAlreadyExists — the
