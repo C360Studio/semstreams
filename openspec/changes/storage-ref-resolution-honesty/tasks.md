@@ -323,9 +323,13 @@
       `AGENT_CONTENT` is the actual reachability fix; gh#881 is the count question).
 - [x] 7.2 Confirm at review that nothing from gh#873 — evidence, trajectory steps, retention — leaked into
       this diff. This change must be observable entirely on its own.
-      `git diff 4b9f8896..HEAD` touches 11 files, all in `graph/embedding/` and `processor/graph-embedding/`.
-      Zero added lines match `agentic-loop|trajectory|evidence|retention|873`. No `processor/agentic-loop`
-      file is touched and no dependency on it exists.
+      **Re-measured after the rework** (the diff grew from 11 files to 26): `git diff 4b9f8896..HEAD` touches
+      only `graph/embedding/`, `processor/graph-embedding/`, and this change's own openspec artifacts.
+      Restricted to code — `git diff 4b9f8896..HEAD -- '*.go' | grep -icE
+      "^\+.*(agentic-loop|trajectory|retention)"` — the count is **0**. The seven whole-diff matches are all
+      prose in this file: `processor/agentic-loop` named as a package whose integration tests failed on
+      Docker substrate, and task 7.2's own wording. No `processor/agentic-loop` file is touched and no
+      dependency on it exists.
       **One thing to see rather than miss:** the string literal `"AGENT_CONTENT"` appears in tests as the name
       of an unresolvable instance. It is a test fixture value chosen because it is the instance this will
       actually meet in production — not a code dependency on gh#873. Every gh#875 test passes with no
