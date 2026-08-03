@@ -142,6 +142,33 @@ func (c *MessageLoggerClient) GetEntriesByTrace(ctx context.Context, traceID str
 	return &result, nil
 }
 
+// WaitForTrace polls one trace until validate accepts the observed entries.
+// The caller owns the deadline through ctx.
+func (c *MessageLoggerClient) WaitForTrace(
+	ctx context.Context,
+	traceID string,
+	validate func([]MessageEntry) error,
+) ([]MessageEntry, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	var lastErr error
+	for {
+		trace, err := c.GetEntriesByTrace(ctx, traceID)
+		if err == nil {
+			if err = validate(trace.Entries); err == nil {
+				return trace.Entries, nil
+			}
+		}
+		lastErr = err
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("waiting for trace %s: %w (last observation: %v)", traceID, ctx.Err(), lastErr)
+		case <-ticker.C:
+		}
+	}
+}
+
 // GetStats returns message logger statistics
 func (c *MessageLoggerClient) GetStats(ctx context.Context) (*LoggerStats, error) {
 	reqURL := fmt.Sprintf("%s/message-logger/stats", c.baseURL)

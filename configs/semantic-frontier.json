@@ -117,7 +117,8 @@
       "config": {
         "buffer_size": 10000,
         "monitor_subjects": [
-          "*"
+          "*",
+          "graph.mutation.>"
         ],
         "enable_kv_query": true,
         "log_level": "INFO"
@@ -585,7 +586,8 @@
             }
           ]
         },
-        "enable_hierarchy": true
+        "enable_hierarchy": true,
+        "enforce_owner_lease": true
       }
     },
     "graph-index": {

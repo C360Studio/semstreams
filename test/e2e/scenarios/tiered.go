@@ -198,14 +198,15 @@ func (s *TieredScenario) Setup(ctx context.Context) error {
 	// Initialize observability clients (matching structural tier patterns)
 	s.metrics = client.NewMetricsClient(s.config.MetricsURL)
 	s.msgLogger = client.NewMessageLoggerClient(s.config.ServiceManagerURL)
+	if err := s.msgLogger.Health(ctx); err != nil {
+		return fmt.Errorf("message logger is required by every tier: %w", err)
+	}
 	s.tracer = client.NewFlowTracer(s.metrics, s.msgLogger)
 
-	// Create NATS validation client for KV bucket assertions
+	// Every variant runs the graph-roundtrip stage, so NATS is mandatory.
 	natsClient, err := client.NewNATSValidationClient(ctx, s.natsURL)
 	if err != nil {
-		// NATS is optional - warn but don't fail
-		// Some stages will skip if natsClient is nil
-		return nil
+		return fmt.Errorf("NATS validation client is required by every tier: %w", err)
 	}
 	s.natsClient = natsClient
 
@@ -254,6 +255,10 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// MUST run before hierarchy validation to ensure all entities are loaded
 		// SSE-enabled: uses real-time KV watching with polling fallback
 		{"wait-for-entity-stabilization", s.executeWaitForEntityStabilization, nil},
+		// Foundational graph canary shared verbatim by every tier: contract-bound
+		// create/replace, authoritative state, derived predicate membership,
+		// external GraphQL read, and Message Logger trace/KV evidence.
+		{"graph-roundtrip", s.executeGraphRoundTrip, nil},
 
 		// Phase 4: Validate hierarchy inference is creating container entities
 		// Verifies the KV watcher pattern from Phase 3 is working correctly
@@ -404,6 +409,17 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		}
 	}
 	return stages
+}
+
+func (s *TieredScenario) executeGraphRoundTrip(ctx context.Context, result *Result) error {
+	if s.natsClient == nil {
+		return fmt.Errorf("graph-roundtrip requires the NATS validation client")
+	}
+	if s.msgLogger == nil {
+		return fmt.Errorf("graph-roundtrip requires Message Logger")
+	}
+	probe := NewGraphRoundTripProbe(s.natsClient, s.msgLogger, s.config.GraphQLURL)
+	return probe.Run(ctx, result)
 }
 
 // executeStages runs all stages with progress logging.

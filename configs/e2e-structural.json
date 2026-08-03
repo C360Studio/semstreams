@@ -45,7 +45,7 @@
       "enabled": true,
       "config": {
         "buffer_size": 10000,
-        "monitor_subjects": ["*"],
+        "monitor_subjects": ["*", "graph.mutation.>"],
         "enable_kv_query": true,
         "log_level": "INFO"
       }
@@ -284,7 +284,8 @@
           ],
           "outputs": [{"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}]
         },
-        "enable_hierarchy": true
+        "enable_hierarchy": true,
+        "enforce_owner_lease": true
       }
     },
     "graph-index": {
