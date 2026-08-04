@@ -45,125 +45,6 @@ retired with it.
   coordinated wipe/reseed that carries it is tracked as an operational event (gh#827), and the
   halt-if-the-window-closed rule is a requirement, not a runbook footnote.
 ## Requirements
-### Requirement: List-valued indexes store one sharded key per membership, not a monolithic list
-
-Each migrated multi-membership graph index — `INCOMING`, `NAME`, and `CONTEXT` — MUST store one
-KV key per edge/membership pair rather than a single growing list value under a low-cardinality
-key, and each write MUST be an unconditional `Put` (no CAS read-modify-write of a growing list).
-Ingesting E memberships into any one key's dimension is therefore O(E) total writes, not O(E²),
-with no CAS-retry contention because no two writers share a key. This replaces the
-O(in-degree²) `INCOMING`, O(shared-name²) `NAME`, and O(context-fan-in²) `CONTEXT` rewrites, and —
-because the pre-change `CONTEXT_INDEX` used a non-CAS `Get`+`Put` — also eliminates its concurrent
-lost-update.
-
-#### Scenario: a hub dimension ingests members in linear write volume
-
-- **GIVEN** an index dimension (a hub target, a shared name, or a common context value) with K members
-- **WHEN** the K memberships are indexed
-- **THEN** the total index writes are O(K), not O(K²)
-- **AND** no single key is CAS-rewritten as the member count grows
-
-#### Scenario: concurrent writers to the same context do not lose updates
-
-- **GIVEN** two workers concurrently indexing distinct entities that share a context value
-- **WHEN** both write to `CONTEXT_INDEX`
-- **THEN** both memberships are present afterward (no read-modify-write clobber)
-
-### Requirement: Key axes are KV-safe; entity-ID axes are validated; free-form axes are encoded
-
-Every token of a sharded index key MUST be NATS-KV-safe and unambiguously reconstructable:
-
-- **Open-vocabulary hashed axes** — a name or context value — MUST hash to a fixed-width token so a
-  raw dotted value cannot token-position-collide under NATS prefix matching (ADR-065). The
-  human-readable value is not recoverable from the hash, so the small per-key value MUST carry it
-  (name original-case + priority; context value).
-- **The predicate axis** MUST retain PR #524's reversible untagged **hex encoding** in the key. PR #524
-  selected that layout when graph-ingest still admitted any non-empty predicate, including KV-unsafe
-  text. PR #532 now enforces the canonical three-part predicate contract at authoritative graph writes,
-  and graph-index independently revalidates replayed state. The codec is a storage and reconstruction
-  layout, not permission to persist a noncanonical predicate. Hex remains so readers recover the exact
-  accepted predicate without a per-row value lookup, keeping `INCOMING` a pure prefix key-scan.
-- **Entity-ID axes** MAY stay raw (fixed 6-token, collision-safe as a prefix), but the write path
-  MUST validate every entity ID it composes into a key with `IsValidEntityID` and skip-with-log on
-  failure. A key MUST NOT contain an empty token.
-
-`CONTEXT_INDEX` — which has no production reader — MUST be keyed with the **entity ID as the prefix**
-(`entityID.hash(context).hex(predicate)`), not the context value, so the write path can enumerate an
-entity's own memberships by prefix scan to RETRACT superseded rows on update and to self-clean on
-delete. `INCOMING` keys on the target ID; `NAME` keys on the name hash.
-
-`PREDICATE_INDEX` membership keys remain `hash(predicate).entityID`, while `PREDICATE_CATALOG` uses the raw
-accepted predicate as its key. Before PR #532, the reverse-key codec and hashed membership could represent a
-noncanonical predicate while the raw catalog `Put` failed; that required failure withheld readiness. Current
-graph-ingest rejects noncanonical candidates before persistence, and graph-index replay revalidation rejects invalid
-preexisting state before membership, catalog, or reverse-index I/O and keeps readiness false.
-
-#### Scenario: codec round-trip does not change predicate acceptance
-
-- **GIVEN** arbitrary bytes are passed directly to the predicate key codec
-- **WHEN** the encoded token is decoded
-- **THEN** the codec reconstructs the exact original bytes
-- **AND** that codec result does not authorize a graph write or index write
-
-#### Scenario: a noncanonical current predicate is rejected before index I/O
-
-- **GIVEN** a current write candidate whose predicate has the wrong arity, whitespace, or a wildcard token
-- **WHEN** it reaches the authoritative graph-write contract
-- **THEN** the candidate is rejected before membership, catalog, or reverse-index I/O
-- **AND** invalid preexisting replay state fails graph-index revalidation and keeps readiness false
-
-#### Scenario: re-indexing an entity retracts its superseded context memberships
-
-- **GIVEN** an entity previously indexed under context predicates {p1, p2} for a context value
-- **WHEN** it is re-indexed carrying only {p1} for that context
-- **THEN** the p2 membership is removed (the entity-prefixed CONTEXT index reconciles), not left stale
-
-#### Scenario: a malformed entity ID is skipped, not indexed into a mis-split key
-
-- **WHEN** a write path composes a key from an entity ID that is not a valid 6-token ID
-- **THEN** the write is skipped and logged
-- **AND** no malformed key is stored
-
-### Requirement: Index reads and deletes enumerate the sharded keyset; wire response types are preserved
-
-Every reader of a sharded index MUST enumerate via the prefix scan and reconstruct entries from
-keys — including all query handlers AND internal consumers such as graph-clustering's neighbor
-expansion. The NATS query-API wire response types (e.g. `IncomingEntry` populating
-`graph.index.query.incoming`) MUST be preserved and reconstructed from keys — only the storage
-format changes, not the wire contract.
-
-The entity-delete path removes an entity's `<entityID>.*` keyset by prefix scan, but the semantics
-differ by index and MUST be labeled as such:
-
-- For `CONTEXT` (entity-prefixed), the `<entityID>.*` keyset is the entity's OWN memberships, so
-  removing it on the entity's death is correct cleanup.
-- For `INCOMING` (target-prefixed), the `<entityID>.*` keyset is every row where the entity is the
-  TARGET — but each such row is a SOURCE's evidence that it still points at this entity. Deleting
-  them on the target's death is a LEGACY HARD-DELETE of a leaf entity and MUST NOT be treated as, or
-  reused by, logical retirement (which must retract SOURCE-owned rows via the source, not the
-  target). Source-owned retraction is deferred to the retention increment (gh#527).
-
-Removing a deleted entity from *other* entities' keys (where it appears as a non-prefix token) is the
-pre-existing gh#433 reciprocal-cleanup gap and remains out of scope.
-
-#### Scenario: deleting an entity removes its own sharded index keys
-
-- **GIVEN** an entity with sharded index keys prefixed by its ID
-- **WHEN** the entity is deleted (an ENTITY_STATES delete event)
-- **THEN** its `<entityID>.*` keys are removed by prefix scan
-- **AND** a later prefix scan for that ID returns no phantom members
-
-#### Scenario: a query response is unchanged in shape
-
-- **WHEN** a `graph.index.query.incoming` request is served after the format change
-- **THEN** the response carries the same `IncomingEntry` fields as before, reconstructed from keys
-
-#### Scenario: an internal clustering reader sees the same neighbors
-
-- **GIVEN** community detection expanding incoming neighbors of an entity
-- **WHEN** it reads the incoming index after the format change
-- **THEN** it observes the same neighbor set as before (no silently-empty read)
-
 ### Requirement: The index buckets rebuild from entity state on boot after the format cutover
 
 The graph-index component MUST repopulate correctly-formatted sharded keys from `ENTITY_STATES` on
@@ -199,7 +80,7 @@ MUST NOT return a successful result, while the index is known-incomplete — whe
 still building (cutover / cold replay) or because a required index write or delete has failed and not
 yet been repaired.
 
-- **Failure honesty.** A required index write (incoming/context/name/alias/predicate/outgoing) or a
+- **Failure honesty.** A required index write (incoming/name/alias/predicate/outgoing) or a
   required delete that ultimately fails after bounded retry MUST return failure to the entity-work
   reconciler and mark the entity failed; it MUST NOT be treated as successful completion merely
   because the asynchronous watcher continues. The re-index no-op baseline MUST be stored only after
@@ -290,73 +171,9 @@ yet been repaired.
 - **WHEN** a `byName` lookup would hydrate more memberships than the read budget
 - **THEN** it returns a typed `resource_exhausted` error rather than an unbounded serial scan
 
-### Requirement: Every derived index declares semantic ownership and reconciliation capability
-
-Each derived graph index MUST declare its physical token layout, exact arity when fixed or explicit variable arity,
-semantic row owner, literal fixed-arity forward query filter when available or explicit non-filterability,
-value-overwrite policy, and update/delete/retirement behavior. It MUST declare either a literal
-owner-reconciliation filter or explicit non-filterability with alternate authority deferred to a separate
-specification. When a proven bounded owner filter exists, reconciliation MUST enumerate the stored owner rows,
-deduplicate them by exact key, diff them against the complete desired projection from current ENTITY_STATES,
-delete stale rows, and put missing rows.
-
-Owner-filter reconciliation MUST preserve keyed entity ordering, execution-time authoritative reads, bounded
-repair, and readiness withholding on any required failure.
-
-#### Scenario: removing the final membership retracts the stored row
-
-- **GIVEN** an entity whose stored owner projection contains one membership
-- **WHEN** current ENTITY_STATES yields an empty desired projection for that membership index
-- **THEN** reconciliation deletes the stale row
-- **AND** queries do not return the former membership
-
-#### Scenario: changing a membership retracts the former row
-
-- **GIVEN** an entity whose stored owner projection contains membership A
-- **WHEN** current ENTITY_STATES yields membership B instead
-- **THEN** reconciliation deletes A and writes B as one required projection
-- **AND** public queries do not return the entity through A after the watermark
-
-#### Scenario: predicate replacement reaches empty
-
-- **GIVEN** an entity uses predicate A
-- **WHEN** its current projection changes to predicate B and then contains neither predicate
-- **THEN** PREDICATE_INDEX contains only B at the first watermark and neither membership at the second
-
-#### Scenario: name replacement overwrites stable-key metadata
-
-- **GIVEN** an entity is named Alpha through one display-name predicate
-- **WHEN** it changes to Beta and then removes the display name
-- **THEN** NAME_INDEX retracts Alpha, exposes Beta, and finally contains no membership for the entity
-- **AND** a case or priority change whose normalized key stays stable overwrites the stored value
-
-#### Scenario: relationship replacement retracts source-owned incoming rows
-
-- **GIVEN** a source relates to target A
-- **WHEN** its relationship changes to target B and then to no target
-- **THEN** INCOMING_INDEX contains only the source-owned B row at the first watermark and none at the second
-
-#### Scenario: context replacement reaches empty
-
-- **GIVEN** an entity has context membership A
-- **WHEN** its context changes to B and then to no context
-- **THEN** the entity-owned CONTEXT_INDEX set contains only B and then becomes empty
-
-#### Scenario: outgoing replacement remains complete
-
-- **GIVEN** an entity points to target A
-- **WHEN** its outgoing projection changes to target B and then to empty
-- **THEN** OUTGOING_INDEX replaces the complete array at both watermarks without a phantom edge
-
-#### Scenario: duplicate filtered results do not duplicate work or query results
-
-- **GIVEN** filtered enumeration observes the same key more than once during concurrent mutation
-- **WHEN** reconciliation computes the stored owner set
-- **THEN** it deduplicates by exact key before diffing
-
 ### Requirement: Fixed-position owner filtering is proven before production reconciliation activates
 
-PREDICATE, NAME, source-owned INCOMING, and CONTEXT MUST be tested against real NATS using literal exact-arity
+PREDICATE, NAME, and source-owned INCOMING MUST be tested against real NATS using literal exact-arity
 forward and owner filters constructed through the `nats-kv-keys` contract. The proof MUST cover filter-string
 construction, malformed longer/shorter keys, matching correctness with no false positives, neighboring-owner and
 reversed-axis controls, concurrent Put/Delete with exact-key deduplication, cancellation, empty buckets, restart,
@@ -496,14 +313,189 @@ proposal.
 
 ### Requirement: Non-predicate codecs keep their recorded rationale
 
-NAME and CONTEXT MUST keep hashed keys for their open-content axes, and NAME, CONTEXT, and INCOMING MAY keep the
-reversible `hex(predicate)` single-token codec; each keep MUST be recorded with its rationale in the
-representation ADR and revisited only on a demonstrated query or operational need. No codec MAY be treated as
-acceptance authority for a predicate that violates the canonical grammar.
+NAME MUST keep hashed keys for its open-content axis, and NAME and INCOMING MAY keep the
+reversible `hex(predicate)` single-token codec; each keep MUST be recorded with its rationale
+in the representation ADR and revisited only on a demonstrated query or operational need.
+No codec MAY be treated as acceptance authority for a predicate that violates the canonical grammar.
 
 #### Scenario: encoding cannot admit an invalid predicate
 
 - **GIVEN** a predicate that could be hex-encoded into a KV-safe token but violates canonical syntax
 - **WHEN** graph state is written in enforcement mode
 - **THEN** predicate validation rejects it before graph-index processing
+
+### Requirement: Context provenance remains authoritative without a durable context index
+
+Graph-index MUST NOT create, open, write, reconcile, or publish readiness for a
+`CONTEXT_INDEX` bucket. Triple provenance MUST remain stored on each authoritative
+triple through `Triple.Context` in `ENTITY_STATES`; retiring the derived bucket MUST
+NOT erase or rewrite that fact.
+
+The pre-v1 cutover MUST use the coordinated clean wipe/reseed. No legacy bucket
+reader, alias, translation, dual write, or online migration is provided.
+
+#### Scenario: fresh graph-index startup creates no context bucket
+
+- **GIVEN** a clean deployment with no `CONTEXT_INDEX`
+- **WHEN** graph-index starts and reaches readiness
+- **THEN** `CONTEXT_INDEX` remains absent
+- **AND** the surviving query indexes initialize normally
+
+#### Scenario: hierarchy provenance remains on authoritative triples
+
+- **GIVEN** hierarchy inference emits triples with context `inference.hierarchy`
+- **WHEN** those triples are persisted and read from `ENTITY_STATES`
+- **THEN** their `Context` remains `inference.hierarchy`
+- **AND** no derived context bucket is required to preserve that provenance
+
+### Requirement: INCOMING and NAME memberships use one sharded key per membership
+
+Each multi-membership graph index — `INCOMING` and `NAME` — MUST store one
+KV key per edge/membership pair rather than a single growing list value under a low-cardinality
+key, and each write MUST be an unconditional `Put` (no CAS read-modify-write of a growing list).
+Ingesting E memberships into any one key's dimension is therefore O(E) total writes, not O(E²),
+with no CAS-retry contention because no two writers share a key. This replaces the
+O(in-degree²) `INCOMING` and O(shared-name²) `NAME` rewrites.
+
+#### Scenario: a hub dimension ingests members in linear write volume
+
+- **GIVEN** an index dimension (a hub target or a shared name) with K members
+- **WHEN** the K memberships are indexed
+- **THEN** the total index writes are O(K), not O(K²)
+- **AND** no single key is CAS-rewritten as the member count grows
+
+### Requirement: Surviving index key axes are KV-safe and reconstructable
+
+Every token of a sharded index key MUST be NATS-KV-safe and unambiguously reconstructable:
+
+- **Open-vocabulary hashed axes** — a name value — MUST hash to a fixed-width token so raw dotted
+  values cannot token-position-collide under NATS prefix matching (ADR-065). The human-readable
+  value is not recoverable from the hash, so the small per-key value MUST carry its original case
+  and priority.
+- **The predicate axis** MUST retain PR #524's reversible untagged **hex encoding** in the key. PR #524
+  selected that layout when graph-ingest still admitted any non-empty predicate, including KV-unsafe
+  text. PR #532 now enforces the canonical three-part predicate contract at authoritative graph writes,
+  and graph-index independently revalidates replayed state. The codec is a storage and reconstruction
+  layout, not permission to persist a noncanonical predicate. Hex remains so readers recover the exact
+  accepted predicate without a per-row value lookup, keeping `INCOMING` a pure prefix key-scan.
+- **Entity-ID axes** MAY stay raw (fixed 6-token, collision-safe as a prefix), but the write path
+  MUST validate every entity ID it composes into a key with `IsValidEntityID` and skip-with-log on
+  failure. A key MUST NOT contain an empty token.
+
+`INCOMING` keys on the target ID; `NAME` keys on the name hash.
+
+`PREDICATE_INDEX` membership keys remain `hash(predicate).entityID`, while `PREDICATE_CATALOG` uses the raw
+accepted predicate as its key. Before PR #532, the reverse-key codec and hashed membership could represent a
+noncanonical predicate while the raw catalog `Put` failed; that required failure withheld readiness. Current
+graph-ingest rejects noncanonical candidates before persistence, and graph-index replay revalidation rejects invalid
+preexisting state before membership, catalog, or reverse-index I/O and keeps readiness false.
+
+#### Scenario: codec round-trip does not change predicate acceptance
+
+- **GIVEN** arbitrary bytes are passed directly to the predicate key codec
+- **WHEN** the encoded token is decoded
+- **THEN** the codec reconstructs the exact original bytes
+- **AND** that codec result does not authorize a graph write or index write
+
+#### Scenario: a noncanonical current predicate is rejected before index I/O
+
+- **GIVEN** a current write candidate whose predicate has the wrong arity, whitespace, or a wildcard token
+- **WHEN** it reaches the authoritative graph-write contract
+- **THEN** the candidate is rejected before membership, catalog, or reverse-index I/O
+- **AND** invalid preexisting replay state fails graph-index revalidation and keeps readiness false
+
+#### Scenario: a malformed entity ID is skipped, not indexed into a mis-split key
+
+- **WHEN** a write path composes a key from an entity ID that is not a valid 6-token ID
+- **THEN** the write is skipped and logged
+- **AND** no malformed key is stored
+
+### Requirement: Index reads reconstruct sharded keysets and preserve wire response types
+
+Every reader of a sharded index MUST enumerate via the prefix scan and reconstruct entries from
+keys — including all query handlers AND internal consumers such as graph-clustering's neighbor
+expansion. The NATS query-API wire response types (e.g. `IncomingEntry` populating
+`graph.index.query.incoming`) MUST be preserved and reconstructed from keys — only the storage
+format changes, not the wire contract.
+
+The entity-delete path removes an entity's `<entityID>.*` keyset by prefix scan, but the semantics
+differ by index and MUST be labeled as such:
+
+- For `INCOMING` (target-prefixed), the `<entityID>.*` keyset is every row where the entity is the
+  TARGET — but each such row is a SOURCE's evidence that it still points at this entity. Deleting
+  them on the target's death is a LEGACY HARD-DELETE of a leaf entity and MUST NOT be treated as, or
+  reused by, logical retirement (which must retract SOURCE-owned rows via the source, not the
+  target). Source-owned retraction is deferred to the retention increment (gh#527).
+
+Removing a deleted entity from *other* entities' keys (where it appears as a non-prefix token) is the
+pre-existing gh#433 reciprocal-cleanup gap and remains out of scope.
+
+#### Scenario: a query response is unchanged in shape
+
+- **WHEN** a `graph.index.query.incoming` request is served after the format change
+- **THEN** the response carries the same `IncomingEntry` fields as before, reconstructed from keys
+
+#### Scenario: an internal clustering reader sees the same neighbors
+
+- **GIVEN** community detection expanding incoming neighbors of an entity
+- **WHEN** it reads the incoming index after the format change
+- **THEN** it observes the same neighbor set as before (no silently-empty read)
+
+### Requirement: Every surviving derived index declares semantic ownership and reconciliation capability
+
+Each derived graph index MUST declare its physical token layout, exact arity when fixed or explicit variable arity,
+semantic row owner, literal fixed-arity forward query filter when available or explicit non-filterability,
+value-overwrite policy, and update/delete/retirement behavior. It MUST declare either a literal
+owner-reconciliation filter or explicit non-filterability with alternate authority deferred to a separate
+specification. When a proven bounded owner filter exists, reconciliation MUST enumerate the stored owner rows,
+deduplicate them by exact key, diff them against the complete desired projection from current ENTITY_STATES,
+delete stale rows, and put missing rows.
+
+Owner-filter reconciliation MUST preserve keyed entity ordering, execution-time authoritative reads, bounded
+repair, and readiness withholding on any required failure.
+
+#### Scenario: removing the final membership retracts the stored row
+
+- **GIVEN** an entity whose stored owner projection contains one membership
+- **WHEN** current ENTITY_STATES yields an empty desired projection for that membership index
+- **THEN** reconciliation deletes the stale row
+- **AND** queries do not return the former membership
+
+#### Scenario: changing a membership retracts the former row
+
+- **GIVEN** an entity whose stored owner projection contains membership A
+- **WHEN** current ENTITY_STATES yields membership B instead
+- **THEN** reconciliation deletes A and writes B as one required projection
+- **AND** public queries do not return the entity through A after the watermark
+
+#### Scenario: predicate replacement reaches empty
+
+- **GIVEN** an entity uses predicate A
+- **WHEN** its current projection changes to predicate B and then contains neither predicate
+- **THEN** PREDICATE_INDEX contains only B at the first watermark and neither membership at the second
+
+#### Scenario: name replacement overwrites stable-key metadata
+
+- **GIVEN** an entity is named Alpha through one display-name predicate
+- **WHEN** it changes to Beta and then removes the display name
+- **THEN** NAME_INDEX retracts Alpha, exposes Beta, and finally contains no membership for the entity
+- **AND** a case or priority change whose normalized key stays stable overwrites the stored value
+
+#### Scenario: relationship replacement retracts source-owned incoming rows
+
+- **GIVEN** a source relates to target A
+- **WHEN** its relationship changes to target B and then to no target
+- **THEN** INCOMING_INDEX contains only the source-owned B row at the first watermark and none at the second
+
+#### Scenario: outgoing replacement remains complete
+
+- **GIVEN** an entity points to target A
+- **WHEN** its outgoing projection changes to target B and then to empty
+- **THEN** OUTGOING_INDEX replaces the complete array at both watermarks without a phantom edge
+
+#### Scenario: duplicate filtered results do not duplicate work or query results
+
+- **GIVEN** filtered enumeration observes the same key more than once during concurrent mutation
+- **WHEN** reconciliation computes the stored owner set
+- **THEN** it deduplicates by exact key before diffing
 

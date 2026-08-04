@@ -2,7 +2,8 @@
 
 ## 1. Sequence the approved breaking change
 
-- [ ] 1.1 Merge and archive `retire-context-index` before archiving this change.
+- [x] 1.1 Merged #894 and archived `retire-context-index` before archiving this
+      change.
 - [x] 1.2 Bind this slice to ADR-090's accepted retirement of durable
       `STRUCTURAL_INDEX` while preserving in-memory structural computation.
 - [x] 1.3 Define graph-clustering and graph-retention deltas against the
