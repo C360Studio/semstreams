@@ -58,10 +58,11 @@ User Question (natural language)
 └─────────────────┘
 ```
 
-The query classifier uses a 3-tier chain: keyword patterns (T0), embedding similarity to domain examples (T1/T2), and
-LLM classification (T3). Each tier progressively handles more ambiguous queries. For example, "What sensors were active
-yesterday?" is caught at T0 by temporal keyword patterns, while "What's the operational health of the fleet?" falls
-through to T3 for LLM-based classification.
+There is no single three-tier classifier path. The HTTP graph facade uses keyword
+classification followed by an optional embedding-example match. The graph-query
+component uses keyword classification followed by an optional LLM classifier; it
+does not configure an embedding classifier. An unmatched enabled chain returns
+the default Tier 0 result with no extracted filters or intent.
 
 ### Local Search
 
@@ -129,16 +130,19 @@ Statistical summaries are fast and deterministic. LLM summaries add natural lang
 
 ### Enable GraphRAG
 
-GraphRAG requires clustering to be enabled. Configure detection interval and entity change threshold to control how often communities are recomputed. See [Community Detection](07-community-detection.md) for clustering configuration details.
+GraphRAG requires clustering to be enabled. The current clustering owner
+recomputes on its timer; `batch_size` does not trigger change-threshold
+recomputation. See [Community Detection](07-community-detection.md).
 
 ### Search Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
 | `max_communities` | 5 | Maximum communities to return per query |
-| `max_entities_per_community` | 20 | Entity limit per community in results |
-
-> **Note**: Additional parameters (`include_summaries`, `include_relationships`) are planned.
+| `summarize_threshold` | 50 | Auto-summarize above this count; negative disables |
+| `include_summaries` | true | Include community summary records |
+| `include_relationships` | false | Include relationships between returned entities |
+| `include_sources` | false | Include source-attribution records |
 
 ### LLM Integration (Tier 2)
 
@@ -146,7 +150,10 @@ For LLM-enhanced summaries and natural language answers, configure an LLM provid
 
 ## API and Response
 
-GraphRAG is accessible via the MCP (Model Context Protocol) gateway using GraphQL queries. Two query patterns are available:
+SemStreams has no implemented MCP graph contract. The current HTTP facade and
+internal NATS subjects are provisional read fronts; confirm an operation is
+explicitly admitted for the caller rather than inferring protocol parity. When an
+admitted operation returns a GraphRAG result, it uses two query patterns:
 
 **Natural Language Q&A** — Submit a question in plain English. The system finds relevant communities, assembles context, and returns an LLM-generated answer with source attribution.
 
@@ -157,10 +164,14 @@ GraphRAG is accessible via the MCP (Model Context Protocol) gateway using GraphQ
 | Field | Description |
 |-------|-------------|
 | `answer` | LLM-generated response (Q&A mode only) |
-| `communities` | List of matched communities with summaries |
-| `entities` | Key entities from matched communities |
-
-> **Note**: Additional response fields (`relationships`, `sources` for attribution) are planned.
+| `answer_model` | Model identifier when answer synthesis uses one |
+| `entities` | Returned full entity records |
+| `entity_ids`, `entity_digests` | Bounded summarized entity forms |
+| `summarized`, `community_summaries` | Summary mode and matched summaries |
+| `relationships`, `sources` | Optional requested relationship and attribution data |
+| `count`, `duration_ms` | Result count and processing duration |
+| `degraded`, `degraded_reason` | Answer-synthesis fallback evidence |
+| `entities_truncated` | Candidate corpus was capped and the result is not exhaustive |
 
 ## How Context Flows to the LLM
 
@@ -235,7 +246,7 @@ The LLM receives organized context—summaries, key entities, relationships—ra
 - [Community Detection](07-community-detection.md) - How communities form via LPA
 - [PathRAG Pattern](10-pathrag-pattern.md) - Structural traversal alternative for impact analysis
 - [Embeddings](05-embeddings.md) - Semantic matching that enables community search
-- [Query Access](11-query-access.md) - Access patterns for GraphQL, MCP, and NATS
+- [Query Access](11-query-access.md) - HTTP facade, typed adapters, and MCP status
 
 **Configuration**
 - [Clustering Configuration](../advanced/01-clustering.md) - Community detection settings

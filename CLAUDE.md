@@ -51,7 +51,8 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
   Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle boundary),
-  new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS Direct). Read the
+  new-payload (payload-registry checklist), query-pattern (admitted remote operation vs
+  operation-specific typed adapter; MCP graph access is unavailable). Read the
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
 
@@ -79,7 +80,7 @@ Flow-based component architecture:
 - **Processor**: Graph, JSONMap, Rule — transform and enrich
 - **Output**: File, HTTPPost, WebSocket — export data
 - **Storage**: ObjectStore — persist to NATS JetStream
-- **Gateway**: HTTP, GraphQL, MCP — expose query APIs
+- **Gateway**: admitted HTTP operations; embedded queries need a named typed adapter
 
 ## Spec-driven development (OpenSpec)
 
@@ -251,20 +252,23 @@ SemStreams is NOT a simple event bus or pub/sub framework. It is a knowledge gra
 
 ### The KV Twofer
 
-Every NATS KV bucket gives you three interfaces from one write:
+Every NATS KV bucket gives you two core interfaces from one write:
 
 - **State**: `kv.Get(key)` — current value, right now
 - **Events**: `kv.Watch(pattern)` — fires on every change (fan-out to all watchers)
-- **History**: Replay from any revision — audit trail at no extra cost
+- **History when configured**: a bounded number of retained per-key revisions
 
-**The write IS the event.** No separate event bus. No dual-write problem. Internal processors react to state changes via KV watch, not pub/sub topics. See [KV Twofer](docs/concepts/02-kv-twofer.md).
+`ENTITY_STATES` has history 1. It is current authority, not an audit or recovery
+ledger. Declared watchers rehydrate current matching values and then observe live
+changes. State-reactive owners may watch; periodic owners may read current state
+on their cycle. See [KV Twofer](docs/concepts/02-kv-twofer.md).
 
 ### Facts vs Requests
 
 | Communication type | Primitive | Restart behavior |
 |---|---|---|
-| Fact about the world (entity state, index, current status) | KV Watch | Re-delivers all current values (correct recovery) |
-| Request to do something (task, LLM call, tool execution) | JetStream Stream | Resumes from last ack (no re-execution) |
+| Fact/current state | KV Watch | Hydrates current matching inputs; owner repair/redrive completes recovery |
+| Work request | JetStream Stream | Unacked work redelivers; acked work does not |
 
 Use `/kv-or-stream` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
 
@@ -282,7 +286,17 @@ Tiers only affect entities with text content. Telemetry-only entities cluster vi
 
 Two layers: **Rule Engine** (conditions + actions + iteration caps) and **Components** (execute work). There is no separate workflow engine — no DSL, no state-machine runtime, no separate event bus; `processor/reactive/` was retired (2026-03-12). Multi-step patterns are expressed as coordinated rule sets firing components, with per-action `MaxIterations` providing iteration caps and entity triples + KV buckets + ObjectStore providing durable state.
 
-For workflow-shaped patterns (named instance with lifecycle, restart recovery, operator visibility), components compose the **Lifecycle harness** substrate (`pkg/lifecycle`, ADR-047): apps declare state structs implementing `Participant`; the framework provides KV-backed `Manager` (Get/Create/Update/Transition/Complete/Fail), rule integration (`lifecycle_*` actions + `$entity.lifecycle.*` substitutions), and an operator gateway API (`GET /workflows`, history via KV revision replay, operator-writable patches via struct tags). The harness is **substrate convention, not a workflow engine** — apps own work logic, state schema, and phase transitions; the framework provides KV storage, restart recovery, audit history, and a uniform operator API across products. **Lifecycle participation is a property of the ENTITY, not the COMPONENT or REQUEST** — short-lived handlers (HTTP, single-purpose processors) can read/write Participant-implementing entities without claiming participation; long-lived participants (mission-planner, calibration-orchestrator, requirement-executor) implement `Participant` and use `Manager`.
+For workflow-shaped patterns (named instance with lifecycle, restart hydration,
+operator visibility), components compose the **Lifecycle harness** substrate
+(`pkg/lifecycle`, ADR-049). Apps declare state structs implementing `Participant`;
+the framework provides KV-backed `Manager`, rule integration, and an operator
+gateway API for current state and operator-writable patches. The harness is
+**substrate convention, not a workflow engine**: apps own work logic, state
+schema, phase transitions, repair, and audit design. `ENTITY_STATES` history 1
+cannot reconstruct lifecycle history. **Lifecycle participation is a property of
+the ENTITY, not the COMPONENT or REQUEST**: short-lived handlers can read/write
+participant entities; long-lived participants implement `Participant` and use
+`Manager`.
 
 For bounded-concurrency parallel work inside components, compose **BoundedDispatcher** (`pkg/dispatch`, ADR-048) — a KV-twofer-aware bounded worker pool wrapping `pkg/worker.Pool`. NOT for at-the-rule-layer fan-out (use rules' `for_each` for that).
 
@@ -293,15 +307,24 @@ For bounded-concurrency parallel work inside components, compose **BoundedDispat
 | A → if X then B else C | One rule, action-level `when` clauses (ADR-041) |
 | A → B → A → B... (max N times) | Rule chain with per-action `MaxIterations` cap |
 | Fan-out + fan-in synchronization | Fan-out rule (`for_each`) + counter-based join (`.length` / `.triples` / `length_eq`) |
-| Named instance with lifecycle (mission, sensor, scenario, plan, request) | Lifecycle harness `Participant` — ADR-047 |
+| Named instance with lifecycle | Lifecycle `Participant` over `ENTITY_STATES` — ADR-049 |
 | Bounded parallel work inside a component | BoundedDispatcher — ADR-048 |
 | Execute LLM call, graph query, file I/O, etc. | Component |
 
-**Key rules**: Rules trigger, they don't do work inline. Components execute, they don't know their caller. State ownership is exclusive — domain entities in `ENTITY_STATES` (only `graph-ingest` writes), operational results in component-specific KV (e.g., `AGENT_LOOPS` with `COMPLETE_*` prefix), Lifecycle-managed instances in workflow-type KV buckets (e.g., `MISSIONS`, `CSAPI_SYSTEMS`, declared at `Manager.Register` time), events in JetStream streams, bulky payloads in ObjectStore via `ContentStorable` with ref-triples on the owning entity.
+**Key rules**: Rules trigger; components execute. State ownership is exclusive.
+Domain and Lifecycle `Participant` current state lives in `ENTITY_STATES` under
+graph-ingest ownership. Operational results use component-specific KV, events use
+JetStream streams, and bulky payloads use ObjectStore via `ContentStorable` refs.
 
 **Engine gaps file as engine work, not app-side state plumbing.** semspec's retired `workflow/reactive/` (7,264 LOC) is the cautionary tale on the engine-shape axis; semspec's `workflow/` package (~7,840 LOC of convention hand-rolled because the framework didn't provide one) is the cautionary tale on the convention-shape axis — both are migration blockers when carried per-consumer. The Lifecycle harness exists specifically to retire the next-instance of the second pattern (cross-consumer convention reinvention). If a rule-engine, harness, or substrate primitive is missing, propose adding it; don't carve out a parallel path.
 
-Use `/orchestration-check` for the decision framework. See [Orchestration Layers — How We Do Workflows in semstreams](docs/concepts/14-orchestration-layers.md) for the full pattern catalog. For multi-step agentic workflows specifically (rule chains spawning agent phases), see [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md). For Lifecycle-shaped workflows, see [ADR-047](docs/adr/047-lifecycle-harness-substrate.md). For bounded-concurrency parallel work, see [ADR-048](docs/adr/048-bounded-dispatcher-and-triples-substrate.md).
+Use `/orchestration-check` for the decision framework. See
+[Orchestration Layers](docs/concepts/14-orchestration-layers.md) for the pattern
+catalog, [Phased Agentic Chains](docs/concepts/25-phased-agentic-chains.md) for
+multi-step agent work, [ADR-049](docs/adr/049-lifecycle-harness-prime-schema-over-entity-states.md)
+for Lifecycle participants, and
+[ADR-048](docs/adr/048-bounded-dispatcher-and-triples-substrate.md) for bounded
+concurrency.
 
 ### Rules don't carry payloads
 

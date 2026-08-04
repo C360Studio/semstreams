@@ -18,7 +18,7 @@ Route to the right section / sibling skill, then come back and run the **Finish 
 | Choosing how two components talk (KV watch vs JetStream vs pub/sub) | `/kv-or-stream`, then **§2** to declare the port |
 | Adding a new message/payload type | `/new-payload` (registration checklist) |
 | Deciding rule vs component vs something else | `/orchestration-check` |
-| Exposing a query API (GraphQL / MCP / NATS direct) | `/query-pattern` |
+| Exposing graph queries (admitted HTTP / named typed adapter; no MCP) | `/query-pattern` |
 
 Core mental model (CLAUDE.md): semstreams is a **knowledge-graph engine**, not an event bus. The
 write IS the event. Components **execute work**; they don't know their caller. Rules **trigger**;
@@ -124,8 +124,8 @@ Ports are typed I/O dependencies (`component/port_*.go`). A `Port` has `Name`, `
 
 | Need | Port | Notes / opinion |
 |---|---|---|
-| Observe entity/index **state** (a *fact*; re-delivers current values on restart) | **KVWatchPort** | Default for "react to state changes." Confirm via `/kv-or-stream`. |
-| Durable **request/work** (at-least-once; resumes from last ack, no re-exec) | **JetStreamPort** | For tasks/LLM calls/tool execution. `/kv-or-stream` is the 4-test decider. |
+| Declared internal state dependency | **KVWatchPort** | Owner-only; bootstrap hydrates inputs |
+| Durable request/work | **JetStreamPort** | At-least-once; unacked work may redeliver |
 | Fire-and-forget **pub/sub** (no durability) | **NATSPort** | Rare; most "events" should be a KV write instead. |
 | Bind a raw **TCP/UDP socket** | **NetworkPort** | Ingress inputs (e.g. `input/udp`). |
 | **Outbound HTTP** client / polling input | **HTTPClientPort** | **Descriptor-not-runtime; secrets-as-refs** (ADR, beta.114). No live client in the descriptor. |
@@ -134,6 +134,9 @@ Ports are typed I/O dependencies (`component/port_*.go`). A `Port` has `Name`, `
 | **Periodic** tick / scheduled trigger | **TimerPort** | Tick-driven components. |
 
 Rules of thumb:
+- There is no general typed reactive semantic subscription. A measured consumer
+  may propose a named typed operation with adopter/surface reduction evidence;
+  raw KV watches are owner/dependency or operator seams, not a fallback.
 - **Facts → KV, requests → JetStream.** If you're reaching for NATSPort pub/sub, re-check
   `/kv-or-stream` — the write usually *is* the event.
 - **Bulky payloads never ride rules or messages** — store via `ContentStorable`/ObjectStore and pass

@@ -1,11 +1,12 @@
-// Package graphgateway provides the graph-gateway component for exposing
-// graph operations via HTTP protocols including GraphQL and MCP.
+// Package graphgateway provides a hand-written GraphQL-shaped graph facade. It
+// is not a general schema executor or selection-set projector. Its
+// registered /mcp route is a placeholder, not an MCP graph-read contract.
 //
 // # Overview
 //
 // The graph-gateway component serves as the external access layer for the
-// knowledge graph. It provides HTTP endpoints for querying entities, triples,
-// and graph analytics, as well as submitting mutations via NATS.
+// knowledge graph. Its query-only handler classifies supported root operations
+// and routes them to NATS query/index responders.
 //
 // # Component Interface
 //
@@ -18,29 +19,24 @@
 // # Communication Patterns
 //
 // Inputs:
-//   - HTTP requests on /graphql: GraphQL queries and mutations
-//   - HTTP requests on /mcp: Model Context Protocol operations
+//   - HTTP requests on /graphql: bounded facade operations
+//   - HTTP requests on /mcp: reserved placeholder response, no MCP graph tools
 //
 // Outputs:
-//   - NATS requests to graph.mutation.*: Mutations forwarded to graph-ingest
-//
-// Internal Reads (via QueryManager):
-//   - ENTITY_STATES: Entity data
-//   - OUTGOING_INDEX, INCOMING_INDEX: Graph traversal
-//   - ALIAS_INDEX, PREDICATE_INDEX: Lookups
-//   - COMMUNITY_INDEX: Clustering results (semantic tier)
-//   - ANOMALY_INDEX: Structural anomalies for inference endpoints
+//   - Classified requests to query/index NATS subjects
+//   - No mutation API; the declared mutation output port is unused debt
 //
 // # HTTP Endpoints
 //
-// GraphQL (/graphql):
-//   - Query entities, triples, and relationships
-//   - Perform graph traversals and analytics
-//   - Submit mutations (forwarded to graph-ingest via NATS)
+// GraphQL-shaped facade (/graphql):
+//   - Routes a bounded, hand-written set of graph operations
+//   - Uses custom argument parsing and advertised introspection
+//   - Does not apply selection-set projection to NATS JSON responses
+//   - Reports mutationType nil and forwards no graph mutations
 //
-// MCP (/mcp):
-//   - Model Context Protocol for LLM tool integration
-//   - Provides structured graph operations for AI agents
+// Reserved placeholder (/mcp):
+//   - Returns a stub response
+//   - Does not implement MCP handshake, tools, or graph access
 //
 // Inference (/inference/*):
 //   - List pending anomalies for human review
@@ -54,7 +50,7 @@
 //
 // Key configuration options:
 //   - graphql_path: GraphQL endpoint path (default: /graphql)
-//   - mcp_path: MCP endpoint path (default: /mcp)
+//   - mcp_path: reserved placeholder path (default: /mcp)
 //   - bind_address: HTTP server address (default: localhost:8080)
 //   - enable_playground: Enable GraphQL playground (default: false)
 //

@@ -44,7 +44,7 @@ SemStreams uses a component-based architecture. Components are self-describing u
 | Processor | Graph, JSONMap, Rule | Transform and enrich data |
 | Output | File, HTTPPost, WebSocket | Export data to external systems |
 | Storage | ObjectStore | Persist data to NATS JetStream |
-| Gateway | HTTP, GraphQL, MCP | Expose APIs for queries and mutations |
+| Gateway | HTTP, GraphQL | Expose implemented remote APIs |
 
 ### Graph Processing Components
 
@@ -59,35 +59,42 @@ The graph system decomposes into 8 specialized components with clear responsibil
 | **graph-embedding** | Vector embeddings (BM25 or HTTP) | EMBEDDING_INDEX, EMBEDDING_DEDUP | ENTITY_STATES |
 | **graph-index-spatial** | Geospatial indexing (geohash) | SPATIAL_INDEX | ENTITY_STATES |
 | **graph-index-temporal** | Time-based indexing | TEMPORAL_INDEX | ENTITY_STATES |
-| **graph-gateway** | HTTP/GraphQL/MCP query API | - | All indexes (reads only) |
+| **graph-gateway** | Provisional HTTP query facade | - | Classified NATS query/index responders |
 
 Each component owns exactly one set of output buckets and declares its input
-dependencies, enabling independent scaling and clear data ownership. See
+dependencies, making data ownership explicit. Durable owners remain single-active
+until they prove active/active safety. See
 [Graph Components Reference](../advanced/07-graph-components.md) for detailed
 configuration and deployment information.
 
-### GraphQL Access
+### Provisional HTTP Graph Facade
 
-SemStreams provides a built-in generic GraphQL executor that returns `Entity` objects with triples. It works immediately with any domain — no configuration or code generation needed. This is the primary access pattern for AI agents, MCP tools, and graph exploration.
+SemStreams provides a hand-written GraphQL-shaped facade for admitted remote
+operations. It is not a general schema executor. Embedded services use a named
+operation-specific typed adapter only when one is admitted. There is no MCP
+graph-read contract; the registered `/mcp` route is a placeholder.
 
 ### Flow-Based Design
 
 Components connect through NATS subjects and KV bucket watches rather than direct calls:
 
 - **Loose coupling**: Components react to bucket changes via watchers—no direct dependencies
-- **Hook points**: Add components at any point by watching existing buckets or subjects
+- **Hook points**: Framework owners declare dependencies. There is no general
+  adopter reactive seam; a measured consumer may propose a named typed operation.
+  Raw watches remain a declared owner/dependency or operator seam, not a fallback.
 - **Configuration-driven**: Flows are JSON configs declaring which components to use and how to connect them
-- **Single ownership**: Each KV bucket has exactly one writer component, preventing races
+- **Single ownership**: Each KV bucket has one declared owner. Deployment still
+  owes single-active enforcement until that owner proves active/active safety.
 
 The graph processing components work together to build a semantic knowledge graph, but you can build simpler flows
 with just protocol-layer components (UDP → JSONMap → File) or add semantic processing with the graph suite.
 
 ## Processing Flow
 
-The component-based architecture processes entities through multiple stages. The `graph-query` component serves as
-the query coordination layer, providing unified access to all graph component queries through a request/reply pattern.
-It orchestrates PathRAG queries and coordinates with graph-index, graph-clustering, and
-graph-embedding to compose complex query responses.
+The component-based architecture processes entities through multiple stages.
+`graph-query` provides operation-specific, hand-wired request/reply routing for
+entity, batch, relationship, and PathRAG operations. Other current query fronts
+remain separate and provisional; this is not unified access to every capability.
 
 ### 1. Message Arrival
 
@@ -138,8 +145,9 @@ The `graph-index` component watches `ENTITY_STATES` and maintains relationship i
 | `PREDICATE_INDEX` | "All entities with this property" | graph-index |
 | `ALIAS_INDEX` | "Resolve friendly name to entity ID" | graph-index |
 
-Indexes update asynchronously after entity saves. There's a brief window (milliseconds) where an entity exists but
-isn't fully indexed.
+Indexes update asynchronously after entity saves. Lag is not bounded to
+milliseconds: failure can leave a view stale until its owner repairs/redrives it.
+GS-03 through GS-10 add lifecycle and status conformance.
 
 ### 4. Specialized Indexing (Optional)
 
@@ -209,9 +217,12 @@ Embeddings are stored in `EMBEDDING_INDEX` (with `EMBEDDING_DEDUP` tracking unch
 re-embedded). This enables semantic search and detection of semantic-structural gaps (entities that are
 semantically similar but lack graph connections).
 
-## State: NATS KV Buckets
+## State: NATS persistence
 
-All state lives in NATS JetStream KV buckets. Each bucket has exactly one writer component to prevent races.
+Current and derived state commonly lives in NATS KV. Work uses JetStream streams,
+and bulky content may live in ObjectStore. Each bucket has one declared owner;
+deployment still owes single-active enforcement until that owner proves
+active/active safety.
 
 **Core buckets** (required for basic graph operations):
 
@@ -234,8 +245,8 @@ All state lives in NATS JetStream KV buckets. Each bucket has exactly one writer
 | `EMBEDDING_INDEX` | graph-embedding | Entity ID → embedding vector | Semantic similarity |
 | `EMBEDDING_DEDUP` | graph-embedding | Deduplication tracking | Embedding efficiency |
 
-See [Graph Components Reference](../advanced/07-graph-components.md#kv-bucket-ownership-table) for complete
-ownership details and reader/writer relationships.
+See [Graph Components Reference](../advanced/07-graph-components.md#current-roles)
+for current ownership evidence.
 
 ## Data Flow Example
 
@@ -263,23 +274,26 @@ Step-by-step breakdown:
 5. **graph-clustering**: Reads current state on its timer and runs community and optional anomaly analysis
 6. **graph-gateway**: Uses its implemented query paths to compose responses
 
-All components operate asynchronously—entity queries return immediately, while index updates complete within
-milliseconds.
+Components use different processing models. Do not infer one latency or
+consistency promise from the protocol used to read them.
 
 ## Consistency Model
 
-Different components provide different consistency guarantees based on their processing model:
+Current consistency evidence is incomplete. The GS program adds it one owner at
+a time; this table does not describe a guarantee the current runtime already
+provides.
 
-| Component | Consistency Level | Latency |
-|-----------|------------------|---------|
-| graph-ingest (ENTITY_STATES) | Immediate | <1ms |
-| graph-index (relationship indexes) | Eventually consistent | <10ms |
-| graph-index-spatial/temporal | Eventually consistent | <10ms |
-| graph-clustering (communities and anomalies) | Batch | Configurable (default: 30s) |
-| graph-embedding (embeddings) | Eventually consistent | <100ms (BM25), varies (HTTP) |
+| Component | Current evidence | Scheduled target |
+|---|---|---|
+| graph-ingest (`ENTITY_STATES`) | Entity value, without revision in the query reply | GS-01: value plus revision |
+| graph-index | Implementation-specific readiness | GS-04: declared authority coverage |
+| graph-index-spatial | No uniform lifecycle/status contract | GS-06: owner-declared status |
+| graph-index-temporal | No uniform lifecycle/status contract | GS-07: owner-declared status |
+| graph-embedding | Capability behavior is operation-specific | GS-08: work and capability state |
+| graph-clustering | Cycle behavior is operation-specific | GS-09: cycle and staleness evidence |
 
-Queries through `graph-gateway` read current bucket state, so they may see entities before their indexes are
-complete. This trade-off prioritizes write throughput and component independence.
+GS-12 requires each admitted query operation to declare whether authority or a
+named view answers and what status evidence accompanies that answer.
 
 ## Component Deployment Patterns
 
@@ -292,10 +306,11 @@ Deploy just the essential components for basic graph operations:
 - `graph-ingest` - Entity ingestion
 - `graph-index` - Relationship indexing
 - `graph-query` - Query coordination (optional, for PathRAG)
-- `graph-gateway` - Query API
+- `graph-gateway` - Provisional HTTP query facade
 
-This provides entity storage, relationship traversal, and GraphQL queries without advanced features. The `graph-query`
-component is optional but recommended for advanced query patterns like PathRAG.
+This provides entity storage, relationship traversal, and the facade's admitted
+HTTP operations without advanced features. `graph-query` is needed only for its
+implemented coordinated operations such as PathRAG.
 
 ### Tiered Deployment
 
@@ -323,8 +338,9 @@ Reference](../advanced/07-graph-components.md) for detailed component specificat
 
 ## What SemStreams Is Not
 
-- **Not a database replacement**: No arbitrary SQL or ACID transactions—but dotted notation with NATS subject/KV
-  wildcards provides SQL-like query basics (prefix matching, pattern queries)
+- **Not a database replacement**: No arbitrary SQL or ACID transactions. Use an
+  admitted prefix/predicate operation when available; raw subject/KV wildcards
+  are owner/operator seams, not adopter query basics.
 - **Hybrid streaming/batch**: Entity updates flow continuously, but analysis components (anomalies, clustering) run
   periodically (configurable intervals)
 - **Not a time-series DB**: Use InfluxDB/Prometheus for metrics

@@ -30,7 +30,8 @@ Events → Graphable Interface → Knowledge Graph → Queries
 - Canonical role contracts live in `.agents/contracts/`; platform adapters must remain thin.
 - Canonical shared decision skills live in `.agents/skills/` — kv-or-stream (KV Watch vs JetStream
   Stream, 4-test heuristic), orchestration-check (rule vs component vs lifecycle boundary),
-  new-payload (payload-registry checklist), query-pattern (GraphQL vs MCP vs NATS Direct). Read the
+  new-payload (payload-registry checklist), query-pattern (admitted remote operation vs
+  operation-specific typed adapter; MCP graph access is unavailable). Read the
   canonical `.agents/skills/<name>/SKILL.md` directly; the `.claude/skills/` entries of the same
   names are thin adapters to it.
 
@@ -58,7 +59,7 @@ Flow-based component architecture:
 - **Processor**: Graph, JSONMap, Rule — transform and enrich
 - **Output**: File, HTTPPost, WebSocket — export data
 - **Storage**: ObjectStore — persist to NATS JetStream
-- **Gateway**: HTTP, GraphQL, MCP — expose query APIs
+- **Gateway**: admitted HTTP operations; embedded queries need a named typed adapter
 
 ## Key Packages
 
@@ -200,20 +201,23 @@ SemStreams is NOT a simple event bus or pub/sub framework. It is a knowledge gra
 
 ### The KV Twofer
 
-Every NATS KV bucket gives you three interfaces from one write:
+Every NATS KV bucket gives you two core interfaces from one write:
 
 - **State**: `kv.Get(key)` — current value, right now
 - **Events**: `kv.Watch(pattern)` — fires on every change (fan-out to all watchers)
-- **History**: Replay from any revision — audit trail at no extra cost
+- **History when configured**: a bounded number of retained per-key revisions
 
-**The write IS the event.** No separate event bus. No dual-write problem. Internal processors react to state changes via KV watch, not pub/sub topics. See [KV Twofer](docs/concepts/02-kv-twofer.md).
+`ENTITY_STATES` has history 1. It is current authority, not an audit or recovery
+ledger. Declared watchers rehydrate current matching values and then observe live
+changes. State-reactive owners may watch; periodic owners may read current state
+on their cycle. See [KV Twofer](docs/concepts/02-kv-twofer.md).
 
 ### Facts vs Requests
 
 | Communication type | Primitive | Restart behavior |
 |---|---|---|
-| Fact about the world (entity state, index, current status) | KV Watch | Re-delivers all current values (correct recovery) |
-| Request to do something (task, LLM call, tool execution) | JetStream Stream | Resumes from last ack (no re-execution) |
+| Fact/current state | KV Watch | Hydrates current matching inputs; owner repair/redrive completes recovery |
+| Work request | JetStream Stream | Unacked work redelivers; acked work does not |
 
 Use `/kv-or-stream` (Claude) or read `.agents/skills/kv-or-stream/SKILL.md` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
 

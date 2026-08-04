@@ -5,6 +5,12 @@
 **Accepted** — 2026-08-03. The owner approved the graph-state decision proposal and authorized
 breaking pre-v1 implementation without compatibility layers.
 
+The evidence baseline is the frozen
+[graph-state inventory](../proposals/graph-state-read-write-inventory.md). The
+canonical living implementation state is the
+[graph-state program](../proposals/graph-state-read-write-program.md). This ADR
+remains the decision record and is not a program tracker.
+
 ## Context
 
 SemStreams has one authoritative current-state store, `ENTITY_STATES`, and independently
@@ -27,9 +33,12 @@ role-appropriate convergence contracts, including durable projections with no se
    the modeled context fact and in-memory structural computation remain.
 5. Surviving durable owners default to one active runtime instance until active/active
    convergence is explicitly proven.
-6. Remote application reads use implemented GraphQL operations. No MCP graph-read contract is
-   claimed until tools exist. Embedded services use a typed client over `graph.query.*`. Direct
-   buckets are owner/debug surfaces, not application contracts.
+6. Remote application reads use the required GraphQL gateway's admitted operations; GS-12 makes
+   that gateway conformant. No MCP graph-read contract is claimed until tools exist. There is no
+   canonical general embedded client; embedded
+   services use an operation-specific typed adapter only when admitted. The aggregate
+   `graph/query.Client` is provisional mixed direct-KV/RPC and GS-12 retires or internalizes it.
+   Raw KV is an owner/operator seam, not an application fallback.
 7. Authoritative writes are expressed as typed intents. Raw subjects are transport details.
    Command correlation and idempotency remain separate from projection visibility.
 8. Derived rebuild is side-effect-free. Effectful inference application is a separately
@@ -52,5 +61,9 @@ convergence and readiness obligations incrementally. Breaking removals use the p
 wipe/reseed policy with no aliases, dual readers, online migrations, or compatibility layers.
 
 This decision supersedes the continuing durable-context consequence of ADR-065 while preserving
-ADR-065 as the historical record of the retired storage layout. Mechanics are implemented through
-separate, archivable OpenSpec changes, beginning with `retire-context-index`.
+ADR-065 as the historical record of the retired storage layout. It also supersedes ADR-049's
+claim that `ENTITY_STATES` revision history supplies lifecycle audit history. ADR-049's lifecycle
+convention remains; repair and audit retention require an explicit owner design outside authority
+history 1. Mechanics are implemented through
+separate, archivable OpenSpec changes. The first two retirements landed in #894
+and #895; subsequent order and gate state live only in the canonical program.

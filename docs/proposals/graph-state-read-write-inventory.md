@@ -1,12 +1,33 @@
 # Graph state, write, projection, and read inventory
 
-**Status:** Evidence inventory with non-binding analysis and recommendation.
+**Status:** Frozen evidence inventory with non-binding analysis and recommendation.
 
 **Snapshot date:** 2026-08-03.
+
+**Repository evidence baseline:** `c6ef4541` (`main` at inventory start), before
+the #894 and #895 projection retirements. The inventory was committed with #894
+so the evidence and the first fix traveled together; its facts remain pinned to
+the earlier census baseline.
+
+**Evidence status:** Fable's adversarial
+[review disposition](graph-state-read-write-inventory-review.md) reported 64 of
+65 citations confirmed; one line range had drifted and no load-bearing claim was
+unsupported. #894 and #895 subsequently changed the catalog facts for
+`CONTEXT_INDEX` and `STRUCTURAL_INDEX`. This document is not refreshed as program
+state changes.
+
+**Canonical program:**
+[`graph-state-read-write-program.md`](graph-state-read-write-program.md).
 
 **Scope:** Graph authority, mutation, change delivery, derived state, query paths,
 readiness, replay, and rebuild. This document does not approve a target
 architecture or itself authorize or prohibit another graph issue fix.
+
+Unless a section explicitly says otherwise, findings are repo-local SemStreams
+evidence. Sister-repository observations are point-in-time holdout/adoption notes,
+not architecture votes, completeness claims, or a requirement to repeat a
+downstream source census before each SemStreams increment. The ten holdouts and
+their coordinated migration policy are recorded in the canonical program.
 
 ## Terminology used in this inventory
 

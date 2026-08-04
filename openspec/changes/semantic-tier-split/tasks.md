@@ -1,5 +1,10 @@
 # Tasks — semantic-tier-split
 
+> **SUSPENDED AND FROZEN.** Every task state below is historical and
+> non-executable until the
+> [ADR-090 program](../../../docs/proposals/graph-state-read-write-program.md)
+> explicitly releases this change. Do not implement, archive, or promote it.
+
 **Amend a task line when the work HAPPENS, not only when it succeeds.** A gate that
 ran and was never recorded is indistinguishable from one that was skipped — that
 misreading cost three separate sessions. A deliberate not-done gets `[~]` AND its

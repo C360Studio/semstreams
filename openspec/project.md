@@ -4,8 +4,9 @@
 
 SemStreams is the **governed graph substrate and framework** for the C360 `sem*`
 family. It turns event data into a semantic knowledge graph on NATS JetStream and
-gives every product above it one shared runtime: the KV-twofer (state + events +
-history from a single write), Graphable ingestion into `ENTITY_STATES`, graph
+gives every product above it one shared runtime: the KV twofer (current state +
+watch notification, with explicitly configured bounded history), Graphable
+ingestion into `ENTITY_STATES`, graph
 mutation/query/gateway APIs, the rule engine, the Lifecycle harness, the agentic
 loop/tool/model substrate, deterministic fusion, the payload registry, and the
 component/port flow model.
@@ -31,8 +32,9 @@ classify ownership before building.
   graph mutation/query/gateway APIs; the consumed derived indexes (predicate, name,
   alias, incoming/outgoing) and indexing profiles; projection contracts,
   ownership claims/leases, and the graph-write-intent taxonomy (ADR-055/056); the
-  **Lifecycle harness** (ADR-047) — Participant/Manager, KV-backed workflow state,
-  operator gateway; the **rule engine** (conditions, actions, iteration caps,
+  **Lifecycle harness** (ADR-049) — `Participant`/`Manager` current state over
+  graph-ingest-owned `ENTITY_STATES`, plus operator gateway; the **rule engine**
+  (conditions, actions, iteration caps,
   `publish_agent`, `for_each`, gated-DAG); the **agentic substrate**
   (loop/tools/model/dispatch/memory/governance primitives — NOT product agent
   personas); **deterministic fusion** (`pkg/fusion`, ADR-062); the **payload
@@ -91,8 +93,10 @@ and `docs/adr/README.md` for the ADR-vs-spec split. In short:
   producer relies on `triple.add` auto-vivifying an entity.
 - `graph-ingest` is the sole writer to `ENTITY_STATES`; other components request
   changes via the `graph.mutation.*` API, never by writing the bucket.
-- Communication model follows facts-vs-requests: KV Watch for facts about the
-  world, JetStream streams for requests to do something (`/kv-or-stream`).
+- Communication separates current facts from queued work. KV watchers rehydrate
+  current matching values; JetStream consumers resume unacknowledged requests
+  (`/kv-or-stream`). History is explicitly bounded, and `ENTITY_STATES` history 1
+  is current authority rather than audit or recovery history.
 - Orchestration stays in the two layers — rules trigger, components execute;
   there is no separate workflow engine (`/orchestration-check`).
 - The live graph never uses NATS TTL/MaxBytes/MaxAge for lifecycle

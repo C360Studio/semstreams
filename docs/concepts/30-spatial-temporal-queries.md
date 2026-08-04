@@ -1,21 +1,22 @@
 # Spatial-Temporal Graph Queries
 
-How to answer "give me the current-state entities **near this place**, **during this time**, scoped to
-**these sources**" using the graph query primitives SemStreams already ships. This is a composition
-recipe, not a new engine: SemStreams is not a GIS, routing, or mission-planning system, and this guide
-does not make it one.
+How the current graph internals can answer "give me the current-state entities
+**near this place**, **during this time**, scoped to **these sources**."
+SemStreams is not a GIS, routing, or mission-planning system, and this guide does
+not make it one.
 
 ## When you need this
 
 A product holds source-scoped current-state entities that carry a location and an observed-time, and it
 wants to ask "what state applies near this place and time?" without scanning every entity. Examples:
 sensor tracks in a region updated in the last minute; advisories valid now within a bounding box; assets
-last seen inside a polygon. The shape recurs across products (COP snapshots, area queries, freshness
-panels) — this is the canonical way to compose it.
+last seen inside a polygon. The shape recurs across products, but SemStreams does
+not yet expose an admitted typed embedded composition contract for it.
 
-## The primitives (what already exists)
+## Owner/internal request mechanics
 
-Every piece below is a NATS request/reply subject. None of them is new.
+These NATS request/reply subjects explain current implementation mechanics. They
+are internal transport, not an adopter API or a product composition recipe.
 
 | Concern | Subject | Request | Returns |
 |---|---|---|---|
@@ -79,7 +80,11 @@ removes it — so a range query never returns an entity from a window it has sin
 replay). The temporal index holds an entity's *current* observed-time, not its full observation history;
 products needing dense historical replay should keep that in their own store.
 
-## The compose pattern
+## Internal composition shape
+
+This sequence describes what a future typed operation may encapsulate and what
+owners may use for controlled diagnostics. An adopter must not compose these raw
+subjects directly.
 
 ```text
 1. Scope by identity/type   →  graph.query.prefix      →  candidate EntityStates (or IDs)
@@ -89,13 +94,13 @@ products needing dense historical replay should keep that in their own store.
 5. Hydrate the survivors    →  graph.query.batch       →  full EntityState values
 ```
 
-Order the axes by selectivity — run the tightest filter first and carry its ID set forward, so later
+An implementation should order the axes by selectivity: run the tightest filter
+first and carry its ID set forward, so later
 axes (and the final `graph.query.batch`) operate on the smallest candidate set. For source-scoped COP
 data the prefix or spatial axis is usually tightest.
 
-If a product only needs two of the three axes (e.g. "fresh tracks in this box", no source scope), drop the
-unused step. The spatial axis already returns coordinates, so a space-only query needs no hydration to draw
-a map — only attribute-rich responses need step 5.
+A future admitted operation can omit unused axes. The spatial result already
+carries coordinates; attribute-rich responses still require hydration.
 
 ## Truncation and freshness diagnostics
 
@@ -133,27 +138,26 @@ against this explicitly:
 - In-framework WKT parsing (products parse WKT and emit the normalized numeric pair).
 - Product-specific location/time predicate configuration (see the canonical-contract section).
 
-## GraphQL and NATS are two doors to the same data
+## Current routing and admitted access
 
-The `graph-gateway` GraphQL fields `spatialSearch(north,south,east,west,limit)` and
+The provisional HTTP facade fields `spatialSearch(north,south,east,west,limit)` and
 `temporalSearch(startTime,endTime,limit)` resolve by calling `graph.query.spatial` /
-`graph.query.temporal`, which pass through to the index subjects above. Hosted processors that do not go
-through GraphQL call the NATS subjects directly and get identical results. There is no separate query
-engine behind GraphQL — choose the door that fits the caller.
+`graph.query.temporal` internally. Raw NATS subjects are internal transport, not
+an adopter fallback. A controlled remote caller may consciously use these
+documented facade operations. There is no admitted typed embedded composition
+for spatial-plus-temporal-plus-prefix access today.
 
 ## What is deliberately not here yet
 
-There is **no single intersection query** that combines identity, space, and time server-side. The recipe
-above is three calls plus a client-side intersect plus a batch hydrate. That is correct and cheap for the
-sizes COP-style products see today. If this glue proves heavy across products — measured, not assumed — the
-right framework addition is a product-neutral `graph.query.spatialTemporal` taking optional prefix/type
-scope, optional bounds/polygon, optional time range, and a `hydrate` flag, returning IDs (+coords) or full
-`EntityState` with explicit per-axis truncation diagnostics. It is gated behind real usage on purpose:
-factor the typed contract once the composition is demonstrably worth a server-side join, not before.
+There is **no single intersection query** that combines identity, space, and time
+server-side. If measured adopter demand justifies one, GS-12 can admit a
+product-neutral typed operation with optional prefix/type, bounds/polygon, time
+range, hydration, and explicit per-axis truncation diagnostics. Do not expose a
+new raw subject as the contract.
 
 ## See also
 
-- [Query Access](11-query-access.md) — GraphQL vs MCP vs NATS-direct decision guide.
+- [Query Access](11-query-access.md) — admitted HTTP, typed adapters, and MCP status.
 - [Governed Semantic State](28-governed-semantic-state.md) — how current-state entities are authored.
 - `graph/geo/geojson` — RFC 7946 geometry types, point-in-polygon, bbox.
 - `processor/graph-index-spatial`, `processor/graph-index-temporal` — the index processors.

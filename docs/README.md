@@ -47,7 +47,7 @@
 - [Index Reference](advanced/05-index-reference.md) - The seven indexes
 - [Rules Engine](advanced/06-rules-engine.md) - Condition-based actions
 - [Community Detection](concepts/07-community-detection.md) - LPA algorithm
-- [Query Access](concepts/11-query-access.md) - GraphQL and MCP gateway
+- [Query Access](concepts/11-query-access.md) - HTTP facade, typed adapters, and MCP status
 - [Governed Semantic State](concepts/28-governed-semantic-state.md) - Ownership for shared graph facts
 - [Raw-Lane Plus Current-State Projection](concepts/29-raw-lane-and-current-state-projection.md) - Bounded raw lanes + governed current-state projection for high-rate feeds
 

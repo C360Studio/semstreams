@@ -1,30 +1,36 @@
 # graph-gateway
 
-HTTP gateway component for external access to the knowledge graph via GraphQL and MCP protocols.
+HTTP gateway for a bounded GraphQL-shaped facade over graph operations. The
+required gateway remains provisional until GS-12 makes it conformant GraphQL.
+The registered `/mcp` route is a placeholder, not an MCP graph contract.
 
 ## Overview
 
-The graph-gateway component provides HTTP endpoints for querying and mutating the knowledge graph. It serves as the external access layer, translating HTTP requests into KV reads (via QueryManager) and NATS mutations.
+The `/graphql` surface is a provisional, query-only facade. Its handler classifies
+and routes supported root operations to NATS query/index subjects. It exposes no
+GraphQL mutations and does not read graph KV through a `QueryManager`. Separate
+inference-review HTTP commands currently mutate `ANOMALY_INDEX` directly; that is
+GS-10 ownership debt, not part of the GraphQL contract.
 
 ## Architecture
 
 ```
                                    ┌─────────────────────┐
 HTTP /graphql ──────────────────►  │                     │
-                                   │   graph-gateway     │ ──► NATS graph.mutation.*
-HTTP /mcp ──────────────────────►  │                     │
-                                   │   (QueryManager)    │ ──► KV reads (direct)
+                                   │   graph-gateway     │ ──► NATS query/index subjects
+HTTP /mcp (placeholder) ────────►  │                     │
+                                   │   (query-only)      │
 HTTP / (playground) ────────────►  │                     │
                                    └─────────────────────┘
 ```
 
 ## Features
 
-- **GraphQL API**: Full query and mutation support for graph operations
-- **MCP Protocol**: Model Context Protocol for LLM tool integration
+- **GraphQL-shaped facade**: hand-written routing for a bounded operation set
+- **Reserved MCP placeholder**: returns a stub response; no protocol or graph tools
 - **GraphQL Playground**: Interactive development IDE
-- **Read-through KV**: Direct KV access for queries (no NATS overhead)
-- **Mutation Forwarding**: Mutations sent via NATS to graph-ingest
+- **Classified query routing**: forwards supported operations to NATS responders
+- **Query-only contract**: introspection reports `mutationType: null`
 
 ## Configuration
 
@@ -36,15 +42,7 @@ HTTP / (playground) ────────────►  │                
     "graphql_path": "/graphql",
     "mcp_path": "/mcp",
     "bind_address": "localhost:8080",
-    "enable_playground": true,
-    "ports": {
-      "inputs": [
-        {"name": "http", "type": "http", "subject": "/graphql"}
-      ],
-      "outputs": [
-        {"name": "mutations", "type": "nats-request", "subject": "graph.mutation.*"}
-      ]
-    }
+    "enable_playground": true
   }
 }
 ```
@@ -54,7 +52,7 @@ HTTP / (playground) ────────────►  │                
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `graphql_path` | string | `/graphql` | GraphQL endpoint path |
-| `mcp_path` | string | `/mcp` | MCP endpoint path |
+| `mcp_path` | string | `/mcp` | Reserved placeholder path; not an MCP contract |
 | `bind_address` | string | `localhost:8080` | HTTP server bind address |
 | `enable_playground` | bool | `false` | Enable GraphQL playground UI |
 
@@ -62,37 +60,28 @@ HTTP / (playground) ────────────►  │                
 
 ### GraphQL (`/graphql`)
 
-Standard GraphQL endpoint supporting:
+Hand-written GraphQL-shaped, query-only endpoint.
+It is not a general parser/schema executor and does not project response fields
+from a selection set.
 
-**Queries:**
-- `entity(id: ID!)`: Fetch single entity
-- `entities(filter: EntityFilter)`: Search entities
-- `triples(subject: ID, predicate: String, object: ID)`: Query triples
-- `traverse(start: ID!, depth: Int!)`: Graph traversal
-- `communities(algorithm: String)`: Community detection results
+The operation inventory is code-defined and can drift: compare
+`buildIntrospectionSchema` with `mapGraphQLQueryToNATSSubject` and its handler
+tests before relying on an operation. Current examples include `entity`,
+`entityByAlias`, `entitiesByPrefix`, `relationships`, and `pathSearch`.
+Introspection reports `mutationType: null`; the facade exposes no mutation API.
 
-**Mutations:**
-- `createEntity(input: EntityInput!)`: Create new entity
-- `updateEntity(id: ID!, input: EntityInput!)`: Update entity
-- `deleteEntity(id: ID!)`: Delete entity
-- `createTriple(input: TripleInput!)`: Create relationship
-- `deleteTriple(id: ID!)`: Delete relationship
+### Reserved placeholder (`/mcp`)
 
-### MCP (`/mcp`)
-
-Model Context Protocol endpoint for LLM integration:
-
-**Tools:**
-- `graph_query`: Execute graph queries
-- `entity_lookup`: Find entities by alias or ID
-- `relationship_find`: Discover relationships
-- `context_build`: Build context from graph neighborhood
+The current handler returns only a stub JSON message. It implements no MCP
+handshake, tool discovery, graph tool, or audit contract. Do not configure or
+advertise it as agent graph access. GS-12 must remove the placeholder surface or
+replace it with a separately specified implementation before the foundation tag.
 
 ### Playground (`/`)
 
-When enabled, serves an interactive GraphQL IDE for:
+When enabled, serves an interactive request UI for:
 - Query composition and testing
-- Schema exploration
+- Advertised-operation exploration; introspection may drift from handlers
 - Response visualization
 
 ## Prefix Scoping Best Practices
@@ -136,39 +125,6 @@ Cursor-based pagination is a tracked follow-up. It is not planned for the beta l
 - Exact full-ID queries (all six parts) fall back to a direct `Get` when the prefix scan returns empty — so `entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone.001", limit: 1)` works for single-entity lookup even though the trailing-dot rule would otherwise miss.
 - Empty-string prefix is the only case where no trailing `.` is added — which is exactly why it walks the whole bucket.
 
-## KV Bucket Access
-
-The gateway reads from multiple KV buckets via QueryManager:
-
-| Bucket | Purpose |
-|--------|---------|
-| `ENTITY_STATES` | Entity data and properties |
-| `OUTGOING_INDEX` | Forward relationship traversal |
-| `INCOMING_INDEX` | Backward relationship traversal |
-| `ALIAS_INDEX` | Entity lookup by alias |
-| `PREDICATE_INDEX` | Predicate-based queries |
-| `COMMUNITY_INDEX` | Clustering results (semantic tier) |
-| `SPATIAL_INDEX` | Geospatial queries (if enabled) |
-| `TEMPORAL_INDEX` | Time-based queries (if enabled) |
-
-## Integration
-
-### With graph-ingest
-
-Mutations received by the gateway are forwarded via NATS:
-- `graph.mutation.entity.create`
-- `graph.mutation.entity.update`
-- `graph.mutation.entity.delete`
-- `graph.mutation.triple.add`
-- `graph.mutation.triple.delete`
-
-### With QueryManager
-
-The gateway uses QueryManager for complex read operations:
-- Multi-hop traversals
-- Filtered entity searches
-- Aggregation queries
-
 ## Security Considerations
 
 Production deployments should:
@@ -195,4 +151,5 @@ The gateway is required in all deployment tiers:
 
 ### High Availability
 
-For production, deploy multiple gateway instances behind a load balancer. Each instance maintains its own QueryManager with KV connections.
+For production, deploy multiple gateway instances behind a load balancer. Each
+instance owns its HTTP facade state and NATS requester.

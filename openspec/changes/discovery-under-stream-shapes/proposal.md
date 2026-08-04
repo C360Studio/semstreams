@@ -1,5 +1,10 @@
 ## Why
 
+> **Status: SUSPENDED AND FROZEN by the ADR-090 graph-state program.**
+> This change preserves historical design truth but is non-executable until the
+> [canonical program](../../../docs/proposals/graph-state-read-write-program.md)
+> explicitly releases it. Do not implement, archive, or promote it.
+
 A deployment whose JetStream config covers `tool.>` — **the shipped `TOOL` stream shape** —
 silently loses tool discovery. A request to `tool.list` is answered by JetStream with a publish
 ack rather than by the component's core-NATS responder:
