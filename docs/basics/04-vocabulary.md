@@ -178,7 +178,8 @@ Different SemStreams features have different requirements from your vocabulary a
 - **`Graphable`**: Provides `EntityID()` and `Triples()`. Required for all graph operations.
 - **`ContentStorable`**: Extends `Graphable` with `ContentFields()` and `RawContent()`. Required only for semantic search—tells embedding workers where to find text content.
 
-If you only need graph structure (relationships, communities, structural indexing), `Graphable` is sufficient. Implement `ContentStorable` only when you need semantic similarity based on text content.
+If you only need graph structure (relationships, communities, or in-memory anomaly analysis), `Graphable` is
+sufficient. Implement `ContentStorable` only when you need semantic similarity based on text content.
 
 ## Common Predicate Domains
 

@@ -4,8 +4,8 @@
 // # Overview
 //
 // The graph-clustering component performs community detection on the entity graph
-// using Label Propagation Algorithm (LPA), computes structural indices (k-core, pivot
-// distances), and detects anomalies within community contexts. Optionally enhances
+// using Label Propagation Algorithm (LPA), computes ephemeral k-core and pivot
+// inputs for enabled anomaly detection, and detects anomalies within community contexts. Optionally enhances
 // community descriptions using LLM.
 //
 // # Tier
@@ -24,7 +24,6 @@
 //	                    ┌───────────────────┐
 //	ENTITY_STATES ─────►│                   │
 //	   (KV reads)       │  graph-clustering ├──► COMMUNITY_INDEX (KV)
-//	                    │                   ├──► STRUCTURAL_INDEX (KV)
 //	                    │                   ├──► ANOMALY_INDEX (KV)
 //	                    └─────────┬─────────┘
 //	                              │ (reads)
@@ -38,7 +37,7 @@
 //   - Label Propagation Algorithm (LPA) for community detection
 //   - Configurable detection interval and batch thresholds
 //   - Optional LLM-based community summarization
-//   - Structural index computation (k-core decomposition, pivot distances)
+//   - Same-cycle structural computation for anomaly detection
 //   - Anomaly detection within community contexts
 //   - Semantic gap detection via graph-embedding query path
 //
@@ -53,7 +52,6 @@
 //	    ],
 //	    "outputs": [
 //	      {"name": "communities", "subject": "COMMUNITY_INDEX", "type": "kv"},
-//	      {"name": "structural", "subject": "STRUCTURAL_INDEX", "type": "kv"},
 //	      {"name": "anomalies", "subject": "ANOMALY_INDEX", "type": "kv"}
 //	    ]
 //	  },
@@ -62,9 +60,6 @@
 //	  "enable_llm": true,
 //	  "min_community_size": 2,
 //	  "max_iterations": 100,
-//	  "enable_structural": true,
-//	  "pivot_count": 16,
-//	  "max_hop_distance": 10,
 //	  "enable_anomaly_detection": true,
 //	  "anomaly_config": {
 //	    "enabled": true,
@@ -82,7 +77,7 @@
 // When triggered, the component runs through these phases:
 //
 //  1. Community Detection (LPA) → COMMUNITY_INDEX
-//  2. Structural Computation (if enabled) → STRUCTURAL_INDEX
+//  2. Ephemeral structural prerequisites (when anomaly detection initialized)
 //  3. Anomaly Detection (if enabled) → ANOMALY_INDEX
 //
 // # Scheduling
@@ -98,7 +93,6 @@
 //
 // Outputs:
 //   - KV bucket: COMMUNITY_INDEX - stores detected communities
-//   - KV bucket: STRUCTURAL_INDEX - stores k-core levels and pivot distances
 //   - KV bucket: ANOMALY_INDEX - stores detected anomalies
 //
 // # Usage
@@ -121,8 +115,4 @@
 // Downstream:
 //   - graph-query: reads COMMUNITY_INDEX (community cache → GraphRAG / search_graph)
 //   - graph-gateway: reads ANOMALY_INDEX for the optional inference-review API
-//   - STRUCTURAL_INDEX is written here but currently has no production query
-//     consumer (read back only by the anomaly detectors in-memory and by e2e
-//     validation). Wiring k-core / pivot distance into search ranking is a
-//     tracked ADR-054 follow-up.
 package graphclustering

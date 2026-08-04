@@ -126,9 +126,6 @@ func compareResults(baseline, target *scenarios.TieredResults, baselineFile, tar
 	// PathRAG comparison (Tier 0 - should be present in all tiers)
 	report.Sections.PathRAG = comparePathRAG(baseline.PathRAGSensor, target.PathRAGSensor)
 
-	// Structural index comparison (Tier 0 - k-core, pivot)
-	report.Sections.StructuralIdx = compareStructuralIndexes(baseline.StructuralIndexes, target.StructuralIndexes)
-
 	// GraphRAG comparison (Tier 2 - semantic only)
 	report.Sections.GraphRAG = compareGraphRAG(baseline.GraphRAG, target.GraphRAG)
 
@@ -374,42 +371,6 @@ func comparePathRAG(baseline, target *scenarios.PathRAGResults) *PathRAGDiff {
 	return diff
 }
 
-// compareStructuralIndexes compares k-core and pivot index results
-func compareStructuralIndexes(baseline, target *scenarios.StructuralIndexResults) *StructuralIndexDiff {
-	if baseline == nil && target == nil {
-		return nil
-	}
-	diff := &StructuralIndexDiff{}
-
-	// K-core comparison
-	if baseline != nil && baseline.KCore != nil {
-		diff.BaselineKCoreMax = baseline.KCore.MaxCore
-		diff.BothKCoreVerified = baseline.KCore.Verified
-	}
-	if target != nil && target.KCore != nil {
-		diff.TargetKCoreMax = target.KCore.MaxCore
-		if diff.BothKCoreVerified {
-			diff.BothKCoreVerified = target.KCore.Verified
-		}
-	}
-	diff.KCoreMaxDiff = diff.TargetKCoreMax - diff.BaselineKCoreMax
-
-	// Pivot comparison
-	if baseline != nil && baseline.Pivot != nil {
-		diff.BaselinePivots = baseline.Pivot.PivotCount
-		diff.BothPivotVerified = baseline.Pivot.Verified
-	}
-	if target != nil && target.Pivot != nil {
-		diff.TargetPivots = target.Pivot.PivotCount
-		if diff.BothPivotVerified {
-			diff.BothPivotVerified = target.Pivot.Verified
-		}
-	}
-	diff.PivotsDiff = diff.TargetPivots - diff.BaselinePivots
-
-	return diff
-}
-
 // compareGraphRAG compares GraphRAG query results
 func compareGraphRAG(baseline, target *scenarios.GraphRAGResults) *GraphRAGDiff {
 	if baseline == nil && target == nil {
@@ -582,7 +543,6 @@ func printComparisonReport(report *ComparisonReport) {
 	printCommunitiesSection(report)
 	printAnomaliesSection(report)
 	printPathRAGSection(report)
-	printStructuralIdxSection(report)
 	printGraphRAGSection(report)
 	printSummarySection(report)
 }
@@ -737,24 +697,6 @@ func printPathRAGSection(report *ComparisonReport) {
 		report.Sections.PathRAG.BaselineLatency,
 		report.Sections.PathRAG.TargetLatency)
 	fmt.Printf("  Scores Valid: %v\n", report.Sections.PathRAG.BothScoresValid)
-}
-
-func printStructuralIdxSection(report *ComparisonReport) {
-	if report.Sections.StructuralIdx == nil {
-		return
-	}
-	fmt.Println("\n--- Structural Indexes (Tier 0) ---")
-	fmt.Printf("  K-Core Max: %d → %d (diff: %+d)\n",
-		report.Sections.StructuralIdx.BaselineKCoreMax,
-		report.Sections.StructuralIdx.TargetKCoreMax,
-		report.Sections.StructuralIdx.KCoreMaxDiff)
-	fmt.Printf("  Pivots: %d → %d (diff: %+d)\n",
-		report.Sections.StructuralIdx.BaselinePivots,
-		report.Sections.StructuralIdx.TargetPivots,
-		report.Sections.StructuralIdx.PivotsDiff)
-	fmt.Printf("  K-Core Verified: %v, Pivot Verified: %v\n",
-		report.Sections.StructuralIdx.BothKCoreVerified,
-		report.Sections.StructuralIdx.BothPivotVerified)
 }
 
 func printGraphRAGSection(report *ComparisonReport) {

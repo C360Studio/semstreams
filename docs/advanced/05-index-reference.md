@@ -324,18 +324,6 @@ remains stored with each authoritative entity in `ENTITY_STATES`. There is no
 production query-by-context contract; operator and E2E diagnostics may inspect
 bounded authoritative state directly.
 
-#### STRUCTURAL_INDEX
-
-K-core decomposition and pivot distance data for structural analysis.
-
-| Attribute | Value |
-|-----------|-------|
-| **Created by** | graph-clustering |
-| **Key format** | Entity ID |
-| **Value** | K-core level, pivot distances |
-
-**Use case**: Anomaly detection, structural importance ranking.
-
 #### COMPONENT_STATUS
 
 Component lifecycle status. Tracks current processing stage of long-running components.

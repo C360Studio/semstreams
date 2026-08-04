@@ -832,11 +832,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|processor/graph-clustering/integration_test.go|TestIntegration_AnomalyDetectionEnabled|time.Sleep(3 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/graph-clustering/integration_test.go|TestIntegration_ClusteringFlow|time.Sleep(2 * time.Second)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
@@ -858,16 +853,6 @@
     },
     {
       "key": "integration-time-sleep|processor/graph-clustering/integration_test.go|TestIntegration_EntityCommunityLookup|time.Sleep(3 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/graph-clustering/integration_test.go|TestIntegration_StructuralComputationEnabled|time.Sleep(3 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/graph-clustering/integration_test.go|TestIntegration_StructuralDisabledByDefault|time.Sleep(2 * time.Second)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },

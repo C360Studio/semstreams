@@ -13,6 +13,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -869,9 +870,9 @@ func TestIntegration_LLMEnhancementDisabled(t *testing.T) {
 	t.Log("No LLM resources allocated when disabled - correct behavior")
 }
 
-// TestIntegration_StructuralComputationEnabled verifies that when EnableStructural=true,
-// k-core and pivot indices are computed after LPA and STRUCTURAL_INDEX bucket is created.
-func TestIntegration_StructuralComputationEnabled(t *testing.T) {
+// TestIntegration_FreshStartOmitsRetiredStructuralBucket proves a populated
+// graph-clustering deployment does not recreate ADR-090's retired durable view.
+func TestIntegration_FreshStartOmitsRetiredStructuralBucket(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 
@@ -889,9 +890,6 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 		MinCommunitySize:     2,
 		MaxIterations:        10,
 		EnableLLM:            false,
-		EnableStructural:     true, // Enable structural computation
-		PivotCount:           4,    // Small for testing
-		MaxHopDistance:       5,
 	}
 
 	config.ApplyDefaults()
@@ -936,13 +934,6 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 
 	require.NoError(t, clusteringComp.Start(ctx))
 	defer clusteringComp.Stop(5 * time.Second)
-
-	// Verify STRUCTURAL_INDEX bucket is created
-	var structuralBucket jetstream.KeyValue
-	require.Eventually(t, func() bool {
-		structuralBucket, err = js.KeyValue(ctx, graph.BucketStructuralIndex)
-		return err == nil
-	}, 5*time.Second, 100*time.Millisecond, "STRUCTURAL_INDEX bucket should be created")
 
 	// Create 4 connected entities
 	now := time.Now().UTC()
@@ -996,21 +987,16 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 		incomingBucket.Put(ctx, edge.to, incomingJSON)
 	}
 
-	// Wait for detection cycles
-	time.Sleep(3 * time.Second)
-
-	// Verify k-core data was written to STRUCTURAL_INDEX
-	// The storage uses key format: structural.kcore._meta for metadata
+	communityBucket, err := js.KeyValue(ctx, graph.BucketCommunityIndex)
+	require.NoError(t, err)
 	require.Eventually(t, func() bool {
-		entry, err := structuralBucket.Get(ctx, "structural.kcore._meta")
-		if err != nil {
-			return false
-		}
-		t.Logf("Found k-core index metadata: %d bytes", len(entry.Value()))
-		return len(entry.Value()) > 0
-	}, 10*time.Second, 500*time.Millisecond, "K-core index should be written to STRUCTURAL_INDEX")
+		keys, keysErr := communityBucket.Keys(ctx)
+		return keysErr == nil && len(keys) > 0
+	}, 10*time.Second, 100*time.Millisecond,
+		"community outcome synchronizes the completed graph-clustering cycle")
 
-	t.Log("Structural computation successfully ran with k-core index created")
+	_, err = js.KeyValue(ctx, "STRUCTURAL_INDEX")
+	require.Error(t, err, "fresh graph-clustering start must not create retired STRUCTURAL_INDEX")
 }
 
 // TestIntegration_AnomalyDetectionEnabled verifies that when EnableAnomalyDetection=true,
@@ -1018,6 +1004,14 @@ func TestIntegration_StructuralComputationEnabled(t *testing.T) {
 func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
+	anomalyConfig := inference.DefaultConfig()
+	anomalyConfig.Enabled = true
+	anomalyConfig.SemanticGap.Enabled = false
+	anomalyConfig.CoreAnomaly.Enabled = false
+	anomalyConfig.Transitivity.Enabled = true
+	anomalyConfig.Transitivity.MinExpectedTransitivity = 1
+	anomalyConfig.Transitivity.TransitivePredicates = []string{"graph.rel.contains"}
+	disabled := false
 
 	config := Config{
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
@@ -1029,14 +1023,16 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
 			},
 		},
-		DetectionIntervalStr:   "1s",
+		DetectionIntervalStr:   "1h", // drive the production cycle synchronously below
 		MinCommunitySize:       2,
 		MaxIterations:          10,
 		EnableLLM:              false,
-		EnableStructural:       true, // Required for anomaly detection
-		PivotCount:             4,
-		MaxHopDistance:         5,
 		EnableAnomalyDetection: true, // Enable anomaly detection
+		AnomalyConfig:          anomalyConfig,
+		EntityIDEdges: &EntityIDEdgesConfig{
+			IncludeSiblings:    &disabled,
+			IncludeSystemPeers: &disabled,
+		},
 	}
 
 	config.ApplyDefaults()
@@ -1132,37 +1128,44 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 	}
 
 	for _, edge := range edges {
-		outgoingData := []relationshipEntry{{Predicate: "relation.network.connected-to", ToEntityID: edge.to}}
+		outgoingData := []relationshipEntry{{Predicate: "graph.rel.contains", ToEntityID: edge.to}}
 		outgoingJSON, _ := json.Marshal(outgoingData)
-		outgoingBucket.Put(ctx, edge.from, outgoingJSON)
+		_, err = outgoingBucket.Put(ctx, edge.from, outgoingJSON)
+		require.NoError(t, err)
 
-		incomingData := []relationshipEntry{{Predicate: "relation.network.connected-to", FromEntityID: edge.from}}
-		incomingJSON, _ := json.Marshal(incomingData)
-		incomingBucket.Put(ctx, edge.to, incomingJSON)
+		incomingKey := edge.to + "." + edge.from + "." + graph.EncodePredicateToken("graph.rel.contains")
+		_, err = incomingBucket.Put(ctx, incomingKey, []byte{})
+		require.NoError(t, err)
 	}
 
-	// Wait for detection cycles
-	time.Sleep(3 * time.Second)
+	// Drive the production cycle entry point synchronously. The one-hour interval
+	// keeps the background ticker out of this assertion while exercising the real
+	// community -> structural prerequisites -> anomaly wiring.
+	clusteringComp.runCommunityDetection(ctx)
+	require.NotNil(t, clusteringComp.previousKCore)
+	assert.Equal(t, len(entityIDs), clusteringComp.previousKCore.EntityCount)
 
-	// The ANOMALY_INDEX bucket exists - anomaly detection ran
-	// Note: Whether anomalies are detected depends on the graph structure
-	t.Log("Anomaly detection successfully initialized and ran")
+	anomalyStorage := inference.NewNATSAnomalyStorage(anomalyBucket, clusteringComp.logger)
+	anomalies, err := anomalyStorage.GetByType(ctx, inference.AnomalyTransitivityGap)
+	require.NoError(t, err)
+	require.NotEmpty(t, anomalies,
+		"same-cycle structural inputs should produce and persist the expected transitivity anomaly")
 
-	// Verify we can access the bucket (it was created).
-	// Sister sentinel-set to the community-bucket check above —
-	// Keys() on an empty bucket returns jetstream.ErrNoKeysFound,
-	// not ErrKeyNotFound. Pre-2026-05-13 only ErrKeyNotFound was
-	// accepted here too. errors.Is for wrapper resilience.
-	_, err = anomalyBucket.Keys(ctx)
-	if err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) && !errors.Is(err, jetstream.ErrNoKeysFound) {
-		// Other errors mean the bucket is genuinely unreachable
-		t.Logf("ANOMALY_INDEX bucket accessible, keys error: %v", err)
+	found := false
+	for _, anomaly := range anomalies {
+		if anomaly.EntityA == entityIDs[0] && anomaly.EntityB == entityIDs[2] {
+			found = true
+			assert.Equal(t, []string{entityIDs[0], entityIDs[1], entityIDs[2]}, anomaly.Evidence.ChainPath)
+		}
 	}
+	assert.True(t, found, "expected A→B→C transitivity gap persisted from fresh same-cycle pivot inputs")
+	_, err = js.KeyValue(ctx, "STRUCTURAL_INDEX")
+	assert.Error(t, err, "anomaly detection must not recreate retired STRUCTURAL_INDEX")
 }
 
-// TestIntegration_StructuralDisabledByDefault verifies that structural computation
-// and anomaly detection are disabled by default.
-func TestIntegration_StructuralDisabledByDefault(t *testing.T) {
+// TestIntegration_AnomalyDisabledByDefault verifies that anomaly resources and
+// retired structural persistence remain absent by default.
+func TestIntegration_AnomalyDisabledByDefault(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
 	nc := testClient.Client
 
@@ -1180,7 +1183,7 @@ func TestIntegration_StructuralDisabledByDefault(t *testing.T) {
 		MinCommunitySize:     2,
 		MaxIterations:        10,
 		EnableLLM:            false,
-		// EnableStructural and EnableAnomalyDetection not set (default false)
+		// EnableAnomalyDetection not set (default false)
 	}
 
 	config.ApplyDefaults()
@@ -1226,18 +1229,18 @@ func TestIntegration_StructuralDisabledByDefault(t *testing.T) {
 	require.NoError(t, clusteringComp.Start(ctx))
 	defer clusteringComp.Stop(5 * time.Second)
 
-	// Verify structural resources are NOT allocated
-	assert.Nil(t, clusteringComp.structuralBucket,
-		"Structural bucket should be nil when EnableStructural=false")
 	assert.Nil(t, clusteringComp.anomalyOrchestrator,
 		"Anomaly orchestrator should be nil when EnableAnomalyDetection=false")
 
-	// Verify STRUCTURAL_INDEX bucket is NOT created
-	time.Sleep(2 * time.Second)
-	_, err = js.KeyValue(ctx, graph.BucketStructuralIndex)
-	assert.Error(t, err, "STRUCTURAL_INDEX bucket should not exist when structural disabled")
+	// Synchronize on a completed detection cycle before asserting absence.
+	require.Eventually(t, func() bool {
+		last, ok := clusteringComp.lastActivity.Load().(time.Time)
+		return ok && last.After(clusteringComp.startTime)
+	}, 10*time.Second, 100*time.Millisecond)
+	_, err = js.KeyValue(ctx, "STRUCTURAL_INDEX")
+	assert.Error(t, err, "retired STRUCTURAL_INDEX bucket should not exist")
 
-	t.Log("Structural/anomaly features correctly disabled by default")
+	t.Log("Anomaly detection and retired structural persistence are absent by default")
 }
 
 // TestIntegration_EntityCommunityLookup verifies that specific entities can be looked up

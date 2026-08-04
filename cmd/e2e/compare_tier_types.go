@@ -11,18 +11,6 @@ type PathRAGDiff struct {
 	BothScoresValid  bool  `json:"both_scores_valid"`
 }
 
-// StructuralIndexDiff compares k-core and pivot index results (Tier 0)
-type StructuralIndexDiff struct {
-	BaselineKCoreMax  int  `json:"baseline_kcore_max"`
-	TargetKCoreMax    int  `json:"target_kcore_max"`
-	KCoreMaxDiff      int  `json:"kcore_max_diff"`
-	BaselinePivots    int  `json:"baseline_pivots"`
-	TargetPivots      int  `json:"target_pivots"`
-	PivotsDiff        int  `json:"pivots_diff"`
-	BothKCoreVerified bool `json:"both_kcore_verified"`
-	BothPivotVerified bool `json:"both_pivot_verified"`
-}
-
 // GraphRAGDiff compares GraphRAG query results (Tier 2 - semantic only)
 type GraphRAGDiff struct {
 	BaselineLocalSuccess  bool  `json:"baseline_local_success"`

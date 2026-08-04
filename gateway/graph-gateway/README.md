@@ -150,7 +150,6 @@ The gateway reads from multiple KV buckets via QueryManager:
 | `COMMUNITY_INDEX` | Clustering results (semantic tier) |
 | `SPATIAL_INDEX` | Geospatial queries (if enabled) |
 | `TEMPORAL_INDEX` | Time-based queries (if enabled) |
-| `STRUCTURAL_INDEX` | Graph analytics (if enabled) |
 
 ## Integration
 

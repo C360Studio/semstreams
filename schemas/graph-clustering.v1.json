@@ -262,11 +262,6 @@
       "description": "Enable LLM-based community summarization (requires model registry with community_summary capability)",
       "category": "advanced"
     },
-    "enable_structural": {
-      "type": "boolean",
-      "description": "Enable structural index computation (k-core and pivot distance)",
-      "category": "advanced"
-    },
     "enhancement_workers": {
       "type": "integer",
       "description": "Number of parallel workers for LLM enhancement (default 5)",
@@ -295,11 +290,6 @@
         }
       }
     },
-    "max_hop_distance": {
-      "type": "integer",
-      "description": "Maximum BFS traversal depth (default 10)",
-      "category": "advanced"
-    },
     "max_iterations": {
       "type": "integer",
       "description": "Maximum iterations for LPA algorithm",
@@ -308,11 +298,6 @@
     "min_community_size": {
       "type": "integer",
       "description": "Minimum number of entities to form a community",
-      "category": "advanced"
-    },
-    "pivot_count": {
-      "type": "integer",
-      "description": "Number of pivot nodes for distance indexing (default 16)",
       "category": "advanced"
     },
     "ports": {

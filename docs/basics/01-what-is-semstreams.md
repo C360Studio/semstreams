@@ -132,16 +132,18 @@ See [Governed Semantic State](../concepts/28-governed-semantic-state.md) for the
 
 | Index | Question It Answers | Requirements |
 |-------|---------------------|--------------|
-| STRUCTURAL_INDEX | "Core connectivity and distance estimation" | Tier 0 (Structural) |
 | EMBEDDING_INDEX | "Semantically similar entities" | Tier 2 (Semantic) |
 | COMMUNITY_INDEX | "What community does this entity belong to?" | Tier 1+ (Statistical/Semantic) |
 
-### Structural Indexing
+### Structural Anomaly Inputs
 
-When enabled, structural indexing computes:
+When anomaly detection is enabled, graph-clustering computes these inputs in memory for the current cycle:
 
-- **K-core decomposition**: Identifies the dense backbone of the graph. Higher core numbers indicate more central, densely connected entities. Useful for filtering noise and detecting hubs.
-- **Pivot-based distance**: Pre-computes distances to landmark nodes for O(1) distance estimation. Enables efficient multi-hop filtering and path query optimization.
+- **K-core decomposition**: Identifies the dense backbone of the graph. Higher core numbers indicate more central,
+  densely connected entities.
+- **Pivot-based distance**: Estimates structural separation from landmark nodes for anomaly detectors.
+
+These values are internal anomaly prerequisites, not a durable or queryable structural index.
 
 ### Automatic Community Detection
 
@@ -149,7 +151,7 @@ Entities that reference each other cluster into communities. You don't define co
 
 ### Anomaly Detection
 
-With structural indexing enabled (Tier 0+), SemStreams can detect anomalies:
+With anomaly detection enabled on graph-clustering, SemStreams can detect anomalies:
 
 - **Core isolation**: Entities disconnected from their expected peer group
 - **Core demotion**: Entities losing connectivity over time
@@ -161,7 +163,7 @@ SemStreams supports three capability tiers. Start minimal, add capabilities as y
 
 | Tier | Name | Capabilities | Requirements |
 |------|------|--------------|--------------|
-| 0 | **Structural** | Rules engine, explicit relationships, structural indexing | NATS only |
+| 0 | **Structural** | Rules engine and explicit graph relationships | NATS only |
 | 1 | **Statistical** | + BM25 search, lexical similarity, statistical communities | Same |
 | 2 | **Semantic** | + Neural embeddings, meaning-based similarity, LLM summaries | + Embedding service |
 

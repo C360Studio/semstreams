@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/c360studio/semstreams/test/e2e/client"
-	"github.com/c360studio/semstreams/test/e2e/scenarios/stages"
 )
 
 // Structural index validation functions for tiered E2E tests
@@ -85,22 +84,5 @@ func (s *TieredScenario) executeVerifyIndexPopulation(ctx context.Context, resul
 			fmt.Sprintf("Required indexes empty: %v", emptyRequired))
 	}
 
-	return nil
-}
-
-// executeVerifyStructuralIndexes validates k-core and pivot indexes (structural tier only)
-func (s *TieredScenario) executeVerifyStructuralIndexes(ctx context.Context, result *Result) error {
-	verifier := &stages.StructuralIndexVerifier{NATSClient: s.natsClient}
-	indexResult, err := verifier.VerifyStructuralIndexes(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("Structural index verification failed: %v", err))
-		return nil
-	}
-
-	result.Details["structural_indexes"] = indexResult
-	result.Warnings = append(result.Warnings, indexResult.Warnings...)
-	if len(indexResult.Errors) > 0 {
-		return fmt.Errorf("structural index errors: %v", indexResult.Errors)
-	}
 	return nil
 }

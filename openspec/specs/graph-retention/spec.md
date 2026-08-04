@@ -17,21 +17,21 @@ The live graph KV buckets MUST NOT use NATS TTL (`MaxAge`) or a binding `MaxByte
 as a lifecycle mechanism. This covers every catalog descriptor declared
 no-lifecycle-retention — `ENTITY_STATES` and every derived index it owns,
 including `PREDICATE_INDEX`, `INCOMING_INDEX`, `OUTGOING_INDEX`, `NAME_INDEX`,
-`ALIAS_INDEX`, `CONTEXT_INDEX`, `SPATIAL_INDEX`, `TEMPORAL_INDEX`,
+`ALIAS_INDEX`, `SPATIAL_INDEX`, `TEMPORAL_INDEX`,
 `TEMPORAL_INDEX_REVERSE`, `EMBEDDING_INDEX`, `EMBEDDING_DEDUP`, `COMMUNITY_INDEX`,
-`COMMUNITY_SUMMARIES`, `ANOMALY_INDEX`, `STRUCTURAL_INDEX`, `ENTITY_SUFFIX_INDEX`,
-the framework operational buckets `GRAPH_INGEST_APPLIED_SEQ` (the ADR-072
-redelivery-guard stamps), `GRAPH_STATUS` (the ADR-083 readiness envelopes), and
-`OWNER_CLAIMS` — all correctness-critical no-eviction state. Retention is a
-per-descriptor policy, not a global rule: `OWNER_PRESENCE` is declared bounded-ttl
-(its TTL is the liveness contract and is converged to, never stripped), and
-`COMPONENT_STATUS` is declared unmanaged (the framework guarantees no retention
-posture for it — an explicit catalog fact, not an omission). Retention is a
-semantic operation (ADR-068), never a storage-policy side effect: age/size
-eviction is reachability-blind and would drop an entity that still has live
-inbound edges. When the guard strips retention it clears ONLY
-`MaxAge`/`MaxBytes`; any other backing-stream configuration a bucket legitimately
-carries (e.g. `GRAPH_STATUS`'s bounded `History`) is left untouched.
+`COMMUNITY_SUMMARIES`, `ANOMALY_INDEX`, `ENTITY_SUFFIX_INDEX`, the framework
+operational buckets `GRAPH_INGEST_APPLIED_SEQ` (the ADR-072 redelivery-guard
+stamps), `GRAPH_STATUS` (the ADR-083 readiness envelopes), and `OWNER_CLAIMS` —
+all correctness-critical no-eviction state. Retention is a per-descriptor policy,
+not a global rule: `OWNER_PRESENCE` is declared bounded-ttl (its TTL is the
+liveness contract and is converged to, never stripped), and `COMPONENT_STATUS` is
+declared unmanaged (the framework guarantees no retention posture for it — an
+explicit catalog fact, not an omission). Retention is a semantic operation
+(ADR-068), never a storage-policy side effect: age/size eviction is
+reachability-blind and would drop an entity that still has live inbound edges.
+When the guard strips retention it clears ONLY `MaxAge`/`MaxBytes`; any other
+backing-stream configuration a bucket legitimately carries (e.g.
+`GRAPH_STATUS`'s bounded `History`) is left untouched.
 
 Enforcement is **seam-primary**: every owner acquisition (boot-time or a post-boot
 dynamic component add/edit re-acquiring its buckets) creates-or-opens, reconciles

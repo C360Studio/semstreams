@@ -64,7 +64,7 @@ rather than a monolithic processor. Each tier requires a specific set of compone
 | **graph-index** | Core (All) | Relationship indexing | `OUTGOING_INDEX`, `INCOMING_INDEX`, `ALIAS_INDEX`, `PREDICATE_INDEX` |
 | **graph-query** | Core (All) | Query coordinator | N/A (read-only) |
 | **graph-gateway** | Core (All) | Query gateway | N/A (read-only) |
-| **graph-clustering** | Statistical (Tier 1+) | Community detection, structural analysis, anomaly detection | `COMMUNITY_INDEX`, `STRUCTURAL_INDEX`, `ANOMALY_INDEX` |
+| **graph-clustering** | Tier 1+ | Communities; optional anomalies | `COMMUNITY_INDEX`, `ANOMALY_INDEX` |
 | **graph-embedding** | Statistical/Semantic (Tier 1+) | Vector embeddings | `EMBEDDING_INDEX`, `EMBEDDING_DEDUP` |
 | **graph-index-spatial** | Core (All) | Geospatial indexing | `SPATIAL_INDEX` |
 | **graph-index-temporal** | Core (All) | Temporal indexing | `TEMPORAL_INDEX` |
@@ -199,7 +199,7 @@ Deterministic processing with stateful rules. No search, no external services.
 
 - Embeddings (no vectors)
 - Community detection
-- Structural analysis (k-core, pivots)
+- In-memory structural inputs for anomaly detection
 - Anomaly detection
 - Semantic search
 - GraphRAG
@@ -289,9 +289,6 @@ graph-embedding declares no output ports — it writes `EMBEDDING_INDEX` and
     "min_community_size": 3,
     "max_iterations": 100,
     "enable_llm": false,
-    "enable_structural": true,
-    "pivot_count": 16,
-    "max_hop_distance": 10,
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
@@ -304,7 +301,6 @@ graph-embedding declares no output ports — it writes `EMBEDDING_INDEX` and
       ],
       "outputs": [
         {"name": "communities", "type": "kv-write", "subject": "COMMUNITY_INDEX"},
-        {"name": "structural", "type": "kv-write", "subject": "STRUCTURAL_INDEX"},
         {"name": "anomalies", "type": "kv-write", "subject": "ANOMALY_INDEX"}
       ]
     }
@@ -375,9 +371,6 @@ Everything in Native, plus:
     "min_community_size": 3,
     "max_iterations": 100,
     "enable_llm": true,
-    "enable_structural": true,
-    "pivot_count": 16,
-    "max_hop_distance": 10,
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
@@ -390,7 +383,6 @@ Everything in Native, plus:
       ],
       "outputs": [
         {"name": "communities", "type": "kv-write", "subject": "COMMUNITY_INDEX"},
-        {"name": "structural", "type": "kv-write", "subject": "STRUCTURAL_INDEX"},
         {"name": "anomalies", "type": "kv-write", "subject": "ANOMALY_INDEX"}
       ]
     }

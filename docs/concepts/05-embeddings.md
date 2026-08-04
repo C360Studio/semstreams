@@ -185,15 +185,16 @@ The rules engine can add triples dynamically based on conditions. When a sensor 
 
 See [Rules Engine](../advanced/06-rules-engine.md) for rule configuration.
 
-### 3. Structural Indexes
+### 3. Structural Analysis
 
 Patterns discovered from relationship topology:
 
 - **K-core analysis**: Find densely connected subgraphs
-- **Pivot indexes**: Identify hub nodes (entities with many connections)
+- **Pivot distances**: Estimate structural separation for anomaly detection
 - **Anomaly detection**: Spot entities with unusual connectivity patterns
 
-Structural analysis surfaces patterns you didn't explicitly model.
+Graph-clustering computes these values in memory only when anomaly detection is
+enabled. They are internal detector inputs, not a durable query index.
 
 **Bottom line:** Design meaningful predicates for entities without embeddings. Explicit triples, rules, and structural analysis provide rich graph connectivity—embeddings add semantic similarity on top, but aren't required for a connected graph.
 

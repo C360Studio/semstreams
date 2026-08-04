@@ -85,6 +85,9 @@ commands are the literal command sheet only for a deployment that uses every cur
 `CONTEXT_INDEX` is retired by ADR-090 and appears below only so an older beta bucket is removed. A fresh deployment
 does not recreate it, and an absent-bucket response is expected.
 
+`STRUCTURAL_INDEX` is likewise retired by ADR-090. Its command removes stale beta state only; it is no longer
+framework-owned or recreated.
+
 ```bash
 nats kv rm ENTITY_STATES
 nats kv rm ENTITY_SUFFIX_INDEX
@@ -106,11 +109,11 @@ nats kv rm ANOMALY_INDEX
 nats kv rm STRUCTURAL_INDEX
 ```
 
-This list is the union of `graph.FrameworkOwnedBuckets()` and graph-ingest's `ENTITY_SUFFIX_INDEX` and
-`GRAPH_INGEST_APPLIED_SEQ` guard buckets at the breaking revision. Delete only buckets enabled by the rendered
-deployment. If a binding overrides a name, replace the corresponding command with that literal resolved name. Do
-not copy this list into a shared account, use wildcard deletion, or remove unrelated operational, product,
-workflow, stream, ObjectStore, or upstream source-system state.
+This list combines the current `graph.FrameworkOwnedBuckets()`, graph-ingest's `ENTITY_SUFFIX_INDEX` and
+`GRAPH_INGEST_APPLIED_SEQ` guard buckets, and explicitly labeled retired beta state. Delete only buckets enabled by
+the rendered deployment. If a binding overrides a name, replace the corresponding command with that literal
+resolved name. Do not copy this list into a shared account, use wildcard deletion, or remove unrelated operational,
+product, workflow, stream, ObjectStore, or upstream source-system state.
 
 `PREDICATE_CATALOG` is intentionally absent from the current-bucket commands because ADR-078 retired it from the
 framework inventory. If the pre-cutover deployment has a legacy catalog under an old or overridden name, record

@@ -43,9 +43,6 @@ const (
 	BucketCommunitySummaries = "COMMUNITY_SUMMARIES"
 	BucketAnomalyIndex       = "ANOMALY_INDEX"
 
-	// Structural tier buckets
-	BucketStructuralIndex = "STRUCTURAL_INDEX"
-
 	// Operational buckets
 	BucketComponentStatus = "COMPONENT_STATUS"
 	// BucketGraphIngestAppliedSeq is graph-ingest's ADR-072 redelivery-guard

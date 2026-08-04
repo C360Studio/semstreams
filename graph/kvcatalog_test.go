@@ -18,7 +18,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 22, "the catalog carries the 22 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 21, "the catalog carries the 21 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -99,13 +99,13 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 // and NOT the write-open COMPONENT_STATUS.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
-	assert.Len(t, owned, 21)
+	assert.Len(t, owned, 20)
 	for _, name := range []string{
 		BucketEntityStates, BucketPredicateIndex, BucketIncomingIndex, BucketOutgoingIndex,
 		BucketAliasIndex, BucketNameIndex, BucketEntitySuffixIndex, BucketSpatialIndex,
 		BucketTemporalIndex, BucketTemporalIndexReverse,
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
-		BucketCommunitySummaries, BucketAnomalyIndex, BucketStructuralIndex,
+		BucketCommunitySummaries, BucketAnomalyIndex,
 		BucketGraphIngestAppliedSeq, BucketGraphStatus,
 		BucketOwnerClaims, BucketOwnerPresence, BucketStorageReport,
 	} {
@@ -115,6 +115,8 @@ func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 		"COMPONENT_STATUS is write-open by declaration (#717), not owned")
 	assert.False(t, IsFrameworkOwnedBucket("CONTEXT_INDEX"),
 		"the retired provenance-only bucket must not remain in the generic write guard")
+	assert.False(t, IsFrameworkOwnedBucket("STRUCTURAL_INDEX"),
+		"the retired structural persistence bucket must not remain in the generic write guard")
 	assert.False(t, IsFrameworkOwnedBucket("AGENT_LOOPS"),
 		"application buckets are outside the catalog by rule")
 }

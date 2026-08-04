@@ -64,8 +64,8 @@ Migration state has five allowed values:
   follows index rebuild; graph-index reconciliation; unassessed; pending.
 - Embedding cache/index/dedup: SHA-256 and entity-derived keys; graph embedding; deliberate hash and entity bounds;
   derived rebuild if changed; embedding storage contract; unassessed; assigned.
-- Community and structural indexes: level/core prefixes plus entity/community IDs; graph clustering/structural;
-  integer and ID bounds; derived rebuild if changed; clustering/structural contracts; unassessed; assigned.
+- Community index: level prefixes plus entity/community IDs; graph clustering; integer and ID bounds; derived
+  rebuild if changed; clustering contracts; unassessed; assigned.
 - Anomaly store and indexes: anomaly IDs, enums, entity IDs, and truncated SHA-256; graph inference; deliberate hash
   collision model and ID bounds; derived rebuild if changed; anomaly storage contract; unassessed; assigned.
 - Rule state, schedules, and config: fixed prefixes plus rule/action IDs; rule processor; rule/action ID bounds;
@@ -124,8 +124,6 @@ allowed values as the boundary inventory.
 - `graph/query/client.go` and `processor/graph-query`: raw entity/geohash Gets, graph-index exact/prefix/filter reads,
   community watch, and entity-state WatchAll; graph query; consume each owning bucket's key contract; follows owning
   index rebuild; graph-index reconciliation and spatial contracts; unassessed; pending.
-- `graph/structural/storage.go`: fixed `structural.*` prefixes, integer core keys, and raw entity suffixes; structural
-  graph index; integer and entity bounds; derived rebuild if changed; structural-index contract; unassessed; assigned.
 - `graph/clustering/storage.go` and enhancement workers: level/community/entity composites plus community watches;
   graph clustering; level and ID bounds; derived rebuild if changed; clustering storage contract; unassessed; assigned.
 - `graph/embedding/cache.go`, `storage.go`, and workers: SHA-256 text hashes, entity keys, dedup keys, and watches;

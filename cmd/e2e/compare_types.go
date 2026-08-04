@@ -24,9 +24,8 @@ type ComparisonDiff struct {
 	Communities *CommunityDiff `json:"communities,omitempty"`
 	Anomalies   *AnomalyDiff   `json:"anomalies,omitempty"`
 	// Tier capability sections
-	PathRAG       *PathRAGDiff         `json:"pathrag,omitempty"`
-	StructuralIdx *StructuralIndexDiff `json:"structural_indexes,omitempty"`
-	GraphRAG      *GraphRAGDiff        `json:"graphrag,omitempty"`
+	PathRAG  *PathRAGDiff  `json:"pathrag,omitempty"`
+	GraphRAG *GraphRAGDiff `json:"graphrag,omitempty"`
 }
 
 // VariantDiff compares variant information

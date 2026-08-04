@@ -47,7 +47,7 @@ Graph Layers (Onion Model):
 | 2 | Connected—part of a chain | Equipment in a zone |
 | 3+ | Backbone—highly interconnected | Control units, key documents |
 
-**Pivot Index**: Enables fast distance estimation between entities
+**Pivot distances**: Enable fast in-memory distance estimation for anomaly detectors
 
 ```
          P (pivot)
@@ -171,7 +171,7 @@ Community detection triggers (time or threshold)
 LPA clustering runs
         │
         ▼
-Structural indices computed (k-core, pivot)
+Fresh structural inputs computed in memory (k-core, pivot)
         │
         ▼
 Anomaly detectors analyze indices
@@ -188,22 +188,18 @@ This is background processing—queries continue to run against the current grap
 
 Anomaly detection is controlled through clustering configuration. Key parameters fall into three categories:
 
-### Structural Index Parameters
+### Structural Prerequisites
 
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `enabled` | false | Enable/disable structural index computation |
-| `kcore.enabled` | true | Compute k-core decomposition |
-| `pivot.enabled` | true | Compute pivot-based distance index |
-| `pivot.pivot_count` | 16 | Number of pivots for distance estimation |
-
-More pivots provide tighter distance bounds but increase memory usage. For most graphs, 8-16 pivots offer a good balance.
+`enable_anomaly_detection` is the sole switch for structural anomaly work. When it
+is enabled, graph-clustering computes K-core and pivot inputs using internal
+defaults and passes them directly to the detectors for that cycle. There is no
+separate structural configuration or durable structural index.
 
 ### Anomaly Detection Parameters
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `enabled` | false | Enable/disable anomaly detection |
+| `enable_anomaly_detection` | false | Enable anomaly detection and its structural prerequisites |
 | `max_anomalies_per_run` | 100 | Cap anomalies per detection cycle |
 | `detection_timeout` | 30s | Maximum time for detection to complete |
 

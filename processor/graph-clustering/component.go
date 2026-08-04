@@ -69,12 +69,8 @@ type Config struct {
 	// format cutover.
 	AllowUngatedReads bool `json:"allow_ungated_reads" schema:"type:bool,description:Allow detection when graph-index readiness is unknown (standalone only; never during cutover),category:advanced"`
 
-	// Structural analysis (optional, enables anomaly detection)
-	EnableStructural bool `json:"enable_structural" schema:"type:bool,description:Enable structural index computation (k-core and pivot distance),category:advanced"`
-	PivotCount       int  `json:"pivot_count" schema:"type:int,description:Number of pivot nodes for distance indexing (default 16),category:advanced"`
-	MaxHopDistance   int  `json:"max_hop_distance" schema:"type:int,description:Maximum BFS traversal depth (default 10),category:advanced"`
-
-	// Anomaly detection (optional, requires EnableStructural)
+	// Anomaly detection (optional). Its structural prerequisites are computed
+	// ephemerally in the same cycle and are not adopter-configurable.
 	EnableAnomalyDetection bool             `json:"enable_anomaly_detection" schema:"type:bool,description:Enable anomaly detection after structural computation,category:advanced"`
 	AnomalyConfig          inference.Config `json:"anomaly_config" schema:"type:object,description:Configuration for anomaly detection,category:advanced"`
 
@@ -251,6 +247,9 @@ func semanticEnabledEntityIDBaseline() clustering.EntityIDProviderConfig {
 var removedConfigFields = map[string]string{
 	"index_lag_tolerance": `removed (ADR-083, BREAKING): the bounded-lag tolerance was replaced by the wall-time "max_staleness", which has itself since been removed — readiness now gates on index HEALTH alone and no view-age tolerance exists to configure. Delete the field. A healthy index serves however far behind it is, and the view age of each detection run is reported on the semstreams_graph_clustering_staleness_at_detection_ms gauge`,
 	"max_staleness":       `removed (BREAKING): readiness gates on index HEALTH alone — a fresh status feed, an interpretable state, no degraded/reset_required hard stop, and a completed initial build. There is no view-age tolerance left to declare, because a healthy index serves however far behind it is: lag is a property to REPORT on the answer, not a fault to withhold it for. Delete the field. The view age each detection run proceeded at is reported on the semstreams_graph_clustering_staleness_at_detection_ms gauge — every run, not only the ones a tolerance admitted`,
+	"enable_structural":   `removed (ADR-090, BREAKING): anomaly detection now computes fresh structural prerequisites internally. Delete the field; use "enable_anomaly_detection" as the sole switch`,
+	"pivot_count":         `removed (ADR-090, BREAKING): anomaly detection now uses the framework's internal structural.DefaultPivotCount. Delete the field`,
+	"max_hop_distance":    `removed (ADR-090, BREAKING): structural distance behavior is internal to anomaly detection. Delete the field`,
 }
 
 // rejectRemovedConfigKeys fails the load when a withdrawn field is present, naming
@@ -328,9 +327,12 @@ func (c *Config) Validate() error {
 	// Validate COMMUNITY_INDEX output exists
 	hasCommunityIndex := false
 	for _, output := range c.Ports.Outputs {
+		if output.Subject == "STRUCTURAL_INDEX" || output.Bucket == "STRUCTURAL_INDEX" {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+				`STRUCTURAL_INDEX output was removed (ADR-090, BREAKING). Delete the output; anomaly detection computes structural prerequisites internally`)
+		}
 		if output.Subject == graph.BucketCommunityIndex {
 			hasCommunityIndex = true
-			break
 		}
 	}
 	if !hasCommunityIndex {
@@ -350,11 +352,6 @@ func (c *Config) Validate() error {
 	// Validate max iterations
 	if c.MaxIterations <= 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "max_iterations must be greater than 0")
-	}
-
-	// Anomaly detection requires structural analysis
-	if c.EnableAnomalyDetection && !c.EnableStructural {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "enable_anomaly_detection requires enable_structural to be true")
 	}
 
 	// Validate anomaly config if anomaly detection is enabled
@@ -397,15 +394,6 @@ func (c *Config) ApplyDefaults() {
 	if c.EnhancementWorkers == 0 {
 		c.EnhancementWorkers = 5 // Increased from default 3 for better parallelism
 	}
-	// Structural analysis defaults
-	if c.EnableStructural {
-		if c.PivotCount == 0 {
-			c.PivotCount = 16 // Default from structural package
-		}
-		if c.MaxHopDistance == 0 {
-			c.MaxHopDistance = 10 // Default maximum BFS depth
-		}
-	}
 	// Anomaly detection defaults
 	if c.EnableAnomalyDetection {
 		c.AnomalyConfig.ApplyDefaults()
@@ -437,24 +425,6 @@ func (c *Config) ApplyDefaults() {
 
 	// Add optional output ports based on enabled features
 	if c.Ports != nil {
-		// Add STRUCTURAL_INDEX output when structural analysis is enabled
-		if c.EnableStructural {
-			hasStructural := false
-			for _, o := range c.Ports.Outputs {
-				if o.Subject == graph.BucketStructuralIndex {
-					hasStructural = true
-					break
-				}
-			}
-			if !hasStructural {
-				c.Ports.Outputs = append(c.Ports.Outputs, component.PortDefinition{
-					Name:    "structural_index",
-					Type:    "kv-write",
-					Subject: graph.BucketStructuralIndex,
-				})
-			}
-		}
-
 		// Add ANOMALY_INDEX output when anomaly detection is enabled
 		if c.EnableAnomalyDetection {
 			hasAnomaly := false
@@ -554,13 +524,13 @@ type Component struct {
 	detector clustering.CommunityDetector
 	storage  *clustering.NATSCommunityStorage
 
-	// Structural analysis (optional)
-	structuralBucket  jetstream.KeyValue
-	structuralStorage *structural.NATSStructuralIndexStorage
-	graphProvider     clustering.Provider    // shared with detector
-	previousKCore     *structural.KCoreIndex // for demotion detection
+	// Ephemeral structural analysis for anomaly detection. graphProvider is the
+	// explicit plus EntityID-derived provider, deliberately excluding semantic
+	// virtual edges; previousKCore supports same-process demotion detection.
+	graphProvider clustering.Provider
+	previousKCore *structural.KCoreIndex
 
-	// Anomaly detection (optional, requires structural)
+	// Anomaly detection (optional; structural prerequisites are ephemeral)
 	anomalyBucket       jetstream.KeyValue
 	anomalyStorage      inference.Storage
 	anomalyOrchestrator *inference.Orchestrator
@@ -602,7 +572,8 @@ type Component struct {
 	deferMu         sync.Mutex
 	lastDeferReason graph.DeferReason
 	// semanticProvider is the concrete SemanticEdgeProvider handle (also the top of
-	// c.graphProvider's chain) when enable_semantic_edges is true, nil otherwise. It
+	// the community detector's provider chain) when enable_semantic_edges is true,
+	// nil otherwise. It
 	// is held typed so applySemanticGate can toggle it per cycle from embedding
 	// readiness. Set under c.mu in initProviderAndDetector before the detection
 	// goroutine launches, then only read/toggled by that goroutine (B3's enhancement
@@ -990,17 +961,18 @@ func (c *Component) Start(ctx context.Context) error {
 	c.initProviderAndDetector()
 	poisoned := c.graphStatePoison.Load() != nil
 
-	// Initialize structural analysis if enabled
-	if !poisoned && c.config.EnableStructural {
-		if err := c.initStructural(ctx); err != nil {
-			c.logger.Warn("failed to initialize structural analysis, continuing without it",
-				slog.Any("error", err))
-		}
-	}
-
-	// Initialize anomaly detection if enabled (requires structural)
-	if !poisoned && c.config.EnableAnomalyDetection && c.structuralStorage != nil {
+	// Anomaly initialization owns its ephemeral structural prerequisites; it has
+	// no durable structural bucket or storage dependency. Clear prior-start
+	// runtime state first so only this Start's successful initialization can
+	// authorize structural computation or review workers.
+	c.anomalyOrchestrator = nil
+	c.anomalyStorage = nil
+	c.similarityFinder = nil
+	if !poisoned && c.config.EnableAnomalyDetection {
 		if err := c.initAnomalyDetection(ctx); err != nil {
+			c.anomalyOrchestrator = nil
+			c.anomalyStorage = nil
+			c.similarityFinder = nil
 			c.logger.Warn("failed to initialize anomaly detection, continuing without it",
 				slog.Any("error", err))
 		}
@@ -1037,7 +1009,6 @@ func (c *Component) Start(ctx context.Context) error {
 		slog.Time("start_time", c.startTime),
 		slog.Duration("detection_interval", c.config.DetectionInterval()),
 		slog.Bool("enable_llm", c.config.EnableLLM),
-		slog.Bool("enable_structural", c.config.EnableStructural),
 		slog.Bool("enable_anomaly_detection", c.config.EnableAnomalyDetection))
 
 	return nil
@@ -1738,9 +1709,11 @@ func (c *Component) graphStateContractError(operation string) error {
 		"authoritative graph state requires operator reset and canonical reingest")
 }
 
-// runStructuralAndAnomalyDetection runs structural computation and anomaly detection if enabled.
+// runStructuralAndAnomalyDetection computes fresh structural prerequisites only
+// for a successfully initialized anomaly orchestrator, then runs anomaly
+// detection against those same-cycle pointers.
 func (c *Component) runStructuralAndAnomalyDetection(ctx context.Context) bool {
-	if !c.config.EnableStructural {
+	if c.anomalyOrchestrator == nil {
 		return true
 	}
 	if ctx.Err() != nil {
@@ -1755,7 +1728,7 @@ func (c *Component) runStructuralAndAnomalyDetection(ctx context.Context) bool {
 		return false
 	}
 
-	if c.config.EnableAnomalyDetection && kcoreIndex != nil {
+	if kcoreIndex != nil {
 		if ctx.Err() != nil {
 			c.logger.Debug("skipping anomaly detection - shutdown in progress")
 			return false

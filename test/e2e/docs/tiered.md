@@ -10,7 +10,7 @@ The unified e2e test scenario covering all three tiers: Structural, Statistical,
 
 | Tier | Variant | Includes | Adds | Dependencies |
 |------|---------|----------|------|--------------|
-| **0** | `structural` | Foundation | Entity storage, graph indexes, rules, PathRAG, k-core, pivot | NATS |
+| **0** | `structural` | Foundation | Entity storage, graph indexes, rules, PathRAG | NATS |
 | **1** | `statistical` | Tier 0 + | BM25 embeddings, LPA communities, semantic search | NATS |
 | **2** | `semantic` | Tier 1 + | Neural embeddings, LLM summaries, GraphRAG | NATS + SemEmbed + SemInstruct |
 
@@ -19,8 +19,6 @@ The unified e2e test scenario covering all three tiers: Structural, Statistical,
 - Graph relationship indexes (incoming, outgoing, predicate, alias, spatial, temporal)
 - Rules engine with state transitions (OnEnter/OnExit)
 - **PathRAG graph traversal** (pure graph, no ML)
-- **K-core decomposition** (graph centrality)
-- **Pivot distance index** (approximate shortest paths)
 
 ### Tier 1: Statistical (Tier 0 + Search)
 - All Tier 0 capabilities
@@ -115,7 +113,6 @@ Stages are organized by tier following the progressive enhancement model:
 | **Tier 0: Structural** | | | | |
 | test-pathrag | 0 | ✓ | ✓ | ✓ |
 | test-pathrag-boundary | 0 | ✓ | ✓ | ✓ |
-| verify-structural-indexes | 0 | ✓ | ✓ | ✓ |
 | **Tier 0 Only: Zero-ML Validation** | | | | |
 | validate-zero-embeddings | 0 | ✓ | - | - |
 | validate-zero-clusters | 0 | ✓ | - | - |
@@ -126,6 +123,7 @@ Stages are organized by tier following the progressive enhancement model:
 | test-http-gateway | 1+ | - | ✓ | ✓ |
 | test-embedding-fallback | 1+ | - | ✓ | ✓ |
 | validate-community-structure | 1+ | - | ✓ | ✓ |
+| validate-retired-structural-bucket-absent | 1 | - | ✓ | - |
 | **Tier 2: Semantic** | | | | |
 | test-graphrag-local | 2 | - | - | ✓ |
 | test-graphrag-global | 2 | - | - | ✓ |
