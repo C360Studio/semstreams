@@ -156,5 +156,10 @@ There are two distinct handoffs:
    recommendation, every design premise with its measurement, artifact drafts as text, and open questions requiring
    an owner ruling. Stop for independent pre-owner design review and then owner acceptance.
 
+Before either review, the caller or technical writer materializes the complete handoff as an exact, line-addressable
+artifact and records its repository baseline and content hash. Preserve the inventory checkpoint identity before
+inventory review; establish the same identity for the complete design before pre-owner review. The architect supplies
+the artifact text and remains read-only—it does not write repository files.
+
 Do not claim the design is approved, and do not soften a conflict the inventory surfaced — an overlap reported plainly
 now is a pivot avoided later.

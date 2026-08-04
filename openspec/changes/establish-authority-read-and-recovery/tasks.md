@@ -1,8 +1,8 @@
 # Tasks — establish-authority-read-and-recovery (GS-01)
 
-> **UNAPPROVED — DESIGN-ONLY.** The fresh problem-only inventory passed independent review. Only section 3 design is
-> executable next. Do not create a spec delta, implementation task, runtime code, or promotion evidence before reviewed
-> design and explicit owner acceptance.
+> **UNAPPROVED — DESIGN-ONLY.** Inventory and revision-13 design passed their independent reviews. Only section 5
+> owner decision is executable next. Do not create a spec delta, implementation task, runtime code, or promotion
+> evidence before explicit owner acceptance.
 
 ## 0. Establish the corrected baton
 
@@ -36,19 +36,19 @@ design-only OpenSpec change became the durable baton with updated architect, rev
 
 ## 3. Design after inventory pass
 
-- [ ] 3.1 After recorded `INVENTORY PASS`, produce options and costs, including
+- [x] 3.1 After recorded `INVENTORY PASS`, produce options and costs, including
       doing nothing and extending an existing owner, then state a measured
       recommendation and adopter-seam effects.
-- [ ] 3.2 Preserve the reviewed inventory without dropping conflicts or unknowns
+- [x] 3.2 Preserve the reviewed inventory without dropping conflicts or unknowns
       while recording every measured design premise and triggered
       decision-skill outcome.
 
 ## 4. Independent pre-owner design review
 
-- [ ] 4.1 Have an independent reviewer attempt to refute the design against the
+- [x] 4.1 Have an independent reviewer attempt to refute the design against the
       reviewed inventory, current repository, specs, ADRs, and adopter do-nothing
       path.
-- [ ] 4.2 Resolve every blocking finding and record `DESIGN REVIEW PASS` without
+- [x] 4.2 Resolve every blocking finding and record `DESIGN REVIEW PASS` without
       presenting that verdict as owner approval.
 
 ## 5. Owner decision
@@ -61,6 +61,10 @@ design-only OpenSpec change became the durable baton with updated architect, rev
       baton or implementation change.
 
 ## Validation evidence
+
+The reviewed artifact is `/private/tmp/gs01-design-revision13.txt`, SHA-256
+`24f99453d108d4f8dd3b9b9879e7a0083a9ed6adc2eaf74bd3b5f3e124ff2103`, at clean checkpoint
+`52dc5e3031131dda0a3a55c4de252b2df9d3d8fc`. Independent review recorded `DESIGN REVIEW PASS` with no findings.
 
 Current documentation evidence has `git diff --check`, the 120-character Markdown limit, targeted strict OpenSpec
 validation, and complete strict OpenSpec validation green without a capability delta.

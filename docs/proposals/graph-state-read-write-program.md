@@ -20,7 +20,8 @@ explicitly records its release.
 
 OpenSpec physically reports three in-progress change directories. The GS-01
 [`establish-authority-read-and-recovery`][gs01-design-baton] directory is an
-unapproved, design-only baton with reviewed inventory and no accepted design. `semantic-tier-split` and
+unapproved, design-only baton with reviewed inventory and independently reviewed revision-13 design.
+`semantic-tier-split` and
 `discovery-under-stream-shapes` are suspended and frozen in their own
 proposal/task records. Only the single Next Action in this program is executable;
 none of these changes authorizes runtime implementation or spec promotion.
@@ -213,10 +214,10 @@ belong to the current GS increment and satisfy its stop/go gate.
 
 ## GS-01 process correction
 
-GS-01 has a fresh inventory independently reviewed with `INVENTORY PASS`. It has no accepted design, target state, or
-runtime mechanism. The owner revoked any apparent prior GS-01 acceptance; acceptance was not granted. The GS-00
-candidates and the increment gate below constrain the problem boundary, but they do not choose GS-01 representation
-or implementation.
+GS-01 has a fresh inventory independently reviewed with `INVENTORY PASS` and revision-13 design independently reviewed
+with `DESIGN REVIEW PASS` and no findings. Reviewer clearance is not owner acceptance; no target state or runtime
+mechanism is accepted. The owner revoked any apparent prior GS-01 acceptance; acceptance was not granted. The GS-00
+candidates and the increment gate below constrain the problem boundary but do not authorize implementation.
 
 The failed design attempt is retained as correction evidence, not as input to
 implement:
@@ -231,10 +232,10 @@ implement:
 
 The unapproved, design-only
 [`establish-authority-read-and-recovery`][gs01-design-baton] OpenSpec change is
-the durable baton. It records the problem, accepted process gates, reviewed
-inventory, and `INVENTORY PASS`. Design, independent pre-owner design review, and
-explicit owner acceptance remain. No runtime implementation, runtime-capable spec
-delta, or spec promotion may begin before that final acceptance.
+the durable baton. It records the problem, gates, reviewed inventory, revision-13
+design, and both review passes. Explicit owner acceptance, rejection, or
+redirection is next. No runtime implementation, runtime-capable spec delta, or
+spec promotion may begin before owner acceptance.
 
 ## GS-00 acceptance candidates
 
@@ -513,7 +514,7 @@ here.
 | Pre-GS #894 | Retire `CONTEXT_INDEX`; keep provenance in authority | Complete and archived |
 | Pre-GS #895 | Retire `STRUCTURAL_INDEX`; keep in-memory anomaly inputs | Complete and archived |
 | GS-00 | Bind design candidates, program control, and canonical guidance | Complete, archived, and merged (#896) |
-| GS-01 | Authority read/recovery and graph-ingest safety | Inventory reviewed; design next; no accepted design |
+| GS-01 | Authority read/recovery and graph-ingest safety | Design review passed; owner decision next; unaccepted |
 | GS-02 | Two write seams, lane matrix, honest mutation outcome/observation | Not started |
 | GS-03 | Role declaration representation, census, and conformance | Not started |
 | GS-04 | Graph-index core declarations and conformance | Not started |
@@ -707,12 +708,24 @@ or an inventory recommendation.
   troubleshooting guide is recorded as a broader operator expectation rather
   than direct lifecycle-audit evidence. No design is accepted, and no capability
   spec delta or runtime work is authorized.
+- **2026-08-04 owner premise:** GS-01 uses the pragmatic CAP envelope supplied by
+  the owner: preserve local authority availability during upstream/cloud
+  partition, accept eventual cross-tier propagation and derived views, make no
+  end-to-end exactly-once promise, and require future cross-tier writers to own
+  entities/shards with deterministic semantic conflict resolution rather than
+  arrival-time last-writer-wins.
+- **2026-08-04:** Revision-13 GS-01 design artifact
+  `/private/tmp/gs01-design-revision13.txt` at clean checkpoint `52dc5e30` and
+  SHA-256 `24f99453d108d4f8dd3b9b9879e7a0083a9ed6adc2eaf74bd3b5f3e124ff2103`
+  received `DESIGN REVIEW PASS` with no findings. This is reviewer clearance,
+  not owner acceptance. No capability spec delta, runtime implementation, or
+  spec promotion is authorized.
 
 ## Next Action
 
-Have the architect produce GS-01 options, costs, measured premises, adopter-seam
-effects, and a recommendation from the reviewed inventory, then stop for
-independent pre-owner design review. Add no capability spec delta or runtime work.
+Obtain the owner's explicit acceptance, rejection, or redirection of reviewed
+GS-01 revision 13. Add no capability spec delta or runtime work unless the owner
+explicitly accepts it.
 
 [gs00-archive]: ../../openspec/changes/archive/2026-08-04-establish-graph-state-foundation/proposal.md
 [gs01-design-baton]: ../../openspec/changes/establish-authority-read-and-recovery/proposal.md

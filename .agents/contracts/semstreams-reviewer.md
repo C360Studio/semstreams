@@ -53,6 +53,11 @@ not replace this review.
 
 ## Architecture review modes
 
+Before either architecture review, verify the caller or technical writer materialized the complete handoff as an
+exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
+inventory checkpoint identity; require the same identity for the complete design before pre-owner review. Review that
+exact artifact, not a summary or direct-message reconstruction.
+
 ### Inventory review
 
 Review the problem-only inventory before any target state, options, recommendation, or spec delta exists. Treat every

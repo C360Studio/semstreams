@@ -1091,26 +1091,965 @@ plan.
 The reviewer found no remaining same-class owner or blocking false claim. The evidence-precision correction above
 is nonblocking and incorporated into the reviewed inventory.
 
-## 5. Design placeholder — next after `INVENTORY PASS`
+## 5. Reviewed design — revision 13
 
-**Status: NEXT; NOT STARTED.** No options, recommendation, representation, interface, or runtime behavior is accepted
-or proposed here.
+**Status: DESIGN REVIEW PASS; REVIEWER CLEARANCE ONLY; OWNER DECISION PENDING.**
 
-The architect may now produce genuine options including do nothing and extension of an existing owner, measured
-premises, adopter-seam consequences, triggered decision-skill outcomes, and a recommendation. The architect must then
-stop for independent pre-owner design review.
+- **Artifact:** `/private/tmp/gs01-design-revision13.txt`
+- **Artifact SHA-256:** `24f99453d108d4f8dd3b9b9879e7a0083a9ed6adc2eaf74bd3b5f3e124ff2103`
+- **Baseline:** clean checkpoint `52dc5e3031131dda0a3a55c4de252b2df9d3d8fc`
+- **Review verdict:** `DESIGN REVIEW PASS`, with no findings
 
-### Independent pre-owner design-review verdict
+The verdict clears revision 13 for an explicit owner decision. It is not owner approval and authorizes no capability
+spec delta, runtime implementation, or spec promotion.
 
-PENDING — design has not started and cannot be reviewed.
+## CAP and pragmatism envelope
 
-### Owner decision
+SemStreams is offline-first, edge-capable, and tiered. GS-01 chooses local authority availability over cross-tier
+synchronous consistency:
 
-PENDING — the owner has not accepted a GS-01 design.
+- local `ENTITY_STATES` remains usable during upstream/cloud partition;
+- cross-tier propagation and derived views are eventual;
+- one statically admitted graph-ingest, per-primary Graphable ordering, effect-specific authority convergence, and
+  durable progress constrain Graphable writes without blocking unrelated mutation RPCs;
+- local revisions are currency only inside one authority domain;
+- future cross-tier writers must declare entity/shard ownership and deterministic semantic conflict resolution, never
+  arrival-time last-writer-wins;
+- corrupt/unavailable authority, incomplete destructive maintenance, or target conflict fails closed;
+- exact poison/broken references localize to the item, while projection poison remains sticky whole-view.
 
-## 6. Implementation and promotion lock
+There is no end-to-end exactly-once promise. UDP is best effort. JetStream authority ingest is unlimited at-least-once.
+A strict plan effect may partially commit before a later conflict; partial state and exact gap remain degraded.
+Recovery is an offline observed reconstruction, not a transaction cut.
 
-There is no GS-01 capability delta, implementation plan, runtime code, or test
-plan in this change. Creating or promoting one before a recorded
-`DESIGN REVIEW PASS` and explicit owner acceptance violates this baton and the
-canonical program.
+## Accepted inventory preservation
+
+The independently reviewed fifth-pass surface inventory and adopter seam inventory in
+`openspec/changes/establish-authority-read-and-recovery/design.md` §§1–4 remain byte-for-byte unchanged with
+recorded `INVENTORY PASS`. Revision 13 is the post-inventory replacement. Every inventoried conflict remains live
+unless explicitly dispositioned below.
+
+Revisions 2–12 are superseded and carry no review pass or accepted target state.
+
+## Recommended bounded increment
+
+Recommend total revision-bearing exact reads; static graph-ingest admission; fixed consumer semantics; bounded
+progress; deterministic staged AuthorityPlans with effect-specific convergence; flat status; immutable observed
+checkpoint with whole physical ObjectStore closure; isolated restore with restore-owned capacity proof; canonical
+authority-scan suffix resolution with no suffix bucket; one authority-domain recovery fact; and lifecycle History
+removal.
+
+Reject general client/raw application KV/MCP, compatibility decoder, online restore, global runtime lease,
+transaction snapshot, audit ledger, general recovery workflow, and operator retry/timing/capacity knobs.
+
+## Exact quality, projection poison, and flat status
+
+- Malformed one-key authority returns `poison` plus observed revision; unrelated exact reads remain total.
+- Valid entity with missing/broken content remains `found` plus bounded `content_unresolved` diagnostics naming logical
+  storage instance/key.
+- Absence, poison, content failure, projection absence, and backend unavailability remain distinct.
+- Every projection keeps the binding contract: malformed watched authority latches whole affected view to sticky
+  `reset_required`; no partial view serves healthy; owner reset/restart remains.
+
+`graph.IndexStatusResponse` stays flat. Add `unavailable`, no wrapper:
+
+- ready: authority/progress/source plans valid and no unresolved ingest/recovery fault;
+- degraded: reachable authority with blocker/gap, partial/conflicted plan, incomplete recovery, unresolved content, or
+  named derived failure; projection poison remains `reset_required`;
+- unavailable: authority/progress invalid/unreachable, reconnect rebootstrap incomplete, or recovery control
+  corrupt/unfinished; always `Ready=false`.
+
+Unavailable hard-stops shared readiness gate, all readiness sets, and every fusion mirror for either bootstrap value.
+Update enums, fusion type, metrics, catalogs, fixtures, clustering, and raw decoding together. Unknown JSON cannot
+zero-decode success.
+
+## Complete exact authority-read surface
+
+```go
+type AuthorityReadOutcome string
+
+const (
+	AuthorityFound       AuthorityReadOutcome = "found"
+	AuthorityAbsent      AuthorityReadOutcome = "absent"
+	AuthorityPoison      AuthorityReadOutcome = "poison"
+	AuthorityUnavailable AuthorityReadOutcome = "unavailable"
+	AuthorityCanceled    AuthorityReadOutcome = "canceled"
+	AuthorityInvalid     AuthorityReadOutcome = "invalid"
+)
+
+type AuthorityReadRequest struct { ID string `json:"id"` }
+type AuthorityReadBatchRequest struct { IDs []string `json:"ids"` }
+
+type AuthorityDiagnostic struct {
+	Code string `json:"code"`
+	Class string `json:"class"`
+	StorageInstance string `json:"storageInstance,omitempty"`
+	Key string `json:"key,omitempty"`
+	Message string `json:"message,omitempty"`
+}
+
+type AuthorityReadError struct {
+	Code string `json:"code"`
+	Message string `json:"message"`
+	Retryable bool `json:"retryable"`
+	Details map[string]string `json:"details,omitempty"`
+}
+
+type AuthorityReadResponse struct {
+	Outcome AuthorityReadOutcome `json:"outcome"`
+	ID string `json:"id"`
+	Entity *graph.EntityState `json:"entity,omitempty"`
+	Revision string `json:"revision,omitempty"`
+	Diagnostics []AuthorityDiagnostic `json:"diagnostics,omitempty"`
+	Error *AuthorityReadError `json:"error,omitempty"`
+}
+
+type AuthorityReadBatchItem struct {
+	Index int `json:"index"`
+	ID string `json:"id"`
+	Result AuthorityReadResponse `json:"result"`
+}
+type AuthorityReadBatchResponse struct { Items []AuthorityReadBatchItem `json:"items"` }
+```
+
+Revision is same-entry base-10 uint64, required found, preserved observed poison, empty otherwise, distinct from
+`EntityState.Version`. Valid decoded requests return total envelopes. Batch preserves count/order/index/ID; duplicate
+valid IDs read once/repeat identically; invalid per-item; distinct keys not snapshot; empty `{"items":[]}`. Only
+malformed top-level, classified pre-envelope failure, or total cancellation fails whole call.
+
+```go
+type AuthorityEntity struct {
+	Entity *graph.EntityState
+	Revision uint64
+	Diagnostics []AuthorityDiagnostic
+}
+type AuthorityOutcomeError struct {
+	Outcome AuthorityReadOutcome
+	Code string
+	Revision uint64
+	Retryable bool
+	Details map[string]string
+	Cause error
+}
+type AuthorityItem struct {
+	Index int
+	ID string
+	Entity *graph.EntityState
+	Revision uint64
+	Diagnostics []AuthorityDiagnostic
+	Err *AuthorityOutcomeError
+}
+type EntityReader interface {
+	ReadEntity(ctx context.Context, entityID string) (AuthorityEntity, error)
+	ReadEntities(ctx context.Context, entityIDs []string) ([]AuthorityItem, error)
+}
+```
+
+Single returns value only found. Other outcomes typed; poison keeps revision. Caller cancellation wraps context.
+No-responder/disconnect/timeout is retryable unavailable unless caller context won, never absence. Internal subjects
+remain entity/batch; malformed top-level classified invalid_argument; response formation failure internal.
+
+Migrate graph-query, agentic-loop todos/graph_writer, agentic-tools emit_lesson, projection mutation client, graph
+gateway
+indirect path, tests/mocks. Replace `agentic/agentrun.NATSLoopTripleReader` with EntityReader-injected
+`AuthorityLoopTripleReader` in both production binaries. Found predicate, found missing predicate, wrong type, entity
+absent, poison, unavailable, canceled remain distinct. Search raw subjects and direct `ENTITY_STATES` acquisition;
+application readers have neither. No alias/general client/MCP/KV fallback.
+
+### GraphQL and #851
+
+Shared Entity gets no revision. Exact root returns:
+
+```graphql
+type ExactEntityResult {
+  entity: Entity!
+  authorityRevision: String!
+  diagnostics: [AuthorityDiagnostic!]!
+}
+```
+
+Other roots remain valid without fabricated revision. Exact invalid/absent/poison-with-revision/unavailable/canceled are
+typed operation errors; unresolved content returns data+diagnostics. Malformed HTTP/JSON 400, valid outcomes 200.
+
+### Canonical suffix resolution without a derived index
+
+GS-01 removes `ENTITY_SUFFIX_INDEX`, its catalog constant/row, graph-ingest bucket field, provision/open path, TTL
+suffix cache, update/delete/backfill helpers, readiness assumptions, metrics, maintenance, and tests that treat it as a
+source. No replacement persistent or lazy suffix index is introduced.
+
+`graph.ingest.query.suffix` preserves its response and matching feature through a new operation-specific internal seam:
+
+```go
+type AuthorityKeyLister interface {
+	ListAuthorityKeys(ctx context.Context) ([]string, error)
+}
+```
+
+This is not `natsclient.KVStore.Keys`, `jetstream.KeyValue.ListKeys`, `jetstream.KeyLister`, or a general application
+KV API. The pinned NATS adapter uses raw `jetstream.KeyValue.WatchAll` exclusively as
+`WatchAll(ctx, jetstream.IgnoreDeletes(), jetstream.MetaOnly())`. It does not pass `IncludeHistory`, `UpdatesOnly`, or a
+resume option: default DeliverLastPerSubject supplies current active keys and the initial snapshot marker, while
+MetaOnly avoids value transfer. It drains `watcher.Updates()` with an explicit two-value receive:
+
+```go
+entry, ok := <-updates
+```
+
+The **only** completion condition is `ok && entry == nil`, the raw watcher’s end-of-initial-snapshot marker. If
+`!ok` occurs before that marker, the listing is incomplete. A `KeyLister.Keys()` channel close is never accepted as
+completion because the pinned wrapper erases whether closure came from the real marker, cancellation, or premature raw
+watch closure. A future adapter may replace raw `WatchAll` only after owner review cites concrete API evidence for a
+distinct, unambiguous completion signal.
+
+The adapter checks `ctx.Err()` before setup, before/after every receive, at the marker, and again before return. It
+stops the raw watcher on every exit. Entries before completion accumulate in an internal set using current-key operation
+semantics. Sorting/deduplication and suffix matching happen **only after** the completion proof. `!ok` before marker
+returns typed `authority_listing_incomplete`: canceled if caller context won, otherwise retryable unavailable for
+internal timeout, disconnect, watcher failure, or unexplained closure. Setup failure is unavailable. No accumulated
+prefix, empty result, or candidate ID escapes on any incomplete path.
+
+After successful composition startup and the existing entity-query readiness check, each request validates a nonempty
+suffix, calls `ListAuthorityKeys`, and, only from its proven-complete sorted result, returns the first key equal to the
+suffix or ending in `"." + suffix`; no match returns the existing empty-ID response. This deliberately resolves IDs
+without decoding entity bytes: a matching poisoned entity ID can be returned, and its subsequent exact state read
+returns the typed poison outcome and revision.
+
+Classification is explicit: malformed/empty request is invalid; completed no-match is a successful absent suffix
+result; caller cancellation is canceled; every unproven listing is unavailable/canceled, never absence. No cache can
+serve a deleted/stale mapping. A completed initial snapshot is not a global transaction with later writes; it is the
+single operation’s total authoritative key catalog at its completion boundary.
+
+Cost is `O(N)` authority keys and `O(N log N)` ordering per suffix request, with bytes/latency proportional to current
+entity count and one watcher lifecycle per request. That bill is accepted for the bounded GS-01 clean break; a future
+owner-specific increment may propose a properly owned, fully rebuilt suffix view.
+
+Exact entity and suffix responders require only authority plus graph-ingest progress resources to initialize. This does
+not create an authority-only partial-boot mode: the configured composition still publishes no external surface unless
+all configured components pass the existing startup barrier.
+
+#851 proof: read R; two ExpectedRevision=R writes; one commits R2; loser typed mismatch/current R2; refetch/recompute
+can commit. Public docs include actual-type example. Closure remains owner action.
+
+## Admission, fixed consumer, and resumable legacy cutover
+
+Registration carries one internal `ENTITY_STATES` claim. Preflight rejects duplicates before factories, metrics, stores,
+subscriptions, consumers, starts; init failure aborts. Same-host lock advisory only; no global lease.
+
+Graph-ingest rejects generic consumer overrides. Framework owns AckExplicit, unlimited MaxDeliver, DeliverAll, one
+durable/physical stream, InProgress, internal backpressure, and logical ceiling 3 completed transient failures. Filters
+sort/dedupe; durable digest includes fixed contract; Description marker/digest. Overlap delivers once; random order
+identical; only marker-owned obsolete durables removed.
+
+Any legacy unmarked consumer/guard **or either exact obsolete suffix resource** independently causes
+`legacy_ingest_cutover_required`: the literal `ENTITY_SUFFIX_INDEX` KV bucket or its exact expected backing-stream
+identity. Detection uses exact direct lookups, never a prefix/list heuristic; a similarly named bucket/stream is
+unrelated. Exact not-found proves absence; permission, disconnect, timeout, or ambiguous lookup failure is unavailable
+and refuses rather than assuming absence. This narrow detector remains in startup/recovery tooling despite removal of
+every normal suffix-index path.
+
+Startup preflight, `authority recovery init`, and restore preflight run that detector before factories or mutation.
+Each refuses with the cutover-required error and directs the operator to confirmed legacy teardown. Recovery init does
+not create `AUTHORITY_RECOVERY` on such a target. No lifetime coupling to an old guard/consumer is assumed.
+
+Offline teardown derives exact old name/config, replacement, bucket configs, sorted items, whole digest; confirms before
+deletion. Bounded plan items/manifest live at:
+
+```text
+v1.control.legacy.<planDigest>.item.<zero-padded-index>
+v1.control.legacy.<planDigest>.manifest
+```
+
+Manifest confirms only after all items/digests. No deletion before confirm. Pre-confirm absent old refuses.
+Post-confirm:
+create/verify replacements earliest retained; delete exact old (absence complete); delete old guard (absence complete);
+verify/complete. The same confirmed cutover contains exact items for the literal `ENTITY_SUFFIX_INDEX` bucket and
+expected backing stream: observe identity/configuration, remove the obsolete bucket through its owning API only after
+confirmation, remove/verify any exact orphan backing stream under its own item postcondition, and verify both literal
+resources absent. If one was initially absent, that item’s absence postcondition is already satisfied. No prefix
+inference or deletion of similarly named resources is allowed. Item phases/postconditions make every crash resumable
+elsewhere. Authority/unrelated consumers remain untouched. Startup/recovery init/restore remain refused until both exact
+postconditions hold.
+
+## Catalog descriptors
+
+- **Bucket:** `GRAPH_INGEST_PROGRESS`
+  **Owner:** graph-ingest authority progress runtime/offline control
+  **Class:** operational
+  **Retention:** no-lifecycle
+  **Write:** owner-only
+  **Posture:** owner-creates
+  **History:** 1
+  **Replicas:** 1
+
+- **Bucket:** `AUTHORITY_RECOVERY`
+  **Owner:** authority recovery command
+  **Class:** operational
+  **Retention:** no-lifecycle
+  **Write:** owner-only
+  **Posture:** owner-creates
+  **History:** 1
+  **Replicas:** 1
+
+Both are literal `graph.KVCatalog` rows; guard/inventory derive. Generic update_kv literal/substituted rejects. Owners
+use
+EnsureFrameworkBucket; readers OpenFrameworkBucket. Graph-ingest and progress CLI share progress owner. Recovery/init
+CLI is only recovery Ensure/write owner; server startup Open must-exist. Fresh target runs offline recovery init; legacy
+cutover initializes. Missing recovery bucket fails startup. No TTL/binding MaxBytes.
+
+The clean break deletes `BucketEntitySuffixIndex`/`ENTITY_SUFFIX_INDEX` from constants, `graph.KVCatalog`,
+framework-owned guards/inventory, provisioning, checkpoint scope, and every graph-ingest read/write/maintenance path.
+Only the exact legacy detector, teardown identifier/evidence, and precondition tests retain the literal. Legacy teardown
+owns deletion; normal startup never adopts or recreates the resource.
+
+## Bounded progress and projection determinism
+
+Progress H1 keys:
+
+```text
+v1.entity.<entityDigest>.summary
+v1.entity.<entityDigest>.source.<sourceDigest>
+v1.source.<sourceDigest>.malformed
+v1.plan.<workDigest>.<planAttemptID>.<planDigest>.chunk.<index>
+v1.plan.<workDigest>.<planAttemptID>.<planDigest>.manifest
+v1.control.legacy.<planDigest>.*
+```
+
+Fixed hashes/canonical bytes; values repeat identity/schema. At consumer bind capture stream+Created incarnation in
+every
+queued delivery. Before each authority effect compare live Created; lookup failure Naks/unavailable; mismatch gaps old
+identity, never relabels, rebuilds binding.
+
+Per-source value owns Applied/Settled, fixed 32 exact unresolved gaps, accepted count/hash/summary receipt. Entity
+summary owns one Graphable blocker and accepted count/hash. No live-source cap. Gap capacity keeps blocker/degraded.
+Summary orders Graphable deliveries only, not mutation RPCs. Source postcondition precedes clear:
+
+1. CAS entity blocker; 2. reconcile source/staged plan; 3. execute plan; 4. CAS source outcome; 5. clear blocker; 6.
+   Ack/Term.
+
+Every crash fails closed; source conflict never clears. Restart scans blockers/gaps. Accepted loss is permanent
+settled-not-applied suppression. Entity rolling digest is D0=SHA256(domain), Dn+1=SHA256(Dn||gapDigest), CAS serialized;
+source receipt precedes clear. Corrected semantics republish; historical retry full reseed. Source retirement stopped
+only when absent config, no blocker/gap, accepted receipt included, no consumer, and no retained old delivery.
+
+Same immutable payload/envelope produces byte-identical EntityID/triples; with same exact base/config it produces same
+plan. No admitted Triples calls wall clock/random/global mutable state. Timestamps use stable payload, BaseMessage
+CreatedAt, or bound JetStream stored timestamp. Generated profile/hierarchy/stub facts use same ProjectionTime;
+canonical
+triple ordering is fixed.
+
+Migrate trajectory step (Step.Timestamp), loop execution (stable serialized Task/envelope time), mission command
+(serialized envelope time), document/iot/weather examples, StoredMessage, every registered production/test Graphable.
+Double-project/canonical compare before staging; registry census projects twice and after marshal/decode. Static test
+forbids time.Now in Triples. Persisted executing plan is retry authority.
+
+## Pure AuthorityPlan and effect-specific convergence
+
+`PlanAuthorityGraphable` is side-effect-free: exact-read bases, pure hierarchy/container/sibling/stub discovery, pure
+foreign classification, canonicalization, size checks, and plan production occur before authority mutation. Graphable
+lane never invokes side-effecting GetHierarchyTriples, hidden MergeEntity hierarchy/stub behavior, or warn-only routing.
+
+Required effect closure:
+
+- **Planned invariant:** Graphable-owned predicate replacements and owned envelope
+  **Target:** primary
+  **Effect class:** strict set, with compatible canonical-stub upgrade only
+
+- **Planned invariant:** Create-time immutable indexing profile
+  **Target:** primary
+  **Effect class:** compatible immutable ensure: absent→create, identical→success, different→conflict
+
+- **Planned invariant:** Forward hierarchy membership/sibling evidence
+  **Target:** primary
+  **Effect class:** monotonic canonical append
+
+- **Planned invariant:** Canonical hierarchy container existence/type
+  **Target:** type/system/domain container
+  **Effect class:** compatible ensure/create
+
+- **Planned invariant:** Container membership inverse
+  **Target:** container
+  **Effect class:** monotonic canonical append
+
+- **Planned invariant:** Sibling inverse
+  **Target:** observed sibling
+  **Effect class:** monotonic canonical append
+
+- **Planned invariant:** Referential target existence and stub evidence
+  **Target:** absent relationship target
+  **Effect class:** compatible ensure/create + monotonic referenced-by append
+
+- **Planned invariant:** Foreign-subject evidence
+  **Target:** admitted foreign target
+  **Effect class:** monotonic canonical append; incompatible policy becomes terminal gap
+
+Coalesce all intended deltas for one target into one canonical target effect while retaining each subeffect class.
+Suffix resolution performs the canonical read-only authority-key scan defined above; AuthorityPlan execution has no
+suffix side effect, derived bucket, cache, metric, readiness, or maintenance state. Other caches/metrics remain
+process-local; poison clear is revision-guarded operational. Contract census rejects every hidden `ENTITY_STATES`
+writer and every runtime/catalog `ENTITY_SUFFIX_INDEX` reference except the narrow exact legacy detector,
+teardown literal/evidence, and their precondition tests.
+
+### Effect rules and canonical assertion identity
+
+**Strict set/replacement.** Persist exact base revision/value digest plus a canonical base projection of every
+Graphable-owned predicate/envelope field. If current satisfies the complete intended owned postcondition, reconcile.
+Otherwise the owned base projection must still equal the persisted projection; any changed owned value is terminal
+`authority_plan_conflict`. A revision advance containing only compatible canonical appends or non-owned facts is not a
+rebase of the strict set: preserve those current facts, apply the persisted replacement only to its declared owned
+keys, validate, and CAS the current revision with bounded retry. CAS retry never adopts a changed owned base. Mutable
+Version/UpdatedAt are excluded. Thus a sibling/container/foreign append cannot make a concurrent primary plan conflict,
+while mutation B changing A-owned p from a to b still does.
+
+If strict primary expected absence but current is a valid canonical profile-less referential stub only, it may perform
+the reviewed stub-upgrade path: preserve all stub/referenced-by evidence, add strict primary facts, and CAS current with
+bounded retry. A real/enveloped non-stub current entity is not compatible and follows strict conflict.
+
+**Canonical append identity.** Every structural append/ensure and every admitted foreign-evidence append uses the
+existing `message.AppendIdentityKey` contract, after the same canonical object normalization as the authority writer:
+
+```text
+(Subject, Predicate, Object, Datatype, Source, Context)
+```
+
+`Timestamp`, `Confidence`, and `ExpiresAt` are assertion annotations, not identity. When the six fields match, the
+assertion is already present: preserve the first assertion and all of its annotations exactly, return success, and do
+not treat a different ProjectionTime/confidence/expiry as a conflict or refresh. A different Datatype is a distinct
+assertion. If a producer needs to change annotations for an existing identity, it must declare a replacement mutation;
+the append lane never smuggles annotation replacement through convergence.
+
+This same identity is intentionally used for structural and foreign evidence because both route through canonical
+append semantics and both must converge under duplicate delivery. “Foreign” describes target ownership/policy, not a
+different triple identity. Policy can reject an otherwise well-formed foreign target before planning; after admission,
+the exact six-field identity has the same deterministic first-assertion rule. Canonical ordering uses
+`AppendIdentityKey` and then stable full bytes only as a deterministic tie-breaker for distinct records; it does not
+promote annotations into identity.
+
+**Monotonic canonical append.** Reread the current valid compatible entity. Every intended six-field key already
+present succeeds and preserves the first assertion. Otherwise preserve every current fact, append only missing keys,
+validate the whole result, CAS current revision, and retry a fixed framework-bounded CAS loop on contention. Retry
+exhaustion is transient logical-attempt failure, not semantic conflict. It never rewrites/removes another plan’s
+facts.
+
+**Compatible ensure/create.** For absent target, Create canonical container/stub. On create race, reread. Container is
+compatible only with valid canonical hierarchy-container envelope/type; ensure missing required invariants using the
+same six-field append key while preserving first-assertion annotations. Stub invariant is “valid target resolves”: a
+valid real entity satisfies it; a compatible stub gains missing stub/referenced-by facts monotonically. Malformed or
+wrong envelope conflicts; annotation variation on an existing append identity does not. Combined ensure+append uses one
+bounded CAS transformation over current.
+
+Thus concurrent different-primary births sharing a container each append their distinct contains fact; sibling inverses
+append independently; two stub creators converge or accept a real target; foreign canonical evidence accumulates. No
+ordinary shared target terminal-gaps merely because its revision advanced. Strict A primary partial then mutation B
+sets p=b still conflicts on A retry, preserves B, never Applied/ready. Unrelated B fact can coexist if A postcondition
+still holds.
+
+## Versioned, abandonable plan staging
+
+Plan effect contains index/class/target, persisted base revision/digest where strict, intended delta/postcondition, and
+compatibility invariant. Plan includes work/projection/base/listing evidence, count/bytes/digest. Canonical chunks use
+fresh random `PlanAttemptID` plus PlanDigest, so different replans never collide.
+
+Manifest phases:
+
+```text
+staging -> executing -> settled
+staging -> abandoned
+executing -> conflict|terminal
+```
+
+Summary blocker always contains a complete tuple `{attemptID, planDigest, phase}`. There is no digestless blocker state.
+During staging, Create/idempotent-identical chunks; manifest CAS to `executing` only after all chunks/count/combined
+digest and full plan verify. **No authority effect is callable unless the manifest is executing.** That CAS is the
+irreversible proof effects may have begun; executing bytes are frozen and retry uses them.
+
+Restart with a staging attempt reconstructs from immutable message and current authority. If identical, finish chunks
+and CAS executing. If authority/listing/config moved so original missing bytes cannot be reconstructed, CAS staging to
+abandoned; because it never reached executing, zero effects began. Atomically roll the abandoned digest into the entity
+summary, delete and verify every old attempt chunk/manifest, and retain an authoritative cleanup receipt in the blocker.
+
+While that exact old cleanup receipt remains authoritative, compute the **complete** next `AuthorityPlan`, canonical
+bytes, `PlanDigest`, and fresh `PlanAttemptID` in memory. Only after all planning, canonicalization, budgets, and digest
+checks pass may one CAS replace the old receipt with the complete new `{attemptID, planDigest, phase=staging}` tuple.
+Only after that CAS may the owner write the new attempt’s chunks and manifest.
+
+Crash semantics are exact:
+
+- before the blocker CAS, restart sees and resumes the old cleanup receipt; no new namespace is authoritative;
+- after the blocker CAS but before any chunk/manifest, redelivery deterministically reproduces that same plan from
+  immutable input and unchanged evidence, or marks that fully identified staging attempt abandoned and repeats the
+  bounded cleanup/replan protocol;
+- after manifest `executing`, the attempt is never abandoned or replanned.
+
+Abandon cleanup is bounded: summary hashes `PlanAttemptID` and PlanDigest once into
+AbandonedPlanCount/RollingHash; chunks and manifest delete/verify before a next attempt is planned. At most one current
+staging/executing namespace and its in-progress cleanup receipt exists. Settled Applied/accepted gap similarly permits
+plan deletion after source postcondition. Unresolved conflict retains executing plan for diagnosis/checkpoint.
+
+Logical attempt CAS starts before executing effects; crash before consumes none, after resumes same plan. Under three
+completed transient failures Nak; third gap/Settled before Term. Policy/invalid/oversize/conflict gaps. Unlimited server
+delivery prevents parking.
+
+## One effective encoded-size contract
+
+```text
+serverLimit = positive connected MaxPayload
+streamLimit = observed MaxMsgSize when >0, else serverLimit
+localKVLimit = configured KVOptions.MaxValueSize when >0,
+               else DefaultKVOptions().MaxValueSize (1 MiB)
+effectiveKVLimit = min(serverLimit, streamLimit, localKVLimit)
+valueBudget = effectiveKVLimit - 8192
+```
+
+Nonpositive fails pre-effect; unlimited stream sentinel falls back server. Owner seam exposes actual local option used
+by
+Create/CAS. Apply consistently to progress/source/plan/cutover, recovery, authority. Full plan total budget is
+min(server, positive source MaxMsgSize else server)-8192; each chunk fits progress budget; each target result authority
+budget. Exact one-byte boundary tests preflight/write agree.
+
+## Reconnect and offline CLI
+
+Async disconnect callbacks remain observers. No barrier/new ordering API. Automatic reconnect, unlimited delivery,
+progress, staged plan, bound incarnation, effect-specific CAS, unavailable/unknown converge.
+
+`semstreams authority ...` parses before server construction, uses same config/credentials, one command/report/exit,
+no components/metrics/ports/HTTP. Commands: recovery
+init/checkpoint/inspect/validate/restore/resume/abort/wipe/reconcile;
+progress legacy-teardown/accept-loss/reseed/retire. No live control/MCP/daemon/general executor.
+
+## Immutable checkpoint with whole-ObjectStore closure
+
+Checkpoint is content-addressed and not globally atomic. It captures configs, exact authority values/revisions/digests,
+all progress keys, source/consumer evidence, diagnostics, and catalog completeness.
+
+Authority/progress use two full catalogs: config/Created/first-last before, sorted keyset and entry bytes/revisions,
+config/first-last after. Movement triggers up to two additional full passes. Complete only when final two catalogs and
+backing evidence match and every selected key reads. Final motion never complete. Select final readable exact value,
+final absence, or unreadable/incomplete.
+
+### Shape-neutral content closure
+
+There is no universal StoredContent/Storable object shape. GS-01 deliberately does not decode envelopes, BinaryRef,
+children, or future layouts. From every selected valid authority entity, resolve distinct framework `StorageInstance`
+through rendered configuration. Map each logical instance to its physical NATS account/domain/ObjectStore bucket and
+deduplicate aliases by physical identity. For **every referenced resolved framework physical ObjectStore, capture the
+entire current store**, not selected direct objects.
+
+Full store observation records bucket/backing stream config, Created identity, first/last stream sequence before/after,
+sorted complete object-name inventory, every object’s supported metadata/headers/size/digest, and exact raw bytes. It
+uses ObjectStore APIs plus backing stream evidence; envelopes, binary children, raw objects, unrelated objects, and
+arbitrary future Storable layouts are copied without interpretation.
+
+Perform two full observations per governed store, bracketed with authority catalogs. Re-read each object metadata after
+bytes. Any added/deleted/replaced object, sequence/config movement, unreadable object, or unsupported nonroundtrippable
+metadata is named and triggers bounded recapture under the same four-pass maximum. Complete requires final two
+authority keysets, resolved physical store set, and every governed store inventory/metadata/digest to match. A new final
+StorageInstance without stable whole-store capture makes catalog incomplete.
+
+Direct referenced key absent remains found+missing diagnostic even though the rest of store is captured. Unresolved
+logical instance, external/non-framework backend, or store that cannot enumerate every object is an explicit incomplete
+gap. A poison authority record whose storage instance cannot be decoded is likewise `content_scope_unknown` and cannot
+support a complete content-closure claim. `--accept-incomplete` retains degraded provenance; default restore refuses.
+No storage-author callback, child enumerator, or object-shape knowledge is added.
+
+### Native NATS ObjectStore links
+
+Native links are metadata, not ordinary object bytes. Observation inspects `ObjectInfo`/`ObjectMeta.Opts.Link` before
+any byte read because `ObjectStore.Get` dereferences object links and therefore cannot prove the link object itself.
+The exact metadata and target identity are part of the bundle inventory.
+
+The supported boundary follows the pinned `nats.go` native API exactly:
+
+- only a direct same-physical-bucket object link with nonempty `Name` whose target is a captured **concrete object** may
+  be preserved. Normalize an omitted/same-bucket Bucket to the current physical identity, record link metadata without
+  dereferencing it as link bytes, inspect the named target’s metadata, require `Opts.Link == nil`, and require that
+  target’s stable metadata and exact raw bytes in the same whole-store capture;
+- if the named target is itself a link, classify the outer object as
+  `native_object_link_unsupported` before restore claim. This applies even to an acyclic same-store chain because
+  pinned `ObjectStore.AddLink` rejects link-to-link with `ErrNoLinkToLink`;
+- a cross-bucket object link, including a logical alias resolving outside the captured physical bucket, is the same
+  exact incomplete gap;
+- a bucket link (`Name == ""`), missing concrete target, unreadable link/target metadata, or other non-round-trippable
+  link is the same gap, with source bucket/name, target bucket/name, and reason evidence.
+
+GS-01 does not recursively widen scope through native cross-bucket links and does not introduce raw/manual link-metadata
+writes. It never calls `Get` and stores dereferenced target bytes under the link name, because that would silently
+change link semantics. Default restore refuses any unsupported native link. With explicit `--accept-incomplete`, the
+claim persists the exact degraded gap and the unsupported link is a declared omission; restore creates neither a
+dangling link nor a materialized substitute and cannot claim content-complete provenance.
+
+Restore creates and verifies every concrete object first. Each supported decorated direct-link item then follows this
+persisted crash-resumable state machine in canonical link-name order:
+
+```text
+pending -> link_created -> metadata_updated -> verified
+```
+
+From `pending`, native `AddLink` creates only Name plus the concrete target link option. The item re-reads
+`ObjectInfo`, requires the exact generated same-store target and no unexpected user metadata, then persists
+`link_created`. From there, native `UpdateMeta` applies the captured Name, Description, Headers, and Metadata; the
+pinned API preserves `Opts.Link`. Re-read must prove those user fields byte-for-byte and prove the generated link
+option is unchanged before `metadata_updated` and `verified`.
+
+Only one canonical-order link is current at a time. The recovery claim persists that link name, target identity,
+captured metadata digest, generated-link-option digest, and subphase; completed predecessors are re-proven from their
+exact postconditions on resume. This bounds control state without losing crash identity or adding another bucket.
+
+Resume observes before acting. Absent link repeats `AddLink`; an existing exact-target link advances to or resumes
+`UpdateMeta`; exact decorated metadata advances to verify. Wrong target, changed link option, unexpected metadata, or
+name collision is a terminal target conflict, never overwritten. Crash after either publication resumes from observed
+postcondition. Whole-store comparison distinguishes links from concrete objects and verifies the target concrete digest.
+A server/client version that cannot inspect, create, update, preserve, or round-trip this direct-link metadata converts
+the item to `native_object_link_unsupported` before claim.
+
+This resolves the accepted-inventory shape conflict by widening physical scope rather than pretending to understand
+logical shapes. Cost is honest: bundles may include large unrelated objects and can approach the entire referenced
+store size; capture/verification time and local disk grow accordingly. Supported direct links add metadata verification
+but no duplicate target bytes. Simplicity and pinned-API round-tripability are preferred over callbacks or raw link
+writes.
+
+## Isolated whole-store restore and recovery provenance
+
+H1 `AUTHORITY_RECOVERY` key `v1.ENTITY_STATES` is account-local; one authority domain/account. Claim stores sorted full
+governed authority/progress/physical ObjectStore scopes, bundle/attempt/phase, exact recovery gaps, accepted hash. Every
+restore collides regardless of content selection; no TTL/takeover/runtime lease.
+
+`semstreams authority recovery init` is a separate offline command that ensures only the recovery bucket. Restore itself
+performs no target NATS mutation before the deterministic capacity plan and recovery claim. Before either claim or any
+other restore mutation, canonicalize every possible provenance gap and encode the worst claim under the common
+per-value budget; never truncate/page unresolved truth. Oversize is a typed report with no claim/mutation.
+
+### Account-wide capacity preflight
+
+Per-object sums are insufficient. Before claiming, build one canonical `AccountRestoreStoragePlan` over the complete
+target account/domain and exact bundle. It records the observed account/config identity, telemetry revision/time where
+available, storage class, replication multiplier, resource counts, each encoded component, safety reserve, and a
+whole-plan digest. Its proof scope is every write owned by the offline authority-restore command: authority, progress,
+recovery, governed ObjectStore, and graph-ingest consumer resources. It explicitly excludes post-complete writes by
+derived projection owners. The plan includes conservative upper bounds for:
+
+1. every authority KV value/message, subject and header bytes, backing-stream message overhead, and replicas;
+2. every restored progress/source/plan/cutover/control KV entry with the same overhead and replicas;
+3. the largest recovery claim plus all restore and current-link item subphase rewrites, conservatively counting every
+   phase message that can coexist under actual H1/backing-stream behavior and all subject/header/storage overhead;
+4. every ObjectStore concrete data chunk and object metadata message; for each supported direct link, both the
+   `AddLink` metadata publication and the later `UpdateMeta` publication with captured Description/Headers/Metadata;
+   all backing-stream message/subject/header overhead, retained crash-phase upper bounds, stream state, and replicas
+   under the target client/server rules;
+5. creation/config state for every governed authority/progress/ObjectStore backing stream that is absent on the empty
+   target after recovery init; the already-initialized recovery bucket is current usage, not silently free;
+6. fixed graph-ingest-owned durable consumer state and metadata needed by the restore; and
+7. resulting JetStream stream and consumer counts, not only bytes.
+
+Derived graph-index, embedding, clustering, rule, graph-query, fusion, lifecycle, and other projection/view stores are
+not restore outputs and are not charged as planned additions. Preflight nevertheless proves every cataloged derived
+store/stream absent or empty as an isolation prerequisite and reports the excluded owner scopes. Their future rebuild
+capacity is intentionally not claimed by `AccountRestoreStoragePlan`.
+
+Message, stream, consumer, and object overhead constants come from the actual pinned NATS server/client encoding or an
+owner-reviewed executable sizing oracle. They are version-bound evidence in the plan, not guessed averages. For each
+file- and memory-storage class, add a fixed nonconfigurable safety reserve:
+
+```text
+reserve = max(1 MiB, ceil(plannedAdditionalBytes / 20))
+```
+
+This 5%/1-MiB reserve is framework policy pending owner approval; adopters do not tune it. Counts use their exact upper
+bounds rather than a percentage.
+
+Preflight obtains authoritative JetStream account information for current file/memory usage and finite quotas, stream
+and consumer counts/limits, plus the configurations and replication of every target stream. Missing, stale,
+contradictory, permission-hidden, or version-unsupported telemetry yields typed `target_capacity_unknown` and refuses
+before claim. An explicit server “unlimited” sentinel is known-unlimited and passes that dimension; it is not
+treated as unknown. The plan compares, per dimension:
+
+```text
+currentUsage + plannedAdditionalUpperBound + reserve <= finiteQuota
+currentCount + plannedAdditionalCount <= finiteCountLimit
+```
+
+Every finite dimension must pass. Object content fitting alone cannot pass account capacity. The report names storage
+class, current, planned, reserve, limit, source telemetry, and enforcing layer. If target state or telemetry changes
+before claim CAS, rebuild the plan; the claim stores the accepted plan digest/evidence.
+
+Account-wide proof complements rather than replaces local limits. Preflight still checks each exact authority value
+against authority KV/server/stream/local limits; each progress/control value against progress limits; each possible
+recovery claim/phase value against recovery limits; and each ObjectStore data chunk, concrete-object metadata,
+`AddLink` publication, and decorated `UpdateMeta` publication against connected MaxPayload, positive backing
+MaxMsgSize, client/local object constraints, and positive bucket MaxBytes. Exact one-byte boundary behavior must match
+both native write calls.
+
+Capacity can race after claim due to unrelated account writers. A post-claim allocation/quota failure records the exact
+scope and observed usage as a fenced `target_capacity_changed` unknown/incomplete recovery attempt; it never reports
+success or silently retries beyond the plan. Resume requires new authoritative evidence and the recovery state-machine
+postcondition for the current phase; any required plan replacement remains owner-governed and cannot bypass isolation.
+
+### Restore phases, completion, and configured-startup boundary
+
+Restore runs without runtime components. Before claim it proves authority, progress, every cataloged derived store/view,
+and every governed physical target ObjectStore absent or empty. Separately, it requires **literal absence**, not
+emptiness, of both the exact obsolete `ENTITY_SUFFIX_INDEX` bucket and expected backing stream. Either legacy resource
+causes `legacy_ingest_cutover_required` before capacity claim or any restore mutation. The other derived checks are
+isolation postconditions only: the offline CLI neither creates derived resources nor invokes their owners.
+
+After capacity proof, claim, and isolation, restore every captured concrete object with supported metadata and bytes;
+then execute each supported direct link’s `AddLink -> UpdateMeta -> verify` item; verify the full sorted inventory
+contains no extras/omissions and every metadata/size/digest/link target matches. Restore authority including poison,
+matching progress and recovery gaps, and fixed graph-ingest consumers at earliest retained. Validate only those
+restore-owned resources plus continued derived/suffix absence, then mark authority recovery complete. No pre-complete
+derived rebuild exists.
+
+Phases remain
+`claimed -> validated_empty -> content_restoring -> content_restored -> authority_restoring -> authority_restored ->
+progress_and_consumers_restoring -> progress_and_consumers_restored -> validating -> complete`.
+The per-link item subphases are inside `content_restoring` and their worst simultaneous native publications are in the
+accepted capacity-plan digest. Prewrite abort is allowed after proven emptiness. Postwrite abort requires explicit wipe
+of all recorded restore-owned scopes followed by CAS-clear. Server startup checks recovery before bind/admission and
+refuses corrupt or unfinished recovery; it is allowed to attempt startup only after `complete`.
+
+GS-01 does **not** add a general optional-component, partial-boot, or failure-domain lifecycle framework. Normal
+configured composition startup remains all-or-fail: every configured component must allocate and start successfully
+before the composition root binds external HTTP/query surfaces. Exact and suffix reads therefore serve only after
+successful full composition startup, although their own graph-ingest initialization uses authority and progress
+resources only. If any other configured graph-index, embedding, clustering, rule, fusion, lifecycle, or gateway
+component cannot allocate/start, boot aborts and neither exact nor suffix external service is promised.
+
+That post-complete boot failure is a control-plane/resource failure, distinct from localized entity poison, missing
+content, or broken references after a successful start. Recovery completion remains valid: the operator fixes quota or
+configuration and retries normal startup; restore is neither reopened nor retroactively failed. Once startup succeeds,
+exact outcomes retain their localized classifications and suffix uses the deterministic authority scan. Derived
+operations and shared readiness then follow their existing component contracts; GS-01 does not invent an independent
+status for a component that prevented the process from starting.
+
+The restore capacity proof ends at `complete` and covers restore-owned writes only. Later configured-component
+allocation is explicitly outside that proof. A later startup quota failure aborts that startup attempt and is reported
+as such; it does not claim per-owner service availability, change the recovery fact, or imply derived capacity was
+preflighted. A future increment may design owner-specific preflight or lifecycle isolation, but GS-01 does neither.
+
+Default restore refuses incomplete/unstable store or authority evidence. Explicit accept-incomplete persists gaps and
+starts authority service degraded only after a later successful composition start. Missing direct content stays
+found+diagnostic/degraded; still-observable missing cannot be accepted. Changed/lost source, evicted work,
+external/unresolved store, and unsupported native links persist. Reconcile clears only proven postconditions.
+
+## Lifecycle History clean break
+
+H1 authority is not audit. Remove Manager.History, gateway member, `/history`, OAS/schema/replay claims; old route 404.
+Preserve GetRaw/GetWithRevision/current state/transitions/restart/poison. Replacement E2E restart current
+phase/revision.
+Draft issue dispositions unchanged: #681 ADR-090, #821 current restart, #843 after replacement green, #888 remains.
+
+## Decision skills
+
+- query-pattern: exact remote HTTP/GraphQL; embedded EntityReader only; no MCP/raw/general client/KV fallback.
+- kv-or-stream: authority/status/progress/recovery KV facts; Graphable JetStream; exact request/reply; no ledger.
+- orchestration-check: reconnect component-local; restore/cutover offline bounded CAS commands; no workflow.
+- new-payload: not triggered; envelopes/progress/plans/claims typed records.
+
+## Adopter seam inventory
+
+- **Adopter:** Exact caller
+  **Must know:** Local revision; service starts only after full composition startup
+  **If nothing:** Exact result revision after successful boot
+  **Discovery:** Schema/startup errors
+  **Should know:** Value/revision/outcome
+
+- **Adopter:** Embedded
+  **Must know:** EntityReader
+  **If nothing:** Raw callers migrate
+  **Discovery:** Compiler
+  **Should know:** One operation
+
+- **Adopter:** Suffix caller
+  **Must know:** Resolution requires an end-marker-proven total key scan
+  **If nothing:** Incomplete watch returns canceled/unavailable, never partial/absent
+  **Discovery:** API/performance docs
+  **Should know:** No index readiness
+
+- **Adopter:** Graphable author
+  **Must know:** Deterministic projection
+  **If nothing:** Nondeterminism gaps pre-write
+  **Discovery:** Contract/tests
+  **Should know:** Stable fields
+
+- **Adopter:** Ingest config
+  **Must know:** Filters only
+  **If nothing:** Many streams/shared targets converge
+  **Discovery:** Boot
+  **Should know:** No retries/sizes
+
+- **Adopter:** Mutation caller
+  **Must know:** Strict plan may conflict, never overwrite
+  **If nothing:** ExpectedRevision unchanged
+  **Discovery:** Status/errors
+  **Should know:** Own intent
+
+- **Adopter:** Recovery operator
+  **Must know:** Whole stores/links copied; exact legacy suffix resources must be absent
+  **If nothing:** Any literal legacy resource refuses before mutation and directs cutover
+  **Discovery:** CLI totals/report
+  **Should know:** Stores/bundle/attempt
+
+- **Adopter:** Storage author
+  **Must know:** Nothing about object layout
+  **If nothing:** Entire resolved store closes children/future shapes
+  **Discovery:** Manifest
+  **Should know:** No callback
+
+- **Adopter:** Native-link user
+  **Must know:** Direct same-store links restore through AddLink then metadata UpdateMeta
+  **If nothing:** Link-to-link/external/bucket links default-refuse or are explicit degraded omissions
+  **Discovery:** Checkpoint/restore item report
+  **Should know:** Native support status
+
+- **Adopter:** Account operator
+  **Must know:** Capacity proof covers restore-owned writes; configured startup is separately all-or-fail
+  **If nothing:** Restore can complete before a later startup quota failure
+  **Discovery:** Capacity/startup reports
+  **Should know:** Fix quota/config and retry startup
+
+- **Adopter:** External store owner
+  **Must know:** Backend must be framework-resolved/enumerable
+  **If nothing:** Incomplete gap/default refusal
+  **Discovery:** Report
+  **Should know:** Resolution status
+
+- **Adopter:** Configured component
+  **Must know:** Full composition startup remains all-or-fail
+  **If nothing:** Any component start failure leaves external surfaces unbound
+  **Discovery:** Startup error
+  **Should know:** Existing composition contract
+
+- **Adopter:** Lifecycle
+  **Must know:** History gone
+  **If nothing:** Compile/404
+  **Discovery:** Compiler/routes
+  **Should know:** Current revision
+
+- **Adopter:** Cross-tier
+  **Must know:** Ownership/conflict rule
+  **If nothing:** No writer
+  **Discovery:** Future
+  **Should know:** No global revision
+
+Framework observes actual stores/inventories/native-link metadata/limits/account quotas/source identity/projection/base/
+postconditions/keysets/digests/gaps. Adopters do not predict Ack/retry/durable/bucket/child
+layout/quiet-time/TTL/takeover/
+readiness or capacity reserve.
+
+## Exact cost and complexity delta from revision 12
+
+Added/refined:
+
+- `AuthorityKeyLister` is pinned exclusively to raw `jetstream.KeyValue.WatchAll` and an explicit
+  `entry, ok := <-updates` receive; only `ok && entry == nil` proves completion.
+- Future substitutes require cited, owner-reviewed API evidence for a distinct completion signal.
+
+Removed/narrowed:
+
+- the pinned `ListKeys`/`KeyLister` alternative and the vague “equivalent terminal signal” clause;
+- any interpretation of a derived key-channel close as successful initial-snapshot completion.
+
+This changes no public or adopter surface. It makes the already selected total-listing implementation mechanically
+capable of observing the completion proof and retains the O(N) materialization/O(N log N) suffix cost.
+
+All other revision-12 contracts remain unchanged: CAP, exact read/GraphQL/#851, direct reader migration, static
+admission, fixed consumer, resumable cutover, exact legacy detector, catalog ownership, bounded source progress,
+deterministic projection, pure effect inventory, six-field append identity, strict replacement/stub upgrade,
+complete-before-CAS staging, flat unavailable/sticky poison, whole-store observation, decorated direct-link restoration,
+restore-owned capacity proof, all-or-fail configured startup, canonical no-index suffix semantics, isolated recovery
+claim/phases, lifecycle History removal, and rejection of optional-component lifecycle/global lease/general client/MCP/
+ledger/compatibility/workflow/online restore.
+
+## Required verification
+
+- exact read/adapter/GraphQL/direct acquisition/#851 matrices unchanged;
+- status/fusion hard-stop and sticky projection tests after successful startup;
+- catalog owner Ensure/reader Open/update_kv/inventory tests;
+- fixed consumer, many sources, source incarnation, progress crash/accept/retire tests;
+- deterministic Graphable registry and cited migrations;
+- pure effect inventory/no hidden authority writers;
+- canonical append, concurrent shared-target, strict A→B preservation, and staging crash matrices unchanged;
+- plan/source/progress/recovery/authority one-byte limit boundaries;
+- decorated direct-link AddLink/UpdateMeta metadata, crash, capacity, and unsupported-link matrices unchanged;
+- whole-store drift/alias/incomplete closure and finite account quota/unknown telemetry matrices remain;
+- raw-WatchAll `AuthorityKeyLister` RED: deliver one key then cancel before nil marker; return canceled and no
+  keys/result;
+- raw-WatchAll RED: deliver one key then close `Updates()` before marker (`ok == false`) with live context; return
+  retryable `authority_listing_incomplete` unavailable and no keys/result;
+- raw-WatchAll RED collision: deliver lexical-later matching key, omit lexical-earlier match, then cancel/close before
+  marker; never return later key or empty-ID success;
+- marker matrix proves only `ok && entry == nil`, followed by final context check, permits sort/dedupe and lexical-first
+  matching; `ok && entry != nil` continues and `!ok` never completes;
+- raw adapter contract pins `WatchAll(ctx, IgnoreDeletes(), MetaOnly())`, excludes IncludeHistory/UpdatesOnly/resume,
+  ignores deleted/purged keys, and still receives the initial nil marker;
+- contract fixture around pinned `KeyLister.Keys()` proves its channel close is never wired into or accepted by
+  AuthorityKeyLister as completion; production construction contains no `ListKeys`/`KeyLister` path;
+- timeout/disconnect/setup failure/marker-race/context-at-marker tests prove explicit classification and no partial
+  keys;
+- completed total scans preserve full-ID, instance, type.instance, exact-key, partial-no-match, empty, poison-ID, and
+  collision semantics; every request uses a fresh operation-specific listing and no suffix cache/index;
+- exact-resource matrix with no old consumer/guard: empty literal `ENTITY_SUFFIX_INDEX` bucket only, exact orphan
+  backing stream only, and both each make startup, recovery init, and restore refuse before mutation with
+  `legacy_ingest_cutover_required`;
+- confirm recovery init creates no recovery bucket/claim on those refused targets; restore creates no capacity claim or
+  small write; confirmed teardown resumes through deleting each exact resource and only then permits operations;
+- similarly named bucket/stream never triggers or is deleted; exact detector/teardown are the only permitted literal
+  runtime references;
+- fresh and migrated boot census proves exact/suffix initialization opens only authority/progress resources and no
+  suffix bucket/cache/write/readiness path remains;
+- restore requires literal suffix bucket/backing-stream absence, not empty, reaches complete with other derived stores
+  absent/empty, and retains all-or-fail subsequent startup behavior;
+- post-complete configured-component failure/retry, lifecycle History, and all retained E2E/race gates remain.
+
+**Breaking gate.** Removing `ENTITY_SUFFIX_INDEX` is a clean-break storage/API-internal migration. Before landing the
+breaking commit, run the relevant full ingest→authority→query E2E tier (at minimum `task e2e:semantic`) and the
+exact/suffix integration matrix above. Grep every binary and package for both the constant and literal bucket name;
+only the exact legacy detector, teardown identifier/evidence, and their tests may remain. Verify both `cmd/semstreams`
+and `cmd/e2e-semstreams` refuse suffix-only legacy state, then start after teardown and resolve suffixes through the
+total authority scan. Regenerate schemas and prove no uncommitted spec/schema delta. If the E2E tier does not cover
+restored-authority suffix resolution and raw-WatchAll partial-list closure, record those coverage gaps before promotion.
+
+## Revision-12 finding-resolution note
+
+- **Revision-12 finding:** HIGH: pinned `ListKeys` cannot expose an unambiguous completion proof
+  **Revision-13 resolution:** Production AuthorityKeyLister uses raw `WatchAll` only. Explicit `entry, ok` receive
+                              accepts only `ok && entry == nil`; `!ok` is incomplete. ListKeys/KeyLister and vague
+                              equivalent clauses are removed; future substitution requires cited distinct-signal
+                              evidence
+
+## Updated owner rulings requested
+
+1. Accept local availability/eventual CAP envelope after successful configured startup, partial strict conflict as
+   durable degraded, and no global transaction/exactly-once.
+2. Accept strict replacement, canonical six-field append, compatible ensure/create, pure deterministic AuthorityPlan,
+   complete-before-CAS staging, and no hidden authority writer.
+3. Accept whole-store capture, decorated direct AddLink→UpdateMeta restore, direct-target-only native-link boundary,
+   restore-owned capacity proof, and incomplete/default-refusal rules.
+4. Accept the operation-specific total `AuthorityKeyLister`: production uses raw `jetstream.KeyValue.WatchAll`
+   exclusively; only `ok && entry == nil` releases sorted keys, while `!ok`/cancel/timeout releases no result. Any
+   future substitute requires cited distinct-completion-signal evidence and owner review.
+5. Accept clean removal of the suffix index/cache/write/readiness surface and lexical-first total authority scan with
+   O(N) keys/O(N log N) cost.
+6. Accept exact legacy suffix bucket/backing-stream presence as an independent mandatory cutover condition; startup,
+   recovery init, and restore refuse before mutation until confirmed exact teardown, with similarly named resources
+   untouched.
+7. Accept derived-empty offline isolation, recovery completion before normal startup, and existing all-or-fail
+   configured startup; later boot failure does not undo recovery completion.
+8. Accept the breaking E2E/census/raw-WatchAll partial-list and suffix-only legacy-resource gates before promotion.
+9. Accept all revision-12 rulings for fixed consumer/progress/budgets/catalogs/exact reads/status/recovery/lifecycle.
+10. Confirm no general optional-component lifecycle, general KV/client/MCP/raw app KV/compatibility/event ledger/online
+    restore/global lease/general workflow or adopter retry/timing/capacity knob.
+11. Confirm all named integration/race gates and coverage-gap rule before promotion.
+
+## 6. Independent pre-owner design-review verdict
+
+**DESIGN REVIEW PASS.** The independent reviewer reported no findings against the exact revision-13 artifact and
+recorded baseline/hash above. This is reviewer clearance only, not owner acceptance.
+
+## 7. Owner decision
+
+**PENDING.** The owner has not accepted, rejected, or redirected revision 13.
+
+## 8. Implementation and promotion lock
+
+There is no GS-01 capability delta, implementation plan, runtime code, or test plan in this change. Creating or
+promoting one before explicit owner acceptance violates this baton and the canonical program.
