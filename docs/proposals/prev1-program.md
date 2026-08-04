@@ -1,13 +1,31 @@
 # Pre-v1 core hardening — program entry point
 
-**This file is the baton.** Read it first, do the Next Action, update it last.
-It is the only file that carries program state across sessions.
+**Status: SUSPENDED AND FROZEN.** ADR-090 graph-state foundation work owns
+program execution. This pre-v1 record is retained as evidence and is not a second
+baton.
+
+Do not execute any `NEXT`, `Next Action`, `WIP`, `active`, priority, or imperative
+text below. Every such occurrence belongs to the historical suspended program.
+Suspension ends only when the
+[graph-state program](graph-state-read-write-program.md) explicitly records that
+the GS foundation has released this program.
 
 Opened 2026-07-21 · baseline `v1.0.0-beta.157`
 
 ---
 
-## Next action
+## Suspended program pointer
+
+There is no executable Next Action in this file. Read the
+[graph-state program](graph-state-read-write-program.md) and perform only its
+single `## Next Action` until that program explicitly releases this suspended
+record.
+
+## Historical pre-v1 record (non-executable)
+
+Everything below this heading is a frozen historical snapshot. It preserves the
+old program's reasoning and evidence, but none of its Next Action, WIP, active,
+or priority language authorizes work.
 
 > **STATE 2026-08-02 (SESSION 25 CLOSED — gh#810 IS PULLED, NOT LANDED. The next increment is
 > GATE INTEGRITY, then ports. Read this whole block before touching gh#810.)**

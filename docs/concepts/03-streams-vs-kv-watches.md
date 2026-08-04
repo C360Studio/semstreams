@@ -12,11 +12,11 @@ is not arbitrary — each maps to a fundamentally different kind of communicatio
 │                        The Decision                                  │
 ├─────────────────────────────────────────────────────────────────────┤
 │                                                                      │
-│   "Is this a fact about the world                                   │
-│    or a request to do something?"                                   │
+│   "Is this current state to rehydrate                              │
+│    or queued work to resume?"                                      │
 │                                                                      │
-│   Fact about the world  ──────────────────► KV Watch (twofer)      │
-│   Request to do something ────────────────► JetStream Stream        │
+│   Current fact/state ───────────────► KV Watch (twofer)             │
+│   Request/work item ────────────────► JetStream Stream              │
 │                                                                      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -50,15 +50,15 @@ graph-index restarts:
        └── entity A updated (live)
 ```
 
-This is correct behavior for a processor that maintains derived state. `graph-index` needs to
-re-index everything it can see to ensure its output buckets are consistent with `ENTITY_STATES`.
-Replaying is not a bug — it's recovery.
+This bootstrap hydrates the processor's current matching inputs. It does not prove
+its output buckets are consistent and is not continuous retry. `graph-index`
+still needs explicit repair/redrive and readiness evidence to complete recovery.
 
 ### JetStream Consumer on Restart
 
-When a JetStream consumer restarts with `DeliverPolicy: "new"`, it picks up from where it left off
-in the stream, processing only messages that arrived after it last acked. Messages it already
-processed stay processed.
+Durable consumer state tracks acknowledgments. On restart, unacknowledged work
+may be redelivered; acknowledged work is not replayed. Consumers remain
+at-least-once and must make effects idempotent.
 
 ```text
 agentic-loop restarts (DeliverPolicy: "new", durable consumer):
@@ -74,8 +74,10 @@ This is correct behavior for a work queue. An LLM task that was already dispatch
 re-dispatched because the orchestrator restarted. Replaying would mean double-executing work with
 real cost and side effects.
 
-**The restart test:** If replaying every message since the beginning of time would be correct and
-harmless, use KV watch. If it would be catastrophic, use a JetStream stream.
+**The restart test:** if rehydrating all current matching values is correct, use
+KV watch. If work must resume from acknowledgment without re-executing completed
+requests, use a JetStream stream. KV history is bounded; this test never assumes
+replay from the beginning of time.
 
 ---
 
@@ -92,12 +94,11 @@ KV Watch — Fan-out:                    JetStream — Queue:
        │                                       │
        ├──► graph-index (watches)              │ (one consumer gets it)
        ├──► graph-rules (watches)              ▼
-       ├──► graph-embedding (watches)    agentic-loop-instance-A
-       └──► graph-clustering (watches)
+       └──► graph-embedding (watches)    agentic-loop-instance-A
 ```
 
-KV watches are naturally fan-out: every watcher sees every change. This is correct for derived
-state — multiple indexes should all update when an entity changes.
+KV watches are naturally fan-out: every declared watcher sees every change.
+Periodic derived owners may instead read current state on their own cycle.
 
 JetStream consumers in a queue group are naturally competing: only one consumer instance handles
 each message. This is correct for work items — only one loop orchestrator should execute a given
@@ -117,9 +118,11 @@ KV Watch:                              JetStream:
   Idempotent on retry                   MaxDeliver, BackOff all apply
 ```
 
-KV watches have no ack mechanism — they're fire-and-react. This is fine for fast, idempotent
-processing. If the processor crashes mid-update, it will recover the correct current state on
-restart from the next watch delivery or bootstrap.
+KV watches have no processing acknowledgment or redelivery. A derived owner must
+apply desired state idempotently, redrive or repair failed work explicitly, and
+publish readiness/degradation. Bootstrap rehydrates current inputs after restart;
+it does not continuously retry failed output. If an owner cannot meet those
+obligations, it must redesign the seam rather than use a watch as a work queue.
 
 JetStream consumers with explicit ack give you the full tuning surface from the
 [JetStream Tuning Guide](../advanced/11-jetstream-tuning.md): `AckWait` for deadline enforcement,
@@ -153,7 +156,6 @@ seeing them side-by-side makes the distinction concrete.
 │  State (KV buckets — twofer):                                     │
 │                                                                    │
 │   AGENT_LOOPS        "What state is loop X in?"                   │
-│   AGENT_TRAJECTORIES "What did loop X do, step by step?"         │
 │                                                                    │
 │  Derived graph state (KV buckets — twofer):                       │
 │                                                                    │
@@ -166,15 +168,15 @@ seeing them side-by-side makes the distinction concrete.
 ### Why task dispatch uses streams
 
 `agent.task.*` carries an instruction to do expensive work. If the agentic-loop component
-restarted, you do not want it to re-execute every task it has ever received. You want it to
+restarted, you do not want current KV keys to be interpreted as fresh work. You want it to
 resume only the tasks that were in flight at the time of the crash.
 
 `DeliverPolicy: "new"` on a durable consumer achieves exactly this: the consumer position
 is persisted, and on restart it picks up from the last acked message.
 
 If the system were to use a KV watch for task dispatch instead, every restart would re-trigger
-every task ever queued. That would be catastrophic — re-running LLM tasks, re-executing tools
-with side effects, producing duplicate results.
+every current matching task key. That could re-run LLM tasks, re-execute tools with side
+effects, and produce duplicate results.
 
 ### Why loop state uses KV
 
@@ -196,7 +198,7 @@ this loop in right now?") would require extra work to reconstruct.
 
 `tool.result.*` carries the output of a specific tool call back to the orchestrating loop.
 This is a work item response — it is only meaningful to the specific loop instance that
-issued the tool call, and it should be delivered exactly once.
+issued the tool call. Delivery is at least once, so handlers remain idempotent.
 
 A KV approach would require the loop to poll or watch a known key for its result. Streams
 deliver the result push-style to the consumer that is waiting for it, with at-least-once
@@ -206,78 +208,19 @@ than being dropped.
 
 ---
 
-## The Workflow Processor
-
-The same logic applies to the workflow processor, and it's worth being explicit because
-workflows have a mix of triggers (streams) and state (KV) in close proximity.
-
-```text
-Workflow trigger:   workflow.trigger.{workflow_id}  ← JetStream stream
-                         │
-                         │  "Execute this workflow with these inputs"
-                         │  (a request to do something)
-                         ▼
-                    workflow-processor
-
-Execution state:    WORKFLOW_EXECUTIONS KV           ← KV twofer
-                         │
-                         │  "What step is execution X on?"
-                         │  (a fact about the world)
-                         │
-                         ├── readable by anything
-                         ├── watchable for status updates
-                         └── recoverable after restart
-```
-
-The trigger is a stream message because "start this workflow" is a request with real cost —
-you don't want it replayed on restart. The execution state is KV because "what step is this
-execution on" is a fact that should be readable and recoverable.
-
-Timer state follows the same pattern. `WORKFLOW_TIMERS` is KV because it records when timers
-are scheduled to fire — a fact. The timer fire event itself (`workflow.timer.fire`) is a
-stream message because "fire this timer now" is a request that should happen exactly once.
-
----
-
 ## Decision Guide
 
-Apply these tests in order. The first test that gives a clear answer is usually sufficient.
+Use the canonical four tests in
+[`kv-or-stream`](../../.agents/skills/kv-or-stream/SKILL.md). The sharpest is the
+restart test:
 
 ```text
-1. Restart test
-   ─────────────
-   If this processor restarted, should it re-process messages it already handled?
-
-   Yes (re-process is correct recovery) ──────────────► KV Watch
-   No (re-process would be wrong)  ───────────────────► JetStream Stream
-
-
-2. Fan-out vs. queue test
-   ───────────────────────
-   Should multiple processors all react to this, or should only one handle it?
-
-   All react (fan-out)  ───────────────────────────────► KV Watch
-   Only one handles it (queue)  ───────────────────────► JetStream Stream
-
-
-3. Processing time test
-   ─────────────────────
-   Is the processing fast and idempotent, or slow with real side effects?
-
-   Fast and idempotent  ───────────────────────────────► KV Watch
-   Slow or has side effects  ──────────────────────────► JetStream Stream
-
-
-4. Nature test
-   ────────────
-   Is this a fact about the world, or a request to do something?
-
-   Fact  ─────────────────────────────────────────────► KV Watch
-   Request  ──────────────────────────────────────────► JetStream Stream
+Rehydrate all current matching values  -> KV Watch
+Resume unacknowledged queued work       -> JetStream Stream
 ```
 
-If any test gives conflicting answers, that is a signal the design may be muddled — revisit
-whether the concept is actually a single thing or two things conflated.
+The remaining tests ask fan-out versus queue, processing behavior, and current
+fact versus request. Conflicting answers mean the concept may need to split.
 
 ### Common Cases
 
@@ -285,14 +228,12 @@ whether the concept is actually a single thing or two things conflated.
 |--------------|-----------------|--------|
 | Entity state changed | KV Watch | Fact; fan-out; fast; idempotent |
 | New task to execute | JetStream Stream | Request; queue; expensive; side effects |
-| Index update | KV Write → others watch | Fact; fan-out; fast |
+| Index update | Owner KV write | Only the declared projection owner writes |
 | LLM call | JetStream Stream | Request; queue; slow; costly |
 | Loop current state | KV | Fact; queryable; recoverable |
 | Tool execution request | JetStream Stream | Request; queue; has side effects |
-| Workflow trigger | JetStream Stream | Request; queue; expensive |
-| Workflow execution state | KV | Fact; queryable; recoverable |
-| Completion notification | JetStream Stream | Request (to downstream); once |
-| Sensor telemetry | KV Write → ENTITY_STATES | Fact; latest-value semantics |
+| Completion notification | JetStream Stream | At-least-once downstream work |
+| External telemetry | Graphable or typed ingest | graph-ingest owns authority |
 
 ---
 
@@ -310,16 +251,17 @@ type AgenticLoop struct {
     resultConsumer   jetstream.ConsumeContext  // tool.result.* — tool results
 
     // State (KV twofer)
-    loopsBucket       nats.KeyValue  // AGENT_LOOPS — current loop state
-    trajectoriesBucket nats.KeyValue // AGENT_TRAJECTORIES — execution trace
+    loopsBucket nats.KeyValue // AGENT_LOOPS — current loop state
 
     // Outbound work (JetStream publish)
     js jetstream.JetStream  // publish to agent.request.*, tool.execute.*
 }
 ```
 
-The separation is visible in the type signatures: `jetstream.ConsumeContext` for work item
-inputs, `nats.KeyValue` for state. The distinction is structural, not just conceptual.
+The separation is visible in the type signatures: `jetstream.ConsumeContext` for
+work items and `nats.KeyValue` for loop state. Trajectories are not a current KV
+bucket: active/finalized reads use memory and a TTL cache, while durable content
+uses ObjectStore and graph entities.
 
 ---
 

@@ -67,7 +67,7 @@ Starting from `config-db`:
 Relevance decreases with distance:
 
 ```text
-score = decay_factor ^ depth
+score = 0.8 ^ depth
 ```
 
 | Decay Factor | Depth 1 | Depth 2 | Depth 3 | Use Case |
@@ -100,7 +100,8 @@ A PathRAG query requires a starting entity and accepts optional bounds. Key para
 | `max_nodes` | 100 | Maximum entities to return |
 | `max_paths` | 0 (unlimited) | Maximum paths to return |
 | `timeout` | (none) | Per-request timeout (e.g., `5s`) |
-| `decay_factor` | 0.8 | Score reduction per hop (see Decay Function) |
+
+The decay factor is currently fixed at `0.8`; it is not a request knob.
 
 ### Predicate Filtering
 
@@ -110,7 +111,8 @@ Limit traversal to specific relationship types. For example, filtering to only `
 |-----------|------|-------------|
 | `predicates` | `[]string` | Only follow edges with these predicate types |
 
-> **Note**: Available via NATS `graph.query.pathSearch` subject. Not yet exposed in the GraphQL gateway schema.
+> **Note**: Implemented by internal `graph.query.pathSearch` and exposed through
+> the provisional HTTP `pathSearch` facade operation.
 
 ### Direction Control
 
@@ -122,17 +124,20 @@ Control which edges are followed during traversal:
 | `incoming` | References → entity | "What depends on this?" |
 | `both` | Bidirectional | "What's connected either way?" |
 
-> **Note**: Available via NATS `graph.query.pathSearch` subject. Not yet exposed in the GraphQL gateway schema.
+> **Note**: Implemented by internal `graph.query.pathSearch` and exposed through
+> the provisional HTTP `pathSearch` facade operation.
 
 ## API and Response
 
-PathRAG is accessible via the MCP (Model Context Protocol) gateway using GraphQL queries. Queries return a structured response containing:
+PathRAG is implemented on internal `graph.query.pathSearch` and exposed by the
+provisional HTTP `pathSearch` facade operation. A controlled remote caller may use
+that documented operation; raw NATS is not an adopter fallback. SemStreams has no
+MCP graph contract. The response contains:
 
 | Field | Description |
 |-------|-------------|
-| `entities` | List of discovered entities with their triples |
-| `paths` | All traversal paths from start entity to each discovered entity |
-| `scores` | Relevance score for each entity (decay-based) |
+| `entities` | Discovered `{id, type, score}` records; score is per entity |
+| `paths` | Paths as ordered `{from, predicate, to}` step arrays |
 | `truncated` | Whether any resource limit was hit |
 
 The `paths` field is particularly useful for understanding *how* entities are connected—not just *that* they're connected.
@@ -149,7 +154,8 @@ The `paths` field is particularly useful for understanding *how* entities are co
 
 **Question:** "What's affected by this failing sensor?"
 
-**Approach:** Start from the failing sensor, filter to `monitors`, `alerts`, and `triggers` predicates, use aggressive decay (0.7) to prioritize immediate neighbors, and limit depth to 3 hops.
+**Approach:** Start from the failing sensor, filter to `monitors`, `alerts`, and
+`triggers` predicates, and limit depth to 3 hops.
 
 ### Mesh Network Topology
 
@@ -157,21 +163,14 @@ The `paths` field is particularly useful for understanding *how* entities are co
 
 **Approach:** Start from the base station, filter to `communicates_with` and `relays_to` predicates, traverse incoming edges (what can reach this), allow deeper traversal (5 hops) and more nodes (200) for mesh discovery.
 
-## Performance Characteristics
+## Performance considerations
 
-PathRAG is designed for real-time queries:
+No repository-owned cross-scale latency contract exists. Measure against the
+deployed graph and request timeout.
 
-| Graph Size | Typical Latency | Notes |
-|------------|-----------------|-------|
-| 1K entities | < 10ms | Trivial |
-| 10K entities | 10-50ms | Well within bounds |
-| 100K entities | 50-200ms | Use predicate filters |
-| 1M+ entities | Varies | Tune bounds carefully |
-
-**Optimization tips:**
-- Use `predicate_filter` to reduce edge count
+**Bounding tips:**
+- Use `predicates` to reduce edge count
 - Lower `max_depth` if you only need immediate neighbors
-- Increase `decay_factor` if you want aggressive pruning
 
 ## Combining with GraphRAG
 
@@ -192,14 +191,14 @@ PathRAG and GraphRAG complement each other:
 ### "Traversal times out"
 
 1. Reduce `max_depth` (most impact)
-2. Add `predicate_filter` to limit edge types
-3. Increase `max_time` if latency SLA allows
+2. Add `predicates` to limit edge types
+3. Set the request `timeout` within the caller's latency budget
 4. Check for dense hub nodes (many connections)
 
 ### "Missing expected entities"
 
 1. Verify relationships exist as triples (check OUTGOING_INDEX)
-2. Check `predicate_filter` isn't excluding the relationship type
+2. Check `predicates` is not excluding the relationship type
 3. Increase `max_depth` if entities are further than expected
 4. Confirm `direction` is correct (incoming vs outgoing)
 
@@ -207,7 +206,7 @@ PathRAG and GraphRAG complement each other:
 
 1. Check which limit was hit (depth, nodes, time, paths)
 2. Increase the relevant limit
-3. Use `predicate_filter` to focus traversal
+3. Use `predicates` to focus traversal
 4. Consider whether you need all results or just top-scored
 
 ## Index Requirements
@@ -218,9 +217,9 @@ PathRAG requires relationship indexes to be enabled:
 |-------|---------|
 | OUTGOING_INDEX | Entity → what it references |
 | INCOMING_INDEX | Entity → what references it |
-| PREDICATE_INDEX | Fast lookup by relationship type |
 
-These indexes maintain entity-to-entity relationships for efficient traversal. They're enabled by default—see [Configuration](../basics/06-configuration.md) for details.
+PathRAG checks entity existence, traverses incoming/outgoing relationships, and
+applies predicate filters in memory. It does not depend on `PREDICATE_INDEX`.
 
 ## Related
 

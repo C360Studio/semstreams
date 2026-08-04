@@ -46,8 +46,8 @@ of the same idea."
 | **Subagent** | `agentic-loop` with role + tool allowlist | Subagents own one conversation context; loops are durable Lifecycle Participants with restart recovery, operator-introspectable trajectory, concurrent execution |
 | **Tool** | Tool executor registered in `agentic-tools` | Same shape conceptually; registry is config-driven, governance-rule-gated, with per-loop / per-role admission |
 | **Hook** | Rule with action triggered on entity-state change or stream event | Hooks are imperative + conversation-local; rules are declarative + survive restart + observable in trajectory + composable across loops |
-| **MCP server** | NATS-Direct gateway / GraphQL gateway / MCP gateway | MCP servers are per-conversation external; gateways are persistent first-class framework primitives sharing the same graph |
-| **Workflow** | Rule chain + Lifecycle Participant (ADR-049) | Workflows are model-driven from inside one conversation; chains are operator-authored, durable per-instance, with audit history at no extra cost |
+| **MCP server** | No graph MCP equivalent | Use admitted HTTP or named adapter; `/mcp` is a placeholder |
+| **Workflow** | Rule chain + Lifecycle Participant | Current state; repair/audit need explicit design |
 | **Plan / Plan mode** | Rule chain authoring + the `Plan` design primitive | Plans are model-generated and conversation-scoped; rule chains are operator-authored, version-controlled, composable across loops |
 | **Memory** | Triples on entities + AGENT_LOOPS KV + ObjectStore content refs | Memory is conversation-spanning but model-managed; triples are operator-managed, queryable, structurally-typed via vocabulary |
 | **Context management / compaction** | Trajectory + agentic-loop's compaction | Built-in to the loop with per-loop budget; not a harness-level concern operators have to wire |
@@ -114,9 +114,9 @@ durably:
 - Trajectory is observable in real time via operator gateways.
 - Tool calls flow through governance rules (ADR-039) before
   execution.
-- The loop is a Lifecycle Participant (ADR-049) — restart recovery,
-  audit history, operator-writable controls (pause / resume /
-  cancel).
+- The loop is a Lifecycle Participant (ADR-049): current-state restart hydration,
+  operator-visible trajectory, and writable pause/resume/cancel controls. Repair
+  and audit retention require an explicit owner design.
 - Multiple loops run concurrently in the same service; each has its
   own entity-ID; cross-loop reasoning is graph-native.
 
@@ -144,7 +144,7 @@ The semstreams equivalent is **rule chain + Lifecycle Participant**
   bucket-ownership rubric — workflow state is graph-visible).
 - Rules that fire on phase transitions or entity-state changes,
   dispatching to typed components.
-- Audit history at no extra cost via KV revision replay.
+- Current state is readable; history 1 supplies no lifecycle audit or replay.
 - Operator gateway endpoints (`GET /workflows?name=...`) that work
   the same across every workflow type.
 
@@ -172,25 +172,19 @@ server-side state is whatever the server chooses to keep. When the
 conversation ends, the per-conversation tool-call history is gone
 (though the server's persistent state survives).
 
-Semstreams ships **gateways** as the persistent equivalent
-(`graph/query/` family + GraphQL + MCP gateways at
-`gateway/graph-gateway/`):
+SemStreams does not ship an implemented graph MCP server. It ships persistent
+graph query fronts: admitted HTTP operations for remote clients and named typed
+adapters for specific embedded operations. The registered `/mcp` route in
+`gateway/graph-gateway/` is a placeholder with no graph tools or MCP contract.
 
-- Multiple consumers (agent loops, sister-repo services, external
-  HTTP clients) share the same gateway and the same underlying
-  graph.
-- Tool invocations are observable in trajectory + gateway metrics.
-- Governance rules can rate-limit, deny, or transform calls.
-- Gateways themselves are first-class framework primitives — they
-  are components, configured per-deployment, monitored as
-  infrastructure.
+- Remote consumers use only admitted facade operations.
+- Embedded consumers use an operation-specific adapter only when admitted.
+- Each operation declares whether authority or a named materialized view answers.
+- A future MCP graph surface requires its own tools, audit behavior, and contract.
 
-**Shift**: MCP servers are external surfaces designed for
-per-conversation tool exposure. Semstreams gateways are internal
-infrastructure designed for multi-consumer durable queries. If
-you're building a "tool" that one conversation needs once, MCP is
-the right shape. If you're building a query path that many
-concurrent consumers + a graph need to share, a gateway is.
+**Shift**: MCP servers are external tool surfaces. SemStreams currently provides
+query APIs, not MCP tools. Do not infer protocol parity from the fact that both
+can mediate access to a persistent service.
 
 ## When to reach for which
 
@@ -339,7 +333,7 @@ Three patterns worth applying in design conversations:
 - [Orchestration Layers](14-orchestration-layers.md) — the rules-vs-components discipline that shapes every workflow/chain.
 - [Phased Agentic Chains](25-phased-agentic-chains.md) — the canonical multi-step pattern, applicable when frontier harnesses would reach for "workflow" or "multi-step skill."
 - [Payload Registry](15-payload-registry.md) — polymorphic dispatch (what tools / hooks / skills look like when typed).
-- [Query Access](11-query-access.md) — GraphQL / MCP / NATS-Direct gateway choice (the MCP-server analog).
+- [Query Access](11-query-access.md) — admitted HTTP, typed adapters, and MCP status.
 
 **Discipline memories** that crystallize past lessons referenced here:
 

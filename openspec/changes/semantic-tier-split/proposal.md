@@ -1,5 +1,10 @@
 ## Why
 
+> **Status: SUSPENDED AND FROZEN by the ADR-090 graph-state program.**
+> This change preserves historical design truth but is non-executable until the
+> [canonical program](../../../docs/proposals/graph-state-read-write-program.md)
+> explicitly releases it. Do not implement, archive, or promote it.
+
 **The `semantic` e2e tier tests two unrelated capabilities, so its red light cannot
 tell you which one broke.** gh#830 is the proof: a `globalSearch` probe failed
 intermittently, and it took five full tier runs and two disproved hypotheses to

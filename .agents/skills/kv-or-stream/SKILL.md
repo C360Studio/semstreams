@@ -16,10 +16,11 @@ Apply these tests in order. The first clear answer is usually sufficient.
 
 ### Test 1: Restart Test (sharpest)
 
-If this processor restarted, should it re-process messages it already handled?
+If this processor restarted, should it rehydrate current facts or resume
+unacknowledged work?
 
-- **Yes** (re-process is correct recovery) --> **KV Watch**
-- **No** (re-process would be wrong) --> **JetStream Stream**
+- **Rehydrate current facts** --> **KV Watch**
+- **Resume queued work without repeating acknowledged work** --> **JetStream Stream**
 
 ### Test 2: Fan-out vs Queue
 
@@ -46,31 +47,46 @@ Is this a fact about the world, or a request to do something?
 
 If any test gives conflicting answers, the concept may be two things conflated. Revisit whether it should be split into separate concerns.
 
+## Mandatory KV Watch Owner Rule
+
+KV Watch has no processing acknowledgment or redelivery. A derived owner that
+chooses it must use idempotent desired-state apply, explicit failed-work
+repair/redrive, and visible readiness/degradation. Bootstrap hydrates restart
+inputs; it is not continuous retry. If the owner cannot accept those obligations,
+redesign the seam. Never treat a KV watch as a work queue.
+
 ## Common Cases Reference
 
 | Communication | Primitive | Reason |
 |--------------|-----------|--------|
-| Entity state changed | KV Watch | Fact; fan-out; fast; idempotent |
+| Entity state changed | KV Watch | Current fact; fan-out; idempotent reaction |
 | New task to execute | JetStream Stream | Request; queue; expensive; side effects |
-| Index update | KV Write (others watch) | Fact; fan-out; fast |
+| Index update | Owner KV write; admitted observers react | Only declared owner writes |
 | LLM call | JetStream Stream | Request; queue; slow; costly |
 | Loop current state | KV | Fact; queryable; recoverable |
 | Tool execution request | JetStream Stream | Request; queue; side effects |
-| Tool result returned | JetStream Stream | Response; once; push delivery |
-| Workflow trigger | JetStream Stream | Request; queue; expensive |
-| Workflow execution state | KV | Fact; queryable; recoverable |
-| Sensor telemetry | KV Write | Fact; latest-value semantics |
+| Tool result returned | JetStream Stream | Response; at-least-once delivery |
+| External telemetry | Graphable or typed ingest | graph-ingest owns authority write |
 
 ## Key Architecture Context
 
-**The KV Twofer**: Every NATS KV bucket is backed by a JetStream stream. A single KV write gives you three interfaces simultaneously:
+**The KV twofer**: every NATS KV bucket is backed by a JetStream stream. A
+single KV write provides current state and change notification. Retained history
+is optional and bounded per bucket; it is not automatically an audit ledger.
+
 - **State**: `kv.Get(key)` returns current value
 - **Events**: `kv.Watch(pattern)` fires on every change (fan-out)
-- **History**: Replay from any revision for audit trail
+- **History**: only revisions retained by that bucket's configured history depth
 
-**Bootstrap phase**: When a KV watcher starts, it delivers ALL current values matching the pattern, then a `nil` entry signals transition to live updates. Processors must distinguish bootstrap from live to avoid treating existing entities as "new" events on restart.
+`ENTITY_STATES` has history 1. Its watchers bootstrap from current values, but
+its history cannot reconstruct prior authority or serve as disaster recovery.
 
-**JetStream consumers**: With `DeliverPolicy: "new"` on a durable consumer, restart resumes from last ack. No replay of already-handled messages.
+**Bootstrap phase**: when a KV watcher starts, it delivers all current matching
+values, then a `nil` entry signals transition to live updates. This is current
+state hydration, not replay of every historical change.
+
+**JetStream consumers**: durable state tracks acknowledgments. Restart can
+redeliver unacknowledged work; acknowledged work is not replayed.
 
 **Using both is normal**: A component using KV for state AND JetStream for work items in the same process is the standard pattern (see agentic-loop).
 

@@ -108,7 +108,8 @@ See [Debugging Data Flow](docs/operations/debugging-data-flow.md) for detailed t
 task dev:stop
 ```
 
-That's it! You've ingested data, transformed it into a semantic graph, and queried it via GraphQL.
+That's it! You've ingested data, transformed it into a semantic graph, and queried
+an admitted HTTP facade operation.
 
 ## Quick Start (For Experienced Users)
 
@@ -164,8 +165,8 @@ Components connect via NATS subjects in flow-based configurations:
 ```
 Input → Processor → Storage → Graph → Gateway
   │         │          │        │        │
- UDP    iot_sensor  ObjectStore KV+   GraphQL
- File   document    (raw docs)  Indexes  MCP
+ UDP    iot_sensor  ObjectStore KV+   HTTP facade
+ File   document    (raw docs)  Indexes  HTTP
 ```
 
 | Component Type | Examples | Role |
@@ -174,9 +175,10 @@ Input → Processor → Storage → Graph → Gateway
 | Processor | Graph, JSONMap, Rule | Transform and enrich |
 | Output | File, HTTPPost, WebSocket | Export data |
 | Storage | ObjectStore | Persist to NATS JetStream |
-| Gateway | HTTP, GraphQL, MCP | Expose query APIs |
+| Gateway | HTTP facade | Expose admitted remote operations |
 
-All state lives in NATS JetStream KV buckets—portable, syncable, queryable.
+Graph current and derived state commonly lives in NATS KV. Work uses JetStream
+streams, and bulky content may live in ObjectStore.
 
 ## Agentic AI
 

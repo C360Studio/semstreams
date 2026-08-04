@@ -1,5 +1,10 @@
 # Tasks — discovery-under-stream-shapes (gh#810, gh#822)
 
+> **SUSPENDED AND FROZEN.** Every task state below is historical and
+> non-executable until the
+> [ADR-090 program](../../../docs/proposals/graph-state-read-write-program.md)
+> explicitly releases this change. Do not implement, archive, or promote it.
+
 > ## ⚠ REWORK REQUIRED — read before writing any code (Fable shape gate, 2026-08-01)
 >
 > The first implementation attempt is **PR #847, now DRAFT**. Its framework seams were built,

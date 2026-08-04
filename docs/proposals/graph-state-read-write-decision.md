@@ -1,11 +1,14 @@
 # Graph state, materialized-view, and query decision proposal
 
-**Status:** Owner-approved for careful implementation.
+**Status:** Frozen owner-approved decision record.
 
 **Date:** 2026-08-03.
 
 **Evidence:**
 [`graph-state-read-write-inventory.md`](graph-state-read-write-inventory.md).
+
+Implementation order and current gate state live only in
+[`graph-state-read-write-program.md`](graph-state-read-write-program.md).
 
 ## Decision statement
 
@@ -287,10 +290,7 @@ On 2026-08-03, the owner approved all eight rulings and authorized the team to
 proceed with careful implementation. This record adds no implementation mechanics
 beyond the approved rulings.
 
-After the bounded `CONTEXT_INDEX` retirement reached green CI in PR #894, the
-owner instructed the team to continue. The next approved slice is the atomic
-retirement of durable `STRUCTURAL_INDEX`: preserve pure K-core and pivot
-algorithms as internal anomaly prerequisites, but remove their unconsumed durable
-store and adopter-facing configuration and port surfaces. This slice is sequenced
-after `retire-context-index`; it does not reopen ADR-090 or add a replacement
-query capability.
+PR #894 retired durable `CONTEXT_INDEX`, and PR #895 retired durable
+`STRUCTURAL_INDEX` while preserving in-memory anomaly prerequisites. Both changes
+are complete and archived. This record does not name a next slice; the canonical
+program owns all subsequent ordering and stop/go state.
