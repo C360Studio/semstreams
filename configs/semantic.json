@@ -633,9 +633,6 @@
         "enable_llm": true,
         "min_community_size": 2,
         "max_iterations": 100,
-        "enable_structural": true,
-        "pivot_count": 16,
-        "max_hop_distance": 10,
         "enable_anomaly_detection": false,
         "anomaly_config": {
           "enabled": true,

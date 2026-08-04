@@ -9,7 +9,7 @@ The graph-query component serves as the central coordination layer for all graph
 primary capabilities:
 
 - **PathRAG**: Multi-hop graph traversal with path tracking and relevance scoring
-- **GraphRAG**: Community-aware search leveraging graph clustering for semantic and structural queries
+- **GraphRAG**: Community-aware search combining graph clustering with semantic relevance
 - **Static Routing**: Query-type-to-subject mapping for distributed graph components
 
 The component implements graceful degradation, enabling partial functionality when optional dependencies like

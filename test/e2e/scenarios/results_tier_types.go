@@ -1,16 +1,6 @@
 // Package scenarios provides tier capability result types for E2E tests
 package scenarios
 
-// StructuralIndexResults contains k-core and pivot index verification results.
-// This is used by Phase 7 structural index verification.
-type StructuralIndexResults struct {
-	// KCore contains k-core decomposition results
-	KCore *KCoreResults `json:"kcore,omitempty"`
-
-	// Pivot contains pivot distance index results
-	Pivot *PivotResults `json:"pivot,omitempty"`
-}
-
 // PathRAGResults contains PathRAG graph traversal test results.
 // PathRAG is a Tier 0 (structural) capability - runs on all tiers.
 type PathRAGResults struct {
@@ -89,36 +79,6 @@ type GraphRAGQueryResult struct {
 
 	// Success indicates if the query completed successfully
 	Success bool `json:"success"`
-}
-
-// KCoreResults contains k-core verification results.
-type KCoreResults struct {
-	// MaxCore is the highest core number in the graph
-	MaxCore int `json:"max_core"`
-
-	// EntityCount is the number of entities in the index
-	EntityCount int `json:"entity_count"`
-
-	// CoreBucketCounts maps core level to entity count
-	CoreBucketCounts map[int]int `json:"core_bucket_counts,omitempty"`
-
-	// Verified indicates if the index was verified
-	Verified bool `json:"verified"`
-}
-
-// PivotResults contains pivot index verification results.
-type PivotResults struct {
-	// PivotCount is the number of pivot nodes
-	PivotCount int `json:"pivot_count"`
-
-	// EntityCount is the number of entities with distance vectors
-	EntityCount int `json:"entity_count"`
-
-	// TriangleInequalityValid indicates if distance bounds are valid
-	TriangleInequalityValid bool `json:"triangle_inequality_valid"`
-
-	// Verified indicates if the index was verified
-	Verified bool `json:"verified"`
 }
 
 // IncomingIndexResults contains IncomingIndex verification results.

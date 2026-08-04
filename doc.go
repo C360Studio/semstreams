@@ -105,7 +105,6 @@
 //   - RULE_STATE: Rule evaluation state per entity
 //
 // Optional buckets (created when features enabled):
-//   - STRUCTURAL_INDEX: K-core levels and pivot distances
 //   - EMBEDDING_INDEX: Entity ID → embedding vector
 //   - COMMUNITY_INDEX: Community records with members and summaries
 //

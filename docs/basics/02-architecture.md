@@ -4,8 +4,8 @@ SemStreams processes event streams into a semantic knowledge graph stored in NAT
 
 ## System Overview
 
-SemStreams uses a distributed component architecture where specialized processors watch and react to entity changes
-in NATS KV buckets:
+SemStreams uses a distributed component architecture where specialized processors
+watch or periodically read state in NATS KV buckets:
 
 ```text
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -50,20 +50,21 @@ SemStreams uses a component-based architecture. Components are self-describing u
 
 The graph system decomposes into 8 specialized components with clear responsibilities:
 
-| Component | Purpose | Writes To | Watches |
+| Component | Purpose | Writes To | Reads/Observes |
 |-----------|---------|-----------|---------|
 | **graph-ingest** | Entity ingestion from event streams | ENTITY_STATES | - |
 | **graph-index** | Indexing | OUTGOING_INDEX, INCOMING_INDEX, ALIAS_INDEX, PREDICATE_INDEX | ENTITY_STATES |
 | **graph-query** | Query coordinator, PathRAG | - | - (request/reply) |
-| **graph-clustering** | Community detection, structural analysis, anomaly detection | COMMUNITY_INDEX, STRUCTURAL_INDEX, ANOMALY_INDEX | ENTITY_STATES |
+| **graph-clustering** | Community and anomaly detection | COMMUNITY_INDEX, ANOMALY_INDEX | ENTITY_STATES (scheduled) |
 | **graph-embedding** | Vector embeddings (BM25 or HTTP) | EMBEDDING_INDEX, EMBEDDING_DEDUP | ENTITY_STATES |
 | **graph-index-spatial** | Geospatial indexing (geohash) | SPATIAL_INDEX | ENTITY_STATES |
 | **graph-index-temporal** | Time-based indexing | TEMPORAL_INDEX | ENTITY_STATES |
 | **graph-gateway** | HTTP/GraphQL/MCP query API | - | All indexes (reads only) |
 
-Each component owns exactly one set of output buckets and watches specific input buckets, enabling independent
-scaling and clear data ownership. See [Graph Components Reference](../advanced/07-graph-components.md) for
-detailed configuration and deployment information.
+Each component owns exactly one set of output buckets and declares its input
+dependencies, enabling independent scaling and clear data ownership. See
+[Graph Components Reference](../advanced/07-graph-components.md) for detailed
+configuration and deployment information.
 
 ### GraphQL Access
 
@@ -173,31 +174,27 @@ Rules can add/remove triples and publish messages, creating derived facts dynami
 
 ### 6. Structural Analysis and Anomaly Detection (graph-clustering)
 
-The `graph-clustering` component optionally performs structural analysis after community detection:
+When anomaly detection is enabled, `graph-clustering` computes structural inputs after community detection:
 
 - **K-core decomposition**: Identifies the dense backbone of the graph. Each entity gets a core number indicating
   how central and well-connected it is. Higher core = more central.
-- **Pivot-based distances**: Pre-computes distances to landmark nodes for O(1) distance estimation between any two
-  entities.
+- **Pivot-based distances**: Estimates structural separation from landmark nodes for anomaly detection.
 - **Anomaly detection**: Detects core isolation and semantic gaps within community contexts.
 
-These computations run after each community detection cycle and store results in `STRUCTURAL_INDEX` and `ANOMALY_INDEX`.
+K-core and pivot results are passed directly to anomaly detectors in memory for that cycle. Only anomaly records are
+stored in `ANOMALY_INDEX`; there is no durable structural query surface.
 
-Structural analysis enables:
-
-- Filtering noise (exclude peripheral entities from search results)
-- Path query optimization (prune unreachable candidates early)
-- Anomaly detection (core demotion, isolation detection, semantic gaps)
+The internal structural analysis supports core demotion, isolation detection, and semantic-gap detection.
 
 Structural analysis requires only NATS—no external services. Semantic gap detection optionally queries graph-embedding.
 
 ### 7. Community Detection (graph-clustering)
 
-The `graph-clustering` component watches `ENTITY_STATES` and groups entities into communities using the Label
-Propagation Algorithm (LPA). Detection runs:
-
-- After a threshold of entity changes (e.g., 100)
-- At configured intervals (e.g., 30s)
+The `graph-clustering` component periodically reads current `ENTITY_STATES` and
+topology state, then groups entities into communities using the Label Propagation
+Algorithm (LPA). Its declared `kv-watch` input is discovery metadata, not an
+active runtime watcher. Detection runs at the configured interval (for example,
+every 30 seconds).
 
 Communities are stored in `COMMUNITY_INDEX` and enable GraphRAG-style queries at different granularity levels.
 
@@ -233,7 +230,6 @@ All state lives in NATS JetStream KV buckets. Each bucket has exactly one writer
 | `SPATIAL_INDEX` | graph-index-spatial | Geohash → entity IDs | Location queries |
 | `TEMPORAL_INDEX` | graph-index-temporal | Time bucket → entity IDs | Time-range queries |
 | `COMMUNITY_INDEX` | graph-clustering | Community records with members | Community detection |
-| `STRUCTURAL_INDEX` | graph-clustering | K-core levels and pivot distances | Structural analysis |
 | `ANOMALY_INDEX` | graph-clustering | Anomaly detection results | Anomaly detection |
 | `EMBEDDING_INDEX` | graph-embedding | Entity ID → embedding vector | Semantic similarity |
 | `EMBEDDING_DEDUP` | graph-embedding | Deduplication tracking | Embedding efficiency |
@@ -264,8 +260,8 @@ Step-by-step breakdown:
 2. **graph-ingest**: Transforms message into EntityState, validates ID format
 3. **ENTITY_STATES**: Entity stored with version 6 (optimistic concurrency)
 4. **graph-index**: Watches ENTITY_STATES, extracts triples, updates relationship indexes
-5. **graph-clustering**: Watches ENTITY_STATES, performs community detection and structural analysis
-6. **graph-gateway**: Reads from all buckets to compose query responses
+5. **graph-clustering**: Reads current state on its timer and runs community and optional anomaly analysis
+6. **graph-gateway**: Uses its implemented query paths to compose responses
 
 All components operate asynchronously—entity queries return immediately, while index updates complete within
 milliseconds.
@@ -279,7 +275,7 @@ Different components provide different consistency guarantees based on their pro
 | graph-ingest (ENTITY_STATES) | Immediate | <1ms |
 | graph-index (relationship indexes) | Eventually consistent | <10ms |
 | graph-index-spatial/temporal | Eventually consistent | <10ms |
-| graph-clustering (communities, structural, anomalies) | Batch | Configurable (default: 30s) |
+| graph-clustering (communities and anomalies) | Batch | Configurable (default: 30s) |
 | graph-embedding (embeddings) | Eventually consistent | <100ms (BM25), varies (HTTP) |
 
 Queries through `graph-gateway` read current bucket state, so they may see entities before their indexes are
@@ -307,7 +303,7 @@ Add components incrementally based on capability requirements:
 
 **Tier 1 (Statistical)**:
 
-- Add `graph-clustering` for community detection with structural analysis and anomaly detection
+- Add `graph-clustering` for community detection; optionally enable anomaly detection and its internal analysis
 - Add `graph-embedding` with BM25 for statistical similarity
 
 **Tier 2 (Semantic)**:

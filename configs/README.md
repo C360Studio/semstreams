@@ -9,7 +9,7 @@ SemStreams supports a 3-tier deployment model with progressively more capable co
 | Tier | Name | Description | External Services |
 |------|------|-------------|-------------------|
 | 0 | **Structural** | Base tier - rules-only, deterministic behavior | None |
-| 1 | **Statistical** | Adds BM25 embeddings, statistical clustering, anomaly detection | None |
+| 1 | **Statistical** | Adds BM25 embeddings, clustering, and optional anomalies | None |
 | 2 | **Semantic** | Full ML with external embedding and LLM services | semembed, seminstruct |
 
 ### Component-to-Tier Matrix
@@ -20,7 +20,7 @@ SemStreams supports a 3-tier deployment model with progressively more capable co
 | `graph-index` | Required | Required | Required | Core relationship indexes |
 | `graph-gateway` | Required | Required | Required | HTTP API (GraphQL/MCP) |
 | `graph-embedding` | - | BM25 | HTTP | Vector embeddings |
-| `graph-clustering` | - | + Structural | + LLM + Semantic | Community detection, structural analysis, anomaly detection |
+| `graph-clustering` | - | Communities | + LLM + Semantic | Community detection and optional anomaly detection |
 | `graph-index-spatial` | Optional | Optional | Optional | Geospatial queries |
 | `graph-index-temporal` | Optional | Optional | Optional | Time-based queries |
 
@@ -40,7 +40,7 @@ Adds statistical algorithms for embeddings and clustering without external ML se
 
 **Additional Components:**
 - `graph-embedding` (BM25) - Statistical term-frequency embeddings
-- `graph-clustering` - Community detection with structural analysis and core anomaly detection
+- `graph-clustering` - Community detection with optional in-memory anomaly analysis
 
 ### Tier 2: Semantic (`semantic.json`)
 
@@ -48,7 +48,7 @@ Full-featured deployment with external ML services for embeddings and LLM enhanc
 
 **Enhanced Components:**
 - `graph-embedding` (HTTP) - ML-based vector embeddings via external service
-- `graph-clustering` (+ LLM) - Community detection with LLM summarization, structural analysis, and semantic gap detection
+- `graph-clustering` (+ LLM) - Community detection with LLM summarization and semantic gap detection
 - `graph-index-spatial` - Geospatial indexing
 - `graph-index-temporal` - Time-based indexing
 
@@ -114,8 +114,7 @@ Tier 1+ Only:
               │
               ▼ (reads KV)
         graph-clustering ──┬──► COMMUNITY_INDEX
-                          ├──► STRUCTURAL_INDEX (k-core, pivot)
-                          └──► ANOMALY_INDEX
+                          └──► ANOMALY_INDEX (when enabled)
 ```
 
 ## Graph Component Configuration
@@ -198,7 +197,8 @@ For Semantic tier, use `"embedder_type": "http"` with a model registry `embeddin
 
 ### graph-clustering
 
-Performs community detection with optional structural analysis, anomaly detection, and LLM enhancement.
+Performs community detection with optional anomaly detection and LLM enhancement. When anomaly detection is
+enabled, the component computes its K-core and pivot prerequisites in memory; they are not a queryable index.
 
 **Tier:** Statistical, Semantic
 
@@ -219,9 +219,6 @@ Performs community detection with optional structural analysis, anomaly detectio
     "batch_size": 100,
     "min_community_size": 2,
     "enable_llm": false,
-    "enable_structural": true,
-    "pivot_count": 16,
-    "max_hop_distance": 10,
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
@@ -243,10 +240,7 @@ Performs community detection with optional structural analysis, anomaly detectio
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `enable_llm` | bool | `false` | Enable LLM-based community summarization (requires model registry `community_summary` capability) |
-| `enable_structural` | bool | `false` | Enable k-core and pivot distance computation |
-| `pivot_count` | int | `16` | Number of pivot nodes for distance indexing |
-| `max_hop_distance` | int | `10` | Maximum BFS traversal depth |
-| `enable_anomaly_detection` | bool | `false` | Enable anomaly detection (requires enable_structural) |
+| `enable_anomaly_detection` | bool | `false` | Enable anomaly detection and its internal structural prerequisites |
 | `anomaly_config.core_anomaly.enabled` | bool | `true` | Detect core isolation anomalies |
 | `anomaly_config.semantic_gap.enabled` | bool | `false` | Detect semantic-structural gaps (requires embeddings) |
 
@@ -353,7 +347,6 @@ HTTP gateway for GraphQL and MCP access.
 | `EMBEDDING_INDEX` | graph-embedding | - | 1+ |
 | `EMBEDDING_DEDUP` | graph-embedding | - | 1+ |
 | `COMMUNITY_INDEX` | graph-clustering | - | 1+ |
-| `STRUCTURAL_INDEX` | graph-clustering | - | 1+ |
 | `ANOMALY_INDEX` | graph-clustering | - | 1+ |
 | `SPATIAL_INDEX` | graph-index-spatial | - | Optional |
 | `TEMPORAL_INDEX` | graph-index-temporal | - | Optional |

@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/test/e2e/scenarios/search"
-	"github.com/c360studio/semstreams/test/e2e/scenarios/stages"
 )
 
 // TieredResults contains structured results from a tiered e2e test run.
@@ -42,9 +41,6 @@ type TieredResults struct {
 	// Two PathRAG tests: sensor (structured IoT) and document (text-rich)
 	PathRAGSensor   *PathRAGResults `json:"pathrag_sensor,omitempty"`
 	PathRAGDocument *PathRAGResults `json:"pathrag_document,omitempty"`
-
-	// Structural index results (k-core, pivot)
-	StructuralIndexes *StructuralIndexResults `json:"structural_indexes,omitempty"`
 
 	// === Tier 2: Semantic capabilities (semantic only) ===
 
@@ -459,7 +455,6 @@ func BuildTieredResults(result *Result, searchStats *search.Stats) *TieredResult
 	buildCoreResults(tr, result, searchStats)
 	buildCommunityResults(tr, result)
 	buildAnomalyResults(tr, result)
-	buildStructuralIndexResults(tr, result)
 	buildPathRAGResultsForTier(tr, result)
 	buildGraphRAGResultsForTier(tr, result)
 	buildComponentAndOutputResults(tr, result)
@@ -468,27 +463,6 @@ func BuildTieredResults(result *Result, searchStats *search.Stats) *TieredResult
 	extractStageDurations(tr, result)
 
 	return tr
-}
-
-// buildStructuralIndexResults populates structural index results.
-func buildStructuralIndexResults(tr *TieredResults, result *Result) {
-	structIdx, ok := result.Details["structural_indexes"].(*stages.StructuralIndexResult)
-	if !ok || structIdx == nil {
-		return
-	}
-	tr.StructuralIndexes = &StructuralIndexResults{}
-	if structIdx.KCore != nil {
-		tr.StructuralIndexes.KCore = &KCoreResults{
-			MaxCore: structIdx.KCore.MaxCore, EntityCount: structIdx.KCore.EntityCount,
-			CoreBucketCounts: structIdx.KCore.CoreBuckets, Verified: structIdx.KCoreValid,
-		}
-	}
-	if structIdx.Pivot != nil {
-		tr.StructuralIndexes.Pivot = &PivotResults{
-			PivotCount: len(structIdx.Pivot.Pivots), EntityCount: structIdx.Pivot.EntityCount,
-			TriangleInequalityValid: true, Verified: structIdx.PivotValid,
-		}
-	}
 }
 
 // buildPathRAGResultsForTier populates PathRAG test results.

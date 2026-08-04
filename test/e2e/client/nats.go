@@ -465,7 +465,6 @@ var IndexBuckets = struct {
 	Embedding     string
 	EmbeddingDedp string
 	Community     string
-	Structural    string
 }{
 	EntityStates:  graph.BucketEntityStates,
 	Predicate:     graph.BucketPredicateIndex,
@@ -477,7 +476,6 @@ var IndexBuckets = struct {
 	Embedding:     graph.BucketEmbeddingIndex,
 	EmbeddingDedp: graph.BucketEmbeddingDedup,
 	Community:     graph.BucketCommunityIndex,
-	Structural:    graph.BucketStructuralIndex,
 }
 
 // GetAllCommunities retrieves all communities from the COMMUNITY_INDEX bucket
@@ -651,111 +649,6 @@ func (c *NATSValidationClient) WaitForCommunitySummaryEnhancement(
 		case <-time.After(pollInterval):
 		}
 	}
-}
-
-// StructuralIndexBucket is the KV bucket for structural indices — re-exported
-// from the framework KV catalog's name constant.
-const StructuralIndexBucket = graph.BucketStructuralIndex
-
-// KCoreMetadata contains k-core index metadata
-type KCoreMetadata struct {
-	MaxCore     int         `json:"max_core"`
-	EntityCount int         `json:"entity_count"`
-	ComputedAt  string      `json:"computed_at"`
-	CoreBuckets map[int]int `json:"core_buckets"` // core number -> count of entities
-}
-
-// PivotMetadata contains pivot distance index metadata
-type PivotMetadata struct {
-	Pivots      []string `json:"pivots"`
-	EntityCount int      `json:"entity_count"`
-	ComputedAt  string   `json:"computed_at"`
-}
-
-// StructuralIndexInfo contains information about structural indices
-type StructuralIndexInfo struct {
-	BucketExists bool           `json:"bucket_exists"`
-	KeyCount     int            `json:"key_count"`
-	KCore        *KCoreMetadata `json:"kcore,omitempty"`
-	Pivot        *PivotMetadata `json:"pivot,omitempty"`
-	SampleKeys   []string       `json:"sample_keys,omitempty"`
-}
-
-// GetStructuralIndexInfo retrieves information about structural indices
-func (c *NATSValidationClient) GetStructuralIndexInfo(ctx context.Context) (*StructuralIndexInfo, error) {
-	info := &StructuralIndexInfo{}
-
-	bucket, err := c.client.GetKeyValueBucket(ctx, StructuralIndexBucket)
-	if err != nil {
-		if isBucketNotFoundError(err) {
-			info.BucketExists = false
-			return info, nil
-		}
-		return nil, fmt.Errorf("failed to get structural index bucket: %w", err)
-	}
-	info.BucketExists = true
-
-	// Get key count
-	keys, err := bucket.Keys(ctx)
-	if err != nil && !isNoKeysError(err) {
-		return nil, fmt.Errorf("failed to list structural index keys: %w", err)
-	}
-	info.KeyCount = len(keys)
-
-	// Get sample keys
-	if len(keys) > 5 {
-		info.SampleKeys = keys[:5]
-	} else {
-		info.SampleKeys = keys
-	}
-
-	// Try to get k-core metadata
-	kcoreMeta, err := bucket.Get(ctx, "structural.kcore._meta")
-	if err == nil {
-		var meta struct {
-			MaxCore     int      `json:"max_core"`
-			EntityCount int      `json:"entity_count"`
-			ComputedAt  string   `json:"computed_at"`
-			CoreBuckets []string `json:"core_buckets"`
-		}
-		if json.Unmarshal(kcoreMeta.Value(), &meta) == nil {
-			info.KCore = &KCoreMetadata{
-				MaxCore:     meta.MaxCore,
-				EntityCount: meta.EntityCount,
-				ComputedAt:  meta.ComputedAt,
-				CoreBuckets: make(map[int]int),
-			}
-			// Count entities per core by looking up bucket keys
-			for i := 0; i <= meta.MaxCore; i++ {
-				coreKey := fmt.Sprintf("structural.kcore.core.%d", i)
-				if entry, err := bucket.Get(ctx, coreKey); err == nil {
-					var entities []string
-					if json.Unmarshal(entry.Value(), &entities) == nil {
-						info.KCore.CoreBuckets[i] = len(entities)
-					}
-				}
-			}
-		}
-	}
-
-	// Try to get pivot metadata
-	pivotMeta, err := bucket.Get(ctx, "structural.pivot._meta")
-	if err == nil {
-		var meta struct {
-			Pivots      []string `json:"pivots"`
-			EntityCount int      `json:"entity_count"`
-			ComputedAt  string   `json:"computed_at"`
-		}
-		if json.Unmarshal(pivotMeta.Value(), &meta) == nil {
-			info.Pivot = &PivotMetadata{
-				Pivots:      meta.Pivots,
-				EntityCount: meta.EntityCount,
-				ComputedAt:  meta.ComputedAt,
-			}
-		}
-	}
-
-	return info, nil
 }
 
 // GetAnomalyCounts retrieves counts of anomalies by type and status from ANOMALY_INDEX bucket

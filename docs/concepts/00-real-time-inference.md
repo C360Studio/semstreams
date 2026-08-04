@@ -133,10 +133,14 @@ BM25 embeddings for entities with text content—pure Go, no external services.
 - Telemetry entities cluster via explicit relationships only
 - **Anomaly detection**: Topology analysis suggests missing relationships (see [Anomaly Detection](08-anomaly-detection.md))
 
-Tier 1 also enables structural analysis after community detection:
+When anomaly detection is enabled, graph-clustering computes structural inputs in
+memory after community detection:
 - **K-core decomposition**: Identifies graph backbone vs periphery
 - **Pivot-based distances**: Estimates structural distance between entities
 - **Gap detection**: Finds entities that are semantically similar but structurally distant
+
+The K-core and pivot results are not persisted or exposed as a structural query
+index.
 
 **Use case:** Mixed deployments with documents AND telemetry—documents cluster by topic, telemetry by explicit relationships. Anomaly detection helps identify missing connections.
 

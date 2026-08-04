@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -858,12 +859,73 @@ func TestCreateGraphClustering_InvalidConfig(t *testing.T) {
 	assert.Nil(t, comp)
 }
 
+func TestCreateGraphClustering_RejectsRetiredStructuralConfig(t *testing.T) {
+	tests := []struct {
+		name  string
+		field string
+		value string
+	}{
+		{name: "enable structural", field: "enable_structural", value: "true"},
+		{name: "pivot count", field: "pivot_count", value: "4"},
+		{name: "max hop distance", field: "max_hop_distance", value: "5"},
+	}
+
+	natsClient, err := natsclient.NewClient("nats://localhost:4222")
+	require.NoError(t, err)
+	deps := component.Dependencies{NATSClient: natsClient}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := json.RawMessage(fmt.Sprintf(`{%q:%s}`, tt.field, tt.value))
+			comp, createErr := CreateGraphClustering(raw, deps)
+
+			require.Error(t, createErr)
+			assert.Nil(t, comp)
+			assert.Contains(t, createErr.Error(), tt.field)
+			assert.Contains(t, createErr.Error(), "Delete the field")
+		})
+	}
+}
+
+func TestCreateGraphClustering_RejectsRetiredStructuralOutput(t *testing.T) {
+	natsClient, err := natsclient.NewClient("nats://localhost:4222")
+	require.NoError(t, err)
+	const guidance = "STRUCTURAL_INDEX output was removed (ADR-090, BREAKING). Delete the output; anomaly detection computes structural prerequisites internally"
+
+	tests := []struct {
+		name       string
+		outputPort string
+	}{
+		{name: "subject form", outputPort: `{"name":"structural","type":"kv-write","subject":"STRUCTURAL_INDEX"}`},
+		{name: "bucket form", outputPort: `{"name":"structural","type":"kv-write","bucket":"STRUCTURAL_INDEX"}`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw := json.RawMessage(fmt.Sprintf(`{
+				"ports": {
+					"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
+					"outputs": [
+						{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"},
+						%s
+					]
+				}
+			}`, tt.outputPort))
+
+			comp, createErr := CreateGraphClustering(raw, component.Dependencies{NATSClient: natsClient})
+
+			require.Error(t, createErr)
+			assert.Nil(t, comp)
+			assert.Contains(t, createErr.Error(), guidance)
+		})
+	}
+}
+
 func TestCreateGraphClustering_RejectsPhantomAnomalyKey(t *testing.T) {
 	// ADR-054: an operator config carrying a phantom anomaly_config key (one that
 	// encoding/json silently drops) must fail loudly at the factory, not bind to
 	// nothing. Drives the production factory wire, not a helper.
 	phantomJSON := []byte(`{
-		"enable_structural": true,
 		"enable_anomaly_detection": true,
 		"anomaly_config": {
 			"enabled": true,

@@ -1,18 +1,19 @@
 # graph-clustering
 
-Community detection, structural analysis, and anomaly detection component for the graph subsystem.
+Community detection and anomaly detection component for the graph subsystem.
 
 ## Overview
 
-The `graph-clustering` component performs community detection on the entity graph using Label Propagation Algorithm (LPA), computes structural indices (k-core decomposition, pivot distances), and detects anomalies within community contexts. Optionally enhances community descriptions using LLM.
+The `graph-clustering` component performs community detection on the entity graph using Label Propagation
+Algorithm (LPA) and detects anomalies within community contexts. When anomaly detection is enabled, it computes
+K-core and pivot inputs in memory for that cycle. It optionally enhances community descriptions using an LLM.
 
 ## Architecture
 
 ```
                     ┌───────────────────┐
 ENTITY_STATES ─────►│                   │
-   (KV watch)       │  graph-clustering ├──► COMMUNITY_INDEX (KV)
-                    │                   ├──► STRUCTURAL_INDEX (KV)
+  (cycle read)      │  graph-clustering ├──► COMMUNITY_INDEX (KV)
                     │                   ├──► ANOMALY_INDEX (KV)
                     └─────────┬─────────┘
                               │ (reads/queries)
@@ -25,9 +26,9 @@ ENTITY_STATES ─────►│                   │
 ## Features
 
 - **Label Propagation Algorithm (LPA)**: Efficient community detection
-- **Configurable Scheduling**: Timer-based or event-count triggered
+- **Configurable Scheduling**: Timer-based detection cycles
 - **LLM Enhancement**: Optional community summarization using LLM
-- **Structural Analysis**: K-core decomposition and pivot distance indexing
+- **Internal Structural Analysis**: Fresh K-core and pivot inputs for anomaly detectors
 - **Anomaly Detection**: Core isolation and semantic gap detection within communities
 - **Semantic Gap Detection**: Uses graph-embedding query path for similarity search
 
@@ -36,7 +37,7 @@ ENTITY_STATES ─────►│                   │
 When triggered, the component runs through these phases:
 
 1. **Community Detection (LPA)** → COMMUNITY_INDEX
-2. **Structural Computation** (if enabled) → STRUCTURAL_INDEX
+2. **Structural Computation** (when anomaly detection is enabled) → in-memory inputs
 3. **Anomaly Detection** (if enabled) → ANOMALY_INDEX
 
 ## Configuration
@@ -53,7 +54,6 @@ When triggered, the component runs through these phases:
       ],
       "outputs": [
         {"name": "communities", "subject": "COMMUNITY_INDEX", "type": "kv"},
-        {"name": "structural", "subject": "STRUCTURAL_INDEX", "type": "kv"},
         {"name": "anomalies", "subject": "ANOMALY_INDEX", "type": "kv"}
       ]
     },
@@ -62,9 +62,6 @@ When triggered, the component runs through these phases:
     "min_community_size": 2,
     "max_iterations": 100,
     "enable_llm": false,
-    "enable_structural": true,
-    "pivot_count": 16,
-    "max_hop_distance": 10,
     "enable_anomaly_detection": true,
     "anomaly_config": {
       "enabled": true,
@@ -100,14 +97,11 @@ When triggered, the component runs through these phases:
 |--------|------|---------|-------------|
 | `ports` | object | required | Port configuration |
 | `detection_interval` | duration | "30s" | Time between detection runs |
-| `batch_size` | int | 100 | Entity change count to trigger detection |
+| `batch_size` | int | 100 | Reserved configuration; detection is currently timer-driven |
 | `min_community_size` | int | 2 | Minimum entities to form community |
 | `max_iterations` | int | 100 | Max LPA iterations |
 | `enable_llm` | bool | false | Enable LLM community summarization (requires model registry with `community_summary` capability) |
-| `enable_structural` | bool | false | Enable k-core and pivot computation |
-| `pivot_count` | int | 16 | Number of pivot nodes for distance indexing |
-| `max_hop_distance` | int | 10 | Maximum BFS traversal depth |
-| `enable_anomaly_detection` | bool | false | Enable anomaly detection (requires enable_structural) |
+| `enable_anomaly_detection` | bool | false | Enable anomaly detection and its internal structural prerequisites |
 | `anomaly_config` | object | {} | Anomaly detection configuration |
 
 ### Anomaly Configuration
@@ -132,26 +126,23 @@ When triggered, the component runs through these phases:
 
 | Name | Type | Subject | Description |
 |------|------|---------|-------------|
-| entity_watch | kv-watch | ENTITY_STATES | Watch for entity changes |
+| entity_watch | kv-watch | ENTITY_STATES | Dependency/discovery metadata for the authority bucket |
+
+The declared `kv-watch` input is component discovery metadata. The runtime does
+not start an `ENTITY_STATES` watcher from it; each scheduled cycle reads current
+authority and topology state.
 
 ### Outputs
 
 | Name | Type | Subject | Description |
 |------|------|---------|-------------|
 | communities | kv | COMMUNITY_INDEX | Community detection results |
-| structural | kv | STRUCTURAL_INDEX | K-core levels and pivot distances |
 | anomalies | kv | ANOMALY_INDEX | Detected anomalies |
 
 ## Scheduling
 
-Community detection triggers when either condition is met:
-
-1. **Timer**: `detection_interval` elapsed since last run
-2. **Batch**: `batch_size` entity changes accumulated
-
-This ensures:
-- Regular detection even with low activity
-- Responsive detection during high activity
+Community detection runs when `detection_interval` elapses. Each tick reads the
+current graph population; it does not depend on an entity-change delivery stream.
 
 ## Index Structures
 
@@ -167,28 +158,6 @@ This ensures:
   "summary": "Cold storage environmental sensors",
   "keywords": ["temperature", "humidity", "sensor"],
   "level": 0
-}
-```
-
-### Structural Index
-
-```json
-{
-  "structural.kcore._meta": {
-    "entity_count": 123,
-    "max_core": 15,
-    "computed_at": "2024-01-15T10:30:00Z"
-  },
-  "structural.kcore.entity-1": {
-    "core_level": 3
-  },
-  "structural.pivot._meta": {
-    "pivot_count": 16,
-    "entity_count": 123
-  },
-  "structural.pivot.entity-1": {
-    "distances": {"pivot-1": 2, "pivot-2": 3}
-  }
 }
 ```
 
@@ -232,13 +201,16 @@ K-core decomposition identifies the "coreness" of each node:
 
 Higher core numbers indicate more densely connected nodes.
 
-### Pivot Distance Indexing
+### Pivot Distances
 
-Pivot indexing enables efficient approximate shortest path queries:
+Anomaly detectors use pivot distances to estimate structural separation:
 
 1. Select k pivot nodes (high-degree or random)
 2. Compute BFS distances from each pivot to all reachable nodes
-3. Store distances for triangle inequality bounds
+3. Pass the distance vectors directly to the anomaly detectors for that cycle
+
+These K-core and pivot results are internal prerequisites. They are not persisted
+or exposed through a structural query contract.
 
 ### Anomaly Detection
 
@@ -249,12 +221,12 @@ Pivot indexing enables efficient approximate shortest path queries:
 ## Dependencies
 
 ### Upstream (reads during detection)
-- `graph-ingest` - watches ENTITY_STATES for triggers
+- `graph-ingest` - owns `ENTITY_STATES`, which clustering reads on each scheduled cycle
 - `graph-index` - reads OUTGOING_INDEX and INCOMING_INDEX for graph structure
 - `graph-embedding` - queries for similar entities via NATS request/reply
 
 ### Downstream
-- `graph-gateway` - queries community, structural, and anomaly data
+- `graph-gateway` - queries community and anomaly data
 
 ### External
 - LLM API service (if LLM enhancement enabled)
@@ -267,13 +239,12 @@ Pivot indexing enables efficient approximate shortest path queries:
 | `graph_clustering_communities_detected` | gauge | Current community count |
 | `graph_clustering_duration_seconds` | histogram | Detection run duration |
 | `graph_clustering_llm_enhancements_total` | counter | LLM enhancement calls |
-| `graph_clustering_structural_runs_total` | counter | Structural computation runs |
 | `graph_clustering_anomalies_detected` | gauge | Current anomaly count |
 
 ## Health
 
 The component reports healthy when:
-- KV watch subscription is active
+- NATS and required KV dependencies initialized successfully
 - Detection runs complete within timeout
 - LLM API reachable (if enabled)
 - NATS connection available for similarity queries (if semantic_gap enabled)

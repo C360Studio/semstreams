@@ -349,9 +349,9 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-gateway-response-shape", s.executeValidateGatewayResponseShape, []string{"statistical", "semantic"}},
 		{"test-embedding-fallback", s.executeTestEmbeddingFallback, []string{"statistical", "semantic"}},
 		{"validate-community-structure", s.executeValidateCommunityStructure, []string{"statistical", "semantic"}},
-		// Structural indexes (k-core, pivot) - require community detection for meaningful structure
-		{"validate-kcore-index", s.executeValidateKCoreIndex, []string{"statistical", "semantic"}},
-		{"validate-pivot-index", s.executeValidatePivotIndex, []string{"statistical", "semantic"}},
+		// ADR-090 breaking gate: statistical is the checked-in graph-clustering
+		// deployment and a fresh stack must never recreate retired persistence.
+		{"validate-retired-structural-bucket-absent", s.validateRetiredStructuralBucketAbsent, []string{"statistical"}},
 
 		// Provenance remains authoritative; no duplicate durable query view exists.
 		{"validate-authoritative-hierarchy-provenance", s.validateAuthoritativeHierarchyProvenance, []string{"structural", "statistical", "semantic"}},

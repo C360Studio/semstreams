@@ -88,7 +88,12 @@ grep -rn "EntityStates\s*:\|SpatialIndex\s*:\|IncomingIndex\s*:" --include="*.go
 
 # Do you create-or-get any framework bucket yourself? Readers must not create;
 # route owners through the catalog seam instead.
-grep -rnE '"(ENTITY_STATES|PREDICATE_INDEX|INCOMING_INDEX|OUTGOING_INDEX|ALIAS_INDEX|NAME_INDEX|ENTITY_SUFFIX_INDEX|SPATIAL_INDEX|TEMPORAL_INDEX|TEMPORAL_INDEX_REVERSE|EMBEDDING_INDEX|EMBEDDING_DEDUP|COMMUNITY_INDEX|COMMUNITY_SUMMARIES|ANOMALY_INDEX|STRUCTURAL_INDEX|GRAPH_INGEST_APPLIED_SEQ|GRAPH_STATUS|OWNER_CLAIMS|OWNER_PRESENCE|COMPONENT_STATUS)"' --include="*.go" .
+framework_buckets='ENTITY_STATES|PREDICATE_INDEX|INCOMING_INDEX|OUTGOING_INDEX|ALIAS_INDEX|NAME_INDEX'
+framework_buckets="${framework_buckets}|ENTITY_SUFFIX_INDEX|SPATIAL_INDEX|TEMPORAL_INDEX|TEMPORAL_INDEX_REVERSE"
+framework_buckets="${framework_buckets}|EMBEDDING_INDEX|EMBEDDING_DEDUP|COMMUNITY_INDEX|COMMUNITY_SUMMARIES"
+framework_buckets="${framework_buckets}|ANOMALY_INDEX|GRAPH_INGEST_APPLIED_SEQ|GRAPH_STATUS|OWNER_CLAIMS"
+framework_buckets="${framework_buckets}|OWNER_PRESENCE|COMPONENT_STATUS"
+grep -rnE "\"(${framework_buckets})\"" --include="*.go" .
 
 # Do you match on the not-ready error? The code is stable; the text is not.
 grep -rn "index_not_ready" --include="*.go" .

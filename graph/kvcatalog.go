@@ -179,8 +179,6 @@ func KVCatalog() []natsclient.BucketSpec {
 			"LLM community summaries (content-addressed by membership hash, ADR-087)"),
 		derived(BucketAnomalyIndex, "graph-clustering",
 			"Anomaly detection index for structural gaps and inferences"),
-		derived(BucketStructuralIndex, "graph-clustering",
-			"Structural index for k-core and pivot distances"),
 
 		// Framework operational plane.
 		graphStatus,

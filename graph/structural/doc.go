@@ -23,12 +23,8 @@
 //	│   (peeling algorithm)     │   (PageRank + BFS)                 │
 //	└───────────────────────────┴────────────────────────────────────┘
 //	                                 ↓
-//	┌────────────────────────────────────────────────────────────────┐
-//	│                  STRUCTURAL_INDEX KV                           │
-//	│  structural.kcore._meta         structural.pivot._meta         │
-//	│  structural.kcore.entity.{id}   structural.pivot.entity.{id}   │
-//	│  structural.kcore.bucket.{k}                                   │
-//	└────────────────────────────────────────────────────────────────┘
+//	                  Ephemeral in-memory indices
+//	                    (same-cycle consumers)
 //
 // # K-Core Decomposition
 //
@@ -96,29 +92,6 @@
 //	// Get candidates potentially within N hops
 //	candidates := index.GetReachableCandidates(source, maxHops)
 //
-// # Storage
-//
-// Indices are stored in the STRUCTURAL_INDEX NATS KV bucket with the following
-// key patterns:
-//
-//	structural.kcore._meta           → KCore metadata (max_core, computed_at)
-//	structural.kcore.entity.{id}     → Per-entity core number
-//	structural.kcore.bucket.{k}      → Entity IDs at core level k
-//	structural.pivot._meta           → Pivot metadata (pivots list, computed_at)
-//	structural.pivot.entity.{id}     → Per-entity distance vector
-//
-// Usage:
-//
-//	storage := structural.NewNATSStructuralIndexStorage(kvBucket)
-//
-//	// Save indices
-//	err := storage.SaveKCoreIndex(ctx, kcoreIndex)
-//	err := storage.SavePivotIndex(ctx, pivotIndex)
-//
-//	// Load indices
-//	kcoreIndex, err := storage.GetKCoreIndex(ctx)
-//	pivotIndex, err := storage.GetPivotIndex(ctx)
-//
 // # Configuration
 //
 // Default parameters:
@@ -130,8 +103,8 @@
 //
 // # Thread Safety
 //
-// KCoreComputer, PivotComputer, and NATSStructuralIndexStorage are safe for
-// concurrent use. The index types (KCoreIndex, PivotIndex) are safe for concurrent
+// KCoreComputer and PivotComputer are safe for concurrent use. The index types
+// (KCoreIndex, PivotIndex) are safe for concurrent
 // reads but not concurrent writes.
 //
 // # See Also
