@@ -28,8 +28,8 @@ classify ownership before building.
 
 - **SemStreams owns** the governed graph substrate: the KV-twofer and NATS/KV
   runtime; Graphable ingestion, `ENTITY_STATES`, the single-writer invariant, and
-  graph mutation/query/gateway APIs; the derived indexes (predicate, name, alias,
-  incoming/outgoing, context) and indexing profiles; projection contracts,
+  graph mutation/query/gateway APIs; the consumed derived indexes (predicate, name,
+  alias, incoming/outgoing) and indexing profiles; projection contracts,
   ownership claims/leases, and the graph-write-intent taxonomy (ADR-055/056); the
   **Lifecycle harness** (ADR-047) — Participant/Manager, KV-backed workflow state,
   operator gateway; the **rule engine** (conditions, actions, iteration caps,

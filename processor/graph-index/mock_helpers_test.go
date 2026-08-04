@@ -11,7 +11,6 @@ type mockRefs struct {
 	incoming  *mockKVBucket
 	alias     *mockKVBucket
 	predicate *mockKVBucket
-	context   *mockKVBucket
 	name      *mockKVBucket
 }
 
@@ -52,11 +51,6 @@ func aliasMock(comp *Component) *mockKVBucket {
 // predicateMock retrieves the mock predicate bucket for a test component.
 func predicateMock(comp *Component) *mockKVBucket {
 	return getMocks(comp).predicate
-}
-
-// contextMock retrieves the mock context bucket for a test component.
-func contextMock(comp *Component) *mockKVBucket {
-	return getMocks(comp).context
 }
 
 // nameMock retrieves the mock name bucket for a test component.

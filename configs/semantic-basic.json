@@ -156,16 +156,14 @@
             "incoming": true,
             "alias": true,
             "spatial": true,
-            "temporal": true,
-            "context": true
+            "temporal": true
           },
           "buckets": {
             "alias": "ALIAS_INDEX",
             "predicate": "PREDICATE_INDEX",
             "incoming": "INCOMING_INDEX",
             "spatial": "SPATIAL_INDEX",
-            "temporal": "TEMPORAL_INDEX",
-            "context": "CONTEXT_INDEX"
+            "temporal": "TEMPORAL_INDEX"
           }
         },
         "querier": {

@@ -1073,86 +1073,66 @@ func (s *TieredScenario) effectiveVariant(result *Result) string {
 	return ""
 }
 
-// validateContextIndexHierarchy validates that the ContextIndex is tracking inference provenance.
-// Phase 5: Verifies that hierarchy inference triples are tracked in CONTEXT_INDEX.
-func (s *TieredScenario) validateContextIndexHierarchy(ctx context.Context, result *Result) error {
+// validateAuthoritativeHierarchyProvenance proves hierarchy provenance remains
+// on authoritative current state and that the retired duplicate bucket is absent.
+func (s *TieredScenario) validateAuthoritativeHierarchyProvenance(ctx context.Context, result *Result) error {
 	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for context index validation")
-		return nil
+		return fmt.Errorf("NATS client unavailable for authoritative provenance validation")
 	}
 
-	fmt.Println("[CONTEXT INDEX] Validating context index hierarchy tracking...")
-
-	// Count raw CONTEXT_INDEX keys. After composite-key sharding (gh#474) a key is
-	// "hash(context).entityID.predicate", so this counts memberships, not distinct
-	// contexts — but non-zero still means the write path populated the bucket.
-	count, err := s.natsClient.CountBucketKeys(ctx, client.IndexBuckets.Context)
+	fmt.Println("[AUTHORITY PROVENANCE] Validating hierarchy triples in ENTITY_STATES...")
+	retiredBucketExists, err := s.natsClient.BucketExists(ctx, "CONTEXT_INDEX")
 	if err != nil {
-		return fmt.Errorf("context index query failed: %w", err)
+		return fmt.Errorf("check retired context bucket absence: %w", err)
+	}
+	if retiredBucketExists {
+		return fmt.Errorf("retired CONTEXT_INDEX bucket exists on the fresh tier stack")
 	}
 
-	// Read the DISTINCT context values from entry values (the sharded key no longer
-	// carries the raw context) and the hierarchy memberships by value-match. This is
-	// the sharded reader under test — see client.GetAllContexts / GetContextEntries.
-	allContexts, err := s.natsClient.GetAllContexts(ctx)
+	matches, err := s.natsClient.FindAuthorityTriplesByPredicatePrefix(ctx, "hierarchy.")
 	if err != nil {
-		return fmt.Errorf("failed to list context values: %w", err)
+		return fmt.Errorf("scan authoritative hierarchy provenance: %w", err)
 	}
-	hierarchyEntries, err := s.natsClient.GetContextEntries(ctx, "inference.hierarchy")
+	hierarchyEntities, hierarchyTriples, err := validateHierarchyProvenance(matches)
 	if err != nil {
-		return fmt.Errorf("failed to read inference.hierarchy context entries: %w", err)
-	}
-	hierarchyContextFound := len(hierarchyEntries) > 0
-	hierarchyEntryCount := len(hierarchyEntries)
-
-	// Record metrics
-	result.Metrics["context_index_keys"] = count
-	result.Metrics["context_hierarchy_found"] = boolToInt(hierarchyContextFound)
-	result.Metrics["context_hierarchy_entries"] = hierarchyEntryCount
-
-	// Log results
-	fmt.Printf("[CONTEXT INDEX] Results: total_keys=%d, distinct_contexts=%d, hierarchy_found=%v, hierarchy_entries=%d\n",
-		count, len(allContexts), hierarchyContextFound, hierarchyEntryCount)
-	if len(allContexts) > 0 {
-		fmt.Printf("[CONTEXT INDEX] Distinct contexts: %v\n", allContexts)
+		return err
 	}
 
-	// Drift guard (all tiers): keys exist but the value-reader recovers zero distinct
-	// contexts ⇒ the sharded on-disk format and this reader disagree. HARD-FAIL — a
-	// warn here is exactly the "tier passes validating nothing" trap this change closes.
-	if count > 0 && len(allContexts) == 0 {
-		return fmt.Errorf("CONTEXT_INDEX has %d keys but no context values are readable — sharded key/value format drift (gh#474)", count)
+	result.Metrics["authority_hierarchy_provenance_triples"] = hierarchyTriples
+	result.Metrics["authority_hierarchy_provenance_entities"] = hierarchyEntities
+	result.Metrics["retired_context_bucket_present"] = 0
+	result.Details["authority_provenance_validation"] = map[string]any{
+		"store":                         client.BucketEntityStates,
+		"context":                       "inference.hierarchy",
+		"hierarchy_triples":             hierarchyTriples,
+		"entities":                      hierarchyEntities,
+		"retired_context_bucket_absent": true,
 	}
-
-	// Populated-expectation guard (non-structural tiers): hierarchy inference runs to
-	// completion here, and every hierarchy triple carries Context:"inference.hierarchy",
-	// so both an empty index and a populated-but-unreadable hierarchy are real failures.
-	variant := s.effectiveVariant(result)
-	if variant == "structural" {
-		if count == 0 {
-			// Structural tier runs quickly — async context indexing may not complete in
-			// time; hierarchy-inference validation already confirms containers exist.
-			fmt.Println("[CONTEXT INDEX] Note: Context index empty (expected in short structural tier run)")
-		}
-	} else {
-		if count == 0 {
-			return fmt.Errorf("CONTEXT_INDEX is empty on the %s tier — hierarchy inference did not populate the index", variant)
-		}
-		if !hierarchyContextFound {
-			return fmt.Errorf("CONTEXT_INDEX has %d keys and %d distinct contexts but 'inference.hierarchy' has no readable entries — sharded reader drift (gh#474)", count, len(allContexts))
-		}
-		fmt.Printf("[CONTEXT INDEX] Success: hierarchy inference provenance tracked (%d entries)\n", hierarchyEntryCount)
-	}
-
-	result.Details["context_index_validation"] = map[string]any{
-		"total_keys":             count,
-		"distinct_contexts":      allContexts,
-		"hierarchy_found":        hierarchyContextFound,
-		"hierarchy_entry_count":  hierarchyEntryCount,
-		"provenance_tracking_ok": hierarchyContextFound && hierarchyEntryCount > 0,
-	}
+	fmt.Printf("[AUTHORITY PROVENANCE] Success: %d hierarchy triples across %d entities; retired bucket absent\n",
+		hierarchyTriples, hierarchyEntities)
 
 	return nil
+}
+
+func validateHierarchyProvenance(matches []client.AuthorityTripleMatch) (int, int, error) {
+	const expectedContext = "inference.hierarchy"
+	if len(matches) == 0 {
+		return 0, 0, fmt.Errorf("ENTITY_STATES has no hierarchy predicate triples")
+	}
+
+	entities := make(map[string]struct{})
+	for _, match := range matches {
+		if !strings.HasPrefix(match.Triple.Predicate, "hierarchy.") {
+			return 0, 0, fmt.Errorf("authority hierarchy scan returned non-hierarchy predicate %q",
+				match.Triple.Predicate)
+		}
+		if match.Triple.Context != expectedContext {
+			return 0, 0, fmt.Errorf("authoritative hierarchy triple %s on %s has Context %q; want %q",
+				match.Triple.Predicate, match.EntityID, match.Triple.Context, expectedContext)
+		}
+		entities[match.EntityID] = struct{}{}
+	}
+	return len(entities), len(matches), nil
 }
 
 // validateIncomingIndexPredicates validates that IncomingIndex stores predicate information.
@@ -1259,72 +1239,6 @@ func (s *TieredScenario) validateIncomingIndexPredicates(ctx context.Context, re
 		"hierarchy_member_count":  hierarchyMemberCount,
 		"unique_predicates":       uniquePredicates,
 		"predicate_validation":    predicateValidation,
-	}
-
-	return nil
-}
-
-// validateContextProvenanceAudit demonstrates context-based provenance queries.
-// Phase 6: Story - "As a system admin, I can audit which relationships came from inference."
-func (s *TieredScenario) validateContextProvenanceAudit(ctx context.Context, result *Result) error {
-	if s.natsClient == nil {
-		result.Warnings = append(result.Warnings, "NATS client unavailable for provenance audit")
-		return nil
-	}
-
-	fmt.Println("[PROVENANCE AUDIT] Demonstrating context-based provenance queries...")
-
-	// 1. Get all inference contexts in use
-	allContexts, err := s.natsClient.GetAllContexts(ctx)
-	if err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("failed to get contexts: %v", err))
-		return nil
-	}
-
-	// 2. Query entities created by hierarchy inference
-	hierarchyEntries, _ := s.natsClient.GetContextEntries(ctx, "inference.hierarchy")
-
-	// 3. Extract unique entity IDs (entities touched by hierarchy inference)
-	entitySet := make(map[string]bool)
-	for _, entry := range hierarchyEntries {
-		entitySet[entry.EntityID] = true
-	}
-
-	// 4. Cross-reference: count container entities
-	containerCount := 0
-	for id := range entitySet {
-		if strings.HasSuffix(id, ".group") ||
-			strings.HasSuffix(id, ".group.container") ||
-			strings.HasSuffix(id, ".group.container.level") {
-			containerCount++
-		}
-	}
-
-	// Record metrics
-	result.Metrics["provenance_contexts_found"] = len(allContexts)
-	result.Metrics["provenance_hierarchy_entities"] = len(entitySet)
-	result.Metrics["provenance_containers_identified"] = containerCount
-
-	// Log results
-	fmt.Printf("[PROVENANCE AUDIT] Found %d contexts, %d hierarchy-inferred entities, %d containers\n",
-		len(allContexts), len(entitySet), containerCount)
-	if len(allContexts) > 0 {
-		fmt.Printf("[PROVENANCE AUDIT] Contexts: %v\n", allContexts)
-	}
-
-	// Validation
-	if len(allContexts) > 0 && len(entitySet) > 0 {
-		fmt.Println("[PROVENANCE AUDIT] Success: Can audit which entities came from inference")
-	} else if len(allContexts) == 0 {
-		result.Warnings = append(result.Warnings,
-			"No provenance contexts found - ContextIndex may not be populated")
-	}
-
-	result.Details["provenance_audit"] = map[string]any{
-		"contexts_found":       allContexts,
-		"hierarchy_entities":   len(entitySet),
-		"containers_found":     containerCount,
-		"provenance_available": len(allContexts) > 0,
 	}
 
 	return nil

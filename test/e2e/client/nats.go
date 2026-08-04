@@ -33,6 +33,7 @@ type Triple struct {
 	Subject   string `json:"subject"`
 	Predicate string `json:"predicate"`
 	Object    any    `json:"object"`
+	Context   string `json:"context,omitempty"`
 }
 
 // Anomaly represents a structural anomaly detected by the inference system
@@ -465,7 +466,6 @@ var IndexBuckets = struct {
 	EmbeddingDedp string
 	Community     string
 	Structural    string
-	Context       string
 }{
 	EntityStates:  graph.BucketEntityStates,
 	Predicate:     graph.BucketPredicateIndex,
@@ -478,7 +478,6 @@ var IndexBuckets = struct {
 	EmbeddingDedp: graph.BucketEmbeddingDedup,
 	Community:     graph.BucketCommunityIndex,
 	Structural:    graph.BucketStructuralIndex,
-	Context:       graph.BucketContextIndex,
 }
 
 // GetAllCommunities retrieves all communities from the COMMUNITY_INDEX bucket
@@ -1058,125 +1057,79 @@ func incomingEntryFromCompositeKey(key, targetID string) (IncomingEntry, bool) {
 	}, true
 }
 
-// ContextEntry matches the indexmanager.ContextEntry structure.
-// Phase 5: Added to verify ContextIndex stores entity+predicate pairs.
-type ContextEntry struct {
-	EntityID  string `json:"entity_id"`
-	Predicate string `json:"predicate"`
+// AuthorityTripleMatch is one E2E diagnostic match found directly in
+// ENTITY_STATES. It is not an application query contract.
+type AuthorityTripleMatch struct {
+	EntityID string `json:"entity_id"`
+	Triple   Triple `json:"triple"`
 }
 
-// contextIndexValue mirrors the JSON value graph-index stores at each
-// CONTEXT_INDEX composite key (gh#474). The raw context string is not recoverable
-// from the sha256 key prefix, so it rides in the value.
-type contextIndexValue struct {
-	Context string `json:"context"`
+const maxAuthorityProvenanceScan = 10_000
+
+// FindAuthorityTriplesByPredicatePrefix scans bounded authoritative current
+// state for triples whose predicates carry predicatePrefix. Selection is
+// independent of provenance so the caller can detect missing or changed context.
+// It fails rather than truncating if the tier exceeds the diagnostic bound.
+func (c *NATSValidationClient) FindAuthorityTriplesByPredicatePrefix(
+	ctx context.Context,
+	predicatePrefix string,
+) ([]AuthorityTripleMatch, error) {
+	return c.findAuthorityTriplesByPredicatePrefix(ctx, predicatePrefix, maxAuthorityProvenanceScan)
 }
 
-// GetContextEntries retrieves all entries for a specific context value.
-//
-// After composite-key sharding (gh#474) CONTEXT_INDEX keys are
-// "hash(contextValue).entityID.predicate" and the raw context rides in the value.
-// This reader scans the bucket and matches on the AUTHORITATIVE stored context
-// value rather than recomputing the sha256 prefix — so it needs no copy of the
-// production hash and cannot silently drift from it. Entity ID + predicate are
-// reconstructed from the composite key.
-func (c *NATSValidationClient) GetContextEntries(ctx context.Context, contextValue string) ([]ContextEntry, error) {
-	bucket, err := c.client.GetKeyValueBucket(ctx, IndexBuckets.Context)
+func (c *NATSValidationClient) findAuthorityTriplesByPredicatePrefix(
+	ctx context.Context,
+	predicatePrefix string,
+	maxEntities int,
+) ([]AuthorityTripleMatch, error) {
+	if predicatePrefix == "" {
+		return nil, fmt.Errorf("predicate prefix cannot be empty")
+	}
+	if maxEntities <= 0 {
+		return nil, fmt.Errorf("authority provenance entity limit must be positive")
+	}
+	bucket, err := c.client.GetKeyValueBucket(ctx, BucketEntityStates)
 	if err != nil {
-		if isBucketNotFoundError(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to get context bucket: %w", err)
+		return nil, fmt.Errorf("failed to get authoritative entity states: %w", err)
 	}
-
-	keys, err := bucket.Keys(ctx)
-	if err != nil {
-		if isNoKeysError(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to list context keys: %w", err)
-	}
-
-	entries := make([]ContextEntry, 0)
-	for _, key := range keys {
-		entry, getErr := bucket.Get(ctx, key)
-		if getErr != nil {
-			continue // concurrently deleted or transient — skip
-		}
-		var v contextIndexValue
-		if json.Unmarshal(entry.Value(), &v) != nil || v.Context != contextValue {
-			continue
-		}
-		entityID, predicate, ok := contextEntryFromCompositeKey(key)
-		if !ok {
-			continue
-		}
-		entries = append(entries, ContextEntry{EntityID: entityID, Predicate: predicate})
-	}
-	return entries, nil
-}
-
-// contextEntryFromCompositeKey extracts entityID and predicate from a
-// CONTEXT_INDEX composite key of the form "entityID.hash(context).hex(predicate)"
-// (entity-prefix, gh#474 P1f). The entity ID is the first 6 dot-separated tokens;
-// the context hash and hex predicate are each a single dot-free token. The raw
-// context is not in the key (it rides in the value). Returns false when the key is
-// malformed.
-func contextEntryFromCompositeKey(key string) (entityID, predicate string, ok bool) {
-	// parts[0..5] = entityID tokens, parts[6] = context hash, parts[7] = hex predicate.
-	parts := strings.SplitN(key, ".", 8)
-	if len(parts) < 8 {
-		return "", "", false
-	}
-	predicate, decoded := graph.DecodePredicateToken(parts[7])
-	if !decoded || predicate == "" {
-		return "", "", false
-	}
-	return strings.Join(parts[:6], "."), predicate, true
-}
-
-// GetAllContexts lists all distinct context values in the CONTEXT_INDEX bucket.
-//
-// After composite-key sharding (gh#474) the raw context value is no longer the
-// key (keys are "hash(context).entityID.predicate") — it rides in each entry's
-// value. This reader scans values and returns the distinct set of stored context
-// strings, sorted for deterministic output.
-func (c *NATSValidationClient) GetAllContexts(ctx context.Context) ([]string, error) {
-	bucket, err := c.client.GetKeyValueBucket(ctx, IndexBuckets.Context)
-	if err != nil {
-		if isBucketNotFoundError(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("failed to get context bucket: %w", err)
-	}
-
-	keys, err := bucket.Keys(ctx)
+	lister, err := bucket.ListKeys(ctx)
 	if err != nil {
 		if isNoKeysError(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to list context keys: %w", err)
+		return nil, fmt.Errorf("failed to list authoritative entity states: %w", err)
 	}
+	defer func() { _ = lister.Stop() }()
 
-	seen := make(map[string]struct{})
+	keys := make([]string, 0, maxEntities)
+	for key := range lister.Keys() {
+		keys = append(keys, key)
+		if len(keys) > maxEntities {
+			return nil, fmt.Errorf("authority provenance scan exceeds entity limit %d", maxEntities)
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("list authoritative entity states: %w", err)
+	}
+	sort.Strings(keys)
+
+	matches := make([]AuthorityTripleMatch, 0)
 	for _, key := range keys {
 		entry, getErr := bucket.Get(ctx, key)
 		if getErr != nil {
-			continue
+			return nil, fmt.Errorf("failed to read authoritative entity %s: %w", key, getErr)
 		}
-		var v contextIndexValue
-		if json.Unmarshal(entry.Value(), &v) != nil || v.Context == "" {
-			continue
+		var entity EntityState
+		if unmarshalErr := json.Unmarshal(entry.Value(), &entity); unmarshalErr != nil {
+			return nil, fmt.Errorf("failed to decode authoritative entity %s: %w", key, unmarshalErr)
 		}
-		seen[v.Context] = struct{}{}
+		for _, triple := range entity.Triples {
+			if strings.HasPrefix(triple.Predicate, predicatePrefix) {
+				matches = append(matches, AuthorityTripleMatch{EntityID: key, Triple: triple})
+			}
+		}
 	}
-
-	contexts := make([]string, 0, len(seen))
-	for ctxVal := range seen {
-		contexts = append(contexts, ctxVal)
-	}
-	sort.Strings(contexts)
-	return contexts, nil
+	return matches, nil
 }
 
 // OutgoingEntry matches the indexmanager.OutgoingEntry structure.

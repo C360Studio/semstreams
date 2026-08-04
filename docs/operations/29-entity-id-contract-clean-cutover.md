@@ -82,6 +82,9 @@ Replace `<exact-cutover-context>` with the literal reviewed context before execu
 `graph.FrameworkOwnedBuckets()`, graph-ingest's guard buckets, and the enabled component port bindings. The following
 commands are the literal command sheet only for a deployment that uses every current default bucket name:
 
+`CONTEXT_INDEX` is retired by ADR-090 and appears below only so an older beta bucket is removed. A fresh deployment
+does not recreate it, and an absent-bucket response is expected.
+
 ```bash
 nats kv rm ENTITY_STATES
 nats kv rm ENTITY_SUFFIX_INDEX

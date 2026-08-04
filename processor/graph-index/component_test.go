@@ -1200,7 +1200,6 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 		incoming:  newMockKVBucket(),
 		alias:     newMockKVBucket(),
 		predicate: newMockKVBucket(), // predicate-audit:unrelated {"column":14,"surface":"go-field:predicate","value":"","basis":"reviewed mock KV bucket field, not predicate syntax"}
-		context:   newMockKVBucket(),
 		name:      newMockKVBucket(),
 	}
 
@@ -1209,7 +1208,6 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	graphIndexComp.incomingBucket = nc.NewKVStore(mocks.incoming)
 	graphIndexComp.aliasBucket = nc.NewKVStore(mocks.alias)
 	graphIndexComp.predicateBucket = nc.NewKVStore(mocks.predicate)
-	graphIndexComp.contextBucket = nc.NewKVStore(mocks.context)
 	graphIndexComp.nameBucket = nc.NewKVStore(mocks.name)
 	// Initialize lifecycle reporter (normally done in Start())
 	graphIndexComp.lifecycleReporter = component.NewNoOpLifecycleReporter()

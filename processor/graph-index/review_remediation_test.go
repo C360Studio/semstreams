@@ -79,7 +79,7 @@ func TestAuthoritativeIdentityMismatchPoisonsBeforeIndexIOAndWithholdsWatermark(
 	}}
 	var puts atomic.Int64
 	for _, bucket := range []*mockKVBucket{
-		outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp), contextMock(comp),
+		outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp),
 	} {
 		bucket.putFunc = func(context.Context, string, []byte) (uint64, error) {
 			puts.Add(1)
@@ -112,17 +112,6 @@ func TestDirectIndexPathsRejectMalformedInputsBeforeBucketIO(t *testing.T) {
 		assert.Zero(t, gets.Load())
 	})
 
-	t.Run("context lister", func(t *testing.T) {
-		comp := createTestComponentWithMockKV(t)
-		var lists atomic.Int64
-		contextMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
-			lists.Add(1)
-			return newMockKeyLister(nil), nil
-		}
-		err := comp.UpdateContextIndex(context.Background(), "bad", nil)
-		require.Error(t, err)
-		assert.Zero(t, lists.Load())
-	})
 }
 
 func TestPublicReverseQueriesSkipNoncanonicalPredicateRows(t *testing.T) {

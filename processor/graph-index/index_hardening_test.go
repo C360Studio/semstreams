@@ -12,14 +12,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -103,47 +100,6 @@ func TestIncomingIndex_InvalidEntityIDRejected(t *testing.T) {
 	// Invalid sourceID (only 2 parts)
 	ok = validateIncomingKeyInputs("acme.ops.robotics.gcs.mission.001", "too.short", "pred", logger)
 	assert.False(t, ok, "invalid sourceID must be rejected")
-}
-
-// CONTEXT index key tests
-
-func TestContextIndex_HashPreventsCollision(t *testing.T) {
-	// "inference.hierarchy" and "inference.hierarchy.deep" would collide under raw
-	// NATS token-prefix matching (the latter is a sub-path of the former).
-	// Hashing the context value before using it as the key prefix eliminates this.
-	h1 := contextHashHex("inference.hierarchy")
-	h2 := contextHashHex("inference.hierarchy.deep")
-	assert.NotEqual(t, h1, h2, "distinct context values must produce distinct hashes")
-}
-
-func TestContextIndex_EntityPrefixReconcileAndIsolation(t *testing.T) {
-	// CONTEXT keys are entity-prefixed (gh#474 P1f): "entityID.hash(context).hex(pred)".
-	// The entity prefix enumerates exactly one entity's memberships (driving reconcile
-	// + delete) and never cross-matches another entity. The raw context rides in the
-	// value, so nested contexts are disambiguated by the hash token, not the prefix.
-	entityA := "acme.ops.robotics.gcs.drone.001"
-	entityB := "acme.ops.robotics.gcs.drone.002"
-	pred := "inference.tier"
-
-	// Distinct contexts for the SAME entity → distinct keys (hash token), both under
-	// that entity's prefix — including the shallow/deep nesting the old layout feared.
-	keyShallow := contextIndexKey(entityA, contextHashHex("inference.hierarchy"), pred)
-	keyDeep := contextIndexKey(entityA, contextHashHex("inference.hierarchy.deep"), pred)
-	assert.NotEqual(t, keyShallow, keyDeep, "distinct contexts must produce distinct keys")
-
-	prefixA := contextIndexEntityPrefix(entityA)
-	assert.True(t, strings.HasPrefix(keyShallow, prefixA), "entity's key must match its own prefix")
-	assert.True(t, strings.HasPrefix(keyDeep, prefixA), "nested-context key still belongs to the same entity")
-
-	// A different entity's key must NOT match entityA's prefix.
-	keyB := contextIndexKey(entityB, contextHashHex("inference.hierarchy"), pred)
-	assert.False(t, strings.HasPrefix(keyB, prefixA), "entity B's key must not match entity A's prefix")
-
-	// Round-trip: reconstruct entity + predicate from the key (context comes from the value).
-	gotEntity, gotPred, ok := contextEntryFromKey(keyShallow)
-	require.True(t, ok)
-	assert.Equal(t, entityA, gotEntity)
-	assert.Equal(t, pred, gotPred)
 }
 
 // NAME index key tests
@@ -232,52 +188,6 @@ func TestIncomingIndex_HubDimensionWritesAreLinear(t *testing.T) {
 	keys, err := comp.incomingBucket.KeysByPrefix(ctx, incomingIndexPrefix(targetID))
 	require.NoError(t, err)
 	assert.Len(t, keys, N, "prefix scan must return all N edge keys")
-}
-
-// TestContextIndex_ConcurrentWritersNoLostUpdate verifies that concurrent writes
-// from different entities to the same context value do not overwrite each other.
-// Under the old non-CAS Get+Put approach concurrent writers raced on the single key
-// and lost updates. With per-(hash,entity,predicate) composite keys every writer
-// has its own key — no shared write contention at all.
-func TestContextIndex_ConcurrentWritersNoLostUpdate(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-
-	// Wire a mock context bucket (createTestComponentWithMockKV leaves it nil).
-	contextMock := newMockKVBucket()
-	nc, err := natsclient.NewClient("nats://localhost:4222")
-	require.NoError(t, err)
-	comp.contextBucket = nc.NewKVStore(contextMock)
-
-	ctx := context.Background()
-	const goroutines = 20
-
-	var wg sync.WaitGroup
-	for i := 0; i < goroutines; i++ {
-		i := i
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			entityID := fmt.Sprintf("acme.ops.robotics.gcs.drone.%03d", i)
-			err := comp.UpdateContextIndex(ctx, entityID, []message.Triple{
-				{
-					Subject:   entityID,
-					Predicate: "inferred.hierarchy.parent",
-					Context:   "inference.hierarchy",
-				},
-			})
-			assert.NoError(t, err)
-		}()
-	}
-	wg.Wait()
-
-	// Each goroutine wrote to a unique composite key (different entityID) — the
-	// mock data map must contain exactly goroutines entries.
-	contextMock.mu.Lock()
-	count := len(contextMock.data)
-	contextMock.mu.Unlock()
-
-	assert.Equal(t, goroutines, count,
-		"each concurrent writer must produce its own composite key — no lost updates")
 }
 
 // ============================================================================
@@ -455,9 +365,8 @@ func TestProjectionInstrumentation_IdenticalProjectionCountedUnchanged(t *testin
 	ctx := context.Background()
 
 	entityID := "acme.ops.robotics.gcs.drone.001"
-	// Use a literal (non-relationship, non-name, no-context) triple so
-	// UpdateNameIndex/UpdateContextIndex are not invoked and no extra buckets
-	// need to be wired up in the test component.
+	// Use a literal (non-relationship, non-name) triple so no additional index
+	// family is involved in the instrumentation assertion.
 	state := graph.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{

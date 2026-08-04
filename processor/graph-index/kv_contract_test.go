@@ -34,7 +34,6 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 	require.NoError(t, err)
 
 	nameHash := nameIndexKey("Alpha")
-	contextHash := contextHashHex("source.alpha")
 	predicateHash := hashPredicateCandidateHex(maxPredicate)
 	alias := "drone.local"
 
@@ -89,16 +88,6 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 			ownerFilter: filterContract{
 				value: nameIndexEntityFilter(entityID), byteFormula: "E+4", wantBytes: entityBytes + 4,
 				tokenFormula: "1+6+1", wantTokens: 8,
-			},
-		},
-		{
-			name: "context", layout: "entity6.hash(context).hex(predicate)",
-			key:            contextIndexKey(entityID, contextHash, maxPredicate),
-			keyByteFormula: "E+66+2P=E+454", wantKeyBytes: entityBytes + 454,
-			keyTokenFormula: "6+1+1", wantKeyTokens: 8,
-			ownerFilter: filterContract{
-				value: contextIndexEntityFilter(entityID), byteFormula: "E+4", wantBytes: entityBytes + 4,
-				tokenFormula: "6+1+1", wantTokens: 8,
 			},
 		},
 		{
@@ -176,7 +165,6 @@ func TestGraphIndexKVContractMatrix(t *testing.T) {
 	}, predicateIndexForwardFilters(maxPredicate))
 	assert.Len(t, predicateIndexKey(maxPredicate, entityID), 451)
 	assert.Len(t, nameCompositeKey(nameHash, entityID, maxPredicate), 710)
-	assert.Len(t, contextIndexKey(entityID, contextHash, maxPredicate), 710)
 	assert.Len(t, incomingIndexKey(targetID, entityID, maxPredicate), 902)
 	assert.Len(t, entityID, 256)
 	assert.Len(t, hashPredicateCandidateKey(maxPredicate, entityID), 321)

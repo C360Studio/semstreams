@@ -158,9 +158,8 @@ func createAndSeedOwnerLoadBuckets(
 		predicateBucket = "OWNER_LOAD_PREDICATE"
 		nameBucket      = "OWNER_LOAD_NAME"
 		incomingBucket  = "OWNER_LOAD_INCOMING"
-		contextBucket   = "OWNER_LOAD_CONTEXT"
 	)
-	bucketNames := []string{predicateBucket, nameBucket, incomingBucket, contextBucket}
+	bucketNames := []string{predicateBucket, nameBucket, incomingBucket}
 	stores := make(map[string]*natsclient.KVStore, len(bucketNames))
 	streams := make(map[string]jetstream.Stream, len(bucketNames))
 	for _, bucketName := range bucketNames {
@@ -175,7 +174,6 @@ func createAndSeedOwnerLoadBuckets(
 	owner := ownerLoadEntityID(profile.nameContext / 2)
 	target := "acme.ops.load.graph.target.hub"
 	name := "Owner Hotspot"
-	contextValue := "source.owner.load"
 	fixtures := []ownerLoadFixture{
 		{name: "predicate", bucket: predicateBucket, store: stores[predicateBucket],
 			ownerFilter: predicateIndexEntityFilter(owner), forwardFilter: predicateIndexForwardFilter(ownerLoadPredicate),
@@ -186,8 +184,6 @@ func createAndSeedOwnerLoadBuckets(
 		{name: "incoming", bucket: incomingBucket, store: stores[incomingBucket],
 			ownerFilter: incomingIndexSourceFilter(owner), forwardFilter: incomingIndexTargetFilter(target),
 			wantForward: profile.entities, stream: streams[incomingBucket]},
-		{name: "context", bucket: contextBucket, store: stores[contextBucket],
-			ownerFilter: contextIndexEntityFilter(owner), wantForward: -1, stream: streams[contextBucket]},
 	}
 
 	type seedRow struct {
@@ -195,10 +191,8 @@ func createAndSeedOwnerLoadBuckets(
 		key   string
 		value []byte
 	}
-	rows := make([]seedRow, 0, 2*profile.entities+2*profile.nameContext+profile.spread)
+	rows := make([]seedRow, 0, 2*profile.entities+profile.nameContext+profile.spread)
 	nameValue, err := json.Marshal(nameCompositeValue{Name: name, Priority: 0})
-	require.NoError(t, err)
-	contextValueJSON, err := json.Marshal(contextIndexValue{Context: contextValue})
 	require.NoError(t, err)
 	for i := 0; i < profile.entities; i++ {
 		entityID := ownerLoadEntityID(i)
@@ -208,9 +202,7 @@ func createAndSeedOwnerLoadBuckets(
 		)
 		if i < profile.nameContext {
 			rows = append(rows,
-				seedRow{stores[nameBucket], nameCompositeKey(nameIndexKey(name), entityID, "core.identity.name"), nameValue},
-				seedRow{stores[contextBucket], contextIndexKey(entityID, contextHashHex(contextValue), ownerLoadPredicate), contextValueJSON},
-			)
+				seedRow{stores[nameBucket], nameCompositeKey(nameIndexKey(name), entityID, "core.identity.name"), nameValue})
 		}
 	}
 	spreadValues := [...]string{
@@ -420,12 +412,11 @@ func runOwnerLoadWorkerShape(
 	for _, count := range afterConsumers {
 		aggregateConsumerAfter += count
 	}
-	t.Logf("phase=consumers workers=%d aggregate_baseline=%d aggregate_high=%d aggregate_after=%d predicate_baseline=%d predicate_high=%d predicate_after=%d name_baseline=%d name_high=%d name_after=%d incoming_baseline=%d incoming_high=%d incoming_after=%d context_baseline=%d context_high=%d context_after=%d",
+	t.Logf("phase=consumers workers=%d aggregate_baseline=%d aggregate_high=%d aggregate_after=%d predicate_baseline=%d predicate_high=%d predicate_after=%d name_baseline=%d name_high=%d name_after=%d incoming_baseline=%d incoming_high=%d incoming_after=%d",
 		workers, aggregateConsumerBaseline, aggregateConsumerHighWater.Load(), aggregateConsumerAfter,
 		baselines["predicate"], consumerHighWater["predicate"].Load(), afterConsumers["predicate"],
 		baselines["name"], consumerHighWater["name"].Load(), afterConsumers["name"],
-		baselines["incoming"], consumerHighWater["incoming"].Load(), afterConsumers["incoming"],
-		baselines["context"], consumerHighWater["context"].Load(), afterConsumers["context"])
+		baselines["incoming"], consumerHighWater["incoming"].Load(), afterConsumers["incoming"])
 
 	// Writers only touched their own deterministic rows. Restore the seeded truth,
 	// then prove every forward result is exact again.
@@ -555,7 +546,7 @@ func TestOwnerLoadChurnIndexExcludesMeasuredOwner(t *testing.T) {
 						require.NotEqual(t, measured, index)
 						require.GreaterOrEqual(t, index, 0)
 						require.Less(t, index, profile.nameContext)
-						for _, domain := range []string{"predicate", "name", "incoming", "context"} {
+						for _, domain := range []string{"predicate", "name", "incoming"} {
 							key, _ := ownerLoadChurnRow(domain, writer, iteration, profile)
 							require.NotContains(t, key, measuredEntity, "%s writer %d iteration %d", domain, writer, iteration)
 						}
@@ -581,8 +572,7 @@ func ownerLoadChurnRow(name string, writer, iteration int, profile ownerLoadProf
 	case "incoming":
 		return incomingIndexKey("acme.ops.load.graph.target.hub", entityID, "robotics.assigned.hub"), incomingIndexMarker
 	default:
-		return contextIndexKey(entityID, contextHashHex("source.owner.load"), ownerLoadPredicate),
-			[]byte(`{"context":"source.owner.load"}`)
+		panic("unknown owner-load fixture: " + name)
 	}
 }
 
@@ -605,7 +595,6 @@ func assertOwnerLoadMaxima(t *testing.T, ctx context.Context, js jetstream.JetSt
 		{"predicate", predicateIndexKey(maximumValue, entityID), predicateIndexEntityFilter(entityID), 451},
 		{"name", nameCompositeKey(nameIndexKey("Maximum"), entityID, maximumValue), nameIndexEntityFilter(entityID), 710},
 		{"incoming", incomingIndexKey(entityID, entityID, maximumValue), incomingIndexSourceFilter(entityID), 902},
-		{"context", contextIndexKey(entityID, contextHashHex("maximum"), maximumValue), contextIndexEntityFilter(entityID), 710},
 	}
 	for _, row := range rows {
 		require.NoError(t, natsclient.ValidateKVLiteralKey(row.key))
@@ -628,7 +617,7 @@ func assertOwnerLoadMaxima(t *testing.T, ctx context.Context, js jetstream.JetSt
 	outgoingEntry, err := store.Get(ctx, entityID)
 	require.NoError(t, err)
 	require.Equal(t, outgoingValue, outgoingEntry.Value)
-	t.Logf("phase=maxima entity_bytes=%d predicate_bytes=%d key_bytes predicate=451 name=710 incoming=902 context=710 outgoing=256",
+	t.Logf("phase=maxima entity_bytes=%d predicate_bytes=%d key_bytes predicate=451 name=710 incoming=902 outgoing=256",
 		len(entityID), len(maximumValue))
 }
 

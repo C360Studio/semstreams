@@ -37,33 +37,6 @@ func readIncomingEntries(ctx context.Context, t *testing.T, kv *natsclient.KVSto
 	return entries
 }
 
-// readContextEntityIDs returns the entity IDs indexed under a context value from the
-// sharded CONTEXT_INDEX (gh#474 P1f): keys are entity-prefixed
-// "entityID.hash(context).hex(predicate)" and the raw context rides in the value. The
-// context is no longer a key prefix, so this value-scans the bucket and matches on the
-// stored context, extracting the entity from each matching key.
-func readContextEntityIDs(ctx context.Context, t *testing.T, kv *natsclient.KVStore, contextValue string) []string {
-	t.Helper()
-	keys, err := kv.Keys(ctx)
-	require.NoError(t, err)
-	ids := make([]string, 0, len(keys))
-	for _, key := range keys {
-		entry, getErr := kv.Get(ctx, key)
-		if getErr != nil {
-			continue
-		}
-		var v contextIndexValue
-		if json.Unmarshal(entry.Value, &v) != nil || v.Context != contextValue {
-			continue
-		}
-		// key = "entityID.hash(context).hex(predicate)"; entity is the first 6 tokens.
-		parts := strings.SplitN(key, ".", 8)
-		require.GreaterOrEqual(t, len(parts), 8, "context composite key should split: %s", key)
-		ids = append(ids, strings.Join(parts[:6], "."))
-	}
-	return ids
-}
-
 // TestIntegration_PreexistingPredicatePoisonIsSticky proves the beta cutover
 // contract at the real KV watch boundary. A noncanonical value that exists
 // before Start must poison readiness during replay, and a later canonical
@@ -218,7 +191,6 @@ func TestIntegration_PredicateCleanWipeReseedRestoresQueryParity(t *testing.T) {
 		graph.BucketIncomingIndex,
 		graph.BucketAliasIndex,
 		graph.BucketPredicateIndex,
-		graph.BucketContextIndex,
 		graph.BucketNameIndex,
 	} {
 		require.NoError(t, js.DeleteKeyValue(ctx, bucket), "wipe bucket %s", bucket)
@@ -846,9 +818,18 @@ func TestIntegration_HierarchyEdgeIndexing(t *testing.T) {
 		assert.True(t, found, "entity should be in incoming index for container %s", containerID)
 	}
 
-	// Verify context index tracks hierarchy inference provenance (composite-key format
-	// after gh#474: keys are "hash(inference.hierarchy).entityID.predicate").
-	contextEntityIDs := readContextEntityIDs(ctx, t, graphIndex.contextBucket, "inference.hierarchy")
-	require.NotEmpty(t, contextEntityIDs, "context index should exist for inference.hierarchy")
-	assert.Contains(t, contextEntityIDs, entityID, "entity should be in inference.hierarchy context")
+	// Provenance remains on the authoritative triples; graph-index must not strip it
+	// while deriving the consumed relationship views.
+	authorityEntry, err := entityBucket.Get(ctx, entityID)
+	require.NoError(t, err)
+	var authoritative graph.EntityState
+	require.NoError(t, json.Unmarshal(authorityEntry.Value(), &authoritative))
+	hierarchyTriples := 0
+	for _, triple := range authoritative.Triples {
+		if strings.HasPrefix(triple.Predicate, "hierarchy.") {
+			hierarchyTriples++
+			assert.Equal(t, "inference.hierarchy", triple.Context)
+		}
+	}
+	assert.Equal(t, 3, hierarchyTriples, "all authoritative hierarchy triples retain provenance")
 }

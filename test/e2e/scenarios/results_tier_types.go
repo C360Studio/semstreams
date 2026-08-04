@@ -121,22 +121,6 @@ type PivotResults struct {
 	Verified bool `json:"verified"`
 }
 
-// ContextIndexResults contains ContextIndex verification results.
-// Phase 5: Added to verify triple provenance tracking via context values.
-type ContextIndexResults struct {
-	// TotalKeys is the number of unique context values in the index
-	TotalKeys int `json:"total_keys"`
-
-	// HierarchyContextFound indicates if "inference.hierarchy" key exists
-	HierarchyContextFound bool `json:"hierarchy_context_found"`
-
-	// HierarchyEntryCount is the number of entity+predicate pairs for hierarchy inference
-	HierarchyEntryCount int `json:"hierarchy_entry_count,omitempty"`
-
-	// SampleContexts contains sample context keys for debugging
-	SampleContexts []string `json:"sample_contexts,omitempty"`
-}
-
 // IncomingIndexResults contains IncomingIndex verification results.
 // Phase 5: Added to verify bidirectional graph traversal preserves predicates.
 type IncomingIndexResults struct {

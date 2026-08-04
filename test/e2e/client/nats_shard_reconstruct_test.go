@@ -1,7 +1,7 @@
 // Package client provides test utilities for E2E NATS validation.
 //
-// This file pins the composite-key reconstruction the sharded INCOMING_INDEX and
-// CONTEXT_INDEX e2e readers depend on (gh#474). The readers replicate the on-disk
+// This file pins the composite-key reconstruction the sharded INCOMING_INDEX
+// e2e reader depends on (gh#474). The reader replicates the on-disk
 // key format written by processor/graph-index rather than importing it (the
 // production builders are unexported), so a mechanical round-trip test guards the
 // split logic — in particular the dotted-predicate case, where a wrong SplitN
@@ -9,8 +9,6 @@
 package client
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"testing"
 
 	"github.com/c360studio/semstreams/graph"
@@ -22,13 +20,6 @@ import (
 // the live e2e HARD-FAIL gate and graph/query/incoming_shard_integration_test.go.
 func buildIncomingKey(targetID, sourceID, predicate string) string {
 	return targetID + "." + sourceID + "." + graph.EncodePredicateToken(predicate)
-}
-
-// buildContextKey mirrors processor/graph-index/context_index.go contextIndexKey
-// (gh#474 P1f entity-prefix): key = entityID + "." + hex(sha256(context)) + "." + hex(predicate).
-func buildContextKey(contextValue, entityID, predicate string) string {
-	sum := sha256.Sum256([]byte(contextValue))
-	return entityID + "." + hex.EncodeToString(sum[:]) + "." + graph.EncodePredicateToken(predicate)
 }
 
 func TestIncomingEntryFromCompositeKey(t *testing.T) {
@@ -77,38 +68,6 @@ func TestIncomingEntryFromCompositeKey(t *testing.T) {
 	t.Run("empty predicate rejected", func(t *testing.T) {
 		key := buildIncomingKey(target, source, "") // trailing dot
 		_, ok := incomingEntryFromCompositeKey(key, target)
-		assert.False(t, ok)
-	})
-}
-
-func TestContextEntryFromCompositeKey(t *testing.T) {
-	const entity = "acme.ops.robotics.gcs.drone.001"
-
-	t.Run("dotted predicate round-trips intact", func(t *testing.T) {
-		key := buildContextKey("inference.hierarchy", entity, "hierarchy.type.member")
-		gotEntity, gotPred, ok := contextEntryFromCompositeKey(key)
-		assert.True(t, ok)
-		assert.Equal(t, entity, gotEntity)
-		assert.Equal(t, "hierarchy.type.member", gotPred)
-	})
-
-	t.Run("nested context value does not affect key split", func(t *testing.T) {
-		// The context value is hashed, so its own dots never reach the key.
-		key := buildContextKey("inference.hierarchy.deep", entity, "contains")
-		gotEntity, gotPred, ok := contextEntryFromCompositeKey(key)
-		assert.True(t, ok)
-		assert.Equal(t, entity, gotEntity)
-		assert.Equal(t, "contains", gotPred)
-	})
-
-	t.Run("too few tokens rejected", func(t *testing.T) {
-		_, _, ok := contextEntryFromCompositeKey("deadbeef.acme.ops.contains")
-		assert.False(t, ok)
-	})
-
-	t.Run("empty predicate rejected", func(t *testing.T) {
-		key := buildContextKey("inference.hierarchy", entity, "") // trailing dot
-		_, _, ok := contextEntryFromCompositeKey(key)
 		assert.False(t, ok)
 	})
 }

@@ -23,9 +23,7 @@ func TestOwnerFilters_RealNATSExactnessAndCancellation(t *testing.T) {
 	otherTarget := "acme.ops.robotics.gcs.mission.002"
 	ownerParts := strings.Split(owner, ".")
 	predicate := "robotics.status.armed"
-	predicateToken := encodePredicateToken(predicate)
 	nameHash := nameIndexKey("Alpha")
-	contextHash := contextHashHex("source.alpha")
 
 	ownerTests := []struct {
 		name     string
@@ -67,17 +65,6 @@ func TestOwnerFilters_RealNATSExactnessAndCancellation(t *testing.T) {
 				target + "." + owner,
 				incomingIndexKey(target, owner, "robotics.assigned.mission") + ".extra",
 				owner + "." + target + "." + encodePredicateToken("robotics.assigned.mission"),
-			},
-		},
-		{
-			name:   "context",
-			filter: contextIndexEntityFilter(owner),
-			owned:  []string{contextIndexKey(owner, contextHash, predicate)},
-			controls: []string{
-				contextIndexKey(other, contextHash, predicate),
-				owner + "." + contextHash,
-				contextIndexKey(owner, contextHash, predicate) + ".extra",
-				contextHash + "." + owner + "." + predicateToken,
 			},
 		},
 	}

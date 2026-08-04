@@ -114,34 +114,6 @@ func TestProcessEntityUpdate_WriteFailure_WithholdsReadiness(t *testing.T) {
 	assert.True(t, stored, "baseline stored after a successful index")
 }
 
-// TestProcessEntityUpdate_PartialFailure_MarksFailed proves a PARTIAL write failure
-// (some indexes succeed, one fails) still withholds readiness — not just zero-success.
-func TestProcessEntityUpdate_PartialFailure_MarksFailed(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	entityID := "acme.ops.robotics.gcs.drone.002"
-	state := graph.EntityState{
-		ID: entityID,
-		Triples: []message.Triple{
-			// A context-bearing triple so the CONTEXT bucket is actually written.
-			{Subject: entityID, Predicate: "robotics.assigned.mission", Object: "acme.ops.robotics.gcs.mission.002", Context: "inference.hierarchy"},
-			{Subject: entityID, Predicate: "core.identity.alias", Object: "drone-002"},
-		},
-	}
-	data, err := json.Marshal(state)
-	require.NoError(t, err)
-
-	// Only the context bucket fails; incoming/outgoing/predicate/alias succeed.
-	contextMock(comp).putFunc = func(_ context.Context, _ string, _ []byte) (uint64, error) {
-		return 0, errors.New("context kv down")
-	}
-
-	err = comp.processEntityUpdateFromData(ctx, entityID, data)
-	require.Error(t, err, "a partial write failure must still be reported")
-	assert.Equal(t, int64(1), comp.failedCount.Load(), "partial failure must mark the entity failed")
-}
-
 // TestComputeIndexProjection_AliasAxis proves the projection distinguishes an
 // alias-only change (P2b) — otherwise the no-op counter miscounts it as unchanged.
 func TestComputeIndexProjection_AliasAxis(t *testing.T) {

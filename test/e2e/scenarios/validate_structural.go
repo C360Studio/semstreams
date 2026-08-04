@@ -31,7 +31,6 @@ func (s *TieredScenario) executeVerifyIndexPopulation(ctx context.Context, resul
 		{"alias", client.IndexBuckets.Alias, false},     // May be empty if no aliases
 		{"spatial", client.IndexBuckets.Spatial, false}, // May be empty if no geo data
 		{"temporal", client.IndexBuckets.Temporal, true},
-		{"context", client.IndexBuckets.Context, false}, // Populated when triples have Context field set
 	}
 
 	indexDetails := make(map[string]any)
