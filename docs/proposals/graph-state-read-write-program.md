@@ -2,7 +2,7 @@
 
 **Status:** Active program state.
 
-**Program baseline:** `1c17958a` (`main`, 2026-08-04), after #894 and #895.
+**Program baseline:** `fe725f82` (`main`, 2026-08-04), after #896 merged the GS-00 archive.
 
 **Binding decision:**
 [ADR-090](../adr/090-authoritative-current-state-and-materialized-views.md).
@@ -18,11 +18,12 @@ The pre-v1 core-hardening program is suspended and frozen; its historical Next
 Action, WIP, active, and priority text is non-executable until this program
 explicitly records its release.
 
-OpenSpec physically reports three in-progress change directories. Only GS-00 is
-executable. `semantic-tier-split` and `discovery-under-stream-shapes` are
-suspended and frozen in their own proposal/task records; their historical task
-truth remains intact, and neither may be implemented, archived, or promoted
-until this program explicitly releases it.
+OpenSpec physically reports three in-progress change directories. The GS-01
+[`establish-authority-read-and-recovery`][gs01-design-baton] directory is an
+unapproved, design-only baton with reviewed inventory and no accepted design. `semantic-tier-split` and
+`discovery-under-stream-shapes` are suspended and frozen in their own
+proposal/task records. Only the single Next Action in this program is executable;
+none of these changes authorizes runtime implementation or spec promotion.
 
 ## Identity and priorities
 
@@ -179,7 +180,7 @@ operation. Raw KV and subjects are not a fallback when no typed operation exists
 | Issues and pre-v1 baton | Point-in-time defects | Class frequency and falsification |
 | Holdout observations | Point-in-time adoption notes | Coordinated migration planning |
 | Runtime `/mcp` placeholder | Config, stub handler, OpenAPI advertise it | GS-12 remove or implement |
-| Suspended active changes | OpenSpec lists three physical changes; only GS-00 is executable | Enforce WIP 1 |
+| Active OpenSpec control | GS-01 design-only baton plus two frozen changes | Enforce WIP 1; block runtime/spec work |
 
 The adversarial review found one line-range drift and no unsupported
 load-bearing claim. The frozen inventory preserves the full pre-refactor detail.
@@ -210,10 +211,35 @@ assignees do not schedule this program.
 No package-level issue is implemented merely because it appears here. A fix must
 belong to the current GS increment and satisfy its stop/go gate.
 
+## GS-01 process correction
+
+GS-01 has a fresh inventory independently reviewed with `INVENTORY PASS`. It has no accepted design, target state, or
+runtime mechanism. The owner revoked any apparent prior GS-01 acceptance; acceptance was not granted. The GS-00
+candidates and the increment gate below constrain the problem boundary, but they do not choose GS-01 representation
+or implementation.
+
+The failed design attempt is retained as correction evidence, not as input to
+implement:
+
+- proposed `GRAPH_INGEST_ACTIVE` duplicated territory already occupied by
+  `GRAPH_STATUS` and graph-ingest behavior; treating that semantic class as empty
+  was a failed premise;
+- the proposed NATS CLI requirement is withdrawn; inventory must enumerate the
+  real operator and recovery seams before design chooses any interface; and
+- prompts, briefings, and prior proposals are hypotheses to falsify, not an
+  existing-surface inventory.
+
+The unapproved, design-only
+[`establish-authority-read-and-recovery`][gs01-design-baton] OpenSpec change is
+the durable baton. It records the problem, accepted process gates, reviewed
+inventory, and `INVENTORY PASS`. Design, independent pre-owner design review, and
+explicit owner acceptance remain. No runtime implementation, runtime-capable spec
+delta, or spec promotion may begin before that final acceptance.
+
 ## GS-00 acceptance candidates
 
 The GS-00 OpenSpec change is
-[`establish-graph-state-foundation`](../../openspec/changes/establish-graph-state-foundation/proposal.md).
+[`establish-graph-state-foundation`][gs00-archive].
 It records non-normative acceptance candidates and program governance only. It
 adds no runtime spec delta or surface. After acceptance, GS-00 archives. Each
 bounded GS-01+ change later adds, implements, validates, and archives the relevant
@@ -486,8 +512,8 @@ here.
 |---|---|---|
 | Pre-GS #894 | Retire `CONTEXT_INDEX`; keep provenance in authority | Complete and archived |
 | Pre-GS #895 | Retire `STRUCTURAL_INDEX`; keep in-memory anomaly inputs | Complete and archived |
-| GS-00 | Bind design candidates, program control, and canonical guidance | Complete; archived locally, pending merge |
-| GS-01 | Authority read/recovery and graph-ingest instance safety | Not started |
+| GS-00 | Bind design candidates, program control, and canonical guidance | Complete, archived, and merged (#896) |
+| GS-01 | Authority read/recovery and graph-ingest safety | Inventory reviewed; design next; no accepted design |
 | GS-02 | Two write seams, lane matrix, honest mutation outcome/observation | Not started |
 | GS-03 | Role declaration representation, census, and conformance | Not started |
 | GS-04 | Graph-index core declarations and conformance | Not started |
@@ -525,11 +551,14 @@ Runtime work may begin only when:
 
 ### Per-increment go gate
 
-Proceed only when the current increment has a reviewed delta, behavior-focused
-tests, bounded proof relevant to that increment, documentation truth, and an
-updated complexity statement. GS-11 owns the deterministic E2E harness; the
-three-run release proof is not part of every slice's iterative loop. The active
-change remains unarchived while its target behavior is not implemented.
+Each increment first passes the architect contract's distinct inventory review
+and pre-owner design review, followed by explicit owner acceptance. Only then may
+it create a runtime-capable spec delta or begin implementation. Proceed only when
+the current increment has a reviewed delta, behavior-focused tests, bounded proof
+relevant to that increment, documentation truth, and an updated complexity
+statement. GS-11 owns the deterministic E2E harness; the three-run release proof
+is not part of every slice's iterative loop. The active change remains unarchived
+while its target behavior is not implemented.
 
 ### Foundation tag-candidate gate
 
@@ -654,8 +683,36 @@ or an inventory recommendation.
   succeeded and moved GS-00 to
   `openspec/changes/archive/2026-08-04-establish-graph-state-foundation` without
   spec promotion. The reviewed archive is pending merge.
+- **2026-08-04:** #896 merged the reviewed GS-00 archive at `fe725f82`; GS-00 is
+  complete, archived, and on `main`.
+- **2026-08-04:** GS-01 opened from `fe725f82` on
+  `codex/gs01-authority-recovery` for architecture inventory/design only. No
+  GS-01 OpenSpec change or runtime implementation begins before owner acceptance.
+  **Superseded/narrowed:** the owner-approved design-only baton permits
+  pre-acceptance proposal, design, and task-control artifacts. Runtime-capable
+  spec deltas and implementation remain prohibited before owner acceptance.
+- **2026-08-04 owner correction:** Prior GS-01 acceptance is revoked/not granted.
+  The proposed `GRAPH_INGEST_ACTIVE` duplicated existing `GRAPH_STATUS` and
+  graph-ingest territory, so the premise and resulting design do not carry
+  forward. The proposed NATS CLI requirement is withdrawn.
+- **2026-08-04:** The unapproved, design-only
+  `establish-authority-read-and-recovery` OpenSpec change became the durable
+  baton. Runtime implementation and spec promotion remain prohibited until a
+  fresh inventory and design pass independent reviews and receive owner
+  acceptance.
+- **2026-08-04:** The corrected fifth-pass GS-01 repository inventory was
+  preserved in the design-only baton. Independent review recorded
+  `INVENTORY PASS` after confirming the admission, owner-lease,
+  lifecycle-history, `GRAPH_STATUS`, and collision-table evidence. The
+  troubleshooting guide is recorded as a broader operator expectation rather
+  than direct lifecycle-audit evidence. No design is accepted, and no capability
+  spec delta or runtime work is authorized.
 
 ## Next Action
 
-Merge the reviewed GS-00 archive PR. Do not open the bounded GS-01 change until
-the archive commit is on `main`.
+Have the architect produce GS-01 options, costs, measured premises, adopter-seam
+effects, and a recommendation from the reviewed inventory, then stop for
+independent pre-owner design review. Add no capability spec delta or runtime work.
+
+[gs00-archive]: ../../openspec/changes/archive/2026-08-04-establish-graph-state-foundation/proposal.md
+[gs01-design-baton]: ../../openspec/changes/establish-authority-read-and-recovery/proposal.md
