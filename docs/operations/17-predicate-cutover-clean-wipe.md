@@ -29,6 +29,9 @@ runbook only for the typed stored-state poison reasons above.
 Stop every writer and SemStreams process that uses the target NATS account. Delete the authoritative graph state,
 ingest replay guards, and every derived graph bucket used by the deployment:
 
+`CONTEXT_INDEX` is retired by ADR-090. It remains in this destructive list only to remove stale beta state; a fresh
+deployment does not create it, and an absent-bucket response is expected.
+
 - `ENTITY_STATES`
 - `ENTITY_SUFFIX_INDEX`
 - `GRAPH_INGEST_APPLIED_SEQ`

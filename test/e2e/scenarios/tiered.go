@@ -353,15 +353,12 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-kcore-index", s.executeValidateKCoreIndex, []string{"statistical", "semantic"}},
 		{"validate-pivot-index", s.executeValidatePivotIndex, []string{"statistical", "semantic"}},
 
-		// Phase 5: New index feature verification (all tiers - hierarchy inference is structural)
-		// Verifies ContextIndex tracks inference provenance (hierarchy, structural contexts)
-		{"validate-context-index-hierarchy", s.validateContextIndexHierarchy, []string{"structural", "statistical", "semantic"}},
+		// Provenance remains authoritative; no duplicate durable query view exists.
+		{"validate-authoritative-hierarchy-provenance", s.validateAuthoritativeHierarchyProvenance, []string{"structural", "statistical", "semantic"}},
 		// Verifies IncomingIndex stores predicates (bidirectional traversal preserves relationship types)
 		{"validate-incoming-index-predicates", s.validateIncomingIndexPredicates, []string{"structural", "statistical", "semantic"}},
 
 		// Phase 6: Story-telling scenarios that demonstrate feature value (all tiers)
-		// Story: "I can audit which relationships came from inference vs user input"
-		{"validate-context-provenance-audit", s.validateContextProvenanceAudit, []string{"structural", "statistical", "semantic"}},
 		// Story: "I can find who references a container and understand WHY"
 		{"validate-bidirectional-traversal", s.validateBidirectionalTraversal, []string{"structural", "statistical", "semantic"}},
 		// Story: "Containers explicitly know their members via 'contains' edges"

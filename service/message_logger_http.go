@@ -203,7 +203,7 @@ func messageLoggerOpenAPISpec() *OpenAPISpec {
 						{
 							Name:        "bucket",
 							In:          "path",
-							Description: "KV bucket name (e.g., ENTITY_STATES, CONTEXT_INDEX)",
+							Description: "KV bucket name (e.g., ENTITY_STATES, INCOMING_INDEX)",
 							Required:    true,
 							Schema:      Schema{Type: "string"},
 						},

@@ -157,12 +157,11 @@ func KVCatalog() []natsclient.BucketSpec {
 			"graph-ingest redelivery guard: (entityID/streamName) -> last-applied stream sequence (ADR-072)",
 			natsclient.ClassOperational),
 
-		// graph-index's four config-declared output indexes + two internals.
+		// graph-index's four config-declared output indexes + the name lookup internal.
 		derived(BucketOutgoingIndex, "graph-index", "Graph index bucket: outgoing relationships"),
 		derived(BucketIncomingIndex, "graph-index", "Graph index bucket: incoming relationships"),
 		derived(BucketAliasIndex, "graph-index", "Graph index bucket: alias lookup"),
 		derived(BucketPredicateIndex, "graph-index", "Graph index bucket: predicate lookup"),
-		derived(BucketContextIndex, "graph-index", "Triple context provenance index"),
 		derived(BucketNameIndex, "graph-index",
 			"Name/title → entities index for deterministic name lookup"),
 

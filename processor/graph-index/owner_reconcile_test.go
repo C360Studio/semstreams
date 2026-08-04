@@ -140,7 +140,7 @@ func TestDeleteFromIndexes_RetractsOwnedRowsWithoutDeletingLiveSourceAssertions(
 func TestDeleteFromIndexes_InvalidOwnerHasNoBucketIO(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	var calls atomic.Int64
-	for _, mock := range []*mockKVBucket{outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp), contextMock(comp)} {
+	for _, mock := range []*mockKVBucket{outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp)} {
 		mock.listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
 			calls.Add(1)
 			return newMockKeyLister(nil), nil
@@ -161,22 +161,22 @@ func TestDeleteFromIndexes_LateDeletePlanFailureHasNoDeletesOrSemanticMetrics(t 
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	var deletes atomic.Int64
 	for _, mock := range []*mockKVBucket{
-		outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp), contextMock(comp),
+		outgoingMock(comp), incomingMock(comp), predicateMock(comp), nameMock(comp),
 	} {
 		mock.deleteFunc = func(context.Context, string, ...jetstream.KVDeleteOpt) error {
 			deletes.Add(1)
 			return nil
 		}
 	}
-	// Context is deliberately the last list in the production delete plan. If it
+	// Name is deliberately the last list in the production delete plan. If it
 	// cannot be resolved, no earlier family (including OUTGOING) may be retracted.
-	contextMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
-		return nil, errors.New("late context list unavailable")
+	nameMock(comp).listFilteredFunc = func(context.Context, ...string) (jetstream.KeyLister, error) {
+		return nil, errors.New("late name list unavailable")
 	}
 
 	processedBefore := atomic.LoadInt64(&comp.messagesProcessed)
 	indexUpdatesBefore := make(map[string]float64)
-	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+	for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 		indexUpdatesBefore[indexType] = testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType))
 	}
 
@@ -318,12 +318,6 @@ func TestOwnerFilters_MatchOnlyDeclaredOwner(t *testing.T) {
 			owned:  incomingIndexKey(target, owner, "robotics.assigned.mission"),
 			other:  incomingIndexKey(target, other, "robotics.assigned.mission"),
 		},
-		{
-			name:   "context",
-			filter: contextIndexEntityFilter(owner),
-			owned:  contextIndexKey(owner, contextHashHex("source.alpha"), predicate),
-			other:  contextIndexKey(other, contextHashHex("source.alpha"), predicate),
-		},
 	}
 
 	for _, tt := range tests {
@@ -392,14 +386,12 @@ func TestOwnerReconcileSpike_RetractsReplacedAndEmptyMemberships(t *testing.T) {
 	require.NoError(t, comp.reconcileNameIndex(ctx, entityID, []nameIndexWrite{
 		{name: "Alpha", predicate: "core.identity.name", priority: 0},
 	}))
-	require.NoError(t, comp.UpdateContextIndex(ctx, entityID, state.Triples))
 	require.NoError(t, comp.reconcileIncomingIndex(ctx, entityID, map[string][]graph.IncomingEntry{
 		targetA: {{FromEntityID: entityID, Predicate: "robotics.assigned.mission"}},
 	}))
 
 	oldPredicateKey := predicateIndexKey("robotics.status.armed", entityID)
 	oldNameKey := nameCompositeKey(nameIndexKey("Alpha"), entityID, "core.identity.name")
-	oldContextKey := contextIndexKey(entityID, contextHashHex("source.alpha"), "robotics.status.armed")
 	oldIncomingKey := incomingIndexKey(targetA, entityID, "robotics.assigned.mission")
 
 	state.Triples = []message.Triple{
@@ -413,27 +405,22 @@ func TestOwnerReconcileSpike_RetractsReplacedAndEmptyMemberships(t *testing.T) {
 	require.NoError(t, comp.reconcileNameIndex(ctx, entityID, []nameIndexWrite{
 		{name: "Beta", predicate: "core.identity.name", priority: 0},
 	}))
-	require.NoError(t, comp.UpdateContextIndex(ctx, entityID, state.Triples))
 	require.NoError(t, comp.reconcileIncomingIndex(ctx, entityID, map[string][]graph.IncomingEntry{
 		targetB: {{FromEntityID: entityID, Predicate: "robotics.assigned.mission"}},
 	}))
 
 	assertMockKeyAbsent(t, predicateMock(comp), oldPredicateKey)
 	assertMockKeyAbsent(t, nameMock(comp), oldNameKey)
-	assertMockKeyAbsent(t, contextMock(comp), oldContextKey)
 	assertMockKeyAbsent(t, incomingMock(comp), oldIncomingKey)
 	assertMockKeyPresent(t, predicateMock(comp), predicateIndexKey("robotics.status.disarmed", entityID))
 	assertMockKeyPresent(t, nameMock(comp), nameCompositeKey(nameIndexKey("Beta"), entityID, "core.identity.name"))
-	assertMockKeyPresent(t, contextMock(comp), contextIndexKey(entityID, contextHashHex("source.beta"), "robotics.status.disarmed"))
 	assertMockKeyPresent(t, incomingMock(comp), incomingIndexKey(targetB, entityID, "robotics.assigned.mission"))
 
 	require.NoError(t, comp.reconcilePredicateIndex(ctx, entityID, nil))
 	require.NoError(t, comp.reconcileNameIndex(ctx, entityID, nil))
-	require.NoError(t, comp.UpdateContextIndex(ctx, entityID, nil))
 	require.NoError(t, comp.reconcileIncomingIndex(ctx, entityID, nil))
 	assert.Empty(t, snapshotMockKeys(predicateMock(comp)))
 	assert.Empty(t, snapshotMockKeys(nameMock(comp)))
-	assert.Empty(t, snapshotMockKeys(contextMock(comp)))
 	assert.Empty(t, snapshotMockKeys(incomingMock(comp)))
 }
 

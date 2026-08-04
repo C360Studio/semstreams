@@ -56,12 +56,12 @@ func TestReconcileMetrics_SemanticUpdatesCountOnceAfterRetry(t *testing.T) {
 	}
 
 	before := make(map[string]float64)
-	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+	for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 		before[indexType] = testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType))
 	}
 	require.NoError(t, comp.processEntityUpdateFromData(context.Background(), entityID,
 		entityStateData(t, entityID, "acme.ops.robotics.gcs.mission.003")))
-	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+	for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 		require.Equal(t, before[indexType]+1,
 			testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType)), indexType)
 	}
@@ -71,14 +71,14 @@ func TestReconcileMetrics_CleanDeleteRecordsOneSemanticCompletionPerIndex(t *tes
 	comp := createTestComponentWithMockKV(t)
 	entityID := "acme.ops.robotics.gcs.drone.004"
 	before := make(map[string]float64)
-	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+	for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 		before[indexType] = testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType))
 	}
 	eventsBefore := testutil.ToFloat64(comp.metrics.eventsProcessed)
 	deletesBefore := testutil.ToFloat64(comp.metrics.watchEvents.WithLabelValues("delete"))
 
 	require.NoError(t, comp.DeleteFromIndexes(context.Background(), entityID))
-	for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+	for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 		require.Equal(t, before[indexType]+1,
 			testutil.ToFloat64(comp.metrics.indexUpdates.WithLabelValues(indexType)), indexType)
 	}

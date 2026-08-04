@@ -53,9 +53,8 @@ Migration state has five allowed values:
 - PREDICATE, PREDICATE_CATALOG, NAME, and INCOMING: current graph-index composite and catalog keys; graph index; fixed
   arity and owner filters; mandatory derived rebuild when current-layout reconciliation activates; graph-index
   reconciliation; unassessed; pending.
-- OUTGOING and CONTEXT: current graph-index entity-owned keys; graph index; entity bound, fixed arity, and owner-filter
-  proof; rebuild only if a later owner decision changes bytes or acceptance; graph-index reconciliation; unassessed;
-  pending.
+- OUTGOING: current graph-index entity-owned key; graph index; entity bound; rebuild only if a later owner decision
+  changes bytes or acceptance; graph-index reconciliation; unassessed; pending.
 - ALIAS: raw alias exact key with entity ID in the value and variable token arity; graph-index ALIAS; alias identity
   bound and literal/opaque/owner-discovery choice; rebuild or migration only if the owning decision changes key bytes
   or ownership; graph-index ALIAS representation and ownership change; unassessed; assigned.
@@ -116,9 +115,8 @@ allowed values as the boundary inventory.
   PREDICATE_CATALOG, NAME, and INCOMING composites, source-owner filters, and entity-state watches; graph index; exact
   arity and owner-filter decisions; mandatory derived rebuild when current-layout reconciliation activates;
   graph-index reconciliation; unassessed; pending.
-- `processor/graph-index/component.go` plus `context_index.go`: current OUTGOING and CONTEXT entity-owned keys and
-  owner-filter paths; graph index; entity bound, exact arity, and owner-filter decisions; rebuild only if a later owner
-  decision changes bytes or acceptance; graph-index reconciliation; unassessed; pending.
+- `processor/graph-index/component.go`: current OUTGOING entity-owned key; graph index; entity bound; rebuild only if
+  a later owner decision changes bytes or acceptance; graph-index reconciliation; unassessed; pending.
 - `processor/graph-index/component.go:UpdateAliasIndex/DeleteFromAliasIndex`: raw alias exact key mapped to an entity-ID
   value with variable token arity; graph-index ALIAS; alias identity bound and literal/opaque/owner-discovery choice;
   rebuild or migration only if the owning decision changes key bytes or ownership; graph-index ALIAS representation
@@ -216,8 +214,8 @@ Downstream owner validation is a pre-v1 release gate recorded in the
 [framework package boundary clean-break inventory](27-framework-package-boundary-clean-break.md), not a reason to
 retain deleted product packages in SemStreams.
 
-`graph.EncodePredicateToken` is a reversible untagged hexadecimal graph codec. Its bytes remain unchanged. NAME,
-CONTEXT, and PREDICATE hash helpers are deliberate layout-specific hashes, not reversible opaque codecs. Located
+`graph.EncodePredicateToken` is a reversible untagged hexadecimal graph codec. Its bytes remain unchanged. NAME and
+PREDICATE hash helpers are deliberate layout-specific hashes, not reversible opaque codecs. Located
 production identity-changing transforms include config's space-to-underscore replacement and loop-result's
 prefix-dropping normalization; both are explicitly `nonconforming` with a `pending` migration above.
 

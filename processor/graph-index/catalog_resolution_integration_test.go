@@ -14,7 +14,36 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/natsclient"
 )
+
+func TestIntegration_Start_DoesNotCreateRetiredContextIndex(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	testClient := natsclient.NewTestClient(t, natsclient.WithKV())
+	nc := testClient.Client
+	js, err := nc.JetStream()
+	require.NoError(t, err)
+	_, err = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket:      graph.BucketEntityStates,
+		Description: "Authoritative state for retired context-index startup proof",
+	})
+	require.NoError(t, err)
+
+	configJSON, err := json.Marshal(DefaultConfig())
+	require.NoError(t, err)
+	created, err := CreateGraphIndex(configJSON, component.Dependencies{NATSClient: nc})
+	require.NoError(t, err)
+	indexComponent := created.(component.LifecycleComponent)
+	require.NoError(t, indexComponent.Initialize())
+	require.NoError(t, indexComponent.Start(ctx))
+	defer func() { require.NoError(t, indexComponent.Stop(5*time.Second)) }()
+
+	_, err = nc.GetKeyValueBucket(ctx, "CONTEXT_INDEX")
+	require.ErrorIs(t, err, jetstream.ErrBucketNotFound,
+		"a fresh graph-index start must not create the retired provenance-only bucket")
+}
 
 // TestIntegration_Start_OffCatalogOutputSubjectFailsBoot is the F2 closure
 // test: a graph-index configuration whose KV output port subject names a

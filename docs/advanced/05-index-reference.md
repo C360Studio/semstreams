@@ -319,17 +319,10 @@ Time range lookup. Maps time buckets to entities.
 
 **Use case**: "Find entities active in time range."
 
-#### CONTEXT_INDEX
-
-Provenance tracking. Maps context values to triples that have them.
-
-| Attribute | Value |
-|-----------|-------|
-| **Created by** | graph-index |
-| **Key format** | Context value (e.g., `inference.hierarchy`) |
-| **Value** | Array of `{entity_id, predicate}` |
-
-**Use case**: "Find all triples from hierarchy inference."
+Triple provenance is not duplicated into a durable index. `message.Triple.Context`
+remains stored with each authoritative entity in `ENTITY_STATES`. There is no
+production query-by-context contract; operator and E2E diagnostics may inspect
+bounded authoritative state directly.
 
 #### STRUCTURAL_INDEX
 

@@ -104,7 +104,6 @@ efficient graph traversal.
 - `incoming_index` (kv-bucket): Writes to `INCOMING_INDEX`
 - `predicate_index` (kv-bucket): Writes to `PREDICATE_INDEX`
 - `alias_index` (kv-bucket): Writes to `ALIAS_INDEX`
-- `context_index` (kv-bucket): Writes to `CONTEXT_INDEX`
 
 **Configuration**:
 
@@ -118,8 +117,7 @@ efficient graph traversal.
       {"name": "outgoing_index", "type": "kv-bucket", "bucket": "OUTGOING_INDEX"},
       {"name": "incoming_index", "type": "kv-bucket", "bucket": "INCOMING_INDEX"},
       {"name": "predicate_index", "type": "kv-bucket", "bucket": "PREDICATE_INDEX"},
-      {"name": "alias_index", "type": "kv-bucket", "bucket": "ALIAS_INDEX"},
-      {"name": "context_index", "type": "kv-bucket", "bucket": "CONTEXT_INDEX"}
+      {"name": "alias_index", "type": "kv-bucket", "bucket": "ALIAS_INDEX"}
     ]
   }
 }
@@ -459,7 +457,6 @@ Each NATS KV bucket has exactly one writer component (single-owner pattern) and 
 | Bucket | Writer | Readers | Purpose |
 |--------|--------|---------|---------|
 | `ENTITY_STATES` | graph-ingest | graph-index, graph-clustering, graph-embedding, graph-index-spatial, graph-index-temporal, graph-gateway | Primary entity storage |
-| `CONTEXT_INDEX` | graph-ingest | graph-query | Context/provenance tracking for hierarchy inference |
 | `OUTGOING_INDEX` | graph-index | graph-clustering, graph-gateway | Entity → referenced entities |
 | `INCOMING_INDEX` | graph-index | graph-clustering, graph-gateway | Entity → referencing entities |
 | `PREDICATE_INDEX` | graph-index | graph-gateway | Predicate → entity IDs |

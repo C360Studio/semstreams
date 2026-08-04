@@ -17,7 +17,6 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/readiness"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -230,7 +229,6 @@ type Component struct {
 	incomingBucket     *natsclient.KVStore
 	aliasBucket        *natsclient.KVStore
 	predicateBucket    *natsclient.KVStore
-	contextBucket      *natsclient.KVStore
 	nameBucket         *natsclient.KVStore
 	entityStatesBucket jetstream.KeyValue // raw: read-only watcher, no CAS needed
 	// entityStatesStatusBucket is a separate JetStream KV handle used only for
@@ -792,16 +790,9 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		c.assignBucket(portDef.Subject, bucket)
 	}
 
-	// CONTEXT_INDEX bucket for triple provenance tracking
-	contextBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketContextIndex)
-	if err != nil {
-		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketContextIndex))
-	}
-	c.contextBucket = c.natsClient.NewKVStore(contextBucket)
-
 	// NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like
-	// CONTEXT_INDEX — not a declared output port, so existing configs don't need
-	// to add it.
+	// the retired provenance-only index — not a declared output port, so existing
+	// configs don't need to add it.
 	nameBucket, err := graph.EnsureCatalogBucket(ctx, c.natsClient, graph.BucketNameIndex)
 	if err != nil {
 		return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", graph.BucketNameIndex))
@@ -1286,7 +1277,6 @@ type entityIndexPlan struct {
 	incomingByTarget map[string][]graph.IncomingEntry
 	aliasWrites      []aliasIndexWrite
 	nameWrites       []nameIndexWrite
-	contextTriples   []message.Triple
 	indexed          int
 }
 
@@ -1299,7 +1289,6 @@ func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID strin
 		outgoingTargets:  make([]map[string]interface{}, 0),
 		predicatesUsed:   make(map[string]bool),
 		incomingByTarget: make(map[string][]graph.IncomingEntry),
-		contextTriples:   state.Triples,
 	}
 	for _, triple := range state.Triples {
 		plan.predicatesUsed[triple.Predicate] = true
@@ -1337,14 +1326,11 @@ func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID strin
 
 	for _, filter := range []string{
 		incomingIndexSourceFilter(entityID), predicateIndexEntityFilter(entityID),
-		nameIndexEntityFilter(entityID), contextIndexEntityFilter(entityID),
+		nameIndexEntityFilter(entityID),
 	} {
 		if err := natsclient.ValidateKVWildcardFilter(filter); err != nil {
 			return entityIndexPlan{}, err
 		}
-	}
-	if err := validateKVPrefix(contextIndexEntityPrefix(entityID)); err != nil {
-		return entityIndexPlan{}, err
 	}
 	for targetID, entries := range plan.incomingByTarget {
 		if err := validateEntityLiteralKey(targetID); err != nil {
@@ -1375,20 +1361,6 @@ func (c *Component) buildEntityIndexPlan(state graph.EntityState, entityID strin
 			return entityIndexPlan{}, err
 		}
 	}
-	for _, triple := range plan.contextTriples {
-		if triple.Context == "" {
-			continue
-		}
-		if !validateContextKeyInputs(entityID, triple.Predicate, c.logger) {
-			return entityIndexPlan{}, errs.WrapInvalid(errs.ErrInvalidData, "Component", "buildEntityIndexPlan", "invalid context membership")
-		}
-		if err := natsclient.ValidateKVLiteralKey(contextIndexKey(entityID, contextHashHex(triple.Context), triple.Predicate)); err != nil {
-			return entityIndexPlan{}, err
-		}
-		if _, err := json.Marshal(contextIndexValue{Context: triple.Context}); err != nil {
-			return entityIndexPlan{}, err
-		}
-	}
 	if _, err := json.Marshal(plan.outgoingTargets); err != nil {
 		return entityIndexPlan{}, err
 	}
@@ -1405,9 +1377,6 @@ func (c *Component) applyEntityIndexPlan(ctx context.Context, plan entityIndexPl
 	}
 	if err := c.reconcilePredicateIndex(ctx, plan.entityID, plan.predicatesUsed); err != nil {
 		errList = append(errList, fmt.Errorf("predicate: %w", err))
-	}
-	if err := c.UpdateContextIndex(ctx, plan.entityID, plan.contextTriples); err != nil {
-		errList = append(errList, fmt.Errorf("context: %w", err))
 	}
 	// ALIAS_INDEX has no owner-complete axis and is intentionally outside
 	// replacement reconciliation. Skipping an unsafe candidate does not retract a
@@ -1498,7 +1467,7 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 		// Record semantic completion once at the entity boundary. The idempotent
 		// write closure may run more than once during retry, but those are physical
 		// attempts rather than additional completed index updates.
-		for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+		for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 			c.metrics.recordIndexUpdate(indexType)
 		}
 	}
@@ -1523,7 +1492,6 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 //   - the full distinct predicate set — driving PREDICATE_INDEX writes
 //   - (namePredicate, name) pairs — driving NAME_INDEX writes
 //   - (aliasPredicate, alias) pairs — driving ALIAS_INDEX writes (gh#474 P2b)
-//   - (context, predicate) pairs — driving CONTEXT_INDEX writes (NOT raw object values)
 //
 // Two entities with the same projection will produce identical index writes on
 // re-index. The projection is intentionally NOT excluding literal-only predicates
@@ -1559,10 +1527,6 @@ func computeIndexProjection(state graph.EntityState, namePredicates, aliasPredic
 			if alias, ok := t.Object.(string); ok && alias != "" {
 				parts = append(parts, "alias:"+t.Predicate+":"+alias)
 			}
-		}
-		// 5. (context, predicate) pairs — NOT raw object values
-		if t.Context != "" {
-			parts = append(parts, "ctx:"+t.Context+":"+t.Predicate)
 		}
 	}
 
@@ -1960,7 +1924,7 @@ func (c *Component) UpdatePredicateIndex(ctx context.Context, entityID, predicat
 
 // DeleteFromIndexes deletes an entity from all indexes.
 //
-// PREDICATE, NAME, CONTEXT, and OUTGOING memberships are owned by the entity.
+// PREDICATE, NAME, and OUTGOING memberships are owned by the entity.
 // INCOMING memberships are owned by their source entity, even though their physical
 // key begins with the target. Deletion therefore uses the fixed-position source
 // filter and deliberately preserves assertions from live sources that still point
@@ -1987,14 +1951,10 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	incomingFilter := incomingIndexSourceFilter(entityID)
 	predicateFilter := predicateIndexEntityFilter(entityID)
 	nameFilter := nameIndexEntityFilter(entityID)
-	contextPrefix := contextIndexEntityPrefix(entityID)
 	for _, ownerFilter := range []string{incomingFilter, predicateFilter, nameFilter} {
 		if err := natsclient.ValidateKVWildcardFilter(ownerFilter); err != nil {
 			return err
 		}
-	}
-	if err := validateKVPrefix(contextPrefix); err != nil {
-		return err
 	}
 
 	// Resolve and validate every owned physical key before the first Delete. A
@@ -2011,7 +1971,6 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 		{name: "incoming", bucket: c.incomingBucket, filter: incomingFilter},
 		{name: "predicate", bucket: c.predicateBucket, filter: predicateFilter},
 		{name: "name", bucket: c.nameBucket, filter: nameFilter},
-		{name: "context", bucket: c.contextBucket, filter: contextPrefix, prefix: true},
 	}
 	preflightFailures := 0
 	for i := range deleteSets {
@@ -2094,7 +2053,7 @@ func (c *Component) DeleteFromIndexes(ctx context.Context, entityID string) erro
 	c.lastProjections.Delete(entityID)
 	c.clearEntityFailed(entityID)
 	if c.metrics != nil {
-		for _, indexType := range []string{"name", "predicate", "incoming", "context", "outgoing"} {
+		for _, indexType := range []string{"name", "predicate", "incoming", "outgoing"} {
 			c.metrics.recordIndexUpdate(indexType)
 		}
 	}
@@ -2184,121 +2143,6 @@ func (c *Component) DeleteFromAliasIndex(ctx context.Context, alias string) erro
 	c.lastActivity.Store(time.Now())
 
 	c.logger.Debug("alias index entry deleted", slog.String("alias", alias))
-
-	return nil
-}
-
-// ============================================================================
-// Context Index Operations (Triple Provenance Tracking)
-// ============================================================================
-
-// UpdateContextIndex updates the context index for triples with a context value.
-// This enables provenance queries like "all triples from hierarchy inference".
-//
-// After composite-key sharding (gh#474): one unconditional Put per (entityID,
-// predicate, contextValue) triple, keyed as hash(contextValue).entityID.predicate.
-// This replaces the former non-CAS Get+Put of a list, which had a lost-update
-// race AND used the raw context value as the key (collision-prone for dotted
-// hierarchies like "inference.hierarchy" vs "inference.hierarchy.deep" — ADR-065).
-//
-// CONTEXT_INDEX has no production reader (design.md D2, no query consumer);
-// the write path is the sole migration target. e2e readers are in scope for
-// task 5 (the breaking-change gate), not here.
-func (c *Component) UpdateContextIndex(ctx context.Context, entityID string, triples []message.Triple) error {
-	if entityID == "" {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex", "entity ID cannot be empty")
-	}
-
-	// Check context
-	if ctx == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex", "context cannot be nil")
-	}
-	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "UpdateContextIndex", "context cancelled")
-	}
-	if err := validateEntityLiteralKey(entityID); err != nil {
-		return err
-	}
-	prefix := contextIndexEntityPrefix(entityID)
-	if err := validateKVPrefix(prefix); err != nil {
-		return err
-	}
-
-	// Build the entity's DESIRED current context memberships (gh#474 P1f: keys are
-	// entity-prefixed). Marshal failure is a bug, not a transient — count it.
-	desired := make(map[string][]byte, len(triples))
-	for _, t := range triples {
-		if t.Context == "" {
-			continue
-		}
-		if !validateContextKeyInputs(entityID, t.Predicate, c.logger) {
-			return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateContextIndex",
-				"context membership contains an invalid entity ID or predicate")
-		}
-		key := contextIndexKey(entityID, contextHashHex(t.Context), t.Predicate)
-		if err := natsclient.ValidateKVLiteralKey(key); err != nil {
-			return err
-		}
-		value, marshalErr := json.Marshal(contextIndexValue{Context: t.Context})
-		if marshalErr != nil {
-			c.logger.Debug("context index: failed to marshal value",
-				slog.String("context", t.Context),
-				slog.Any("error", marshalErr))
-			continue
-		}
-		desired[key] = value
-	}
-
-	// CONTEXT_INDEX already has entityID in the leading key position, so its
-	// shipped prefix reconciliation remains the production path. The generic
-	// filtered-owner candidate stays in the fixed-arity spike until the
-	// registered real-NATS benchmark selects it.
-	existing, listErr := c.contextBucket.KeysByPrefix(ctx, prefix)
-	if c.metrics != nil {
-		c.metrics.recordKVOperation("list", "context")
-	}
-	if listErr != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.WrapTransient(listErr, "Component", "UpdateContextIndex", "list existing context keys")
-	}
-	for _, key := range existing {
-		if err := natsclient.ValidateKVLiteralKey(key); err != nil {
-			return err
-		}
-	}
-
-	var failures int
-	for _, key := range existing {
-		if _, keep := desired[key]; keep {
-			continue
-		}
-		delErr := c.contextBucket.Delete(ctx, key)
-		if c.metrics != nil {
-			c.metrics.recordKVOperation("delete", "context")
-		}
-		if delErr != nil && !natsclient.IsKVNotFoundError(delErr) {
-			atomic.AddInt64(&c.errors, 1)
-			failures++
-			c.logger.Debug("context index: failed to retract superseded entry",
-				slog.String("key", key), slog.Any("error", delErr))
-		}
-	}
-	for key, value := range desired {
-		_, putErr := c.contextBucket.Put(ctx, key, value)
-		if c.metrics != nil {
-			c.metrics.recordKVOperation("put", "context")
-		}
-		if putErr != nil {
-			atomic.AddInt64(&c.errors, 1)
-			failures++
-			c.logger.Debug("context index: failed to write entry",
-				slog.String("key", key), slog.Any("error", putErr))
-		}
-	}
-	if failures > 0 {
-		return errs.WrapTransient(errIndexWritePartial, "Component", "UpdateContextIndex",
-			fmt.Sprintf("%d of %d context writes/retractions failed for %s", failures, len(desired)+len(existing), entityID))
-	}
 
 	return nil
 }

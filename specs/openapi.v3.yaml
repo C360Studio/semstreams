@@ -492,7 +492,7 @@ paths:
                 - name: bucket
                   in: path
                   required: true
-                  description: KV bucket name (e.g., ENTITY_STATES, CONTEXT_INDEX)
+                  description: KV bucket name (e.g., ENTITY_STATES, INCOMING_INDEX)
                   schema:
                     type: string
                 - name: pattern

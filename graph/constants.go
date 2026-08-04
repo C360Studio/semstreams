@@ -29,7 +29,6 @@ const (
 	// time bucket when the entity is re-indexed (observed-time changed) or deleted,
 	// so a range query never returns an entity from a bucket it has since left.
 	BucketTemporalIndexReverse = "TEMPORAL_INDEX_REVERSE"
-	BucketContextIndex         = "CONTEXT_INDEX"
 
 	// Semantic tier buckets
 	BucketEmbeddingIndex = "EMBEDDING_INDEX"
