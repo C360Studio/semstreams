@@ -255,10 +255,7 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 	fetchedAt := now.UTC().Format(time.RFC3339Nano)
 	contentType := resp.Header.Get("Content-Type")
 
-	// Loop back-link first so partial-writes under graph-ingest
-	// degradation still leave a discoverable pointer from the loop.
-	triples := []message.Triple{
-		{Subject: loopEntityID, Predicate: agvocab.LoopFetchedWeb, Object: urlEntity, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
+	observationTriples := []message.Triple{
 		{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebFetchedAt, Object: fetchedAt, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebFetchedBy, Object: loopEntityID, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
@@ -267,12 +264,20 @@ func (e *HTTPRequestExecutor) emitObservation(ctx context.Context, call agentic.
 		{Subject: urlEntity, Predicate: agvocab.WebText, Object: body, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 		{Subject: urlEntity, Predicate: agvocab.WebTruncated, Object: truncated, Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0},
 	}
-	for _, tr := range triples {
-		if err := e.publisher.AddTriple(ctx, tr); err != nil {
-			webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
-			e.logger.Warn("http_request emission failed for triple",
-				"call_id", call.ID, "url", canon, "predicate", tr.Predicate, "error", err)
-		}
+	if err := publishWebObservation(ctx, e.publisher, urlEntity, observationTriples); err != nil {
+		webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
+		e.logger.Warn("http_request observation emission failed",
+			"call_id", call.ID, "url", canon, "error", err)
+		return
+	}
+	backlink := message.Triple{
+		Subject: loopEntityID, Predicate: agvocab.LoopFetchedWeb, Object: urlEntity,
+		Source: httpRequestTripleSource, Timestamp: now, Confidence: 1.0,
+	}
+	if err := e.publisher.Append(ctx, []message.Triple{backlink}); err != nil {
+		webEmitFailuresTotal.WithLabelValues("http_request", "publish").Inc()
+		e.logger.Warn("http_request backlink emission failed",
+			"call_id", call.ID, "url", canon, "error", err)
 	}
 }
 

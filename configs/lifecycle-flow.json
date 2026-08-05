@@ -131,6 +131,13 @@
         "ports": {
           "inputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "mission_in",
               "subject": "mission.processed.entity",
               "type": "jetstream",
@@ -158,7 +165,9 @@
         "enable_graph_integration": true,
         "ports": {
           "inputs": [],
-          "outputs": []
+          "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+          ]
         },
         "entity_watch_buckets": {"ENTITY_STATES": ["c360.test.lifecycle.gcs.mission.*"]},
         "rules_files": ["/app/configs/rules/lifecycle/01-mission-launch.json"],
@@ -171,6 +180,18 @@
       "name": "lifecycle-gateway",
       "enabled": true,
       "config": {
+        "ports": {
+          "inputs": [],
+          "outputs": [
+            {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            }
+          ]
+        },
         "path_prefix": "workflows",
         "enable_websocket": true,
         "allowed_origins": ["http://localhost", "http://localhost:38080"]

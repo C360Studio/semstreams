@@ -2,6 +2,10 @@
 
 ## Status
 
+**Mutation-lane taxonomy superseded by ADR-091 — 2026-08-05.** ADR-091 retains the fact/request distinction,
+envelope-bearing strict birth, must-exist non-create mutations, and graph-ingest's physical write boundary, but replaces
+the eight-lane surface with four typed Create/Reconcile/Append/Delete operations and observed-revision CAS.
+
 **Accepted — must-exist flip implemented 2026-06-19** (BREAKING; see
 [Implementation](#implementation--breaking-consequence-2026-06-19) below).
 Originally proposed 2026-06-11. Derived from a

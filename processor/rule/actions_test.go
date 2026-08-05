@@ -692,23 +692,6 @@ type mockTripleMutator struct {
 	removedRuleIDs []string
 	addErr         error
 	removeErr      error
-
-	// replaceOwnedCalls captures every ReplaceOwned invocation (ADR-056
-	// Decision 3) so tests can assert on the owner identity, target entity,
-	// predicate, and the constructed objects (including the clear sub-case,
-	// where objects is empty). replaceOwnedErr lets a test force the mutator
-	// to fail (e.g. simulating ErrorCodeEntityNotFound).
-	replaceOwnedCalls []replaceOwnedCall
-	replaceOwnedErr   error
-}
-
-// replaceOwnedCall records the arguments of one ReplaceOwned invocation.
-type replaceOwnedCall struct {
-	ruleID    string
-	owner     string
-	entityID  string
-	predicate string
-	objects   []message.Triple
 }
 
 func (m *mockTripleMutator) AddTriple(_ context.Context, ruleID string, triple message.Triple) (uint64, error) {
@@ -730,20 +713,6 @@ func (m *mockTripleMutator) RemoveTriple(_ context.Context, ruleID, subject, pre
 	}{subject, predicate})
 	m.removedRuleIDs = append(m.removedRuleIDs, ruleID)
 	return 1, nil
-}
-
-func (m *mockTripleMutator) ReplaceOwned(_ context.Context, ruleID, owner, entityID, predicate string, objects []message.Triple) (uint64, error) {
-	if m.replaceOwnedErr != nil {
-		return 0, m.replaceOwnedErr
-	}
-	m.replaceOwnedCalls = append(m.replaceOwnedCalls, replaceOwnedCall{
-		ruleID:    ruleID,
-		owner:     owner,
-		entityID:  entityID,
-		predicate: predicate, // predicate-audit:unrelated {"column":14,"surface":"go-field:predicate","value":"","basis":"reviewed mock call capture copied from production invocation"}
-		objects:   objects,
-	})
-	return uint64(len(m.replaceOwnedCalls)), nil
 }
 
 // T045: Test Action UpdateTriple - updates a triple (remove + add)
@@ -2153,7 +2122,7 @@ func TestAction_PublishAgent_NonLoopTriggerLeavesParentLoopIDUnset(t *testing.T)
 		{"chain execution", chainID},
 		{name: "non-canonical entity ID", entityID: "e.1"},
 	}
-	// entity-id-audit:classify intentional-malformed "e.1" line=2154 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
+	// entity-id-audit:classify intentional-malformed "e.1" line=2123 column=47 surface=go-field:.entityID entity_id_invalid:arity verifies noncanonical IDs remain opaque agent payload values
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2849,7 +2818,7 @@ func TestAction_UpdateKV_VariableSubstitution(t *testing.T) {
 		Payload: map[string]any{
 			"status":     "drafting",
 			"updated_at": "$now",
-			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2852 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
+			"entity_id":  "$entity.id", // entity-id-audit:classify intentional-template "$entity.id" line=2821 column=18 surface=go-field:.entity_id entity_id_invalid:arity runtime entity-ID substitution
 		},
 		Merge: false,
 	}

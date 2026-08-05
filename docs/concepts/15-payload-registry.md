@@ -443,8 +443,8 @@ The payload registry applies to **stream messages** — messages published to Je
 
 | Subject pattern | Package | Purpose |
 |---|---|---|
-| `graph.mutation.triple.*` | `graph` | Triple add/remove mutations |
-| `graph.mutation.entity.*` | `graph` | Entity CRUD operations |
+| `graph.mutation.triple.append` | `graph` | Exact-tuple append with per-subject outcomes |
+| `graph.mutation.entity.*` | `graph` | Strict create, revision-fenced reconcile/delete |
 | `graph.ingest.query.*` | `graph` | Hierarchy/prefix/batch lookups |
 | `graph.query.*` | `graph` | Entity, relationship, search queries |
 
@@ -454,29 +454,32 @@ Request/reply is point-to-point: one publisher, one handler. The publisher knows
 
 BaseMessage wrapping would add envelope overhead and registry coupling without providing any benefit — the consumer never needs to ask "what type is this?" because the subject already determines the handler.
 
-### How callers use graph types
+### How components use graph request/reply
 
-External consumers (semspec, semdragon) and internal components import the `graph` package directly for request/response types:
+Components declare the typed `semstreams.graph.mutation` v1 request port. Framework writers normally receive a
+narrow `pkg/projection` capability rather than spelling a subject or holding a raw NATS client:
 
 ```go
-import gtypes "github.com/c360studio/semstreams/graph"
+import "github.com/c360studio/semstreams/pkg/projection"
 
-req := gtypes.AddTripleRequest{Triple: triple}
-reqData, _ := json.Marshal(req)
-respData, _ := natsClient.Request(ctx, "graph.mutation.triple.add", reqData, 5*time.Second)
-
-var resp gtypes.AddTripleResponse
-json.Unmarshal(respData, &resp)
+receipt, err := appender.Append(ctx, projection.AppendMutation{
+    Contract: "example.observations.v1",
+    Group:    "observations",
+    EntityID: entityID,
+    Triples:  triples,
+    Metadata: metadata,
+})
 ```
 
-This is the intended integration pattern. The `graph` package's request and response types are its public API contract for NATS request/reply consumers.
+The `graph` package still defines the four wire DTO pairs. Subject resolution belongs to the declared request-port
+interface, and the framework sends each request once. Components own any retry decision.
 
 ### When to use which pattern
 
 | Pattern | When | Example |
 |---|---|---|
 | **Payload registry + BaseMessage** | Stream pub/sub, fan-out, polymorphic consumers | `agent.task.*`, `agent.complete.*` |
-| **Raw JSON structs** | NATS request/reply, point-to-point, known handler | `graph.mutation.*`, `graph.query.*` |
+| **Raw JSON structs** | Typed NATS request/reply, point-to-point, known handler | `graph.mutation.>`, `graph.query.>` |
 
 ## Related Documentation
 

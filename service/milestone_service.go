@@ -27,26 +27,21 @@ type milestoneStarter interface {
 // NewMilestoneSubscriber + Start + defer-stop block that was duplicated in both
 // mains.
 //
-// Unlike OwnershipService, Start CAN return an error: the milestone subscriber
-// enforces ADR-053 D3 zombie-prevention terminal authority, a HARD correctness
-// dependency — NOT the observe-only/best-effort posture ADR-058 R1's infallibility
-// targets (ownership/lifecycle "never a boot gate"). A genuine consumer-start
-// failure is therefore forwarded so StartAll aborts boot, preserving today's
-// inline-abort behavior. The stream-absent case is already a graceful no-op inside
+// Start returns subscriber setup errors so a configured milestone observer never
+// reports running without its durable consumers. A genuine consumer-start
+// failure is forwarded so StartAll aborts boot. The stream-absent case is already a graceful no-op inside
 // the subscriber (gh#246) — it returns a no-op stop with no error — so resourceless
 // deploys (no agentic components) still boot.
 //
 // Shutdown semantics: Start receives the ServiceManager's lifecycle ctx (the
 // SIGTERM-derived signal context), which the subscriber binds its consumers to.
 // The old inline wiring passed an uncancellable context, so in-flight HandleEvent
-// calls ran to completion at shutdown; now they observe cancellation. This is safe
-// — a D3 transition interrupted at shutdown Naks and is redelivered idempotently
-// on restart (durable consumers, MaxDeliver 5) — and arguably more correct
-// (shutdown is respected). Stop() additionally cancels consumption via the
+// calls ran to completion at shutdown; now reads and handlers observe cancellation.
+// Stop() additionally cancels consumption via the
 // captured stop func, so delivery halts regardless of ctx.
 type MilestoneService struct {
 	*BaseService
-	logger     *slog.Logger // own logger (mirrors OwnershipService); set by ctor.
+	logger     *slog.Logger
 	subscriber milestoneStarter
 	client     *natsclient.Client   // live NATS conn (Phase A), passed to subscriber.Start.
 	cfg        agentrun.StartConfig // StreamName: agentrun.AgentStreamName.
@@ -71,7 +66,7 @@ func NewMilestoneService(subscriber milestoneStarter, client *natsclient.Client,
 }
 
 // Start starts the subscriber's durable consumers. A double-Start returns an
-// error (BUG-CLASS guard, mirrors OwnershipService). A genuine consumer-start
+// error as a bug-class guard. A genuine consumer-start
 // failure is FORWARDED — StartAll aborts boot — because the subscriber is a hard
 // dependency (see the type doc for why this is deliberately not R1-degraded). The
 // subscriber's stream-absent graceful-skip returns a non-nil no-op stop with no
@@ -87,8 +82,8 @@ func (s *MilestoneService) Start(ctx context.Context) error {
 	}
 	stop, err := s.subscriber.Start(ctx, s.client, s.cfg)
 	if err != nil {
-		// Hard dependency (D3): forward the error so StartAll aborts boot. Roll
-		// back BaseService status so a failed Start does not leave us phantom-Running.
+		// Forward the error so StartAll does not report an observer with no
+		// consumers. Roll back BaseService status after the failed start.
 		_ = s.BaseService.Stop(0)
 		return fmt.Errorf("milestone subscriber start: %w", err)
 	}
@@ -98,7 +93,7 @@ func (s *MilestoneService) Start(ctx context.Context) error {
 
 // Stop cancels the subscriber's local consumption (durable offsets persist in
 // NATS for restart recovery). The wrapper spawns no goroutine of its own, so —
-// unlike OwnershipService — there is nothing to join. Idempotent: a second Stop
+// there is nothing to join. Idempotent: a second Stop
 // (or a Stop before Start) is a no-op.
 func (s *MilestoneService) Stop(timeout time.Duration) error {
 	s.mu.Lock()

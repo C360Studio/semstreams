@@ -133,12 +133,6 @@ type graphView struct {
 	// stranded-unit detector can age-gate a claim (ADR-070): a claimed unit older
 	// than StrandedAfter stops counting as healthy in-flight.
 	claimedAt map[string]time.Time
-	// stubsSkipped counts entities under the unit prefix that were referential
-	// stubs (graph.StubMessageType) and therefore excluded from the unit set
-	// this read (gh#429). A sustained nonzero value means a referenced unit's
-	// real content never landed on a re-stamping lane — an observable stuck-stub
-	// signal rather than a silent never-dispatch.
-	stubsSkipped int
 }
 
 // extractGraph derives the brain inputs (unit IDs, depends_on edges, marker
@@ -169,12 +163,6 @@ func extractGraph(states []graph.EntityState, cfg Config) graphView {
 
 	for i := range states {
 		s := &states[i]
-		if s.IsStub() {
-			// Not-yet-born placeholder; the real producer re-stamps the envelope
-			// at birth and the next read picks the unit up with its real edges.
-			view.stubsSkipped++
-			continue
-		}
 		view.unitIDs = append(view.unitIDs, s.ID)
 		for j := range s.Triples {
 			t := &s.Triples[j]

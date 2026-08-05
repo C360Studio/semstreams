@@ -139,11 +139,6 @@ func (c *Config) ApplyDefaults() {
 					Type:    "nats-request",
 					Subject: "graph.query.*",
 				},
-				{
-					Name:    "mutations",
-					Type:    "nats-request",
-					Subject: "graph.mutation.*",
-				},
 			}
 		} else {
 			// Ensure the queries port is always present — graph-gateway
@@ -185,11 +180,6 @@ func DefaultConfig() Config {
 					Name:    "queries",
 					Type:    "nats-request",
 					Subject: "graph.query.*",
-				},
-				{
-					Name:    "mutations",
-					Type:    "nats-request",
-					Subject: "graph.mutation.*",
 				},
 			},
 		},

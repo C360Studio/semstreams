@@ -147,7 +147,7 @@ func TestIntegration_BootSweepInventoriesResidentPoisonRealNATS(t *testing.T) {
 	assert.Contains(t, string(data), validID)
 
 	// Canonical repair: delete + recreate recovers Health without restart.
-	require.NoError(t, c.DeleteEntity(ctx, poisonID))
+	require.NoError(t, c.deleteEntityAtRevision(ctx, poisonID, rec.revision))
 	_, inventoried = poisonInventoryEntry(c, poisonID)
 	assert.False(t, inventoried)
 	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{

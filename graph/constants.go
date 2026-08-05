@@ -62,20 +62,6 @@ const (
 	// leave History untouched.
 	BucketGraphStatus = "GRAPH_STATUS"
 
-	// BucketOwnerClaims is the ADR-056 owner-claim registry — the single
-	// `_registry` epoch key, written only through the ownership Registry. The
-	// epoch write IS the registration audit trail (the KV-twofer), so its
-	// catalog descriptor declares History 10 to answer "who registered what,
-	// when" across recent deploys — and NO TTL (a TTL would age out the durable
-	// epoch between deploys).
-	BucketOwnerClaims = "OWNER_CLAIMS"
-	// BucketOwnerPresence holds ADR-056 owner liveness heartbeats. Its catalog
-	// descriptor declares bounded-ttl retention (ownership.PresenceTTL): the
-	// TTL IS the liveness contract — a presence key not re-bumped within the
-	// window ages out so a crashed owning lease frees — and the acquisition
-	// seam converges to it rather than stripping it.
-	BucketOwnerPresence = "OWNER_PRESENCE"
-
 	// BucketStorageReport is the account storage report
 	// (storage-observability): ONE KEY PER INVENTORIED RESOURCE, carrying that
 	// resource's attribution, capacity, growth rate, projection, and pressure

@@ -227,3 +227,18 @@ last-applied baseline.
 - **WHEN** no production caller consumes it after boot-time propagation lands
 - **THEN** the hook is deleted rather than left as a dead exported surface (a signal read by
   nothing is not enforcement)
+
+### Requirement: Typed request ports define mutation composition
+
+`NATSRequestPort.Interface` MUST survive flat definition construction, typed config construction, JSON round trips,
+and flow-graph extraction. A validated flow MUST provide exactly one input port for interface
+`semstreams.graph.mutation` v1 and family `graph.mutation.>`, and MAY provide many compatible outputs. Zero providers
+is unresolved; multiple providers are ambiguous. This rule observes declared topology only and MUST NOT claim
+account-wide process cardinality.
+
+#### Scenario: Multiple requesters share one provider
+
+- **GIVEN** three components declare compatible mutation output ports and graph-ingest declares one provider input
+- **WHEN** the flow graph is validated
+- **THEN** all three requesters connect to the provider
+- **AND** validation creates no stream, consumer, leader, or lease

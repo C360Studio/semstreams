@@ -133,6 +133,13 @@
         "ports": {
           "inputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "sensor_in",
               "subject": "sensor.processed.entity",
               "type": "jetstream",
@@ -225,11 +232,6 @@
             {
               "name": "queries",
               "subject": "graph.query.*",
-              "type": "nats-request"
-            },
-            {
-              "name": "mutations",
-              "subject": "graph.mutation.*",
               "type": "nats-request"
             }
           ]

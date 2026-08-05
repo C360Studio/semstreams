@@ -393,15 +393,17 @@
 // There is no in-band error channel and no legacy "error: <msg>" body — a
 // reply with no X-Status header is success.
 //
-// Callers use RequestClassified / RequestWithRetryClassified, which surface the
+// Callers use RequestClassified, or RequestWithRetryClassified only when an
+// operation-specific non-graph contract authorizes redelivery. Both surface the
 // classified error via the err return (transport AND handler failures,
-// uniformly):
+// uniformly). Canonical graph mutations always use one RequestClassified
+// attempt; components own any later retry decision:
 //
 //	data, err := c.RequestClassified(ctx, "subject", body, 5*time.Second)
 //	if err != nil {
-//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* CAS: re-read, retry */ }
+//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* caller may re-read and retry */ }
 //	    if errs.IsInvalid(err)   { /* 4xx — bad input */ }
-//	    if errs.IsTransient(err) { /* retry */ }
+//	    if errs.IsTransient(err) { /* surface or apply an explicit operation policy */ }
 //	    var ce *errs.ClassifiedError
 //	    if errors.As(err, &ce)   { /* ce.Code, ce.Detail */ }
 //	}

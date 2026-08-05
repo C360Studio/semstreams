@@ -452,11 +452,7 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 		dataType   string
 		ruleOpaque bool
 	}{
-		{"TodoID", agentic.TodoID, "string", false},
-		{"TodoContent", agentic.TodoContent, "string", true},
-		{"TodoStatus", agentic.TodoStatus, "string", false},
-		{"TodoPosition", agentic.TodoPosition, "int", false},
-		{"TodoUpdatedAt", agentic.TodoUpdatedAt, "time.Time", false},
+		{"TodoRecord", agentic.TodoRecord, "string", true},
 	}
 
 	for _, tt := range todoPredicates {
@@ -471,6 +467,18 @@ func TestTodoPredicatesRegistered(t *testing.T) {
 		if meta.RuleOpaque != tt.ruleOpaque {
 			t.Errorf("%s: RuleOpaque = %v, want %v (ADR-036 §Decision Rule 1: rules MUST NOT predicate on opaque content)",
 				tt.name, meta.RuleOpaque, tt.ruleOpaque)
+		}
+	}
+
+	for _, retired := range []string{
+		"agent.todo.id",
+		"agent.todo.content",
+		"agent.todo.status",
+		"agent.todo.position",
+		"agent.todo.updated-at",
+	} {
+		if meta := vocabulary.GetPredicateMetadata(retired); meta != nil {
+			t.Errorf("retired predicate %q remains registered: %#v", retired, meta)
 		}
 	}
 }

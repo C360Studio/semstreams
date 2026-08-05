@@ -35,15 +35,15 @@ const (
 	ActionTypeRemoveTriple = "remove_triple"
 	// ActionTypeUpdateTriple updates metadata on an existing triple
 	ActionTypeUpdateTriple = "update_triple"
-	// ActionTypeReplaceOwned replaces (or clears) the selected predicate
+	// ActionTypeReconcilePredicates replaces (or clears) the selected predicate
 	// through the rule pack's bound projection.MutationClient. The public
-	// client atomically reconciles the complete named ModeReplaceOwned group,
+	// client atomically reconciles the complete named ModeReconcile group,
 	// preserving predicates outside that group. A raw empty Object clears the
 	// entire selected named group; a raw non-empty Object authors one desired
 	// triple even when substitution resolves to an empty value. The contract,
 	// group, and literal predicate are resolved against the immutable boot-time
 	// projection target index at load/hot-reload time (HARD-FAIL on violation).
-	ActionTypeReplaceOwned = "replace_owned"
+	ActionTypeReconcilePredicates = "reconcile_predicates"
 	// ActionTypePublishAgent triggers an agentic loop by publishing a TaskMessage
 	ActionTypePublishAgent = "publish_agent"
 	// ActionTypeUpdateKV writes JSON to a named KV bucket with optional CAS merge
@@ -113,7 +113,7 @@ type Action struct {
 	Predicate string `json:"predicate,omitempty"`
 
 	// ProjectionContract and ProjectionGroup select the exact immutable
-	// replace-owned target. Both are required for replace_owned actions.
+	// reconcile target. Both are required for reconcile_predicates actions.
 	ProjectionContract string `json:"projection_contract,omitempty"`
 	ProjectionGroup    string `json:"projection_group,omitempty"`
 
@@ -522,11 +522,11 @@ type LifecycleManager interface {
 	// RunScope "new" path to mint an AgentRun (ADR-053 D4). Returns
 	// lifecycle.ErrAlreadyExists when already lifecycle-managed.
 	Create(ctx context.Context, initial lifecycle.Participant) error
-	// Note: Transition is NOT part of the rule LifecycleManager interface — the
-	// rule engine never drives terminal transitions directly; that is reserved for
-	// the subscriber's MockableManager (agentrun.MockableManager) which handles
-	// the D3 zombie-prevention path. Keeping the interfaces separate prevents
-	// rule-pack authors from reaching terminal transitions through the rule surface.
+	// Note: Transition is NOT part of the rule LifecycleManager interface. The
+	// agent-run subscriber is observation-only and never mutates lifecycle state.
+	// A coordinator or component that needs a terminal transition emits the
+	// declared lifecycle_transition action through its graph-mutation port.
+	// Keeping the interfaces separate prevents an observer from becoming a writer.
 }
 
 // ActionExecutor executes actions for rules.
@@ -542,7 +542,7 @@ type ActionExecutor struct {
 	// audit stream (ADR-055 §3a). Optional: if nil, verdicts are still applied
 	// and logged but no audit event is emitted (e.g. NATS-less test executors).
 	verdictAuditor VerdictAuditor
-	ownedReplacer  projection.OwnedReplacer
+	reconciler     projection.PredicateReconciler
 	targetIndex    *projectionTargetIndex
 	revisionWriter revisionTracker
 }
@@ -574,10 +574,9 @@ func (e *ActionExecutor) SetVerdictAuditor(a VerdictAuditor) {
 	e.verdictAuditor = a
 }
 
-// SetOwnedReplacer installs the narrow public projection capability used by
-// replace_owned actions.
-func (e *ActionExecutor) SetOwnedReplacer(replacer projection.OwnedReplacer) {
-	e.ownedReplacer = replacer
+// SetPredicateReconciler installs the projection reconcile capability.
+func (e *ActionExecutor) SetPredicateReconciler(reconciler projection.PredicateReconciler) {
+	e.reconciler = reconciler
 }
 
 func (e *ActionExecutor) setProjectionTargets(index *projectionTargetIndex, tracker revisionTracker) {
@@ -648,8 +647,8 @@ func (e *ActionExecutor) Execute(ctx context.Context, action Action, ec *Executi
 		return e.executePublish(ctx, action, ec)
 	case ActionTypeUpdateTriple:
 		return e.executeUpdateTriple(ctx, action, ec)
-	case ActionTypeReplaceOwned:
-		return e.executeReplaceOwned(ctx, action, ec)
+	case ActionTypeReconcilePredicates:
+		return e.executeReconcilePredicates(ctx, action, ec)
 	case ActionTypePublishAgent:
 		return e.executePublishAgent(ctx, action, ec)
 	case ActionTypeUpdateKV:
@@ -1030,7 +1029,7 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 	return nil
 }
 
-// executeReplaceOwned executes a replace_owned action (ADR-056 Decision 3)
+// executeReconcilePredicates executes a reconcile_predicates action
 // through the rule pack's bound public mutation client. The client reconciles
 // the complete selected projection group atomically.
 //
@@ -1041,14 +1040,14 @@ func (e *ActionExecutor) executeUpdateTriple(ctx context.Context, action Action,
 // non-empty expression that resolves to "" still authors that empty value.
 //
 // Predicate is always a literal (validation rejects any `$` in the predicate of
-// a replace_owned action), so it is NOT run through substitution. Object IS
+// a reconcile_predicates action), so it is NOT run through substitution. Object IS
 // substituted through the same typed dispatch as add_triple / update_triple so
 // numeric / bool values round-trip their source type. Ownership identity and
 // fencing remain encapsulated by projection.MutationClient.
-func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action, ec *ExecutionContext) error {
+func (e *ActionExecutor) executeReconcilePredicates(ctx context.Context, action Action, ec *ExecutionContext) error {
 	entityID, err := resolveTripleSubject(action, ec)
 	if err != nil {
-		return fmt.Errorf("resolve replace_owned subject: %w", err)
+		return fmt.Errorf("resolve reconcile subject: %w", err)
 	}
 
 	target, err := e.targetIndex.resolve(
@@ -1057,10 +1056,10 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		action.Predicate,
 	)
 	if err != nil {
-		return fmt.Errorf("resolve replace_owned target: %w", err)
+		return fmt.Errorf("resolve reconcile target: %w", err)
 	}
-	if e.ownedReplacer == nil {
-		return errors.New("replace_owned action requires an owned replacer")
+	if e.reconciler == nil {
+		return errors.New("reconcile_predicates action requires a predicate reconciler")
 	}
 
 	// Clear vs replace is decided on the RAW Object before substitution.
@@ -1098,7 +1097,7 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 	}
 
 	if e.logger != nil {
-		e.logger.Debug("Replacing owned predicate",
+		e.logger.Debug("Reconciling predicate group",
 			"entity_id", entityID,
 			"predicate", action.Predicate,
 			"projection_contract", target.Contract,
@@ -1118,7 +1117,7 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 		iteration,
 		action.effectiveID(ruleID),
 	)
-	receipt, err := e.ownedReplacer.ReplaceOwned(ctx, projection.ReplaceOwnedMutation{
+	receipt, err := e.reconciler.Reconcile(ctx, projection.ReconcileMutation{
 		Contract: target.Contract,
 		Group:    target.Group,
 		EntityID: entityID,
@@ -1132,7 +1131,7 @@ func (e *ActionExecutor) executeReplaceOwned(ctx context.Context, action Action,
 	})
 	if err != nil {
 		return fmt.Errorf(
-			"replace owned contract %q group %q predicate %q on %s: %w",
+			"reconcile contract %q group %q predicate %q on %s: %w",
 			target.Contract,
 			target.Group,
 			action.Predicate,

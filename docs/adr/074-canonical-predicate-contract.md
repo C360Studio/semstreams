@@ -4,6 +4,10 @@
 
 **Date:** 2026-07-14
 
+**Partially superseded by [ADR-091](091-graph-mutation-authority-without-semantic-ownership.md):** canonical predicate
+syntax and namespace declaration remain in force. ADR-091 retires global graph/predicate ownership; mutation intent is
+now validated by local projection contracts and applied through revision-aware create/reconcile/append/delete operations.
+
 ## Context
 
 SemStreams intended predicates to be semantic names with three positions, but the runtime accepted arbitrary
@@ -26,13 +30,13 @@ are query syntax and are never stored predicate values.
 `vocabulary.ParsePredicate` is the sole parser. Boolean checks, registration, authoring validation, persistence,
 replay, and index code delegate to it.
 
-### Separate syntax, declaration, authority, ownership, and encoding
+### Separate syntax, declaration, mutation intent, and encoding
 
 - Syntax determines whether a value can be a predicate.
 - Vocabulary registration supplies stable names and metadata.
 - Namespace delegation permits a product authoring surface to define names in one domain or one
   `domain.category` pair.
-- Graph ownership determines who may mutate facts on an entity.
+- The typed mutation operation and observed revision determine whether a requested change can commit.
 - Index encoding determines how a query axis is stored.
 
 These checks do not imply one another.
@@ -42,7 +46,7 @@ configuration, rule pack, schema, or generated tool may expose an undeclared can
 artifact is bound to an exact delegated domain or `domain.category` namespace. ENTITY_STATES persistence always
 enforces canonical syntax, but does not infer namespace authority from `Triple.Source`, `EntityState.MessageType`,
 context, subjects, or other caller data. Raw mutation lanes are syntax-only at persistence; endpoint authentication
-and graph ownership remain separate. Runtime namespace authorization requires a future principal-bearing mutation
+and graph mutation semantics remain separate. Runtime namespace authorization requires a future principal-bearing mutation
 envelope and is out of scope.
 
 ### One authoritative state codec

@@ -14,6 +14,13 @@ against code on 2026-06-22 (auto-vivify removed; `pkg/projection.Contract` wired
 still a stub; agentic-governance is content-safety only). The one pre-v1 honesty fix in §"The live
 defect carve-out" ships independently and immediately.
 
+**ADR-091 amendment (current mutation behavior):** the epistemic trust-tier scope remains
+accepted, but the ownership/projection wiring it cited is retired. Trust artifacts mutate
+through the canonical request/reply graph-mutation port; predicate reconciliation uses
+declared contracts plus expected-revision CAS. There is no `OWNER_CLAIMS` registry,
+owner-token authorization, or `replace_owned` lane. Those references below are historical
+premises, not current implementation requirements.
+
 This ADR **consolidates and will close** five issues filed 2026-06-03 — #216 (keystone), #214,
 #217, #215, #213 — all seeded by [MemGraphRAG](https://github.com/XMUDeepLIT/MemGraphRAG). The
 issues predate three substrate layers (ADR-055/056, ADR-057, agentic-governance) that landed

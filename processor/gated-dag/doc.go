@@ -29,14 +29,11 @@
 // An adversarial review of an earlier ADR draft caught it asserting guarantees
 // the substrate does NOT provide. These hold here:
 //
-//  1. Single-flight per fan-out, one instance per fan-out. replace_owned is
-//     last-write-wins, not CAS, and the owner-lease fence is default-off +
-//     cross-incarnation only — neither provides concurrent mutual exclusion.
-//     Dedup holds only because reEvaluate runs one pass at a time per instance
-//     (evalMu + a single eval goroutine) and exactly one component instance owns
-//     a given fan-out (singleton in the flow). If true cross-writer exclusion is
-//     ever needed, switch the claim to an ExpectedRevision-based CAS write (see
-//     the CAS-UPGRADE POINT in claim.go).
+//  1. Single-flight per fan-out, one instance per fan-out. Claim reconcile is
+//     revision-fenced, while reEvaluate still runs one pass at a time per
+//     instance (evalMu + a single eval goroutine). Exactly one component
+//     instance is configured for a given fan-out; CAS exposes an accidental
+//     competing writer as a revision conflict rather than silently overwriting.
 //  2. Claim before dispatch. The claim marker is committed BEFORE the dispatch
 //     is published. A crash between publish and claim would re-derive the unit
 //     as Ready on restart and double-run.

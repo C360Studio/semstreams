@@ -1,6 +1,10 @@
 # ADR-058: Boot Lifecycle — Phase-A Eager Wiring vs Phase-B Managed Services
 
-- **Status**: Draft
+- **Status**: Draft; ownership-specific boot service, watcher, heartbeat, and shutdown sections superseded by ADR-091
+- **ADR-091 amendment:** the live composition helper is
+  `service.ConfigureRulePackMutations`. Historical references below to
+  `BindRulePackContracts`, ownership registries, heartbeats, or ownership services
+  are not current API or implementation guidance.
 - **Date**: 2026-06-18
 - **Supersedes**: none
 - **Related**: ADR-047 (Lifecycle harness), ADR-056 (authoritative semantic

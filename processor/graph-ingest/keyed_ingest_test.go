@@ -27,7 +27,7 @@ type keyedIngestTestMsg struct {
 	term atomic.Bool
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=163 column=61 surface=go-field:EntityState.ID entity_id_invalid:arity malformed keyed-ingest state rejection fixture
+// entity-id-audit:classify intentional-malformed "bad" line=164 column=61 surface=go-field:EntityState.ID entity_id_invalid:arity malformed keyed-ingest state rejection fixture
 
 func (*keyedIngestTestMsg) Metadata() (*jetstream.MsgMetadata, error) { return nil, nil }
 func (*keyedIngestTestMsg) Data() []byte                              { return nil }
@@ -159,9 +159,10 @@ func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
 		reason      string
 		tripleIndex int
 		predicate   bool
+		unmetered   bool
 	}{
 		{name: "invalid envelope", entity: &graph.EntityState{ID: "bad"}, field: "id", reason: "arity", tripleIndex: -1},
-		{name: "invalid subject", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: "test.state.value"}}}, field: "subject", reason: "arity", tripleIndex: 0},
+		{name: "cross subject", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: "bad", Predicate: "test.state.value"}}}, field: "id", reason: "unknown", tripleIndex: -1, unmetered: true},
 		{name: "invalid explicit reference", entity: &graph.EntityState{ID: validID, Triples: []message.Triple{{Subject: validID, Predicate: "test.state.value", Object: 42, Datatype: message.EntityReferenceDatatype}}}, field: "reference", reason: "object_type", tripleIndex: 0},
 		{
 			name: "invalid predicate",
@@ -206,9 +207,9 @@ func TestProcessIngest_InvalidGraphableTerminatesBeforeGuardIO(t *testing.T) {
 			require.False(t, msg.ack.Load(), "terminal rejection is not an ack path")
 			require.Equal(t, errorsBefore, atomic.LoadInt64(&component.errors), "pre-guard rejection must not poison sticky error state")
 
-			if tt.predicate {
+			if !tt.unmetered && tt.predicate {
 				assert.InDelta(t, before+1, testutil.ToFloat64(component.predicateContractRejections.WithLabelValues("graphable", tt.reason)), 0.0001)
-			} else {
+			} else if !tt.unmetered {
 				assert.InDelta(t, before+1, testutil.ToFloat64(component.entityStateContractRejections.WithLabelValues("graphable", tt.field, tt.reason)), 0.0001)
 			}
 			logLine := logs.String()

@@ -31,7 +31,7 @@ func TestIntegration_BatchQuery_ReportsMissingIDs(t *testing.T) {
 	alsoAbsent := "c360.test.batchmissing.system.drone.405"
 
 	for _, id := range []string{present, alsoPresent} {
-		require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
+		require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 			ID: id,
 			Triples: []message.Triple{{
 				Subject: id, Predicate: "core.identity.type", Object: "drone", Confidence: 1.0,
@@ -114,7 +114,7 @@ func TestIntegration_BatchQuery_EmptyIDIsAccountedFor(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	present := "c360.test.batchempty.system.drone.001"
-	require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 		ID: present,
 		Triples: []message.Triple{{
 			Subject: present, Predicate: "core.identity.type", Object: "drone", Confidence: 1.0,

@@ -75,7 +75,7 @@ func buildQueryPool() []querySpec {
 		pool = append(pool, querySpec{
 			Name: "entity",
 			Query: fmt.Sprintf(
-				`{"query":"{ entity(id: \"%s\") { id triples { subject predicate object } } }"}`,
+				`{"query":"{ entity(id: \"%s\") { entity { id triples { subject predicate object } } kvRevision } }"}`,
 				eid),
 		})
 	}

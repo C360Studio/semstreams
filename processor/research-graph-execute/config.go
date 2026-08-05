@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 )
 
 // ComponentName is the canonical registry name + log subsystem.
@@ -103,7 +104,10 @@ func DefaultConfig() Config {
 					Description: "R2's publish target. Subject suffix carries the research-pipeline loop_id.",
 				},
 			},
-			Outputs: []component.PortDefinition{},
+			Outputs: []component.PortDefinition{{
+				Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
+				Interface: graphmutation.InterfaceType, Required: true,
+			}},
 		},
 		LoopsBucket:           "AGENT_LOOPS",
 		ExecuteTimeout:        DefaultExecuteTimeout,

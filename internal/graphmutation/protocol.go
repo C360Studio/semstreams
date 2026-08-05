@@ -8,19 +8,26 @@ import (
 )
 
 const (
-	InterfaceType    = "semstreams.graph.mutation"
+	// InterfaceType is the canonical component-port interface identity.
+	InterfaceType = "semstreams.graph.mutation"
+	// InterfaceVersion is the canonical component-port interface version.
 	InterfaceVersion = "v1"
-	SubjectFamily    = "graph.mutation.>"
+	// SubjectFamily is the only admitted NATS request/reply subject family.
+	SubjectFamily = "graph.mutation.>"
 )
 
 // Operation identifies one admitted graph mutation command.
 type Operation string
 
 const (
-	CreateEntity        Operation = "entity.create"
+	// CreateEntity strictly creates one entity and rejects an existing ID.
+	CreateEntity Operation = "entity.create"
+	// ReconcilePredicates replaces a declared predicate set under a revision fence.
 	ReconcilePredicates Operation = "entity.reconcile"
-	AppendTriples       Operation = "triple.append"
-	DeleteEntity        Operation = "entity.delete"
+	// AppendTriples adds set-valued triples to existing subjects.
+	AppendTriples Operation = "triple.append"
+	// DeleteEntity removes one entity under a revision fence.
+	DeleteEntity Operation = "entity.delete"
 )
 
 // ResolveSubject returns the exact subject for an admitted operation within

@@ -127,6 +127,7 @@
             {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
             {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
             {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
@@ -176,6 +177,7 @@
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
             {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
           ],
           "kv_read": [
@@ -185,7 +187,7 @@
       }
     },
     "graph-ingest": {
-      "_doc": "Owns ENTITY_STATES. emit_lesson births each lesson entity through graph.mutation.entity.create_with_triples here; LessonCurator.Promote/Retire/Supersede flip agent.lesson.status through graph.mutation.entity.update_with_triples (single-valued replace). Required for any lesson to persist or be queryable via GET /graph/triples.",
+      "_doc": "Writes ENTITY_STATES. emit_lesson creates each lesson through graph.mutation.entity.create; LessonCurator.Promote/Retire/Supersede reconcile agent.lesson.status through graph.mutation.entity.reconcile. Required for any lesson to persist or be queryable via GET /graph/triples.",
       "type": "processor",
       "name": "graph-ingest",
       "enabled": true,
@@ -193,7 +195,7 @@
         "enable_hierarchy": true,
         "ports": {
           "inputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
           ],
           "outputs": [
             {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}

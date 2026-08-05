@@ -183,8 +183,8 @@ func TestDefaultConfig(t *testing.T) {
 	if len(cfg.Ports.Inputs) != 2 {
 		t.Errorf("DefaultConfig() input ports count = %d, want 2", len(cfg.Ports.Inputs))
 	}
-	if len(cfg.Ports.Outputs) != 1 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 1", len(cfg.Ports.Outputs))
+	if len(cfg.Ports.Outputs) != 2 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 2", len(cfg.Ports.Outputs))
 	}
 
 	ins := map[string]string{}
@@ -198,9 +198,21 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("tool.list input subject = %q, want tool.list", ins["tool.list"])
 	}
 
-	// Verify output subject
-	if cfg.Ports.Outputs[0].Subject != "tool.result.*" {
-		t.Errorf("DefaultConfig() output subject = %s, want tool.result.*", cfg.Ports.Outputs[0].Subject)
+	outputs := map[string]string{}
+	for _, port := range cfg.Ports.Outputs {
+		outputs[port.Name] = port.Subject
+	}
+	if outputs["tool.result"] != "tool.result.*" {
+		t.Errorf("tool.result output subject = %q, want tool.result.*", outputs["tool.result"])
+	}
+	if outputs["graph_mutations"] != "graph.mutation.>" {
+		t.Errorf("graph_mutations output subject = %q, want graph.mutation.>", outputs["graph_mutations"])
+	}
+	for _, port := range cfg.Ports.Outputs {
+		if port.Name == "graph_mutations" &&
+			(port.Type != "nats-request" || port.Interface != "semstreams.graph.mutation" || !port.Required) {
+			t.Errorf("graph_mutations output is not the required typed request port: %#v", port)
+		}
 	}
 
 	// Verify allowed tools is initialized (can be nil or empty, both valid)

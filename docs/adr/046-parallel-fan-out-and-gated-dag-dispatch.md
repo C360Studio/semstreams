@@ -11,6 +11,13 @@ eight correctness wedges). Implementation pending a dedicated session.
 Closes ADR-026 milestone 2 (parallel flow composition), deferred since
 ADR-026 shipped Phase 1. References GH #134, GH #357.
 
+**ADR-091 amendment (current mutation behavior):** the gated-DAG decision remains
+accepted, but its historical `replace_owned` claim/marker mechanism is retired.
+Current implementations reconcile the component's declared predicate set through
+the canonical request/reply mutation port and use an expected entity revision for
+CAS conflict detection. There is no owner token, owner claim, or replace-owned lane.
+References to `replace_owned` below describe the superseded implementation design.
+
 ## Context
 
 SemTeams's deep-research and dev-via-spec packs hit the same shape: a

@@ -22,9 +22,9 @@
 //	data, err := c.RequestClassified(ctx, subj, body, timeout)
 //	if err != nil {
 //	    // transport OR classified handler error, uniformly:
-//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* re-read, retry */ }
+//	    if errors.Is(err, errs.ErrRevisionMismatch) { /* caller decides whether to re-read and retry */ }
 //	    if errs.IsInvalid(err) { /* 4xx */ }
-//	    if errs.IsTransient(err) { /* retry */ }
+//	    if errs.IsTransient(err) { /* surface or apply the operation's explicit policy */ }
 //	    var ce *errs.ClassifiedError
 //	    if errors.As(err, &ce) { /* ce.Code, ce.Detail */ }
 //	    return err
@@ -241,19 +241,19 @@ func ClassifyReply(msg *nats.Msg) ([]byte, error) {
 // runs the reply through ClassifyReply so the returned error covers
 // both transport and handler failure modes uniformly.
 //
-// Transport failures (no responders, timeout) are returned as the
-// underlying error and classify as ErrorTransient via pkg/errs.IsTransient
-// — caller's existing retry logic on IsTransient continues to fire.
+// Transport failures (no responders, timeout) are returned as the underlying
+// error and classify as ErrorTransient via pkg/errs.IsTransient. Classification
+// does not authorize a retry; the operation's contract owns that decision.
 //
 // Handler failures arrive as a *errs.ClassifiedError reconstructed
 // from the X-Error-Class / X-Error-Code headers + {message, detail} body.
 // Caller branches on errs.IsInvalid / IsTransient / IsFatal.
 //
-// Use this for QUERIES. For MUTATIONS where the responder is
-// idempotent AND emits classified errors, use
-// RequestWithRetryClassified — retrying on a hung query masks
-// responder problems as latency. See
-// docs/operations/07-nats-request-retry.md for the full rule.
+// Use this for steady-state queries and canonical graph mutations. Graph
+// create, reconcile, append, and delete always make one transport attempt;
+// ambiguity is returned to the component. Use RequestWithRetryClassified only
+// for a non-graph operation whose contract explicitly authorizes redelivery.
+// See docs/operations/07-nats-request-retry.md.
 func (c *Client) RequestClassified(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 	msg, err := c.RequestWithHeaders(ctx, subject, data, nil, timeout)
 	if err != nil {
@@ -274,8 +274,8 @@ func (c *Client) RequestClassified(ctx context.Context, subject string, data []b
 // shape semteams shipped in cmd/semteams/tools/addsource/executor.go
 // before this method existed).
 //
-// Use this for MUTATIONS where the responder is idempotent AND
-// emits classified errors. The classified contract round-trips per
+// Use this only where an operation-specific contract explicitly authorizes
+// redelivery after transport ambiguity. The classified contract round-trips per
 // the same rules as RequestClassified: transport failures arrive as
 // the underlying error after the retry budget exhausts (classifies
 // as ErrorTransient via pkg/errs.IsTransient); handler failures
@@ -283,10 +283,10 @@ func (c *Client) RequestClassified(ctx context.Context, subject string, data []b
 // X-Error-Class / X-Error-Code headers + {message, detail} body.
 // Caller branches on errs.IsInvalid / IsTransient / IsFatal.
 //
-// For QUERIES use RequestClassified; retrying on a hung query
-// masks responder problems as latency. See
-// docs/operations/07-nats-request-retry.md for the full
-// mutation-vs-query rule.
+// Canonical graph mutations and steady-state queries use RequestClassified.
+// Retrying graph mutations can duplicate effects after a lost reply; retrying a
+// hung query masks responder problems as latency. See
+// docs/operations/07-nats-request-retry.md.
 func (c *Client) RequestWithRetryClassified(
 	ctx context.Context,
 	subject string,

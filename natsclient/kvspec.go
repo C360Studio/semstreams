@@ -83,9 +83,8 @@ const (
 	// correctness-critical no-eviction state (ADR-068). Acquisition strips a
 	// foreign retention in place or fails closed.
 	RetentionNoLifecycle RetentionKind = "no-lifecycle"
-	// RetentionBoundedTTL: the declared TTL IS the contract (e.g.
-	// OWNER_PRESENCE liveness). Acquisition converges MaxAge TO the declared
-	// TTL — preserved, never stripped.
+	// RetentionBoundedTTL: the declared TTL IS the contract. Acquisition
+	// converges MaxAge TO the declared TTL — preserved, never stripped.
 	RetentionBoundedTTL RetentionKind = "bounded-ttl"
 	// RetentionUnmanaged: the framework guarantees no retention posture — an
 	// explicit catalog fact (COMPONENT_STATUS), not an omission. Acquisition
@@ -323,8 +322,7 @@ func OpenFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jetst
 // reconcileBoundedTTL converges a bucket's backing-stream MaxAge TO the
 // declared TTL — the read → Update → re-read → assert shape of
 // ReconcileNoLifecycleRetention, with the opposite goal: here the TTL is the
-// contract (e.g. OWNER_PRESENCE liveness staleness floor) and must be
-// preserved, never stripped.
+// contract and must be preserved, never stripped.
 func reconcileBoundedTTL(
 	ctx context.Context, js jetstream.JetStream, bucket string, ttl time.Duration, logger *slog.Logger,
 ) error {

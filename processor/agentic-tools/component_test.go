@@ -12,6 +12,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -81,11 +82,14 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	ports := comp.OutputPorts()
 
-	if len(ports) != 1 {
-		t.Fatalf("OutputPorts() count = %d, want 1", len(ports))
+	if len(ports) != 2 {
+		t.Fatalf("OutputPorts() count = %d, want 2", len(ports))
 	}
-
-	port := ports[0]
+	byName := make(map[string]component.Port, len(ports))
+	for _, port := range ports {
+		byName[port.Name] = port
+	}
+	port := byName["tool.result"]
 	if port.Name != "tool.result" {
 		t.Errorf("OutputPort name = %s, want tool.result", port.Name)
 	}
@@ -103,6 +107,15 @@ func TestComponent_OutputPorts(t *testing.T) {
 	}
 	if jsConfig.StreamName != "AGENT" {
 		t.Errorf("OutputPort stream = %s, want AGENT", jsConfig.StreamName)
+	}
+	mutation := byName["graph_mutations"]
+	request, ok := mutation.Config.(component.NATSRequestPort)
+	if !ok {
+		t.Fatalf("graph_mutations config = %T, want NATSRequestPort", mutation.Config)
+	}
+	if !mutation.Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
+		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
+		t.Fatalf("graph_mutations contract drift: %#v", mutation)
 	}
 }
 

@@ -19,12 +19,10 @@ no-lifecycle-retention — `ENTITY_STATES` and every derived index it owns,
 including `PREDICATE_INDEX`, `INCOMING_INDEX`, `OUTGOING_INDEX`, `NAME_INDEX`,
 `ALIAS_INDEX`, `SPATIAL_INDEX`, `TEMPORAL_INDEX`,
 `TEMPORAL_INDEX_REVERSE`, `EMBEDDING_INDEX`, `EMBEDDING_DEDUP`, `COMMUNITY_INDEX`,
-`COMMUNITY_SUMMARIES`, `ANOMALY_INDEX`, `ENTITY_SUFFIX_INDEX`, the framework
+`COMMUNITY_SUMMARIES`, `ANOMALY_INDEX`, `ENTITY_SUFFIX_INDEX`, and the framework
 operational buckets `GRAPH_INGEST_APPLIED_SEQ` (the ADR-072 redelivery-guard
-stamps), `GRAPH_STATUS` (the ADR-083 readiness envelopes), and `OWNER_CLAIMS` —
-all correctness-critical no-eviction state. Retention is a per-descriptor policy,
-not a global rule: `OWNER_PRESENCE` is declared bounded-ttl (its TTL is the
-liveness contract and is converged to, never stripped), and `COMPONENT_STATUS` is
+stamps), and `GRAPH_STATUS` (the ADR-083 readiness envelopes) — all correctness-critical
+no-eviction state. Retention is a per-descriptor policy, not a global rule. `COMPONENT_STATUS` is
 declared unmanaged (the framework guarantees no retention posture for it — an
 explicit catalog fact, not an omission). Retention is a semantic operation
 (ADR-068), never a storage-policy side effect: age/size eviction is
@@ -244,12 +242,9 @@ identity at runtime; that boundary is review-enforced and stated here deliberate
 
 #### Scenario: retention policy is a per-descriptor fact, not a global rule
 
-- **GIVEN** the seam acquiring `OWNER_PRESENCE` (declared bounded-ttl) and `EMBEDDING_INDEX`
-  (declared no-lifecycle-retention), each carrying a `MaxAge`
-- **WHEN** each acquisition reconciles
-- **THEN** `OWNER_PRESENCE`'s declared TTL is preserved (converged to, never stripped) while
-  `EMBEDDING_INDEX`'s foreign TTL is stripped — the same seam, opposite outcomes, driven by the
-  descriptor
+- **GIVEN** the seam acquiring `EMBEDDING_INDEX` with a foreign `MaxAge`
+- **WHEN** acquisition reconciles its no-lifecycle-retention descriptor
+- **THEN** the foreign TTL is stripped without changing unrelated stream configuration
 
 #### Scenario: an unknown retention Kind fails closed
 

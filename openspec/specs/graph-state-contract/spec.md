@@ -15,8 +15,8 @@ ingest-ceiling regression from three such watchers on one connection.
 **Poison response is scoped by reader class, not globally.** The authoritative read surface serves
 ENTITY_STATES values per request, and every response is enforced by the canonical decode of the
 bytes it returns — so correctness never depended on a global latch. It refuses exactly the poisoned
-entities, keeps serving every unaffected one, and recovers without a process restart. A projection
-owner serves a derived view it cannot re-validate per request, so it latches the whole view sticky
+entities, keeps serving every unaffected one, and recovers without a process restart. A derived-view
+component serves a projection it cannot re-validate per request, so it latches the whole view sticky
 on observed poison and recovers only by operator reset and restart. The typed
 `graph_state_reset_required` code and its bounded reasons are identical across both classes: the
 scope of the refusal differs, the vocabulary does not.
@@ -36,7 +36,7 @@ Every ENTITY_STATES reader MUST apply the poison response of its class. The **au
 read surface** — graph-ingest's query lanes, which serve ENTITY_STATES values directly
 per-request — MUST scope its poison response to exactly the poisoned entities: every unaffected
 entity keeps serving, each request enforced by the canonical decode of the bytes it returns,
-and repair recovers the surface without a process restart. A **projection owner** — a component
+and repair recovers the surface without a process restart. A **derived-view component** — a component
 serving a derived view built from watched or replayed entity state, including a
 watch-maintained derived-view reader whose response cache depends on its own watcher — MUST
 enter sticky whole-view reset-required state on observed poison, MUST NOT serve its derived
@@ -51,9 +51,9 @@ view, and recovers only by operator reset and process restart. The typed
 - **AND** a read of the poisoned entity returns `graph_state_reset_required` with its bounded
   reason
 
-#### Scenario: projection owners keep the sticky whole-view response
+#### Scenario: derived-view components keep the sticky whole-view response
 
-- **GIVEN** a projection owner observes the same typed graph-state poison in its watched or
+- **GIVEN** a derived-view component observes the same typed graph-state poison in its watched or
   replayed input
 - **WHEN** it evaluates readiness
 - **THEN** it enters sticky reset-required state and serves no derived view until operator
@@ -179,4 +179,3 @@ runtime variable substitution. Domain application KV buckets remain valid `updat
 - **WHEN** the result is a framework-owned graph bucket
 - **THEN** the action fails before any KV write
 - **AND** the caller is directed to the graph mutation API
-

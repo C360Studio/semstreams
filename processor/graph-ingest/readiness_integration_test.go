@@ -245,11 +245,7 @@ func TestIntegration_ReadinessEnvelope_NoStreamingPortIsHonestlyCaughtUp(t *test
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
 
 	cfg := DefaultConfig()
-	cfg.Ports.Inputs = []component.PortDefinition{{
-		Name:    "graph_mutations",
-		Type:    "nats",
-		Subject: "graph.mutation.>",
-	}}
+	cfg.Ports.Inputs = cfg.Ports.Inputs[1:]
 	configJSON, err := json.Marshal(cfg)
 	require.NoError(t, err)
 

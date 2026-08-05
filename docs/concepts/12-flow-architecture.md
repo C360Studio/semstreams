@@ -41,10 +41,10 @@ SemStreams persists state in two NATS JetStream KV buckets:
 
 The config bucket stores the runtime configuration that the ComponentManager watches and reacts to. The flows bucket stores visual flow definitions that the UI displays and modifies.
 
-Runtime configuration can change operational behavior, but governed projection ownership is data-plane authority rather
-than ordinary component config. Changes to entity patterns, predicate ownership, write modes, producer identity, or
-foreign-edge behavior should follow the contract-migration model in
-[Governed Semantic State](28-governed-semantic-state.md).
+Runtime configuration can change operational behavior. Graph writers declare copied local projection contracts with
+entity patterns plus reconcile or append groups; those contracts validate component intent and do not grant global
+predicate ownership. Wire changes follow the typed mutation-port contract in
+[Graph Mutation Contracts](28-governed-semantic-state.md).
 
 ## Static Config → Flow Bridge
 

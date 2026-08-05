@@ -85,7 +85,7 @@ stateDiagram-v2
     proposed --> active: LessonCurator.Promote (evidence-existence resolved)
     active --> retired: LessonCurator.Retire
     active --> superseded: LessonCurator.Supersede
-    proposed --> retired: replace_owned rule (e.g. birth-time suppression)
+    proposed --> retired: reconcile_predicates rule (e.g. birth-time suppression)
 ```
 
 **Birth.** `emit_lesson` (`processor/agentic-tools/emit_lesson.go`) is the ops agent's
@@ -106,10 +106,9 @@ evidence. Re-emitting an identical lesson always derives the same entity ID, so 
 naturally idempotent — no separate dedup pass required.
 
 **Promotion.** `LessonCurator.Promote` (`processor/agentic-tools/lesson_promotion.go`) is the
-validated path: it resolves that *every* cited evidence entity actually exists in the graph (a
-bare referential-integrity stub does not count) and refuses the promotion — leaving the lesson
-`proposed` — if any citation is missing. Promotion, retirement, and supersession all ride the
-canonical single-valued **replace** lane (`update_with_triples` / `graph.MergeTriples`), never an
+validated path: it resolves that *every* cited evidence entity actually exists in the graph and
+refuses the promotion — leaving the lesson `proposed` — if any citation is missing. Promotion,
+retirement, and supersession all ride the canonical single-valued **reconcile** operation, never an
 append, so a lifecycle transition can never accumulate stale status values. Retired and
 superseded lessons stay durable in the graph for audit — they leave future briefs, never the
 graph.
@@ -302,23 +301,21 @@ Promotion `proposed → active` is **operator/product-invoked**, not an agent to
 (ADR-080 makes review the default gate; there is no `promote_lesson` tool). The
 validated path is `LessonCurator.Promote`, which resolves that **every** cited
 evidence entity exists in the graph before flipping the status via the
-single-valued replace lane (`graph.mutation.entity.update_with_triples`):
+single-valued reconcile operation (`graph.mutation.entity.reconcile`):
 
 ```go
-// mutations is the application-bound *projection.MutationClient. The
-// composition root bound it once, before starting lesson consumers.
-var lessonReplacer projection.OwnedReplacer = mutations
+// mutations is the application-configured *projection.MutationClient.
+var lessonReconciler projection.PredicateReconciler = mutations
 var lessonReader projection.AuthoritativeReader = mutations
 
-curator := agentictools.NewLessonCurator(lessonReplacer, lessonReader, logger)
+curator := agentictools.NewLessonCurator(lessonReconciler, lessonReader, logger)
 if err := curator.Promote(ctx, lessonEntityID); err != nil {
     // refused: a cited evidence entity is absent — the lesson stays proposed
 }
 ```
 
-Consumer code must not call `BindMutationClient`. Binding, ownership bootstrap,
-heartbeat startup, and overlap checks are application boot responsibilities;
-the curator receives only the already-bound narrow capabilities it needs.
+The composition root constructs the client from copied local projection contracts.
+The curator receives only the narrow reconcile and exact-read capabilities it needs.
 
 If any citation is missing, `Promote` **refuses** and the lesson stays
 `proposed`. `Retire` writes `retired` plus `retired-at`, while `Supersede` writes
@@ -326,8 +323,8 @@ If any citation is missing, `Promote` **refuses** and the lesson stays
 evidence check. Re-run the step-3 query and the status now reads `active`.
 
 > **Honest gap — config-only promotion is not viable for the validated path.**
-> A rule `replace_owned` action *can* mechanically flip `agent.lesson.status` to
-> `active` (status is in the lesson lifecycle owned group — see
+> A rule `reconcile_predicates` action *can* mechanically flip `agent.lesson.status` to
+> `active` (status is in the lesson lifecycle reconcile group — see
 > [`configs/rules/lessons/README.md`](../../configs/rules/lessons/README.md)),
 > but a rule condition can only match the lesson's **own** fields; it cannot
 > resolve whether a *cited evidence entity* exists. So a bare-rule promotion is

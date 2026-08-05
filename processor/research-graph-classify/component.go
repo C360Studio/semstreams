@@ -459,11 +459,14 @@ func (c *Component) InputPorts() []component.Port {
 	return ports
 }
 
-// OutputPorts implements Discoverable. nl_classify has no NATS-
-// publishing output port: its emits are KV writes to AGENT_LOOPS.
-// The empty slice surfaces honestly in flow-discovery so operators
-// don't expect a NATS subject they'll never see.
-func (c *Component) OutputPorts() []component.Port { return []component.Port{} }
+// OutputPorts implements Discoverable.
+func (c *Component) OutputPorts() []component.Port {
+	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
+	for _, definition := range c.config.Ports.Outputs {
+		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionOutput))
+	}
+	return ports
+}
 
 // ConfigSchema implements Discoverable.
 func (c *Component) ConfigSchema() component.ConfigSchema { return configSchema }

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/require"
@@ -26,21 +25,21 @@ func TestDeriveEffectiveProjectionContractsScansEveryActionCollectionDeterminist
 			Entity:  EntityConfig{Pattern: "acme.ops.test.system.record.*"},
 			OnEnter: []Action{
 				{
-					Type: ActionTypeReplaceOwned, ProjectionContract: "zeta",
+					Type: ActionTypeReconcilePredicates, ProjectionContract: "zeta",
 					ProjectionGroup: "state", Predicate: "test.derive.gamma",
 				},
 				{Type: ActionTypeAddTriple, Predicate: "test.derive.alpha"},
 			},
 			OnExit: []Action{{
-				Type: ActionTypeReplaceOwned, ProjectionContract: "alpha",
+				Type: ActionTypeReconcilePredicates, ProjectionContract: "alpha",
 				ProjectionGroup: "status", Predicate: "test.derive.beta",
 			}},
 			WhileTrue: []Action{{
-				Type: ActionTypeReplaceOwned, ProjectionContract: "alpha",
+				Type: ActionTypeReconcilePredicates, ProjectionContract: "alpha",
 				ProjectionGroup: "status", Predicate: "test.derive.alpha",
 			}},
 			OnRecovery: []Action{{
-				Type: ActionTypeReplaceOwned, ProjectionContract: "alpha",
+				Type: ActionTypeReconcilePredicates, ProjectionContract: "alpha",
 				ProjectionGroup: "status", Predicate: "test.derive.delta",
 			}},
 		},
@@ -49,7 +48,7 @@ func TestDeriveEffectiveProjectionContractsScansEveryActionCollectionDeterminist
 			Type:    CronRuleType,
 			Enabled: true,
 			Actions: []Action{{
-				Type:               ActionTypeReplaceOwned,
+				Type:               ActionTypeReconcilePredicates,
 				ProjectionContract: "cron",
 				ProjectionGroup:    "status",
 				Predicate:          "test.derive.epsilon",
@@ -65,7 +64,7 @@ func TestDeriveEffectiveProjectionContractsScansEveryActionCollectionDeterminist
 			Name:          "alpha",
 			EntityPattern: "acme.ops.test.system.record.*",
 			Groups: []projection.PredicateGroup{{
-				Name: "status", Mode: ownership.ModeReplaceOwned,
+				Name: "status", Mode: projection.ModeReconcile,
 				Predicates: []string{
 					"test.derive.alpha",
 					"test.derive.beta",
@@ -77,7 +76,7 @@ func TestDeriveEffectiveProjectionContractsScansEveryActionCollectionDeterminist
 			Name:          "cron",
 			EntityPattern: "acme.ops.test.system.record.literal",
 			Groups: []projection.PredicateGroup{{
-				Name: "status", Mode: ownership.ModeReplaceOwned,
+				Name: "status", Mode: projection.ModeReconcile,
 				Predicates: []string{"test.derive.epsilon"},
 			}},
 		},
@@ -85,7 +84,7 @@ func TestDeriveEffectiveProjectionContractsScansEveryActionCollectionDeterminist
 			Name:          "zeta",
 			EntityPattern: "acme.ops.test.system.record.*",
 			Groups: []projection.PredicateGroup{{
-				Name: "state", Mode: ownership.ModeReplaceOwned,
+				Name: "state", Mode: projection.ModeReconcile,
 				Predicates: []string{"test.derive.gamma"},
 			}},
 		},
@@ -133,7 +132,7 @@ func TestDeriveEffectiveProjectionContractsInfersOnlyStaticSubjects(t *testing.T
 				definition.Entity = EntityConfig{}
 			}
 			definition.OnEnter = []Action{{
-				Type:               ActionTypeReplaceOwned,
+				Type:               ActionTypeReconcilePredicates,
 				ProjectionContract: "subject-contract",
 				ProjectionGroup:    "state",
 				Predicate:          "test.derive.subject",
@@ -155,7 +154,7 @@ func TestDeriveEffectiveProjectionContractsNeverWidensConflictingPatterns(t *tes
 	t.Parallel()
 	vocabulary.Register("test.derive.conflict")
 	action := Action{
-		Type:               ActionTypeReplaceOwned,
+		Type:               ActionTypeReconcilePredicates,
 		ProjectionContract: "conflict",
 		ProjectionGroup:    "state",
 		Predicate:          "test.derive.conflict",
@@ -176,7 +175,7 @@ func TestDeriveEffectiveProjectionContractsNeverWidensConflictingPatterns(t *tes
 	declared := []projection.Contract{{
 		Name: "conflict", EntityPattern: "acme.ops.test.*.record.*",
 		Groups: []projection.PredicateGroup{{
-			Name: "state", Mode: ownership.ModeReplaceOwned,
+			Name: "state", Mode: projection.ModeReconcile,
 			Predicates: []string{"test.derive.conflict"},
 		}},
 	}}
@@ -195,7 +194,7 @@ func TestDeriveEffectiveProjectionContractsValidatesDeclaredStructuralSuperset(t
 		ID:     "override",
 		Entity: EntityConfig{Pattern: "acme.ops.test.system.record.*"},
 		OnEnter: []Action{{
-			Type:               ActionTypeReplaceOwned,
+			Type:               ActionTypeReconcilePredicates,
 			ProjectionContract: "override",
 			ProjectionGroup:    "state",
 			Predicate:          "test.derive.used",
@@ -208,7 +207,7 @@ func TestDeriveEffectiveProjectionContractsValidatesDeclaredStructuralSuperset(t
 		BirthPredicates: []string{"test.derive.birth"},
 		IndexingProfile: "control",
 		Groups: []projection.PredicateGroup{{
-			Name: "state", Mode: ownership.ModeReplaceOwned,
+			Name: "state", Mode: projection.ModeReconcile,
 			Predicates: []string{"test.derive.reserved", "test.derive.used"},
 		}},
 	}}
@@ -235,7 +234,7 @@ func TestDeriveEffectiveProjectionContractsValidatesDeclaredStructuralSuperset(t
 		},
 		{
 			name: "different mode", mutate: func(in []projection.Contract) []projection.Contract {
-				in[0].Groups[0].Mode = ownership.ModeAppendEvidence
+				in[0].Groups[0].Mode = projection.ModeAppend
 				return in
 			}, wantErr: "uses mode",
 		},
@@ -270,7 +269,7 @@ func TestDeriveEffectiveProjectionContractsDynamicSubjectNeedsCoveringOverride(t
 	definition := Definition{
 		ID: "dynamic",
 		OnEnter: []Action{{
-			Type:               ActionTypeReplaceOwned,
+			Type:               ActionTypeReconcilePredicates,
 			ProjectionContract: "dynamic",
 			ProjectionGroup:    "state",
 			Predicate:          "test.derive.dynamic",
@@ -280,7 +279,7 @@ func TestDeriveEffectiveProjectionContractsDynamicSubjectNeedsCoveringOverride(t
 	declared := []projection.Contract{{
 		Name: "dynamic", EntityPattern: "acme.ops.test.system.record.*",
 		Groups: []projection.PredicateGroup{{
-			Name: "state", Mode: ownership.ModeReplaceOwned,
+			Name: "state", Mode: projection.ModeReconcile,
 			Predicates: []string{"test.derive.dynamic"},
 		}},
 	}}
@@ -332,7 +331,7 @@ func TestProcessorProjectionBindingsExposeEffectiveImmutableSnapshotOnlyAfterPre
 	config.InlineRules = []Definition{{
 		ID: "snapshot", Entity: EntityConfig{Pattern: "acme.ops.test.system.record.*"},
 		OnEnter: []Action{{
-			Type:               ActionTypeReplaceOwned,
+			Type:               ActionTypeReconcilePredicates,
 			ProjectionContract: "snapshot",
 			ProjectionGroup:    "state",
 			Predicate:          "test.derive.snapshot",
@@ -363,7 +362,7 @@ func TestHotReloadUsesFrozenDerivedOrDeclaredEnvelopeWithoutRebinding(t *testing
 		Type:   "test_rule",
 		Entity: EntityConfig{Pattern: "acme.ops.test.system.record.*"},
 		OnEnter: []Action{{
-			Type:               ActionTypeReplaceOwned,
+			Type:               ActionTypeReconcilePredicates,
 			ProjectionContract: "hot-reload",
 			ProjectionGroup:    "state",
 			Predicate:          "test.derive.boot",
@@ -372,7 +371,7 @@ func TestHotReloadUsesFrozenDerivedOrDeclaredEnvelopeWithoutRebinding(t *testing
 	hotRule := map[string]any{
 		"type": "test_rule",
 		"on_enter": []any{map[string]any{
-			"type": ActionTypeReplaceOwned, "projection_contract": "hot-reload",
+			"type": ActionTypeReconcilePredicates, "projection_contract": "hot-reload",
 			"projection_group": "state", "predicate": "test.derive.reserved",
 		}},
 	}
@@ -387,14 +386,14 @@ func TestHotReloadUsesFrozenDerivedOrDeclaredEnvelopeWithoutRebinding(t *testing
 	require.ErrorContains(t, err, "outside projection contract")
 	_, minimalAfter := minimal.ProjectionBindings()
 	require.Equal(t, minimalBefore, minimalAfter)
-	require.False(t, minimal.replacerConfigured)
+	require.False(t, minimal.reconcilerConfigured)
 
 	declaredConfig := mustTestConfig(t, "declared-hot-reload")
 	declaredConfig.InlineRules = []Definition{initial}
 	declaredConfig.ProjectionContracts = []projection.Contract{{
 		Name: "hot-reload", EntityPattern: "acme.*.test.system.record.*",
 		Groups: []projection.PredicateGroup{{
-			Name: "state", Mode: ownership.ModeReplaceOwned,
+			Name: "state", Mode: projection.ModeReconcile,
 			Predicates: []string{"test.derive.boot", "test.derive.reserved"},
 		}},
 	}}
@@ -407,7 +406,7 @@ func TestHotReloadUsesFrozenDerivedOrDeclaredEnvelopeWithoutRebinding(t *testing
 	}))
 	_, declaredAfter := declared.ProjectionBindings()
 	require.Equal(t, declaredBefore, declaredAfter)
-	require.False(t, declared.replacerConfigured)
+	require.False(t, declared.reconcilerConfigured)
 }
 
 func TestOmittedProjectionContractsRemainAuthoredOmissionAfterPreflight(t *testing.T) {
@@ -417,7 +416,7 @@ func TestOmittedProjectionContractsRemainAuthoredOmissionAfterPreflight(t *testi
 	config.InlineRules = []Definition{{
 		ID: "roundtrip", Entity: EntityConfig{Pattern: "acme.ops.test.system.record.*"},
 		OnEnter: []Action{{
-			Type:               ActionTypeReplaceOwned,
+			Type:               ActionTypeReconcilePredicates,
 			ProjectionContract: "roundtrip",
 			ProjectionGroup:    "state",
 			Predicate:          "test.derive.roundtrip",
@@ -466,7 +465,7 @@ func TestDerivationDiagnosticsAreStable(t *testing.T) {
 	t.Parallel()
 	vocabulary.Register("test.derive.diagnostic")
 	action := Action{
-		Type:               ActionTypeReplaceOwned,
+		Type:               ActionTypeReconcilePredicates,
 		ProjectionContract: "diagnostic",
 		ProjectionGroup:    "state",
 		Predicate:          "test.derive.diagnostic",

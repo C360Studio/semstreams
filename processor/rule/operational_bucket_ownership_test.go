@@ -51,59 +51,6 @@ func TestUpdateKV_RejectsOperationalOwnedBuckets_AtLoad(t *testing.T) {
 	}
 }
 
-// TestUpdateKV_RejectsCatalogDerivedBuckets_BothGuards is the
-// derivation-not-snapshot proof at the production guards: OWNER_CLAIMS and
-// OWNER_PRESENCE were NEVER members of the retired hand-written owned list —
-// they are owned ONLY because the catalog declares them write-owner-only and
-// both guards consume the DERIVED view. If either guard were a snapshot of the
-// old list, these writes would pass.
-func TestUpdateKV_RejectsCatalogDerivedBuckets_BothGuards(t *testing.T) {
-	t.Parallel()
-	for _, bucket := range []string{"OWNER_CLAIMS", "OWNER_PRESENCE"} {
-		bucket := bucket
-		t.Run(bucket, func(t *testing.T) {
-			t.Parallel()
-			// Load-time guard.
-			def := Definition{
-				ID:   "derived-owned-load-guard",
-				Type: "expression",
-				Actions: []Action{
-					{
-						Type:    ActionTypeUpdateKV,
-						Bucket:  bucket,
-						Key:     "some-key",
-						Payload: map[string]any{"forged": true},
-					},
-				},
-			}
-			err := ValidateDefinition(def)
-			if err == nil {
-				t.Fatalf("ValidateDefinition must reject update_kv into %s (derived owned set), got nil", bucket)
-			}
-			if !strings.Contains(err.Error(), "framework-owned") {
-				t.Errorf("error must name the framework-owned bucket, got: %v", err)
-			}
-
-			// Runtime guard, via substitution.
-			executor := &ActionExecutor{kvWriter: newMockKVWriter()}
-			action := Action{
-				Type:    ActionTypeUpdateKV,
-				Bucket:  "$message.bucket",
-				Key:     "some-key",
-				Payload: map[string]any{"forged": true},
-			}
-			ec := &ExecutionContext{MessageData: map[string]any{"bucket": bucket}}
-			err = executor.executeUpdateKV(context.Background(), action, ec)
-			if err == nil {
-				t.Fatalf("executeUpdateKV must reject a write into %s (derived owned set), got nil", bucket)
-			}
-			if !strings.Contains(err.Error(), "framework-owned") {
-				t.Errorf("runtime error must name the framework-owned bucket, got: %v", err)
-			}
-		})
-	}
-}
-
 // TestUpdateKV_PermitsWriteOpenComponentStatus: COMPONENT_STATUS is a catalog
 // member deliberately declared write-OPEN (#717: many cross-layer writers,
 // zero production readers), so it must NOT appear in the derived owned set —

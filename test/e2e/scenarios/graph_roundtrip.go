@@ -12,23 +12,34 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
 const (
-	graphRoundTripContract = "e2e.graph-roundtrip"
-	graphRoundTripGroup    = "title"
-	graphRoundTripSource   = "e2e-graph-roundtrip"
-	graphRoundTripTimeout  = 10 * time.Second
-
-	mutationCreateSubject  = "graph.mutation.entity.create_with_triples"
-	mutationReplaceSubject = "graph.mutation.entity.update_with_triples"
+	graphRoundTripContract  = "e2e.graph-roundtrip"
+	graphRoundTripGroup     = "title"
+	graphRoundTripSource    = "e2e-graph-roundtrip"
+	graphRoundTripTimeout   = 10 * time.Second
+	graphQLExactEntityQuery = `query($id: String!) { entity(id: $id) { entity { id triples { subject predicate object } } kvRevision } }`
 )
+
+var (
+	mutationCreateSubject    = mustGraphMutationSubject(graphmutation.CreateEntity)
+	mutationReconcileSubject = mustGraphMutationSubject(graphmutation.ReconcilePredicates)
+)
+
+func mustGraphMutationSubject(operation graphmutation.Operation) string {
+	subject, err := graphmutation.ResolveSubject(graphmutation.SubjectFamily, operation)
+	if err != nil {
+		panic(err)
+	}
+	return subject
+}
 
 // GraphRoundTripProbe exercises the public graph write and read seams against a
 // running SemStreams stack. Message Logger supplies correlated transport and KV
@@ -57,7 +68,7 @@ func NewGraphRoundTripProbe(
 	}
 }
 
-// Run creates one uniquely correlated entity, replaces its owned title, and
+// Run creates one uniquely correlated entity, reconciles its selected title, and
 // proves authoritative state plus both public GraphQL views converge.
 func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	if err := p.validateDependencies(); err != nil {
@@ -85,14 +96,13 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 			fmt.Errorf("message logger is required for graph-roundtrip: %w", err))
 	}
 
-	mutationClient, stopHeartbeat, err := p.bindMutationClient(runCtx, entityID, rootTrace.TraceID)
+	mutationClient, err := p.buildMutationClient(entityID)
 	if err != nil {
 		return p.withDiagnostics(entityID, rootTrace.TraceID, fmt.Errorf("bind projection client: %w", err))
 	}
-	defer stopHeartbeat()
 
 	createdAt := time.Now().UTC()
-	createReceipt, err := mutationClient.CreateWithTriples(createCtx, projection.CreateMutation{
+	createReceipt, err := mutationClient.Create(createCtx, projection.CreateMutation{
 		Contract: graphRoundTripContract,
 		Entity:   newGraphRoundTripEntity(entityID, createdAt),
 		Triples: []message.Triple{{
@@ -114,7 +124,7 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	}
 
 	replacedAt := time.Now().UTC()
-	replaceReceipt, err := mutationClient.ReplaceOwned(replaceCtx, projection.ReplaceOwnedMutation{
+	replaceReceipt, err := mutationClient.Reconcile(replaceCtx, projection.ReconcileMutation{
 		Contract: graphRoundTripContract,
 		Group:    graphRoundTripGroup,
 		EntityID: entityID,
@@ -129,7 +139,7 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 		},
 	})
 	if err != nil {
-		return p.withDiagnostics(entityID, rootTrace.TraceID, fmt.Errorf("replace owned title: %w", err))
+		return p.withDiagnostics(entityID, rootTrace.TraceID, fmt.Errorf("reconcile selected title: %w", err))
 	}
 	if replaceReceipt.Commit != projection.CommitVerified {
 		return p.withDiagnostics(entityID, rootTrace.TraceID,
@@ -154,7 +164,7 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 		mutationCreateSubject: {
 			EntityID: entityID, RequestID: createRequestID, TraceID: rootTrace.TraceID, SpanID: createTrace.SpanID,
 		},
-		mutationReplaceSubject: {
+		mutationReconcileSubject: {
 			EntityID: entityID, RequestID: replaceRequestID, TraceID: rootTrace.TraceID, SpanID: replaceTrace.SpanID,
 		},
 	})
@@ -217,45 +227,24 @@ func (p *GraphRoundTripProbe) validateDependencies() error {
 	}
 }
 
-func (p *GraphRoundTripProbe) bindMutationClient(
-	ctx context.Context,
-	entityID string,
-	traceID string,
-) (*projection.MutationClient, context.CancelFunc, error) {
-	registry, err := ownership.EnsureBuckets(ctx, p.nats.Client(), nil, nil)
-	if err != nil {
-		return nil, func() {}, err
-	}
-	heartbeater := registry.NewHeartbeater(ownership.HeartbeatInterval)
-	heartbeatCtx, stopHeartbeat := context.WithCancel(ctx)
-	go heartbeater.Run(heartbeatCtx)
-
+func (p *GraphRoundTripProbe) buildMutationClient(entityID string) (*projection.MutationClient, error) {
 	contract := projection.Contract{
 		Name:            graphRoundTripContract,
 		MessageType:     "test.fixture.v1",
 		EntityPattern:   entityID,
 		IndexingProfile: "control",
 		Groups: []projection.PredicateGroup{{
-			Name: graphRoundTripGroup, Mode: ownership.ModeReplaceOwned,
+			Name: graphRoundTripGroup, Mode: projection.ModeReconcile,
 			Predicates: []string{vocabulary.DCTermsTitle},
 		}},
 	}
-	retry := natsclient.DefaultRetryConfig()
-	retry.MaxRetries = 1
-	bound, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
-		NATS:        p.nats.Client(),
-		Registry:    registry,
-		Heartbeater: heartbeater,
-		Owner:       "e2e-graph-roundtrip-" + traceID,
-		Contracts:   []projection.Contract{contract},
-		Timeout:     3 * time.Second,
-		Retry:       retry,
+	client, err := projection.NewMutationClient(projection.MutationClientConfig{
+		NATS: p.nats.Client(), Contracts: []projection.Contract{contract}, Timeout: 3 * time.Second,
 	})
 	if err != nil {
-		stopHeartbeat()
-		return nil, func() {}, err
+		return nil, err
 	}
-	return bound, stopHeartbeat, nil
+	return client, nil
 }
 
 func (p *GraphRoundTripProbe) waitForGraphQL(ctx context.Context, entityID, before, after string) error {
@@ -290,12 +279,12 @@ func (p *GraphRoundTripProbe) waitForGraphQL(ctx context.Context, entityID, befo
 func (p *GraphRoundTripProbe) queryGraphQLEntity(ctx context.Context, entityID string) (*graph.EntityState, error) {
 	var response struct {
 		Data struct {
-			Entity *graph.EntityState `json:"entity"`
+			Entity *graph.ExactEntity `json:"entity"`
 		} `json:"data"`
 		Errors []graphQLError `json:"errors"`
 	}
 	err := p.postGraphQL(ctx, map[string]any{
-		"query":     `query($id: String!) { entity(id: $id) { id triples { subject predicate object } } }`,
+		"query":     graphQLExactEntityQuery,
 		"variables": map[string]any{"id": entityID},
 	}, &response)
 	if err != nil {
@@ -305,9 +294,15 @@ func (p *GraphRoundTripProbe) queryGraphQLEntity(ctx context.Context, entityID s
 		return nil, err
 	}
 	if response.Data.Entity == nil {
-		return nil, errors.New("GraphQL entity response is null")
+		return nil, errors.New("GraphQL exact entity response is null")
 	}
-	return response.Data.Entity, nil
+	if response.Data.Entity.Entity == nil {
+		return nil, errors.New("GraphQL exact entity response has no entity")
+	}
+	if response.Data.Entity.KVRevision == 0 {
+		return nil, errors.New("GraphQL exact entity response has zero KV revision")
+	}
+	return response.Data.Entity.Entity, nil
 }
 
 func (p *GraphRoundTripProbe) queryGraphQLPredicate(ctx context.Context, value string) ([]string, error) {
@@ -465,7 +460,7 @@ func validateMutationTraceEntry(
 func decodeMutationTracePayload(entry client.MessageEntry) (string, string, string, error) {
 	switch entry.Subject {
 	case mutationCreateSubject:
-		var request graph.CreateEntityWithTriplesRequest
+		var request graph.CreateEntityRequest
 		if err := json.Unmarshal(entry.RawData, &request); err != nil {
 			return "", "", "", fmt.Errorf("decode create raw_data: %w", err)
 		}
@@ -473,15 +468,12 @@ func decodeMutationTracePayload(entry client.MessageEntry) (string, string, stri
 			return "", "", "", errors.New("create raw_data entity is nil")
 		}
 		return request.Entity.ID, request.RequestID, request.TraceID, nil
-	case mutationReplaceSubject:
-		var request graph.UpdateEntityWithTriplesRequest
+	case mutationReconcileSubject:
+		var request graph.ReconcilePredicatesRequest
 		if err := json.Unmarshal(entry.RawData, &request); err != nil {
 			return "", "", "", fmt.Errorf("decode replace raw_data: %w", err)
 		}
-		if request.Entity == nil {
-			return "", "", "", errors.New("replace raw_data entity is nil")
-		}
-		return request.Entity.ID, request.RequestID, request.TraceID, nil
+		return request.EntityID, request.RequestID, request.TraceID, nil
 	default:
 		return "", "", "", fmt.Errorf("unexpected mutation subject %q", entry.Subject)
 	}

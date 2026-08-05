@@ -416,7 +416,8 @@ func TestLifecycleSharedGuardNormalShutdownClosesWatchesWithoutPoison(t *testing
 	}
 	done := make(chan struct{})
 	go func() {
-		mgr.WaitOwnership()
+		mgr.graphStateGuardCancel()
+		mgr.graphStateGuardWG.Wait()
 		close(done)
 	}()
 	select {

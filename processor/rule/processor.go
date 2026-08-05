@@ -234,12 +234,12 @@ type Processor struct {
 	// instance (processor=nil) for agent CRUD tools. Both share the same KV bucket.
 	kvConfigManager *ConfigManager
 
-	projectionTargets  *projectionTargetIndex
-	effectiveContracts []projection.Contract
-	initialRules       []Definition
-	initialRulesReady  bool
-	ownedReplacer      projection.OwnedReplacer
-	replacerConfigured bool
+	projectionTargets    *projectionTargetIndex
+	effectiveContracts   []projection.Contract
+	initialRules         []Definition
+	initialRulesReady    bool
+	reconciler           projection.PredicateReconciler
+	reconcilerConfigured bool
 }
 
 // NewProcessor creates a new rule processor
@@ -425,9 +425,9 @@ func (rp *Processor) PreflightProjectionMutations() error {
 	return rp.prepareInitialRules()
 }
 
-// SetOwnedReplacer injects the pack's one public mutation capability. It is a
+// SetPredicateReconciler injects the pack's reconcile capability. It is a
 // one-time composition operation and must follow successful preflight.
-func (rp *Processor) SetOwnedReplacer(replacer projection.OwnedReplacer) error {
+func (rp *Processor) SetPredicateReconciler(reconciler projection.PredicateReconciler) error {
 	rp.mu.Lock()
 	defer rp.mu.Unlock()
 	if !rp.initialRulesReady {
@@ -436,14 +436,14 @@ func (rp *Processor) SetOwnedReplacer(replacer projection.OwnedReplacer) error {
 	if len(rp.effectiveContracts) == 0 {
 		return fmt.Errorf("rule pack %q has no projection contracts", rp.config.PackID)
 	}
-	if replacer == nil {
-		return fmt.Errorf("rule pack %q owned replacer is nil", rp.config.PackID)
+	if reconciler == nil {
+		return fmt.Errorf("rule pack %q predicate reconciler is nil", rp.config.PackID)
 	}
-	if rp.replacerConfigured {
-		return fmt.Errorf("rule pack %q owned replacer is already configured", rp.config.PackID)
+	if rp.reconcilerConfigured {
+		return fmt.Errorf("rule pack %q predicate reconciler is already configured", rp.config.PackID)
 	}
-	rp.ownedReplacer = replacer
-	rp.replacerConfigured = true
+	rp.reconciler = reconciler
+	rp.reconcilerConfigured = true
 	return nil
 }
 
@@ -737,9 +737,9 @@ func (rp *Processor) initializeStateTracker(ctx context.Context) error {
 	// Wire the immutable replacement envelope and the one public mutation
 	// capability before any evaluator or scheduler can dispatch an action.
 	if setter, ok := actionExecutor.(interface {
-		SetOwnedReplacer(projection.OwnedReplacer)
+		SetPredicateReconciler(projection.PredicateReconciler)
 	}); ok {
-		setter.SetOwnedReplacer(rp.ownedReplacer)
+		setter.SetPredicateReconciler(rp.reconciler)
 	}
 	if executor, ok := actionExecutor.(*ActionExecutor); ok {
 		executor.setProjectionTargets(rp.projectionTargets, rp)
@@ -875,7 +875,7 @@ func (rp *Processor) Start(ctx context.Context) error {
 	if err := rp.prepareInitialRules(); err != nil {
 		return errs.WrapInvalid(err, "RuleProcessor", "Start", "preflight mutation projection")
 	}
-	if len(rp.effectiveContracts) > 0 && !rp.replacerConfigured {
+	if len(rp.effectiveContracts) > 0 && !rp.reconcilerConfigured {
 		return errs.WrapInvalid(
 			fmt.Errorf("rule pack %q has projection contracts but no owned replacer", rp.config.PackID),
 			"RuleProcessor",
@@ -1367,38 +1367,38 @@ func (rp *Processor) DebugStatus() any {
 	}
 }
 
-func (rp *Processor) validateReplaceOwnedAction(ruleID string, a Action) error {
-	return validateReplaceOwnedAction(rp.projectionTargets, ruleID, a)
+func (rp *Processor) validateReconcileAction(ruleID string, a Action) error {
+	return validateReconcileAction(rp.projectionTargets, ruleID, a)
 }
 
-func validateReplaceOwnedAction(index *projectionTargetIndex, ruleID string, a Action) error {
-	if a.Type != ActionTypeReplaceOwned {
+func validateReconcileAction(index *projectionTargetIndex, ruleID string, a Action) error {
+	if a.Type != ActionTypeReconcilePredicates {
 		return nil
 	}
 	if _, err := index.resolve(a.ProjectionContract, a.ProjectionGroup, a.Predicate); err != nil {
 		return errs.WrapInvalid(
-			fmt.Errorf("rule %s replace_owned target: %w", ruleID, err),
+			fmt.Errorf("rule %s reconcile_predicates target: %w", ruleID, err),
 			"RuleProcessor",
-			"validateReplaceOwnedAction",
+			"validateReconcileAction",
 			"resolve projection target",
 		)
 	}
 	return nil
 }
 
-// validateRuleReplaceOwnedActions walks every action list on a Definition
+// validateRuleReconcileActions walks every action list on a Definition
 // (OnEnter, OnExit, WhileTrue, OnRecovery, Actions) and runs the ADR-056
-// Decision 3 envelope check on each replace_owned action. Called from the
+// target check on each reconcile_predicates action. Called from the
 // file-load path (loadRules) at PROCESSOR level — not in the stateless factory
 // — because the envelope is the PROCESSOR's ProjectionContracts, which the
 // factory does not see. A violation HARD-FAILS the load (returns the error,
 // aborting boot) rather than skipping the rule, so a broken owned-write claim
 // can never silently ship.
-func (rp *Processor) validateRuleReplaceOwnedActions(def Definition) error {
-	return validateRuleReplaceOwnedActions(rp.projectionTargets, def)
+func (rp *Processor) validateRuleReconcileActions(def Definition) error {
+	return validateRuleReconcileActions(rp.projectionTargets, def)
 }
 
-func validateRuleReplaceOwnedActions(index *projectionTargetIndex, def Definition) error {
+func validateRuleReconcileActions(index *projectionTargetIndex, def Definition) error {
 	for label, actions := range map[string][]Action{
 		"on_enter":    def.OnEnter,
 		"on_exit":     def.OnExit,
@@ -1407,8 +1407,8 @@ func validateRuleReplaceOwnedActions(index *projectionTargetIndex, def Definitio
 		"actions":     def.Actions,
 	} {
 		for i, a := range actions {
-			if err := validateReplaceOwnedAction(index, def.ID, a); err != nil {
-				return errs.Wrap(err, "RuleProcessor", "validateRuleReplaceOwnedActions",
+			if err := validateReconcileAction(index, def.ID, a); err != nil {
+				return errs.Wrap(err, "RuleProcessor", "validateRuleReconcileActions",
 					fmt.Sprintf("rule %s %s[%d]", def.ID, label, i))
 			}
 		}

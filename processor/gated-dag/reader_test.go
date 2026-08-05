@@ -6,7 +6,6 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/pkg/gateddag"
 	"github.com/stretchr/testify/require"
 )
 
@@ -72,49 +71,4 @@ func TestExtractGraph(t *testing.T) {
 		require.Empty(t, v.unitIDs)
 	})
 
-	t.Run("referential stubs excluded by envelope; real + upgraded units kept (gh#429)", func(t *testing.T) {
-		stubID := semantictest.EntityID(t, "test", "gateddag", "reader", "stub", "node", "x")
-		realID := semantictest.EntityID(t, "test", "gateddag", "reader", "unit", "node", "real-y")
-		upgradedID := semantictest.EntityID(t, "test", "gateddag", "reader", "unit", "node", "up-z")
-		stub := graph.EntityState{
-			ID:          stubID,
-			MessageType: graph.StubMessageType,
-			Triples:     []message.Triple{{Predicate: semantictest.Predicate(t, "core", "entity", "stub"), Object: true}},
-		}
-		realUnit := unit(realID, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: realID})
-		// Post-birth the stub TRIPLE persists but the ENVELOPE flips to a real
-		// type; such a unit MUST be kept — the filter is envelope-based, not
-		// triple-based, so a persisted stub marker does not exclude a real unit.
-		upgraded := graph.EntityState{
-			ID:          upgradedID,
-			MessageType: message.Type{Domain: "workflow", Category: "task-unit", Version: "v1"},
-			Triples: []message.Triple{
-				{Predicate: semantictest.Predicate(t, "core", "entity", "stub"), Object: true}, // persisted stub triple
-				{Predicate: semantictest.Predicate(t, "gateddag", "unit", "completed"), Object: upgradedID},
-			},
-		}
-		v := extractGraph([]graph.EntityState{stub, realUnit, upgraded}, cfg)
-		require.ElementsMatch(t, []string{realID, upgradedID}, v.unitIDs)
-		require.Equal(t, 1, v.stubsSkipped)
-		require.True(t, v.markers.Completed[upgradedID], "upgraded unit's markers still read despite the persisted stub triple")
-	})
-
-	t.Run("dependent on a stubbed prerequisite is held, not dispatched (gh#429)", func(t *testing.T) {
-		prereqID := semantictest.EntityID(t, "test", "gateddag", "reader", "stub", "node", "prereq")
-		dependentID := semantictest.EntityID(t, "test", "gateddag", "reader", "unit", "node", "dependent")
-		stub := graph.EntityState{
-			ID:          prereqID,
-			MessageType: graph.StubMessageType,
-			Triples:     []message.Triple{{Predicate: semantictest.Predicate(t, "core", "entity", "stub"), Object: true}},
-		}
-		dependent := unit(dependentID, message.Triple{Predicate: semantictest.Predicate(t, "gateddag", "unit", "depends-on"), Object: prereqID})
-		v := extractGraph([]graph.EntityState{stub, dependent}, cfg)
-		require.Equal(t, []string{dependentID}, v.unitIDs, "the stub prerequisite is filtered out of the unit set")
-		require.Equal(t, 1, v.stubsSkipped)
-		// Dependency-closure correctness: DeriveStatus keys on marker membership,
-		// so a dependent whose prerequisite is a filtered stub is still correctly
-		// held (the prerequisite is not Done) — NOT wrongly dispatched.
-		require.Empty(t, gateddag.SelectDispatchable(v.unitIDs, v.dependsOn, v.markers),
-			"dependent must be held while its prerequisite is an unborn stub")
-	})
 }

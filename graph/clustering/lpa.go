@@ -677,7 +677,7 @@ func DefaultInferenceConfig() InferenceConfig {
 //   - level: Hierarchical level to process (0 = most granular)
 //   - config: Inference configuration (min size, max pairs)
 //
-// Returns triples suitable for persistence via graph.mutation.triple.add.
+// Returns triples suitable for persistence via graph.mutation.triple.append.
 // The caller is responsible for persisting these triples.
 //
 // Confidence scoring:

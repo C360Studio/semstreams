@@ -4,49 +4,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 )
-
-func TestMutationProtocolResolvesOnlyAdmittedOperations(t *testing.T) {
-	want := map[graphmutation.Operation]string{
-		graphmutation.CreateEntity:        "graph.mutation.entity.create",
-		graphmutation.ReconcilePredicates: "graph.mutation.entity.reconcile",
-		graphmutation.AppendTriples:       "graph.mutation.triple.append",
-		graphmutation.DeleteEntity:        "graph.mutation.entity.delete",
-	}
-	for operation, subject := range want {
-		got, err := graphmutation.ResolveSubject(graphmutation.SubjectFamily, operation)
-		if err != nil {
-			t.Fatalf("ResolveMutationSubject(%q): %v", operation, err)
-		}
-		if got != subject {
-			t.Fatalf("ResolveMutationSubject(%q) = %q, want %q", operation, got, subject)
-		}
-	}
-
-	retired := []graphmutation.Operation{
-		"entity.create_with_triples",
-		"entity.update",
-		"entity.update_with_triples",
-		"triple.add",
-		"triple.add_batch",
-		"triple.remove",
-	}
-	for _, operation := range retired {
-		if subject, err := graphmutation.ResolveSubject(graphmutation.SubjectFamily, operation); err == nil {
-			t.Fatalf("retired operation %q resolved to %q", operation, subject)
-		}
-	}
-}
-
-func TestMutationProtocolRejectsNoncanonicalFamily(t *testing.T) {
-	for _, family := range []string{"", "graph.mutation.*", "custom.mutation.>"} {
-		if subject, err := graphmutation.ResolveSubject(family, graphmutation.CreateEntity); err == nil {
-			t.Fatalf("family %q resolved to %q", family, subject)
-		}
-	}
-}
 
 func TestFourMutationRequestShapesExcludeRetiredFields(t *testing.T) {
 	entity := &EntityState{ID: "acme.ops.robotics.gcs.drone.001"}
@@ -157,7 +116,7 @@ func TestMutationOutcomeVocabularyIsClosed(t *testing.T) {
 	for _, outcome := range []MutationOutcome{
 		MutationApplied, MutationUnchanged,
 		MutationEntityNotFound, MutationEntityAlreadyExists,
-		MutationRevisionMismatch, MutationInvalid,
+		MutationRevisionMismatch, MutationInvalid, MutationFailed,
 	} {
 		if !isServerMutationOutcome(outcome) {
 			t.Fatalf("declared outcome %q rejected", outcome)

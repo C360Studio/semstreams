@@ -191,8 +191,8 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 	// multiple scratchpad calls within one loop simply accumulate.
 	//
 	// Context is load-bearing, not decoration. It is one of the six fields in
-	// add-lane identity (subject, predicate, object, datatype, source,
-	// context), and the add lane suppresses any triple whose tuple is already
+	// append tuple identity (subject, predicate, object, datatype, source,
+	// context), and append suppresses any triple whose tuple is already
 	// stored. Before this stamp only ScratchID carried the per-call UUID, so
 	// two calls emitting the same text — or merely the same CHARACTER COUNT,
 	// which is far likelier — produced byte-identical ScratchText /
@@ -225,7 +225,7 @@ func (e *ScratchpadExecutor) scratchpad(ctx context.Context, call agentic.ToolCa
 		{Subject: loopEntityID, Predicate: agvocab.ScratchCreatedAt, Object: createdAt, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
 		{Subject: loopEntityID, Predicate: agvocab.ScratchChars, Object: chars, Source: scratchpadToolSource, Context: scratchID, Timestamp: now, Confidence: 1.0},
 	}
-	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+	if err := e.publisher.Append(ctx, triples); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("publish scratchpad triples: %v", err),

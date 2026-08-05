@@ -3,12 +3,12 @@
 Reference configuration for the `agent.lesson.*` gated lifecycle (ADR-080,
 change `agent-memory-lesson-substrate`). A lesson is born `proposed`; only
 `active` lessons are injected into future loop briefs. Two lanes move a lesson
-between states, both riding the canonical single-valued **replace** write
-(`graph.mutation.entity.update_with_triples`, ADR-056) — never an append.
+between states, both riding the canonical single-valued **reconcile** operation
+(`graph.mutation.entity.reconcile`, ADR-091) — never an append.
 
-## The owned projection group
+## The local projection group
 
-`lesson-lifecycle-rulepack.json` declares the lesson lifecycle **owned group**
+`lesson-lifecycle-rulepack.json` declares the lesson lifecycle **reconcile group**
 in `projection_contracts`:
 
 | Predicate | Role |
@@ -18,12 +18,11 @@ in `projection_contracts`:
 | `agent.lesson.retired-at` | retirement timestamp |
 
 These three are **mutable** and single-valued, so they belong in a
-`replace-owned` group. This mirrors `lessonRecordProjectionContract()` in both
-`cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go` (the boot-time owner
-registry). The **immutable birth predicates** — `agent.lesson.created-at`,
+`reconcile` group. This mirrors `lessonRecordProjectionContract()` in both
+`cmd/semstreams/main.go` and `cmd/e2e-semstreams/main.go`. The **birth predicates** — `agent.lesson.created-at`,
 `category`, `polarity`, `severity`, `summary`, `detail`, `injection-form`,
 `evidence`, `applies-to`, `observed-role` — are stamped once at emit and are
-deliberately **absent** from any owned group, so a `replace_owned` action can
+deliberately **absent** from the reconcile group, so a `reconcile_predicates` action can
 never overwrite a lesson's identity or evidence.
 
 ## Lane 1 — VALIDATED promotion (evidence-existence-resolved)
@@ -49,7 +48,7 @@ evidence check.
 ## Lane 2 — mechanical rule transition (this config's example)
 
 For declarative, hot-reloadable transitions that assert nothing about the
-world, a rule `replace_owned` action writes an **owned** lifecycle predicate
+world, a rule `reconcile_predicates` action writes a lifecycle predicate
 directly. This is a **mechanical primitive** — products wire it to their own
 genuine trigger. The shipped example, `auto-retire-suppressed-lesson-at-birth`,
 is a **birth-time suppression** policy:
@@ -57,7 +56,7 @@ is a **birth-time suppression** policy:
 - **Trigger** (both reachable at birth): `agent.lesson.status == "proposed"`
   (the born state) **and** `agent.lesson.category == "deprecated"` (an
   illustrative product convention on the open `category` taxonomy).
-- **Action**: `replace_owned agent.lesson.status → "retired"`.
+- **Action**: `reconcile_predicates agent.lesson.status → "retired"`.
 
 Effect: a freshly-born proposed lesson a product never wants injected (e.g. it
 documents an already-fixed anti-pattern, kept only for audit) is retired
@@ -73,13 +72,13 @@ Honest scope — read before adopting:
   identity-bearing** birth predicate (part of the content-derived entity ID);
   no supported lane changes an existing lesson's category. The rule only
   **reads** `category` as a condition and **writes** the owned `status`
-  predicate. (Attempting a `replace_owned` on `category` HARD-FAILS the load —
-  it is not in the owned group; see the config test.)
+  predicate. (Attempting a reconcile of `category` HARD-FAILS the load —
+  it is not in the reconcile group; see the config test.)
 - It performs **no evidence-existence check**. That check is exactly what makes
   a `proposed → active` promotion honest, so **promotion must route through
   Lane 1** (`LessonCurator.Promote`), never a bare rule.
 
-Swap the trigger for your own reachable signal — another owned lifecycle
+Swap the trigger for your own reachable signal — another lifecycle
 predicate (`agent.lesson.superseded-by`, `agent.lesson.retired-at`), a
 rule-matchable birth fact (`severity`, `polarity`, `applies-to`,
 `observed-role`), or `$now` in the object to stamp a timestamp — as long as the
@@ -89,7 +88,7 @@ predicate you **write** stays inside the owned group.
 
 Point a rule processor at this file (or fold `projection_contracts` +
 `inline_rules` into an existing ops rule pack). At load, the rule engine
-HARD-FAILS if any `replace_owned` predicate is not a literal inside a
-`replace-owned` group in this pack's `projection_contracts` (ADR-056
+HARD-FAILS if any `reconcile_predicates` predicate is not a literal inside a
+`reconcile` group in this pack's `projection_contracts` (ADR-091
 Decision 3) — `retire-deprecated-lesson` passes because `agent.lesson.status`
-is in the owned group above.
+is in the reconcile group above.

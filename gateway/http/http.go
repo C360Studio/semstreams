@@ -321,7 +321,7 @@ func (g *Gateway) mapErrorToHTTPStatus(err error) int {
 		switch ce.Code {
 		case graph.ErrorCodeEntityNotFound:
 			return http.StatusNotFound
-		case graph.ErrorCodeEntityExists, graph.ErrorCodeRevisionMismatch, graph.ErrorCodeOwnerLeaseStale:
+		case graph.ErrorCodeEntityExists, graph.ErrorCodeRevisionMismatch:
 			return http.StatusConflict
 		}
 	}

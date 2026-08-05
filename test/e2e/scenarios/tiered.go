@@ -259,6 +259,11 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		// create/replace, authoritative state, derived predicate membership,
 		// external GraphQL read, and Message Logger trace/KV evidence.
 		{"graph-roundtrip", s.executeGraphRoundTrip, nil},
+		// Canonical RPC mutations are authority commands, not Graphable ingestion:
+		// they preserve supplied facts but do not run hierarchy inference or birth
+		// referenced targets.
+		{"validate-canonical-create-no-hierarchy", s.executeValidateCanonicalCreateNoHierarchy, []string{"structural"}},
+		{"validate-relationship-no-stub", s.executeValidateRelationshipNoStub, []string{"structural"}},
 
 		// Phase 4: Validate hierarchy inference is creating container entities
 		// Verifies the KV watcher pattern from Phase 3 is working correctly
@@ -333,10 +338,6 @@ func (s *TieredScenario) getStagesForVariant(variant string) []stage {
 		{"validate-zero-clusters", s.executeValidateZeroClusters, []string{"structural"}},
 		{"validate-rule-transitions", s.executeValidateRuleTransitions, []string{"structural"}},
 		{"validate-entity-triples", s.executeValidateEntityTriples, []string{"structural"}},
-		// ADR-056 Decision-4 fourth path: a dangling entity-ID relationship target
-		// is materialised as an envelope-bearing referential stub (structural — no ML).
-		{"validate-referential-stub", s.executeValidateReferentialStub, []string{"structural"}},
-
 		// === Tier 1+: Statistical capabilities (statistical + semantic) ===
 		{"verify-search-quality", s.executeVerifySearchQuality, []string{"statistical", "semantic"}},
 		{"test-http-gateway", s.executeTestHTTPGateway, []string{"statistical", "semantic"}},

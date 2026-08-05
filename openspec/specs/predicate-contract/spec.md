@@ -25,7 +25,7 @@ Authoring delegation is declaration-time governance: it constrains what rules, d
 may *author*. It is **not** a bearer credential, and configuration-time checks are **not** runtime
 authorization. The system therefore states two prohibitions rather than an exemption: an agent tool
 MUST NOT accept a caller-controlled predicate, and no component may infer authority from
-caller-supplied content on `graph.mutation.*`.
+caller-supplied content on the declared `graph.mutation.>` request family.
 
 Those are prohibitions deliberately. Access to the mutation lanes *is* the trust boundary — NATS
 authentication is connection-level, no principal concept exists in the graph, and any publisher can
@@ -38,9 +38,8 @@ identity.
 **What it does NOT cover.** Index encoding and key representation (`nats-kv-keys`, `graph-index`).
 Entity identity (`entity-id-contract`). Provenance — recording what the system believes about a
 triple's origin — belongs to gh#692's lane, and is a different question from authorization. A
-principal-bearing mutation envelope is deferred with explicit trigger conditions (gh#802); it is
-correctly built *after* registry-derived ownership (gh#798) produces the per-predicate owner map
-such a layer would consume.
+principal-bearing mutation envelope is deferred with explicit trigger conditions (gh#802); no
+current graph contract depends on predicted per-predicate writer identity.
 
 ## Requirements
 ### Requirement: Every stored graph predicate has one canonical three-segment syntax
@@ -90,7 +89,7 @@ than accept an unrestricted predicate string.
 - **GIVEN** a product has declared authority for a namespace
 - **WHEN** it writes a syntactically valid predicate in that namespace through an authorized lane
 - **THEN** predicate declaration policy accepts the name
-- **AND** ordinary graph ownership rules still decide whether the fact mutation is authorized
+- **AND** the selected mutation operation and observed Create/CAS outcome decide whether it lands
 
 #### Scenario: an anonymous mutation does not invent runtime namespace authority
 
@@ -98,7 +97,7 @@ than accept an unrestricted predicate string.
 - **WHEN** the authoritative persistence seam receives its final candidate
 - **THEN** the seam enforces canonical predicate syntax
 - **AND** it does not infer namespace authority from source, message type, context, subject, or other caller data
-- **AND** endpoint authentication and ordinary graph ownership remain separate controls
+- **AND** endpoint authentication and operation validation remain separate controls
 
 ### Requirement: Canonical predicate enforcement is unconditional
 
@@ -170,7 +169,7 @@ NOT do.
 
 The scope of the rule follows from what is actually enforceable. The model is the only
 semi-trusted principal in the system: it emits tool calls whose arguments it chooses. Every other
-writer of `graph.mutation.*` is infrastructure holding NATS credentials, and is inside the trust
+writer of `graph.mutation.>` is infrastructure holding NATS credentials, and is inside the trust
 boundary (see the requirement below). So the tool surface is where a real boundary exists, and it is
 the surface this rule binds.
 
@@ -194,7 +193,7 @@ shown capable of failing.
 
 ### Requirement: Mutation-lane access MUST be treated as the trust boundary, not as authenticated identity
 A component MUST NOT infer namespace authority, principal identity, or write privilege from
-caller-supplied triple content, message fields, or subject naming on `graph.mutation.*`.
+caller-supplied triple content, message fields, or subject naming on `graph.mutation.>`.
 
 The graph seam authenticates no principal, and no principal concept exists to authenticate: NATS
 authentication is connection-level, and the mutation lanes accept any triple from any publisher.
@@ -202,15 +201,12 @@ Access to those lanes is therefore itself the trust boundary. Deployments requir
 between writers MUST enforce it with NATS subject permissions, which is the layer that actually
 holds identity.
 
-Deployment guidance (a condition of the 5.6c ruling, restored 2026-08-02): restrict publish
-permissions on the eight mutation-lane subjects — `graph.mutation.triple.add`,
-`graph.mutation.triple.add_batch`, `graph.mutation.triple.remove`, `graph.mutation.entity.create`,
-`graph.mutation.entity.create_with_triples`, `graph.mutation.entity.update`,
-`graph.mutation.entity.update_with_triples`, `graph.mutation.entity.delete` — to the writer
-identities the deployment trusts with graph writes; a subscriber-only consumer needs none of them.
-The composition is explicit: write-owner guards constrain WHAT may land where at the application
-layer; NATS subject permissions constrain WHO may publish at the wire layer; neither claims the
-other's job.
+Deployment guidance: restrict publish permissions on the canonical mutation family —
+`graph.mutation.entity.create`, `graph.mutation.entity.reconcile`, `graph.mutation.triple.append`, and
+`graph.mutation.entity.delete` — to identities trusted with graph writes. A subscriber-only consumer
+needs none of them. NATS permissions identify who may publish; the operation schema validates what
+may land. Neither is semantic predicate ownership, and an authenticated caller still observes real
+Create/CAS conflicts.
 
 Stating this is what prevents an implied guarantee. A component that behaved as though
 configuration-time authoring checks were runtime authorization would be relying on a property the
@@ -262,7 +258,7 @@ delete/reset path.
 ### Requirement: Every authoritative replay consumer withholds readiness on incompatible state
 
 Every component that interprets ENTITY_STATES or serves a derived graph view MUST use the shared canonical decoder
-independently of component startup order. On any unreadable entity or predicate violation, projection owners MUST
+independently of component startup order. On any unreadable entity or predicate violation, derived-view components MUST
 enter sticky reset-required state, MUST NOT advance readiness across the poisoned revision, and MUST return the
 typed reset/reingest requirement. Action/evaluation consumers MUST emit no derived output. Predicate, incoming,
 outgoing, traversal, clustering, spatial, temporal, and embedding paths MUST NOT serve partial or briefly ready
@@ -280,4 +276,3 @@ views while another component's preflight is pending.
 - **GIVEN** every replayed ENTITY_STATES value satisfies the canonical contract
 - **WHEN** graph-index reaches the authoritative replay watermark
 - **THEN** ordinary readiness rules may permit graph-index/query consumers to serve results
-

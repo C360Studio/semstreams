@@ -2,7 +2,7 @@
 //
 // On every Get the Manager:
 //
-//  1. Reads the entity from ENTITY_STATES (1 KV.Get via graph-gateway / direct bucket)
+//  1. Reads the entity and same-entry KV revision through the exact reader
 //  2. Allocates a fresh Participant via reflect.New(Workflow.Schema)
 //  3. Walks the entity's triples, finds each predicate in the schema's
 //     FieldsByPredicate index, and SetX's the corresponding field
@@ -10,14 +10,13 @@
 // On every Transition / UpdateFromOperator / Create the Manager:
 //
 //  1. Builds a small slice of message.Triple from the changes
-//  2. Emits via UpdateEntityWithTriplesRequest{AddTriples: ...}
-//     — graph-ingest does the per-predicate latest-wins merge into
-//     ENTITY_STATES on its side, so we never need to read-then-overwrite
+//  2. Uses strict create for birth or revision-fenced reconcile for a complete
+//     lifecycle predicate group
 //
 // The projection layer never owns whole-entity JSON. The Participant
 // struct is a typed VIEW over triples, not a copy of them. Triples
 // on the entity that the schema doesn't declare are preserved by
-// graph-ingest (delta semantics) and ignored by projection.
+// graph-ingest (selected-group semantics) and ignored by projection.
 package lifecycle
 
 import (
@@ -149,9 +148,8 @@ func setFieldFromObject(field reflect.Value, object any, fieldName string) error
 // triples under per-entity KV keys today, but future cross-entity
 // triple storage would silently mis-project without this check.
 //
-// Used by Manager.Transition's read-validate path (extract current
-// phase before validating the transition) and by Manager.History
-// (extract audit-predicate values from each revision).
+// Used by Manager.Transition's read-validate path and Manager.History's
+// current-record projection to validate and extract lifecycle phases.
 func extractTripleScalar(triples []message.Triple, entityID, predicate string) string {
 	last := ""
 	for _, t := range triples {

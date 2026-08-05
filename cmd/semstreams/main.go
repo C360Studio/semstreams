@@ -160,13 +160,11 @@ func run() error {
 	}
 
 	lifecycleManager := lifecycle.NewManager(natsClient, logger)
-	hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, lifecycleManager)
-	defer ownershipShutdown()
-	ownerReg, staticOwnerHB, mutationClient, err := service.WireOwnership(
-		hbCtx, natsClient, lifecycleManager, logger, builtinprojection.Contracts()...,
+	mutationClient, err := service.WireGraphRuntime(
+		ctx, natsClient, logger, builtinprojection.Contracts()...,
 	)
 	if err != nil {
-		return fmt.Errorf("wire ownership: %w", err)
+		return fmt.Errorf("wire graph runtime: %w", err)
 	}
 
 	// 9b. Build the shared tool registry and register builtins. Done
@@ -217,9 +215,6 @@ func run() error {
 	// [[feedback_verify_main_go_wire_for_sister_asks]] —
 	// half-migrated framework binaries silently break workflows.
 	svcDeps.LifecycleManager = lifecycleManager
-	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
-	// ordered shutdown.
-	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
 
 	// 10c. Register the agent-run workflow (ADR-053 D2). Must come after
 	// the Manager is constructed so lifecycle_* actions that reference
@@ -232,17 +227,16 @@ func run() error {
 
 	// 10d. ADR-058 Phase B — agent-run milestone subscriber (ADR-053 D6) under the
 	// ServiceManager's ordered shutdown. Subscribes to agent.complete.* /
-	// agent.failed.*, pre-resolves the run, applies D3 zombie-prevention terminal
-	// authority, and fans out to registered product handlers (none in the framework
-	// binary; D3 still enforced for run_scope=new rules). Registered AFTER
-	// "ownership" so StopAll stops it first (mirrors the old defer LIFO). Its Start
-	// CAN abort boot on a genuine consumer-start failure (D3 is a hard dependency);
+	// agent.failed.*, pre-resolves the run, and fans out to registered product
+	// handlers (none in the framework binary). Lifecycle terminal mutations remain
+	// coordinator/component work through declared ports. Registered before
+	// component services so StopAll stops it after their event publishers. Its Start
+	// can abort boot on a genuine consumer-start failure;
 	// the stream-absent case graceful-skips inside the subscriber (gh#246).
 	manager.RegisterInstance("milestone", service.NewMilestoneService(
 		agentrun.NewMilestoneSubscriber(
 			svcDeps.LifecycleManager,
 			agentrun.NewNATSLoopTripleReader(natsClient),
-			agentrun.NewNATSTriplePublisher(natsClient),
 			platform.Org,
 			platform.Platform,
 			logger,
@@ -257,16 +251,15 @@ func run() error {
 		return err
 	}
 
-	// 11b. ADR-056 #278 inc 2 — bind each rule pack's projection contracts under
-	// the ownership substrate. Done HERE (after the rule processors are
+	// 11b. Validate each rule pack's local projection-contract composition. Done
+	// HERE (after the rule processors are
 	// constructed by configureAndCreateServices) and BEFORE StartAll runs inside
 	// runWithSignalHandling. Pack contracts are read ONCE, statically — this is
 	// the ONLY rule-pack bind site, and it must NEVER be called from the
-	// hot-reload path. Every composition, overlap, ownership/liveness bind, and
-	// mutation-client injection error is a boot gate. A repeated owning bind may
-	// fail as already bound, while a claim-free bind reaches the processor's
-	// one-time injection guard.
-	if err := service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger); err != nil {
+	// hot-reload path. Every composition, overlap, and mutation-client injection
+	// error is a boot gate. Repeated binding reaches the processor's one-time
+	// injection guard.
+	if err := service.ConfigureRulePackMutations(manager); err != nil {
 		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}
 

@@ -149,13 +149,14 @@ Storage is ENTITY_STATES (`manager.go:182`), ADR-049-compliant.
   subscribe to terminal subjects, decode once, demux by payload category to
   product handlers under a panic guard (lifts semteams `subscriber.go`, zero
   domain). The framework pre-resolves the run from the event's `run_id` and
-  hands it to the product handler, which writes milestone triples via a
-  publisher — **not** via `Manager` (§5):
+  hands it to the product handler. The subscriber remains read-only; graph facts
+  derived from milestone events are component work and use that component's
+  declared mutation output port:
 
 ```go
 type MilestoneHandler interface {
     OnLoopTerminal(ctx context.Context, ev agentic.LoopTerminalEvent,
-        run *AgentRun, pub TriplePublisher) error
+        run *AgentRun) error
 }
 ```
 
@@ -169,22 +170,16 @@ un-threaded loops, logged WARN.
 (closing on any child failure kills recoverable chains; closing on any child
 success completes early). Resolution:
 
-- **Framework CREATES and OBSERVES.** It mints the run and stamps audit/phase
-  on declared transitions. It does **not** infer run completion from child
-  loop events.
+- **Framework CREATES and OBSERVES.** It mints the run and observes declared
+  transitions. It does **not** infer run completion from loop events.
 - **Product/coordinator EMITS the terminal run decision** — the coordinator is
   the orchestrator that knows when the run is done. It fires a
-  `lifecycle_transition` rule action (or its terminal tool stamps a trigger a
-  rule matches) to move the run to `completed`/`failed`/`cancelled`. This is
-  ADR-028-consistent (rules/coordinator orchestrate; framework observes).
-- **Narrow framework fallback:** if the dispatch-ROOT loop terminates
-  (fail/cancel) **before any child handoff** (run still `dispatched`, no
-  children), the subscriber transitions the run to `failed`/`cancelled` to
-  prevent a zombie. This is the ONLY framework-initiated terminal transition,
-  and it's why mint-at-creation requires the failure subscriber.
-- The adapter calls `Transition` with the **explicit** terminal — **never
-  `Manager.Complete`** (which, with `executing`→3 terminals, picks
-  `reachable[0]` non-deterministically, `manager.go:671`).
+  declared lifecycle mutation port, directly or via a `lifecycle_transition`
+  rule action (or its terminal tool stamps a trigger a rule matches), to move the
+  run to `completed`/`failed`/`cancelled`. This is ADR-028-consistent
+  (rules/coordinator orchestrate; framework observes).
+- The subscriber resolves run state and delivers terminal events to handlers. It
+  has no lifecycle mutation surface and never guesses terminal phase.
 
 **Mint is a declared rule-action field, not prose/convention.** Auto-minting
 every parentless loop would mint a "run" per CLI-chat/HTTP loop

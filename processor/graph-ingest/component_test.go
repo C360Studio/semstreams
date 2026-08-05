@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
@@ -34,8 +35,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=799 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=920 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=769 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=867 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -264,6 +265,8 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
 						{Name: "entity_stream", Type: "jetstream", Subject: "entity.>"},
+						{Name: "mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
+							Interface: graphmutation.InterfaceType, Required: true},
 					},
 					Outputs: []component.PortDefinition{
 						{Name: "entity_states", Type: "kv-write", Subject: "ENTITY_STATES"},
@@ -277,7 +280,8 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
 						{Name: "entity_stream", Type: "jetstream", Subject: "entity.>"},
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
+							Interface: graphmutation.InterfaceType, Required: true},
 					},
 					Outputs: []component.PortDefinition{
 						{Name: "entity_states", Type: "kv-write", Subject: "ENTITY_STATES"},
@@ -334,6 +338,14 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "missing canonical mutation provider",
+			config: Config{Ports: &component.PortConfig{
+				Inputs:  []component.PortDefinition{{Name: "entity_stream", Type: "jetstream", Subject: "entity.>"}},
+				Outputs: []component.PortDefinition{{Name: "entity_states", Type: "kv-write", Subject: "ENTITY_STATES"}},
+			}},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -378,48 +390,6 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.NotEmpty(t, config.Ports.Inputs)
 	assert.NotEmpty(t, config.Ports.Outputs)
 	assert.False(t, config.EnableHierarchy)
-	// ADR-056 PR-5: the lease-enforcement toggle defaults to the observe-only
-	// bake posture (off) so existing deploys are unaffected.
-	assert.False(t, config.EnforceOwnerLease, "EnforceOwnerLease must default to false (observe-only)")
-}
-
-// TestConfig_EnforceOwnerLease_JSONRoundTrip locks the operator-reachable
-// enforce_owner_lease toggle against the JSON wire: absent → false (the
-// observe-only default), explicit true survives a marshal/unmarshal round-trip,
-// and the factory honors it. Per the operator-configurable-surface discipline
-// (every operator-reachable field needs a JSON round-trip test).
-func TestConfig_EnforceOwnerLease_JSONRoundTrip(t *testing.T) {
-	// Absent in JSON → false.
-	{
-		var cfg Config
-		require.NoError(t, json.Unmarshal([]byte(`{"ports":{}}`), &cfg))
-		assert.False(t, cfg.EnforceOwnerLease, "absent enforce_owner_lease must decode to false")
-	}
-	// Explicit true round-trips.
-	{
-		in := DefaultConfig()
-		in.EnforceOwnerLease = true
-		raw, err := json.Marshal(in)
-		require.NoError(t, err)
-		assert.Contains(t, string(raw), `"enforce_owner_lease":true`, "field must marshal under its json tag")
-
-		var out Config
-		require.NoError(t, json.Unmarshal(raw, &out))
-		assert.True(t, out.EnforceOwnerLease, "explicit true must survive the round-trip")
-	}
-	// The factory threads the toggle onto the live component.
-	{
-		cfg := DefaultConfig()
-		cfg.EnforceOwnerLease = true
-		raw, err := json.Marshal(cfg)
-		require.NoError(t, err)
-		natsClient, err := natsclient.NewClient("nats://localhost:4222")
-		require.NoError(t, err)
-		comp, err := CreateGraphIngest(raw, component.Dependencies{NATSClient: natsClient})
-		require.NoError(t, err)
-		assert.True(t, comp.(*Component).config.EnforceOwnerLease,
-			"CreateGraphIngest must honor enforce_owner_lease from config JSON")
-	}
 }
 
 // TestConfig_IngestLanes pins the ADR-072 lane-count knob: unset defaults to 8
@@ -833,36 +803,6 @@ func TestComponent_CreateEntity_TriggersHierarchy(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-func TestComponent_UpdateEntity_ValidEntity(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	// Create entity first
-	entity := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
-		Triples: []message.Triple{
-			{
-				Subject:   "c360.platform.robotics.mav1.drone.001",
-				Predicate: "robotics.status.armed",
-				Object:    false,
-				Timestamp: time.Now(),
-			},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}
-	require.NoError(t, comp.CreateEntity(ctx, entity))
-
-	// Update entity
-	entity.Triples[0].Object = true
-	entity.Version = 2
-	entity.UpdatedAt = time.Now()
-
-	err := comp.UpdateEntity(ctx, entity)
-
-	assert.NoError(t, err)
-}
-
 func TestComponent_DeleteEntity_ValidID(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
@@ -876,9 +816,11 @@ func TestComponent_DeleteEntity_ValidID(t *testing.T) {
 	}
 	require.NoError(t, comp.CreateEntity(ctx, entity))
 
-	// Delete entity
-	err := comp.DeleteEntity(ctx, entity.ID)
-
+	entry, err := comp.entityBucket.Get(ctx, entity.ID)
+	require.NoError(t, err)
+	data, err := json.Marshal(graph.DeleteEntityRequest{EntityID: entity.ID, ExpectedRevision: entry.Revision})
+	require.NoError(t, err)
+	_, err = comp.handleCanonicalDelete(ctx, data)
 	assert.NoError(t, err)
 }
 
@@ -886,7 +828,7 @@ func TestComponent_DeleteEntity_ValidID(t *testing.T) {
 // Triple Operations Tests
 // ====================================================================================
 
-func TestComponent_AddTriple_ValidTriple(t *testing.T) {
+func TestComponent_CanonicalAppend_ValidTriple(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
@@ -907,12 +849,17 @@ func TestComponent_AddTriple_ValidTriple(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	err := comp.AddTriple(ctx, triple)
-
-	assert.NoError(t, err)
+	data, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
+	require.NoError(t, err)
+	body, err := comp.handleCanonicalAppend(ctx, data)
+	require.NoError(t, err)
+	var response graph.AppendTriplesResponse
+	require.NoError(t, json.Unmarshal(body, &response))
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, graph.MutationApplied, response.Results[0].Outcome)
 }
 
-func TestComponent_AddTriple_MissingSubject(t *testing.T) {
+func TestComponent_CanonicalAppend_MissingSubject(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
@@ -923,35 +870,10 @@ func TestComponent_AddTriple_MissingSubject(t *testing.T) {
 		Timestamp: time.Now(),
 	}
 
-	err := comp.AddTriple(ctx, triple)
-
-	assert.Error(t, err, "AddTriple should fail with empty subject")
-}
-
-func TestComponent_RemoveTriple_ValidTriple(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	// Create entity with triple
-	entity := &graph.EntityState{
-		ID: "c360.platform.robotics.mav1.drone.001",
-		Triples: []message.Triple{
-			{
-				Subject:   "c360.platform.robotics.mav1.drone.001",
-				Predicate: "robotics.battery.level",
-				Object:    85.5,
-				Timestamp: time.Now(),
-			},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}
-	require.NoError(t, comp.CreateEntity(ctx, entity))
-
-	// Remove triple
-	err := comp.RemoveTriple(ctx, entity.ID, "robotics.battery.level")
-
-	assert.NoError(t, err)
+	data, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
+	require.NoError(t, err)
+	_, err = comp.handleCanonicalAppend(ctx, data)
+	assert.Error(t, err, "append should fail with empty subject")
 }
 
 // ====================================================================================
@@ -992,64 +914,6 @@ func TestComponent_RespectsContext_Timeout(t *testing.T) {
 		// If error, it should be context-related
 		assert.Contains(t, err.Error(), "context")
 	}
-}
-
-// TestComponent_CreateEntity_ReferentialIntegrityStubHasVersion1 verifies that
-// stub entities created for referential integrity (when a relationship triple
-// references an entity that doesn't yet exist) are written with Version=1.
-//
-// Historical bug: stubs were written without Version, defaulting to 0, which
-// violated the invariant held by every other EntityState write path. Downstream
-// consumers that check Version > 0 (notably the e2e entity-structure validator)
-// would silently reject these stubs as invalid.
-func TestComponent_CreateEntity_ReferentialIntegrityStubHasVersion1(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	sourceID := "c360.platform.robotics.mav1.drone.001"
-	targetID := "c360.platform.robotics.mav1.operator.alice"
-
-	// Entity with a relationship triple whose object is a valid entity ID
-	// referencing a target that does NOT yet exist in the bucket. This
-	// triggers ensureReferencedEntityExists → stub creation.
-	entity := &graph.EntityState{
-		ID: sourceID,
-		Triples: []message.Triple{
-			{
-				Subject:    sourceID,
-				Predicate:  "robotics.assignment.operator",
-				Object:     targetID,
-				Source:     "test",
-				Timestamp:  time.Now(),
-				Confidence: 1.0,
-			},
-		},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}
-
-	require.NoError(t, comp.CreateEntity(ctx, entity))
-
-	// Read the stub back from the mock bucket and verify Version == 1.
-	entry, err := comp.entityBucket.Get(ctx, targetID)
-	require.NoError(t, err, "stub for referenced target should have been created")
-
-	var stub graph.EntityState
-	require.NoError(t, json.Unmarshal(entry.Value, &stub))
-
-	assert.Equal(t, uint64(1), stub.Version,
-		"stub entity must be written with Version=1 to match the invariant held by all other write paths")
-	assert.Equal(t, targetID, stub.ID)
-
-	// Sanity: the stub triples include the referential-integrity markers.
-	foundStubMarker := false
-	for _, tr := range stub.Triples {
-		if tr.Predicate == "core.identity.stub" {
-			foundStubMarker = true
-			break
-		}
-	}
-	assert.True(t, foundStubMarker, "stub should carry core.identity.stub predicate")
 }
 
 // ====================================================================================
@@ -1109,6 +973,7 @@ func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucke
 	component := comp.(*Component)
 	// Create KVStore wrapper for all KV operations
 	component.entityBucket = natsClient.NewKVStore(mockBucket)
+	component.entityStateBucket = mockBucket
 
 	return component, mockBucket
 }

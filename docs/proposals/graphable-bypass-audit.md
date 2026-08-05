@@ -206,12 +206,12 @@ Four conjured ID spaces, all written through the `agentic-memory`
   because it is workflow-instance-shaped — a `pkg/lifecycle.Participant`
   (ADR-047). Example/demo, low production stakes, but the cleanest teaching case.
 
-## 5. Grey Zone — Lifecycle / Participant Substrate (9 sites, needs explicit decision)
+## 5. Grey Zone — Lifecycle / Participant Substrate (8 sites, needs explicit decision)
 
 **Sites:** `pkg/lifecycle/graph_emit.go:124` (update) & `:162` (create);
 `manager.go:330` (create-fresh), `:357` (attach-to-existing), `:507`
-(Transition/Complete/Fail), `:633` (UpdateFromOperator); `agentrun/nats_reader.go:55-72`
-(milestone publisher). Entities: `*.*.agent.chain.execution.*` (`agentrun.AgentRun`)
+(Transition/Complete/Fail), `:633` (UpdateFromOperator). Entities:
+`*.*.agent.chain.execution.*` (`agentrun.AgentRun`)
 and `*.*.lifecycle.gcs.mission.*` (`mission.State`).
 
 **The tension.** On pure Subject-ownership these are **Flavor-A-shaped**: they

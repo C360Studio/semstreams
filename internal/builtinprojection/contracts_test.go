@@ -3,7 +3,7 @@ package builtinprojection
 import (
 	"testing"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
+	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 	"github.com/c360studio/semstreams/vocabulary/builtins"
 )
@@ -33,15 +33,11 @@ func TestContractsDeclareBuiltinBirthAndMutableLanes(t *testing.T) {
 		agvocab.LoopDescription,
 	})
 	if len(loop.Groups) != 1 || loop.Groups[0].Name != TodoGroupName ||
-		loop.Groups[0].Mode != ownership.ModeReplaceOwned {
+		loop.Groups[0].Mode != projection.ModeReconcile {
 		t.Fatalf("loop mutable group = %#v", loop.Groups)
 	}
 	assertExactSet(t, "todo group predicates", loop.Groups[0].Predicates, []string{
-		agvocab.TodoID,
-		agvocab.TodoContent,
-		agvocab.TodoStatus,
-		agvocab.TodoPosition,
-		agvocab.TodoUpdatedAt,
+		agvocab.TodoRecord,
 	})
 	assertNoOverlap(t, loop.BirthPredicates, loop.Groups[0].Predicates)
 
@@ -63,7 +59,7 @@ func TestContractsDeclareBuiltinBirthAndMutableLanes(t *testing.T) {
 		agvocab.ActionExecutedBy,
 	})
 	if len(lesson.Groups) != 1 || lesson.Groups[0].Name != LessonLifecycleGroupName ||
-		lesson.Groups[0].Mode != ownership.ModeReplaceOwned {
+		lesson.Groups[0].Mode != projection.ModeReconcile {
 		t.Fatalf("lesson mutable group = %#v", lesson.Groups)
 	}
 	assertExactSet(t, "lesson lifecycle predicates", lesson.Groups[0].Predicates, []string{

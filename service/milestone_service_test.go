@@ -52,9 +52,8 @@ func TestMilestoneService_Start_RunsAndStops(t *testing.T) {
 	assert.Equal(t, 1, f.stopCalls, "Stop must call the captured stop func exactly once")
 }
 
-// TestMilestoneService_Start_ErrorForwardedAndRollsBack proves the deliberate
-// divergence from OwnershipService: a genuine consumer-start failure is forwarded
-// (so StartAll aborts boot) AND BaseService status is rolled back so a failed
+// TestMilestoneService_Start_ErrorForwardedAndRollsBack proves a genuine
+// consumer-start failure is forwarded (so StartAll aborts boot) AND BaseService status is rolled back so a failed
 // Start does not leave the service phantom-Running.
 func TestMilestoneService_Start_ErrorForwardedAndRollsBack(t *testing.T) {
 	t.Parallel()
@@ -62,13 +61,13 @@ func TestMilestoneService_Start_ErrorForwardedAndRollsBack(t *testing.T) {
 	svc := newTestMilestoneService(f)
 
 	err := svc.Start(context.Background())
-	require.Error(t, err, "a genuine consumer-start failure must be forwarded (hard dependency, not R1-degraded)")
+	require.Error(t, err, "a genuine consumer-start failure must be forwarded")
 	assert.Contains(t, err.Error(), "milestone subscriber start")
 	assert.NotEqual(t, StatusRunning, svc.Status(), "a failed Start must roll back status — not phantom-Running")
 }
 
 // TestMilestoneService_ReentrancyGuard verifies a double-Start returns an error
-// and does NOT re-invoke the subscriber (BUG-CLASS guard, mirrors OwnershipService).
+// and does NOT re-invoke the subscriber.
 func TestMilestoneService_ReentrancyGuard(t *testing.T) {
 	t.Parallel()
 	f := &fakeStarter{}

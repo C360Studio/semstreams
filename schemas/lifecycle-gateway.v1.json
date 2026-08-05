@@ -27,6 +27,11 @@
       "type": "string",
       "description": "URL path prefix mounted under the parent component prefix (e.g. \"workflows\" → /lifecycle-gateway/workflows). Default \"workflows\". Must be non-empty after stripping leading/trailing slashes.",
       "category": "basic"
+    },
+    "ports": {
+      "type": "string",
+      "description": "Component port configuration. The canonical required graph mutation request output is supplied when omitted.",
+      "category": "basic"
     }
   },
   "required": [],

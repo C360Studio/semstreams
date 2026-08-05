@@ -104,10 +104,9 @@ const (
 // TransitionEvent is one entry in an entity's phase-transition
 // history. Manager.History returns these in chronological order.
 //
-// History is derived from ENTITY_STATES revision replay filtered to
-// phase-changing writes; source attribution is reconstructed from
-// the AuditPredicates triples Manager.Transition stamped at write
-// time. No parallel audit bucket is required.
+// History is decoded from occurrence-discriminated transition triples retained
+// in the participant's current ENTITY_STATES value. The framework keeps a
+// fixed recent operator window; this type is not an unbounded audit surface.
 type TransitionEvent struct {
 	// From is the phase the entity was in before the transition.
 	// Empty string for the Create event (entity didn't exist before).
@@ -117,21 +116,15 @@ type TransitionEvent struct {
 	// PhasePredicate value at the time of the transition.
 	To string `json:"to"`
 
-	// At is the wallclock time the transition was committed.
-	// Sourced from the KV revision's metadata, not from app code
-	// — so it's authoritative across restarts and clock skew.
+	// At is the wallclock time recorded when the transition mutation was built.
 	At time.Time `json:"at"`
 
 	// Triggered identifies what caused the transition. Closed set
-	// of values defined by TransitionSource. Read from the audit
-	// triple stamped at write time; defaults to
-	// TransitionSourceFramework when the workflow has no
-	// AuditPredicates.Source declared.
+	// of values defined by TransitionSource. It is stored in the transition
+	// occurrence itself and does not depend on workflow audit-summary fields.
 	Triggered TransitionSource `json:"triggered"`
 
-	// Note is an optional free-text annotation, stamped by
-	// Manager.Transition if AuditPredicates.Note is declared.
-	// Empty when omitted at write time or undeclared.
+	// Note is an optional free-text annotation stored with the occurrence.
 	Note string `json:"note,omitempty"`
 }
 

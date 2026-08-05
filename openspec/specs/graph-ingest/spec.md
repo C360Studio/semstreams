@@ -9,9 +9,9 @@ write means. It owns two ways state arrives and the rules each one follows:
   re-arriving entity refreshes its predicates rather than accumulating them, with per-entity
   ordering preserved under concurrent processing and an applied-sequence guard so a redelivered
   stale message cannot overwrite a newer write;
-- the **mutation lane** — the request/reply verbs (`graph.mutation.triple.add`,
-  `.add_batch`, `.remove`, `entity.update_with_triples`, `create_with_triples`), where the add
-  verbs are append-only and deduplicate by exact tuple, and the update verbs replace.
+- the **mutation lane** — the four typed request/reply operations (`entity.create`,
+  `entity.reconcile`, `triple.append`, and `entity.delete`), with strict birth, revision-fenced
+  reconciliation and deletion, and exact-tuple append deduplication.
 
 It also owns the structural gate that rejects invalid entity IDs and predicates — unconditionally
 fail-closed, with no bypass configuration — the create-time indexing profile, and the queue-wait
@@ -31,10 +31,10 @@ comes through the Graphable (JetStream) ingest lane. A predicate carried by the
 incoming entity MUST replace that `(subject, predicate)`'s prior triples, so the
 entity does not accumulate duplicate triples across repeated arrivals.
 
-This is NOT the same rule the mutation add lane applies. The add lane is append-only and
+This is NOT the same rule the `triple.append` mutation applies. Append is append-only and
 deduplicates by exact six-field tuple, so it preserves multiple distinct values under one
 predicate — which is what multi-valued predicates such as hierarchy containment and sibling edges
-require. Predicate-level replacement on that lane would delete them. The two lanes converge only
+require. Predicate-level replacement during append would delete them. The two paths converge only
 on the outcome that a repeated identical write accumulates nothing.
 
 #### Scenario: republishing the same entity does not accumulate duplicates
@@ -44,11 +44,11 @@ on the outcome that a repeated identical write accumulates nothing.
 - **THEN** the stored entity has exactly one `flock.position.x` triple
 - **AND** its value is `2`
 
-#### Scenario: the add lane preserves multiple values under one predicate
+#### Scenario: append preserves multiple values under one predicate
 
 - **GIVEN** an entity carrying two `hierarchy.type.contains` triples with distinct objects
-- **WHEN** a third distinct `hierarchy.type.contains` triple is added through the mutation add
-  lane
+- **WHEN** a third distinct `hierarchy.type.contains` triple is submitted through
+  `graph.mutation.triple.append`
 - **THEN** the entity carries three `hierarchy.type.contains` triples
 
 ### Requirement: A predicate absent from an arrival is preserved
@@ -69,8 +69,7 @@ predicates written by a different writer (e.g. lifecycle-managed triples).
 MUST preserve the create-time indexing profile across a merge: it is immutable
 after create (ADR-054), so even though the merge is otherwise newer-wins, a
 re-arrival that declares a different indexing profile MUST NOT change the stored
-profile. A profile-less referential-integrity stub is the sole exception — its
-first real arrival's declared profile stands as the entity's true birth.
+profile. Missing relationship targets do not create profile-less entities.
 
 #### Scenario: a re-arrival cannot change the create-time profile
 
@@ -78,12 +77,6 @@ first real arrival's declared profile stands as the entity's true birth.
 - **WHEN** a later Graphable arrival for that entity declares profile `trace`
 - **THEN** the stored indexing profile is still `content`
 - **AND** the entity has exactly one indexing-profile triple
-
-#### Scenario: a profile-less stub's first real arrival sets the profile
-
-- **GIVEN** a profile-less referential-integrity stub for an entity
-- **WHEN** the first real Graphable arrival declares indexing profile `content`
-- **THEN** the stored indexing profile is `content`
 
 ### Requirement: A multi-valued predicate is full-set replaced
 
@@ -114,10 +107,9 @@ and a redeliveries-dropped counter. Together these MUST let an operator distingu
 backlog/queue wait from per-message processing time and observe achieved concurrency;
 the throughput counter (`entities_updated_total`) remains the ingest-rate signal. The
 CAS-retry counter is a cross-entity **contention-observability** signal — an entity's own
-key is never written concurrently under keying, but legitimate cross-entity referential
-writes (relationship-target stubs, foreign edges, shared hierarchy containers) still
-touch shared keys and may retry — so it MUST NOT be interpreted as a keying-correctness
-proof. The redeliveries-dropped counter (applied-sequence guard drops) is disjoint from
+key is never written concurrently under keying, but legitimate cross-entity hierarchy
+container and inverse writes still touch shared keys and may retry — so it MUST NOT be interpreted as a
+keying-correctness proof. The redeliveries-dropped counter (applied-sequence guard drops) is disjoint from
 the pool's dropped counter (full-lane rejects); operators MUST NOT sum them.
 
 #### Scenario: an operator can read processing vs queue time
@@ -277,16 +269,16 @@ unconditional rejection meant the hatch could only swap the caller-visible error
 persistence.)
 
 #### Scenario: No configuration can weaken the gate
-- **WHEN** a mutation carries a non-3-part predicate on the `triple.add` or `triple.add_batch` lane,
+- **WHEN** a mutation carries a non-3-part predicate on the `triple.append` lane,
   under any component configuration
 - **THEN** the gate rejects the mutation with the classified structural code before any KV I/O
 - **AND** the `mutation_rejections{reason="structural_invalid"}` metric increments exactly once and a
   log names the token
 - **AND** nothing from the mutation is written to `ENTITY_STATES`
 
-### Requirement: The add lane MUST NOT append a triple already stored with an identical tuple
+### Requirement: Append MUST NOT store a triple already present with an identical tuple
 
-The add lane MUST suppress any triple whose six-field identity tuple — subject, predicate,
+Append MUST suppress any triple whose six-field identity tuple — subject, predicate,
 object, datatype, source, context — already exists on the target entity. Object identity MUST be
 decided on the object's PERSISTED encoding, so that a value and the form it takes after a storage
 round-trip are one tuple. An object submitted in process and the same object read back from
@@ -296,10 +288,9 @@ round-trip can change an encoding, including field ordering in structured values
 in values outside the storage format's exact range; a type excluded from normalization MUST be one
 whose round-trip is provably the identity, not one assumed to be unaffected. Suppression is
 unconditional: it does not depend on `RequestID`, on `Context` carrying a request identifier, on
-the caller, or on which entry point was used. It MUST cover every add-lane emitter from a single
-implementation, including the `graph.mutation.triple.add` and `graph.mutation.triple.add_batch`
-handlers, hierarchy inference's in-process adder, foreign-edge regroup, and the projection
-mutation client's append-evidence path. Duplicates appearing more than once within a single
+the caller, or on which entry point was used. It MUST cover every append emitter from a single
+implementation, including the `graph.mutation.triple.append` handler, hierarchy inference's
+in-process append path, and projection clients. Duplicates appearing more than once within a single
 request MUST also collapse, preserving first-input order, so one request commits at most one copy
 of a tuple.
 
@@ -307,7 +298,7 @@ of a tuple.
 
 - **GIVEN** an entity already carries a triple with a given subject, predicate, object, datatype,
   source, and context
-- **WHEN** an add request submits a triple with that same six-field tuple
+- **WHEN** an append request submits a triple with that same six-field tuple
 - **THEN** the entity still carries exactly one copy of that tuple
 
 #### Scenario: duplicates within one batch collapse to one
@@ -326,7 +317,7 @@ of a tuple.
 - **THEN** it is suppressed
 - **AND** the outcome is the same as for a request that carries one
 
-### Requirement: A fully-duplicate add request MUST advance no ENTITY_STATES revision
+### Requirement: A fully duplicate append MUST advance no ENTITY_STATES revision
 
 A request whose triples are all suppressed as duplicates MUST commit nothing. The check MUST
 short-circuit inside the compare-and-swap closure, before the revision-checked write, so no
@@ -340,7 +331,7 @@ not an error, and MUST NOT increment the component error counter.
 
 - **GIVEN** an entity at a known KV revision whose triples include every tuple about to be
   submitted
-- **WHEN** the add request is processed
+- **WHEN** the append request is processed
 - **THEN** the request succeeds
 - **AND** the entity's KV revision is unchanged
 - **AND** the entity's version and update timestamp are unchanged
@@ -356,7 +347,7 @@ not an error, and MUST NOT increment the component error counter.
 #### Scenario: a partially-duplicate write commits only the new tuples
 
 - **GIVEN** an entity carrying one of two submitted tuples
-- **WHEN** the add request is processed
+- **WHEN** the append request is processed
 - **THEN** exactly one triple is appended
 - **AND** the KV revision advances exactly once
 
@@ -371,100 +362,50 @@ both observe the tuple absent and both append.
 #### Scenario: two concurrent identical appends store one tuple
 
 - **GIVEN** an entity that does not yet carry the tuple
-- **WHEN** two identical add requests are issued concurrently
+- **WHEN** two identical append requests are issued concurrently
 - **THEN** exactly one copy of the tuple is stored
 - **AND** both requests report success
 
 #### Scenario: a late commit followed by an identical retry stores one tuple
 
-- **GIVEN** an add request whose response is lost after the write commits
+- **GIVEN** an append request whose response is lost after the write commits
 - **WHEN** the caller retries with identical provenance
 - **THEN** exactly one copy of the tuple is stored
 - **AND** the retry reports success
 
-### Requirement: Add-lane responses MUST count only newly appended tuples
+### Requirement: Append responses report one discriminated result per subject
 
-`WrittenCount` MUST report the number of tuples newly appended, excluding every suppressed
-duplicate. A request in which everything was suppressed MUST return `WrittenCount` zero with an
-empty failed-subject set and no error — success with nothing written is a valid outcome, and a
-suppressed subject MUST NOT appear among failed subjects. The response MUST additionally report
-how many tuples were suppressed, so a caller can distinguish "already present" from "no traffic"
-without an authoritative read-back, and a client MUST treat written plus suppressed equalling the
-submitted count as a fully accounted-for request rather than as an anomaly needing verification.
+Append MUST return one result for each distinct submitted subject. Its outcome MUST be `applied`,
+`unchanged`, `entity_not_found`, or `failed`. `applied` and `unchanged` MUST carry a nonzero KV
+revision and no error. `entity_not_found` MUST carry neither a revision nor an error. `failed`
+MUST carry a typed `{class, code}` error and no revision. The response MUST NOT contain aggregate
+written, suppressed, or failed-subject counts, a degraded flag, or a single revision that implies
+a cross-subject transaction.
 
-A response for a request targeting exactly one entity MUST report a KV revision derived from
-whether that entity actually committed. When the write COMMITTED, the reported revision MUST be
-the exact revision that write produced, never a value re-read afterwards: another writer can
-commit between the write and a re-read, and a caller that attributes the re-read revision to its
-own write would then act on someone else's. When the write was SUPPRESSED as a duplicate, the
-response MUST report the entity's live unchanged revision, so a read-your-writes check still
-resolves; if that live read fails the response MUST report no revision rather than being marked
-degraded, and a caller that sees a suppressed or no-op response carrying no revision has no
-read-your-writes anchor and MUST read authoritative state if it requires one. When the entity
-FAILED, the response MUST report no revision. A request spanning several
-entities has no single entity revision and MUST report none.
+#### Scenario: a mixed append is fully accounted by subject
 
-A response MUST NOT be marked degraded unless a write COMMITTED. Degraded means a committed write
-whose echo could not be confirmed; a failure and a no-op are neither, and flagging either one
-degraded is unsafe because a client checks the degraded flag before it inspects failed subjects
-and would enter committed verification for a write that never happened.
-
-#### Scenario: an all-duplicate batch reports zero written and no failures
-
-- **GIVEN** an entity carrying every tuple in the batch
-- **WHEN** the batch is submitted
-- **THEN** the response reports zero written and no failed subjects
-- **AND** the response reports a suppressed count equal to the batch size
-- **AND** no error is returned
-
-#### Scenario: written plus suppressed accounts for the whole request
-
-- **GIVEN** a batch of tuples of which some are already stored
-- **WHEN** the batch is submitted
-- **THEN** written plus suppressed equals the number of tuples submitted
-- **AND** a client treats the request as fully committed without an authoritative read-back
-
-#### Scenario: a committed write reports its own revision, not a later writer's
-
-- **GIVEN** a single-entity add that commits
-- **WHEN** another writer commits to the same entity immediately afterwards
-- **THEN** the response reports the revision this request's own write produced
-- **AND** a caller tracking its own writes does not record the other writer's revision
-
-#### Scenario: a failed subject is not reported as degraded
-
-- **GIVEN** an add request targeting an entity that does not exist
+- **GIVEN** one append request targets existing A, unchanged B, absent C, and invalid D
 - **WHEN** the request is processed
-- **THEN** the entity appears among the failed subjects
-- **AND** the response is not marked degraded
-- **AND** it reports no revision
+- **THEN** A reports `applied` with its committing revision
+- **AND** B reports `unchanged` with its observed live revision
+- **AND** C reports `entity_not_found` without a revision or error
+- **AND** D reports `failed` with a typed error and no revision
 
 ### Requirement: A no-op mutation MUST report that it committed nothing
 
-A triple mutation that commits nothing MUST say so in its response, because the KV revision it
-reports is the entity's live revision and on a no-op that revision was produced by a DIFFERENT
-writer. An add suppressed as a duplicate MUST be flagged as deduplicated, and a removal that
-matched no stored triple MUST report that nothing was removed. A caller that attributes the
-reported revision to its own write MUST consult these flags first: attributing another writer's
-revision to itself makes that caller discard the other writer's genuine change when its own
-change-feed later delivers it. A no-op MUST NOT be marked degraded — it has no committed write
-whose echo could have failed.
+A mutation that commits nothing MUST report `unchanged`. For append this means every submitted
+canonical tuple is already present. For reconcile it means the selected predicates already equal
+the requested desired state. The reported KV revision is observed live state, not evidence of a
+commit by this caller, and no KV revision, logical entity version, or update timestamp may advance.
 
-#### Scenario: a suppressed add is not attributed to the caller
+#### Scenario: an unchanged append is not attributed to the caller
 
 - **GIVEN** a rule that previously wrote a triple, and a later unrelated write by another
   component that advanced the entity's revision
 - **WHEN** that rule re-asserts the identical triple and it is suppressed
-- **THEN** the response reports the write as deduplicated
+- **THEN** the response reports `unchanged` with the live revision
 - **AND** the rule does not record the reported revision as its own
 - **AND** the rule still evaluates when its watcher delivers the other component's change
-
-#### Scenario: a removal that matched nothing reports nothing removed
-
-- **GIVEN** an entity carrying no triple with the requested predicate
-- **WHEN** a removal for that predicate is processed
-- **THEN** the request succeeds
-- **AND** the response reports that nothing was removed
 
 ### Requirement: Suppressed duplicates MUST be observable
 
@@ -479,12 +420,11 @@ replay traffic makes that unbounded.
 - **WHEN** those triples are suppressed
 - **THEN** the suppressed-duplicate counter rises with a label identifying that lane
 
-### Requirement: Duplicate suppression MUST NOT suppress redelivery side effects
+### Requirement: Duplicate suppression preserves required Graphable side effects
 
 Suppression MUST cover the KV write only. The applied-sequence redelivery guard remains the sole
-gate on whether a redelivered message is re-applied, and every post-commit side effect of the
-lanes that own them — suffix-index maintenance, relationship-target creation, foreign-edge
-routing — MUST still run when their lane runs, so a crash mid-apply is re-driven on redelivery
+gate on whether a redelivered message is re-applied, and required Graphable-lane index and hierarchy
+side effects MUST still run when their lane runs, so a crash mid-apply is re-driven on redelivery
 rather than being masked by a suppression that looks like a completed write.
 
 #### Scenario: a redelivered message still re-drives its post-commit work
@@ -595,7 +535,7 @@ responses cannot outlive detection.
 #### Scenario: mutation read seams return the typed classification
 
 - **GIVEN** entity A's resident state is poisoned
-- **WHEN** a caller issues `entity.update`, `update_with_triples`, or `create_with_triples`
+- **WHEN** a caller issues `entity.create`, `entity.reconcile`, `triple.append`, or `entity.delete`
   against A
 - **THEN** the reply carries the fatal `graph_state_reset_required` classification
 - **AND** no reply invites the caller to retry the same request
@@ -707,8 +647,8 @@ terminally rejected.
 ### Requirement: Every ENTITY_STATES commit validates the complete final candidate
 
 graph-ingest MUST apply the canonical predicate contract at one authoritative persistence seam used by every
-ENTITY_STATES create, update, merge, batch, CAS, Graphable, foreign-edge, inference, rule, direct-adapter,
-and repair lane. Validation MUST inspect the complete candidate after normalization, merging, routing, and
+ENTITY_STATES create, reconcile, append, delete, CAS, Graphable, hierarchy, and rule path.
+Validation MUST inspect the complete candidate after normalization, merging, routing, and
 framework triple injection, and before any state or required projection side effect commits.
 
 Handler-level validation MAY return earlier classified errors but MUST NOT be the correctness boundary.
@@ -720,10 +660,10 @@ Handler-level validation MAY return earlier classified errors but MUST NOT be th
 - **THEN** the invalid foreign candidate reaches the same authoritative structural gate
 - **AND** graph-ingest commits neither malformed state nor a partial derived projection
 
-#### Scenario: a direct mutation adapter cannot bypass the gate
+#### Scenario: a canonical RPC mutation cannot bypass the gate
 
-- **WHEN** an internal adapter calls a public create, merge, or add-triples path with an invalid predicate
-- **THEN** the final persistence seam applies the same typed rejection as the external mutation lane
+- **WHEN** a create, reconcile, or append handler constructs an invalid final candidate
+- **THEN** the final persistence seam returns the canonical typed structural rejection
 
 ### Requirement: Replacement validates before destructive mutation
 
@@ -738,3 +678,107 @@ value MUST remain unchanged.
 - **THEN** the original triple remains in ENTITY_STATES
 - **AND** no remove-then-fail partial update is visible
 
+### Requirement: The mutation API is a declared typed component port
+
+Graph-ingest MUST declare one required input `nats-request` port with interface `semstreams.graph.mutation` version
+`v1` and family `graph.mutation.>`. Handler setup MUST resolve the four admitted leaves from that declaration and MUST
+NOT subscribe through hidden constants or fallback subjects. A validated flow MUST contain exactly one compatible
+provider input and MAY contain many compatible requester outputs.
+
+#### Scenario: An undeclared mutation side channel cannot boot
+
+- **GIVEN** graph-ingest has no compatible mutation provider input port
+- **WHEN** the flow is validated
+- **THEN** validation fails before mutation subscriptions are installed
+- **AND** graph-ingest does not fall back to hardcoded subjects
+
+### Requirement: Authority writes share one atomic Create and CAS discipline
+
+A genuine `ENTITY_STATES` birth MUST use atomic KV `Create`. Every write to an existing key, whether Graphable merge,
+RPC mutation, or hierarchy inverse, MUST commit by CAS against state read at a specific revision. No production path
+MAY retain unconditional Put-as-upsert semantics. The keyed ingest pool MAY reduce local contention but MUST NOT be a
+correctness precondition or coordinate RPC handlers.
+
+#### Scenario: RPC reconcile survives a racing Graphable merge
+
+- **GIVEN** ingest and reconcile both read entity A at revision R
+- **WHEN** reconcile commits R to R+1 before ingest attempts its write
+- **THEN** ingest cannot overwrite R+1 from its stale candidate
+- **AND** it re-evaluates its retry-safe merge against R+1 or returns a classified failure
+
+### Requirement: Four explicit mutation operations define the wire surface
+
+The admitted operations MUST be `entity.create`, `entity.reconcile`, `triple.append`, and `entity.delete`. Create MUST
+strictly birth one absent entity. Reconcile MUST require a nonzero expected revision and replace the complete desired
+set for named predicates. Append MUST deduplicate canonical exact tuples and report one result per subject, with no
+cross-subject transaction. Delete MUST require a nonzero expected revision and conditionally delete one entity. Every
+absent non-create target MUST return typed `entity_not_found`.
+
+#### Scenario: A stale reconcile does not silently retry
+
+- **GIVEN** a reconcile request names revision R and the entity is now at R+1
+- **WHEN** graph-ingest evaluates the request
+- **THEN** it returns typed `revision_mismatch`
+- **AND** it does not overwrite or retry automatically
+
+#### Scenario: Append uses an explicit discriminated result
+
+- **GIVEN** one append request targets existing A and absent B
+- **WHEN** graph-ingest evaluates both subjects
+- **THEN** A reports `applied` or `unchanged` with its KV revision
+- **AND** B reports `entity_not_found` without a revision or fabricated error payload
+
+### Requirement: Exact authority read returns value and same-entry revision
+
+The exact entity read MUST return one validated entity and the nonzero KV revision from the same KV entry. Absence MUST
+return typed `entity_not_found`; poison MUST retain the graph-state classification. Logical `EntityState.Version` MUST
+NOT be accepted as a KV revision. The read MUST NOT mutate, repair, create a stub, or change `GRAPH_STATUS`.
+
+#### Scenario: A reconciler receives usable CAS evidence
+
+- **GIVEN** entity A is resident and valid
+- **WHEN** the exact read succeeds
+- **THEN** its entity and revision come from one KV entry
+- **AND** the returned revision is nonzero
+
+### Requirement: Relationship target absence creates no entity
+
+Mutation MUST validate relationship syntax without requiring the object entity to exist. Graph-ingest MUST NOT create
+a target stub, pending record, inverse repair, or delayed drain because an object is absent. A later real birth makes
+future dereference resolve; no source-edge replay is required.
+
+#### Scenario: A relationship may precede its object
+
+- **GIVEN** entity A contains a valid relationship to absent entity B
+- **WHEN** A commits
+- **THEN** A's edge remains current authority
+- **AND** no `ENTITY_STATES` key for B is created
+
+### Requirement: Hierarchy inference is Graphable-lane-only and uses Create/CAS
+
+Opt-in hierarchy inference MUST run only for Graphable ingest. RPC create MUST produce no hierarchy side effects.
+Hierarchy containers are real inferred entities; their birth MUST use atomic `Create`, and container or sibling inverse
+edges MUST update must-exist targets through CAS. A failed companion write MAY leave a dangling relationship, which is
+valid eventual graph state and MUST NOT trigger rollback or repair machinery.
+
+#### Scenario: RPC create does not manufacture hierarchy
+
+- **GIVEN** hierarchy is enabled
+- **WHEN** a caller creates an entity through request/reply
+- **THEN** only the caller-supplied entity birth commits
+- **AND** no container or inverse hierarchy write is attempted
+
+### Requirement: Mutation outcomes are bounded and honest about lost replies
+
+Server replies MUST classify applied, unchanged, not-found, exists, revision-mismatch, and invalid outcomes. The typed
+client MUST classify no responder as `unavailable` and a context already done before send as `deadline`; both prove
+non-delivery. It MUST classify a post-send timeout or disconnect, malformed reply, or semantically invalid success
+reply as `commit_unknown`. `graph_mutation_outcomes_total{operation,outcome}` is the bounded command counter. Entity ID
+MUST NOT be a metric label.
+
+#### Scenario: An ambiguous reply is not automatically retried
+
+- **GIVEN** a request was sent and may have reached graph-ingest
+- **WHEN** its reply times out, disconnects, or cannot be validated
+- **THEN** it returns `commit_unknown`
+- **AND** it does not automatically retry or claim exactly-once behavior

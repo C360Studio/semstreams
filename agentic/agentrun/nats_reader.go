@@ -1,94 +1,34 @@
-// Package agentrun — NATS-backed production adapters.
-//
-// NATSLoopTripleReader satisfies LoopTripleReader by reading entity triples
-// directly from the ENTITY_STATES KV bucket via a natsclient.Client.
-//
-// NATSTriplePublisher satisfies TriplePublisher by writing triples through
-// the graph.mutation.triple.add NATS request/response surface (same path as
-// the rule engine's TripleMutator). Neither adapter tracks KV revisions for
-// feedback-loop prevention — they are event-subscriber side effects, not
-// rule-engine transitions.
-//
-// Both adapters are wired in cmd/semstreams and cmd/e2e-semstreams at startup.
+// Package agentrun contains the NATS-backed exact-read adapter used to resolve
+// agent-run ancestry from graph authority.
 package agentrun
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
-// natsTripleAddSubject is the NATS request subject for single-triple adds.
-// Must match processor/rule/triple_mutator.go:SubjectTripleAdd.
-const natsTripleAddSubject = "graph.mutation.triple.add"
+const natsExactReadTimeout = 5 * time.Second
 
-// natsTripleMutationTimeout is the round-trip budget for triple mutations.
-// Matches the rule engine's MutationTimeout.
-const natsTripleMutationTimeout = 5 * time.Second
-
-// NATSTriplePublisher satisfies agentrun.TriplePublisher via the
-// graph.mutation.triple.add NATS surface. Used by MilestoneSubscriber
-// to stamp milestone triples onto run entities via graph-ingest.
-//
-// The ruleID argument is accepted to satisfy the interface but is NOT
-// forwarded — milestone writes are not rule-engine transitions and need
-// no feedback-loop revision tracking.
-type NATSTriplePublisher struct {
-	client *natsclient.Client
-}
-
-// NewNATSTriplePublisher builds a TriplePublisher backed by the shared
-// graph.mutation.triple.add NATS surface.
-func NewNATSTriplePublisher(client *natsclient.Client) *NATSTriplePublisher {
-	return &NATSTriplePublisher{client: client}
-}
-
-// AddTriple writes a triple through graph-ingest and returns the KV revision.
-func (p *NATSTriplePublisher) AddTriple(ctx context.Context, _ string, triple message.Triple) (uint64, error) {
-	req := graph.AddTripleRequest{Triple: triple}
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: marshal: %w", err)
-	}
-	// gh#93 Phase 2: RequestWithRetryClassified surfaces handler errors
-	// (legacy "error: " body prefix) as err rather than silently
-	// mis-decoding them as success JSON. Migration from RequestWithRetry.
-	respData, err := p.client.RequestWithRetryClassified(ctx, natsTripleAddSubject, reqData, natsTripleMutationTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: NATS request: %w", err)
-	}
-	// ADR-060: a handler failure arrives as the classified err above; decode the
-	// success body only for the KV revision.
-	var resp graph.AddTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return 0, fmt.Errorf("agentrun: NATSTriplePublisher: unmarshal response: %w", err)
-	}
-	return resp.KVRevision, nil
-}
-
-// NATSLoopTripleReader implements LoopTripleReader backed by the ENTITY_STATES
-// KV bucket. Reads are lazy-bucket: the bucket is opened on first use and
-// cached for subsequent calls.
+// NATSLoopTripleReader implements LoopTripleReader through the exact authority
+// operation. It owns no KV handle and has no raw-storage fallback.
 //
 // Satisfies the LoopTripleReader interface required by ResolveRun and
 // MilestoneSubscriber.
 type NATSLoopTripleReader struct {
-	client *natsclient.Client
+	reader graph.ExactEntityReader
 }
 
-// NewNATSLoopTripleReader constructs a LoopTripleReader backed by a natsclient.
-// The client must be connected; the ENTITY_STATES bucket is opened lazily on
-// first read.
+// NewNATSLoopTripleReader constructs a LoopTripleReader backed by the exact
+// graph authority operation.
 func NewNATSLoopTripleReader(client *natsclient.Client) *NATSLoopTripleReader {
-	return &NATSLoopTripleReader{client: client}
+	return &NATSLoopTripleReader{reader: graph.NewExactEntityReader(client, natsExactReadTimeout)}
 }
 
 // GetLoopRunID reads the agent.loop.run triple from the given loop entity ID.
@@ -104,30 +44,22 @@ func (r *NATSLoopTripleReader) GetLoopParentEntityID(ctx context.Context, loopEn
 	return r.getStringTriple(ctx, loopEntityID, agvocab.LoopParent)
 }
 
-// getStringTriple is the shared read path for both triple-reading methods.
-// It opens the ENTITY_STATES bucket, fetches the entity JSON, and extracts
-// the named predicate's value as a string.
+// getStringTriple is the shared exact-read path for both triple-reading methods.
 func (r *NATSLoopTripleReader) getStringTriple(ctx context.Context, entityID, predicate string) (string, bool, error) {
-	bucket, err := r.client.GetKeyValueBucket(ctx, graph.BucketEntityStates)
-	if err != nil {
-		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: open bucket: %w", err)
+	if r == nil || r.reader == nil {
+		return "", false, errors.New("agentrun: NATSLoopTripleReader: exact reader is required")
 	}
-
-	entry, err := bucket.Get(ctx, entityID)
+	exact, err := r.reader.ReadExactEntity(ctx, entityID)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
+		var classified *errs.ClassifiedError
+		if errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound {
 			// Entity not yet in graph — triple is absent.
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: KV get %q: %w", entityID, err)
+		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: exact read %q: %w", entityID, err)
 	}
 
-	var state graph.EntityState
-	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-		return "", false, fmt.Errorf("agentrun: NATSLoopTripleReader: unmarshal entity %q: %w", entityID, err)
-	}
-
-	val, ok := state.GetPropertyValue(predicate)
+	val, ok := exact.Entity.GetPropertyValue(predicate)
 	if !ok {
 		return "", false, nil
 	}

@@ -16,11 +16,11 @@ var errWriteTodosMutationClientRequired = errors.New(
 
 // registerWriteTodos wires the ADR-036 write_todos tool. The tool
 // writes agent-private todo state on the calling loop's entity via one
-// contract-bound replace-owned mutation. Available to all roles
+// contract-bound reconcile mutation. Available to all roles
 // (per ADR-036 §First Instance — opacity is per-loop, not per-role);
 // persona authors opt out via tool allowlists for tiny-model
 // deployments.
-func registerWriteTodos(reg *agentictools.ExecutorRegistry, client projection.OwnedReplacer, platform component.PlatformMeta, logger *slog.Logger) error {
+func registerWriteTodos(reg *agentictools.ExecutorRegistry, client projection.PredicateReconciler, platform component.PlatformMeta, logger *slog.Logger) error {
 	if client == nil {
 		return errWriteTodosMutationClientRequired
 	}

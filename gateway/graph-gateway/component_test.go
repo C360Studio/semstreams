@@ -35,7 +35,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -51,7 +51,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath:      "/graphql",
@@ -92,7 +92,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -144,7 +144,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath: "", // Empty - invalid
@@ -161,7 +161,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -178,7 +178,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath:      "/graphql",
@@ -196,7 +196,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 						{Name: "http", Type: "http", Subject: "/graphql"},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -226,7 +226,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 				{Name: "http", Type: "http", Subject: "/graphql"},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "mutations", Type: "nats-request", Subject: "graph.mutation.*"},
+				{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
 			},
 		},
 	}
@@ -309,7 +309,7 @@ func TestComponent_OutputPorts_ReturnsNATSRequestPort(t *testing.T) {
 
 	require.NotEmpty(t, ports, "should have at least one output port")
 
-	// Verify NATS request ports exist for both queries and mutations
+	// Verify the gateway exposes only its query request port.
 	subjects := make(map[string]bool)
 	for _, port := range ports {
 		assert.NotEmpty(t, port.Name)
@@ -321,7 +321,7 @@ func TestComponent_OutputPorts_ReturnsNATSRequestPort(t *testing.T) {
 	}
 
 	assert.True(t, subjects["graph.query.*"], "should have graph.query.* output port")
-	assert.True(t, subjects["graph.mutation.*"], "should have graph.mutation.* output port")
+	assert.NotContains(t, subjects, "graph.mutation.*", "graph-gateway is not a mutation requester")
 }
 
 func TestComponent_ConfigSchema_ReturnsValidSchema(t *testing.T) {
@@ -718,7 +718,7 @@ func TestCreateGraphGateway_PartialConfig(t *testing.T) {
 				{"name": "http", "type": "http", "subject": "/graphql"}
 			],
 			"outputs": [
-				{"name": "mutations", "type": "nats-request", "subject": "graph.mutation.*"}
+				{"name": "audit", "type": "nats", "subject": "audit.events"}
 			]
 		},
 		"graphql_path": "/custom-graphql"
@@ -742,13 +742,13 @@ func TestCreateGraphGateway_PartialConfig(t *testing.T) {
 	assert.Equal(t, "/mcp", component.config.MCPPath, "should apply default MCP path")
 	assert.Equal(t, "localhost:8080", component.config.BindAddress, "should apply default bind address")
 
-	// Verify queries port was injected even though outputs already had mutations
+	// Verify queries was injected while the unrelated configured output survived.
 	outputNames := make(map[string]bool)
 	for _, p := range component.config.Ports.Outputs {
 		outputNames[p.Name] = true
 	}
 	assert.True(t, outputNames["queries"], "ensureDefaults should inject queries port when missing")
-	assert.True(t, outputNames["mutations"], "ensureDefaults should preserve existing mutations port")
+	assert.True(t, outputNames["audit"], "ensureDefaults should preserve existing unrelated outputs")
 }
 
 func TestRegister_AddsToRegistry(t *testing.T) {

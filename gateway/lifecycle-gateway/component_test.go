@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,9 +27,55 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/pkg/projection"
 )
+
+func TestDefaultConfigDeclaresCanonicalMutationOutput(t *testing.T) {
+	t.Parallel()
+
+	cfg := DefaultConfig()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("DefaultConfig.Validate: %v", err)
+	}
+	componentUnderTest := &Component{config: cfg}
+	ports := componentUnderTest.OutputPorts()
+	if len(ports) != 1 {
+		t.Fatalf("OutputPorts len = %d, want one canonical mutation port", len(ports))
+	}
+	request, ok := ports[0].Config.(component.NATSRequestPort)
+	if !ok || !ports[0].Required || request.Subject != graphmutation.SubjectFamily ||
+		request.Interface == nil || request.Interface.Type != graphmutation.InterfaceType ||
+		request.Interface.Version != graphmutation.InterfaceVersion {
+		t.Fatalf("mutation output = %#v", ports[0])
+	}
+}
+
+func TestConfigRejectsNoncanonicalMutationOutput(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		port component.PortDefinition
+	}{
+		{name: "wrong type", port: component.PortDefinition{Name: "graph_mutations", Type: "nats", Subject: graphmutation.SubjectFamily, Interface: graphmutation.InterfaceType, Required: true}},
+		{name: "wrong family", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: "graph.mutation.*", Interface: graphmutation.InterfaceType, Required: true}},
+		{name: "wrong interface", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily, Interface: "other.interface", Required: true}},
+		{name: "optional", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily, Interface: graphmutation.InterfaceType}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cfg := DefaultConfig()
+			cfg.Ports.Outputs = []component.PortDefinition{test.port}
+			if err := cfg.Validate(); err == nil {
+				t.Fatal("Validate accepted noncanonical mutation output")
+			}
+		})
+	}
+}
 
 // --- Mock LifecycleManager ---
 
@@ -187,7 +234,7 @@ func (m *fakeManager) Children(_ context.Context, parentEntityID string, _ lifec
 	return out, nil
 }
 
-func (m *fakeManager) References(_ context.Context, _ string) ([]lifecycle.ReferenceStub, error) {
+func (m *fakeManager) References(_ context.Context, _ string) ([]lifecycle.RelationshipReference, error) {
 	return nil, nil
 }
 
@@ -1049,6 +1096,20 @@ func TestOpenAPISpec_DocumentsAllEndpoints(t *testing.T) {
 			}
 		}
 	}
+
+	create := spec.Paths["/workflows/{type}"].POST
+	if strings.Contains(strings.ToLower(create.Description), "degraded") {
+		t.Errorf("create description still promises degraded success: %q", create.Description)
+	}
+	for _, path := range []string{
+		"/workflows/{type}",
+		"/workflows/{type}/{id}/state",
+		"/workflows/{type}/{id}/transition",
+	} {
+		if _, ok := spec.Paths[path].POST.Responses["503"]; !ok {
+			t.Errorf("mutation path %q does not document commit uncertainty with 503", path)
+		}
+	}
 }
 
 func TestFactory_ValidatesPathPrefix(t *testing.T) {
@@ -1102,7 +1163,7 @@ func mustDecodeJSON(t *testing.T, r *http.Response, into any) {
 // makes the first instance. A composition that had correctly disabled every
 // unbound product writer therefore had no supported public way to create
 // deterministic state, and the workarounds (re-enable a legacy seed writer, or
-// publish raw graph mutations) are exactly what the ownership cutover forbids.
+// publish raw graph mutations) are exactly what the lifecycle manager boundary forbids.
 func TestCreateInstance_BirthLane(t *testing.T) {
 	srv, mgr := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
 		Workflow:               "mission",
@@ -1122,7 +1183,7 @@ func TestCreateInstance_BirthLane(t *testing.T) {
 		t.Fatalf("create status = %d, want 201 (body: %s)", resp.StatusCode, raw)
 	}
 
-	// The response is the committed state read back, not the request echoed.
+	// The response is the causal committed instance, not the request echoed.
 	var created map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create response: %v", err)
@@ -1312,7 +1373,6 @@ func TestErrorToStatus_MapsTheSentinelsCreateMadeReachable(t *testing.T) {
 		wantStatus int
 		wantInBody string
 	}{
-		{"owner quiesced", fmt.Errorf("%w: superseded", lifecycle.ErrOwnerQuiesced), http.StatusConflict, "superseded"},
 		{"entity-id pattern mismatch", fmt.Errorf("%w: bad id", lifecycle.ErrEntityIDPatternMismatch), http.StatusBadRequest, "bad id"},
 		{"not lifecycle managed", fmt.Errorf("%w: no phase", lifecycle.ErrEntityNotLifecycleManaged), http.StatusNotFound, "no phase"},
 	}
@@ -1332,9 +1392,142 @@ func TestErrorToStatus_MapsTheSentinelsCreateMadeReachable(t *testing.T) {
 				t.Errorf("status = %d, want %d (body: %s)", resp.StatusCode, tc.wantStatus, body)
 			}
 			// 4xx must preserve the reason — a canned message leaves an
-			// ownership-strict operator with nothing actionable.
+			// operator request with nothing actionable.
 			if !strings.Contains(string(body), tc.wantInBody) {
 				t.Errorf("body %s does not carry the reason %q", body, tc.wantInBody)
+			}
+		})
+	}
+}
+
+func TestMutationHandlers_CommitUnknownIsTypedAndNotRetryAdvice(t *testing.T) {
+	tests := []struct {
+		name      string
+		path      string
+		body      string
+		operation projection.MutationOperation
+		setError  func(*fakeManager, error)
+	}{
+		{
+			name: "create", path: "/lifecycle/workflows/mission",
+			body:      `{"entity_id":"acme.ops.gcs.mission.instance.unknown","workflow":"mission","phase":"planned"}`,
+			operation: projection.MutationOperationCreate,
+			setError:  func(m *fakeManager, err error) { m.createErr = err },
+		},
+		{
+			name: "state patch", path: "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.unknown/state",
+			body:      `{"owner_org_id":"acme"}`,
+			operation: projection.MutationOperationReconcile,
+			setError:  func(m *fakeManager, err error) { m.updateErr = err },
+		},
+		{
+			name: "transition", path: "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.unknown/transition",
+			body:      `{"phase":"flying"}`,
+			operation: projection.MutationOperationReconcile,
+			setError:  func(m *fakeManager, err error) { m.transitionErr = err },
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, manager := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
+				Workflow:               "mission",
+				OperatorWritableFields: []string{"owner_org_id"},
+			})
+			defer srv.Close()
+			test.setError(manager, &projection.MutationError{
+				Operation: test.operation,
+				Kind:      projection.MutationCommitUnknown,
+				Commit:    projection.CommitUnknown,
+				Err:       errors.New("request delivery ended without an authoritative response"),
+			})
+
+			response, err := http.Post(srv.URL+test.path, "application/json", strings.NewReader(test.body))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503 (body: %s)", response.StatusCode, mustBody(response))
+			}
+			var envelope errorResponse
+			mustDecodeJSON(t, response, &envelope)
+			if envelope.Code != "commit_unknown" {
+				t.Errorf("code = %q, want commit_unknown", envelope.Code)
+			}
+			if !strings.Contains(envelope.Error, "inspect authoritative state") {
+				t.Errorf("error = %q, want authority-inspection guidance", envelope.Error)
+			}
+			if strings.Contains(strings.ToLower(envelope.Error), "retry") {
+				t.Errorf("error = %q, must not advise a blind retry", envelope.Error)
+			}
+		})
+	}
+}
+
+func TestMutationHandlers_PreserveDefiniteTypedOutcomes(t *testing.T) {
+	tests := []struct {
+		name       string
+		path       string
+		body       string
+		mutation   *projection.MutationError
+		setError   func(*fakeManager, error)
+		wantStatus int
+		wantCode   string
+	}{
+		{
+			name: "create conflict", path: "/lifecycle/workflows/mission",
+			body: `{"entity_id":"acme.ops.gcs.mission.instance.conflict","workflow":"mission","phase":"planned"}`,
+			mutation: &projection.MutationError{Operation: projection.MutationOperationCreate,
+				Kind: projection.MutationConflict, Code: graph.ErrorCodeEntityExists,
+				Commit: projection.CommitNotCommitted, Err: errors.New("already exists")},
+			setError:   func(m *fakeManager, err error) { m.createErr = err },
+			wantStatus: http.StatusConflict,
+			wantCode:   graph.ErrorCodeEntityExists,
+		},
+		{
+			name: "patch revision mismatch",
+			path: "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.raced/state", body: `{"owner_org_id":"acme"}`,
+			mutation: &projection.MutationError{Operation: projection.MutationOperationReconcile,
+				Kind: projection.MutationRevisionConflict, Code: graph.ErrorCodeRevisionMismatch,
+				Commit: projection.CommitNotCommitted, Err: errors.New("stale revision")},
+			setError:   func(m *fakeManager, err error) { m.updateErr = err },
+			wantStatus: http.StatusConflict,
+			wantCode:   graph.ErrorCodeRevisionMismatch,
+		},
+		{
+			name: "transition entity not found",
+			path: "/lifecycle/workflows/mission/acme.ops.gcs.mission.instance.missing/transition", body: `{"phase":"flying"}`,
+			mutation: &projection.MutationError{Operation: projection.MutationOperationReconcile,
+				Kind: projection.MutationNotFound, Code: graph.ErrorCodeEntityNotFound,
+				Commit: projection.CommitNotCommitted, Err: errors.New("missing entity")},
+			setError:   func(m *fakeManager, err error) { m.transitionErr = err },
+			wantStatus: http.StatusNotFound,
+			wantCode:   graph.ErrorCodeEntityNotFound,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			srv, manager := newTestGateway(t, "/lifecycle", lifecycle.WorkflowDef{
+				Workflow:               "mission",
+				OperatorWritableFields: []string{"owner_org_id"},
+			})
+			defer srv.Close()
+			test.setError(manager, test.mutation)
+
+			response, err := http.Post(srv.URL+test.path, "application/json", strings.NewReader(test.body))
+			if err != nil {
+				t.Fatalf("POST: %v", err)
+			}
+			defer response.Body.Close()
+			if response.StatusCode != test.wantStatus {
+				t.Fatalf("status = %d, want %d (body: %s)", response.StatusCode, test.wantStatus, mustBody(response))
+			}
+			var envelope errorResponse
+			mustDecodeJSON(t, response, &envelope)
+			if envelope.Code != test.wantCode {
+				t.Errorf("code = %q, want %q", envelope.Code, test.wantCode)
 			}
 		})
 	}

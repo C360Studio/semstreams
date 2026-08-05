@@ -11,7 +11,6 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,17 +63,8 @@ func createTestComponentWithHierarchyConfig(t *testing.T, enableHierarchy bool) 
 func createHierarchyComponentOnClient(t *testing.T, natsClient *natsclient.Client, enableHierarchy bool) *Component {
 	t.Helper()
 
-	config := Config{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "entity_stream", Type: "jetstream", Subject: "entity.>"},
-			},
-			Outputs: []component.PortDefinition{
-				{Name: "entity_states", Type: "kv-write", Subject: graph.BucketEntityStates},
-			},
-		},
-		EnableHierarchy: enableHierarchy,
-	}
+	config := DefaultConfig()
+	config.EnableHierarchy = enableHierarchy
 
 	deps := component.Dependencies{
 		NATSClient: natsClient,

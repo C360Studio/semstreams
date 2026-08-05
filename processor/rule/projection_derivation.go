@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 )
@@ -64,7 +63,7 @@ func collectProjectionActionObligations(
 		}
 		for _, list := range lists {
 			for index, action := range list.actions {
-				if action.Type != ActionTypeReplaceOwned {
+				if action.Type != ActionTypeReconcilePredicates {
 					continue
 				}
 				location := fmt.Sprintf("%s %s[%d]", definition.ID, list.name, index)
@@ -104,16 +103,16 @@ func collectProjectionActionObligations(
 
 func validateProjectionActionSelectors(action Action) error {
 	if strings.TrimSpace(action.ProjectionContract) == "" {
-		return fmt.Errorf("replace_owned projection_contract is required")
+		return fmt.Errorf("reconcile_predicates projection_contract is required")
 	}
 	if strings.TrimSpace(action.ProjectionGroup) == "" {
-		return fmt.Errorf("replace_owned projection_group is required")
+		return fmt.Errorf("reconcile_predicates projection_group is required")
 	}
 	if strings.TrimSpace(action.Predicate) == "" {
-		return fmt.Errorf("replace_owned predicate is required")
+		return fmt.Errorf("reconcile_predicates predicate is required")
 	}
 	if strings.Contains(action.Predicate, "$") {
-		return fmt.Errorf("replace_owned predicate %q must be a literal", action.Predicate)
+		return fmt.Errorf("reconcile_predicates predicate %q must be a literal", action.Predicate)
 	}
 	return nil
 }
@@ -134,7 +133,7 @@ func inferProjectionActionPattern(
 		}
 		if err := semtypes.ValidateEntityID(action.Subject); err != nil {
 			return "", false, fmt.Errorf(
-				"replace_owned subject %q must be a canonical literal entity ID or a supported runtime template: %w",
+				"reconcile_predicates subject %q must be a canonical literal entity ID or a supported runtime template: %w",
 				action.Subject,
 				err,
 			)
@@ -186,7 +185,7 @@ func buildMinimalProjectionContracts(
 	}
 	if len(unresolved) > 0 {
 		return nil, fmt.Errorf(
-			"each replace_owned target at %s requires an explicit projection_contracts envelope; unresolved targets are never widened to match-all",
+			"each reconcile_predicates target at %s requires an explicit projection_contracts envelope; unresolved targets are never widened to match-all",
 			strings.Join(unresolved, ", "),
 		)
 	}
@@ -214,7 +213,7 @@ func buildMinimalProjectionContracts(
 			sort.Strings(predicates)
 			groups = append(groups, projection.PredicateGroup{
 				Name:       groupName,
-				Mode:       ownership.ModeReplaceOwned,
+				Mode:       projection.ModeReconcile,
 				Predicates: predicates,
 			})
 		}
@@ -224,7 +223,7 @@ func buildMinimalProjectionContracts(
 			Groups:        groups,
 		})
 	}
-	if _, err := projection.Derive("rule-pack-derived-preflight", effective...); err != nil {
+	if err := projection.ValidateContracts(effective); err != nil {
 		return nil, fmt.Errorf("validate derived projection contracts: %w", err)
 	}
 	return effective, nil
@@ -247,7 +246,7 @@ func validateDeclaredProjectionSuperset(
 		byName[contract.Name] = contract
 	}
 	if len(declared) > 0 {
-		if _, err := projection.Derive("rule-pack-declared-preflight", declared...); err != nil {
+		if err := projection.ValidateContracts(declared); err != nil {
 			return fmt.Errorf("validate declared projection contracts: %w", err)
 		}
 	}
@@ -275,14 +274,14 @@ func validateDeclaredProjectionSuperset(
 				obligation.group,
 			)
 		}
-		if matchingGroup.Mode != ownership.ModeReplaceOwned {
+		if matchingGroup.Mode != projection.ModeReconcile {
 			return fmt.Errorf(
 				"%s: declared contract %q group %q uses mode %q, want %q",
 				obligation.location,
 				obligation.contract,
 				obligation.group,
 				matchingGroup.Mode,
-				ownership.ModeReplaceOwned,
+				projection.ModeReconcile,
 			)
 		}
 		if !containsString(matchingGroup.Predicates, obligation.predicate) {

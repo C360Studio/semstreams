@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
@@ -235,7 +236,13 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 					},
 					Outputs: []component.PortDefinition{
 						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
-						{Name: "inferred_edges", Type: "nats-request", Subject: "graph.mutation.triple.add"},
+						{
+							Name:      "inferred_edges",
+							Type:      "nats-request",
+							Subject:   graphmutation.SubjectFamily,
+							Interface: graphmutation.InterfaceType,
+							Required:  true,
+						},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -601,6 +608,7 @@ func TestComponent_OutputPorts_ReturnsCommunityIndex(t *testing.T) {
 
 	// Verify COMMUNITY_INDEX output bucket
 	hasCommunityIndex := false
+	hasMutationPort := false
 	for _, port := range ports {
 		assert.NotEmpty(t, port.Name)
 		assert.Equal(t, component.DirectionOutput, port.Direction)
@@ -610,9 +618,15 @@ func TestComponent_OutputPorts_ReturnsCommunityIndex(t *testing.T) {
 				hasCommunityIndex = true
 			}
 		}
+		if request, ok := port.Config.(component.NATSRequestPort); ok {
+			hasMutationPort = port.Required && request.Subject == graphmutation.SubjectFamily &&
+				request.Interface != nil && request.Interface.Type == graphmutation.InterfaceType &&
+				request.Interface.Version == graphmutation.InterfaceVersion
+		}
 	}
 
 	assert.True(t, hasCommunityIndex, "should have COMMUNITY_INDEX output")
+	assert.True(t, hasMutationPort, "should expose the required canonical graph mutation output")
 }
 
 func TestComponent_ConfigSchema_ReturnsValidSchema(t *testing.T) {

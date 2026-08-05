@@ -333,6 +333,10 @@ The wire proves only what graph-ingest can causally report:
 
 - successful reply: `applied` or `unchanged`, with the operation's exact entity revision evidence;
 - classified reply: definitely not applied for invalid, not-found, exists, or revision-mismatch precondition failures;
+- multi-subject append reply: one result per distinct subject using `outcome` as the explicit discriminator;
+  `applied|unchanged` require `kv_revision`, `entity_not_found` forbids it, and `failed` requires
+  `error:{class,code}`. Every other outcome forbids `error`. A subject-local classified failure is definite and does
+  not erase exact receipts for subjects already committed;
 - no responder before delivery: unavailable/not-applied according to the NATS primitive's classified guarantee;
 - timeout, disconnect, malformed/lost reply after possible delivery: `commit_unknown` at the typed-client boundary.
 
@@ -407,8 +411,8 @@ Retain `projection.Contract` as local mutation schema, not global authority:
   `rule-pack.<PackID>` ownership or triggers projection binding;
 - rule-pack preflight still freezes contracts and validates every `reconcile` action against an exact contract/group/
   predicate target before start or hot reload;
-- a rule reconcile that receives `revision_mismatch` performs one fresh exact read and one retry; a second mismatch is a
-  visible action failure. This fixed bound is not a configuration knob and does not apply after `commit_unknown`;
+- a rule reconcile performs one exact read and one mutation request. It surfaces `revision_mismatch` and
+  `commit_unknown` without automatic retry; the component owns any later operation-specific retry decision;
 - `LessonCurator`, `write_todos`, and rule actions keep their narrow mutation interfaces over a locally constructed client.
 
 ### 9. Complete semantic-ownership and stub retirement

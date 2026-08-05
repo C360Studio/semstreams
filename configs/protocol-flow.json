@@ -282,6 +282,13 @@
         "ports": {
           "inputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "unused_in",
               "subject": "_e2e.core.graph.unused",
               "type": "nats"
@@ -295,8 +302,7 @@
             }
           ]
         },
-        "enable_hierarchy": false,
-        "enforce_owner_lease": true
+        "enable_hierarchy": false
       }
     },
     "graph-index": {
@@ -353,8 +359,7 @@
             {"name": "http", "subject": ":8084", "type": "http"}
           ],
           "outputs": [
-            {"name": "queries", "subject": "graph.query.*", "type": "nats-request"},
-            {"name": "mutations", "subject": "graph.mutation.*", "type": "nats-request"}
+            {"name": "queries", "subject": "graph.query.*", "type": "nats-request"}
           ]
         },
         "graphql_path": "/graphql",

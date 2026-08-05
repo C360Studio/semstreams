@@ -260,14 +260,14 @@ Every NATS KV bucket gives you two core interfaces from one write:
 
 `ENTITY_STATES` has history 1. It is current authority, not an audit or recovery
 ledger. Declared watchers rehydrate current matching values and then observe live
-changes. State-reactive owners may watch; periodic owners may read current state
+changes. State-reactive components may watch; periodic components may read current state
 on their cycle. See [KV Twofer](docs/concepts/02-kv-twofer.md).
 
 ### Facts vs Requests
 
 | Communication type | Primitive | Restart behavior |
 |---|---|---|
-| Fact/current state | KV Watch | Hydrates current matching inputs; owner repair/redrive completes recovery |
+| Fact/current state | KV Watch | Hydrates current matching inputs; the responsible component repairs/redrives when needed |
 | Work request | JetStream Stream | Unacked work redelivers; acked work does not |
 
 Use `/kv-or-stream` for the full 4-test decision heuristic. See [Streams vs KV Watches](docs/concepts/03-streams-vs-kv-watches.md).
@@ -311,9 +311,9 @@ For bounded-concurrency parallel work inside components, compose **BoundedDispat
 | Bounded parallel work inside a component | BoundedDispatcher — ADR-048 |
 | Execute LLM call, graph query, file I/O, etc. | Component |
 
-**Key rules**: Rules trigger; components execute. State ownership is exclusive.
+**Key rules**: Rules trigger; components execute. Physical storage responsibility is explicit.
 Domain and Lifecycle `Participant` current state lives in `ENTITY_STATES` under
-graph-ingest ownership. Operational results use component-specific KV, events use
+graph-ingest's authority. Operational results use component-specific KV, events use
 JetStream streams, and bulky payloads use ObjectStore via `ContentStorable` refs.
 
 **Engine gaps file as engine work, not app-side state plumbing.** semspec's retired `workflow/reactive/` (7,264 LOC) is the cautionary tale on the engine-shape axis; semspec's `workflow/` package (~7,840 LOC of convention hand-rolled because the framework didn't provide one) is the cautionary tale on the convention-shape axis — both are migration blockers when carried per-consumer. The Lifecycle harness exists specifically to retire the next-instance of the second pattern (cross-consumer convention reinvention). If a rule-engine, harness, or substrate primitive is missing, propose adding it; don't carve out a parallel path.

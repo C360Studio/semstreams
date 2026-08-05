@@ -26,8 +26,6 @@ const WriteTodosToolName = "write_todos"
 // coordinator-decision triples in graph queries.
 const writeTodosToolSource = "agent-write-todos"
 
-const todoTriplesPerItem = 5
-
 // validTodoStatuses enumerates the ADR-036 status enum. The executor
 // rejects any other value with ToolErrorInvalidArgs so the LLM can
 // self-correct rather than emitting silently-broken state.
@@ -42,16 +40,15 @@ var validTodoStatuses = map[string]struct{}{
 // — the agent is the sole writer and sole interpreter of content
 // (the persona's discipline, not enforced at the executor level).
 //
-// Each call has full-list-replace semantics: every existing
-// agent.todo.* triple on the loop entity is cleared before the new
-// triples are written. The agent submits the entire desired list on
-// every call.
+// Each call has full-list-replace semantics: the agent.todo.record reconcile
+// group is made equal to one complete JSON record triple per submitted item.
+// The agent submits the entire desired list on every call.
 //
 // All public methods are safe for concurrent use across loops; the
 // executor holds no per-call mutable state. Within a single loop,
 // the agentic-loop already serialises tool calls.
 type WriteTodosExecutor struct {
-	writer   projection.OwnedReplacer
+	writer   projection.PredicateReconciler
 	platform types.PlatformMeta
 	logger   *slog.Logger
 	now      func() time.Time
@@ -60,7 +57,7 @@ type WriteTodosExecutor struct {
 // NewWriteTodosExecutor constructs the executor given a writer and
 // the platform identity used to resolve loop entity IDs. The clock
 // defaults to time.Now; tests inject a frozen clock via SetClock.
-func NewWriteTodosExecutor(writer projection.OwnedReplacer, platform types.PlatformMeta) *WriteTodosExecutor {
+func NewWriteTodosExecutor(writer projection.PredicateReconciler, platform types.PlatformMeta) *WriteTodosExecutor {
 	return &WriteTodosExecutor{
 		writer:   writer,
 		platform: platform,
@@ -77,7 +74,7 @@ func (e *WriteTodosExecutor) SetLogger(logger *slog.Logger) {
 }
 
 // SetClock replaces the time source the executor stamps onto
-// triples (Triple.Timestamp and the agent.todo.updated_at value).
+// triples (Triple.Timestamp and each record's updated_at field).
 // nil-safe — passing nil preserves the existing clock. Used by
 // tests for deterministic timestamp assertions; production should
 // not call this.
@@ -187,8 +184,15 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 	}
 
 	now := e.now()
-	triples := buildTodoTriples(loopEntityID, args.Todos, now)
-	_, err = e.writer.ReplaceOwned(ctx, projection.ReplaceOwnedMutation{
+	triples, err := buildTodoTriples(loopEntityID, args.Todos, now)
+	if err != nil {
+		return agentic.ToolResult{
+			CallID:    call.ID,
+			Error:     fmt.Sprintf("encode todo records: %v", err),
+			ErrorKind: agentic.ToolErrorInternal,
+		}, errs.WrapFatal(err, "WriteTodosExecutor", "write", "encode todo records")
+	}
+	_, err = e.writer.Reconcile(ctx, projection.ReconcileMutation{
 		Contract: builtinprojection.LoopExecutionContractName,
 		Group:    builtinprojection.TodoGroupName,
 		EntityID: loopEntityID,
@@ -200,7 +204,7 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 		},
 	})
 	if err != nil {
-		errorKind, classifiedErr := classifyTodoReplaceFailure(err)
+		errorKind, classifiedErr := classifyTodoReconcileFailure(err)
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("replace todos: %v", err),
@@ -225,8 +229,7 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 	e.logger.Debug("write_todos applied",
 		"loop_id", call.LoopID,
 		"loop_entity_id", loopEntityID,
-		"todo_count", len(args.Todos),
-		"triple_count", len(triples))
+		"todo_count", len(args.Todos))
 
 	return agentic.ToolResult{
 		CallID:  call.ID,
@@ -234,15 +237,14 @@ func (e *WriteTodosExecutor) write(ctx context.Context, call agentic.ToolCall) (
 		Metadata: map[string]any{
 			"loop_entity_id": loopEntityID,
 			"todo_count":     len(args.Todos),
-			"triple_count":   len(triples),
 		},
 	}, nil
 }
 
-// classifyTodoReplaceFailure preserves the projection client's commit-aware
+// classifyTodoReconcileFailure preserves the projection client's commit-aware
 // taxonomy at the tool retry boundary. Only a typed unavailable outcome that is
 // known not to have committed may enter the network/transient retry lane.
-func classifyTodoReplaceFailure(err error) (agentic.ToolErrorKind, error) {
+func classifyTodoReconcileFailure(err error) (agentic.ToolErrorKind, error) {
 	const (
 		component = "WriteTodosExecutor"
 		method    = "write"
@@ -270,8 +272,6 @@ func classifyTodoReplaceFailure(err error) (agentic.ToolErrorKind, error) {
 			return agentic.ToolErrorNetwork, errs.WrapTransient(err, component, method, action)
 		}
 		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
-	case projection.MutationStaleOwnerToken:
-		return agentic.ToolErrorPermission, errs.WrapInvalid(err, component, method, action)
 	case projection.MutationInvalid,
 		projection.MutationConflict,
 		projection.MutationRevisionConflict:
@@ -280,8 +280,7 @@ func classifyTodoReplaceFailure(err error) (agentic.ToolErrorKind, error) {
 		return agentic.ToolErrorNotFound, errs.WrapInvalid(err, component, method, action)
 	case projection.MutationCommitUnknown:
 		return agentic.ToolErrorUnknown, errs.WrapFatal(err, component, method, action)
-	case projection.MutationCommittedUnverified,
-		projection.MutationInternal:
+	case projection.MutationInternal:
 		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
 	default:
 		return agentic.ToolErrorInternal, errs.WrapFatal(err, component, method, action)
@@ -332,41 +331,38 @@ func parseWriteTodosArgs(raw map[string]any) (writeTodosArgs, error) {
 	return args, nil
 }
 
-// buildTodoTriples produces the five triples per todo item that the
-// prompt assembler reconstructs the list from. Position is derived
-// from the array index (0-based); updated_at is the caller-supplied
-// wall-clock time so tests can pin it deterministically.
-func buildTodoTriples(loopEntityID string, todos []todoArg, now time.Time) []message.Triple {
+type todoRecord struct {
+	ID        string `json:"id"`
+	Content   string `json:"content"`
+	Status    string `json:"status"`
+	Position  int    `json:"position"`
+	UpdatedAt string `json:"updated_at"`
+}
+
+// buildTodoTriples produces one deterministic JSON record triple per todo.
+// Struct field order makes the byte representation stable; position is derived
+// from the array index and updated_at is shared across one reconcile call.
+func buildTodoTriples(loopEntityID string, todos []todoArg, now time.Time) ([]message.Triple, error) {
 	if len(todos) == 0 {
-		return nil
+		return nil, nil
 	}
-	triples := make([]message.Triple, 0, len(todos)*todoTriplesPerItem)
+	triples := make([]message.Triple, 0, len(todos))
 	updatedAt := now.UTC().Format(time.RFC3339Nano)
 	for i, t := range todos {
-		triples = append(triples,
-			message.Triple{
-				Subject: loopEntityID, Predicate: agvocab.TodoID,
-				Object: t.ID, Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
-			},
-			message.Triple{
-				Subject: loopEntityID, Predicate: agvocab.TodoContent,
-				Object: t.Content, Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
-			},
-			message.Triple{
-				Subject: loopEntityID, Predicate: agvocab.TodoStatus,
-				Object: t.Status, Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
-			},
-			message.Triple{
-				Subject: loopEntityID, Predicate: agvocab.TodoPosition,
-				Object: i, Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
-			},
-			message.Triple{
-				Subject: loopEntityID, Predicate: agvocab.TodoUpdatedAt,
-				Object: updatedAt, Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
-			},
-		)
+		encoded, err := json.Marshal(todoRecord{
+			ID: t.ID, Content: t.Content, Status: t.Status,
+			Position: i, UpdatedAt: updatedAt,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("todo %q: %w", t.ID, err)
+		}
+		triples = append(triples, message.Triple{
+			Subject: loopEntityID, Predicate: agvocab.TodoRecord,
+			Object: string(encoded), Source: writeTodosToolSource, Timestamp: now, Confidence: 1.0,
+			Datatype: agvocab.TodoRecordJSONDatatype,
+		})
 	}
-	return triples
+	return triples, nil
 }
 
 // writeTodosSummary is the compact JSON the executor returns in

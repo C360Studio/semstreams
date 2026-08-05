@@ -11,9 +11,10 @@ well.
 
 The framework registers `write_todos` for every role by default. The
 tool writes structured working memory onto the calling loop's entity
-that survives context compaction. Personas decide when to reach for
-it; the discipline is descriptive (in the persona prompt), not
-prescriptive (no rule, no validator gates content).
+as one rule-opaque `agent.todo.record` JSON record per item. The state
+survives context compaction. Personas decide when to reach for it; the
+discipline is descriptive (in the persona prompt), not prescriptive
+(no rule or validator interprets record fields).
 
 ## When the tool earns its keep
 
@@ -113,26 +114,19 @@ Status markers:
   enum, so `[?]` only appears if a future tool/persona writes outside
   the enum)
 
-## What rules and ops can match on (and what they can't)
+## What rules and graph queries can match
 
-`agent.todo.id`, `agent.todo.status`, `agent.todo.position`,
-`agent.todo.updated_at` are rule-matchable. Useful predicates:
+`agent.todo.record` is **rule-opaque**. Its deterministic JSON contains
+the logical `id`, `content`, `status`, `position`, and `updated_at`
+fields, but none of those raw fields is a supported rule predicate or
+record-correlated graph-query surface. In particular, status counts,
+completion ratios, timestamp/status conjunctions, and content matching
+must not be inferred from the stored record.
 
-- `agent.todo.status = "in_progress"` — find loops with active work.
-- `agent.todo.updated_at < now-30m AND agent.todo.status =
-  "in_progress"` — wedge detector.
-- Count of `agent.todo.status = "completed"` — completion ratio.
-
-`agent.todo.content` is **rule-opaque**. The vocabulary registry
-flags it `RuleOpaque: true`; the rule-validator rejects any rule
-whose `condition.field` names this predicate. This is the structural
-mechanism that keeps content out of the rule-engine's branching
-surface — see ADR-036 §Decision Rule 1 for why.
-
-If you find yourself wanting a rule that reads todo content, you
-need a coordinator agent in that path instead. Rules don't make
-quality judgments over unstructured text (`CLAUDE.md` lines
-161-170).
+If a concrete consumer needs one of those observations, define a
+separate derived predicate with its own contract. GS-01 adds none. If a
+rule needs semantic judgment over todo content, put a coordinator agent
+in that path instead; rules do not judge unstructured text.
 
 ## Per-deployment opt-out
 
@@ -161,36 +155,41 @@ discussion of why role-gating buys no Goodhart safety.
 
 | Signal | Where | What it tells you |
 |---|---|---|
-| `agent.todo.*` triples on `agent.execution.*` entities | graph | Current and historical working lists |
+| `agent.todo.record` on loop entities | exact graph read | Current rule-opaque working list records |
 | `[Working list...]` system message in trajectory | loop trajectory | What the model saw on a given iteration |
-| Iteration count vs `agent.todo.status` distribution | graph queries | Are roles using the primitive? |
-| `agent.todo.updated_at` lag | graph queries | Are agents updating status promptly, or batching at the end? |
+| Logical `todo_count` | successful tool metadata | Number of items in the complete desired list |
 
 The ops agent (ADR-027 Phase 1) is the natural consumer of these
 signals. After ~2 weeks of deployment, file an ops-agent diagnosis
-asking the four questions in ADR-036 Appendix A: per-role todo-call
-frequency, correlation with loop outcome, compaction-survival
-behaviour, and status-marker discipline. Use what surfaces to
-revise the threshold and templates.
+using supported tool and loop telemetry for per-role call frequency,
+correlation with loop outcome, and compaction-survival behaviour. Any
+status-level diagnosis requires a separately reviewed derived
+observation surface; do not query raw record fields as though they were
+independently correlated triples.
 
 ## Failure modes
 
 - **Tool call fails while writing**: `write_todos` sends the complete
-  desired `todos` predicate group through one contract-bound
-  `ReplaceOwned` operation. The group is not cleared and rebuilt in
-  separate requests. A proven pre-commit failure leaves the previous
-  group intact; a committed or commit-unknown outcome follows the
-  projection mutation client's receipt and authoritative read-back
-  contract. Consumer code must not add its own clear/batch fallback or
-  blind retry loop.
-- **Read fails on iteration build**: the model just doesn't see the
-  working-list block this iteration. Next iteration retries. The
-  per-iteration read budget caps at 2s — the LLM call's latency is
-  unaffected.
+  desired `agent.todo.record` set through one contract-bound reconcile.
+  It performs one exact read and one mutation request. The group is not
+  cleared and rebuilt in separate requests, and neither
+  `revision_mismatch` nor `commit_unknown` is retried automatically.
+  The component receives the classified outcome and owns any future,
+  operation-specific retry policy.
+- **Read fails on iteration build**: the model does not see the
+  working-list block this iteration. A missing loop entity or an entity
+  with no record triples is an empty list. Any malformed record fails
+  the complete list; no partial list is returned and fields from
+  different records are never combined. The next iteration performs a
+  new exact read.
 - **Model emits invalid status enum**: rejected pre-CAS as
   `ToolErrorInvalidArgs` with the canonical enum names in the error
   message. The model can self-correct without retrying through the
   loop's outer retry policy.
+- **Legacy todo triples remain after deployment**: there is no
+  compatibility decoder, alias, or dual-write path. This is a clean
+  pre-v1 cutover; wipe/reseed according to the coordinated GS-01
+  migration rather than expecting the reader to translate old data.
 
 ## Related ADRs
 

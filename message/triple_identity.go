@@ -9,7 +9,7 @@ import (
 
 // Add-lane triple identity.
 //
-// The add lane (graph.mutation.triple.add / add_batch, hierarchy inference's
+// The append lane (graph.mutation.triple.append, hierarchy inference's
 // in-process adder, foreign-edge regroup, the rule engine's add_triple, and
 // pkg/projection's AppendEvidence) is append-only: it preserves multiple
 // distinct values under one predicate, which is what multi-valued predicates

@@ -15,6 +15,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -88,10 +89,8 @@ const emitLessonDefaultSeverity = "info"
 // lessonNamespaceUUID is the fixed UUIDv5 namespace for content-derived lesson
 // identities. It is lesson-specific so a UUIDv5 minted here can only collide
 // with another lesson of identical identity content — never a foreign entity
-// kind. That property is what makes the create lane's EntityExists→success path
-// (see natsTriplePublisher.CreateEntityWithTriples) SAFE for a reused/stable
-// entity ID: a collision is always a genuine identical-lesson re-emit carrying
-// the same AgentLessonMessageType envelope, so first-write-wins is benign.
+// kind. A repeated emit therefore reaches the same strict-create conflict;
+// this component decides explicitly how to handle that known identity.
 var lessonNamespaceUUID = uuid.MustParse("2c5acb9b-8283-4b34-a4d1-4b1c9f8502ca")
 
 // emitLessonValidSeverities is the closed set of accepted severity values.
@@ -189,7 +188,7 @@ func defaultLessonRejectionRecorder(reason string) {
 // the canonical mutation client is part of the graph-mutation caller cutover;
 // status reads already use the sole embedded exact-read adapter.
 type natsLessonStore struct {
-	client *natsclient.Client
+	client *graphmutation.Client
 	reader graph.ExactEntityReader
 }
 
@@ -198,35 +197,132 @@ const lessonQueryTimeout = 5 * time.Second
 // NewNATSLessonStore builds a LessonStore backed by the shared graph
 // mutation/query NATS surfaces. Wire this into the emit_lesson executor.
 func NewNATSLessonStore(client *natsclient.Client) LessonStore {
-	return &natsLessonStore{client: client, reader: graph.NewExactEntityReader(client, lessonQueryTimeout)}
+	wire, _ := graphmutation.NewClient(client, lessonQueryTimeout)
+	return &natsLessonStore{client: wire, reader: graph.NewExactEntityReader(client, lessonQueryTimeout)}
 }
 
 func (s *natsLessonStore) CreateLesson(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) (bool, error) {
-	req := graph.CreateEntityWithTriplesRequest{
+	if s == nil || s.client == nil || s.reader == nil {
+		return false, errors.New("graph mutation client is required")
+	}
+	_, err := s.client.Create(ctx, graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
 			MessageType: msgType,
-			Triples:     triples,
 		},
 		Triples: triples,
+	})
+	if err == nil {
+		return true, nil
 	}
-	reqData, err := json.Marshal(req)
+
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) || classified.Code != graph.ErrorCodeEntityExists {
+		return false, fmt.Errorf("create lesson entity: %w", err)
+	}
+
+	// The deterministic lesson ID makes an identical re-emit converge on the
+	// existing entity. Strict Create still reports the conflict; this component
+	// exact-reads and verifies its own immutable identity before deciding that
+	// the desired semantic result already exists. A foreign or mismatched entity
+	// remains a hard collision.
+	exact, readErr := s.reader.ReadExactEntity(ctx, entityID)
+	if readErr != nil {
+		return false, fmt.Errorf("verify existing lesson %s after create conflict: %w", entityID, readErr)
+	}
+	if exact == nil || exact.Entity == nil {
+		return false, fmt.Errorf("verify existing lesson %s after create conflict: empty exact read", entityID)
+	}
+	if exact.Entity.MessageType != msgType {
+		return false, fmt.Errorf(
+			"lesson identity collision for %s: existing message type %q, want %q",
+			entityID, exact.Entity.MessageType.Key(), msgType.Key())
+	}
+	if identityErr := requireSameLessonIdentity(exact.Entity.Triples, triples); identityErr != nil {
+		return false, fmt.Errorf("lesson identity collision for %s: %w", entityID, identityErr)
+	}
+	return false, nil
+}
+
+type lessonIdentity struct {
+	category  string
+	summary   string
+	evidence  []string
+	appliesTo []string
+}
+
+func requireSameLessonIdentity(existing, requested []message.Triple) error {
+	left, err := lessonIdentityFromTriples(existing)
 	if err != nil {
-		return false, fmt.Errorf("marshal create_with_triples request: %w", err)
+		return fmt.Errorf("existing identity: %w", err)
 	}
-	// Classified variant surfaces handler errors via err (gh#93 Phase 2).
-	if _, err := s.client.RequestWithRetryClassified(ctx, natsCreateWithTriplesSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig()); err != nil {
-		var ce *errs.ClassifiedError
-		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityExists {
-			// Idempotent re-emit: the content-derived ID guarantees this
-			// collision is a genuine identical-lesson re-emit carrying the same
-			// AgentLessonMessageType envelope (never a foreign-type ID), so
-			// first-write-wins is benign. Signal dedup, not error.
-			return false, nil
+	right, err := lessonIdentityFromTriples(requested)
+	if err != nil {
+		return fmt.Errorf("requested identity: %w", err)
+	}
+	if left.category != right.category || left.summary != right.summary ||
+		!equalStrings(left.evidence, right.evidence) || !equalStrings(left.appliesTo, right.appliesTo) {
+		return errors.New("existing content-derived identity fields do not match the request")
+	}
+	return nil
+}
+
+func lessonIdentityFromTriples(triples []message.Triple) (lessonIdentity, error) {
+	var identity lessonIdentity
+	categoryCount := 0
+	summaryCount := 0
+	for _, triple := range triples {
+		var target *string
+		switch triple.Predicate {
+		case agvocab.LessonCategory:
+			categoryCount++
+			target = &identity.category
+		case agvocab.LessonSummary:
+			summaryCount++
+			target = &identity.summary
+		case agvocab.LessonEvidence:
+			value, ok := triple.Object.(string)
+			if !ok || value == "" {
+				return lessonIdentity{}, fmt.Errorf("predicate %s has a non-string or empty object", triple.Predicate)
+			}
+			identity.evidence = append(identity.evidence, value)
+			continue
+		case agvocab.LessonAppliesTo:
+			value, ok := triple.Object.(string)
+			if !ok || value == "" {
+				return lessonIdentity{}, fmt.Errorf("predicate %s has a non-string or empty object", triple.Predicate)
+			}
+			identity.appliesTo = append(identity.appliesTo, value)
+			continue
+		default:
+			continue
 		}
-		return false, fmt.Errorf("request %s: %w", natsCreateWithTriplesSubject, err)
+		value, ok := triple.Object.(string)
+		if !ok || value == "" {
+			return lessonIdentity{}, fmt.Errorf("predicate %s has a non-string or empty object", triple.Predicate)
+		}
+		*target = value
 	}
-	return true, nil
+	if categoryCount != 1 || summaryCount != 1 || len(identity.evidence) == 0 || len(identity.appliesTo) == 0 {
+		return lessonIdentity{}, fmt.Errorf(
+			"requires one category, one summary, evidence, and applies-to (got category=%d summary=%d evidence=%d applies_to=%d)",
+			categoryCount, summaryCount, len(identity.evidence), len(identity.appliesTo))
+	}
+	sort.Strings(identity.evidence)
+	sort.Strings(identity.appliesTo)
+	return identity, nil
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *natsLessonStore) ReadLessonStatus(ctx context.Context, entityID string) (string, bool, error) {
@@ -421,9 +517,9 @@ func (e *EmitLessonExecutor) emitLesson(ctx context.Context, call agentic.ToolCa
 	now := time.Now()
 	triples := buildEmitLessonTriples(lessonEntityID, loopEntityID, args, observedRole, now)
 
-	// BIRTH via create_with_triples with the typed-origin envelope (graph-ingest
-	// enforces must-exist on triple.add/add_batch, so a bare batch to a
-	// never-created entity is rejected — the gh#390 shape). Re-emitting an
+	// BIRTH via entity.create with the typed-origin envelope. Append is
+	// must-exist, so an append to a never-created lesson returns not-found.
+	// Re-emitting an
 	// identical lesson derives the SAME entity ID; the create then hits
 	// EntityExists, which the store reports as created=false (idempotent dedup),
 	// not an error. Safe because the lesson namespace guarantees any collision is
@@ -614,8 +710,8 @@ func buildEmitLessonTriples(lessonEntityID, loopEntityID string, args emitLesson
 	triples = append(triples, base(agvocab.LessonStatus, lessonBornStatus))
 	// Immutable birth timestamp — the replay-stable ordering key the
 	// brief-assembly matcher sorts on (severity → created-at → entity-ID).
-	// RFC3339 UTC. NOT part of content-identity (idempotency unchanged) and NOT
-	// replace-owned, so first-write-wins preserves the FIRST emit's created-at
+	// RFC3339 UTC. NOT part of content identity and absent from the lifecycle
+	// reconcile group, so strict create preserves the FIRST emit's created-at
 	// across idempotent re-emits and an ADR-073 from-zero reingest. A triple's
 	// own Timestamp is re-stamped by lifecycle transitions; this object is not.
 	triples = append(triples, base(agvocab.LessonCreatedAt, now.UTC().Format(time.RFC3339)))

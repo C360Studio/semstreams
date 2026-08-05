@@ -32,9 +32,8 @@ What changes in ADR-049:
   `UpdateEntityWithTriplesRequest`
 - Schema declarations grow `ChildWorkflows`, `ReferencePredicates`,
   `AuditPredicates`
-- History reads ENTITY_STATES revisions with source attribution
-  from the audit-predicate triples (fixes the always-`framework`
-  Triggered bug structurally)
+- History reads the fixed recent transition-record window in the current
+  ENTITY_STATES value (ADR-049 amendment, gh#843)
 - lifecycle-gateway slims to thin composition over graph-gateway
 - Create semantics reframe to "add lifecycle dimension" (allows
   coexisting with existing non-lifecycle triples on the same entity)
@@ -567,8 +566,8 @@ guidance follows.
 - **Cross-product operator UX**: one workflow dashboard convention
   across products. A multi-tenant deployment can present
   drone-survey + sensor-fleet + plan-executions under one ops view.
-- **Audit trail by default**: `Manager.History` synthesizes phase
-  transitions from KV revision replay — free audit.
+- **Operator history by default**: `Manager.History` reads the fixed recent
+  transition-record window retained in the current entity.
 - **Restart recovery by default**: rule engine bootstraps from
   the workflow KV bucket; instances resume from current phase.
 - **Discipline enforcement**: declared transitions tables make

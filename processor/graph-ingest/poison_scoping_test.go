@@ -72,7 +72,7 @@ func TestPoisonRepairRecoveryWithoutRestart(t *testing.T) {
 	assert.Equal(t, graph.IndexStateDegraded, health.Status)
 
 	// Canonical wire repair step 1: delete.
-	require.NoError(t, c.DeleteEntity(context.Background(), id))
+	require.NoError(t, c.deleteEntityAtRevision(context.Background(), id, 1))
 	_, inventoried = poisonInventoryEntry(c, id)
 	assert.False(t, inventoried, "delete must clear the inventory entry (D3a)")
 	assert.Equal(t, float64(0), testutil.ToFloat64(c.poisonedEntities))
@@ -274,14 +274,11 @@ func TestAggregateReadNamesEveryPoisonedEntity(t *testing.T) {
 	})
 }
 
-// TestMutationReadSeamsReturnTypedFatal drives the spec scenario "mutation
-// read seams return the typed classification": entity.update,
-// update_with_triples (CAS read and RMW closure), and create_with_triples'
-// restamp read-back all classify resident poison as the fatal
-// graph_state_reset_required — never a retry-inviting transient internal.
+// TestMutationReadSeamsReturnTypedFatal proves canonical read-modify-write
+// mutations classify resident poison as graph_state_reset_required rather than
+// a retry-inviting transient internal error.
 func TestMutationReadSeamsReturnTypedFatal(t *testing.T) {
 	const id = "acme.ops.test.system.widget.seam"
-	validMT := message.Type{Domain: "test", Category: "widget", Version: "v1"}
 	validTriple := message.Triple{Subject: id, Predicate: "test.state.value", Object: "v", Timestamp: time.Now(), Confidence: 1.0}
 
 	assertTypedFatalReject := func(t *testing.T, data []byte, err error) {
@@ -294,54 +291,33 @@ func TestMutationReadSeamsReturnTypedFatal(t *testing.T) {
 		assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, classified.Code)
 	}
 
-	t.Run("entity.update read seam", func(t *testing.T) {
+	t.Run("reconcile read seam", func(t *testing.T) {
 		c, bucket := poisonScopingTestComponent(t)
 		seedPoisonBytes(bucket, id, 1)
-		req, err := json.Marshal(graph.UpdateEntityRequest{Entity: &graph.EntityState{
-			ID: id, Version: 2, MessageType: validMT, Triples: []message.Triple{validTriple},
-		}})
+		req, err := json.Marshal(graph.ReconcilePredicatesRequest{
+			EntityID: id, ExpectedRevision: 1, Predicates: []string{validTriple.Predicate},
+			Desired: []message.Triple{validTriple},
+		})
 		require.NoError(t, err)
-		data, herr := c.handleEntityUpdate(context.Background(), req)
+		data, herr := c.handleCanonicalReconcile(context.Background(), req)
 		assertTypedFatalReject(t, data, herr)
 		_, inventoried := poisonInventoryEntry(c, id)
 		assert.True(t, inventoried, "the seam read must inventory the poison")
 	})
 
-	t.Run("update_with_triples CAS read seam", func(t *testing.T) {
+	t.Run("append RMW seam", func(t *testing.T) {
 		c, bucket := poisonScopingTestComponent(t)
 		seedPoisonBytes(bucket, id, 1)
-		req, err := json.Marshal(graph.UpdateEntityWithTriplesRequest{
-			Entity:           &graph.EntityState{ID: id, MessageType: validMT},
-			AddTriples:       []message.Triple{validTriple},
-			ExpectedRevision: 1,
-		})
+		req, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{validTriple}})
 		require.NoError(t, err)
-		data, herr := c.handleEntityUpdateWithTriples(context.Background(), req)
-		assertTypedFatalReject(t, data, herr)
-	})
-
-	t.Run("update_with_triples RMW closure", func(t *testing.T) {
-		c, bucket := poisonScopingTestComponent(t)
-		seedPoisonBytes(bucket, id, 1)
-		req, err := json.Marshal(graph.UpdateEntityWithTriplesRequest{
-			Entity:     &graph.EntityState{ID: id, MessageType: validMT},
-			AddTriples: []message.Triple{validTriple},
-		})
-		require.NoError(t, err)
-		data, herr := c.handleEntityUpdateWithTriples(context.Background(), req)
-		assertTypedFatalReject(t, data, herr)
-	})
-
-	t.Run("create_with_triples restamp read-back seam", func(t *testing.T) {
-		c, bucket := poisonScopingTestComponent(t)
-		seedPoisonBytes(bucket, id, 1)
-		req, err := json.Marshal(graph.CreateEntityWithTriplesRequest{
-			Entity:  &graph.EntityState{ID: id, Version: 1, MessageType: validMT},
-			Triples: []message.Triple{validTriple},
-		})
-		require.NoError(t, err)
-		data, herr := c.handleEntityCreateWithTriples(context.Background(), req)
-		assertTypedFatalReject(t, data, herr)
+		data, herr := c.handleCanonicalAppend(context.Background(), req)
+		require.NoError(t, herr)
+		var response graph.AppendTriplesResponse
+		require.NoError(t, json.Unmarshal(data, &response))
+		require.Len(t, response.Results, 1)
+		assert.Equal(t, graph.MutationFailed, response.Results[0].Outcome)
+		require.NotNil(t, response.Results[0].Error)
+		assert.Equal(t, graph.ErrorCodeGraphStateResetRequired, response.Results[0].Error.Code)
 	})
 }
 
@@ -369,7 +345,7 @@ func TestProcessIngestResidentPoisonNakThenAppliesAfterRepair(t *testing.T) {
 	assert.False(t, first.term.Load(), "resident poison must not Term (valid data would be destroyed)")
 
 	// Operator repair: delete + (implicit) fresh state via the redelivery itself.
-	require.NoError(t, c.DeleteEntity(context.Background(), id))
+	require.NoError(t, c.deleteEntityAtRevision(context.Background(), id, 1))
 
 	// Redelivery of the SAME message applies.
 	redelivery := &keyedIngestTestMsg{}

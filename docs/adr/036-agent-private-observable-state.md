@@ -2,7 +2,7 @@
 
 ## Status
 
-**Proposed — 2026-05-08.** Generalises a primitive that has been
+**Proposed — 2026-05-08; todo storage amended by GS-01 on 2026-08-05.** Generalises a primitive that has been
 implicit in [ADR-027](027-ops-agent-meta-harness.md) (ops agent reads
 loop telemetry) and [ADR-028](028-orchestration-architecture.md)
 (rules carry references, not content) but has never been named or
@@ -30,12 +30,13 @@ Three forces meet here:
    survives, and can be re-injected at prompt assembly time
    (`processor/agentic-loop/prompt/assembler.go`).
 
-2. **Rules can match structured facts but not prose.** CLAUDE.md
-   commits hard to "rules can't make quality judgments over
-   unstructured text — that's coordinator work." A predicate like
-   `agent.todo.status = pending` is exactly the structural surface
-   the rule engine *can* branch on; a predicate like
-   "todo content mentions X" is exactly what it cannot.
+2. **Rules cannot safely interpret an agent's private working
+   memory.** CLAUDE.md commits hard to "rules can't make quality
+   judgments over unstructured text — that's coordinator work."
+   A todo item is therefore stored as one rule-opaque record. No raw
+   todo field is a supported rule or correlated graph-query surface.
+   If a concrete consumer later requires a structural observation,
+   it must be designed as a separate derived predicate.
 
 3. **LLM-on-LLM checklist contracts Goodhart.** semteams's
    `feedback_format_compliance_goodhart.md` documented the failure
@@ -61,27 +62,27 @@ produces it, with asymmetric access discipline.
 | Role | Access | Stake |
 |---|---|---|
 | Owning agent (writer of this loop's state) | read-write | uses state as personal working memory |
-| Any reader of the graph (humans, ops agent, debug UI, downstream rules) | read-only | observes; does not interpret content |
+| Any reader of the graph (humans, ops agent, debug UI) | read-only | observes the record without treating raw fields as a query contract |
 | Authorised actuator agents (per ADR-026 deploy surface) | indirect — may write to *other* entities (configs, prompts, rules) on the basis of what was observed | learns from patterns across many loops, never edits a live loop's private state |
 
 The writer is the **sole writer** and the **sole interpreter of
-content**. Other parties may read structural facts (existence,
-counts, status enums, timestamps, transitions). They may not
-predicate on content, and they may not write back into the
-owner's state mid-loop.
+content**. Other parties may inspect the opaque record for debugging,
+but no raw ID, status, position, timestamp, or content field is a
+supported rule predicate or correlated graph-query surface. They may
+not write back into the owner's state mid-loop.
 
 ### Three discipline rules
 
 These keep the asymmetry intact. Drop any one and Goodhart returns.
 
-**Rule 1 — Rules predicate on structural facts only.**
-The rule engine may match `agent.todo.status_count.pending = 0`,
-`agent.todo.last_transition > 30s ago`, or
-`agent.todo.completion_ratio >= 1.0`. It may not match
-`agent.todo.content contains "X"` or otherwise branch on what the
-agent wrote in free-form fields. The moment a rule reads content,
-content becomes a contract and the agent will optimise to satisfy
-the rule rather than reflect actual progress.
+**Rule 1 — Todo records are rule-opaque.**
+The rule engine may not match any field inside `agent.todo.record`.
+Raw-field status counts, transition times, completion ratios, and
+field conjunctions are not supported by the record representation.
+The moment a rule reads private working-memory content, that content
+becomes a contract and the agent will optimise to satisfy the rule
+rather than reflect actual progress. A future derived observation
+requires a concrete consumer and its own reviewed predicate contract.
 
 **Rule 2 — Persona prompts describe state descriptively, not
 prescriptively.**
@@ -141,8 +142,10 @@ const ToolNameWriteTodos = "write_todos"
 ```
 
 The executor is a passthrough: it validates the argument shape,
-writes one triple per todo onto the loop entity, and returns
-`ToolResult.Content` with a compact summary. Following the decide
+reconciles the complete desired list onto the loop entity, and returns
+`ToolResult.Content` with a compact summary. Result metadata exposes
+only the logical `todo_count`; it does not expose a storage-shaped
+triple count. Following the decide
 tool pattern (`processor/agentic-tools/decide.go`), validation
 errors surface as `ToolErrorInvalidArgs` with the canonical schema
 in the message so the LLM can self-correct.
@@ -150,47 +153,53 @@ in the message so the LLM can self-correct.
 `StopLoop=false` — unlike `decide`, this tool is meant to be called
 many times in a single loop. It is working memory, not a terminal.
 
-### Predicates
+### Current storage contract
 
-Add to `vocabulary/agentic/predicates.go` under a new `Todo`
-constant block:
+GS-01 replaces the original five-predicate sketch with one predicate:
 
 ```go
-const (
-    TodoID         = "agent.todo.id"          // string
-    TodoContent    = "agent.todo.content"     // string — opaque to rules
-    TodoStatus     = "agent.todo.status"      // enum: pending|in_progress|completed
-    TodoPosition   = "agent.todo.position"    // int — order within list
-    TodoUpdatedAt  = "agent.todo.updated_at"  // timestamp
-)
+const TodoRecord = "agent.todo.record" // deterministic JSON; opaque to rules
 ```
 
-`TodoContent` is registered with metadata flagging it as
-**rule-opaque**: rule validators reject any rule that predicates on
-this field. (Implementation: extend `processor/rule/config_validation.go`
-with a `RuleOpaquePredicates` denylist sourced from vocabulary
-metadata. Same machinery serves any future content-bearing
-predicate that follows this pattern.)
+Each todo contributes exactly one record triple whose JSON object has
+`id`, `content`, `status`, `position`, and `updated_at` with the tool's
+existing logical types and validation. Deterministic JSON gives the
+item an explicit record boundary without relying on duplicate triple
+occurrences or storage order.
+
+Every call submits one contract-bound reconcile containing the complete
+desired record set; omitted items are removed and an empty list clears
+the group. The reader performs an exact entity read, decodes every
+record, and sorts the logical items by position. A missing loop entity
+or an entity with no record triples yields an empty list. Any malformed
+record invalidates the complete list: `TodoReader` returns an error and
+never combines or returns partial items.
+
+The five former `agent.todo.{id,content,status,position,updated-at}`
+predicates and positional decoder are removed in the coordinated clean
+break. There are no deprecated constants, aliases, dual writes, or
+compatibility reads. `TodoState` and `TodoReader` retain their existing
+logical Go shapes so callers do not need to know the graph encoding.
 
 ### Compaction survival
 
-`processor/agentic-loop/prompt/assembler.go` reads the current todo
-list from the loop entity at every prompt build and injects it
-into the system message as a structured block. Trajectory may be
-compacted; the todo state is reconstructed from triples each turn.
+`processor/agentic-loop/prompt/assembler.go` exact-reads the current
+todo records from the loop entity at every prompt build and injects
+the decoded logical list into the system message as a structured block.
+Trajectory may be compacted; the todo state is reconstructed from
+records each turn.
 This is the load-bearing reason for the primitive — without it,
 the value of the tool collapses to a pretty version of "write notes
 in your reply."
 
 ### Goodhart cross-checks
 
-Following `feedback_format_compliance_goodhart.md`'s lesson, add
-one structural cross-check that catches the obvious failure mode:
-a todo marked `completed` should plausibly correspond to evidence
-in the loop's trajectory or graph. The implementation is a
-periodic ops-agent diagnosis (Phase 1 territory), not a hard
-runtime gate. Hard runtime gating would itself be a contract and
-recreates the failure mode.
+Following `feedback_format_compliance_goodhart.md`'s lesson, a future
+ops diagnosis may ask whether completed items plausibly correspond to
+trajectory or graph evidence. That analysis is not a raw todo-field
+rule/query contract and is not implemented as a derived predicate in
+this cutover. A hard runtime gate would itself recreate the failure
+mode.
 
 ## Future candidates
 
@@ -206,8 +215,8 @@ a candidate:
 | `agent.breadcrumb.*` | Exploration trail (visited states / tried approaches) | Coordinator, debugger |
 | `agent.budget.*` | Self-imposed limits (iterations remaining, tokens spent) | Any role |
 
-Each would follow the same pattern: a tool that writes triples to
-the loop entity, content fields flagged rule-opaque, persona
+Each would follow the same pattern: a tool that writes explicit records
+to the loop entity, records flagged rule-opaque, persona
 surface descriptive not prescriptive, ops agent observes
 post-hoc, authorised actuators feed back through configuration.
 
@@ -215,9 +224,8 @@ post-hoc, authorised actuators feed back through configuration.
 
 **Positive.**
 - Long-horizon flows survive compaction without losing plan state.
-- Rules gain a deterministic predicate surface for plan progress
-  (status counts, transitions, durations) without violating the
-  ADR-028 content/rule firewall.
+- Raw todo records remain outside the rule engine's branching surface,
+  preserving the ADR-028 content/rule firewall.
 - Ops agent (ADR-027 Phase 1) gains a richer observation substrate;
   Phase 2/3 authorised actuators get the same surface without
   needing privileged access to live loops.
@@ -234,10 +242,9 @@ post-hoc, authorised actuators feed back through configuration.
   (decide-tool action allowlist drift, beta.40/41/44) is the
   reference case for "small models drown when the tool surface
   widens"; persona-level opt-out remains the right lever.
-- Rule-validator complexity. Enforcing the rule-opaque predicate
-  list at config-load is new machinery (a few dozen LOC, but it
-  needs tests). Trade-off worth taking because the same machinery
-  protects every future content-bearing predicate.
+- The current representation supplies no raw-field rule or correlated
+  graph-query surface. A future structural observation needs a separate
+  reviewed derived predicate rather than querying inside todo records.
 - Persona-prompt discipline is convention-enforced, not
   framework-enforced. A persona author can still write "you must
   produce ≥3 todos." Mitigation: review checklist for new
@@ -342,10 +349,9 @@ encodes a planning step:
 That's exactly the shape `write_todos` formalises. Today the plan
 lives only in chat-history prose and dies on compaction; with the
 tool, the same 3–6 bullets become structured state on the loop
-entity, observable to the architect on retry, queryable by ops
-agent for "did builders that wrote ≥3 todos finish more reliably
-than those who didn't?" diagnoses, and re-injected by the prompt
-assembler every iteration.
+entity, observable to the architect on retry, available to future ops
+analysis through a separately designed observation surface, and
+re-injected by the prompt assembler every iteration.
 
 This is the canonical case. Other personas with implicit
 "state-your-plan-then-execute" guidance (architect's output
@@ -439,8 +445,8 @@ diagnose:
 - Correlation between todo presence and loop outcome (`agent.loop.outcome`).
 - Compaction events on loops with vs. without active todos —
   did plan state survive?
-- Status-marker discipline — are agents marking items completed
-  in the same iteration the work happened, or batching at the end?
+- Status-marker discipline, if a supported derived observation surface
+  is later introduced for a concrete consumer.
 
 Revise the threshold and templates based on what surfaces. The
 trigger pattern is empirical, not theoretical, and ADR-027's

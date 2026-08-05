@@ -28,23 +28,17 @@ import (
 // entity ID (ADR-053 D1 critical invariant). The projection layer reads the
 // `lifecycle:"id"` field from the ENTITY_STATES KV key — not from triples.
 //
-// This test drives the production wire path:
-//  1. Write a crafted EntityState (with the agent.run.phase phase triple) directly
-//     into the ENTITY_STATES KV bucket — simulating what graph-ingest would write
-//     after Manager.Create emits to graph.mutation.entity.create_with_triples.
-//  2. Call Manager.Get (production entry point, reads from ENTITY_STATES).
+// This test drives the production authority-read path:
+//  1. Serve a crafted ExactEntity (with the agent.run.phase phase triple) on
+//     graph.ingest.query.entity, as graph-ingest does.
+//  2. Call Manager.Get (production entry point, uses the exact reader).
 //  3. Assert EntityIDField == full 6-part chain.execution entity ID (not a bare UUID,
 //     not a garbled form like TryChainExecutionEntityID would reject).
 //
-// Why direct KV write rather than Manager.Create → graph-ingest responder?
-// Manager.Create routes through a NATS request/reply to graph-ingest. Setting up
-// a full stub responder is valid but adds test surface area. The D1 invariant
-// is specifically about the projection layer (KV key → EntityIDField), so
-// writing the KV state directly is more focused and avoids coupling the D1
-// round-trip test to the Manager.Create → graph-ingest wire contract (which
-// has its own integration test in pkg/lifecycle/manager_integration_test.go).
+// The D1 invariant is specifically about exact authority projection, so this
+// test does not add mutation behavior already covered by lifecycle integration.
 func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
-	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
+	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup())
 	ctx := context.Background()
 
 	mgr := lifecycle.NewManager(tc.Client, nil)
@@ -58,9 +52,7 @@ func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 	)
 	fullEntityID := "acme.ops.agent.chain.execution." + rootLoopID
 
-	// Write an EntityState with the agent.run.phase triple directly into
-	// ENTITY_STATES — simulating what graph-ingest writes after Manager.Create.
-	// The KV key is the full entity ID.
+	// Build the exact authority value returned by graph-ingest.
 	now := time.Now().UTC()
 	state := graph.EntityState{
 		ID: fullEntityID,
@@ -77,15 +69,18 @@ func TestIntegration_D1_ProjectionRoundTrip(t *testing.T) {
 		Version:   1,
 		UpdatedAt: now,
 	}
-	stateBytes, err := json.Marshal(state)
+	_, err := tc.Client.SubscribeForRequests(ctx, "graph.ingest.query.entity",
+		func(_ context.Context, request []byte) ([]byte, error) {
+			var query struct {
+				ID string `json:"id"`
+			}
+			if decodeErr := json.Unmarshal(request, &query); decodeErr != nil {
+				return nil, decodeErr
+			}
+			require.Equal(t, fullEntityID, query.ID)
+			return json.Marshal(graph.ExactEntity{Entity: state.Clone(), KVRevision: 1})
+		})
 	require.NoError(t, err)
-
-	// Write to ENTITY_STATES KV bucket using the production bucket name as key.
-	bucket, err := tc.Client.GetKeyValueBucket(ctx, graph.BucketEntityStates)
-	require.NoError(t, err, "ENTITY_STATES bucket must be available (WithKVBuckets creates it)")
-
-	_, err = bucket.Put(ctx, fullEntityID, stateBytes)
-	require.NoError(t, err, "KV Put must succeed for the entity state")
 
 	// Manager.Get — the production projection path.
 	participant, err := mgr.Get(ctx, agentrun.WorkflowName, fullEntityID)
@@ -124,9 +119,9 @@ func TestIntegration_MilestoneSubscriber_GracefulSkipWhenStreamAbsent(t *testing
 
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
-	// reader/pub are unused on the stream-absent early-return path; nil logger
+	// The reader is unused on the stream-absent early-return path; nil logger
 	// is defaulted by the constructor.
-	sub := agentrun.NewMilestoneSubscriber(mgr, nil, nil, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{StreamName: agentrun.AgentStreamName})
 	require.NoError(t, err, "Start must not error when the AGENT stream is absent (gh#246)")
@@ -155,7 +150,7 @@ func TestIntegration_MilestoneSubscriber_StartsWhenStreamPresent(t *testing.T) {
 
 	mgr := lifecycle.NewManager(tc.Client, nil)
 	require.NoError(t, agentrun.Register(mgr))
-	sub := agentrun.NewMilestoneSubscriber(mgr, nil, nil, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriber(mgr, nil, "acme", "ops", nil)
 
 	stop, err := sub.Start(ctx, tc.Client, agentrun.StartConfig{
 		StreamName:         agentrun.AgentStreamName,

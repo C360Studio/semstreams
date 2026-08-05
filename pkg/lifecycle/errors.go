@@ -71,6 +71,12 @@ var (
 	// at runtime rather than letting the state machine drift.
 	ErrInvalidTransition = errors.New("lifecycle: invalid transition")
 
+	// ErrInvalidTransitionRecord is returned when the bounded transition
+	// records in a participant's current entity value are incomplete,
+	// duplicated, or otherwise malformed. History returns no partial result,
+	// and transitions refuse to overwrite malformed records.
+	ErrInvalidTransitionRecord = errors.New("lifecycle: invalid transition record")
+
 	// ErrTerminalPhase is returned by Manager.Transition when the current
 	// phase has no declared out-edges (i.e. is terminal). Distinguishes
 	// "you tried to transition from completed/failed" from a generic
@@ -116,8 +122,7 @@ var (
 	ErrUpdateRetriesExhausted = errors.New("lifecycle: Update retry budget exhausted (persistent CAS contention)")
 
 	// ErrEmitFailed is returned by Manager state-change operations
-	// when the graph-ingest emit (NATS request/reply on the
-	// UpdateEntityWithTriples subject) fails — typically because
+	// when the graph-ingest reconcile request fails — typically because
 	// graph-ingest is down, the request handler returns a non-CAS
 	// error, or the NATS transport itself errors. Wraps the
 	// underlying transport / handler error so callers can branch
@@ -132,13 +137,4 @@ var (
 	// refuses to emit a delete for an entity that provably belongs to a
 	// different pattern (a caller wire-up bug: wrong workflow for the entity).
 	ErrEntityIDPatternMismatch = errors.New("lifecycle: entity_id does not match workflow EntityIDPattern")
-
-	// ErrOwnerQuiesced is returned by Manager.Create / TransitionWith /
-	// UpdateFromOperator when the attached ownership Registry has QUIESCED this
-	// workflow's owner — WatchRevival detected another process re-registered the
-	// same owner id with a different incarnation, so this process is the stale
-	// writer and must not clobber the live owner's authoritative state (ADR-056
-	// PR-4, quiesce-not-HALT). The refusal is loud and surfaces to the caller
-	// (rule action / operator API) rather than silently dropping the write.
-	ErrOwnerQuiesced = errors.New("lifecycle: owner quiesced (superseded by another process; this writer must not clobber the live owner)")
 )

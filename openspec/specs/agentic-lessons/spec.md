@@ -14,7 +14,7 @@ citations.
 #### Scenario: Evidence-cited lesson is created
 - **WHEN** `emit_lesson` is called with summary, detail, injection form, category, polarity,
   severity, at least one typed `applies_to` key, and at least one well-formed evidence entity ID
-- **THEN** an `agent.lesson.record` entity is created via `create_with_triples` carrying
+- **THEN** an `agent.lesson.record` entity is created via the canonical `entity.create` operation carrying
   `agent.lesson.*` triples, the evidence references, attribution to the emitting loop, and
   `agent.lesson.status` of `proposed`
 
@@ -81,8 +81,8 @@ the calling loop, and the executor MUST enforce a per-loop emission cap.
 ### Requirement: Lessons carry a gated lifecycle and only active lessons are injectable
 Lessons SHALL be created with `agent.lesson.status` of `proposed`, and the framework MUST exclude
 any lesson whose status is not `active` from brief injection. Promotion and retirement SHALL
-be single-valued replace-not-append writes through the canonical `update_with_triples` lane
-(rule `replace_owned` or a product curation writer), promotion MUST resolve that every cited
+be single-valued reconcile-not-append writes through the canonical `entity.reconcile` operation
+(rule `reconcile_predicates` or a product curation writer), promotion MUST resolve that every cited
 evidence entity exists, and retired or superseded lessons MUST remain durable in the graph for
 audit.
 
@@ -158,4 +158,3 @@ dedicated agent-invoked lesson search, list, or query tool.
 - **WHEN** the built-in tool registry is enumerated
 - **THEN** it contains `emit_lesson` (write) and no dedicated lesson search, list, or query
   tool (generic graph-read tools remain governed by per-role allowlists)
-

@@ -1,12 +1,14 @@
-# ADR-057: Cryptographic Provenance — Signed Owner Claims and Signed Envelopes (Scope-Only Stub)
+# ADR-057: Cryptographic Provenance — Signed Owner Claims and Signed Envelopes (Withdrawn Scope Stub)
 
 ## Status
 
-**Proposed (scope-only)** — 2026-06-13. This is a SCOPE STUB, not a design. It reserves the
-follow-up named in [ADR-056 §"Cryptographic provenance"](056-authoritative-semantic-state.md)
-and bounds what a future authenticity layer would cover. It is NOT on any wave plan and does
-NOT block ADR-056's Accept. No mechanism here is decided; this document exists so the seam is
-named and the scope is agreed before anyone designs it.
+**Withdrawn; superseded by [ADR-091](091-graph-mutation-authority-without-semantic-ownership.md).**
+The 2026-06-13 scope stub was defined entirely in terms of the retired `OWNER_CLAIMS`, owner-token,
+and semantic-ownership model. It is not live work and reserves no future implementation scope.
+If a concrete authenticity or signing requirement emerges, it requires a fresh proposal grounded
+in the current canonical mutation protocol rather than this historical ownership design.
+
+The remainder records the withdrawn proposal's historical context only.
 
 ## Context: authorization is not authentication
 

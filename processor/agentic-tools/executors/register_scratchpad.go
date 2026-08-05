@@ -11,7 +11,7 @@ import (
 
 // registerScratchpad wires the scratchpad tool. The tool writes
 // agent.scratch.* triples on the calling loop's entity via the same
-// graph.mutation.triple.add NATS surface decide/write_todos use.
+// graph.mutation.triple.append NATS surface decide/write_todos use.
 //
 // semspec ask 2026-05-12, ADR-036 §Future candidates first
 // implementation. Available to any role; persona authors opt specific

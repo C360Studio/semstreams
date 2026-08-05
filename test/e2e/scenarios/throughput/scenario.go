@@ -9,7 +9,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -695,9 +694,13 @@ func (s *Scenario) waitForSyntheticEntities(ctx context.Context) error {
 
 // probeEntities checks which entity IDs are queryable and returns the missing ones.
 func (s *Scenario) probeEntities(ctx context.Context, httpClient *http.Client, entityIDs []string) []string {
+	if s == nil || s.config == nil || s.config.GraphQLURL == "" {
+		return append([]string(nil), entityIDs...)
+	}
+
 	var missing []string
 	for _, eid := range entityIDs {
-		query := fmt.Sprintf(`{"query":"{ entity(id: \"%s\") { id } }"}`, eid)
+		query := fmt.Sprintf(`{"query":"{ entity(id: \"%s\") { entity { id } kvRevision } }"}`, eid)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.config.GraphQLURL,
 			bytes.NewReader([]byte(query)))
 		if err != nil {
@@ -711,11 +714,22 @@ func (s *Scenario) probeEntities(ctx context.Context, httpClient *http.Client, e
 			missing = append(missing, eid)
 			continue
 		}
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-
-		// Check for successful response with entity data (no errors)
-		if resp.StatusCode != http.StatusOK || strings.Contains(string(body), "not found") || strings.Contains(string(body), "error") {
+		var response struct {
+			Data struct {
+				Entity *struct {
+					Entity *struct {
+						ID string `json:"id"`
+					} `json:"entity"`
+					KVRevision uint64 `json:"kvRevision"`
+				} `json:"entity"`
+			} `json:"data"`
+			Errors []json.RawMessage `json:"errors"`
+		}
+		decodeErr := json.NewDecoder(resp.Body).Decode(&response)
+		closeErr := resp.Body.Close()
+		exact := response.Data.Entity
+		if resp.StatusCode != http.StatusOK || decodeErr != nil || closeErr != nil || len(response.Errors) != 0 ||
+			exact == nil || exact.Entity == nil || exact.Entity.ID != eid || exact.KVRevision == 0 {
 			missing = append(missing, eid)
 		}
 	}

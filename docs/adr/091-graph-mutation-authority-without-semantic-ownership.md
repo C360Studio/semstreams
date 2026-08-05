@@ -96,8 +96,8 @@ coordination primitive, compatibility path, or MCP surface.
   claims, leases, tokens, heartbeats, and foreign-edge modes.
 - Fighting writers become an observable runtime conflict rather than a boot-time predicted prohibition. A bounded
   per-operation revision-mismatch signal identifies the condition; no detector service is introduced.
-- Rule reconcile performs one fresh exact read and one retry after a definite revision mismatch, then fails visibly.
-  `commit_unknown` is never automatically retried.
+- Rule reconcile performs one exact read and one mutation request. It surfaces `revision_mismatch` and
+  `commit_unknown` without automatic retry; the component owns any later operation-specific retry decision.
 - Broken or missing references do not stop the graph. Readers report them precisely and continue serving valid state.
 - Operators run one graph-ingest process and retain existing `GRAPH_STATUS` readiness/poison semantics. NATS clustering
   remains supported; operators own deployment backup/checkpoint procedures.

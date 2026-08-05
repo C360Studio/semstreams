@@ -282,16 +282,10 @@ func (s *Scenario) stageOperatorTransition(ctx context.Context, _ *scenarios.Res
 	return nil
 }
 
-// stageHistory verifies the KV-revision-derived history captures the
-// full phase sequence: the seeded create (→planning), the rule-driven
-// transition (planning→flying), and the operator-driven transition
-// (flying→completed). Manager.History in v1 reconstructs From/To/At
-// from KV revisions but the Triggered field is always
-// TransitionSourceFramework (full source/note persistence is the v2
-// TODO in pkg/lifecycle/manager_query.go's History impl) — so this
-// assertion locks the structural shape, not the source classification.
-// When v2 lands the source assertion can be added back; failing here
-// is the structural reach the gateway exposes today.
+// stageHistory verifies that the current participant entity carries the full
+// recent phase sequence and correct provenance: framework seed, rule-driven
+// transition, and operator-driven transition. This is the restart-stable,
+// bounded operator window; it does not depend on KV revision retention.
 func (s *Scenario) stageHistory(ctx context.Context, result *scenarios.Result) error {
 	var events []historyEvent
 	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/history", &events); err != nil {
@@ -303,19 +297,19 @@ func (s *Scenario) stageHistory(ctx context.Context, result *scenarios.Result) e
 	// Expected sequence: (anything → planning) [seed], planning →
 	// flying [rule], flying → completed [operator]. The seed event's
 	// From field is "" because the entity didn't exist before Create.
-	want := []struct{ from, to string }{
-		{"", "planning"},
-		{"planning", "flying"},
-		{"flying", "completed"},
+	want := []struct{ from, to, source string }{
+		{"", "planning", "framework"},
+		{"planning", "flying", "rule"},
+		{"flying", "completed", "operator"},
 	}
 	if len(events) < len(want) {
 		return fmt.Errorf("expected at least %d history events (create + rule + operator transitions), got %d: %+v",
 			len(want), len(events), events)
 	}
 	for i, w := range want {
-		if events[i].From != w.from || events[i].To != w.to {
-			return fmt.Errorf("history event %d: got from=%q to=%q, want from=%q to=%q (full sequence: %+v)",
-				i, events[i].From, events[i].To, w.from, w.to, events)
+		if events[i].From != w.from || events[i].To != w.to || events[i].Triggered != w.source {
+			return fmt.Errorf("history event %d: got from=%q to=%q source=%q, want from=%q to=%q source=%q (full sequence: %+v)",
+				i, events[i].From, events[i].To, events[i].Triggered, w.from, w.to, w.source, events)
 		}
 	}
 	return nil

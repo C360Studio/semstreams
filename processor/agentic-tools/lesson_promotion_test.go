@@ -20,7 +20,7 @@ type fakeLessonReplacer struct {
 	born         map[string][]message.Triple
 	replaceErr   error
 	replaceCalls int
-	lastRequest  projection.ReplaceOwnedMutation
+	lastRequest  projection.ReconcileMutation
 }
 
 func newFakeLessonReplacer() *fakeLessonReplacer {
@@ -34,7 +34,7 @@ func (w *fakeLessonReplacer) birth(entityID string, triples ...message.Triple) {
 	w.born[entityID] = triples
 }
 
-func (w *fakeLessonReplacer) ReplaceOwned(_ context.Context, req projection.ReplaceOwnedMutation) (projection.MutationReceipt, error) {
+func (w *fakeLessonReplacer) Reconcile(_ context.Context, req projection.ReconcileMutation) (projection.MutationReceipt, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	w.replaceCalls++

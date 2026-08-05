@@ -82,7 +82,7 @@ const (
 	//
 	// Stage transitions are ATOMIC per-component: every stage writes
 	// its completion predicate together with any per-stage state
-	// (e.g., route.action, assess.sufficient) in a single AddTriplesBatch
+	// (e.g., route.action, assess.sufficient) in one append request
 	// so a rule that branches on action+complete won't see a stale
 	// action paired with a fresh completion timestamp.
 

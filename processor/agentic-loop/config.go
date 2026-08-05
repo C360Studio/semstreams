@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -447,6 +448,13 @@ func DefaultConfig() Config {
 				},
 			},
 			Outputs: []component.PortDefinition{
+				{
+					Name:      "graph_mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
+				},
 				{
 					Name:        "agent.request",
 					Type:        "jetstream",

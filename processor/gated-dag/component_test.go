@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/stretchr/testify/require"
 )
@@ -41,9 +42,15 @@ func TestComponent_Discoverable(t *testing.T) {
 	require.Empty(t, c.InputPorts())
 
 	out := c.OutputPorts()
-	require.Len(t, out, 1)
+	require.Len(t, out, 2)
 	require.Equal(t, component.DirectionOutput, out[0].Direction)
 	require.Equal(t, "gateddag.dispatch.unit", out[0].Config.(component.NATSPort).Subject)
+	mutation, ok := out[1].Config.(component.NATSRequestPort)
+	require.True(t, ok)
+	require.True(t, out[1].Required)
+	require.Equal(t, graphmutation.SubjectFamily, mutation.Subject)
+	require.Equal(t, graphmutation.InterfaceType, mutation.Interface.Type)
+	require.Equal(t, graphmutation.InterfaceVersion, mutation.Interface.Version)
 
 	require.Contains(t, c.ConfigSchema().Required, "unit_entity_prefix")
 	require.Contains(t, c.ConfigSchema().Required, "dispatch_subject")

@@ -7,6 +7,11 @@ resource preparation with an **existing** gated-DAG primitive and to **reject** 
 pre-dispatch prepare hook on the executor. **No framework code lands.** Extends
 ADR-046 (gated-DAG dispatch component).
 
+**Current graph-reference behavior:** ADR-091 supersedes this ADR's historical
+dependency on referential stubs. Graph ingest does not materialize an entity for
+an absent relationship target. The relationship remains valid, and readers
+observe the absent target as unresolved/not found until that entity is written.
+
 ## Decision
 
 For per-unit resource preparation that must happen **after** a unit's
@@ -149,17 +154,16 @@ guarded by a real `Completed` marker rather than an out-of-band skip check.
   entity and edges — **not** the rejected dispatch hook. Do not add the
   convenience preemptively (framework-vs-product boundary).
 
-- **Depends on the referential-stub fix (GH #429).** This pattern threads
+- **Historical dependency, superseded by ADR-091:** the accepted design
+  originally depended on the referential-stub fix (GH #429). This pattern threads
   `entity_id` references between units (`depends_on` edges, and any forward
-  reference such as a `prepare_target`). A reference to a **not-yet-born** unit
-  makes graph-ingest materialize a referential stub (`core.identity.stub`) at
-  that ID; a stub carries no `depends_on` edges, so gated-dag's brain derives it
-  as a **dependency-free, immediately dispatchable** unit and would dispatch it
-  before its real content lands — defeating the ordering this pattern exists to
-  provide. gated-dag ignoring referential stubs by default (GH #429, the
-  stub-envelope filter) is the safety net that makes this pattern race-free.
-  Consumers should also seed units before writing cross-references where they
-  can, but must not rely on that ordering alone.
+  reference such as a `prepare_target`). The old implementation materialized a
+  `core.identity.stub` entity at a not-yet-born target and required gated-dag to
+  filter that stub. ADR-091 retires both automatic target birth and the stub
+  filter. An absent target is a valid unresolved relationship, not a dispatchable
+  unit; readers report it as not found until its real content lands. Consumers
+  still decide whether their own workflow requires targets to be seeded before
+  cross-references are written.
 
 ## Open questions
 

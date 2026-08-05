@@ -2,7 +2,7 @@
 
 ## Purpose
 
-SemStreams is the **governed graph substrate and framework** for the C360 `sem*`
+SemStreams is the **semantic graph substrate and framework** for the C360 `sem*`
 family. It turns event data into a semantic knowledge graph on NATS JetStream and
 gives every product above it one shared runtime: the KV twofer (current state +
 watch notification, with explicitly configured bounded history), Graphable
@@ -23,11 +23,11 @@ second path requires recorded evidence of a framework-level usability or
 correctness gap, a product-neutral contract, and no product vocabulary or policy.
 Standards interest, sponsor interest, an in-repo example, or first-party authorship
 is not sufficient. See ADR-075. Unwired-in-the-framework does not mean broken;
-classify ownership before building.
+classify framework responsibility before building.
 
 ## Product Boundary
 
-- **SemStreams owns** the governed graph substrate: the KV-twofer and NATS/KV
+- **SemStreams provides** the graph substrate: the KV-twofer and NATS/KV
   runtime; Graphable ingestion, `ENTITY_STATES`, the single-writer invariant, and
   graph mutation/query/gateway APIs; the consumed derived indexes (predicate, name,
   alias, incoming/outgoing) and indexing profiles; local projection contracts,
@@ -47,7 +47,7 @@ classify ownership before building.
   - **SemSource** — source discovery/parsing, binary/media by-reference, source
     provenance, and source-graph publishing.
   - **SemOps** — COP product semantics, feed fusion, tactical UI, product-level
-    graph ownership.
+    graph policy.
   - **SemConnect** — the OGC Connected Systems API bridge, including OMS,
     SensorML, SWE Common, CS API, and associated vocabulary contracts.
   - **SemDev** — GitHub webhook, forge tools, and development-workflow policy.

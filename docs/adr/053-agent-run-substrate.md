@@ -2,10 +2,14 @@
 
 ## Status
 
-**Proposed** — 2026-06-07. Not yet implemented or tagged. Derived from
+**Accepted and implemented** — status corrected 2026-08-05. The AgentRun
+participant, lifecycle registration, run propagation, and rule integration ship
+in the framework. The original 2026-06-07 design was derived from
 [docs/proposals/agent-run-substrate.md](../proposals/agent-run-substrate.md)
 (full design exercise + two adversarial reviews: architect + Codex, both
-RIGHT-WITH-CHANGES, thesis accepted). Builds on
+RIGHT-WITH-CHANGES, thesis accepted). Its mutation mechanics are amended by
+GS-01/[ADR-091](091-graph-mutation-authority-without-semantic-ownership.md) as
+recorded in D5. Builds on
 [ADR-047](047-lifecycle-harness-substrate.md) (Lifecycle harness) and
 [ADR-049](049-lifecycle-harness-prime-schema-over-entity-states.md) (schema over
 ENTITY_STATES). Lifts the reference design from semteams ADR-038 (chain entity).
@@ -73,7 +77,8 @@ phase churn. The fit has emerged.
 
 The `Manager` surface (`pkg/lifecycle`, post-ADR-049) is a superset of what a run
 needs: `Create`=mint, `Get`/`LookupByEntityID`=resolve, `Transition`/`Complete`/
-`Fail`=lifecycle, `List`/`Watch`/`History`=operator view + KV-revision audit,
+`Fail`=lifecycle, `List`/`Watch`/`History`=operator view over the fixed recent
+transition window,
 `Children`=tree, `UpdateFromOperator`=operator patches, plus restart recovery,
 the operator gateway (`GET /workflows`), rule integration (`lifecycle_*` actions
 + `$entity.lifecycle.*`), and ENTITY_STATES storage (`manager.go:182`). Building a
@@ -133,15 +138,13 @@ fallback walk (D6) when needed.
 - The **framework CREATES** (mint, D4) and **OBSERVES** (subscriber, D7). It does
   **not** infer run completion from child-loop events.
 - The **product/coordinator EMITS the terminal run decision** (it is the
-  orchestrator that knows when the run is done) by firing a `lifecycle_transition`
-  rule action to `completed`/`failed`/`cancelled`. ADR-028-consistent.
-- **Narrow framework fallback:** if the dispatch-ROOT loop terminates
-  (fail/cancel) *before any child handoff* (run still `dispatched`, no children),
-  the subscriber transitions it to `failed`/`cancelled` to prevent a zombie. This
-  is the ONLY framework-initiated terminal transition.
-- The adapter calls `Transition` with the **explicit** terminal — **never
-  `Manager.Complete`** (with `executing`→3 terminals it picks `reachable[0]`
-  non-deterministically, `manager.go:671`).
+  orchestrator that knows when the run is done). A coordinator/component performs
+  the terminal lifecycle mutation through its declared port, directly or through
+  a `lifecycle_transition` rule action, to `completed`/`failed`/`cancelled`.
+  ADR-028-consistent.
+- The framework subscriber only observes terminal loop events and resolves the
+  associated run for handlers. It has no lifecycle mutation surface and never
+  guesses a terminal run phase from a loop event.
 
 ### D4 — Mint is a declared rule-action field, not convention
 
@@ -160,19 +163,20 @@ run, else `none` — so child spawns are free and only the coordinator's dispatc
 declares `new`. Auto-minting every parentless loop is rejected (would mint a run
 per CLI-chat/HTTP loop, `agentic-dispatch/http.go:301`).
 
-### D5 — Milestones: two write paths + a cardinality contract
+### D5 — Milestones: current mutation paths + a cardinality contract
 
-Run **phase** → `Manager.Transition` (low-write, CAS, transition-guarded). Run
-**milestones** → product triples on the run entity via the **graph-ingest path**
-(`AddTriple`, last-writer-wins per predicate, no CAS) — NOT `Manager`:
+**GS-01/ADR-091 supersedes this proposal's original `AddTriple`/last-writer-wins
+mechanics.** Run phase changes use the declared `lifecycle_transition` action
+through its canonical mutation port. The agent-run subscriber is
+observation-only and does not stamp milestones or terminal phases. If a product
+needs milestone facts, a coordinator or component declares a canonical `Append`
+output and publishes them through that port; graph-ingest owns server-side CAS,
+deduplication, and the authoritative mutation result.
 
-- `UpdateFromOperator` is operator-authority gated, default-deny
-  (`manager_query.go:451`); routing derived milestone data through it makes them
-  operator-patchable and forces product vocab into the framework struct.
-- `Manager` writes are CAS (`updateRetries=5`, `manager.go:399`); a subscriber
-  stamping on every loop completion in a fan-out arc contends on the hot run
-  entity → retry exhaustion. Same rationale ADR-049 used to keep `AGENT_LOOPS`
-  off the CAS path.
+The old proposal routed derived milestone data around `Manager` to avoid making
+product vocabulary operator-patchable and to avoid client-side contention. Those
+constraints remain useful, but bypassing the canonical mutation port is no
+longer an allowed solution.
 
 **Cardinality contract:** distinguish **scalar run-snapshot** predicates
 (latest-wins correct, e.g. `chain.dispatched.at`, current-best) from
@@ -192,9 +196,12 @@ product-domain.
   ```go
   type MilestoneHandler interface {
       OnLoopTerminal(ctx context.Context, ev agentic.LoopTerminalEvent,
-          run *AgentRun, pub TriplePublisher) error
+          run *AgentRun) error
   }
   ```
+  The subscriber is an event consumer and has no graph mutation client. A
+  component that derives graph facts from milestone events performs that work
+  through its declared graph mutation output port.
 - **Fallback resolution** (lifts `Resolver.ChainID` walk + the `RequestClassified`
   footgun fix, `chain/resolver.go:209`): for pre-migration / un-threaded loops,
   logged WARN.
@@ -227,18 +234,20 @@ the wire — no `resolver.ChainEntityID` round-trip. Because cancellation rides
 
 ### Storage
 
-Run entity in ENTITY_STATES (low-write: phase transitions + audit; passes the
-ADR-049 rubric — graph-reasonable facts, audit free from KV revisions; **no
-private bucket**). Loops stay in high-write `AGENT_LOOPS` (the ADR-049
-exception). Phase via CAS; milestones via graph-ingest. Clean split.
+Run entity in ENTITY_STATES (low-write phase transitions plus the fixed recent
+transition window; `History=1` provides no audit for free; **no private
+bucket**). Loops stay in high-write `AGENT_LOOPS` (the ADR-049 exception).
+Phase changes use the declared canonical mutation path. Product milestones, if
+needed, use a component's declared canonical `Append`; the subscriber remains
+observation-only.
 
 ### What we gain
 
 semteams retires its hand-rolled run layer: the resolver/ancestry-walk as
 primary, the three-source fallback, the `run-loop-entity-id` threading, the
 hand-wired completion subscriber, and the `DispatchedStamper` (dissolves into
-`AuditPredicates`). Net product LOC negative. Runs gain an operator API, audit
-history, restart recovery, and rule integration **for free**. The #225 wire-field
+`AuditPredicates`). Net product LOC negative. Runs gain an operator API, bounded
+recent transition history, restart recovery, and rule integration. The #225 wire-field
 asks are answered as a typed contract, not a `loop_wire.go` patch. The next
 agentic product gets the run primitive instead of re-plumbing it.
 

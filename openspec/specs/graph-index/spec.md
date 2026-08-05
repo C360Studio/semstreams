@@ -441,10 +441,10 @@ pre-existing gh#433 reciprocal-cleanup gap and remains out of scope.
 - **WHEN** it reads the incoming index after the format change
 - **THEN** it observes the same neighbor set as before (no silently-empty read)
 
-### Requirement: Every surviving derived index declares semantic ownership and reconciliation capability
+### Requirement: Every surviving derived index declares storage responsibility and reconciliation capability
 
 Each derived graph index MUST declare its physical token layout, exact arity when fixed or explicit variable arity,
-semantic row owner, literal fixed-arity forward query filter when available or explicit non-filterability,
+component responsible for its rows, literal fixed-arity forward query filter when available or explicit non-filterability,
 value-overwrite policy, and update/delete/retirement behavior. It MUST declare either a literal
 owner-reconciliation filter or explicit non-filterability with alternate authority deferred to a separate
 specification. When a proven bounded owner filter exists, reconciliation MUST enumerate the stored owner rows,
@@ -498,4 +498,3 @@ repair, and readiness withholding on any required failure.
 - **GIVEN** filtered enumeration observes the same key more than once during concurrent mutation
 - **WHEN** reconciliation computes the stored owner set
 - **THEN** it deduplicates by exact key before diffing
-

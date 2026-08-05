@@ -137,12 +137,12 @@ The graph builds situational awareness; rules and agents close the loop.
 Two core patterns power this:
 - **Graphable** — Your types become graph entities ([docs](docs/basics/03-graphable-interface.md))
 - **Payload Registry** — Messages serialize with type discrimination ([docs](docs/concepts/15-payload-registry.md))
-- **Governed Semantic State** — Shared graph facts declare who may replace them, who may append evidence, and how
-  cross-entity edges are handled ([docs](docs/concepts/28-governed-semantic-state.md))
+- **Typed Graph Mutations** — Components create, reconcile, append, and delete through one revision-aware port
+  contract ([docs](docs/adr/091-graph-mutation-authority-without-semantic-ownership.md))
 
-`Graphable` is enough for simple fact ingestion. Domains with multiple writers, lifecycle state, regulated audit, or
-agentic automation also need ownership for stateful predicate groups. That keeps `ENTITY_STATES` queryable without
-letting unrelated components silently overwrite each other's facts.
+`Graphable` is enough for ordinary event ingestion. Components that intentionally change current graph state use the
+typed mutation port: strict create, complete-set reconcile, set-valued append, or revision-fenced delete. CAS exposes
+real conflicts without semantic owner leases, and relationship objects may arrive later under eventual consistency.
 
 ## Progressive Capabilities
 

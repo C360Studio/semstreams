@@ -31,13 +31,19 @@ import (
 // would double-count the same rejection under a second reason label).
 //
 // Lane map (see validateTriplePredicates' doc comment):
-//   - triple.add / triple.add_batch — this gate is the FIRST predicate authority.
-//   - create_with_triples / update_with_triples / Graphable ingest — the
+//   - triple.append — this gate is the FIRST predicate authority.
+//   - entity.create / entity.reconcile / Graphable ingest — the
 //     authoritative entity-state contract validation
 //     (graph.ValidateEntityStateContract) fires first with the generic
 //     invalid_request classification; the gate is a backstop.
 
 const structuralGateEntity = "acme.ops.robotics.gcs.drone.001"
+
+const (
+	structuralAppendSubject    = "graph.mutation.triple.append"
+	structuralCreateSubject    = "graph.mutation.entity.create"
+	structuralReconcileSubject = "graph.mutation.entity.reconcile"
+)
 
 // structuralGateTestType is the synthetic envelope type for gate tests.
 var structuralGateTestType = message.Type{Domain: "test", Category: "mutation", Version: "v1"}
@@ -99,14 +105,14 @@ func TestValidateTriplePredicates_ValidPredicate_Untouched(t *testing.T) {
 	require.NoError(t, err, "conforming 3-part predicates pass the fail-closed gate")
 }
 
-// TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted drives the
+// TestHandleCanonicalAppend_InvalidPredicate_FailClosedNothingPersisted drives the
 // production handler through the meteredMutation wrapper (the exact chain
 // SubscribeForRequests registers) and pins the full fail-closed contract on the
-// triple.add lane: classified structural_invalid error, rejection metric, loud
+// append lane: classified structural_invalid error, rejection metric, loud
 // Warn naming the token, and NOTHING persisted. The target entity is absent, so
 // the gate must fire BEFORE the must-exist check (structural_invalid, not
 // entity_not_found) and before any KV write.
-func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.T) {
+func TestHandleCanonicalAppend_InvalidPredicate_FailClosedNothingPersisted(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
@@ -117,16 +123,16 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 	// The meteredMutation wrapper is the SINGLE metering point: it meters the
 	// classified error by its code (reason=structural_invalid). The gate's old
 	// direct-meter cell must stay untouched (double-metering regression guard).
-	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, graph.ErrorCodeStructuralInvalid)
+	counter := comp.mutationRejections.WithLabelValues(structuralAppendSubject, graph.ErrorCodeInvalidRequest)
 	before := testutil.ToFloat64(counter)
-	gateDirectCell := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, "structural_predicate_invalid")
+	gateDirectCell := comp.mutationRejections.WithLabelValues(structuralAppendSubject, "structural_predicate_invalid")
 	gateDirectBefore := testutil.ToFloat64(gateDirectCell)
 
-	handler := comp.meteredMutation(SubjectTripleAdd, comp.handleTripleAdd)
-	reqBytes, err := json.Marshal(graph.AddTripleRequest{Triple: message.Triple{
+	handler := comp.meteredMutation(structuralAppendSubject, comp.handleCanonicalAppend)
+	reqBytes, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{{
 		Subject: absentID, Predicate: "agent.role", Object: "researcher", // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 		Timestamp: time.Now(), Confidence: 1.0,
-	}})
+	}}})
 	require.NoError(t, err)
 
 	resp, err := handler(ctx, reqBytes)
@@ -135,12 +141,12 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 
 	var ce *errs.ClassifiedError
 	require.ErrorAs(t, err, &ce)
-	assert.Equal(t, graph.ErrorCodeStructuralInvalid, ce.Code,
-		"the gate fires before the must-exist check: structural_invalid, not entity_not_found")
+	assert.Equal(t, graph.ErrorCodeInvalidRequest, ce.Code,
+		"the complete candidate contract fires before the must-exist check")
 	assert.True(t, errs.IsInvalid(err), "structural rejection classifies invalid (do-not-retry)")
 
 	assert.InDelta(t, before+1, testutil.ToFloat64(counter), 0.0001,
-		"mutation_rejections{subject=triple.add, reason=structural_invalid} must increment exactly once")
+		"mutation_rejections{subject=triple.append, reason=invalid_request} must increment exactly once")
 	assert.InDelta(t, gateDirectBefore, testutil.ToFloat64(gateDirectCell), 0.0001,
 		"the gate must NOT meter directly — one rejection, one metric cell (no double-metering)")
 
@@ -152,23 +158,23 @@ func TestHandleTripleAdd_InvalidPredicate_FailClosedNothingPersisted(t *testing.
 	logged := logBuf.String()
 	assert.Contains(t, logged, "graph mutation rejected", "a loud Warn must be emitted")
 	assert.Contains(t, logged, "agent.role", "the Warn must name the offending predicate")
-	assert.Contains(t, logged, SubjectTripleAdd, "the Warn must name the source subject")
-	assert.Contains(t, logged, graph.ErrorCodeStructuralInvalid, "the Warn must name the reason")
+	assert.Contains(t, logged, structuralAppendSubject, "the Warn must name the source subject")
+	assert.Contains(t, logged, graph.ErrorCodeInvalidRequest, "the Warn must name the reason")
 }
 
-// TestHandleTripleAddBatch_InvalidPredicate_WholeBatchRejected pins D2's
+// TestHandleCanonicalAppend_InvalidPredicate_WholeBatchRejected pins D2's
 // reject-the-whole-mutation decision on the batch lane: one malformed predicate
 // rejects the ENTIRE batch — the conforming triple in the same batch must NOT
 // be persisted either.
-func TestHandleTripleAddBatch_InvalidPredicate_WholeBatchRejected(t *testing.T) {
+func TestHandleCanonicalAppend_InvalidPredicate_WholeBatchRejected(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
 	now := time.Now()
 
-	handler := comp.meteredMutation(SubjectTripleAddBatch, comp.handleTripleAddBatch)
-	reqBytes, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{
+	handler := comp.meteredMutation(structuralAppendSubject, comp.handleCanonicalAppend)
+	reqBytes, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{
 		{Subject: structuralGateEntity, Predicate: "sensorml.capability.value", Object: "50m", Timestamp: now, Confidence: 1.0},
 		{Subject: structuralGateEntity, Predicate: "agent.role", Object: "researcher", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 	}})
@@ -180,7 +186,7 @@ func TestHandleTripleAddBatch_InvalidPredicate_WholeBatchRejected(t *testing.T) 
 
 	var ce *errs.ClassifiedError
 	require.ErrorAs(t, err, &ce)
-	assert.Equal(t, graph.ErrorCodeStructuralInvalid, ce.Code)
+	assert.Equal(t, graph.ErrorCodeInvalidRequest, ce.Code)
 
 	stored, _, err := comp.fetchEntityState(ctx, structuralGateEntity)
 	require.NoError(t, err)
@@ -189,25 +195,25 @@ func TestHandleTripleAddBatch_InvalidPredicate_WholeBatchRejected(t *testing.T) 
 	assert.Equal(t, baseline.Version, stored.Version, "entity version must be untouched")
 }
 
-// TestHandleEntityCreateWithTriples_InvalidPredicate_NothingPersisted pins the
-// create_with_triples lane. On this lane the AUTHORITATIVE entity-state contract
+// TestHandleCanonicalCreate_InvalidPredicate_NothingPersisted pins the
+// entity.create lane. On this lane the AUTHORITATIVE entity-state contract
 // validation (validateMutationEntityState → graph.ValidateEntityStateContract)
 // fires before the handler-level structural gate, so the caller-visible
 // classification is the generic invalid_request — still a classified validation
 // error, still nothing persisted, and the specific structural reason is metered
 // via predicate_contract_rejections{lane,reason}.
-func TestHandleEntityCreateWithTriples_InvalidPredicate_NothingPersisted(t *testing.T) {
+func TestHandleCanonicalCreate_InvalidPredicate_NothingPersisted(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	const createID = "acme.ops.robotics.gcs.drone.777"
 	contractCounter := comp.predicateContractRejections.WithLabelValues(
-		SubjectEntityCreateWithTriples, string(vocabulary.PredicateReasonArity))
+		structuralCreateSubject, string(vocabulary.PredicateReasonArity))
 	before := testutil.ToFloat64(contractCounter)
 
 	now := time.Now()
-	handler := comp.meteredMutation(SubjectEntityCreateWithTriples, comp.handleEntityCreateWithTriples)
-	reqBytes, err := json.Marshal(graph.CreateEntityWithTriplesRequest{
+	handler := comp.meteredMutation(structuralCreateSubject, comp.handleCanonicalCreate)
+	reqBytes, err := json.Marshal(graph.CreateEntityRequest{
 		Entity: &graph.EntityState{ID: createID, MessageType: structuralGateTestType, Version: 1, UpdatedAt: now},
 		Triples: []message.Triple{
 			{Subject: createID, Predicate: "agent.role", Object: "researcher", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
@@ -227,28 +233,31 @@ func TestHandleEntityCreateWithTriples_InvalidPredicate_NothingPersisted(t *test
 	assert.Contains(t, err.Error(), "agent.role", "the error must name the offending predicate")
 
 	assert.InDelta(t, before+1, testutil.ToFloat64(contractCounter), 0.0001,
-		"predicate_contract_rejections{lane=create_with_triples, reason=arity} must increment")
+		"predicate_contract_rejections{lane=entity.create, reason=arity} must increment")
 
 	_, getErr := comp.entityBucket.Get(ctx, createID)
 	require.Error(t, getErr, "nothing may be persisted for the rejected create")
 	assert.True(t, errors.Is(getErr, natsclient.ErrKVKeyNotFound))
 }
 
-// TestHandleEntityUpdateWithTriples_InvalidPredicate_EntityUnchanged pins the
-// update_with_triples lane: a malformed predicate in the AddTriples delta
+// TestHandleCanonicalReconcile_InvalidPredicate_EntityUnchanged pins the
+// entity.reconcile lane: a malformed desired predicate
 // rejects the update as a classified validation error and leaves the stored
 // entity byte-identical (existing merge state untouched).
-func TestHandleEntityUpdateWithTriples_InvalidPredicate_EntityUnchanged(t *testing.T) {
+func TestHandleCanonicalReconcile_InvalidPredicate_EntityUnchanged(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
 	now := time.Now()
 
-	handler := comp.meteredMutation(SubjectEntityUpdateWithTriples, comp.handleEntityUpdateWithTriples)
-	reqBytes, err := json.Marshal(graph.UpdateEntityWithTriplesRequest{
-		Entity: &graph.EntityState{ID: structuralGateEntity, MessageType: structuralGateTestType, Version: baseline.Version + 1},
-		AddTriples: []message.Triple{
+	entry, err := comp.entityBucket.Get(ctx, structuralGateEntity)
+	require.NoError(t, err)
+	handler := comp.meteredMutation(structuralReconcileSubject, comp.handleCanonicalReconcile)
+	reqBytes, err := json.Marshal(graph.ReconcilePredicatesRequest{
+		EntityID: structuralGateEntity, ExpectedRevision: entry.Revision,
+		Predicates: []string{"agent.role"},
+		Desired: []message.Triple{
 			{Subject: structuralGateEntity, Predicate: "agent.role", Object: "researcher", Timestamp: now, Confidence: 1.0}, // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 		},
 	})
@@ -298,33 +307,34 @@ func TestIngestEntity_InvalidPredicate_NothingPersisted(t *testing.T) {
 	assert.True(t, errors.Is(getErr, natsclient.ErrKVKeyNotFound))
 }
 
-// TestHandleTripleAdd_ValidPredicate_PersistsMergeIntact is the regression
+// TestHandleCanonicalAppend_ValidPredicate_PersistsMergeIntact is the regression
 // guard: a fully-conforming mutation passes the structural gate and persists
 // with the existing merge semantics intact (append on the entity, version
 // bump, prior triples preserved). Includes the gh#519 collision case: a real
 // 3-part predicate ending in the literal segment "value".
-func TestHandleTripleAdd_ValidPredicate_PersistsMergeIntact(t *testing.T) {
+func TestHandleCanonicalAppend_ValidPredicate_PersistsMergeIntact(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	baseline := seedStructuralGateEntity(t, comp, structuralGateEntity)
 
-	counter := comp.mutationRejections.WithLabelValues(SubjectTripleAdd, graph.ErrorCodeStructuralInvalid)
+	counter := comp.mutationRejections.WithLabelValues(structuralAppendSubject, graph.ErrorCodeStructuralInvalid)
 	before := testutil.ToFloat64(counter)
 
-	handler := comp.meteredMutation(SubjectTripleAdd, comp.handleTripleAdd)
-	reqBytes, err := json.Marshal(graph.AddTripleRequest{Triple: message.Triple{
+	handler := comp.meteredMutation(structuralAppendSubject, comp.handleCanonicalAppend)
+	reqBytes, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{{
 		Subject: structuralGateEntity, Predicate: "sensorml.capability.value", Object: "50m",
 		Timestamp: time.Now(), Confidence: 1.0,
-	}})
+	}}})
 	require.NoError(t, err)
 
 	respBytes, err := handler(ctx, reqBytes)
 	require.NoError(t, err, "a conforming mutation must pass the gate and persist")
 
-	var resp graph.AddTripleResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.NotZero(t, resp.KVRevision, "success response carries the post-write revision")
+	require.Len(t, resp.Results, 1)
+	assert.NotZero(t, resp.Results[0].KVRevision, "success response carries the post-write revision")
 
 	stored, _, err := comp.fetchEntityState(ctx, structuralGateEntity)
 	require.NoError(t, err)

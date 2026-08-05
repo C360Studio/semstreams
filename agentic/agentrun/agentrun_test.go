@@ -5,7 +5,7 @@
 //   - D2: WorkflowDeclaration validation
 //   - D4: Mint idempotence
 //   - D6: ResolveRun typed + ancestry-walk fallback (with WARN log verification shape)
-//   - D3: Terminal authority — zombie prevention (root dispatched → failed/cancelled)
+//   - D3: Terminal authority stays with coordinators/components
 //   - D6: Subscriber category demux (cancellation rides loop_cancelled category)
 //   - D6: Panic guard
 package agentrun_test
@@ -145,21 +145,13 @@ func TestWorkflowDeclaration_TerminalPhases(t *testing.T) {
 }
 
 // --- Integration path: use lifecycle.Manager with integration build tag ---
-// The unit tests below use a mock lifecycle manager for phase-logic testing.
+// The unit tests below use an in-memory lifecycle reader.
 
 // --- Mock lifecycle.Manager for unit tests ---
 
-// mockLifecycleManager is a test double for lifecycle.Manager used by
-// MilestoneSubscriber tests that need phase-transition verification.
+// mockLifecycleManager is a test double used for run-state reads and Mint.
 type mockLifecycleManager struct {
-	runs        map[string]*agentrun.AgentRun
-	transitions []transitionCall
-}
-
-type transitionCall struct {
-	entityID string
-	newPhase string
-	source   lifecycle.TransitionSource
+	runs map[string]*agentrun.AgentRun
 }
 
 func newMockLifecycleManager() *mockLifecycleManager {
@@ -185,23 +177,6 @@ func (m *mockLifecycleManager) Get(_ context.Context, workflow, entityID string)
 	return &runCopy, nil
 }
 
-func (m *mockLifecycleManager) Transition(_ context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, _ string) error {
-	if workflow != agentrun.WorkflowName {
-		return lifecycle.ErrWorkflowNotRegistered
-	}
-	run, ok := m.runs[entityID]
-	if !ok {
-		return lifecycle.ErrEntityNotFound
-	}
-	m.transitions = append(m.transitions, transitionCall{
-		entityID: entityID,
-		newPhase: newPhase,
-		source:   source,
-	})
-	run.PhaseField = newPhase
-	return nil
-}
-
 func (m *mockLifecycleManager) Create(_ context.Context, initial lifecycle.Participant) error {
 	run, ok := initial.(*agentrun.AgentRun)
 	if !ok {
@@ -214,14 +189,6 @@ func (m *mockLifecycleManager) Create(_ context.Context, initial lifecycle.Parti
 	m.runs[run.EntityIDField] = &runCopy
 	return nil
 }
-
-// mockMilestoneSubscriber wraps the real subscriber but injects the mock manager.
-// Since MilestoneSubscriber is a concrete struct, we can't inject a mock mgr
-// through the current constructor. We test subscriber behavior via HandleEvent
-// directly by seeding state into the mock and reading back transitions.
-//
-// To test terminal authority, we use the MilestoneSubscriberForTest which
-// accepts a mock-capable dependency set.
 
 // --- D4: Mint idempotence ---
 
@@ -317,19 +284,19 @@ func TestResolveRun_AncestryWalkPath_WhenNoRunTriple(t *testing.T) {
 	assert.False(t, rootHasParent)
 }
 
-// --- D3: Terminal authority — zombie prevention ---
+// --- D3: Terminal lifecycle authority remains outside the subscriber ---
 
-// TestTerminalAuthority_RootLoopFailViaResolveWalk exercises D3 via the PRODUCTION
+// TestSubscriber_RootLoopFailViaResolveWalk exercises the production
 // resolution path: the root coordinator loop's terminal event carries RunID="" and
 // RunEntityID="" (because the root was not spawned with a RunID — the run_scope:new
 // rule fires AFTER the root starts, stamping agent.loop.run via tripleMutator on the
 // firing entity but NOT updating LoopEntity.RunID). So the subscriber falls through
 // to ResolveRun → reads the agent.loop.run triple from the firing entity (the root loop
-// entity) → builds the chain entity ID → Manager.Get → D3 guard fires.
+// entity) → builds the chain entity ID → RunStateReader.Get.
 //
 // This test drives the exact resolution path production uses when the root loop
 // fails before any child handoff (ev.RunID == "").
-func TestTerminalAuthority_RootLoopFailViaResolveWalk(t *testing.T) {
+func TestSubscriber_RootLoopFailViaResolveWalk(t *testing.T) {
 	t.Parallel()
 	rootLoopID := "root-loop-id"
 	runEntityID := "acme.ops.agent.chain.execution." + rootLoopID
@@ -345,11 +312,15 @@ func TestTerminalAuthority_RootLoopFailViaResolveWalk(t *testing.T) {
 	rootLoopEntityID, _ := agentic.TryLoopExecutionEntityID("acme", "ops", rootLoopID)
 	reader.set(rootLoopEntityID, agvocab.LoopRun, rootLoopID)
 
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	var observedRun *agentrun.AgentRun
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
+	sub.AddHandler(&testMilestoneHandler{fn: func(_ context.Context, _ agentrun.LoopTerminalEvent, run *agentrun.AgentRun) error {
+		observedRun = run
+		return nil
+	}})
 
 	// Build LoopFailedEvent as production emits it for the root coordinator:
 	// RunID="" and RunEntityID="" because LoopEntity.RunID was never set
@@ -370,17 +341,15 @@ func TestTerminalAuthority_RootLoopFailViaResolveWalk(t *testing.T) {
 	err := sub.HandleEvent(context.Background(), data)
 	require.NoError(t, err)
 
-	// D3: framework must have transitioned the run to "failed".
-	require.Len(t, mock.transitions, 1, "exactly one transition expected")
-	assert.Equal(t, "failed", mock.transitions[0].newPhase,
-		"zombie prevention: root-loop fail before children must transition run to failed")
-	assert.Equal(t, lifecycle.TransitionSourceFramework, mock.transitions[0].source)
+	require.NotNil(t, observedRun, "root terminal event must still resolve and reach handlers")
+	assert.Equal(t, runEntityID, observedRun.EntityIDField)
+	assert.Equal(t, "dispatched", mock.runs[runEntityID].PhaseField,
+		"subscriber must not mutate lifecycle phase")
 }
 
-// TestTerminalAuthority_ChildLoopFailDoesNotCloseRunViaWireRunID exercises the path
-// where a CHILD loop's terminal event carries RunEntityID on the wire (D8 typed
-// propagation). The child's ev.LoopID != run.RunID(), so D3 must NOT fire.
-func TestTerminalAuthority_ChildLoopFailDoesNotCloseRunViaWireRunID(t *testing.T) {
+// TestSubscriber_ChildLoopFailPreservesRunStateViaWireRunID exercises the path
+// where a child loop's terminal event carries RunEntityID on the wire.
+func TestSubscriber_ChildLoopFailPreservesRunStateViaWireRunID(t *testing.T) {
 	t.Parallel()
 	runEntityID := "acme.ops.agent.chain.execution.root-loop-id"
 	run := &agentrun.AgentRun{
@@ -389,14 +358,12 @@ func TestTerminalAuthority_ChildLoopFailDoesNotCloseRunViaWireRunID(t *testing.T
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 
-	// A CHILD loop fails: ev.LoopID ("child-loop-id") != run.RunID() ("root-loop-id").
-	// Even though the run is in "dispatched", D3 must not fire for a non-root loop.
+	// A child loop fails while the observed run remains dispatched.
 	childFailed := &agentic.LoopFailedEvent{
 		LoopID:      "child-loop-id",
 		TaskID:      "task-002",
@@ -414,13 +381,10 @@ func TestTerminalAuthority_ChildLoopFailDoesNotCloseRunViaWireRunID(t *testing.T
 	err := sub.HandleEvent(context.Background(), data)
 	require.NoError(t, err)
 
-	// D3: run must NOT be closed by the framework — only the coordinator/product does that.
-	assert.Empty(t, mock.transitions,
-		"child loop failure must NOT close the run (only product/coordinator does that)")
 	assert.Equal(t, "dispatched", mock.runs[runEntityID].PhaseField)
 }
 
-func TestTerminalAuthority_ChildLoop_DoesNotCloseRun(t *testing.T) {
+func TestSubscriber_ChildLoopFailPreservesExecutingRun(t *testing.T) {
 	t.Parallel()
 	runEntityID := "acme.ops.agent.chain.execution.root-loop-id"
 	run := &agentrun.AgentRun{
@@ -429,11 +393,10 @@ func TestTerminalAuthority_ChildLoop_DoesNotCloseRun(t *testing.T) {
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 
 	// A CHILD loop fails: LoopID != RunID.
 	childFailed := &agentic.LoopFailedEvent{
@@ -453,13 +416,10 @@ func TestTerminalAuthority_ChildLoop_DoesNotCloseRun(t *testing.T) {
 	err := sub.HandleEvent(context.Background(), data)
 	require.NoError(t, err)
 
-	// D3: run must NOT be closed by the framework.
-	assert.Empty(t, mock.transitions,
-		"child loop failure must NOT close the run (only product/coordinator does that)")
 	assert.Equal(t, "executing", mock.runs[runEntityID].PhaseField)
 }
 
-func TestTerminalAuthority_RootCancel_Dispatched(t *testing.T) {
+func TestSubscriber_RootCancelDeliveredWithoutLifecycleMutation(t *testing.T) {
 	t.Parallel()
 	runEntityID := "acme.ops.agent.chain.execution.root-cancel-id"
 	run := &agentrun.AgentRun{
@@ -468,11 +428,15 @@ func TestTerminalAuthority_RootCancel_Dispatched(t *testing.T) {
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	var observedCategory string
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
+	sub.AddHandler(&testMilestoneHandler{fn: func(_ context.Context, event agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
+		observedCategory = event.Category
+		return nil
+	}})
 
 	cancelled := &agentic.LoopCancelledEvent{
 		LoopID:      "root-cancel-id",
@@ -488,9 +452,9 @@ func TestTerminalAuthority_RootCancel_Dispatched(t *testing.T) {
 	err := sub.HandleEvent(context.Background(), data)
 	require.NoError(t, err)
 
-	require.Len(t, mock.transitions, 1)
-	assert.Equal(t, "cancelled", mock.transitions[0].newPhase,
-		"zombie prevention: root-loop cancel before children must transition run to cancelled")
+	assert.Equal(t, agentic.CategoryLoopCancelled, observedCategory)
+	assert.Equal(t, "dispatched", mock.runs[runEntityID].PhaseField,
+		"subscriber must deliver cancellation without mutating lifecycle phase")
 }
 
 // --- D6: Subscriber category demux ---
@@ -500,22 +464,21 @@ func TestSubscriber_CategoryDemux_CancelledEventDetectedCorrectly(t *testing.T) 
 	runEntityID := "acme.ops.agent.chain.execution.demux-test"
 	run := &agentrun.AgentRun{
 		EntityIDField: runEntityID,
-		PhaseField:    "executing", // not dispatched — zombie guard won't fire
+		PhaseField:    "executing",
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
 	var receivedCategory string
 	handler := &testMilestoneHandler{
-		fn: func(_ context.Context, ev agentrun.LoopTerminalEvent, _ *agentrun.AgentRun, _ agentrun.TriplePublisher) error {
+		fn: func(_ context.Context, ev agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
 			receivedCategory = ev.Category
 			return nil
 		},
 	}
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 	sub.AddHandler(handler)
 
 	// LoopCancelledEvent — category=loop_cancelled (not from subject).
@@ -545,18 +508,17 @@ func TestSubscriber_CategoryDemux_CompletedEventDetectedCorrectly(t *testing.T) 
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
 	var receivedCategory string
 	handler := &testMilestoneHandler{
-		fn: func(_ context.Context, ev agentrun.LoopTerminalEvent, _ *agentrun.AgentRun, _ agentrun.TriplePublisher) error {
+		fn: func(_ context.Context, ev agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
 			receivedCategory = ev.Category
 			return nil
 		},
 	}
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 	sub.AddHandler(handler)
 
 	completed := &agentic.LoopCompletedEvent{
@@ -588,19 +550,18 @@ func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 	}
 
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	mock.seed(run)
 
 	var secondHandlerCalled bool
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 	sub.AddHandler(&testMilestoneHandler{
-		fn: func(context.Context, agentrun.LoopTerminalEvent, *agentrun.AgentRun, agentrun.TriplePublisher) error {
+		fn: func(context.Context, agentrun.LoopTerminalEvent, *agentrun.AgentRun) error {
 			panic("intentional test panic")
 		},
 	})
 	sub.AddHandler(&testMilestoneHandler{
-		fn: func(_ context.Context, _ agentrun.LoopTerminalEvent, _ *agentrun.AgentRun, _ agentrun.TriplePublisher) error {
+		fn: func(_ context.Context, _ agentrun.LoopTerminalEvent, _ *agentrun.AgentRun) error {
 			secondHandlerCalled = true
 			return nil
 		},
@@ -626,26 +587,25 @@ func TestSubscriber_PanicGuard_SecondHandlerRunsAfterFirstPanics(t *testing.T) {
 	assert.True(t, secondHandlerCalled, "second handler must run even when first panics")
 }
 
-// --- D3: Non-run loops (no RunEntityID, no agent.loop.run triple) ---
+// --- Non-run loops (no RunEntityID, no agent.loop.run triple) ---
 
 // TestSubscriber_NonRunLoop_HandlersCalledWithNilRun verifies the exact contract for
 // a standalone loop (not part of any run): resolveRunForEvent returns (nil, nil) →
-// handlers ARE called with run=nil → NO D3 transition fires. This pins the "nil run"
-// handler-call contract so product handlers know to expect nil.
+// handlers are called with run=nil. This pins the nil-run handler contract so
+// product handlers know to expect nil.
 func TestSubscriber_NonRunLoop_HandlersCalledWithNilRun(t *testing.T) {
 	t.Parallel()
 	// reader has NO agent.loop.run triple for standalone-loop → walk → root has no parent
 	// → Manager.Get for the loop itself returns ErrEntityNotFound → (nil, nil).
 	reader := newFakeTripleReader()
-	pub := &fakePublisher{}
 	mock := newMockLifecycleManager()
 	// mock has NO runs seeded — Manager.Get returns ErrEntityNotFound for any entity.
 
 	var handlerRun *agentrun.AgentRun
 	var handlerCalled bool
-	sub := agentrun.NewMilestoneSubscriberWithManager(mock, reader, pub, "acme", "ops", nil)
+	sub := agentrun.NewMilestoneSubscriberWithRunStateReader(mock, reader, "acme", "ops", nil)
 	sub.AddHandler(&testMilestoneHandler{
-		fn: func(_ context.Context, _ agentrun.LoopTerminalEvent, run *agentrun.AgentRun, _ agentrun.TriplePublisher) error {
+		fn: func(_ context.Context, _ agentrun.LoopTerminalEvent, run *agentrun.AgentRun) error {
 			handlerCalled = true
 			handlerRun = run
 			return nil
@@ -672,8 +632,6 @@ func TestSubscriber_NonRunLoop_HandlersCalledWithNilRun(t *testing.T) {
 	assert.True(t, handlerCalled, "handlers must be called even for non-run loops (run will be nil)")
 	assert.Nil(t, handlerRun, "run must be nil for a loop with no run association")
 
-	// D3: no transition must have fired — there is no run to transition.
-	assert.Empty(t, mock.transitions, "non-run loop must not trigger any D3 transition")
 }
 
 // --- Helper types ---
@@ -712,23 +670,13 @@ func (r *fakeTripleReader) GetLoopParentEntityID(_ context.Context, loopEntityID
 	return "", false, nil
 }
 
-// fakePublisher implements agentrun.TriplePublisher for tests.
-type fakePublisher struct {
-	calls []message.Triple
-}
-
-func (p *fakePublisher) AddTriple(_ context.Context, _ string, t message.Triple) (uint64, error) {
-	p.calls = append(p.calls, t)
-	return 1, nil
-}
-
 // testMilestoneHandler is a test double for agentrun.MilestoneHandler.
 type testMilestoneHandler struct {
-	fn func(context.Context, agentrun.LoopTerminalEvent, *agentrun.AgentRun, agentrun.TriplePublisher) error
+	fn func(context.Context, agentrun.LoopTerminalEvent, *agentrun.AgentRun) error
 }
 
-func (h *testMilestoneHandler) OnLoopTerminal(ctx context.Context, ev agentrun.LoopTerminalEvent, run *agentrun.AgentRun, pub agentrun.TriplePublisher) error {
-	return h.fn(ctx, ev, run, pub)
+func (h *testMilestoneHandler) OnLoopTerminal(ctx context.Context, ev agentrun.LoopTerminalEvent, run *agentrun.AgentRun) error {
+	return h.fn(ctx, ev, run)
 }
 
 // mustMarshalBaseMessage wraps a payload in the envelope shape HandleEvent.Unmarshal reads.
@@ -749,19 +697,15 @@ func mustMarshalBaseMessage(t *testing.T, schema message.Type, payload any) []by
 
 // --- Static compile-time checks ---
 
-// Ensure mockLifecycleManager satisfies agentrun.MockableManager.
-var _ agentrun.MockableManager = (*mockLifecycleManager)(nil)
+// Ensure mockLifecycleManager satisfies both narrow seams it exercises.
+var _ agentrun.RunStateReader = (*mockLifecycleManager)(nil)
+var _ agentrun.MintableManager = (*mockLifecycleManager)(nil)
 
-// MockableManager defines the subset of lifecycle.Manager that the subscriber
-// uses, so tests can inject a mock without importing the real Manager.
-// (This interface is defined in agentrun package — we verify it here.)
 func init() {
 	// Verify the Participant interface at test compile time.
 	var _ lifecycle.Participant = (*agentrun.AgentRun)(nil)
 	// Verify LoopTripleReader
 	var _ agentrun.LoopTripleReader = (*fakeTripleReader)(nil)
-	// Verify TriplePublisher
-	var _ agentrun.TriplePublisher = (*fakePublisher)(nil)
 	// Verify MilestoneHandler
 	var _ agentrun.MilestoneHandler = (*testMilestoneHandler)(nil)
 }

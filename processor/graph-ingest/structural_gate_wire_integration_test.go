@@ -30,22 +30,20 @@ import (
 //
 //	X-Status:      error
 //	X-Error-Class: invalid
-//	X-Error-Code:  structural_invalid   (triple.add lane — handler gate)
-//	               invalid_request      (create_with_triples lane — authoritative
-//	                                     contract seam fires first)
+//	X-Error-Code:  invalid_request
 //	body:          {"message": "...<offending predicate>..."}
-func TestIntegration_StructuralGate_TripleAdd_WireContract(t *testing.T) {
+func TestIntegration_StructuralGate_Append_WireContract(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	const absentID = "c360.test.structural.wire.drone.404"
-	reqBytes, err := json.Marshal(graph.AddTripleRequest{Triple: message.Triple{
+	reqBytes, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{{
 		Subject: absentID, Predicate: "agent.role", Object: "researcher", // predicate-audit:invalid {"kind":"stored-predicate","value":"agent.role","reason":"arity"}
 		Timestamp: time.Now(), Confidence: 1.0,
-	}})
+	}}})
 	require.NoError(t, err)
 
 	t.Run("raw_reply_headers", func(t *testing.T) {
-		msg, err := c.natsClient.RequestWithHeaders(ctx, SubjectTripleAdd, reqBytes, nil, 2*time.Second)
+		msg, err := c.natsClient.RequestWithHeaders(ctx, structuralAppendSubject, reqBytes, nil, 2*time.Second)
 		require.NoError(t, err, "transport must succeed — the failure is a handler-classified reply")
 		require.NotNil(t, msg)
 
@@ -54,8 +52,7 @@ func TestIntegration_StructuralGate_TripleAdd_WireContract(t *testing.T) {
 				"json.Unmarshal the error body into a zero-valued response (the silent-success bug)")
 		assert.Equal(t, natsclient.ErrorClassInvalid, msg.Header.Get(natsclient.HeaderErrorClass),
 			"structural rejection is invalid-class (do-not-retry)")
-		assert.Equal(t, graph.ErrorCodeStructuralInvalid, msg.Header.Get(natsclient.HeaderErrorCode),
-			"triple.add lane carries the specific structural_invalid code")
+		assert.Equal(t, graph.ErrorCodeInvalidRequest, msg.Header.Get(natsclient.HeaderErrorCode))
 
 		var body struct {
 			Message string `json:"message"`
@@ -65,13 +62,13 @@ func TestIntegration_StructuralGate_TripleAdd_WireContract(t *testing.T) {
 	})
 
 	t.Run("classified_caller_path", func(t *testing.T) {
-		respBytes, err := c.natsClient.RequestClassified(ctx, SubjectTripleAdd, reqBytes, 2*time.Second)
+		respBytes, err := c.natsClient.RequestClassified(ctx, structuralAppendSubject, reqBytes, 2*time.Second)
 		require.Error(t, err, "RequestClassified must surface the rejection as an error, not a success body")
 		assert.Nil(t, respBytes)
 
 		var ce *errs.ClassifiedError
 		require.ErrorAs(t, err, &ce, "caller receives a reconstructed *errs.ClassifiedError")
-		assert.Equal(t, graph.ErrorCodeStructuralInvalid, ce.Code)
+		assert.Equal(t, graph.ErrorCodeInvalidRequest, ce.Code)
 		assert.True(t, errs.IsInvalid(err), "callers branch on errs.IsInvalid for do-not-retry")
 		assert.True(t, strings.Contains(err.Error(), "agent.role"), "error text names the predicate")
 	})
@@ -82,17 +79,17 @@ func TestIntegration_StructuralGate_TripleAdd_WireContract(t *testing.T) {
 	assert.True(t, errors.Is(getErr, natsclient.ErrKVKeyNotFound))
 }
 
-// TestIntegration_StructuralGate_CreateWithTriples_WireContract covers the
-// create_with_triples lane over the wire: the authoritative entity-state
+// TestIntegration_StructuralGate_Create_WireContract covers the
+// entity.create lane over the wire: the authoritative entity-state
 // contract seam rejects the malformed predicate first, so the caller sees the
 // generic invalid_request code — still a classified invalid error naming the
 // predicate, still nothing persisted.
-func TestIntegration_StructuralGate_CreateWithTriples_WireContract(t *testing.T) {
+func TestIntegration_StructuralGate_Create_WireContract(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	const createID = "c360.test.structural.wire.drone.777"
 	now := time.Now()
-	reqBytes, err := json.Marshal(graph.CreateEntityWithTriplesRequest{
+	reqBytes, err := json.Marshal(graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
 			ID:          createID,
 			MessageType: message.Type{Domain: "test", Category: "mutation", Version: "v1"},
@@ -105,7 +102,7 @@ func TestIntegration_StructuralGate_CreateWithTriples_WireContract(t *testing.T)
 	})
 	require.NoError(t, err)
 
-	respBytes, err := c.natsClient.RequestClassified(ctx, SubjectEntityCreateWithTriples, reqBytes, 2*time.Second)
+	respBytes, err := c.natsClient.RequestClassified(ctx, structuralCreateSubject, reqBytes, 2*time.Second)
 	require.Error(t, err, "the malformed predicate must reject the create over the wire")
 	assert.Nil(t, respBytes)
 

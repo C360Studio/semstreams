@@ -348,7 +348,7 @@ func (cm *ComponentManager) Initialize() error {
 // state (drainBootConfigBacklog) — mid-boot component adds/edits/removals and
 // model-registry changes are applied with barrier semantics, their failures
 // joining the boot failure, BEFORE Start returns — so post-start boot guards
-// (the owned-bucket coverage pass) observe them. Only then does the config
+// (the catalog-retention backstop) observe them. Only then does the config
 // watcher launch (never on a failed boot), and every dynamically applied
 // update observes started == true and takes the real dynamic start path.
 //
@@ -387,7 +387,7 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	// Start has returned, joining all failures. Mark started even on failure so
 	// a subsequent Stop tears down the components that DID start, then fail
 	// boot closed — the composition root must not proceed to the post-start
-	// bucket sweep or HTTP setup on a partially failed component set.
+	// catalog-retention check or HTTP setup on a partially failed component set.
 	startErr := cm.startAllComponents(ctx)
 
 	cm.started.Store(true)
@@ -400,8 +400,8 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	// became locally visible during the barrier — synchronously, with barrier
 	// semantics — before the watcher exists and before Start returns. This
 	// closes two holes the deferred watcher alone left open: (1) a mid-boot
-	// update's component starting on the detached dynamic path AFTER the
-	// post-start owned-bucket sweep (reopening the create-race for it), and
+	// update's component starting on the detached dynamic path after the
+	// boot-boundary retention check (reopening the create-race for it), and
 	// (2) outright LOSS of mid-boot changes to the cap-1 drop-on-full OnChange
 	// buffers (a dropped model_registry change previously stayed unapplied
 	// until the next change; a dropped component edit until the next

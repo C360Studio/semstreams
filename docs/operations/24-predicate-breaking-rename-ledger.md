@@ -302,7 +302,7 @@ make the diff inventory complete, but they are not product migration promises.
 - The e2e mission contract and lifecycle test vocabulary intentionally map the same old strings to different new
   identities. Release notes must present only the production e2e mapping; the fixture mapping must not become a
   compatibility promise.
-- The inference default-set replacement needs semantic owner sign-off because it is not a mechanical rename.
+- The inference default-set replacement needs capability-owner sign-off because it is not a mechanical rename.
 - All exact-query consumers and RDF/JSON-LD mappings must be tested with the canonical identities before release.
 - Sister-repository occurrences consume this ledger and may not invent a third identity for an existing contract.
   An owner-approved mapping absent from the initial framework diff is added as an explicit owner-scoped section, as

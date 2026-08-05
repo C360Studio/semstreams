@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/projection"
 	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
@@ -61,19 +62,19 @@ type Config struct {
 		ReplayPolicy   string `json:"replay_policy"`    // "instant" or "original"
 	} `json:"consumer"`
 
-	// PackID identifies both this rule pack's graph-projection owner and its
+	// PackID identifies both this rule pack's local graph projection and its
 	// graph-event producer identity. Replicas use the same stable value so their
 	// rule-trigger events converge; independently composed packs use distinct
 	// values so processor-local rule IDs cannot collide. Every processor must
 	// declare an explicit non-empty value; there is no default pack identity.
-	PackID string `json:"pack_id" schema:"type:string,category:basic,description:Required stable rule-pack projection owner and graph-event producer identity"`
+	PackID string `json:"pack_id" schema:"type:string,category:basic,description:Required stable rule-pack projection and graph-event producer identity"`
 
 	// ProjectionContracts optionally override action-based derivation. Omission
-	// derives the minimal replace-owned authority when every action target is
+	// derives the minimal reconcile contract when every action target is
 	// statically provable. A supplied array is an explicit immutable superset
-	// envelope for boot and hot reload. Birth predicates, foreign edges,
-	// indexing profile, and message type are never inferred.
-	ProjectionContracts []projection.Contract `json:"projection_contracts,omitempty" schema:"type:array,category:advanced,description:Optional explicit projection authorization superset; omit to derive minimal replace-owned groups and statically provable entity scope from initial actions. Birth predicates foreign edges indexing profile and message type are explicit-only"`
+	// envelope for boot and hot reload. Birth predicates, indexing profile, and
+	// message type are never inferred.
+	ProjectionContracts []projection.Contract `json:"projection_contracts,omitempty" schema:"type:array,category:advanced,description:Optional explicit local projection contract; omit to derive minimal reconcile groups and statically provable entity scope from initial actions. Birth predicates indexing profile and message type are explicit-only"`
 }
 
 // MarshalJSON implements custom JSON marshaling for Config
@@ -227,6 +228,13 @@ func defaultConfig() Config {
 				},
 			},
 			Outputs: []component.PortDefinition{
+				{
+					Name:      "graph_mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
+				},
 				{
 					Name:        "control_commands",
 					Type:        "nats",

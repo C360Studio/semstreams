@@ -2,6 +2,14 @@
 
 ## Status
 
+**Ownership-bucket evidence amended by ADR-091 — 2026-08-05.** `OWNER_CLAIMS` and `OWNER_PRESENCE` are retired;
+the live graph catalog, no-TTL policy, conditional delete, and derived-index cleanup questions remain distinct.
+
+**Automatic-stub premise superseded by ADR-091 — 2026-08-05.** `graph/stub.go` and automatic relationship-target birth
+are retired. A source relationship may validly name an absent object; readers surface the unresolved target. Every stub
+or "dual of the stub" reference below is preserved as historical proposal context, not current runtime truth or an
+accepted dependency for future retention work.
+
 **Proposed — 2026-07-04. Design-only (no code).** Names the responsibility and
 fixes the shape so semsource (ADR-0008, retention-first) and any other consumer
 can react before anything is built. Scopes gh#433 (index cleanup on delete) as
@@ -43,12 +51,13 @@ storage-policy side effect. Concretely:
 3. **Delete is integrity-preserving:** `entity.delete` is **refuse-if-referenced
    by default, cascade opt-in** — both driven by the existing `INCOMING_INDEX` —
    and MUST clean every derived index (subsumes gh#433) and handle owned blobs.
-4. **Tombstone = the death-side dual of the stub:** an application-level
-   "retired-at-R" entity state, written through graph-ingest, so a reference can
-   safely outlive its target during an async cascade and readers resolve to an
-   authoritative "deleted" instead of an ambiguous missing key.
+4. **Historical tombstone proposal (stub analogy superseded):** this draft
+   proposed an application-level "retired-at-R" entity state. ADR-091 removed
+   the birth-side stub that supplied its analogy. Missing relationship objects
+   are now valid and observable, so any future tombstone must justify its own
+   consumer contract rather than restore automatic target materialization.
 5. **A narrow, watermark-gated GC worker** for reclamation only (tombstone
-   purge, never-born-stub reaping, orphaned-blob collection, optional
+   purge, the then-proposed never-born-stub reaping, orphaned-blob collection, optional
    root-reachability sweep) — NOT a general "evict old data" sweeper.
 
 This is a **primitive-completion**, not a feature: deletion already exists in the
@@ -98,14 +107,15 @@ documented ways**:
     key), so naive cascade-delete would break sharers — this needs refcount or
     reachability, not a cascade.
 
-### The birth-side primitive we already have (the key analogy)
+### Retired birth-side premise (historical context)
 
-`graph/stub.go`: when `B` references `A` before `A` is born, graph-ingest
-materializes a **profile-less stub** at `A`'s ID so "a relationship's target
-always resolves to a node" (ADR-056 D4 lane-ii). The stub is the framework's
-**birth-side** referential-integrity placeholder. This ADR's tombstone is its
-**death-side dual** — the same invariant, applied when a target is retired while
-references may still point at it.
+At the time of this proposal, `graph/stub.go` materialized a profile-less entity
+when `B` referenced not-yet-born `A`; the tombstone proposal used that behavior
+as its death-side analogy. ADR-091 superseded the premise and deleted the
+primitive. Current SemStreams preserves `B`'s relationship without creating
+`A`; exact dereference or traversal reports `A` unresolved until a real producer
+creates it. This section records why the draft took its original shape and does
+not require either automatic birth or a symmetric tombstone.
 
 ### Consumer position (semsource ADR-0008)
 

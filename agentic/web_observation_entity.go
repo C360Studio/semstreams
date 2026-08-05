@@ -16,6 +16,16 @@ import (
 // scale; short enough to keep entity IDs and NATS subjects compact.
 const webObservationInstanceLen = 16
 
+// CategoryWebObservation identifies graph entities that represent one
+// canonical URL observed by agent tools.
+const CategoryWebObservation = "web_observation"
+
+// WebObservationMessageType returns the mutation-only origin type stamped when
+// a web observation entity is born.
+func WebObservationMessageType() message.Type {
+	return message.Type{Domain: Domain, Category: CategoryWebObservation, Version: SchemaVersion}
+}
+
 // TryWebObservationEntityID returns the canonical 6-part entity ID for a
 // URL observed by an agent (web_search) or fetched by an agent
 // (http_request), along with the canonical URL the entity represents.

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -85,12 +86,13 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	ports := comp.OutputPorts()
 
-	if len(ports) != 8 {
-		t.Fatalf("OutputPorts() count = %d, want 8", len(ports))
+	if len(ports) != 9 {
+		t.Fatalf("OutputPorts() count = %d, want 9", len(ports))
 	}
 
 	// Expected output ports
 	expected := map[string]string{
+		"graph_mutations":          graphmutation.SubjectFamily,
 		"agent.request":            "agent.request.*",
 		"tool.execute":             "tool.execute.*",
 		"agent.complete":           "agent.complete.*",
@@ -103,6 +105,14 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	for _, port := range ports {
 		expectedSubject, ok := expected[port.Name]
+		if port.Name == "graph_mutations" {
+			request, requestOK := port.Config.(component.NATSRequestPort)
+			if !requestOK || !port.Required || request.Subject != expectedSubject || request.Interface == nil ||
+				request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
+				t.Errorf("graph_mutations contract drift: %#v", port)
+			}
+			continue
+		}
 		if !ok {
 			t.Errorf("Unexpected output port: %s", port.Name)
 			continue

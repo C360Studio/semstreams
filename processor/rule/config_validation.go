@@ -109,13 +109,13 @@ func (rp *Processor) validateSingleRuleConfig(ruleID string, ruleConfig any) err
 			"RuleProcessor", "validateSingleRuleConfig", "check rule type")
 	}
 
-	// ADR-056 Decision 3: enforce the replace_owned envelope on the hot-reload
+	// Enforce the reconcile_predicates contract envelope on the hot-reload
 	// path. validateSingleRuleConfig is a *Processor method so it reaches the
 	// pack's ProjectionContracts. Build the Definition ONCE (definitionFromMap
 	// walks all five action lists) and run the envelope check; a violation
 	// returns an error, which ValidateConfigUpdate surfaces as a HARD-REJECT of
 	// the change (the proposed rule set is not applied). Runs for ALL rule kinds
-	// — cron rules carry replace_owned in def.Actions; expression rules in the
+	// — cron rules carry reconcile_predicates in def.Actions; expression rules in the
 	// transition lists — so it must precede the cron/expression branch split.
 	//
 	// A definitionFromMap parse error is itself a HARD-REJECT (go-reviewer I1):
@@ -130,7 +130,7 @@ func (rp *Processor) validateSingleRuleConfig(ruleID string, ruleConfig any) err
 		return errs.WrapInvalid(err, "RuleProcessor", "validateSingleRuleConfig",
 			fmt.Sprintf("parse rule %s", ruleID))
 	}
-	if verr := rp.validateRuleReplaceOwnedActions(def); verr != nil {
+	if verr := rp.validateRuleReconcileActions(def); verr != nil {
 		return verr
 	}
 

@@ -40,7 +40,7 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "unused_in", "subject": "_graph_backend.unused.ingest", "type": "nats"}
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
           ],
           "outputs": [
             {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}

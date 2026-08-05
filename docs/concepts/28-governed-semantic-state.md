@@ -1,154 +1,69 @@
-# Governed Semantic State
+# Graph Mutation Contracts
 
-SemStreams stores domain facts in `ENTITY_STATES` so they can be queried, watched, indexed, and replayed. For simple
-fact ingestion, a `Graphable` payload can emit triples and the graph can merge them.
+SemStreams has one physical graph authority: graph-ingest writes `ENTITY_STATES`. Components ask it to mutate graph
+state through a typed NATS request/reply port. There is no framework concept of semantic predicate ownership.
 
-That is not enough once the same entity is written by more than one component.
+## The four operations
 
-## Identity, Facts, and Governance Are Different Layers
+The `semstreams.graph.mutation` v1 interface admits exactly four subjects:
 
-Graph governance is a contract *about* writes — **not a new metadata model and not a second graph**. It is a
-governed projection over the canonical graph identity you already have. Three (really four) layers answer
-distinct questions and do not compete:
-
-| Layer | Answers | Mechanism |
+| Operation | Meaning | Concurrency evidence |
 |---|---|---|
-| **Entity ID** | "What entity is this?" | the stable 6-part address `org.platform.domain.system.type.instance` |
-| **rdf/type facts** | "What does it classify as; how does it export/read?" | RDF / SOSA / SensorML triples |
-| **MessageType + projection contract** | "Which producer is writing, with what write semantics?" | the payload type + its declared graph projection |
-| **Ownership** | "Who may write which predicate groups and foreign edges, and how?" | runtime arbitration over predicate-group claims |
+| `graph.mutation.entity.create` | Birth one absent entity with its initial facts | Atomic KV create |
+| `graph.mutation.entity.reconcile` | Replace the complete desired set for named predicates | Required KV revision |
+| `graph.mutation.triple.append` | Add exact tuples to existing subjects, suppressing duplicates | Per-subject result |
+| `graph.mutation.entity.delete` | Delete one entity if it is still at the observed revision | Required KV revision |
 
-IDs and RDF facts remain the **portable semantic shape** — what external tools and other systems read.
-Governance adds the **operational contract** for safely *producing and updating* those facts. A producer still
-writes `sensorml.process.type`, `uid`, `label`, `isHostedBy`, …; the new bit is that the write is stamped with a
-producer MessageType and an ownership claim that says "this producer owns these predicates; this foreign edge is
-expected; route it to its subject." That is governance *around* the graph, not a competing canon.
+No legacy subject aliases or compatibility request shapes are served. Create is strict: an existing entity returns
+`entity_already_exists`. Reconcile, append, and delete are must-exist operations. They never create a missing entity.
 
-## The Problem
+## Exact reads are CAS evidence
 
-A predicate can mean different things operationally:
+An authoritative exact read returns the validated entity and the nonzero KV revision from the same `ENTITY_STATES`
+entry. The entity's logical `Version` field is not a KV revision. Reconcile and delete decisions must use the revision
+returned by the exact read.
 
-| Predicate shape | Write meaning |
-|---|---|
-| Current phase, status, location, configuration | One owner replaces the current value |
-| Lifecycle transition state | One owner changes state under compare-and-swap |
-| Observation, finding, backlink, evidence | Many writers append facts |
-| Foreign edge onto another entity | A producer writes a relationship whose subject is not its primary entity |
+The GraphQL exact-entity operation exposes the same pair as `{entity, kvRevision}`. Embedded framework code uses the
+narrow exact-reader adapter; application code does not read raw graph KV.
 
-If all of these arrive as undifferentiated triples, the graph cannot tell whether a write should replace, append, wait
-for a target entity, or be rejected. The failure mode is silent corruption: a gateway update, rule action, lifecycle
-transition, or agent tool can remove a fact that another component owns.
+## Projection contracts are local schemas
 
-## The Contract
+`projection.Contract` describes the graph shape one component intends to emit. A contract contains:
 
-Governed semantic state adds an ownership contract above raw triples:
+- an entity pattern;
+- optional create-time birth predicates;
+- named `reconcile` groups for complete selected-predicate state; and
+- named `append` groups for exact evidence tuples.
 
-```text
-payload type -> graph projection -> predicate-group ownership -> graph-ingest enforcement
-```
+Contracts validate local intent. They do not reserve predicates, register owners, or prevent another component from
+writing the same entity. Two overlapping contracts are valid. If writers race, atomic Create and CAS outcomes expose
+the real conflict.
 
-- **Payload type** tells the system what kind of message or request is flowing.
-- **Graph projection** declares the entity pattern and predicates the type can emit.
-- **Predicate-group ownership** declares whether those predicates are replaced, CAS-transitioned, appended, or emitted
-  as foreign edges.
-- **graph-ingest enforcement** rejects overlapping owners and stale owner leases at the write boundary.
+## Retry belongs to the component
 
-The payload registry and ownership registry are not competing systems. The payload registry is local type lookup for
-`BaseMessage` decoding. The ownership registry is distributed arbitration for shared graph state. Projection contracts
-are the bridge between them.
+The framework sends each mutation request once. A definite `revision_mismatch` proves that no write occurred, so a
+component may choose to exact-read again, recompute its desired state, and retry. The rule engine's reconcile action,
+for example, permits one such bounded retry.
 
-## Runtime Config vs Contract Migration
+`unavailable` (no responder) and `deadline` (context already done before send) are definite non-commits.
+`commit_unknown` means a send was attempted but a timeout, disconnect, malformed reply, or semantically invalid
+success reply left the result unproved. The client does not retry it automatically and does not infer authorship from
+matching state found later. The component decides whether and how to resolve that ambiguity.
 
-SemStreams has runtime-configurable surfaces: rule thresholds, routes, model selection, prompts, flow shape, and
-component behavior can be changed while the system is running when the component supports it.
+## Eventual references
 
-Ownership contracts are different. They declare data-plane authority over entity patterns, predicate groups, write
-modes, producer identities, and foreign-edge behavior. Changing that authority is closer to a schema migration or
-online DDL than ordinary hot config.
+A relationship to an absent entity is valid graph state. The source edge remains authoritative; dereference,
+hydration, or traversal reports the missing object through its typed missing result. SemStreams does not create a
+stub, pending-edge record, rollback, or repair workflow. If the object is created later, the next read resolves it
+without rewriting the source.
 
-Runtime config may change behavior *inside* an already declared ownership contract. For example, a rule pack can
-hot-reload the threshold that decides when it emits `alert.active` if that predicate is already part of its projection
-contract. A new owned predicate, write mode, entity pattern, producer identity, or foreign-edge mode is a contract
-migration.
+This is an eventually consistent graph, not a financial transaction system. Invalid stored entity bytes are still
+reported as per-entity poison, but one missing reference does not stop the graph or change `GRAPH_STATUS`.
 
-The current model treats static projection contracts as deployment-time declarations with runtime liveness. Owners
-renew presence through `OWNER_PRESENCE`; they do not renegotiate predicate-claim shape during normal hot reload.
+## Operations and backups
 
-Future online contract migration would need an explicit protocol:
+Graph mutation has no checkpoint, restore, or recovery subsystem. Clustered NATS deployments use their normal
+operational backup practices. Edge and offline deployments should maintain NATS data-store backups at useful
+checkpoints. SemStreams does not attempt to coordinate or attest those backups.
 
-1. Register the proposed contract and check for overlapping claims.
-2. Quiesce or fence old writes that would conflict with the new authority.
-3. Backfill, reconcile, or validate existing graph state as needed.
-4. Flip producers to the new contract.
-5. Observe the new owner and retire the old contract when safe.
-
-The practical rule is:
-
-```text
-Hot reload changes behavior. Contract migration changes authority.
-```
-
-## What Governance Does Not Do
-
-Keep these edges sharp:
-
-- **It is not semantic dedupe.** Ownership arbitrates *writes* over `(entity-ID pattern, predicate)` cells; it does
-  not reconcile two IDs that denote the same real-world object. If one component mints a deterministic child ID and a
-  later client posts that same object as a standalone entity under a different ID/UID, the graph holds two entities —
-  governance will not merge them. Dedupe is a separate concern.
-- **Aliases are read compatibility, not equal write contracts.** Ownership and indexes are exact-predicate driven. A
-  read path may understand both a canonical predicate and an alias (e.g. `rdf.type` ↔ `sensorml.process.type`), but
-  writers must emit the canonical framework constant — an alias is not an interchangeable write/ownership key.
-- **It is not (yet) full authorization.** Enforcement shipped in stages. **Entity birth is now enforced** — a triple
-  targeting a non-existent entity is rejected (`entity_not_found`); the mutation API no longer auto-vivifies, so every
-  entity carries a semantic envelope (ADR-055 must-exist, shipped `v1.0.0-beta.112`). **Owner-token write leases
-  shipped but default-off** (`enforce_owner_lease`): observe-only by default (a mismatched write is metered on
-  `owner_lease_mismatch_total` and logged, never blocked), rejecting with `owner_lease_stale` only when an operator
-  enables enforcement (ADR-056). Unclaimed foreign edges are still metered (`foreign_edge_unclaimed_total`), and
-  post-flip an unclaimed edge to an *absent* target is dropped-with-warn rather than birthing it. Cryptographic
-  authentication of authorship is still reserved (ADR-057).
-- **Ownership arbitration is not a domain fact — but provenance can be.** Two halves:
-  - *Do not* encode ownership arbitration as domain triples. Ownership claims live in the `OWNER_CLAIMS` substrate and
-    arbitrate who may write predicate groups; they are never facts on the entity.
-  - *Do* allow explicit provenance triples when they describe entity **materialization, source, audit, or lineage**.
-    For example, `core.identity.stub_owner` records which producer caused a referential-integrity stub to be
-    materialized — that is provenance-on-entity, **not** an ownership claim and **not** an enforcement rule.
-
-  This matters for readers: graph consumers (e.g. CS API clients) will see provenance-like facts in the graph and must
-  not mistake them for authorization or write ownership.
-
-## When It Matters
-
-Use governed semantic state when a domain has:
-
-- more than one writer for the same entity family
-- lifecycle or workflow state stored as graph facts
-- PATCH/PUT style replacement of resource fields
-- rules or agents that write triples back into the graph
-- regulated or operator-facing audit requirements
-- cross-entity edges produced during ingestion
-
-Do not use it for high-volume opaque execution traces, raw telemetry streams, or one-shot requests. Those belong in
-JetStream streams, ObjectStore, or component-specific buckets with graph references when needed.
-
-## Why It Is Still Flow-Based
-
-The flow does not change: components still emit messages, `Graphable` still describes entities, and graph processors
-still react through KV watches. The added contract makes the write side explicit before data enters shared state.
-
-The practical rule is:
-
-```text
-Facts can flow freely after their write semantics are declared.
-```
-
-That keeps the graph usable as shared state without requiring every consumer to build a private CQRS mirror.
-
-## Related Documents
-
-- [Graphable Interface](../basics/03-graphable-interface.md)
-- [Payload Registry](15-payload-registry.md)
-- [KV Twofer](02-kv-twofer.md)
-- [Streams vs KV Watches](03-streams-vs-kv-watches.md)
-- [Orchestration Layers](14-orchestration-layers.md)
-- [ADR-056: Authoritative Semantic State](../adr/056-authoritative-semantic-state.md)
+See [Operating the Projection Mutation Client](../operations/34-projection-mutation-client.md) for Go examples.

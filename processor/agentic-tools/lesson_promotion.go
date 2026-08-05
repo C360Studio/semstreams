@@ -30,26 +30,26 @@ const (
 
 // LessonCurator is the reference VALIDATED lesson lifecycle writer (ADR-080
 // gated lifecycle, task 4.1). It promotes, retires, and supersedes lesson
-// records through the contract-bound REPLACE lane (ADR-056), composing the
-// framework's least-privilege OwnedReplacer and AuthoritativeReader
+// records through the contract-bound reconcile lane, composing the
+// framework's least-privilege PredicateReconciler and AuthoritativeReader
 // capabilities. Every transition reconciles the complete lifecycle group, so
 // mutually exclusive sibling predicates cannot survive a transition.
 //
 // This is the OPERATOR/PRODUCT curation path, NOT an agent tool: ADR-080 makes
 // operator/product review the default promotion gate, so the framework ships no
 // `promote_lesson` tool. A product may wrap Promote in a curation UI, a rule
-// `replace_owned` action (for mechanical/retirement transitions), or an
+// `reconcile_predicates` action (for mechanical/retirement transitions), or an
 // explicit auto-promotion policy — but the evidence-existence resolution below
 // is what makes a promotion HONEST, so the validated path routes through here.
 type LessonCurator struct {
-	writer projection.OwnedReplacer
+	writer projection.PredicateReconciler
 	reader projection.AuthoritativeReader
 	logger *slog.Logger
 }
 
 // NewLessonCurator builds a curator over an explicit write + read surface
 // (testable with fakes). A nil logger falls back to slog.Default().
-func NewLessonCurator(writer projection.OwnedReplacer, reader projection.AuthoritativeReader, logger *slog.Logger) *LessonCurator {
+func NewLessonCurator(writer projection.PredicateReconciler, reader projection.AuthoritativeReader, logger *slog.Logger) *LessonCurator {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -61,7 +61,7 @@ func NewLessonCurator(writer projection.OwnedReplacer, reader projection.Authori
 // missing the promotion is REFUSED with an instructive error and the lesson is
 // left untouched (status stays proposed) — spec scenario "Promotion resolves
 // evidence existence". This is the validated promotion path; the bare rule
-// `replace_owned` lane performs no such check and is for mechanical transitions.
+// `reconcile_predicates` lane performs no such check and is for mechanical transitions.
 func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) error {
 	if !message.IsValidEntityID(lessonEntityID) {
 		return fmt.Errorf("promote lesson: %q is not a well-formed 6-part entity ID", lessonEntityID)
@@ -75,9 +75,6 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 		return fmt.Errorf("promote lesson %s: read cited evidence: %w", lessonEntityID, err)
 	}
 	lesson := exactLesson.Entity
-	if lesson.IsStub() {
-		return fmt.Errorf("promote lesson %s: refused — lesson entity not found in the graph", lessonEntityID)
-	}
 	evidence := lessonEvidence(lesson)
 	if len(evidence) == 0 {
 		// Defensive: emit_lesson requires >=1 evidence, so this only fires if a
@@ -87,16 +84,13 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 
 	var missing []string
 	for _, ev := range evidence {
-		exactEntity, existsErr := c.reader.ReadAuthoritative(ctx, ev)
+		_, existsErr := c.reader.ReadAuthoritative(ctx, ev)
 		if existsErr != nil {
 			if isProjectionNotFound(existsErr) {
 				missing = append(missing, ev)
 				continue
 			}
 			return fmt.Errorf("promote lesson %s: resolve evidence %s: %w", lessonEntityID, ev, existsErr)
-		}
-		if exactEntity.Entity.IsStub() {
-			missing = append(missing, ev)
 		}
 	}
 	if len(missing) > 0 {
@@ -167,7 +161,7 @@ func (c *LessonCurator) replace(ctx context.Context, lessonEntityID string, add 
 	if len(add) != 0 {
 		timestamp = add[0].Timestamp
 	}
-	_, err := c.writer.ReplaceOwned(ctx, projection.ReplaceOwnedMutation{
+	_, err := c.writer.Reconcile(ctx, projection.ReconcileMutation{
 		Contract: builtinprojection.LessonRecordContractName,
 		Group:    builtinprojection.LessonLifecycleGroupName,
 		EntityID: lessonEntityID,

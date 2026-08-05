@@ -37,7 +37,6 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
-	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 	gateddagexec "github.com/c360studio/semstreams/processor/gated-dag"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
@@ -226,16 +225,14 @@ func setupFullStack(t *testing.T, opts fsOpts) *fullStack {
 	// work-completion loop a real consumer (semspec) provides; here it writes the
 	// terminal marker so the executor's next backstop advances the DAG. The marker
 	// write is synchronous in the callback (dispatch is recorded first, so the
-	// dispatch assertions are unaffected). A retrying write head-of-line-blocks
-	// sibling units on this single-threaded subscription callback, but bounded at
-	// addMarker's 25s — under fsEventually even in the worst case — and a
-	// goroutine-per-marker alternative measurably worsened scheduling contention
-	// under constrained CPU, so synchronous is the right trade here.
+	// dispatch assertions are unaffected). The test consumer makes one mutation
+	// attempt; the scenario's eventual assertion exposes a failed marker instead
+	// of hiding transport ambiguity behind framework retry behavior.
 	// These terminal markers are part of the test consumer's fixed graph
 	// contract, not caller options. Keeping them here makes every composed
 	// scenario—including future ones—incapable of emitting an empty predicate.
-	completedMarker := message.Triple{Predicate: "gateddag.unit.completed", Object: true, Confidence: 1.0}
-	failedMarker := message.Triple{Predicate: "gateddag.unit.failed", Object: true, Confidence: 1.0}
+	completedMarker := message.Triple{Predicate: "gateddag.unit.completed", Object: true, Source: "gated-dag-fullstack", Confidence: 1.0}
+	failedMarker := message.Triple{Predicate: "gateddag.unit.failed", Object: true, Source: "gated-dag-fullstack", Confidence: 1.0}
 	dec := newDispatchDecoder(t)
 	sub, err := nc.Subscribe(ctx, subject, func(_ context.Context, msg *nats.Msg) {
 		unitID, ok := dec(msg.Data)
@@ -325,9 +322,17 @@ func (fs *fullStack) seedUnit(t *testing.T, id string, dependsOn ...string) {
 // rule engine's DELETED-branch $state cleanup).
 func (fs *fullStack) deleteEntity(t *testing.T, id string) {
 	t.Helper()
-	data, err := json.Marshal(gtypes.DeleteEntityRequest{EntityID: id})
+	entityData, err := json.Marshal(struct {
+		ID string `json:"id"`
+	}{ID: id})
 	require.NoError(t, err)
-	_, err = fs.nc.RequestWithRetryClassified(context.Background(), "graph.mutation.entity.delete", data, 5*time.Second, natsclient.DefaultRetryConfig())
+	entityReply, err := fs.nc.RequestClassified(context.Background(), "graph.ingest.query.entity", entityData, 5*time.Second)
+	require.NoError(t, err)
+	var exact gtypes.ExactEntity
+	require.NoError(t, json.Unmarshal(entityReply, &exact))
+	data, err := json.Marshal(gtypes.DeleteEntityRequest{EntityID: id, ExpectedRevision: exact.KVRevision})
+	require.NoError(t, err)
+	_, err = fs.nc.RequestClassified(context.Background(), "graph.mutation.entity.delete", data, 5*time.Second)
 	require.NoError(t, err)
 }
 
@@ -349,44 +354,19 @@ func (fs *fullStack) unitHasPredicate(t *testing.T, id, predicate string) bool {
 	return false
 }
 
-// addMarker writes a terminal marker, retrying until the mutation lands, a 25s
-// deadline elapses, ctx is cancelled, or the error is permanent. A real work
-// consumer must write terminal markers reliably (at-least-once); the prior
-// fire-and-forget (single RequestWithRetry, error DISCARDED) silently LOST the
-// marker whenever a transport-level failure — graph-ingest's mutation subject
-// momentarily slow/unready under CI Docker contention — blew RequestWithRetry's
-// transport-retry budget. A lost marker leaves the unit dispatched-but-never-
-// terminal, stalling the dependent assertions for the full Eventually window
-// (gh#373, the real root cause behind the "flake"). 25s sits under fsEventually
-// (30s local / 90s CI) so a genuinely-failing mutation still surfaces as the
-// assertion failure rather than being masked by the wait.
-//
-// ctx is the test-scoped marker context, cancelled at teardown so no loop
-// outlives the test or races client.Close. Synchronous in the consumer callback
-// (see setupFullStack for the head-of-line-blocking trade-off). Must not touch
-// *testing.T.
-//
-// NOTE: this makes the TEST consumer infallible. Production has no such
-// guarantee and a stranded claimed-but-unmarked unit is not auto-recovered —
-// tracked separately as a production gap (gh#373 follow-up).
+// addMarker makes one canonical append request. A lost reply is not retried:
+// retry policy belongs to the component, and this test consumer deliberately
+// lets the scenario's eventual assertion expose a failed or ambiguous write.
 func addMarker(ctx context.Context, nc *natsclient.Client, triple message.Triple) {
-	req := gtypes.AddTripleRequest{Triple: triple}
+	req := gtypes.AppendTriplesRequest{
+		Triples:   []message.Triple{triple},
+		RequestID: "gated-dag-fullstack-marker-" + triple.Subject,
+	}
 	data, err := json.Marshal(req)
 	if err != nil {
 		return
 	}
-	deadline := time.Now().Add(25 * time.Second)
-	for {
-		_, err := nc.RequestWithRetryClassified(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig())
-		if err == nil || errs.IsInvalid(err) || time.Now().After(deadline) {
-			return // success, permanent rejection (won't pass on retry), or deadline
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
+	_, _ = nc.RequestClassified(ctx, "graph.mutation.triple.append", data, 5*time.Second)
 }
 
 func fsUnit(scenario, suffix string) string {

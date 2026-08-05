@@ -418,7 +418,7 @@ func sumSnapshotMetric(snapshot *client.MetricsSnapshot, metricName string) floa
 
 // verifyGraphTriples verifies that the graph writer emitted triples for the loop
 // execution and model endpoint entities. This validates the full path:
-// agentic-loop → graph.mutation.triple.add → graph-ingest → ENTITY_STATES KV.
+// agentic-loop → graph.mutation.triple.append → graph-ingest → ENTITY_STATES KV.
 func (s *Scenario) verifyGraphTriples(ctx context.Context, result *scenarios.Result) error {
 	loopID, ok := result.Details["loop_id"].(string)
 	if !ok || loopID == "" {

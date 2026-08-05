@@ -5,25 +5,25 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
+	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
+	"github.com/c360studio/semstreams/vocabulary/builtins"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // storedTodoTripleCount reads the loop entity back over the production
 // graph.ingest.query.entity surface — the same one the todo reader consumes —
-// and counts its agent.todo.* triples.
+// and counts its agent.todo.record triples.
 func storedTodoTripleCount(ctx context.Context, t *testing.T, client *natsclient.Client, loopEntityID string) int {
 	t.Helper()
 	reqData, err := json.Marshal(struct {
@@ -34,12 +34,14 @@ func storedTodoTripleCount(ctx context.Context, t *testing.T, client *natsclient
 	respData, err := client.RequestClassified(ctx, "graph.ingest.query.entity", reqData, 5*time.Second)
 	require.NoError(t, err)
 
-	var entity graph.EntityState
-	require.NoError(t, graph.UnmarshalEntityState(respData, &entity))
+	var exact graph.ExactEntity
+	require.NoError(t, json.Unmarshal(respData, &exact))
+	require.NotNil(t, exact.Entity)
+	entity := exact.Entity
 
 	count := 0
 	for _, triple := range entity.Triples {
-		if strings.HasPrefix(triple.Predicate, "agent.todo.") {
+		if triple.Predicate == agvocab.TodoRecord {
 			count++
 		}
 	}
@@ -65,6 +67,7 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	}
 	testClient := natsclient.NewTestClient(t, natsclient.WithKV(), natsclient.WithStreams(streams...))
 	natsClient := testClient.Client
+	builtins.Register()
 
 	// Boot graph-ingest to handle the mutation/query NATS surfaces.
 	config := graphingest.DefaultConfig()
@@ -82,8 +85,9 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	const loopID = "compaction-survival-001"
 	loopEntityID := agentic.LoopExecutionEntityID("acme", "ops", loopID)
 
-	// Iteration 1 — agent calls write_todos with three items.
-	// Build the same triple shape Stage 3's executor emits.
+	// Iteration 1 — plant the same one-record-per-item shape emitted by
+	// write_todos. The writer integration test separately proves the real
+	// projection reconcile path; this test isolates exact read and reconstruction.
 	now := time.Now()
 	items := []struct {
 		id      string
@@ -95,36 +99,20 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 		{"3", "Wire e2e test", "pending"},
 	}
 
-	triples := make([]message.Triple, 0, len(items)*5)
+	triples := make([]message.Triple, 0, len(items))
 	for i, it := range items {
-		triples = append(triples,
-			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "id"), Object: it.id, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "content"), Object: it.content, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "status"), Object: it.status, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "position"), Object: i, Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-			message.Triple{Subject: loopEntityID, Predicate: semantictest.Predicate(t, "agent", "todo", "updated-at"), Object: now.Format(time.RFC3339Nano), Timestamp: now, Confidence: 1.0, Source: "agent-write-todos"},
-		)
+		triples = append(triples, integrationTodoRecordTriple(t, loopEntityID, i, it.id, it.content, it.status, now))
 	}
 
 	// Born-first (ADR-055): the loop-execution entity must exist before
 	// anything writes todo triples to it. In production graphWriter creates it
-	// via create_with_triples carrying agentic.LoopExecutionMessageType()
+	// through canonical create carrying agentic.LoopExecutionMessageType()
 	// (#277) before the agent's first write_todos.
 	//
-	// The triples are planted in the SAME write, because that stores what
-	// production stores. write_todos does not use the append lane at all — it
-	// goes through projection.ReplaceOwned (write_todos.go), the replace lane,
-	// which writes the caller's desired set verbatim. The append lane
-	// deduplicates by exact six-field tuple, and a real todo batch shares one
-	// `now` across every item, so its three agent.todo.updated-at triples are
-	// byte-identical and collapse to one — shearing the reader's fixed
-	// five-stride grouping. Planting via the create lane (also verbatim)
-	// reproduces the production-shaped stored state without dragging
-	// owner-token and contract scaffolding into a test about compaction
-	// survival. Do NOT "fix" this by making the planted timestamps distinct:
-	// production genuinely writes one shared updated_at across items, so that
-	// would make the fixture less faithful, not more.
-	require.NoError(t, c.CreateEntityStrict(ctx, &graph.EntityState{
+	// The triples are planted in the same birth so the reader observes the exact
+	// persisted representation. Records share status/timestamps without relying
+	// on duplicate triple occurrence or storage order.
+	require.NoError(t, c.CreateEntity(ctx, &graph.EntityState{
 		ID:          loopEntityID,
 		MessageType: agentic.LoopExecutionMessageType(),
 		Triples:     triples,
@@ -132,10 +120,9 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 
 	// The reader consumes STORED state, so assert on stored state — read back
 	// over the same graph.ingest.query.entity surface the reader itself uses.
-	// All five triples per item must survive, including the three identical
-	// updated-at tuples the append lane would have collapsed.
+	// Every logical item survives as one complete record.
 	require.Equal(t, len(triples), storedTodoTripleCount(ctx, t, natsClient, loopEntityID),
-		"the reader groups agent.todo.* triples in strides of five; a missing one shears every later group")
+		"each logical item must survive as one complete record triple")
 
 	// Iteration 2 — context has been "compacted" (irrelevant to this
 	// test — the assembler doesn't read trajectory; it reads triples).
@@ -160,6 +147,29 @@ func TestIntegration_TodoWriteReadRoundTrip(t *testing.T) {
 	assert.Contains(t, msg.Content, "[x] Survey existing rules", "completed marker")
 	assert.Contains(t, msg.Content, "[~] Draft new rule", "in_progress marker")
 	assert.Contains(t, msg.Content, "[ ] Wire e2e test", "pending marker")
+}
+
+func integrationTodoRecordTriple(
+	t *testing.T,
+	loopEntityID string,
+	position int,
+	id, content, status string,
+	updatedAt time.Time,
+) message.Triple {
+	t.Helper()
+	encoded, err := json.Marshal(struct {
+		ID        string `json:"id"`
+		Content   string `json:"content"`
+		Status    string `json:"status"`
+		Position  int    `json:"position"`
+		UpdatedAt string `json:"updated_at"`
+	}{id, content, status, position, updatedAt.UTC().Format(time.RFC3339Nano)})
+	require.NoError(t, err)
+	return message.Triple{
+		Subject: loopEntityID, Predicate: agvocab.TodoRecord, Object: string(encoded),
+		Datatype: agvocab.TodoRecordJSONDatatype, Source: "agent-write-todos",
+		Timestamp: updatedAt, Confidence: 1,
+	}
 }
 
 // TestIntegration_FreshLoopReturnsEmptyList covers the case Stage 4's

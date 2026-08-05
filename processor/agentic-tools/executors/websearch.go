@@ -253,14 +253,7 @@ func (e *WebSearchExecutor) emitObservations(ctx context.Context, call agentic.T
 			continue
 		}
 
-		// Loop back-link is emitted first so a partial-write under
-		// graph-ingest degradation still leaves a discoverable pointer
-		// from the loop to the (possibly under-populated) observation
-		// entity. The URL-side predicates can be re-populated by any
-		// later observation of the same URL; the back-link is the
-		// rule-matchable fact that drives downstream query patterns.
-		triples := []message.Triple{
-			{Subject: loopEntityID, Predicate: agvocab.LoopObservedWeb, Object: urlEntity, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
+		observationTriples := []message.Triple{
 			{Subject: urlEntity, Predicate: agvocab.WebURL, Object: canon, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebTitle, Object: r.title, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebSnippet, Object: r.description, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
@@ -268,16 +261,20 @@ func (e *WebSearchExecutor) emitObservations(ctx context.Context, call agentic.T
 			{Subject: urlEntity, Predicate: agvocab.WebObservedAt, Object: observedAt, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 			{Subject: urlEntity, Predicate: agvocab.WebObservedBy, Object: loopEntityID, Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0},
 		}
-		for _, tr := range triples {
-			if err := e.publisher.AddTriple(ctx, tr); err != nil {
-				webEmitFailuresTotal.WithLabelValues("web_search", "publish").Inc()
-				e.logger.Warn("web_search emission failed for triple",
-					"call_id", call.ID, "url", canon, "predicate", tr.Predicate, "error", err)
-				// Don't abort the batch — other triples (including the
-				// loop back-link) may still land, and the next result is
-				// independent. The graph is a set-of-triples; partial
-				// writes are correct, not corrupt.
-			}
+		if err := publishWebObservation(ctx, e.publisher, urlEntity, observationTriples); err != nil {
+			webEmitFailuresTotal.WithLabelValues("web_search", "publish").Inc()
+			e.logger.Warn("web_search observation emission failed",
+				"call_id", call.ID, "url", canon, "error", err)
+			continue
+		}
+		backlink := message.Triple{
+			Subject: loopEntityID, Predicate: agvocab.LoopObservedWeb, Object: urlEntity,
+			Source: webSearchTripleSource, Timestamp: now, Confidence: 1.0,
+		}
+		if err := e.publisher.Append(ctx, []message.Triple{backlink}); err != nil {
+			webEmitFailuresTotal.WithLabelValues("web_search", "publish").Inc()
+			e.logger.Warn("web_search backlink emission failed",
+				"call_id", call.ID, "url", canon, "error", err)
 		}
 	}
 }

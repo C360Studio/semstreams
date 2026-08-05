@@ -11,7 +11,7 @@ import (
 
 // registerEmitDiagnosis wires the ops agent's emit_diagnosis terminal tool.
 // The tool mints a new ops.diagnosis entity per call and publishes findings
-// via the graph.mutation.triple.add NATS surface (same path rule actions
+// via the graph.mutation.triple.append NATS surface (same path rule actions
 // and the decide tool use). A nil natsClient is a deployment choice (skip
 // silently); a registry-level failure (duplicate name) propagates so
 // RegisterBuiltins can surface it at boot.

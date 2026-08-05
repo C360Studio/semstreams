@@ -471,7 +471,7 @@ func (ml *MessageLogger) handleMessage(ctx context.Context, subject string, data
 	ml.stats.sampledMessages.Add(1)
 
 	// Parse message — try BaseMessage envelope first, fall back to raw JSON.
-	// Graph request/reply subjects (graph.mutation.*, graph.query.*, etc.) use
+	// Graph request/reply families (graph.mutation.>, graph.query.>, etc.) use
 	// raw JSON structs without BaseMessage wrapping. These are still valuable
 	// for observability so we log them with the subject as the type identifier.
 	var msgType, summary string

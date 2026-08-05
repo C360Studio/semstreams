@@ -4,6 +4,7 @@ package lifecyclegateway
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
 )
@@ -30,6 +32,11 @@ const ComponentName = "lifecycle-gateway"
 // so operator dashboards can render the config surface. See
 // `component/schema_tags.go` for the conventions.
 type Config struct {
+	// Ports declares the gateway's transitive graph mutation dependency. HTTP
+	// handlers invoke the lifecycle Manager, whose create/reconcile/delete
+	// operations use the canonical request/reply mutation protocol.
+	Ports *component.PortConfig `json:"ports,omitempty" schema:"type:ports,description:Component port configuration. The canonical required graph mutation request output is supplied when omitted.,category:basic"`
+
 	// PathPrefix is mounted under the parent component prefix (the
 	// arg to RegisterHTTPHandlers). Default "workflows" so the
 	// fully-resolved routes look like /lifecycle-gateway/workflows
@@ -78,6 +85,31 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 			"path_prefix must be non-empty after stripping leading/trailing slashes")
 	}
+	if c.Ports == nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			"ports configuration is required")
+	}
+	var mutationPorts []component.PortDefinition
+	for _, port := range c.Ports.Outputs {
+		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+			mutationPorts = append(mutationPorts, port)
+		}
+	}
+	if len(mutationPorts) != 1 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("exactly one canonical graph mutation output is required; found %d", len(mutationPorts)))
+	}
+	definition := mutationPorts[0]
+	port := component.BuildPortFromDefinition(definition, component.DirectionOutput)
+	request, ok := port.Config.(component.NATSRequestPort)
+	if !ok || definition.Type != "nats-request" || !port.Required ||
+		request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
+		request.Interface.Type != graphmutation.InterfaceType ||
+		request.Interface.Version != graphmutation.InterfaceVersion {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			fmt.Sprintf("graph mutation output must be required nats-request interface %s %s on %s",
+				graphmutation.InterfaceType, graphmutation.InterfaceVersion, graphmutation.SubjectFamily))
+	}
 	return nil
 }
 
@@ -107,6 +139,26 @@ func (c *Config) ApplyDefaults() {
 		v := true
 		c.EnableWebSocket = &v
 	}
+	if c.Ports == nil {
+		c.Ports = &component.PortConfig{}
+	}
+	hasMutationOutput := false
+	for _, port := range c.Ports.Outputs {
+		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+			hasMutationOutput = true
+			break
+		}
+	}
+	if !hasMutationOutput {
+		c.Ports.Outputs = append(c.Ports.Outputs, defaultGraphMutationOutput())
+	}
+}
+
+func defaultGraphMutationOutput() component.PortDefinition {
+	return component.PortDefinition{
+		Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
+		Interface: graphmutation.InterfaceType, Required: true,
+	}
 }
 
 // wsEnabled returns the effective EnableWebSocket value. nil pointer
@@ -125,6 +177,7 @@ func (c *Config) wsEnabled() bool {
 func DefaultConfig() Config {
 	t := true
 	return Config{
+		Ports:           &component.PortConfig{Outputs: []component.PortDefinition{defaultGraphMutationOutput()}},
 		PathPrefix:      "workflows",
 		EnableWebSocket: &t,
 		MaxBodyBytes:    DefaultMaxBodyBytes,
@@ -149,7 +202,7 @@ type LifecycleManager interface {
 	Get(ctx context.Context, workflow, entityID string) (lifecycle.Participant, error)
 	History(ctx context.Context, workflow, entityID string) ([]lifecycle.TransitionEvent, error)
 	Children(ctx context.Context, parentEntityID string, opts lifecycle.ChildOptions) ([]lifecycle.ChildResult, error)
-	References(ctx context.Context, entityID string) ([]lifecycle.ReferenceStub, error)
+	References(ctx context.Context, entityID string) ([]lifecycle.RelationshipReference, error)
 	CreateFromOperator(ctx context.Context, workflow string, initial json.RawMessage) (lifecycle.CreateResult, error)
 	UpdateFromOperator(ctx context.Context, workflow, entityID string, patch map[string]any) error
 	Transition(ctx context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, note string) error
@@ -262,11 +315,31 @@ func (c *Component) Meta() component.Metadata {
 	}
 }
 
-// InputPorts returns no input ports — the gateway is request-driven, not NATS-fed.
-func (c *Component) InputPorts() []component.Port { return []component.Port{} }
+// InputPorts returns configured inputs. The default gateway is HTTP-driven and
+// therefore has none.
+func (c *Component) InputPorts() []component.Port {
+	if c.config.Ports == nil {
+		return nil
+	}
+	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
+	for _, definition := range c.config.Ports.Inputs {
+		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionInput))
+	}
+	return ports
+}
 
-// OutputPorts returns no output ports — the gateway is request-driven, not NATS-fed.
-func (c *Component) OutputPorts() []component.Port { return []component.Port{} }
+// OutputPorts includes the required canonical graph mutation request port used
+// transitively by the lifecycle Manager's operator mutation lanes.
+func (c *Component) OutputPorts() []component.Port {
+	if c.config.Ports == nil {
+		return nil
+	}
+	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
+	for _, definition := range c.config.Ports.Outputs {
+		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionOutput))
+	}
+	return ports
+}
 
 // ConfigSchema implements component.Discoverable.
 func (c *Component) ConfigSchema() component.ConfigSchema { return schema }

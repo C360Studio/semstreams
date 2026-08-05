@@ -23,13 +23,12 @@ func TestNewNATSTriplePublisher_NilClient(t *testing.T) {
 // assert orchestration-triple emission in their handler tests. Kept
 // here so the five component test suites share one shape.
 type recordingPublisher struct {
-	addCalls    []message.Triple
 	batchCalls  [][]message.Triple
 	createCalls []recordedCreate
 	err         error
 }
 
-// recordedCreate captures one CreateEntityWithTriples call so birth tests can
+// recordedCreate captures one Create call so birth tests can
 // assert the entity ID, typed-origin envelope, and carried triples.
 type recordedCreate struct {
 	entityID string
@@ -37,17 +36,12 @@ type recordedCreate struct {
 	triples  []message.Triple
 }
 
-func (r *recordingPublisher) CreateEntityWithTriples(_ context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+func (r *recordingPublisher) Create(_ context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
 	r.createCalls = append(r.createCalls, recordedCreate{entityID: entityID, msgType: msgType, triples: triples})
 	return r.err
 }
 
-func (r *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
-	r.addCalls = append(r.addCalls, triple)
-	return r.err
-}
-
-func (r *recordingPublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+func (r *recordingPublisher) Append(_ context.Context, triples []message.Triple) error {
 	r.batchCalls = append(r.batchCalls, triples)
 	return r.err
 }
@@ -60,11 +54,9 @@ func TestTriplePublisher_InterfaceShape(t *testing.T) {
 	var pub TriplePublisher = &recordingPublisher{}
 	assert.NotNil(t, pub)
 	entityID := semantictest.EntityID(t, "c360", "ops", "agent", "agentic-loop", "execution", "rg-x")
-	err := pub.CreateEntityWithTriples(context.Background(), entityID, message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}, []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "shape"), Object: "z", Timestamp: time.Now()}})
+	err := pub.Create(context.Background(), entityID, message.Type{Domain: "agentic", Category: "loop_execution", Version: "v1"}, []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "shape"), Object: "z", Timestamp: time.Now()}})
 	assert.NoError(t, err)
-	err = pub.AddTriple(context.Background(), message.Triple{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "single"), Object: "z", Timestamp: time.Now()})
-	assert.NoError(t, err)
-	err = pub.AddTriplesBatch(context.Background(), []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "batch"), Object: "z", Timestamp: time.Now()}})
+	err = pub.Append(context.Background(), []message.Triple{{Subject: entityID, Predicate: semantictest.Predicate(t, "test", "publisher", "append"), Object: "z", Timestamp: time.Now()}})
 	assert.NoError(t, err)
 }
 
@@ -84,8 +76,8 @@ func TestBirthLoopEntityWithTriples_NilPublisher_Degraded(t *testing.T) {
 	assert.Equal(t, 1, lg.warns, "nil publisher must log a single degraded warn")
 }
 
-// TestBirthLoopEntityWithTriples_Success births via CreateEntityWithTriples
-// (NOT AddTriplesBatch) carrying the typed-origin envelope + kickoff triples —
+// TestBirthLoopEntityWithTriples_Success births via Create rather than Append,
+// carrying the typed-origin envelope and kickoff triples —
 // the gh#390 fix: the FIRST write must CREATE the entity, not append to it.
 func TestBirthLoopEntityWithTriples_Success(t *testing.T) {
 	pub := &recordingPublisher{}

@@ -23,33 +23,31 @@ import (
 // project_addtriplebatch_migration_followup memory.
 type recordingPublisher struct {
 	triples  []message.Triple
+	calls    int
 	failOn   int
 	failWith error
 }
 
-func (p *recordingPublisher) AddTriple(_ context.Context, tr message.Triple) error {
-	p.triples = append(p.triples, tr)
-	if p.failWith != nil && len(p.triples) == p.failOn {
+func (p *recordingPublisher) Append(_ context.Context, triples []message.Triple) error {
+	p.calls++
+	if p.failWith != nil && p.calls == p.failOn {
 		return p.failWith
 	}
+	p.triples = append(p.triples, triples...)
 	return nil
 }
 
-// AddTriplesBatch satisfies the widened TriplePublisher interface but
-// web_search / http_request never call it (their emissions span
-// multiple Subjects per call so the atomic per-Subject batch doesn't
-// help). Present only for interface conformance — if a test hits it,
-// the migration model is broken.
-func (p *recordingPublisher) AddTriplesBatch(_ context.Context, _ []message.Triple) error {
-	panic("recordingPublisher: AddTriplesBatch unexpectedly called; web_search/http_request emit per-Subject via AddTriple")
-}
-
-// CreateEntityWithTriples satisfies the widened agentictools.TriplePublisher
+// Create satisfies the agentictools.TriplePublisher
 // interface. web_search / http_request only APPEND URL/back-link triples onto
 // existing entities — they never birth an entity — so this is never called;
 // present for interface conformance (gh#390).
-func (p *recordingPublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, _ []message.Triple) error {
-	panic("recordingPublisher: CreateEntityWithTriples unexpectedly called; web_search/http_request only append, never birth entities")
+func (p *recordingPublisher) Create(_ context.Context, _ string, _ message.Type, triples []message.Triple) error {
+	p.calls++
+	if p.failWith != nil && p.calls == p.failOn {
+		return p.failWith
+	}
+	p.triples = append(p.triples, triples...)
+	return nil
 }
 
 func fixedClock(t time.Time) func() time.Time {
@@ -178,8 +176,8 @@ func TestWebSearchExecutor_EmitObservations_PublishFailure_ContinuesBatch(t *tes
 	// see one — emitObservations is fire-and-forget by design).
 	e.emitObservations(context.Background(), call, "q", results)
 
-	if len(pub.triples) != 14 {
-		t.Errorf("AddTriple call count = %d, want 14 (continue-on-failure semantics)", len(pub.triples))
+	if len(pub.triples) != 13 {
+		t.Errorf("triples recorded = %d, want 13 (first backlink failed; second result continued)", len(pub.triples))
 	}
 }
 
@@ -297,7 +295,7 @@ func TestHTTPRequestExecutor_EmitObservation_TruncatedFlag(t *testing.T) {
 // TestHTTPRequestExecutor_EmitObservation_PublishFailure_ContinuesBatch
 // confirms log+continue when a per-triple publish fails.
 func TestHTTPRequestExecutor_EmitObservation_PublishFailure_ContinuesBatch(t *testing.T) {
-	pub := &recordingPublisher{failOn: 3, failWith: errors.New("nats degraded")}
+	pub := &recordingPublisher{failOn: 2, failWith: errors.New("nats degraded")}
 	e := NewHTTPRequestExecutor(
 		WithHTTPTriplePublisher(pub),
 		WithHTTPPlatform(testPlatform()),
@@ -306,10 +304,10 @@ func TestHTTPRequestExecutor_EmitObservation_PublishFailure_ContinuesBatch(t *te
 
 	e.emitObservation(context.Background(), agentic.ToolCall{ID: "c", LoopID: "l"}, "https://example.com/x", resp, "body", false)
 
-	// All 8 AddTriple calls should have been issued, even though the
-	// 3rd one returned an error — the helper logs and continues.
-	if got := len(pub.triples); got != 8 {
-		t.Errorf("AddTriple call count = %d, want 8 (continue-on-failure)", got)
+	// The observation entity is written first; a backlink failure does not
+	// erase that verified result or fabricate a dangling reference.
+	if got := len(pub.triples); got != 7 {
+		t.Errorf("triples recorded = %d, want 7 observation triples", got)
 	}
 }
 
@@ -393,11 +391,7 @@ func TestWebSearchExecutor_EmitObservations_DedupsAcrossCalls(t *testing.T) {
 	}
 }
 
-// TestWebSearchExecutor_EmitObservations_LoopBacklinkFirst asserts the
-// reordering from go-reviewer N2: the LoopObservedWeb back-link is the
-// first triple in each per-result batch so partial-writes under
-// graph-ingest degradation leave a discoverable pointer.
-func TestWebSearchExecutor_EmitObservations_LoopBacklinkFirst(t *testing.T) {
+func TestWebSearchExecutor_EmitObservations_ObservationPrecedesBacklink(t *testing.T) {
 	pub := &recordingPublisher{}
 	e := NewWebSearchExecutor("test-key",
 		WithWebSearchTriplePublisher(pub),
@@ -409,15 +403,12 @@ func TestWebSearchExecutor_EmitObservations_LoopBacklinkFirst(t *testing.T) {
 	if len(pub.triples) == 0 {
 		t.Fatalf("no triples emitted")
 	}
-	if pub.triples[0].Predicate != agvocab.LoopObservedWeb {
-		t.Errorf("first triple predicate = %q, want %q (back-link must precede URL-side triples for partial-write resilience)",
-			pub.triples[0].Predicate, agvocab.LoopObservedWeb)
+	if pub.triples[len(pub.triples)-1].Predicate != agvocab.LoopObservedWeb {
+		t.Errorf("last triple predicate = %q, want %q", pub.triples[len(pub.triples)-1].Predicate, agvocab.LoopObservedWeb)
 	}
 }
 
-// TestHTTPRequestExecutor_EmitObservation_LoopBacklinkFirst is the
-// http_request counterpart to the websearch reordering check.
-func TestHTTPRequestExecutor_EmitObservation_LoopBacklinkFirst(t *testing.T) {
+func TestHTTPRequestExecutor_EmitObservation_ObservationPrecedesBacklink(t *testing.T) {
 	pub := &recordingPublisher{}
 	e := NewHTTPRequestExecutor(
 		WithHTTPTriplePublisher(pub),
@@ -429,8 +420,8 @@ func TestHTTPRequestExecutor_EmitObservation_LoopBacklinkFirst(t *testing.T) {
 	if len(pub.triples) == 0 {
 		t.Fatalf("no triples emitted")
 	}
-	if pub.triples[0].Predicate != agvocab.LoopFetchedWeb {
-		t.Errorf("first triple predicate = %q, want %q", pub.triples[0].Predicate, agvocab.LoopFetchedWeb)
+	if pub.triples[len(pub.triples)-1].Predicate != agvocab.LoopFetchedWeb {
+		t.Errorf("last triple predicate = %q, want %q", pub.triples[len(pub.triples)-1].Predicate, agvocab.LoopFetchedWeb)
 	}
 }
 

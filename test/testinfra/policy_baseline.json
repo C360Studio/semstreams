@@ -477,21 +477,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|pkg/lifecycle/manager_integration_test.go|TestIntegration_ManagerCreate_SurvivesGraphIngestColdStart|time.Sleep(50 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|pkg/ownership/bootstrap_integration_test.go|waitForPresenceChange|time.Sleep(10 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|pkg/ownership/bootstrap_integration_test.go|waitForPresence|time.Sleep(10 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/agentic-loop/approval_integration_test.go|TestIntegration_ApprovalFlow_Approve|time.Sleep(100 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
@@ -712,11 +697,6 @@
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
     {
-      "key": "integration-time-sleep|processor/agentic-tools/lesson_promotion_integration_test.go|startGraphIngestForOFW|time.Sleep(150 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
       "key": "integration-time-sleep|processor/agentic-tools/tools_integration_test.go|TestIntegration_AdvertisedToolsEnforced|time.Sleep(100 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
@@ -813,16 +793,6 @@
     },
     {
       "key": "integration-time-sleep|processor/gated-dag/fullstack_integration_test.go|TestFullStack_FailedNodeHoldsDependents|time.Sleep(2 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/gated-dag/stub_dispatch_integration_test.go|TestFullStack_ReferentialStubNotDispatchedUntilBorn|time.Sleep(2 * time.Second)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/gated-dag/stub_dispatch_integration_test.go|TestFullStack_ReferentialStubNotDispatchedUntilBorn|time.Sleep(2 * time.Second)|2",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },
@@ -973,21 +943,6 @@
     },
     {
       "key": "integration-time-sleep|processor/graph-ingest/batch_integration_test.go|startBatchTestComponent|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/graph-ingest/cas_integration_test.go|TestIntegration_CASRetryBehavior|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/graph-ingest/cas_integration_test.go|TestIntegration_ConcurrentAddTriple|time.Sleep(100 * time.Millisecond)|1",
-      "kind": "migration-debt",
-      "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
-    },
-    {
-      "key": "integration-time-sleep|processor/graph-ingest/cas_integration_test.go|TestIntegration_SharedSeam_CASFailureDoesNotRouteForeign|time.Sleep(100 * time.Millisecond)|1",
       "kind": "migration-debt",
       "reason": "existing synchronization debt recorded when the Gate 0 ratchet landed"
     },

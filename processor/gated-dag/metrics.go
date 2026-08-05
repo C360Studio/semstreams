@@ -12,7 +12,6 @@ const metricsService = "gated-dag"
 // shared registry when one is provided, so increments are always nil-safe.
 type metrics struct {
 	stall         prometheus.Gauge
-	stubsSkipped  prometheus.Gauge
 	claimed       prometheus.Counter
 	claimErr      prometheus.Counter
 	dispatched    prometheus.Counter
@@ -27,10 +26,6 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 		stall: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "gated_dag_stalled_units",
 			Help: "Number of units held-ready with no forward progress and nothing in-flight (a depends_on cycle or all-blocked-behind-failure). 0 = healthy.",
-		}),
-		stubsSkipped: prometheus.NewGauge(prometheus.GaugeOpts{
-			Name: "gated_dag_referential_stubs_skipped",
-			Help: "Entities under the unit prefix excluded this eval because they are referential-integrity stubs (not-yet-born, core.identity.stub envelope) — gh#429. Briefly nonzero during a referenced unit's birth window is expected; a SUSTAINED nonzero value means a referenced unit's real content never landed on a re-stamping lane and it will never dispatch.",
 		}),
 		claimed: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "gated_dag_units_claimed_total",
@@ -61,7 +56,6 @@ func newMetrics(reg *metric.MetricsRegistry) *metrics {
 		// Best-effort registration: a duplicate (e.g. two flows) is logged by the
 		// registry and does not abort the executor.
 		_ = reg.RegisterGauge(metricsService, "stalled_units", m.stall)
-		_ = reg.RegisterGauge(metricsService, "referential_stubs_skipped", m.stubsSkipped)
 		_ = reg.RegisterCounter(metricsService, "units_claimed_total", m.claimed)
 		_ = reg.RegisterCounter(metricsService, "claim_errors_total", m.claimErr)
 		_ = reg.RegisterCounter(metricsService, "units_dispatched_total", m.dispatched)

@@ -7,77 +7,89 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
-	"github.com/c360studio/semstreams/message"
-	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/projection"
 )
 
-func TestValidateMutationResponseEntityRejectsPoison(t *testing.T) {
-	t.Parallel()
-
-	validID := "acme.ops.test.system.widget.001"
-	invalidEntityID := "bad"
-	entity := &graph.EntityState{ID: validID, Triples: []message.Triple{{
-		Subject: validID, Predicate: "test.state.target", Object: invalidEntityID, Datatype: message.EntityReferenceDatatype,
-	}}}
-
-	err := validateMutationResponseEntity(entity)
-	if err == nil || !graph.IsStateContractError(err) {
-		t.Fatalf("error = %T %v, want graph state reset contract", err, err)
-	}
-	if err := validateMutationResponseEntity(nil); err != nil {
-		t.Fatalf("nil degraded response entity error = %v", err)
-	}
-}
-
-type deleteFaultRequester struct {
+type mutationFaultRequester struct {
 	calls    int
+	subject  string
 	response []byte
 	err      error
 }
 
-func (r *deleteFaultRequester) RequestClassified(context.Context, string, []byte, time.Duration) ([]byte, error) {
+func (r *mutationFaultRequester) RequestClassified(_ context.Context, subject string, _ []byte, _ time.Duration) ([]byte, error) {
 	r.calls++
+	r.subject = subject
 	return r.response, r.err
 }
 
-func (*deleteFaultRequester) RequestWithRetryClassified(
-	context.Context,
-	string,
-	[]byte,
-	time.Duration,
-	natsclient.RetryConfig,
-) ([]byte, error) {
-	panic("conditional delete must not use retry transport")
-}
-
-func TestDeleteAmbiguousReplyReturnsCommitUnknownWithoutRetry(t *testing.T) {
-	for _, tt := range []struct {
+func TestMutationAmbiguousReplyReturnsCommitUnknownAfterOneAttempt(t *testing.T) {
+	entity := &graph.EntityState{ID: "acme.ops.test.system.widget.001"}
+	operations := []struct {
+		name      string
+		subject   string
+		operation projection.MutationOperation
+		call      func(*graphEmitterNATS) error
+	}{
+		{
+			name: "create", subject: "graph.mutation.entity.create", operation: projection.MutationOperationCreate,
+			call: func(emitter *graphEmitterNATS) error {
+				_, err := emitter.create(context.Background(), &graph.CreateEntityRequest{Entity: entity})
+				return err
+			},
+		},
+		{
+			name: "reconcile", subject: "graph.mutation.entity.reconcile", operation: projection.MutationOperationReconcile,
+			call: func(emitter *graphEmitterNATS) error {
+				_, err := emitter.reconcile(context.Background(), &graph.ReconcilePredicatesRequest{
+					EntityID: entity.ID, ExpectedRevision: 9, Predicates: []string{"test.state.value"},
+				})
+				return err
+			},
+		},
+		{
+			name: "delete", subject: "graph.mutation.entity.delete", operation: projection.MutationOperationDelete,
+			call: func(emitter *graphEmitterNATS) error {
+				_, err := emitter.delete(context.Background(), &graph.DeleteEntityRequest{
+					EntityID: entity.ID, ExpectedRevision: 9,
+				})
+				return err
+			},
+		},
+	}
+	faults := []struct {
 		name     string
 		response []byte
 		err      error
 	}{
 		{name: "deadline", err: context.DeadlineExceeded},
 		{name: "malformed response", response: []byte(`{"outcome":`)},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			requester := &deleteFaultRequester{response: tt.response, err: tt.err}
-			emitter := &graphEmitterNATS{client: requester, timeout: time.Second}
-			_, err := emitter.delete(context.Background(), &graph.DeleteEntityRequest{
-				EntityID: "acme.ops.test.system.widget.001", ExpectedRevision: 9,
+	}
+	for _, operation := range operations {
+		for _, fault := range faults {
+			t.Run(operation.name+"/"+fault.name, func(t *testing.T) {
+				requester := &mutationFaultRequester{response: fault.response, err: fault.err}
+				client, newErr := graphmutation.NewClient(requester, time.Second)
+				if newErr != nil {
+					t.Fatalf("NewClient: %v", newErr)
+				}
+				emitter := &graphEmitterNATS{client: client}
+				err := operation.call(emitter)
+				var mutationErr *projection.MutationError
+				if !errors.As(err, &mutationErr) ||
+					mutationErr.Operation != operation.operation ||
+					mutationErr.Kind != projection.MutationCommitUnknown ||
+					mutationErr.Commit != projection.CommitUnknown {
+					t.Fatalf("error = %#v, want %s commit_unknown", mutationErr, operation.name)
+				}
+				if requester.calls != 1 {
+					t.Fatalf("calls = %d, want one", requester.calls)
+				}
+				if requester.subject != operation.subject {
+					t.Fatalf("subject = %q, want %q", requester.subject, operation.subject)
+				}
 			})
-			var mutationErr *projection.MutationError
-			if !errors.As(err, &mutationErr) ||
-				mutationErr.Operation != projection.MutationOperationDelete ||
-				mutationErr.Kind != projection.MutationCommitUnknown ||
-				mutationErr.Commit != projection.CommitUnknown {
-				t.Fatalf("error = %#v, want delete commit_unknown", mutationErr)
-			}
-			if requester.calls != 1 {
-				t.Fatalf("calls = %d, want one", requester.calls)
-			}
-		})
+		}
 	}
 }
-
-// entity-id-audit:classify intentional-malformed "bad" line=14 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity lifecycle mutation reply reference poison fixture

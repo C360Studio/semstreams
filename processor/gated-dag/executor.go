@@ -230,12 +230,6 @@ func (e *executor) reEvaluate(ctx context.Context, fromBackstop bool) {
 	}
 
 	view := extractGraph(states, e.cfg)
-	if e.metrics != nil {
-		// gh#429: referential stubs excluded from the unit set this eval. A
-		// sustained nonzero value is a stuck-stub signal (a referenced unit whose
-		// real content never landed on a re-stamping lane), not a silent wedge.
-		e.metrics.stubsSkipped.Set(float64(view.stubsSkipped))
-	}
 	decisions := gateddag.Evaluate(view.unitIDs, view.dependsOn, view.markers)
 
 	// In-flight bookkeeping: drop units that have gone terminal, been reset
