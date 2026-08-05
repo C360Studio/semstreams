@@ -1,8 +1,8 @@
 # Tasks — establish-authority-read-and-recovery (GS-01)
 
-> **UNAPPROVED — DESIGN-ONLY.** Inventory and revision-13 design passed their independent reviews. Only section 5
-> owner decision is executable next. Do not create a spec delta, implementation task, runtime code, or promotion
-> evidence before explicit owner acceptance.
+> **DESIGN REVIEW PASS — OWNER ACCEPTANCE PENDING.** Inventory and revision-35 review are complete. Section 5 is
+> active. Do not create a capability delta, implementation task, runtime code, or promotion evidence before explicit
+> owner acceptance.
 
 ## 0. Establish the corrected baton
 
@@ -62,9 +62,9 @@ design-only OpenSpec change became the durable baton with updated architect, rev
 
 ## Validation evidence
 
-The reviewed artifact is `/private/tmp/gs01-design-revision13.txt`, SHA-256
-`24f99453d108d4f8dd3b9b9879e7a0083a9ed6adc2eaf74bd3b5f3e124ff2103`, at clean checkpoint
-`52dc5e3031131dda0a3a55c4de252b2df9d3d8fc`. Independent review recorded `DESIGN REVIEW PASS` with no findings.
+Revision 13 is revoked and intermediate corrections remain non-normative evidence. The exact r27/r28/r29/r31/r32/r33/
+r34/r35 stack is preserved in `reviewed-recovery-contract-r35.md`. Revision 35 received `DESIGN REVIEW PASS` and
+`APPROVE`; owner acceptance remains pending.
 
-Current documentation evidence has `git diff --check`, the 120-character Markdown limit, targeted strict OpenSpec
-validation, and complete strict OpenSpec validation green without a capability delta.
+Current documentation evidence has `git diff --check`; the 120-character Markdown limit outside immutable exact reviewed
+artifact bytes; and targeted plus complete strict OpenSpec validation green without a capability delta.
