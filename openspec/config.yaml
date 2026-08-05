@@ -17,8 +17,8 @@ context: |
     contracts). History. Mechanics live in the spec, not the ADR.
 
   Non-negotiables to reflect in specs/tasks: graph-ingest is the sole writer to
-  ENTITY_STATES (mutations via graph.mutation.* API); every graph write carries a
-  semantic envelope (ADR-055); the live graph never uses NATS TTL/MaxBytes for
+  ENTITY_STATES (mutations via the typed graph.mutation.> request/reply port);
+  every entity birth carries a semantic envelope (ADR-091); the live graph never uses NATS TTL/MaxBytes for
   lifecycle (ADR-068); CI must be green (revive warnings = fail, -race, schema
   gen no-drift) before push.
 

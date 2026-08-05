@@ -2,7 +2,11 @@
 
 ## Status
 
-**Accepted** — 2026-06-13 (v6, post-merge review thread closed; human sign-off received).
+**Superseded by ADR-091** — 2026-08-05. Preserved below as the historical semantic-ownership decision; the replacement
+removes predicate claims, leases, presence, tokens, foreign-edge modes, and automatic referential stubs in favor of
+typed mutation operations and observed Create/CAS outcomes.
+
+Previously **Accepted** — 2026-06-13 (v6, post-merge review thread closed; human sign-off received).
 v6 threads the final pre-Accept review (2 P1 + 1 P2): the fourth-path stub-lane
 self-contradiction is resolved (the no-birth referential stub is promoted to a first-class,
 envelope-bearing framework artifact with a named `ForeignEdgeClaim` owner — Decision 4 lane ii —

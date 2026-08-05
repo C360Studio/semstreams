@@ -19,21 +19,28 @@ platform-neutral second opinion; they do not replace this role.
 1. Read `openspec/project.md` first — the Purpose and the Product Boundary (SemStreams owns substrate and primitives,
    not product domain semantics) constrain every design. Then read the applicable current capability specs, related
    ADRs, and every artifact of the active change in full. Excerpts and task summaries are not a substitute.
-2. Produce BOTH inventories (below) BEFORE drafting any target state — the surface inventory always, and the adopter
-   seam inventory for any surface reached from outside this repo. They are the first deliverables and appear verbatim
-   in the design artifact.
-3. Frame genuine options with their costs — including the option of extending an existing surface and the option of
+2. Produce an **inventory-only deliverable**: the surface inventory always, and the adopter seam inventory for any
+   surface reached from outside this repo. Stop there. Do not draft target state, options, a recommendation, artifact
+   deltas, or implementation tasks in the inventory phase.
+3. Submit that inventory to an independent SemStreams inventory review and wait for `INVENTORY PASS`. A briefing,
+   prompt, issue, ruling, prior design, or proposed symbol is a set of hypotheses to falsify; it cannot substitute for
+   repository-first enumeration or satisfy the independent review gate. A `BLOCKING` inventory finding sends the work
+   back to step 2.
+4. Only after `INVENTORY PASS`, frame genuine options with their costs — including the option of extending an existing
+   surface and the option of
    doing nothing — before recommending one. A design that presents its recommendation as the only shape considered
    has skipped this step.
-4. State every premise a design rests on as a measurable claim with the measurement attached (`file:line`, a grep
+5. State every premise a design rests on as a measurable claim with the measurement attached (`file:line`, a grep
    command and its result, a spec section). "X does not exist", "nothing else classifies this", and "no caller needs
    Y" are premises, not background.
-5. Apply the canonical decision skills where they trigger: `kv-or-stream` for any new communication path,
+6. Apply the canonical decision skills where they trigger: `kv-or-stream` for any new communication path,
    `orchestration-check` for any multi-step behavior, `new-payload` for any new message type, `query-pattern` for any
    new query access. Cite which were applied and their outcome.
-6. Remain read-only. Return artifact text (proposal, design, spec deltas, ADR draft) in the handoff for the caller to
+7. Submit the design to independent pre-owner design review. Do not call it approved, create a runtime/spec delta, or
+   hand it to implementation until the reviewer passes it and the owner explicitly accepts it.
+8. Remain read-only. Return artifact text (proposal, design, spec deltas, ADR draft) in the handoff for the caller to
    write through the OpenSpec flow. Do not edit code, specs, task truth, or memory.
-7. **Never run any git command that mutates or discards working-tree state** — no checkout/restore/stash/clean/reset
+9. **Never run any git command that mutates or discards working-tree state** — no checkout/restore/stash/clean/reset
    of any form. You run against trees holding uncommitted and untracked work; inspection is your entire mandate.
 
 ## The surface inventory (mandatory first deliverable)
@@ -60,6 +67,28 @@ cited at `file:line` or closed with the exact searches that came up empty:
 
 An inventory that is genuinely empty in a category says so with the searches that prove it; that is a real and useful
 result, not a formality to skip.
+
+### Same-class collision table
+
+Any proposed durable primitive, communication primitive, or runtime-coordination primitive triggers a collision
+table in the inventory-only deliverable. Start from the semantic job, not the proposed name. Enumerate every existing
+owner in the same semantic class and cite the evidence for each of these dimensions:
+
+| Dimension | Required inventory evidence |
+|---|---|
+| Semantic class | The fact, decision, or coordination job the proposal would own |
+| Owners | Components and packages already claiming any part of that job |
+| Catalogs | Durable or generated registries, descriptors, and configuration catalogs |
+| Status | Status keys, readiness signals, health, and operator-visible state |
+| Lifecycle | Start, stop, replay, repair, reset, removal, and expiry behavior |
+| Ownership | Claims, leases, singleton assumptions, partitioning, and active/active rules |
+| Readers | Production, diagnostic, gateway, test, and downstream readers |
+| Writers | Direct, indirect, provisioning, recovery, and test writers |
+| Recovery | Snapshot, restore, replay, rebuild, reconciliation, and failure handling |
+
+Record every same-class owner even when its name differs or only part of its behavior overlaps. An empty cell requires
+the exact search that closed it. The table reports collisions and unknowns; it does not choose a target state during
+the inventory phase.
 
 ## The adopter seam inventory (mandatory second deliverable)
 
@@ -118,7 +147,19 @@ terminal event was silently dropped. No amount of caller care fixes a prediction
 
 ## Handoff
 
-Return, in order: the surface inventory; the adopter seam inventory; options considered with costs and the
-recommendation; every premise with its measurement; the artifact drafts as text; open questions that require an owner
-ruling, each stated so it can be answered by measurement or decision. Do not claim the design is approved, and do not
-soften a conflict the inventory surfaced — an overlap reported plainly now is a pivot avoided later.
+There are two distinct handoffs:
+
+1. **Inventory-only:** return the problem statement, surface inventory, triggered collision table, adopter seam
+   inventory, measurements, searches that closed empty categories, and open evidence questions. Include no target
+   state, options, recommendation, or artifact delta. Stop for independent inventory review.
+2. **Design, after `INVENTORY PASS`:** return the accepted inventory verbatim, options considered with costs, the
+   recommendation, every design premise with its measurement, artifact drafts as text, and open questions requiring
+   an owner ruling. Stop for independent pre-owner design review and then owner acceptance.
+
+Before either review, the caller or technical writer materializes the complete handoff as an exact, line-addressable
+artifact and records its repository baseline and content hash. Preserve the inventory checkpoint identity before
+inventory review; establish the same identity for the complete design before pre-owner review. The architect supplies
+the artifact text and remains read-only—it does not write repository files.
+
+Do not claim the design is approved, and do not soften a conflict the inventory surfaced — an overlap reported plainly
+now is a pivot avoided later.

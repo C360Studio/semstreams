@@ -12,23 +12,26 @@ not replace this review.
 
 ## Required review workflow
 
-1. Read `openspec/project.md`, applicable current specs, and every proposal, design, spec delta, and task file in the
+1. Declare the review mode: inventory review, pre-owner design review, or implementation/merge review. Never collapse
+   the first two modes into one verdict.
+2. Read `openspec/project.md`, applicable current specs, and every proposal, design, spec delta, and task file in the
    active change. Compare task status with the live diff and evidence; report overclaimed, stale, or missing task truth.
-2. Read the complete diff, then its callers, callees, registrations, binaries, state owners, storage builders, and
+3. Read the complete diff, then its callers, callees, registrations, binaries, state owners, storage builders, and
    public query consumers. Review the blast radius, not only changed lines.
-3. Verify every claim from code, configuration, generated artifacts, tests, or command output. Do not launder prior
+4. Verify every claim from code, configuration, generated artifacts, tests, or command output. Do not launder prior
    reviewer or agent assertions.
-4. Try to refute every candidate finding. Downgrade an unconfirmed concern to a question and state what evidence is
+5. Try to refute every candidate finding. Downgrade an unconfirmed concern to a question and state what evidence is
    missing.
-5. Apply only triggered checks. Do not pad the review with irrelevant checklist items.
-6. Remain read-only. Do not implement fixes, resolve threads, mutate task truth, or commit unless explicitly asked.
-7. **NEVER run any git command that can discard or shuffle working-tree state.** Prohibited without exception:
+6. Apply only triggered checks. Do not pad the review with irrelevant checklist items.
+7. Remain read-only. Do not implement fixes, resolve threads, mutate task truth, or commit unless explicitly asked.
+8. **NEVER run any git command that can discard or shuffle working-tree state.** Prohibited without exception:
    `git checkout -- <path>`, `git restore <path>`, `git stash` in **any** form (including `git stash push -- <path>`),
    `git clean`, `git reset --hard`. Review runs against trees with UNCOMMITTED, UNSTAGED, and UNTRACKED work; these
    commands destroy it permanently and it is **not** recoverable from git. This has already cost real work (round 6 of
    PR #604 discarded an entire uncommitted method via `git checkout`).
 
-   Path-scoped `git stash push -- <path>` is prohibited too, and is a specific trap rather than a safe alternative: on an
+   Path-scoped `git stash push -- <path>` is prohibited too, and is a specific
+   trap rather than a safe alternative: on an
    **untracked** path it is a silent no-op, so the paired `git stash pop` restores whatever is on top of the stack —
    frequently an unrelated stash from another branch, dumped over the tree you are reviewing.
 
@@ -47,6 +50,40 @@ not replace this review.
 
    If you discover you have destroyed work, say so immediately and prominently at the TOP of your report, before any
    findings — the owner needs to restore before acting on anything else.
+
+## Architecture review modes
+
+Before either architecture review, verify the caller or technical writer materialized the complete handoff as an
+exact, line-addressable artifact with a recorded repository baseline and content hash. Preserve and verify the
+inventory checkpoint identity; require the same identity for the complete design before pre-owner review. Review that
+exact artifact, not a summary or direct-message reconstruction.
+
+### Inventory review
+
+Review the problem-only inventory before any target state, options, recommendation, or spec delta exists. Treat every
+prompted mechanism, proposed symbol, issue claim, prior design, and briefing assertion as a hypothesis, not evidence.
+
+1. Read only the problem boundary and evidence baseline first. Independently enumerate the repository surface before
+   reading the inventory's conclusions.
+2. Compare the independent enumeration with the submitted surface inventory, adjacent claims, adopter seam inventory,
+   and searches used to close empty categories.
+3. For every proposed durable, communication, or runtime-coordination primitive, independently enumerate all owners in
+   the same semantic class. Verify the collision table covers catalogs, status, lifecycle, ownership, readers, writers,
+   and recovery even when the existing owners use different names.
+4. Attempt to refute both claimed gaps and claimed completeness with code, configuration, generated artifacts, tests,
+   current specs, ADRs, and active changes.
+5. Return `INVENTORY PASS` only when the inventory is sufficiently complete to begin design. Any missing same-class
+   owner or incomplete triggered collision table is `BLOCKING`; return `INVENTORY CHANGES REQUESTED` and do not review
+   or suggest a target state.
+
+### Pre-owner design review
+
+Run only after a recorded `INVENTORY PASS`. Verify that the design reproduces the reviewed inventory without silently
+dropping collisions, frames genuine options including do nothing and extension of an existing owner, measures every
+premise, applies triggered decision skills, and introduces no phantom consumer or unreviewed surface. Independently
+try to falsify the recommendation and its claimed costs. Return `DESIGN REVIEW PASS` or
+`DESIGN CHANGES REQUESTED`; neither verdict is owner approval. Runtime implementation and spec promotion remain blocked
+until the owner explicitly accepts the reviewed design.
 
 ## Contract and task-truth review
 
