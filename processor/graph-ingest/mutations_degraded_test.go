@@ -21,17 +21,6 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 		decodeWithEntity func([]byte) (resp graph.MutationResponse, hasEntity bool, err error)
 	}{
 		{
-			name:    "create_entity",
-			marshal: marshalCreateEntityDegraded,
-			decodeWithEntity: func(b []byte) (graph.MutationResponse, bool, error) {
-				var r graph.CreateEntityResponse
-				if err := json.Unmarshal(b, &r); err != nil {
-					return graph.MutationResponse{}, false, err
-				}
-				return r.MutationResponse, r.Entity != nil, nil
-			},
-		},
-		{
 			name:    "create_entity_with_triples",
 			marshal: marshalCreateEntityWithTriplesDegraded,
 			decodeWithEntity: func(b []byte) (graph.MutationResponse, bool, error) {
@@ -115,13 +104,7 @@ func TestMarshalDegraded_AllFourEntityShapes(t *testing.T) {
 // compat for callers that may not handle the new field — they see no
 // new key in the JSON they were already parsing).
 func TestMutationResponse_DegradedOmittedWhenFalse(t *testing.T) {
-	resp := graph.CreateEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Degraded:   false,
-			Timestamp:  1,
-			KVRevision: 42,
-		},
-	}
+	resp := graph.CreateEntityResponse{Outcome: graph.MutationApplied, Entity: &graph.EntityState{}, KVRevision: 42}
 	b, err := json.Marshal(resp)
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

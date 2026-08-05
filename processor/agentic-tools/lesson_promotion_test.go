@@ -88,7 +88,7 @@ func newFakeLessonReader() *fakeLessonReader {
 	return &fakeLessonReader{evidence: map[string][]string{}, present: map[string]bool{}}
 }
 
-func (r *fakeLessonReader) ReadAuthoritative(_ context.Context, entityID string) (*graph.EntityState, error) {
+func (r *fakeLessonReader) ReadAuthoritative(_ context.Context, entityID string) (*graph.ExactEntity, error) {
 	if evidence, ok := r.evidence[entityID]; ok {
 		if r.evidenceErr != nil {
 			return nil, r.evidenceErr
@@ -99,13 +99,13 @@ func (r *fakeLessonReader) ReadAuthoritative(_ context.Context, entityID string)
 				Subject: entityID, Predicate: agvocab.LessonEvidence, Object: evidenceID,
 			})
 		}
-		return &graph.EntityState{ID: entityID, Triples: triples}, nil
+		return &graph.ExactEntity{Entity: &graph.EntityState{ID: entityID, Triples: triples}, KVRevision: 1}, nil
 	}
 	if r.existsErr != nil {
 		return nil, r.existsErr
 	}
 	if r.present[entityID] {
-		return &graph.EntityState{ID: entityID}, nil
+		return &graph.ExactEntity{Entity: &graph.EntityState{ID: entityID}, KVRevision: 1}, nil
 	}
 	return nil, &projection.MutationError{Kind: projection.MutationNotFound, Err: errors.New("entity not found")}
 }

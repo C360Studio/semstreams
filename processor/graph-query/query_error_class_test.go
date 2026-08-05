@@ -90,14 +90,18 @@ func TestPublicEntitySurfacesRejectCompleteCandidatePoisonBeforeSuccess(t *testi
 		{
 			name:    "entity",
 			request: []byte(`{"id":"acme.ops.test.system.widget.001"}`),
-			wrap:    func(entity graph.EntityState) []byte { return mustMarshalQueryFixture(t, entity) },
-			handle:  (*Component).handleQueryEntity,
+			wrap: func(entity graph.EntityState) []byte {
+				return mustMarshalQueryFixture(t, graph.ExactEntity{Entity: &entity, KVRevision: 1})
+			},
+			handle: (*Component).handleQueryEntity,
 		},
 		{
 			name:    "entity by alias",
 			request: []byte(`{"aliasOrID":"acme.ops.test.system.widget.001"}`),
-			wrap:    func(entity graph.EntityState) []byte { return mustMarshalQueryFixture(t, entity) },
-			handle:  (*Component).handleQueryEntityByAlias,
+			wrap: func(entity graph.EntityState) []byte {
+				return mustMarshalQueryFixture(t, graph.ExactEntity{Entity: &entity, KVRevision: 1})
+			},
+			handle: (*Component).handleQueryEntityByAlias,
 		},
 		{
 			name:    "batch",
@@ -298,8 +302,8 @@ func TestHandleQueryEntity_PassthroughPropagatesClassifiedError(t *testing.T) {
 
 // entity-id-audit:classify intentional-malformed "bad" line=49 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity GraphRAG batch aggregate poison fixture
 // entity-id-audit:classify intentional-malformed "bad" line=76 column=27 surface=go-assignment:invalidPublicEntityID entity_id_invalid:arity public query complete-candidate poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=152 column=29 surface=go-assignment:invalidFallbackEntityID entity_id_invalid:arity GraphRAG fatal fallback poison fixture
-// entity-id-audit:classify intentional-malformed "bad" line=194 column=27 surface=go-assignment:invalidLookupEntityID entity_id_invalid:arity entity lookup fatal fallback poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=156 column=29 surface=go-assignment:invalidFallbackEntityID entity_id_invalid:arity GraphRAG fatal fallback poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=198 column=27 surface=go-assignment:invalidLookupEntityID entity_id_invalid:arity entity lookup fatal fallback poison fixture
 
 // ─────────────────────────────────────────────────────────────────────────────
 // handleQueryPrefix — error-class fidelity (gh#304 primary fix)
@@ -614,4 +618,4 @@ func TestHandleStrategySpatial_HandlerErrorSurfaces(t *testing.T) {
 	assert.True(t, errs.IsTransient(err), "the transient class must survive: %v", err)
 }
 
-// entity-id-audit:classify intentional-malformed "bad" line=436 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity hierarchy prefix aggregate poison fixture
+// entity-id-audit:classify intentional-malformed "bad" line=440 column=21 surface=go-assignment:invalidEntityID entity_id_invalid:arity hierarchy prefix aggregate poison fixture

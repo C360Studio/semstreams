@@ -18,6 +18,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -511,6 +512,13 @@ func DefaultConfig() Config {
 						DeliverPolicy: "all", // Idempotent: catch up on historical entities
 					},
 				},
+				{
+					Name:      "mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
+				},
 			},
 			Outputs: []component.PortDefinition{
 				{
@@ -628,7 +636,7 @@ type Component struct {
 
 	// Domain resources
 	entityBucket      *natsclient.KVStore            // KV operations with CAS support
-	entityStateBucket jetstream.KeyValue             // raw bucket for the boot snapshot sweep
+	entityStateBucket jetstream.KeyValue             // authority-native snapshot and conditional-delete operations
 	entityCache       cache.Cache[graph.EntityState] // Read-through cache for query handlers
 	suffixBucket      *natsclient.KVStore            // KV suffix index: suffix → fullID
 	suffixCache       cache.Cache[string]            // TTL cache for suffix resolution
@@ -2645,21 +2653,30 @@ func (c *Component) CreateEntityStrict(ctx context.Context, entity *graph.Entity
 // referential integrity stubs, cache invalidation, metrics) is
 // identical.
 func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState, atomicCreate bool) error {
+	_, _, err := c.createEntityWithReceipt(ctx, entity, atomicCreate)
+	return err
+}
+
+func (c *Component) createEntityWithReceipt(
+	ctx context.Context,
+	entity *graph.EntityState,
+	atomicCreate bool,
+) (*graph.EntityState, uint64, error) {
 	if entity == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
+		return nil, 0, errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
 	}
 
 	// Validate entity ID format
 	if err := validateEntityID(entity.ID); err != nil {
-		return err
+		return nil, 0, err
 	}
 	if err := graph.ValidateEntityStateContract(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
+		return nil, 0, errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
 	}
 
 	// Check context
 	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "CreateEntity", "context cancelled")
+		return nil, 0, errs.Wrap(err, "Component", "CreateEntity", "context cancelled")
 	}
 
 	// SYNCHRONOUS HIERARCHY INFERENCE:
@@ -2687,7 +2704,7 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	data, err := graph.MarshalEntityState(entity)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
+		return nil, 0, errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
 	}
 
 	// Store in KV bucket. Put is upsert (last-writer-wins); Create is
@@ -2701,14 +2718,14 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 		if writeErr != nil && errors.Is(writeErr, natsclient.ErrKVKeyExists) {
 			// Expected conflict shape — don't count as a component
 			// error and don't wrap (preserves sentinel identity).
-			return writeErr
+			return nil, 0, writeErr
 		}
 	} else {
 		committedRev, writeErr = c.entityBucket.Put(ctx, entity.ID, data)
 	}
 	if writeErr != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
+		return nil, 0, errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
 	}
 
 	// Committed valid bytes at a known revision — clear any stale poison
@@ -2733,7 +2750,7 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 
 	c.ensureRelationshipTargetsExist(ctx, entity)
 
-	return nil
+	return entity.Clone(), committedRev, nil
 }
 
 // ensureRelationshipTargetsExist walks the entity's relationship triples
@@ -3025,6 +3042,34 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 
 	c.logger.Debug("entity deleted", slog.String("entity_id", entityID))
 
+	return nil
+}
+
+func (c *Component) deleteEntityAtRevision(ctx context.Context, entityID string, revision uint64) error {
+	if err := validateEntityID(entityID); err != nil {
+		return err
+	}
+	if revision == 0 {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "deleteEntityAtRevision", "revision must be nonzero")
+	}
+	if c.entityStateBucket == nil {
+		return errors.New("ENTITY_STATES authority bucket unavailable")
+	}
+	if err := c.entityStateBucket.Delete(ctx, entityID, jetstream.LastRevision(revision)); err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		if natsclient.IsKVNotFoundError(err) {
+			return natsclient.ErrKVKeyNotFound
+		}
+		if natsclient.IsKVConflictError(err) {
+			return natsclient.ErrKVRevisionMismatch
+		}
+		return err
+	}
+	c.clearEntityPoisonOnDelete(entityID)
+	c.invalidateEntityCacheEntry(entityID)
+	c.removeSuffixIndex(ctx, entityID)
+	atomic.AddInt64(&c.messagesProcessed, 1)
+	c.lastActivity.Store(time.Now())
 	return nil
 }
 

@@ -49,7 +49,7 @@ var testMutationType = message.Type{
 	Version:  "v1",
 }
 
-// entity-id-audit:classify intentional-malformed "" line=566 column=45 surface=go-field:DeleteEntityRequest.EntityID entity_id_invalid:empty empty delete ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=570 column=45 surface=go-field:DeleteEntityRequest.EntityID entity_id_invalid:empty empty delete ID rejection fixture
 
 func newMutationTestEntity(id string) *graph.EntityState {
 	now := time.Now()
@@ -81,6 +81,9 @@ func TestIntegration_HandleEntityCreate_Success(t *testing.T) {
 	assert.NotZero(t, resp.KVRevision, "revision should be set after a successful write")
 	require.NotNil(t, resp.Entity, "Entity should be populated in success response")
 	assert.Equal(t, entity.ID, resp.Entity.ID)
+	entry, err := c.entityBucket.Get(ctx, entity.ID)
+	require.NoError(t, err)
+	assert.Equal(t, entry.Revision, resp.KVRevision, "create response must carry the KV Create revision")
 }
 
 func TestIntegration_HandleEntityCreate_Conflict(t *testing.T) {
@@ -386,7 +389,9 @@ func TestIntegration_HandleEntityDelete_Existing(t *testing.T) {
 	const entityID = "c360.test.entity.delete.existing.001"
 	require.NoError(t, c.CreateEntity(ctx, newMutationTestEntity(entityID)), "seed entity")
 
-	req := graph.DeleteEntityRequest{EntityID: entityID, RequestID: "req-delete-1"}
+	_, revision, err := c.fetchEntityState(ctx, entityID)
+	require.NoError(t, err)
+	req := graph.DeleteEntityRequest{EntityID: entityID, ExpectedRevision: revision, RequestID: "req-delete-1"}
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
@@ -395,29 +400,31 @@ func TestIntegration_HandleEntityDelete_Existing(t *testing.T) {
 
 	var resp graph.DeleteEntityResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.True(t, resp.Deleted, "Deleted should be true when the entity was present")
+	assert.Equal(t, graph.MutationApplied, resp.Outcome)
+	assert.Equal(t, entityID, resp.EntityID)
+	assert.Equal(t, revision, resp.ExpectedRevision)
 
 	exists, err := c.entityExists(ctx, entityID)
 	require.NoError(t, err)
 	assert.False(t, exists, "entity should be gone after delete")
 }
 
-func TestIntegration_HandleEntityDelete_Idempotent(t *testing.T) {
+func TestIntegration_HandleEntityDelete_AbsentReturnsNotFound(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	req := graph.DeleteEntityRequest{
-		EntityID:  "c360.test.entity.delete.absent.001",
-		RequestID: "req-delete-idempotent",
+		EntityID:         "c360.test.entity.delete.absent.001",
+		ExpectedRevision: 1,
+		RequestID:        "req-delete-absent",
 	}
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respBytes, err := c.handleEntityDelete(ctx, reqBytes)
-	require.NoError(t, err)
-
-	var resp graph.DeleteEntityResponse
-	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.False(t, resp.Deleted, "Deleted should be false when entity was already absent")
+	_, err = c.handleEntityDelete(ctx, reqBytes)
+	require.Error(t, err)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, graph.ErrorCodeEntityNotFound, classified.Code)
 }
 
 // TestIntegration_HandleEntityUpdate_DeleteBeforeUpdate pins the

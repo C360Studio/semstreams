@@ -534,8 +534,9 @@ func TestIntegration_MutationClientCreateAtomicConflictAndOwnerFence(t *testing.
 	requireMutationFailure(t, err, MutationConflict, CommitNotCommitted)
 	authoritative, err := harness.client.ReadAuthoritative(harness.ctx, entityID)
 	require.NoError(t, err)
-	require.Equal(t, 1, exactTripleCount(authoritative, integrationOwnedLabel, "alpha"))
-	require.Zero(t, exactTripleCount(authoritative, integrationOwnedLabel, "different"))
+	require.NotZero(t, authoritative.KVRevision)
+	require.Equal(t, 1, exactTripleCount(authoritative.Entity, integrationOwnedLabel, "alpha"))
+	require.Zero(t, exactTripleCount(authoritative.Entity, integrationOwnedLabel, "different"))
 
 	// A new registry incarnation for the same owner fences this immutable
 	// client. It must surface owner_lease_stale and must not auto-rebind.
@@ -674,10 +675,11 @@ func TestIntegration_MutationClientReplaceOwnedPreservesNonOwnedFactsAndFencesSt
 
 	authoritative, err := harness.client.ReadAuthoritative(harness.ctx, entityID)
 	require.NoError(t, err)
-	require.Equal(t, 1, exactTripleCount(authoritative, integrationOwnedLabel, "after"))
-	require.Zero(t, exactTripleCount(authoritative, integrationOwnedLabel, "must-not-land"))
-	require.Equal(t, 1, exactTripleCount(authoritative, integrationEvidence, "evidence-a"))
-	require.Equal(t, 1, exactTripleCount(authoritative, integrationForeignFact, "preserve-me"))
+	require.NotZero(t, authoritative.KVRevision)
+	require.Equal(t, 1, exactTripleCount(authoritative.Entity, integrationOwnedLabel, "after"))
+	require.Zero(t, exactTripleCount(authoritative.Entity, integrationOwnedLabel, "must-not-land"))
+	require.Equal(t, 1, exactTripleCount(authoritative.Entity, integrationEvidence, "evidence-a"))
+	require.Equal(t, 1, exactTripleCount(authoritative.Entity, integrationForeignFact, "preserve-me"))
 }
 
 type realResponseFaultRequester struct {
@@ -777,7 +779,8 @@ func TestIntegration_MutationClientAppendLostResponseReadsBackWithoutDuplicate(t
 
 	authoritative, err := harness.client.ReadAuthoritative(harness.ctx, entityID)
 	require.NoError(t, err)
-	require.Equal(t, 1, exactTripleCount(authoritative, integrationEvidence, "ambiguous-evidence"))
+	require.NotZero(t, authoritative.KVRevision)
+	require.Equal(t, 1, exactTripleCount(authoritative.Entity, integrationEvidence, "ambiguous-evidence"))
 }
 
 func TestIntegration_MutationClientDegradedCreateUsesAuthoritativeReadBack(t *testing.T) {

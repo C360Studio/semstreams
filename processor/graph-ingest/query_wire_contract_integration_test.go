@@ -61,7 +61,7 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 		//   - X-Error-Class: invalid  (so IsInvalid(err) == true at the gateway)
 		//   - X-Error-Code: entity_not_found (stable machine code for 404 routing)
 		//   - body: {"message":"not found: <id>"} — JSON envelope, not plain text
-		const absentID = "no.such.entity.does.not.exist.xyz"
+		const absentID = "no.such.entity.does.exist.xyz"
 		req, _ := json.Marshal(map[string]string{"id": absentID})
 
 		msg, err := natsClient.RequestWithHeaders(ctx, "graph.ingest.query.entity", req, nil, 2*time.Second)
@@ -152,16 +152,12 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 		if !bytes.HasPrefix(msg.Data, []byte("{")) {
 			t.Errorf("ADR-060: body must be JSON envelope; got %q", msg.Data)
 		}
-		if !bytes.Contains(msg.Data, []byte("empty id")) {
-			t.Errorf("body must describe empty-id validation failure; got %q", msg.Data)
+		if !bytes.Contains(msg.Data, []byte("invalid request: entity ID")) {
+			t.Errorf("body must describe entity-ID validation failure; got %q", msg.Data)
 		}
 	})
 
-	t.Run("success_path_unchanged", func(t *testing.T) {
-		// Success body byte invariant — Phase 3 must NOT introduce
-		// any header on the success path, NOT change the success
-		// body bytes. Closes the Phase 1 reviewer R1 lock at this
-		// handler.
+	t.Run("success_path_returns_exact_entity", func(t *testing.T) {
 		entityID := "test.platform.domain.system.entity.success-fixture"
 		seedEntity(t, ctx, c, entityID, []byte(`{"id":"`+entityID+`","triples":[]}`))
 
@@ -176,10 +172,11 @@ func TestIntegration_QueryEntityNATS_WireContract(t *testing.T) {
 		if bytes.HasPrefix(msg.Data, []byte("error: ")) {
 			t.Errorf("success body must NOT carry legacy error prefix; got %q", msg.Data)
 		}
-		// Body should be the seeded entity JSON.
-		if !bytes.Contains(msg.Data, []byte(entityID)) {
-			t.Errorf("success body missing entity ID; got %q", msg.Data)
-		}
+		var exact graph.ExactEntity
+		require.NoError(t, json.Unmarshal(msg.Data, &exact))
+		require.NotNil(t, exact.Entity)
+		require.Equal(t, entityID, exact.Entity.ID)
+		require.NotZero(t, exact.KVRevision)
 	})
 }
 

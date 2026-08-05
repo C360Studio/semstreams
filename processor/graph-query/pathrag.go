@@ -68,6 +68,7 @@ type RelationshipEntry struct {
 // PathSearcher executes PathRAG traversal with proper path tracking
 type PathSearcher struct {
 	nats        natsRequester
+	exactReader graph.ExactEntityReader
 	timeout     time.Duration
 	maxDepth    int
 	decayFactor float64
@@ -78,6 +79,7 @@ type PathSearcher struct {
 func NewPathSearcher(nats natsRequester, timeout time.Duration, maxDepth int, logger *slog.Logger) *PathSearcher {
 	return &PathSearcher{
 		nats:        nats,
+		exactReader: graph.NewExactEntityReader(nats, timeout),
 		timeout:     timeout,
 		maxDepth:    maxDepth,
 		decayFactor: 0.8, // Score decreases by 20% per hop
@@ -226,9 +228,7 @@ func (p *PathSearcher) applyLimits(reqDepth, reqNodes int) (maxDepth, maxNodes i
 //   - raw transport error → same server-error wrapper (no responders,
 //     timeout, cancelled context).
 func (p *PathSearcher) verifyEntityExists(ctx context.Context, entityID string) error {
-	entityReq := map[string]string{"id": entityID}
-	entityReqData, _ := json.Marshal(entityReq)
-	_, err := p.nats.RequestClassified(ctx, "graph.ingest.query.entity", entityReqData, p.timeout)
+	_, err := p.exactReader.ReadExactEntity(ctx, entityID)
 	if err != nil {
 		// IsInvalid: handler answered definitively — entity absent or
 		// bad request. Propagate verbatim; the producer's clean

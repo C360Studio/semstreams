@@ -185,27 +185,20 @@ func defaultLessonRejectionRecorder(reason string) {
 	}
 }
 
-// natsLessonStore adapts natsclient.Client to LessonStore, routing births
-// through graph.mutation.entity.create_with_triples and status read-back
-// through graph.ingest.query.entity. Lifecycle changes use the separate
-// contract-bound projection mutation client.
+// natsLessonStore adapts natsclient.Client to LessonStore. Birth migration to
+// the canonical mutation client is part of the graph-mutation caller cutover;
+// status reads already use the sole embedded exact-read adapter.
 type natsLessonStore struct {
 	client *natsclient.Client
+	reader graph.ExactEntityReader
 }
 
-const (
-	lessonQueryEntitySubject = "graph.ingest.query.entity"
-	lessonQueryTimeout       = 5 * time.Second
-)
-
-type lessonEntityQueryRequest struct {
-	ID string `json:"id"`
-}
+const lessonQueryTimeout = 5 * time.Second
 
 // NewNATSLessonStore builds a LessonStore backed by the shared graph
 // mutation/query NATS surfaces. Wire this into the emit_lesson executor.
 func NewNATSLessonStore(client *natsclient.Client) LessonStore {
-	return &natsLessonStore{client: client}
+	return &natsLessonStore{client: client, reader: graph.NewExactEntityReader(client, lessonQueryTimeout)}
 }
 
 func (s *natsLessonStore) CreateLesson(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) (bool, error) {
@@ -237,26 +230,15 @@ func (s *natsLessonStore) CreateLesson(ctx context.Context, entityID string, msg
 }
 
 func (s *natsLessonStore) ReadLessonStatus(ctx context.Context, entityID string) (string, bool, error) {
-	reqData, err := json.Marshal(lessonEntityQueryRequest{ID: entityID})
-	if err != nil {
-		return "", false, fmt.Errorf("marshal entity query: %w", err)
-	}
-	// RequestClassified (NOT the retry variant): this is a QUERY — retrying a
-	// hung query masks a responder problem as latency (natsclient
-	// mutation-vs-query rule).
-	respData, err := s.client.RequestClassified(ctx, lessonQueryEntitySubject, reqData, lessonQueryTimeout)
+	exact, err := s.reader.ReadExactEntity(ctx, entityID)
 	if err != nil {
 		var ce *errs.ClassifiedError
 		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityNotFound {
 			return "", false, nil
 		}
-		return "", false, fmt.Errorf("request %s: %w", lessonQueryEntitySubject, err)
+		return "", false, fmt.Errorf("read lesson entity %s: %w", entityID, err)
 	}
-	var entity graph.EntityState
-	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {
-		return "", false, fmt.Errorf("unmarshal entity query: %w", err)
-	}
-	for _, tr := range entity.Triples {
+	for _, tr := range exact.Entity.Triples {
 		if tr.Predicate == agvocab.LessonStatus {
 			if status, ok := tr.Object.(string); ok {
 				return status, true, nil

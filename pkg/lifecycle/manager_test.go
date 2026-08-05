@@ -132,10 +132,6 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	}, nil
 }
 
-// delete mirrors graph-ingest's handleEntityDelete — idempotent
-// reclaim. Removes the entity from the bucket and reports whether it
-// existed (DeleteEntityResponse.Deleted); an already-absent entity is a
-// no-op success, matching the production handler.
 func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -143,8 +139,13 @@ func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) 
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
-	existed := f.bucket.remove(req.EntityID)
-	return &graph.DeleteEntityResponse{Deleted: existed}, nil
+	if f.bucket.revOf(req.EntityID) == 0 {
+		return nil, ErrEntityNotFound
+	}
+	f.bucket.remove(req.EntityID)
+	return &graph.DeleteEntityResponse{
+		EntityID: req.EntityID, Outcome: graph.MutationApplied, ExpectedRevision: req.ExpectedRevision,
+	}, nil
 }
 
 // fakeBucket is the minimal jetstream.KeyValue surface Manager.getEntity
@@ -207,8 +208,6 @@ func (b *fakeBucket) put(id string, state *graph.EntityState) {
 	b.entries[id] = &fakeBucketEntry{state: state, revision: b.nextRev, createdAt: time.Now()}
 }
 
-// remove deletes an entry and reports whether it existed (mirrors the
-// graph-ingest delete handler's Deleted flag).
 func (b *fakeBucket) remove(id string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -651,7 +650,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=654 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=653 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -771,7 +770,7 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 
 // --- Despawn / DespawnWith (gh#497) ---
 
-func TestManager_Despawn_ReclaimsAndIsIdempotent(t *testing.T) {
+func TestManager_Despawn_ReclaimsAtExactRevisionAndRejectsAbsence(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
@@ -788,12 +787,14 @@ func TestManager_Despawn_ReclaimsAndIsIdempotent(t *testing.T) {
 	if bucket.exists(id) {
 		t.Errorf("entity should be gone from ENTITY_STATES after Despawn")
 	}
-	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id {
+	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id || emitter.deletes[0].ExpectedRevision == 0 {
 		t.Errorf("expected exactly 1 delete for %q, got %+v", id, emitter.deletes)
 	}
-	// Idempotent: despawning an already-absent entity succeeds.
-	if err := mgr.Despawn(ctx, "fixture", id); err != nil {
-		t.Errorf("Despawn on absent entity should be idempotent success, got %v", err)
+	if err := mgr.Despawn(ctx, "fixture", id); !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("Despawn on absent entity error = %v, want ErrEntityNotFound", err)
+	}
+	if len(emitter.deletes) != 1 {
+		t.Errorf("absent entity emitted a delete: %+v", emitter.deletes)
 	}
 }
 

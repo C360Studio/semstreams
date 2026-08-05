@@ -474,7 +474,7 @@ func TestComponent_QueryEntity_PassthroughSuccess(t *testing.T) {
 	validID := "acme.ops.test.system.widget.001"
 
 	// Mock response from graph-ingest
-	entityResponse := []byte(`{"id":"acme.ops.test.system.widget.001","triples":[]}`)
+	entityResponse := []byte(`{"entity":{"id":"acme.ops.test.system.widget.001","triples":[]},"kvRevision":7}`)
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		// Actual query should go to graph-ingest
 		assert.Equal(t, "graph.ingest.query.entity", subject, "should forward to graph-ingest")
@@ -590,7 +590,7 @@ func TestComponent_PathSearch_SimpleTraversal(t *testing.T) {
 		switch subject {
 		case "graph.ingest.query.entity":
 			// Return start entity
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return relationships (1 hop) in QueryResponse envelope format
@@ -648,7 +648,7 @@ func TestComponent_PathSearch_MaxDepthEnforced(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			// Always return next entity (infinite graph simulation) in QueryResponse envelope format
@@ -705,7 +705,7 @@ func TestComponent_PathSearch_ContextCancellation(t *testing.T) {
 
 		// Simulate slow response
 		time.Sleep(50 * time.Millisecond)
-		return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+		return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 	}
 
 	comp := createTestComponentWithMockClient(t, mockClient)
@@ -782,7 +782,7 @@ func TestComponent_PathSearch_CyclicGraph(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			var req map[string]string
@@ -922,7 +922,7 @@ func TestComponent_PathSearch_DirectionIncoming(t *testing.T) {
 
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.002","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.002","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.incoming":
 			// Return incoming relationships (entities pointing TO this one)
@@ -978,7 +978,7 @@ func TestComponent_PathSearch_DirectionBoth(t *testing.T) {
 
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.002","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.002","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			var req map[string]string
@@ -1036,7 +1036,7 @@ func TestComponent_PathSearch_PredicateFilter_Single(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return multiple relationships with different predicates
@@ -1093,7 +1093,7 @@ func TestComponent_PathSearch_PredicateFilter_NoMatch(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return relationships that don't match filter
@@ -1148,7 +1148,7 @@ func TestComponent_PathSearch_MaxPathsLimit(t *testing.T) {
 	mockClient.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 
 		case "graph.index.query.outgoing":
 			// Return many relationships

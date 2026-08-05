@@ -23,7 +23,6 @@ const (
 	subjectCreateWithTriples = "graph.mutation.entity.create_with_triples"
 	subjectUpdateWithTriples = "graph.mutation.entity.update_with_triples"
 	subjectAddTriplesBatch   = "graph.mutation.triple.add_batch"
-	subjectQueryEntity       = "graph.ingest.query.entity"
 )
 
 type mutationRequester interface {
@@ -584,9 +583,9 @@ func (c *MutationClient) CreateWithTriples(
 		if isClassified(requestErr) {
 			var classified *errs.ClassifiedError
 			if errors.As(requestErr, &classified) && classified.Code == graph.ErrorCodeEntityExists {
-				entity, readErr := c.ReadAuthoritative(ctx, canonical.entity.ID)
-				if readErr == nil && createFactsMatch(canonical, entity) {
-					return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
+				exact, readErr := c.ReadAuthoritative(ctx, canonical.entity.ID)
+				if readErr == nil && createFactsMatch(canonical, exact.Entity) {
+					return MutationReceipt{Entity: exact.Entity, KVRevision: exact.KVRevision, Commit: CommitVerified}, nil
 				}
 				if ambiguousCause != nil {
 					return MutationReceipt{Commit: CommitUnknown},
@@ -652,13 +651,13 @@ func (c *MutationClient) CreateWithTriples(
 					errors.Join(ambiguousCause, ctx.Err()),
 				)
 		}
-		entity, readErr := c.ReadAuthoritative(ctx, canonical.entity.ID)
+		exact, readErr := c.ReadAuthoritative(ctx, canonical.entity.ID)
 		if readErr == nil {
-			if createFactsMatch(canonical, entity) {
-				return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
+			if createFactsMatch(canonical, exact.Entity) {
+				return MutationReceipt{Entity: exact.Entity, KVRevision: exact.KVRevision, Commit: CommitVerified}, nil
 			}
 			if ambiguousCause != nil {
-				return MutationReceipt{Entity: entity, Commit: CommitUnknown},
+				return MutationReceipt{Entity: exact.Entity, KVRevision: exact.KVRevision, Commit: CommitUnknown},
 					commitUnknown(
 						MutationOperationCreate,
 						errors.Join(
@@ -769,14 +768,15 @@ func (c *MutationClient) ReplaceOwned(
 			return receipt, nil
 		}
 	}
-	entity, readErr := c.ReadAuthoritative(ctx, req.EntityID)
-	if readErr != nil || !ownedFactsMatch(group, desired, entity) {
+	exact, readErr := c.ReadAuthoritative(ctx, req.EntityID)
+	if readErr != nil || !ownedFactsMatch(group, desired, exact.Entity) {
 		if readErr == nil {
 			readErr = errors.New("authoritative owned facts do not match requested replacement")
 		}
 		return committedUnverified(MutationOperationReplaceOwned, receipt, readErr)
 	}
-	receipt.Entity = entity
+	receipt.Entity = exact.Entity
+	receipt.KVRevision = exact.KVRevision
 	receipt.Commit = CommitVerified
 	return receipt, nil
 }
@@ -925,9 +925,9 @@ func (c *MutationClient) AppendEvidence(
 					errors.Join(ambiguousCause, ctx.Err()),
 				)
 		}
-		entity, readErr := c.ReadAuthoritative(ctx, req.EntityID)
-		if readErr == nil && appendFactsPresent(evidence, entity) {
-			return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
+		exact, readErr := c.ReadAuthoritative(ctx, req.EntityID)
+		if readErr == nil && appendFactsPresent(evidence, exact.Entity) {
+			return MutationReceipt{Entity: exact.Entity, KVRevision: exact.KVRevision, Commit: CommitVerified}, nil
 		}
 		if readErr != nil && !isNotFound(readErr) {
 			return MutationReceipt{Commit: CommitUnknown},
@@ -953,35 +953,15 @@ func (c *MutationClient) AppendEvidence(
 
 // ReadAuthoritative returns the current graph-ingest source-of-truth state for
 // entityID.
-func (c *MutationClient) ReadAuthoritative(ctx context.Context, entityID string) (*graph.EntityState, error) {
+func (c *MutationClient) ReadAuthoritative(ctx context.Context, entityID string) (*graph.ExactEntity, error) {
 	if c == nil || isNilMutationRequester(c.rpc) {
 		return nil, invalidMutationError(MutationOperationReadAuthoritative, errors.New("mutation client is nil"))
 	}
-	if err := semtypes.ValidateEntityID(entityID); err != nil {
-		return nil, invalidMutationError(MutationOperationReadAuthoritative, fmt.Errorf("entity ID: %w", err))
-	}
-	data, err := json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: entityID})
-	if err != nil {
-		return nil, invalidMutationError(MutationOperationReadAuthoritative, err)
-	}
-	responseData, err := c.rpc.RequestClassified(ctx, subjectQueryEntity, data, c.timeout)
+	exact, err := graph.NewExactEntityReader(c.rpc, c.timeout).ReadExactEntity(ctx, entityID)
 	if err != nil {
 		return nil, newMutationError(MutationOperationReadAuthoritative, err, CommitNotCommitted)
 	}
-	var entity graph.EntityState
-	if err := graph.UnmarshalEntityState(responseData, &entity); err != nil {
-		return nil, newMutationError(MutationOperationReadAuthoritative, err, CommitNotCommitted)
-	}
-	if entity.ID != entityID {
-		return nil, newMutationError(
-			MutationOperationReadAuthoritative,
-			fmt.Errorf("query returned entity %q for %q", entity.ID, entityID),
-			CommitNotCommitted,
-		)
-	}
-	return entity.Clone(), nil
+	return exact, nil
 }
 
 func classifyAppendResponse(
@@ -1035,9 +1015,9 @@ func (c *MutationClient) verifyAnomalousAppend(
 	evidence []message.Triple,
 	anomaly error,
 ) (MutationReceipt, error) {
-	entity, readErr := c.ReadAuthoritative(ctx, entityID)
-	if readErr == nil && appendFactsPresent(evidence, entity) {
-		return MutationReceipt{Entity: entity, Commit: CommitVerified}, nil
+	exact, readErr := c.ReadAuthoritative(ctx, entityID)
+	if readErr == nil && appendFactsPresent(evidence, exact.Entity) {
+		return MutationReceipt{Entity: exact.Entity, KVRevision: exact.KVRevision, Commit: CommitVerified}, nil
 	}
 	if readErr == nil || isNotFound(readErr) {
 		if readErr != nil {
@@ -1060,9 +1040,12 @@ func (c *MutationClient) verifyCommittedAppend(
 	evidence []message.Triple,
 	receipt MutationReceipt,
 ) (MutationReceipt, error) {
-	entity, readErr := c.ReadAuthoritative(ctx, evidence[0].Subject)
-	if readErr == nil && appendFactsPresent(evidence, entity) {
-		receipt.Entity = entity
+	exact, readErr := c.ReadAuthoritative(ctx, evidence[0].Subject)
+	if readErr == nil && appendFactsPresent(evidence, exact.Entity) {
+		receipt.Entity = exact.Entity
+		if receipt.KVRevision == 0 {
+			receipt.KVRevision = exact.KVRevision
+		}
 		receipt.Commit = CommitVerified
 		return receipt, nil
 	}
@@ -1077,7 +1060,7 @@ func (c *MutationClient) resolveRequestedAppendFailure(
 	entityID string,
 	reason string,
 ) (MutationReceipt, error) {
-	entity, readErr := c.ReadAuthoritative(ctx, entityID)
+	exact, readErr := c.ReadAuthoritative(ctx, entityID)
 	if isNotFound(readErr) {
 		return MutationReceipt{Commit: CommitNotCommitted},
 			newMutationError(MutationOperationAppendEvidence, readErr, CommitNotCommitted)
@@ -1086,7 +1069,13 @@ func (c *MutationClient) resolveRequestedAppendFailure(
 	if readErr != nil {
 		rejected = errors.Join(rejected, readErr)
 	}
-	return MutationReceipt{Entity: entity, Commit: CommitNotCommitted}, &MutationError{
+	var entity *graph.EntityState
+	var revision uint64
+	if exact != nil {
+		entity = exact.Entity
+		revision = exact.KVRevision
+	}
+	return MutationReceipt{Entity: entity, KVRevision: revision, Commit: CommitNotCommitted}, &MutationError{
 		Operation: MutationOperationAppendEvidence,
 		Kind:      MutationUnavailable,
 		Class:     errs.ErrorTransient,
@@ -1232,18 +1221,19 @@ func (c *MutationClient) verifyCreate(
 	canonical canonicalCreate,
 	receipt MutationReceipt,
 ) (MutationReceipt, error) {
-	entity, err := c.ReadAuthoritative(ctx, canonical.entity.ID)
+	exact, err := c.ReadAuthoritative(ctx, canonical.entity.ID)
 	if err != nil {
 		return committedUnverified(MutationOperationCreate, receipt, err)
 	}
-	if !createFactsMatch(canonical, entity) {
+	if !createFactsMatch(canonical, exact.Entity) {
 		return committedUnverified(
 			MutationOperationCreate,
 			receipt,
 			errors.New("authoritative entity does not match requested creation"),
 		)
 	}
-	receipt.Entity = entity
+	receipt.Entity = exact.Entity
+	receipt.KVRevision = exact.KVRevision
 	receipt.Commit = CommitVerified
 	return receipt, nil
 }

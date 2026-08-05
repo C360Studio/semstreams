@@ -45,7 +45,7 @@ func TestVerifyEntityExists_ClassificationBranch(t *testing.T) {
 					if subject != "graph.ingest.query.entity" {
 						t.Errorf("unexpected subject %q", subject)
 					}
-					return []byte(`{"id":"acme.test.foo.bar.baz.001","triples":[]}`), nil
+					return []byte(`{"entity":{"id":"acme.test.foo.bar.baz.001","triples":[]},"kvRevision":1}`), nil
 				}
 			},
 		},

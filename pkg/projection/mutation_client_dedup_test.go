@@ -39,7 +39,7 @@ func TestAppendEvidenceWithInternalDuplicatesIsNotReportedNotCommitted(t *testin
 		subjectAddTriplesBatch: {{data: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{
 			WrittenCount: 1,
 		})}},
-		subjectQueryEntity: {{data: marshalMutationTestJSON(t, stored)}},
+		subjectQueryEntity: {{data: marshalMutationTestExact(t, stored)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 
@@ -180,7 +180,7 @@ func TestAppendEvidenceFullySuppressedResponse(t *testing.T) {
 			response.KVRevision = 42
 			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
 				subjectAddTriplesBatch: {{data: marshalMutationTestJSON(t, response)}},
-				subjectQueryEntity:     {{data: marshalMutationTestJSON(t, stored)}},
+				subjectQueryEntity:     {{data: marshalMutationTestExact(t, stored)}},
 			}}
 			client := newMutationTestClient(t, rpc)
 
@@ -233,7 +233,7 @@ func TestAppendEvidenceLateCommitThenIdenticalRetryReportsSuccess(t *testing.T) 
 				WrittenCount:     0, Deduplicated: 1,
 			})},
 		},
-		subjectQueryEntity: {{data: marshalMutationTestJSON(t, absent)}},
+		subjectQueryEntity: {{data: marshalMutationTestExact(t, absent)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 	client.retry.MaxRetries = 1

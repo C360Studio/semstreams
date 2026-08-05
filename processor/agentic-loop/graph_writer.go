@@ -252,21 +252,12 @@ func (w *graphWriter) createEntityWithTriples(ctx context.Context, entity *gtype
 // the divergent-task_id check no-ops and only the generic MessageType readback
 // applies — exactly the typed-origin guard those entities need.
 func (w *graphWriter) verifyExistingEntityOrigin(ctx context.Context, entityID string, want message.Type, incomingTaskID string) error {
-	reqData, err := json.Marshal(struct {
-		ID string `json:"id"`
-	}{ID: entityID})
-	if err != nil {
-		return fmt.Errorf("marshal origin-verify query for %s: %w", entityID, err)
-	}
-	respData, err := w.natsClient.RequestClassified(ctx, queryEntitySubject, reqData, graphWriterTimeout)
+	exact, err := gtypes.NewExactEntityReader(w.natsClient, graphWriterTimeout).ReadExactEntity(ctx, entityID)
 	if err != nil {
 		// Cannot confirm the existing entity is our origin → do not bless it.
 		return fmt.Errorf("create_with_triples returned entity_exists for %s but the read-back to verify the typed origin failed: %w", entityID, err)
 	}
-	var existing gtypes.EntityState
-	if err := gtypes.UnmarshalEntityState(respData, &existing); err != nil {
-		return fmt.Errorf("create_with_triples entity_exists: unmarshal existing entity %s: %w", entityID, err)
-	}
+	existing := exact.Entity
 	if existing.MessageType != want {
 		return fmt.Errorf("create_with_triples: %s already exists but is NOT a %s typed origin (existing message_type=%q) — refusing to bless a non-origin shell as born",
 			entityID, want.Key(), existing.MessageType.Key())
@@ -277,7 +268,7 @@ func (w *graphWriter) verifyExistingEntityOrigin(ctx context.Context, entityID s
 	// was born under a different task_id, the loop_id is being reused across tasks.
 	// This is a producer contract violation. We keep the first spawn's identity
 	// (loop_id is immutable per task) and emit a WARNING so operators can detect it.
-	if existingTaskID, divergent := divergentTaskID(&existing, incomingTaskID); divergent {
+	if existingTaskID, divergent := divergentTaskID(existing, incomingTaskID); divergent {
 		w.logger.Warn("graph_writer: loop_id reuse under divergent task_id; keeping original spawn identity (loop_id is immutable per task)",
 			"loop_id", entityID,
 			"existing_task_id", existingTaskID,

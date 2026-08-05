@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -26,6 +28,33 @@ func todoTestPlatform() types.PlatformMeta {
 func todoTestLogger() *slog.Logger { return slog.Default() }
 
 var errTodoReadFailed = errors.New("graph-gateway transient unavailable")
+
+type exactTodoReaderFunc func(context.Context, string) (*graph.ExactEntity, error)
+
+func (fn exactTodoReaderFunc) ReadExactEntity(ctx context.Context, id string) (*graph.ExactEntity, error) {
+	return fn(ctx, id)
+}
+
+func TestNATSTodoReaderOnlyTreatsEntityNotFoundAsEmpty(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		code      string
+		wantError bool
+	}{
+		{name: "not found", code: graph.ErrorCodeEntityNotFound},
+		{name: "invalid ID", code: graph.ErrorCodeInvalidRequest, wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reader := &natsTodoReader{reader: exactTodoReaderFunc(func(context.Context, string) (*graph.ExactEntity, error) {
+				return nil, errs.ClassifiedCode(errs.ErrorInvalid, tt.code, errors.New(tt.name))
+			})}
+			_, err := reader.ReadTodos(context.Background(), todoFixtureLoopEntityID)
+			if (err != nil) != tt.wantError {
+				t.Fatalf("error = %v, wantError %t", err, tt.wantError)
+			}
+		})
+	}
+}
 
 func TestReconstructTodos_HappyPath(t *testing.T) {
 	now := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
@@ -152,39 +181,6 @@ func TestBuildTodoStateMessage_EmptyReturnsZeroValue(t *testing.T) {
 	msg := BuildTodoStateMessage(nil)
 	if msg.Role != "" || msg.Content != "" {
 		t.Errorf("empty list should return zero ChatMessage, got %+v", msg)
-	}
-}
-
-// TestParseQueryEntityTodos_UnmarshalFailureSurfaces pins the
-// remaining contract for parseQueryEntityTodos after the gh#93
-// Phase 2 migration: ReadTodos now routes through
-// natsclient.RequestClassified, so handler errors arrive via the err
-// return and the fresh-loop fail-open contract is enforced one level
-// up. parseQueryEntityTodos only sees success-path bytes; if they
-// aren't valid EntityState JSON, return the unmarshal error.
-//
-// The not-found / fresh-loop fail-open contract is now wire-driven
-// by the integration test in todos_wire_integration_test.go.
-func TestParseQueryEntityTodos_UnmarshalFailureSurfaces(t *testing.T) {
-	tests := []struct {
-		name      string
-		payload   string
-		wantError bool
-	}{
-		{"empty body", "", true},
-		{"non-JSON", "garbage data", true},
-		{"empty triples", `{"id":"c360.ops.agent.loop.todo.test-001","triples":[]}`, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := parseQueryEntityTodos([]byte(tt.payload))
-			if tt.wantError && err == nil {
-				t.Errorf("payload %q: expected error, got nil", tt.payload)
-			}
-			if !tt.wantError && err != nil {
-				t.Errorf("payload %q: got err %v, want nil", tt.payload, err)
-			}
-		})
 	}
 }
 

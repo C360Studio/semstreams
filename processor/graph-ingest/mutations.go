@@ -603,7 +603,8 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("entity cannot be nil"))
 	}
 
-	if err := c.CreateEntityStrict(ctx, req.Entity); err != nil {
+	stored, rev, err := c.createEntityWithReceipt(ctx, req.Entity, true)
+	if err != nil {
 		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			return nil, rejectInvalidDetail(graph.ErrorCodeEntityExists,
 				map[string]any{"entity": req.Entity.ID},
@@ -612,22 +613,12 @@ func (c *Component) handleEntityCreate(ctx context.Context, data []byte) ([]byte
 		return nil, rejectFromError(err)
 	}
 
-	stored, rev, err := c.fetchEntityState(ctx, req.Entity.ID)
-	if err != nil {
-		// Write committed; read-back failed. #120 contract: degraded
-		// success rather than Success=false, so callers don't retry
-		// into a 409 Conflict on what's already there.
-		return marshalCreateEntityDegraded(req.TraceID, req.RequestID, err.Error())
-	}
-
 	return json.Marshal(graph.CreateEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Timestamp:  time.Now().UnixNano(),
-			KVRevision: rev,
-			TraceID:    req.TraceID,
-			RequestID:  req.RequestID,
-		},
-		Entity: stored,
+		Outcome:    graph.MutationApplied,
+		Entity:     stored,
+		KVRevision: rev,
+		TraceID:    req.TraceID,
+		RequestID:  req.RequestID,
 	})
 }
 
@@ -1259,11 +1250,8 @@ func (c *Component) handleEntityUpdateWithTriplesCAS(ctx context.Context, req *g
 	})
 }
 
-// handleEntityDelete is entity-scoped delete. Idempotent: deleting a
-// non-existent entity returns Success=true, Deleted=false. The NATS
-// KV Delete primitive itself is idempotent, so this handler just
-// distinguishes "the call succeeded" from "the entity actually was
-// present" via the Deleted bool.
+// handleEntityDelete removes one existing entity at the exact revision the
+// caller observed. Absence and revision mismatch are definite failures.
 func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte, error) {
 	var req graph.DeleteEntityRequest
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -1275,23 +1263,42 @@ func (c *Component) handleEntityDelete(ctx context.Context, data []byte) ([]byte
 	if err := validateEntityID(req.EntityID); err != nil {
 		return nil, rejectFromError(err)
 	}
-
-	existed, err := c.entityExists(ctx, req.EntityID)
-	if err != nil {
-		return nil, rejectInternal(fmt.Errorf("existence check failed: %w", err))
+	if req.ExpectedRevision == 0 {
+		return nil, rejectInvalid(graph.ErrorCodeInvalidRequest, errors.New("expected_revision must be nonzero"))
 	}
 
-	if err := c.DeleteEntity(ctx, req.EntityID); err != nil {
+	_, currentRevision, err := c.fetchEntityState(ctx, req.EntityID)
+	if err != nil {
+		if natsclient.IsKVNotFoundError(err) {
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.EntityID}, fmt.Errorf("entity not found: %s", req.EntityID))
+		}
+		return nil, rejectFromError(err)
+	}
+	if currentRevision != req.ExpectedRevision {
+		return nil, rejectRevisionMismatch(
+			map[string]any{"entity": req.EntityID, "expected_revision": req.ExpectedRevision, "current_revision": currentRevision},
+			fmt.Errorf("revision mismatch: expected %d, current %d", req.ExpectedRevision, currentRevision))
+	}
+	if err := c.deleteEntityAtRevision(ctx, req.EntityID, req.ExpectedRevision); err != nil {
+		if errors.Is(err, natsclient.ErrKVRevisionMismatch) {
+			return nil, rejectRevisionMismatch(
+				map[string]any{"entity": req.EntityID, "expected_revision": req.ExpectedRevision},
+				fmt.Errorf("revision mismatch deleting %s at %d", req.EntityID, req.ExpectedRevision))
+		}
+		if natsclient.IsKVNotFoundError(err) {
+			return nil, rejectInvalidDetail(graph.ErrorCodeEntityNotFound,
+				map[string]any{"entity": req.EntityID}, fmt.Errorf("entity not found: %s", req.EntityID))
+		}
 		return nil, rejectInternal(err)
 	}
 
 	return json.Marshal(graph.DeleteEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Timestamp: time.Now().UnixNano(),
-			TraceID:   req.TraceID,
-			RequestID: req.RequestID,
-		},
-		Deleted: existed,
+		EntityID:         req.EntityID,
+		Outcome:          graph.MutationApplied,
+		ExpectedRevision: req.ExpectedRevision,
+		TraceID:          req.TraceID,
+		RequestID:        req.RequestID,
 	})
 }
 
@@ -1494,18 +1501,6 @@ func rejectRevisionMismatch(detail map[string]any, err error) error {
 // truth — a future refactor of the wording lands in one place rather
 // than five.
 const degradedReadbackErrPrefix = "post-write read-back failed: "
-
-func marshalCreateEntityDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
-	return json.Marshal(graph.CreateEntityResponse{
-		MutationResponse: graph.MutationResponse{
-			Degraded:       true,
-			DegradedReason: degradedReadbackErrPrefix + readbackErr,
-			Timestamp:      time.Now().UnixNano(),
-			TraceID:        traceID,
-			RequestID:      requestID,
-		},
-	})
-}
 
 func marshalCreateEntityWithTriplesDegraded(traceID, requestID, readbackErr string) ([]byte, error) {
 	return json.Marshal(graph.CreateEntityWithTriplesResponse{

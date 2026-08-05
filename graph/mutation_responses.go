@@ -174,10 +174,62 @@ const (
 	ErrorCodeEmbeddingUnavailable = "embedding_unavailable"
 )
 
-// CreateEntityResponse response for entity creation
+// MutationOutcome is the closed graph-mutation server vocabulary. Transport
+// uncertainty is classified by the typed requester and is never asserted by a
+// server response.
+type MutationOutcome string
+
+const (
+	MutationApplied             MutationOutcome = "applied"
+	MutationUnchanged           MutationOutcome = "unchanged"
+	MutationEntityNotFound      MutationOutcome = "entity_not_found"
+	MutationEntityAlreadyExists MutationOutcome = "entity_already_exists"
+	MutationRevisionMismatch    MutationOutcome = "revision_mismatch"
+	MutationInvalid             MutationOutcome = "invalid"
+)
+
+// isServerMutationOutcome reports whether outcome belongs to the closed wire vocabulary.
+func isServerMutationOutcome(outcome MutationOutcome) bool {
+	switch outcome {
+	case MutationApplied, MutationUnchanged,
+		MutationEntityNotFound, MutationEntityAlreadyExists,
+		MutationRevisionMismatch, MutationInvalid:
+		return true
+	default:
+		return false
+	}
+}
+
+// CreateEntityResponse reports one atomic birth.
 type CreateEntityResponse struct {
-	MutationResponse
-	Entity *EntityState `json:"entity,omitempty"`
+	Outcome    MutationOutcome `json:"outcome"`
+	Entity     *EntityState    `json:"entity"`
+	KVRevision uint64          `json:"kv_revision"`
+	TraceID    string          `json:"trace_id,omitempty"`
+	RequestID  string          `json:"request_id,omitempty"`
+}
+
+// ReconcilePredicatesResponse reports the exact current or committed entity.
+type ReconcilePredicatesResponse struct {
+	Outcome    MutationOutcome `json:"outcome"`
+	Entity     *EntityState    `json:"entity"`
+	KVRevision uint64          `json:"kv_revision"`
+	TraceID    string          `json:"trace_id,omitempty"`
+	RequestID  string          `json:"request_id,omitempty"`
+}
+
+// AppendSubjectResult reports one subject's independent append outcome.
+type AppendSubjectResult struct {
+	EntityID   string          `json:"entity_id"`
+	Outcome    MutationOutcome `json:"outcome"`
+	KVRevision uint64          `json:"kv_revision,omitempty"`
+}
+
+// AppendTriplesResponse reports explicit partial results by distinct subject.
+type AppendTriplesResponse struct {
+	Results   []AppendSubjectResult `json:"results"`
+	TraceID   string                `json:"trace_id,omitempty"`
+	RequestID string                `json:"request_id,omitempty"`
 }
 
 // UpdateEntityResponse response for entity update
@@ -189,8 +241,11 @@ type UpdateEntityResponse struct {
 
 // DeleteEntityResponse response for entity deletion
 type DeleteEntityResponse struct {
-	MutationResponse
-	Deleted bool `json:"deleted"`
+	EntityID         string          `json:"entity_id"`
+	Outcome          MutationOutcome `json:"outcome"`
+	ExpectedRevision uint64          `json:"expected_revision"`
+	TraceID          string          `json:"trace_id,omitempty"`
+	RequestID        string          `json:"request_id,omitempty"`
 }
 
 // CreateEntityWithTriplesResponse response for atomic entity+triples creation

@@ -91,6 +91,7 @@ const (
 	MutationOperationCreate            MutationOperation = "create-with-triples"
 	MutationOperationReplaceOwned      MutationOperation = "replace-owned"
 	MutationOperationAppendEvidence    MutationOperation = "append-evidence"
+	MutationOperationDelete            MutationOperation = "delete"
 	MutationOperationReadAuthoritative MutationOperation = "read-authoritative"
 )
 
@@ -157,7 +158,7 @@ type EvidenceAppender interface {
 
 // AuthoritativeReader is the least-privilege graph-ingest source-of-truth read.
 type AuthoritativeReader interface {
-	ReadAuthoritative(context.Context, string) (*graph.EntityState, error)
+	ReadAuthoritative(context.Context, string) (*graph.ExactEntity, error)
 }
 
 //revive:enable:max-public-structs

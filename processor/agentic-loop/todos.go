@@ -3,6 +3,7 @@ package agenticloop
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -15,10 +16,6 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
-
-// queryEntitySubject is the NATS subject for single-entity reads from
-// graph-ingest. Mirrors processor/graph-ingest/query.go.
-const queryEntitySubject = "graph.ingest.query.entity"
 
 // readTodosTimeout bounds the per-iteration todo-reconstruction read.
 // Failure surfaces silently — the model just doesn't see the todo
@@ -57,54 +54,25 @@ type TodoReader interface {
 // values from the entity's triples. Treats "entity not found" as an
 // empty list (the loop has never written todos).
 type natsTodoReader struct {
-	client *natsclient.Client
+	reader graph.ExactEntityReader
 }
 
 // NewNATSTodoReader builds a TodoReader backed by the
 // graph.ingest.query.entity NATS surface.
 func NewNATSTodoReader(client *natsclient.Client) TodoReader {
-	return &natsTodoReader{client: client}
+	return &natsTodoReader{reader: graph.NewExactEntityReader(client, readTodosTimeout)}
 }
 
 func (r *natsTodoReader) ReadTodos(ctx context.Context, loopEntityID string) ([]TodoState, error) {
-	req := struct {
-		ID string `json:"id"`
-	}{ID: loopEntityID}
-	reqData, err := json.Marshal(req)
+	exact, err := r.reader.ReadExactEntity(ctx, loopEntityID)
 	if err != nil {
-		return nil, fmt.Errorf("marshal query request: %w", err)
-	}
-
-	respData, err := r.client.RequestClassified(ctx, queryEntitySubject, reqData, readTodosTimeout)
-	if err != nil {
-		// gh#93: RequestClassified unifies transport AND handler
-		// errors behind one classified return. Handler-side
-		// "not found" classifies as Invalid (graph-ingest's
-		// handleQueryEntityNATS returns errs.Classified(ErrorInvalid,
-		// "not found: <id>") for missing entities) — fail-open with
-		// an empty list so a fresh loop's first iteration doesn't
-		// emit Debug noise. Transient/transport errors propagate.
-		if errs.IsInvalid(err) {
+		var classified *errs.ClassifiedError
+		if errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("request %s: %w", queryEntitySubject, err)
+		return nil, fmt.Errorf("read todo entity %s: %w", loopEntityID, err)
 	}
-
-	return parseQueryEntityTodos(respData)
-}
-
-// parseQueryEntityTodos decodes a graph.ingest.query.entity response
-// payload into TodoState values. As of gh#93 Phase 2 the caller
-// (ReadTodos) routes through natsclient.RequestClassified, which
-// surfaces handler-side errors via err return — this function only
-// sees success-path bytes.
-func parseQueryEntityTodos(respData []byte) ([]TodoState, error) {
-	var entity graph.EntityState
-	if err := graph.UnmarshalEntityState(respData, &entity); err != nil {
-		return nil, fmt.Errorf("unmarshal entity: %w", err)
-	}
-
-	return ReconstructTodos(entity.Triples), nil
+	return ReconstructTodos(exact.Entity.Triples), nil
 }
 
 // ReconstructTodos rebuilds the ordered todo list from a loop

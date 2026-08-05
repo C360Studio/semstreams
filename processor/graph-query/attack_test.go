@@ -60,7 +60,7 @@ func TestAttack_ZeroMaxDepth(t *testing.T) {
 	mockClient.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 		case "graph.index.query.outgoing":
 			return []byte(`{"data":{"relationships":[]},"timestamp":"2026-01-09T00:00:00Z"}`), nil
 		default:
@@ -356,7 +356,7 @@ func TestAttack_PathSearchExcessiveMaxDepth(t *testing.T) {
 		callCount++
 		switch subject {
 		case "graph.ingest.query.entity":
-			return []byte(`{"id":"test.fixture.graph.query.entity.001","triples":[]}`), nil
+			return []byte(`{"entity":{"id":"test.fixture.graph.query.entity.001","triples":[]},"kvRevision":1}`), nil
 		case "graph.index.query.outgoing":
 			// Always return next node (infinite graph) in QueryResponse envelope format
 			return []byte(`{"data":{"relationships":[{"to_entity_id":"` + nextID + `","predicate":"test.fixture.p"}]},"timestamp":"2026-01-09T00:00:00Z"}`), nil

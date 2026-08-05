@@ -34,6 +34,8 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
+	"github.com/nats-io/nats.go"
 )
 
 // graphEmitter is the abstraction Manager uses to push entity +
@@ -56,17 +58,18 @@ type graphEmitter interface {
 	create(ctx context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error)
 
 	// delete sends a DeleteEntityRequest to graph-ingest, reclaiming an
-	// entity from ENTITY_STATES (Manager.Despawn). The handler is
-	// idempotent: deleting an already-absent entity returns
-	// DeleteEntityResponse{Deleted: false} with no error, so there is no
-	// not-found sentinel to translate.
+	// entity from ENTITY_STATES (Manager.Despawn) at the caller's exact-read
+	// revision. Absence and revision mismatch are typed failures.
 	delete(ctx context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error)
 }
 
 // graphEmitterNATS is the production graphEmitter — sends requests
 // via natsclient.Request on the graph-ingest mutation subjects.
 type graphEmitterNATS struct {
-	client  *natsclient.Client
+	client interface {
+		RequestClassified(context.Context, string, []byte, time.Duration) ([]byte, error)
+		RequestWithRetryClassified(context.Context, string, []byte, time.Duration, natsclient.RetryConfig) ([]byte, error)
+	}
 	timeout time.Duration
 }
 
@@ -213,14 +216,6 @@ func validateMutationResponseEntity(entity *graph.EntityState) error {
 // request/reply, and returns the response. Targets
 // graph.mutation.entity.delete — the reclaim path for Manager.Despawn.
 //
-// Uses RequestWithRetryClassified with lifecycleEmitRetryConfig to
-// survive the graph-ingest cold-start race (gh#170); retry is safe
-// because delete is idempotent — a duplicate delivery after a lost
-// response re-deletes an already-absent entity, which the handler
-// reports as DeleteEntityResponse{Deleted: false} with no error. There
-// is therefore no not-found sentinel to translate (unlike create/update):
-// any error here is a genuine transport/handler failure → ErrEmitFailed.
-//
 // No outer context.WithTimeout: see update() rationale.
 func (g *graphEmitterNATS) delete(ctx context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error) {
 	body, err := json.Marshal(req)
@@ -228,16 +223,49 @@ func (g *graphEmitterNATS) delete(ctx context.Context, req *graph.DeleteEntityRe
 		return nil, fmt.Errorf("%w: marshal request: %w", ErrEmitFailed, err)
 	}
 
-	respBody, err := g.client.RequestWithRetryClassified(ctx, graphSubjectEntityDelete, body, g.timeout, lifecycleEmitRetryConfig)
+	respBody, err := g.client.RequestClassified(ctx, graphSubjectEntityDelete, body, g.timeout)
 	if err != nil {
-		return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectEntityDelete, err)
+		if errors.Is(err, nats.ErrNoResponders) {
+			return nil, &projection.MutationError{
+				Operation: projection.MutationOperationDelete,
+				Kind:      projection.MutationUnavailable,
+				Class:     errs.ErrorTransient,
+				Commit:    projection.CommitNotCommitted,
+				Err:       err,
+			}
+		}
+		var classified *errs.ClassifiedError
+		if errors.As(err, &classified) {
+			switch classified.Code {
+			case graph.ErrorCodeEntityNotFound:
+				return nil, fmt.Errorf("%w: %s", ErrEntityNotFound, err.Error())
+			case graph.ErrorCodeRevisionMismatch:
+				return nil, err
+			default:
+				return nil, fmt.Errorf("%w: NATS request to %s: %w", ErrEmitFailed, graphSubjectEntityDelete, err)
+			}
+		}
+		return nil, deleteCommitUnknown(err)
 	}
 
 	var resp graph.DeleteEntityResponse
 	if err := json.Unmarshal(respBody, &resp); err != nil {
-		return nil, fmt.Errorf("%w: unmarshal response: %w", ErrEmitFailed, err)
+		return nil, deleteCommitUnknown(fmt.Errorf("unmarshal response: %w", err))
+	}
+	if resp.Outcome != graph.MutationApplied || resp.EntityID != req.EntityID || resp.ExpectedRevision != req.ExpectedRevision {
+		return nil, deleteCommitUnknown(fmt.Errorf("invalid delete response for %s at revision %d", req.EntityID, req.ExpectedRevision))
 	}
 	return &resp, nil
+}
+
+func deleteCommitUnknown(err error) error {
+	return &projection.MutationError{
+		Operation: projection.MutationOperationDelete,
+		Kind:      projection.MutationCommitUnknown,
+		Class:     errs.ErrorTransient,
+		Commit:    projection.CommitUnknown,
+		Err:       err,
+	}
 }
 
 // triple is a small constructor that builds a message.Triple for the

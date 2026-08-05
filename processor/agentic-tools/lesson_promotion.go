@@ -67,13 +67,14 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 		return fmt.Errorf("promote lesson: %q is not a well-formed 6-part entity ID", lessonEntityID)
 	}
 
-	lesson, err := c.reader.ReadAuthoritative(ctx, lessonEntityID)
+	exactLesson, err := c.reader.ReadAuthoritative(ctx, lessonEntityID)
 	if err != nil {
 		if isProjectionNotFound(err) {
 			return fmt.Errorf("promote lesson %s: refused — lesson entity not found in the graph", lessonEntityID)
 		}
 		return fmt.Errorf("promote lesson %s: read cited evidence: %w", lessonEntityID, err)
 	}
+	lesson := exactLesson.Entity
 	if lesson.IsStub() {
 		return fmt.Errorf("promote lesson %s: refused — lesson entity not found in the graph", lessonEntityID)
 	}
@@ -86,7 +87,7 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 
 	var missing []string
 	for _, ev := range evidence {
-		entity, existsErr := c.reader.ReadAuthoritative(ctx, ev)
+		exactEntity, existsErr := c.reader.ReadAuthoritative(ctx, ev)
 		if existsErr != nil {
 			if isProjectionNotFound(existsErr) {
 				missing = append(missing, ev)
@@ -94,7 +95,7 @@ func (c *LessonCurator) Promote(ctx context.Context, lessonEntityID string) erro
 			}
 			return fmt.Errorf("promote lesson %s: resolve evidence %s: %w", lessonEntityID, ev, existsErr)
 		}
-		if entity.IsStub() {
+		if exactEntity.Entity.IsStub() {
 			missing = append(missing, ev)
 		}
 	}

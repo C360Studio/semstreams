@@ -44,9 +44,10 @@ var lifecycleMessageType = message.Type{
 // re-validates until either the write commits or the retry budget
 // exhausts.
 type Manager struct {
-	natsClient *natsclient.Client
-	logger     *slog.Logger
-	emitter    graphEmitter
+	natsClient  *natsclient.Client
+	logger      *slog.Logger
+	emitter     graphEmitter
+	exactReader graph.ExactEntityReader
 
 	// entityStatesBucket is the direct KV handle for ENTITY_STATES.
 	// Used for reads (Get, List, History) and Watch — graph-ingest
@@ -141,7 +142,7 @@ func NewManager(client *natsclient.Client, logger *slog.Logger) *Manager {
 		logger = slog.Default()
 	}
 	guardCtx, guardCancel := context.WithCancel(context.Background())
-	return &Manager{
+	manager := &Manager{
 		natsClient:            client,
 		logger:                logger,
 		emitter:               newGraphEmitterNATS(client, 5*time.Second),
@@ -152,27 +153,10 @@ func NewManager(client *natsclient.Client, logger *slog.Logger) *Manager {
 		graphStateGuardDone:   make(chan struct{}),
 		graphStateProgress:    make(chan struct{}),
 	}
-}
-
-// newManagerForTest constructs a Manager with an injected emitter
-// and an injected ENTITY_STATES bucket. Test-only — production
-// callers use NewManager.
-func newManagerForTest(logger *slog.Logger, emitter graphEmitter, bucket jetstream.KeyValue) *Manager {
-	if logger == nil {
-		logger = slog.Default()
+	if client != nil {
+		manager.exactReader = graph.NewExactEntityReader(client, 5*time.Second)
 	}
-	guardCtx, guardCancel := context.WithCancel(context.Background())
-	return &Manager{
-		logger:                logger,
-		emitter:               emitter,
-		entityStatesBucket:    bucket,
-		registrations:         make(map[string]*registration),
-		graphStateGuardCtx:    guardCtx,
-		graphStateGuardCancel: guardCancel,
-		graphStateGuardReady:  make(chan struct{}),
-		graphStateGuardDone:   make(chan struct{}),
-		graphStateProgress:    make(chan struct{}),
-	}
+	return manager
 }
 
 // Register declares a workflow to the Manager. Must be called at
@@ -437,23 +421,22 @@ func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.Entity
 	if err := m.graphStateContractError("getEntity"); err != nil {
 		return nil, 0, err
 	}
-	bucket, err := m.ensureBucket(ctx)
-	if err != nil {
-		return nil, 0, err
+	if m.exactReader == nil {
+		return nil, 0, errors.New("lifecycle: exact entity reader unavailable")
 	}
-	entry, err := bucket.Get(ctx, entityID)
+	exact, err := m.exactReader.ReadExactEntity(ctx, entityID)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
+		var classified *errs.ClassifiedError
+		if errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound {
 			return nil, 0, fmt.Errorf("%w: entity_id=%q", ErrEntityNotFound, entityID)
 		}
-		return nil, 0, fmt.Errorf("lifecycle: KV get for %q: %w", entityID, err)
-	}
-	var state graph.EntityState
-	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
 		m.latchGraphStatePoison(err)
-		return nil, 0, m.graphStateContractError("getEntity")
+		if poisonErr := m.graphStateContractError("getEntity"); poisonErr != nil {
+			return nil, 0, poisonErr
+		}
+		return nil, 0, fmt.Errorf("lifecycle: exact read for %q: %w", entityID, err)
 	}
-	return &state, entry.Revision(), nil
+	return exact.Entity, exact.KVRevision, nil
 }
 
 func (m *Manager) latchGraphStatePoison(err error) bool {
@@ -1209,9 +1192,6 @@ func (m *Manager) Fail(ctx context.Context, workflow, entityID, reason string) e
 // transition the entity to a terminal phase first; a caller that wants a
 // terminal audit trail should Complete/Fail beforehand, or use DespawnWith.
 //
-// Idempotent: reclaiming an already-absent entity succeeds (the delete handler
-// reports Deleted:false with no error).
-//
 // workflow MUST be registered and its EntityIDPattern MUST match entityID; a
 // mismatch returns ErrEntityIDPatternMismatch and emits no delete (scopes the
 // reclaim to a known workflow and refuses a delete for a foreign entity).
@@ -1230,7 +1210,13 @@ func (m *Manager) Despawn(ctx context.Context, workflow, entityID string) error 
 		return fmt.Errorf("%w: workflow=%q entity_id=%q pattern=%q",
 			ErrEntityIDPatternMismatch, reg.workflow.Name, entityID, reg.workflow.EntityIDPattern)
 	}
-	if _, err := m.emitter.delete(ctx, &graph.DeleteEntityRequest{EntityID: entityID}); err != nil {
+	_, revision, err := m.getEntity(ctx, entityID)
+	if err != nil {
+		return fmt.Errorf("lifecycle: Despawn %q: %w", entityID, err)
+	}
+	if _, err := m.emitter.delete(ctx, &graph.DeleteEntityRequest{
+		EntityID: entityID, ExpectedRevision: revision,
+	}); err != nil {
 		return fmt.Errorf("lifecycle: Despawn %q: %w", entityID, err)
 	}
 	m.logger.Debug("lifecycle: despawn",

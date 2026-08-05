@@ -21,7 +21,9 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
@@ -48,6 +50,9 @@ import (
 func TestIntegration_ManagerCreate_SurvivesGraphIngestColdStart(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithKVBuckets(graph.BucketEntityStates))
 	ctx := context.Background()
+	kv, err := tc.Client.GetKeyValueBucket(ctx, graph.BucketEntityStates)
+	require.NoError(t, err)
+	startExactEntityResponder(t, tc, kv)
 
 	mgr := NewManager(tc.Client, nil)
 	require.NoError(t, mgr.Register(lifecycle{}.fixtureWorkflow()))
@@ -73,13 +78,23 @@ func TestIntegration_ManagerCreate_SurvivesGraphIngestColdStart(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	var responderHits atomic.Int32
-	_, err := tc.Client.SubscribeForRequests(ctx, graphSubjectCreateWithTriples, func(_ context.Context, data []byte) ([]byte, error) {
+	_, err = tc.Client.SubscribeForRequests(ctx, graphSubjectCreateWithTriples, func(_ context.Context, data []byte) ([]byte, error) {
 		responderHits.Add(1)
 		var req graph.CreateEntityWithTriplesRequest
 		require.NoError(t, json.Unmarshal(data, &req))
+		entity := req.Entity.Clone()
+		entity.Triples = append([]message.Triple(nil), req.Triples...)
+		body, marshalErr := graph.MarshalEntityState(entity)
+		if marshalErr != nil {
+			return nil, marshalErr
+		}
+		revision, putErr := kv.Put(ctx, entity.ID, body)
+		if putErr != nil {
+			return nil, putErr
+		}
 		resp := graph.CreateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{KVRevision: 1},
-			Entity:           req.Entity,
+			MutationResponse: graph.MutationResponse{KVRevision: revision},
+			Entity:           entity,
 			TriplesAdded:     len(req.Triples),
 		}
 		return json.Marshal(resp)
@@ -105,6 +120,7 @@ func startKVBackedResponders(t *testing.T, tc *natsclient.TestClient) jetstream.
 	ctx := context.Background()
 	kv, err := tc.Client.GetKeyValueBucket(ctx, graph.BucketEntityStates)
 	require.NoError(t, err)
+	startExactEntityResponder(t, tc, kv)
 
 	// create_with_triples → real KV put of Entity{Triples}.
 	_, err = tc.Client.SubscribeForRequests(ctx, graphSubjectCreateWithTriples, func(_ context.Context, data []byte) ([]byte, error) {
@@ -130,24 +146,50 @@ func startKVBackedResponders(t *testing.T, tc *natsclient.TestClient) jetstream.
 	})
 	require.NoError(t, err)
 
-	// entity.delete → real KV delete (idempotent on absent).
+	// entity.delete → real conditional KV delete.
 	_, err = tc.Client.SubscribeForRequests(ctx, graphSubjectEntityDelete, func(_ context.Context, data []byte) ([]byte, error) {
 		var req graph.DeleteEntityRequest
 		if err := json.Unmarshal(data, &req); err != nil {
 			return nil, err
 		}
-		existed := true
-		if err := kv.Delete(ctx, req.EntityID); err != nil {
-			if !errors.Is(err, jetstream.ErrKeyNotFound) {
-				return nil, err
+		if err := kv.Delete(ctx, req.EntityID, jetstream.LastRevision(req.ExpectedRevision)); err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEntityNotFound, err)
 			}
-			existed = false
+			return nil, err
 		}
-		return json.Marshal(graph.DeleteEntityResponse{Deleted: existed})
+		return json.Marshal(graph.DeleteEntityResponse{
+			EntityID: req.EntityID, Outcome: graph.MutationApplied, ExpectedRevision: req.ExpectedRevision,
+		})
 	})
 	require.NoError(t, err)
 
 	return kv
+}
+
+func startExactEntityResponder(t *testing.T, tc *natsclient.TestClient, kv jetstream.KeyValue) {
+	t.Helper()
+	_, err := tc.Client.SubscribeForRequests(context.Background(), "graph.ingest.query.entity", func(ctx context.Context, data []byte) ([]byte, error) {
+		var req struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(data, &req); err != nil {
+			return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest, err)
+		}
+		entry, err := kv.Get(ctx, req.ID)
+		if err != nil {
+			if errors.Is(err, jetstream.ErrKeyNotFound) {
+				return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeEntityNotFound, err)
+			}
+			return nil, err
+		}
+		var entity graph.EntityState
+		if err := graph.UnmarshalEntityState(entry.Value(), &entity); err != nil {
+			return nil, err
+		}
+		return json.Marshal(graph.ExactEntity{Entity: entity.Clone(), KVRevision: entry.Revision()})
+	})
+	require.NoError(t, err)
 }
 
 // TestIntegration_Despawn_RemovesEntity proves Manager.Despawn round-trips the

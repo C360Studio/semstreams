@@ -19,6 +19,8 @@ import (
 	"github.com/nats-io/nats.go"
 )
 
+const subjectQueryEntity = "graph.ingest.query.entity"
+
 func TestMutationClientImplementsNarrowPublicCapabilities(t *testing.T) {
 	t.Parallel()
 
@@ -220,6 +222,24 @@ func TestReadAuthoritativeMapsNoRespondersAsUnavailableNotCommitted(t *testing.T
 	}
 }
 
+func TestReadAuthoritativeMapsMalformedIDAsInvalidWithoutTransport(t *testing.T) {
+	t.Parallel()
+	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{}}
+	client := newMutationTestClient(t, rpc)
+	_, err := client.ReadAuthoritative(context.Background(), "not-six-parts")
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) ||
+		mutationErr.Kind != MutationInvalid ||
+		mutationErr.Class != errs.ErrorInvalid ||
+		mutationErr.Code != graph.ErrorCodeInvalidRequest ||
+		mutationErr.Commit != CommitNotCommitted {
+		t.Fatalf("error = %#v", mutationErr)
+	}
+	if rpc.callCount() != 0 {
+		t.Fatalf("invalid read made %d transport calls", rpc.callCount())
+	}
+}
+
 func TestAmbiguousMutationAttemptCannotBeDowngradedByLaterFailure(t *testing.T) {
 	t.Parallel()
 	request := validCreateMutation()
@@ -283,7 +303,7 @@ func TestAmbiguousMutationAttemptCannotBeDowngradedByLaterFailure(t *testing.T) 
 						{err: test.terminal},
 					}
 					responses[subjectQueryEntity] = []fakeRPCResult{
-						{data: marshalMutationTestJSON(t, absent)},
+						{data: marshalMutationTestExact(t, absent)},
 					}
 				}
 				rpc := &fakeMutationRequester{responses: responses}
@@ -377,7 +397,7 @@ func TestAppendEvidenceAmbiguitySurvivesNonDefinitiveSuccessResponse(t *testing.
 			ambiguous := errors.New("first append reply lost")
 			queries := make([]fakeRPCResult, test.wantQueryCount)
 			for index := range queries {
-				queries[index].data = marshalMutationTestJSON(t, absent)
+				queries[index].data = marshalMutationTestExact(t, absent)
 			}
 			rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
 				subjectAddTriplesBatch: {
@@ -438,7 +458,7 @@ func TestCreateAmbiguitySurvivesDivergentReadAndMalformedLaterResponse(t *testin
 			name:    "divergent authoritative read",
 			creates: []fakeRPCResult{{err: errors.New("placeholder")}},
 			queries: []fakeRPCResult{{
-				data: marshalMutationTestJSON(t, divergent),
+				data: marshalMutationTestExact(t, divergent),
 			}},
 			wantCalls: 2,
 		},
@@ -1054,6 +1074,11 @@ func marshalMutationTestJSON(t *testing.T, value any) []byte {
 	return data
 }
 
+func marshalMutationTestExact(t *testing.T, entity *graph.EntityState) []byte {
+	t.Helper()
+	return marshalMutationTestJSON(t, graph.ExactEntity{Entity: entity, KVRevision: 17})
+}
+
 func canonicalMutationTestEntity(req CreateMutation) *graph.EntityState {
 	entity := req.Entity.Clone()
 	entity.Triples = append([]message.Triple(nil), req.Triples...)
@@ -1070,7 +1095,7 @@ func TestReadAuthoritativeUsesGraphIngestAndReturnsClone(t *testing.T) {
 	req := validCreateMutation()
 	entity := canonicalMutationTestEntity(req)
 	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
-		subjectQueryEntity: {{data: marshalMutationTestJSON(t, entity)}},
+		subjectQueryEntity: {{data: marshalMutationTestExact(t, entity)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 
@@ -1078,7 +1103,7 @@ func TestReadAuthoritativeUsesGraphIngestAndReturnsClone(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadAuthoritative: %v", err)
 	}
-	got.Triples[0].Object = "mutated"
+	got.Entity.Triples[0].Object = "mutated"
 
 	if rpc.calls[0].subject != subjectQueryEntity || rpc.calls[0].retry != nil {
 		t.Fatalf("read call = %#v, want single-attempt authoritative query", rpc.calls[0])
@@ -1100,7 +1125,7 @@ func TestCreateWithTriplesReadsBackAmbiguousCommitWithoutBlindRetry(t *testing.T
 	entity := canonicalMutationTestEntity(req)
 	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
 		subjectCreateWithTriples: {{err: errors.New("reply timeout")}},
-		subjectQueryEntity:       {{data: marshalMutationTestJSON(t, entity)}},
+		subjectQueryEntity:       {{data: marshalMutationTestExact(t, entity)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 
@@ -1177,7 +1202,7 @@ func TestCreateWithTriplesDegradedSuccessIsReadBackNotRetried(t *testing.T) {
 				MutationResponse: graph.MutationResponse{Degraded: true},
 			}),
 		}},
-		subjectQueryEntity: {{data: marshalMutationTestJSON(t, entity)}},
+		subjectQueryEntity: {{data: marshalMutationTestExact(t, entity)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 
@@ -1375,12 +1400,12 @@ func TestAppendEvidenceDegradedResponseRequiresAuthoritativeVerification(t *test
 	}{
 		{
 			name: "verified",
-			read: fakeRPCResult{data: marshalMutationTestJSON(t, present)},
+			read: fakeRPCResult{data: marshalMutationTestExact(t, present)},
 			want: CommitVerified,
 		},
 		{
 			name: "tuple absent",
-			read: fakeRPCResult{data: marshalMutationTestJSON(t, absent)},
+			read: fakeRPCResult{data: marshalMutationTestExact(t, absent)},
 			want: CommitCommitted, wantKind: MutationCommittedUnverified,
 		},
 		{
@@ -1470,7 +1495,7 @@ func TestCreateAndReplaceVerificationUsesCompleteTripleEquality(t *testing.T) {
 					Entity: mismatch,
 				}),
 			}},
-			subjectQueryEntity: {{data: marshalMutationTestJSON(t, mismatch)}},
+			subjectQueryEntity: {{data: marshalMutationTestExact(t, mismatch)}},
 		}}
 		client := newMutationTestClient(t, rpc)
 		receipt, err := client.CreateWithTriples(context.Background(), req)
@@ -1493,7 +1518,7 @@ func TestCreateAndReplaceVerificationUsesCompleteTripleEquality(t *testing.T) {
 					Entity: mismatch,
 				}),
 			}},
-			subjectQueryEntity: {{data: marshalMutationTestJSON(t, mismatch)}},
+			subjectQueryEntity: {{data: marshalMutationTestExact(t, mismatch)}},
 		}}
 		client := newMutationTestClient(t, rpc)
 		receipt, err := client.ReplaceOwned(context.Background(), ReplaceOwnedMutation{
@@ -1812,7 +1837,7 @@ func TestAppendEvidenceReadsExactTupleBeforeStableRetry(t *testing.T) {
 			{err: errors.New("reply timeout")},
 			{data: marshalMutationTestJSON(t, graph.AddTriplesBatchResponse{WrittenCount: 1})},
 		},
-		subjectQueryEntity: {{data: marshalMutationTestJSON(t, mismatch)}},
+		subjectQueryEntity: {{data: marshalMutationTestExact(t, mismatch)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 	client.retry.MaxRetries = 1
@@ -1924,7 +1949,7 @@ func TestCreateAndAppendCancellationAtAuthoritativeAbsenceReturnIsNotCommitted(t
 			} else {
 				rpc.responses[subjectAddTriplesBatch] = []fakeRPCResult{{err: ambiguous}}
 				rpc.responses[subjectQueryEntity] = []fakeRPCResult{{
-					data:         marshalMutationTestJSON(t, absent),
+					data:         marshalMutationTestExact(t, absent),
 					beforeReturn: cancel,
 				}}
 			}
@@ -2054,7 +2079,7 @@ func TestAppendEvidenceAnomalousSuccessRequiresAuthoritativeVerification(t *test
 		{
 			name:     "written count mismatch verified present",
 			response: graph.AddTriplesBatchResponse{WrittenCount: 0},
-			read:     fakeRPCResult{data: marshalMutationTestJSON(t, present)},
+			read:     fakeRPCResult{data: marshalMutationTestExact(t, present)},
 			want:     CommitVerified,
 		},
 		{
@@ -2065,7 +2090,7 @@ func TestAppendEvidenceAnomalousSuccessRequiresAuthoritativeVerification(t *test
 					"acme.ops.test.system.other.002": "unexpected",
 				},
 			},
-			read: fakeRPCResult{data: marshalMutationTestJSON(t, present)},
+			read: fakeRPCResult{data: marshalMutationTestExact(t, present)},
 			want: CommitVerified,
 		},
 		{
@@ -2073,7 +2098,7 @@ func TestAppendEvidenceAnomalousSuccessRequiresAuthoritativeVerification(t *test
 			response: graph.AddTriplesBatchResponse{
 				WrittenCount: 2,
 			},
-			read:     fakeRPCResult{data: marshalMutationTestJSON(t, absent)},
+			read:     fakeRPCResult{data: marshalMutationTestExact(t, absent)},
 			want:     CommitNotCommitted,
 			wantKind: MutationInternal,
 		},
@@ -2161,7 +2186,7 @@ func TestAppendEvidenceLostResponseWithExactTupleDoesNotRetry(t *testing.T) {
 	stored.Triples[0].ExpiresAt = &expiresAt
 	rpc := &fakeMutationRequester{responses: map[string][]fakeRPCResult{
 		subjectAddTriplesBatch: {{err: errors.New("reply timeout")}},
-		subjectQueryEntity:     {{data: marshalMutationTestJSON(t, stored)}},
+		subjectQueryEntity:     {{data: marshalMutationTestExact(t, stored)}},
 	}}
 	client := newMutationTestClient(t, rpc)
 	client.retry.MaxRetries = 3

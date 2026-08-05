@@ -140,7 +140,10 @@ func (p *GraphRoundTripProbe) Run(ctx context.Context, result *Result) error {
 	if err != nil {
 		return p.withDiagnostics(entityID, rootTrace.TraceID, fmt.Errorf("read authoritative entity: %w", err))
 	}
-	if err := validateTitleReplacement(authoritative, before, after); err != nil {
+	if authoritative.KVRevision == 0 {
+		return p.withDiagnostics(entityID, rootTrace.TraceID, errors.New("authoritative read returned zero KV revision"))
+	}
+	if err := validateTitleReplacement(authoritative.Entity, before, after); err != nil {
 		return p.withDiagnostics(entityID, rootTrace.TraceID, fmt.Errorf("authoritative replacement: %w", err))
 	}
 
