@@ -1,8 +1,7 @@
 # Tasks — authority reads and graph-ingest safety (GS-01)
 
-> **REVISION 35 REJECTED — REVISION 36 INVENTORY ACTIVE.** Do not create a replacement design, capability delta,
-> implementation task, runtime code, or promotion evidence until revision-36 inventory receives independent pass and
-> the later design/owner gates complete.
+> **SUPERSEDED AND ARCHIVED — 2026-08-05.** No unchecked item in this investigation authorizes work. The owner-approved
+> implementation baton is `establish-graph-read-write-foundation`.
 
 ## 0. Establish the corrected baton
 

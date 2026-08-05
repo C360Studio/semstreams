@@ -1,5 +1,7 @@
-> **REVISION 35 REJECTED — REVISION 36 INVENTORY ACTIVE.** Owner redirection rejected revision 35 as a target. This is
-> again an inventory-only baton with no accepted target, capability delta, runtime implementation, or spec promotion.
+> **SUPERSEDED AND ARCHIVED — 2026-08-05.** This investigation is preserved as correction history only. Its recovery,
+> authority-reader, and semantic-ownership iterations are not an implementation baton. The approved target, inventory,
+> review, rulings, capability deltas, and tasks live in
+> `openspec/changes/establish-graph-read-write-foundation/`.
 
 ## Why
 
@@ -48,8 +50,6 @@ remains unapproved.
 - **Spec impact:** none; no capability delta exists in this change.
 - **Process impact:** the architect and reviewer contracts enforce separate
   inventory and design gates.
-- **Program impact:** GS-01 remains the sole active increment. Revision-36 design is active after inventory pass.
-- **Promotion rule:** runtime work and spec promotion remain prohibited until the
-  independently reviewed design receives explicit owner acceptance. After
-  acceptance, this same GS-01 change gains the capability deltas and TDD tasks;
-  no second change is opened.
+- **Program impact:** none; this change is archived investigation history.
+- **Promotion rule:** none. The later owner-approved clean foundation change supersedes this change's former
+  same-baton constraint.

@@ -30,8 +30,8 @@ classify ownership before building.
 - **SemStreams owns** the governed graph substrate: the KV-twofer and NATS/KV
   runtime; Graphable ingestion, `ENTITY_STATES`, the single-writer invariant, and
   graph mutation/query/gateway APIs; the consumed derived indexes (predicate, name,
-  alias, incoming/outgoing) and indexing profiles; projection contracts,
-  ownership claims/leases, and the graph-write-intent taxonomy (ADR-055/056); the
+  alias, incoming/outgoing) and indexing profiles; local projection contracts,
+  the typed four-operation graph mutation algebra, and exact authority reads (ADR-091); the
   **Lifecycle harness** (ADR-049) — `Participant`/`Manager` current state over
   graph-ingest-owned `ENTITY_STATES`, plus operator gateway; the **rule engine**
   (conditions, actions, iteration caps,
@@ -89,10 +89,10 @@ and `docs/adr/README.md` for the ADR-vs-spec split. In short:
 ## Standing Technical Conventions
 
 - Entity IDs are deterministic 6-part IDs (`org.platform.domain.system.type.instance`).
-- Every graph writer path carries a semantic envelope; after ADR-055, no
-  producer relies on `triple.add` auto-vivifying an entity.
+- Every entity birth carries a semantic envelope. Non-create mutations are must-exist and no
+  producer relies on a mutation auto-vivifying an entity.
 - `graph-ingest` is the sole writer to `ENTITY_STATES`; other components request
-  changes via the `graph.mutation.*` API, never by writing the bucket.
+  changes through the typed `nats-request` `graph.mutation.>` component port, never by writing the bucket.
 - Communication separates current facts from queued work. KV watchers rehydrate
   current matching values; JetStream consumers resume unacknowledged requests
   (`/kv-or-stream`). History is explicitly bounded, and `ENTITY_STATES` history 1
