@@ -1,6 +1,7 @@
 # Graph state, materialized-view, and query decision proposal
 
-**Status:** Frozen owner-approved decision record.
+**Status:** Frozen historical decision record. The operational-recovery portions
+of rulings 1 and 8 were superseded by owner correction on 2026-08-05.
 
 **Date:** 2026-08-03.
 
@@ -9,6 +10,13 @@
 
 Implementation order and current gate state live only in
 [`graph-state-read-write-program.md`](graph-state-read-write-program.md).
+
+> **Operational-recovery correction:** SemStreams will not implement checkpoint,
+> backup, restore, attestation, recovery-gate, or recovery-orchestration tooling.
+> Clustered NATS remains supported. Edge/offline operators should maintain
+> infrastructure backups as checkpoints. Snapshot/restore proposals retained
+> below are historical evidence, not an active framework requirement. The active
+> ruling is ADR-090 and the canonical program.
 
 ## Decision statement
 

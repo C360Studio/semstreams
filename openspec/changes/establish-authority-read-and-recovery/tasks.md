@@ -1,8 +1,8 @@
-# Tasks — establish-authority-read-and-recovery (GS-01)
+# Tasks — authority reads and graph-ingest safety (GS-01)
 
-> **DESIGN REVIEW PASS — OWNER ACCEPTANCE PENDING.** Inventory and revision-35 review are complete. Section 5 is
-> active. Do not create a capability delta, implementation task, runtime code, or promotion evidence before explicit
-> owner acceptance.
+> **REVISION 35 REJECTED — REVISION 36 INVENTORY ACTIVE.** Do not create a replacement design, capability delta,
+> implementation task, runtime code, or promotion evidence until revision-36 inventory receives independent pass and
+> the later design/owner gates complete.
 
 ## 0. Establish the corrected baton
 
@@ -34,37 +34,45 @@ design-only OpenSpec change became the durable baton with updated architect, rev
       required categories are complete. Any omitted same-class owner is
       `BLOCKING` and returns work to section 1.
 
-## 3. Design after inventory pass
+## 3. Re-audit scope after revision-35 rejection
 
-- [x] 3.1 After recorded `INVENTORY PASS`, produce options and costs, including
+- [x] 3.0 Record owner rejection of revision 35 and preserve it as correction evidence.
+- [x] 3.0a Record the binding boundary: no SemStreams operational recovery tooling; NATS clusters remain supported;
+      edge/offline backup checkpoints are documented operator responsibility.
+- [x] 3.1 Materialize revision-36 inventory-only scope loss, current owners, adopter costs, collisions, and searches.
+- [x] 3.2 Obtain independent `INVENTORY PASS` on the exact revision-36 inventory.
+
+## 4. Design after revision-36 inventory pass
+
+- [ ] 4.1 After recorded `INVENTORY PASS`, produce options and costs, including
       doing nothing and extending an existing owner, then state a measured
       recommendation and adopter-seam effects.
-- [x] 3.2 Preserve the reviewed inventory without dropping conflicts or unknowns
+- [ ] 4.2 Preserve the reviewed inventory without dropping conflicts or unknowns
       while recording every measured design premise and triggered
       decision-skill outcome.
 
-## 4. Independent pre-owner design review
+## 5. Independent pre-owner design review
 
-- [x] 4.1 Have an independent reviewer attempt to refute the design against the
+- [ ] 5.1 Have an independent reviewer attempt to refute the design against the
       reviewed inventory, current repository, specs, ADRs, and adopter do-nothing
       path.
-- [x] 4.2 Resolve every blocking finding and record `DESIGN REVIEW PASS` without
+- [ ] 5.2 Resolve every blocking finding and record `DESIGN REVIEW PASS` without
       presenting that verdict as owner approval.
 
-## 5. Owner decision
+## 6. Owner decision
 
-- [ ] 5.1 Obtain explicit owner acceptance, rejection, or redirection of the
+- [ ] 6.1 Obtain explicit owner acceptance, rejection, or redirection of the
       independently reviewed design.
-- [ ] 5.2 Only after explicit acceptance, amend this same GS-01 change with the
+- [ ] 6.2 Only after explicit acceptance, amend this same GS-01 change with the
       capability spec deltas and TDD implementation tasks. Until then, runtime
       implementation and spec promotion remain prohibited; do not open a second
       baton or implementation change.
 
 ## Validation evidence
 
-Revision 13 is revoked and intermediate corrections remain non-normative evidence. The exact r27/r28/r29/r31/r32/r33/
-r34/r35 stack is preserved in `reviewed-recovery-contract-r35.md`. Revision 35 received `DESIGN REVIEW PASS` and
-`APPROVE`; owner acceptance remains pending.
+Revision 35 received `DESIGN REVIEW PASS` but was rejected by owner redirection on 2026-08-05. Its exact stack remains
+in `reviewed-recovery-contract-r35.md` as correction evidence. `scope-audit-r36.md` is the active inventory-only
+handoff.
 
 Current documentation evidence has `git diff --check`; the 120-character Markdown limit outside immutable exact reviewed
 artifact bytes; and targeted plus complete strict OpenSpec validation green without a capability delta.

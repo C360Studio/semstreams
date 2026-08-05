@@ -205,8 +205,10 @@ js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
 ```
 
 With `History: 64`, that example bucket stores at most the last 64 values per key.
-It remains a bounded storage policy, not a complete event log. If complete audit
-or authority recovery is required, design that capability explicitly.
+It remains a bounded storage policy, not a complete event log. Complete audit
+needs an explicitly owned audit store. Deployment backup and restore remain NATS
+and operator responsibilities; they are not supplied by KV history or a
+SemStreams recovery subsystem.
 
 ---
 

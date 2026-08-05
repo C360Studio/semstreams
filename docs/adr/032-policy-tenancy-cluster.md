@@ -116,11 +116,12 @@ the PKI cost (which most ops teams already pay anyway).
 
 **3. Operational substrate.** The framework's documentation pattern
 to date assumes "stock NATS" — single-node, unauthenticated,
-ephemeral-friendly. Ops teams have started asking how to back up the
-SKG (Semantic Knowledge Graph). The honest answer is **don't back up
-a single-node SKG; run a JetStream cluster with replicated streams.**
-Accounts work is unsafe on a single node anyway — losing the node
-loses every tenant's state simultaneously.
+ephemeral-friendly. Connected production deployments should run a
+JetStream cluster with replicated streams. Edge/offline deployments
+remain supported; their operators should maintain infrastructure
+backups as checkpoints. SemStreams does not provide a second backup,
+checkpoint, or restore subsystem beside NATS and the deployment's
+infrastructure.
 
 ### What semstreams already has working in its favor
 
@@ -193,8 +194,9 @@ must not lock that choice in.
 - **One evaluator, one config shape.** The rules engine extensions in
   Track A do not become a parallel policy DSL — they are additive
   operators and action types on the existing evaluator.
-- **Replication, not snapshots.** SKG durability comes from JetStream
-  cluster replication (R≥3), not from external backup tooling.
+- **Deployment-owned durability.** Connected SKG durability normally comes
+  from JetStream cluster replication (R≥3). Edge/offline operators maintain
+  backups as checkpoints. Neither path creates SemStreams recovery tooling.
 - **No new orchestration layer.** Per ADR-028, governance enforcement
   remains rule-shaped where ECA fits and component-shaped (filter
   chain) where it doesn't.

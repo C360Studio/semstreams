@@ -86,10 +86,12 @@ evidence through its bounded GS slice.
 | Query responder unavailable | The named operation fails or times out |
 | Gateway unavailable | Remote facade is unavailable; authority is unchanged |
 
-Bootstrap from current inputs is not authority disaster recovery. Authority uses
-the separately governed snapshot/restore runbook. Derived rebuild is
-capability-scoped and effect-free; authorized inference application is a separate
-operation.
+Bootstrap from current inputs repairs a derived view; it is not deployment
+backup or restore. Connected deployments use JetStream replication, while
+edge/offline operators maintain infrastructure backups as checkpoints.
+SemStreams adds no recovery runtime beside those deployment operations. Derived
+rebuild remains capability-scoped and effect-free; authorized inference
+application is a separate operation.
 
 ## Monitoring
 

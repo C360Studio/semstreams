@@ -2,8 +2,9 @@
 
 ## Status
 
-**Accepted** — 2026-08-03. The owner approved the graph-state decision proposal and authorized
-breaking pre-v1 implementation without compatibility layers.
+**Accepted** — 2026-08-03; operational-recovery scope corrected 2026-08-05. The owner approved
+the graph-state decision proposal and authorized breaking pre-v1 implementation without
+compatibility layers.
 
 The evidence baseline is the frozen
 [graph-state inventory](../proposals/graph-state-read-write-inventory.md). The
@@ -15,15 +16,20 @@ remains the decision record and is not a program tracker.
 
 SemStreams has one authoritative current-state store, `ENTITY_STATES`, and independently
 implemented derived views. `ENTITY_STATES` has history 1; mutation commands and retained
-Graphable facts do not form an authority-recovery ledger. The recurring failure pattern is
+Graphable facts do not form an event-sourced authority ledger. The recurring failure pattern is
 therefore not missing event-sourced CQRS machinery. It is derived capabilities without
 role-appropriate convergence contracts, including durable projections with no semantic consumer.
+
+In this program, "recovery" means recovering the framework architecture from accumulated read/write
+drift. It does not name a SemStreams disaster-recovery product.
 
 ## Decision
 
 1. `ENTITY_STATES` remains canonical current shared semantic state. Graphable replay is bounded
-   catch-up, not disaster recovery. Authority recovery uses snapshot/restore of `ENTITY_STATES`,
-   referenced ObjectStore content, and explicitly coordinated ingest-guard state.
+   catch-up, not disaster recovery. SemStreams does not own a checkpoint, backup, restore,
+   attestation, or recovery-orchestration subsystem. Connected deployments may use clustered,
+   replicated JetStream; edge/offline operators should maintain deployment backups as checkpoints
+   using their NATS and infrastructure procedures.
 2. SemStreams does not adopt event sourcing or a general CQRS/read-model runtime.
 3. Every derived capability is classified as a required query view, optional enrichment,
    internal accelerator or deduplication store, reverse bookkeeping, reactive consumer, or
@@ -43,7 +49,8 @@ role-appropriate convergence contracts, including durable projections with no se
    Command correlation and idempotency remain separate from projection visibility.
 8. Derived rebuild is side-effect-free. Effectful inference application is a separately
    authorized, idempotent, bounded component operation with authoritative mutation evidence.
-   Authority restore is a distinct runbook.
+   A deployment restored by its operator re-enters those ordinary startup, validation, and
+   owner-specific rebuild contracts; SemStreams does not orchestrate the restore.
 9. Shared runtime mechanics are introduced only after at least three surviving owners need the
    same behavior and a prototype reduces total code and adopter knowledge.
 

@@ -20,7 +20,7 @@ explicitly records its release.
 
 OpenSpec physically reports three in-progress change directories. The GS-01
 [`establish-authority-read-and-recovery`][gs01-design-baton] directory is an
-owner-pending, design-only baton with reviewed inventory, historical correction evidence, and a reviewed design.
+inventory-active baton with reviewed inventory and rejected-design correction evidence.
 `semantic-tier-split` and
 `discovery-under-stream-shapes` are suspended and frozen in their own
 proposal/task records. Only the single Next Action in this program is executable;
@@ -49,8 +49,9 @@ does not outrank these priorities.
 ### Authority
 
 `ENTITY_STATES` is canonical current shared semantic state with history 1. It is
-not a retained event ledger. Its supported recovery unit is current state plus
-the separately declared content and ingest-guard state needed by the deployment.
+not a retained event ledger. In this program, recovery means recovering the
+framework architecture from read/write drift; it does not mean implementing a
+SemStreams disaster-recovery subsystem.
 
 ### Writes
 
@@ -214,9 +215,10 @@ belong to the current GS increment and satisfy its stop/go gate.
 
 ## GS-01 process correction
 
-GS-01 has a fresh inventory and suffix addendum with `INVENTORY PASS`. External review revoked revision 13. The bounded,
-content-addressed revision-35 contract now has independent `DESIGN REVIEW PASS` and `APPROVE`. Owner acceptance remains
-pending; no capability delta or runtime mechanism is authorized.
+GS-01 has a fresh inventory and suffix addendum with `INVENTORY PASS`. Revision 35 later passed design review but was
+rejected by owner redirection on 2026-08-05 because recovery mechanisms displaced exact-read and graph-ingest-safety
+obligations. Revision-36 scope inventory received independent `INVENTORY PASS`; replacement design is active. No
+runtime mechanism is authorized.
 
 The failed design attempt is retained as correction evidence, not as input to
 implement:
@@ -229,11 +231,11 @@ implement:
 - prompts, briefings, and prior proposals are hypotheses to falsify, not an
   existing-surface inventory.
 
-The reviewed, owner-pending, design-only
+The inventory-active, design-only
 [`establish-authority-read-and-recovery`][gs01-design-baton] OpenSpec change is
 the durable baton. It records the problem, gates, reviewed inventory, suffix
 addendum, current evidence, Git-history correction evidence, and review findings.
-Revision 35 is ready for owner rulings. No runtime
+Revision 35 remains rejected correction evidence. No runtime
 implementation, runtime-capable spec delta, or spec promotion may begin before
 owner acceptance.
 
@@ -348,7 +350,8 @@ A shared durable-view runtime may be proposed later only when all three owners:
 - Optional capability absence is explicit and uses a declared lower-tier result;
   it is not reported as an empty authoritative answer.
 - Restart from preserved local current state must not require a cloud control
-  plane. Authority disaster recovery remains a separate snapshot/restore design.
+  plane. Cluster replication and operator-managed backups/checkpoints belong to
+  NATS and deployment operations, not a SemStreams recovery runtime.
 
 ## Frozen holdouts and coordinated migration
 
@@ -468,13 +471,13 @@ concept-file ratchet at no more than 31. Reduction alone is not success.
 
 ## Increment-specific accepted-ruling gates
 
-- **GS-01 authority recovery:** deliver and verify the coordinated
-  snapshot/restore runbook for `ENTITY_STATES`, referenced content, and
-  `GRAPH_INGEST_APPLIED_SEQ` reset-or-restore. Fact-stream replay is not accepted
-  as disaster recovery. Authority startup validation remains fail-closed for
+- **GS-01 authority reads and ingest safety:** unify the admitted exact
+  authority value-plus-revision contract and its classified outcomes. Authority
+  startup validation remains fail-closed for
   reads while preserving writer availability and states its history-1 dependency.
   Graph-ingest also proves single-active enforcement or accepted active/active
-  safety; GS-02 re-verifies that proof under both mutation seams.
+  safety; GS-02 re-verifies that proof under both mutation seams. SemStreams adds
+  no checkpoint, backup, restore, attestation, or recovery-orchestration surface.
 - **GS-02 write identity:** complete the two semantic write seams and remove the
   misleading `pkg/projection` authority-writer namespace as specified above.
 - **GS-03 role declaration and deletion test:** land role declaration
@@ -514,7 +517,7 @@ here.
 | Pre-GS #894 | Retire `CONTEXT_INDEX`; keep provenance in authority | Complete and archived |
 | Pre-GS #895 | Retire `STRUCTURAL_INDEX`; keep in-memory anomaly inputs | Complete and archived |
 | GS-00 | Bind design candidates, program control, and canonical guidance | Complete, archived, and merged (#896) |
-| GS-01 | Authority read/recovery and graph-ingest safety | Revision 35 reviewed; owner decision pending |
+| GS-01 | Authority reads and graph-ingest safety | Revision-36 design active after inventory pass |
 | GS-02 | Two write seams, lane matrix, honest mutation outcome/observation | Not started |
 | GS-03 | Role declaration representation, census, and conformance | Not started |
 | GS-04 | Graph-index core declarations and conformance | Not started |
@@ -573,8 +576,9 @@ GS-14 records `PASS` only when all objective evidence is present:
   applicable conformance evidence, including authority startup validation,
   reactive consumers, serving caches, and effectful inference; every GS-03 census
   row has an implemented/conformant owner home or is deleted/internal-only;
-- the authority snapshot/restore runbook proves coordinated restore of authority,
-  referenced content, and ingest-guard state;
+- operator guidance states that connected deployments use JetStream replication
+  and edge/offline deployments maintain infrastructure backups as checkpoints,
+  without a SemStreams recovery subsystem;
 - `COMPONENT_STATUS` has a recorded delete-or-retain disposition with any retained
   semantic consumer and status contract;
 - every durable owner has enforced single-active deployment or accepted
@@ -730,12 +734,21 @@ or an inventory recommendation.
   inventory, and recovery-claim durability. This is historical correction evidence; revision 35 supersedes it.
 - **2026-08-04:** Revision 35 replaced in-process source coordination with an offline single-node checkpoint and native
   physical restore. The exact reviewed stack is preserved in `reviewed-recovery-contract-r35.md`. Independent review
-  found no blocking or high issues and recorded `DESIGN REVIEW PASS` and `APPROVE`. Owner acceptance remains pending.
+  found no blocking or high issues and recorded `DESIGN REVIEW PASS` and `APPROVE`. At that point owner acceptance
+  remained pending.
+- **2026-08-05 owner correction:** Revision 35 was rejected as a target because disaster-recovery proof machinery
+  displaced the foundational admitted-read and graph-ingest-safety pillars. The reviewed artifact remains correction
+  evidence. Revision 36 returns to inventory-only scope correction before any replacement design. Operational
+  durability remains a NATS/deployment concern: clusters are supported, while edge/offline operators maintain backups
+  as checkpoints. SemStreams will not implement operational recovery tooling.
+- **2026-08-05 revision-36 inventory:** The corrected 440-line inventory at SHA-256
+  `eca90d2eaafec75f02fa3a0ae243a95e8614daaa9dde385a1247fdd345a3ef02` received independent `INVENTORY PASS`.
+  It closes direct, mediated, diagnostic, gateway, tool, and test readers before replacement design.
 
 ## Next Action
 
-Obtain explicit owner rulings on revision 35. Add no capability spec delta or runtime work before explicit owner
-acceptance.
+Design and independently review the revision-36 authority-read and graph-ingest-safety replacement before owner
+rulings. Add no capability delta or runtime work before explicit acceptance.
 
 [gs00-archive]: ../../openspec/changes/archive/2026-08-04-establish-graph-state-foundation/proposal.md
 [gs01-design-baton]: ../../openspec/changes/establish-authority-read-and-recovery/proposal.md
