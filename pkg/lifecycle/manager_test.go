@@ -36,6 +36,9 @@ type fakeEmitter struct {
 	createResponseMutator func(*graph.EntityState)
 	// forceRevisionMismatch makes reconcile() fail CAS regardless of revision.
 	forceRevisionMismatch bool
+	// reconcileHook scripts state changes and outcomes by one-based attempt.
+	// It runs after request capture and before the fake evaluates authority.
+	reconcileHook func(int, *graph.ReconcilePredicatesRequest) error
 	// afterReconcile runs after the reconcile commit and before its response.
 	// It deterministically models a newer writer racing DespawnWith.
 	afterReconcile func(*graph.ReconcilePredicatesResponse)
@@ -48,6 +51,11 @@ func (f *fakeEmitter) reconcile(_ context.Context, req *graph.ReconcilePredicate
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
+	if f.reconcileHook != nil {
+		if err := f.reconcileHook(len(f.requests), req); err != nil {
+			return nil, err
+		}
+	}
 	currentRev := f.bucket.revOf(req.EntityID)
 	if f.forceRevisionMismatch && f.bucket.exists(req.EntityID) {
 		return nil, fmt.Errorf("%w: forced", errs.ErrRevisionMismatch)
@@ -549,6 +557,243 @@ func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
 	}
 }
 
+func TestManager_TransitionConflictRebuildsIntentFromChangedAuthority(t *testing.T) {
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.retry-rebuild"
+	if err := mgr.Create(ctx, &fixtureMission{
+		ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict",
+	}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	reg, err := mgr.lookupByWorkflow("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.workflow.Transitions["planning"] = append(reg.workflow.Transitions["planning"], "completed")
+	initialRevision := bucket.revOf(id)
+	changedAt := time.Now().UTC().Add(time.Hour)
+	var changedRevision uint64
+	emitter.reconcileHook = func(attempt int, _ *graph.ReconcilePredicatesRequest) error {
+		if attempt != 1 {
+			return nil
+		}
+		replaceLifecycleTestAuthority(
+			bucket,
+			id,
+			"planning",
+			"after-conflict",
+			[]transitionRecord{newTransitionRecord(
+				"", "planning", changedAt, TransitionSourceOperator, "concurrent-authority",
+			)},
+		)
+		changedRevision = bucket.revOf(id)
+		return fmt.Errorf("%w: scripted first conflict", errs.ErrRevisionMismatch)
+	}
+
+	var observedOwners []string
+	err = mgr.TransitionWith(
+		ctx,
+		"fixture",
+		id,
+		"completed",
+		TransitionSourceRule,
+		"requested-transition",
+		func(participant Participant) error {
+			mission := participant.(*fixtureMission)
+			observedOwners = append(observedOwners, mission.OwnerOrgID)
+			mission.Note = "mutated-" + mission.OwnerOrgID
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatalf("TransitionWith: %v", err)
+	}
+	if len(emitter.requests) != 2 {
+		t.Fatalf("reconcile requests = %d, want first conflict plus one rebuilt attempt", len(emitter.requests))
+	}
+	if got := []uint64{emitter.requests[0].ExpectedRevision, emitter.requests[1].ExpectedRevision}; got[0] != initialRevision || got[1] != changedRevision {
+		t.Fatalf("expected revisions = %v, want [%d %d]", got, initialRevision, changedRevision)
+	}
+	if !reflect.DeepEqual(observedOwners, []string{"before-conflict", "after-conflict"}) {
+		t.Fatalf("mutator projections = %v, want fresh projection on each attempt", observedOwners)
+	}
+	second := emitter.requests[1]
+	if got := desiredTripleObject(second.Desired, "mission.lifecycle.phase"); got != "completed" {
+		t.Fatalf("rebuilt phase = %v, want completed", got)
+	}
+	if got := desiredTripleObject(second.Desired, "mission.transition.from"); got != "planning" {
+		t.Fatalf("rebuilt edge source = %v, want changed phase planning", got)
+	}
+	if got := desiredTripleObject(second.Desired, "mission.annotation.note"); got != "mutated-after-conflict" {
+		t.Fatalf("rebuilt mutator delta = %v, want changed-authority projection", got)
+	}
+	records, err := decodeTransitionRecords(id, second.Desired)
+	if err != nil {
+		t.Fatalf("decode rebuilt audit chain: %v", err)
+	}
+	if len(records) != 2 || records[0].event.To != "planning" ||
+		records[0].event.Note != "concurrent-authority" || records[1].event.From != "planning" ||
+		records[1].event.To != "completed" || records[1].event.Note != "requested-transition" {
+		t.Fatalf("rebuilt audit chain = %#v, want changed authority followed by requested transition", records)
+	}
+	wantTransitionAt := changedAt.Add(time.Nanosecond)
+	if !records[1].event.At.Equal(wantTransitionAt) {
+		t.Fatalf("rebuilt occurrence timestamp = %s, want %s after changed record", records[1].event.At, wantTransitionAt)
+	}
+	auditAtText, ok := desiredTripleObject(second.Desired, "mission.transition.at").(string)
+	if !ok {
+		t.Fatalf("rebuilt audit timestamp = %#v, want RFC3339Nano string", desiredTripleObject(second.Desired, "mission.transition.at"))
+	}
+	auditAt, err := time.Parse(time.RFC3339Nano, auditAtText)
+	if err != nil {
+		t.Fatalf("parse rebuilt audit timestamp %q: %v", auditAtText, err)
+	}
+	if !auditAt.Equal(wantTransitionAt) {
+		t.Fatalf("rebuilt audit timestamp = %s, want occurrence timestamp %s", auditAt, wantTransitionAt)
+	}
+}
+
+func TestManager_TransitionConflictRejectsChangedPhaseInconsistentOccurrenceChain(t *testing.T) {
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.retry-chain"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	reg, err := mgr.lookupByWorkflow("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.workflow.Transitions["planning"] = append(reg.workflow.Transitions["planning"], "completed")
+	changedAt := time.Now().UTC().Add(time.Hour)
+	emitter.reconcileHook = func(attempt int, _ *graph.ReconcilePredicatesRequest) error {
+		if attempt != 1 {
+			t.Fatalf("unexpected mutation attempt %d after changed occurrence chain became invalid", attempt)
+		}
+		replaceLifecycleTestAuthority(
+			bucket,
+			id,
+			"planning",
+			"after-conflict",
+			[]transitionRecord{newTransitionRecord(
+				"", "flying", changedAt, TransitionSourceOperator, "phase-inconsistent-authority",
+			)},
+		)
+		return fmt.Errorf("%w: scripted first conflict", errs.ErrRevisionMismatch)
+	}
+	mutatorCalls := 0
+	err = mgr.TransitionWith(
+		ctx,
+		"fixture",
+		id,
+		"completed",
+		TransitionSourceRule,
+		"requested-transition",
+		func(Participant) error {
+			mutatorCalls++
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrInvalidTransitionRecord) {
+		t.Fatalf("TransitionWith error = %v, want changed occurrence-chain rejection", err)
+	}
+	if len(emitter.requests) != 1 {
+		t.Fatalf("reconcile requests = %d, want no mutation after changed occurrence-chain rejection", len(emitter.requests))
+	}
+	if mutatorCalls != 1 {
+		t.Fatalf("mutator calls = %d, want no second mutator call after changed occurrence-chain rejection", mutatorCalls)
+	}
+	changedRecords, decodeErr := decodeTransitionRecords(id, bucket.get(id).Triples)
+	if decodeErr != nil {
+		t.Fatalf("changed occurrence chain is not decodable: %v", decodeErr)
+	}
+	if len(changedRecords) != 1 || changedRecords[0].event.To != "flying" ||
+		extractTripleScalar(bucket.get(id).Triples, id, "mission.lifecycle.phase") != "planning" {
+		t.Fatalf("changed authority = %#v, want decodable record ending flying with current phase planning", changedRecords)
+	}
+}
+
+func TestManager_TransitionConflictRevalidatesChangedEdge(t *testing.T) {
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.retry-edge"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "flying", OwnerOrgID: "before-conflict"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	emitter.reconcileHook = func(attempt int, _ *graph.ReconcilePredicatesRequest) error {
+		if attempt != 1 {
+			t.Fatalf("unexpected mutation attempt %d after changed edge became invalid", attempt)
+		}
+		replaceLifecycleTestAuthority(
+			bucket,
+			id,
+			"planning",
+			"after-conflict",
+			[]transitionRecord{newTransitionRecord(
+				"", "planning", time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC),
+				TransitionSourceOperator, "concurrent-authority",
+			)},
+		)
+		return fmt.Errorf("%w: scripted first conflict", errs.ErrRevisionMismatch)
+	}
+	mutatorCalls := 0
+	err := mgr.TransitionWith(
+		ctx,
+		"fixture",
+		id,
+		"completed",
+		TransitionSourceRule,
+		"requested-transition",
+		func(Participant) error {
+			mutatorCalls++
+			return nil
+		},
+	)
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("TransitionWith error = %v, want changed authority edge rejection", err)
+	}
+	if len(emitter.requests) != 1 {
+		t.Fatalf("reconcile requests = %d, want no mutation from invalid changed edge", len(emitter.requests))
+	}
+	if mutatorCalls != 1 {
+		t.Fatalf("mutator calls = %d, want no mutator replay after changed edge rejection", mutatorCalls)
+	}
+}
+
+func replaceLifecycleTestAuthority(
+	bucket *fakeBucket,
+	entityID, phase, owner string,
+	records []transitionRecord,
+) {
+	state := bucket.get(entityID)
+	retained := make([]message.Triple, 0, len(state.Triples))
+	for _, item := range state.Triples {
+		switch {
+		case item.Predicate == "mission.lifecycle.phase":
+		case item.Predicate == "mission.identity.owner-org-id":
+		case isTransitionRecordPredicate(item.Predicate):
+		default:
+			retained = append(retained, item)
+		}
+	}
+	state.Triples = append(retained,
+		triple(entityID, "mission.lifecycle.phase", phase),
+		triple(entityID, "mission.identity.owner-org-id", owner),
+	)
+	state.Triples = append(state.Triples, transitionRecordsToTriples(entityID, records)...)
+	bucket.put(entityID, state)
+}
+
+func desiredTripleObject(triples []message.Triple, predicate string) any {
+	for _, item := range triples {
+		if item.Predicate == predicate {
+			return item.Object
+		}
+	}
+	return nil
+}
+
 func TestManager_TransitionRejectsUnknownSourceBeforeMutation(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, _ := newTestManager(t)
@@ -814,7 +1059,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=817 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=1062 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),

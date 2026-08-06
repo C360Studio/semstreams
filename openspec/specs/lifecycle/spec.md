@@ -77,8 +77,14 @@ a placeholder target, or a pending operation. The component decides whether late
 ### Requirement: Lifecycle transitions use exact revision evidence
 
 A transition MUST exact-read the entity and reconcile the complete lifecycle predicate group using the same-entry
-nonzero KV revision. A definite revision mismatch MAY be handled only by a bounded component policy that re-reads and
-recomputes desired state. `commit_unknown` MUST NOT be automatically retried.
+nonzero KV revision. `Transition` and `TransitionWith` own a bounded local policy for definite revision conflicts. On
+every attempt that policy MUST re-read current authority and reconstruct the complete transition intent from it: the
+current phase, declared edge, retained occurrence chain, next occurrence and audit values, projected participant for
+the optional mutator, complete desired predicate set, and expected revision. The optional mutator MUST run again
+against the fresh projection and the mutation request MUST be rebuilt. No shared retry helper, knob, or coordinator is
+part of this contract. This full-intent reconstruction requirement is specific to transitions and MUST NOT be
+generalized to `UpdateFromOperator`, whose operator patch is validated before its own bounded conflict loop.
+`commit_unknown` MUST NOT be automatically retried.
 
 The same reconcile MUST replace the current phase while retaining a fixed window of the 64 most recent transition
 occurrences in the current entity. Each occurrence MUST use the framework `lifecycle.transition.*` predicate family
@@ -92,6 +98,14 @@ size knob, or imply that the bounded operator window is an unbounded audit log.
 - **WHEN** lifecycle receives `commit_unknown`
 - **THEN** it returns the ambiguity to its caller
 - **AND** it does not infer authorship from a later matching read
+
+#### Scenario: Definite conflict reconstructs intent from changed authority
+
+- **GIVEN** a transition mutation returns `revision_mismatch` and current authority changes before the next attempt
+- **WHEN** the bounded transition policy continues
+- **THEN** it revalidates the changed phase and declared edge and validates the changed occurrence chain
+- **AND** it reruns projection and the optional mutator against that authority
+- **AND** it rebuilds the audit values, complete desired predicates, and expected revision before mutation
 
 #### Scenario: Transition history survives History one
 

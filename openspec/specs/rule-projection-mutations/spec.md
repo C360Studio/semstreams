@@ -79,19 +79,22 @@ equal the preflighted envelope. Dynamic contract/group selection and arbitrary p
 - **THEN** the replacement snapshot is fully preflighted before activation
 - **AND** the running action envelope remains unchanged
 
-### Requirement: Rule reconcile has one bounded conflict retry
+### Requirement: Rule reconcile makes one exact read and one mutation attempt
 
-Before reconcile, the rule executor MUST exact-read the entity and submit the returned nonzero revision. On definite
-`revision_mismatch`, it MUST perform one fresh exact read, recompute the complete selected group, and retry once. A
-second mismatch is a visible action failure. `commit_unknown` MUST NOT be automatically retried. Successful receipts
-MUST retain the exact committing revision.
+A rule reconcile action MUST resolve its complete desired group once from the `ExecutionContext` that caused the
+evaluation and invoke the contract-bound reconciler once. That call MUST perform exactly one exact authority read and
+one mutation request. A definite `revision_mismatch` MUST remain a visible classified action failure; the action MUST
+NOT replay or recompute the old `ExecutionContext`. `commit_unknown` MUST NOT be automatically retried. Successful
+receipts MUST retain the exact committing revision. No retry helper, knob, loop, or coordinator is part of this
+contract.
 
-#### Scenario: Fighting writers do not spin forever
+#### Scenario: A racing writer produces one visible conflict
 
-- **GIVEN** another writer wins both the initial reconcile and the single retry
-- **WHEN** the second revision mismatch is returned
-- **THEN** the rule action fails visibly
-- **AND** no retry knob, loop, or arbitration service is introduced
+- **GIVEN** another writer commits after the rule action's exact read
+- **WHEN** reconcile returns `revision_mismatch`
+- **THEN** the rule action returns the classified conflict visibly
+- **AND** it sends no second exact read, no second mutation, and no third request of any kind
+- **AND** it does not replay or recompute the old `ExecutionContext`
 
 ### Requirement: Rule mutations use reconcile and append semantics
 
