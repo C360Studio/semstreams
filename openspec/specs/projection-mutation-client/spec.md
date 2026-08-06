@@ -61,7 +61,9 @@ Existing authority MUST return a classified entity-exists outcome; no hierarchy 
 
 Reconcile MUST select one named `reconcile` group, exact-read the entity once, and submit the same-entry nonzero KV
 revision with the complete desired predicate set. Omitted predicates in the selected group MUST be removed; predicates
-outside it MUST remain untouched. The client MUST NOT retry revision mismatch automatically.
+outside it MUST remain untouched. Equality MUST include the persisted `Timestamp`, `Confidence`, and `ExpiresAt`
+annotations as desired state. A caller seeking `unchanged` MUST preserve observed annotations rather than regenerate a
+timestamp. The client MUST NOT retry revision mismatch automatically.
 
 #### Scenario: Component owns retry policy
 
@@ -69,6 +71,13 @@ outside it MUST remain untouched. The client MUST NOT retry revision mismatch au
 - **WHEN** the client returns to its caller
 - **THEN** no automatic second request has been sent
 - **AND** the component may exact-read, recompute, and retry according to its own policy
+
+#### Scenario: Annotation-only desired state commits once
+
+- **GIVEN** a current selected triple and desired state that changes only one persisted annotation
+- **WHEN** the caller reconciles that desired state and then repeats it exactly from the committed revision
+- **THEN** the annotation-only change is applied with a new KV revision
+- **AND** the exact repeat is unchanged without advancing authority
 
 ### Requirement: Append preserves explicit per-subject outcomes
 

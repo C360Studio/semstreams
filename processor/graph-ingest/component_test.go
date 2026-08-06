@@ -35,8 +35,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=769 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=867 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=772 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=870 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -141,6 +141,9 @@ func (m *mockKVBucket) Purge(ctx context.Context, key string, opts ...jetstream.
 }
 
 func (m *mockKVBucket) Watch(ctx context.Context, keys string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
+	if keys == ">" && m.watchAllFactory != nil {
+		return m.watchAllFactory()
+	}
 	return nil, errors.New("not implemented")
 }
 
@@ -973,7 +976,6 @@ func createTestComponentWithMockKVBucket(t *testing.T) (*Component, *mockKVBucke
 	component := comp.(*Component)
 	// Create KVStore wrapper for all KV operations
 	component.entityBucket = natsClient.NewKVStore(mockBucket)
-	component.entityStateBucket = mockBucket
 
 	return component, mockBucket
 }

@@ -496,11 +496,10 @@ type Component struct {
 	logger     *slog.Logger
 
 	// Domain resources
-	entityBucket      *natsclient.KVStore            // KV operations with CAS support
-	entityStateBucket jetstream.KeyValue             // authority-native snapshot and conditional-delete operations
-	entityCache       cache.Cache[graph.EntityState] // Read-through cache for query handlers
-	suffixBucket      *natsclient.KVStore            // KV suffix index: suffix → fullID
-	suffixCache       cache.Cache[string]            // TTL cache for suffix resolution
+	entityBucket *natsclient.KVStore            // authoritative KV operations, snapshot watch, and CAS support
+	entityCache  cache.Cache[graph.EntityState] // Read-through cache for query handlers
+	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
+	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
 
 	// maxPrefixResponseBytesOverride, when > 0, replaces the package-level
 	// maxPrefixResponseBytes byte budget in handleQueryPrefixNATS. It exists
@@ -934,7 +933,7 @@ func (c *Component) Start(ctx context.Context) error {
 	// self-watch on ENTITY_STATES (poison-response-scoping D1). A transport
 	// failure degrades only queries; ingest writers still boot so operators
 	// can repair state through canonical writes before restart.
-	c.startEntityStateGuard(ctx, c.entityStateBucket)
+	c.startEntityStateGuard(ctx, c.entityBucket)
 
 	// Initialize lifecycle reporter (throttled for high-throughput ingestion)
 	c.initLifecycleReporter(ctx)
@@ -1094,7 +1093,6 @@ func (c *Component) initStorage(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "KV bucket creation")
 	}
 	c.entityBucket = c.natsClient.NewKVStore(bucket)
-	c.entityStateBucket = bucket
 
 	// Entity query cache (HybridCache: LRU capacity + TTL freshness)
 	entityCache, err := cache.NewFromConfig[graph.EntityState](ctx, cache.Config{
@@ -1157,9 +1155,9 @@ func (c *Component) initStorage(ctx context.Context) error {
 // key, so gap-resets cannot inflate the received set and the nil
 // end-of-snapshot marker means the full resident state was seen. Raising the
 // bucket's history depth invalidates this marker math.
-func (c *Component) startEntityStateGuard(ctx context.Context, bucket jetstream.KeyValue) {
+func (c *Component) startEntityStateGuard(ctx context.Context, bucket *natsclient.KVStore) {
 	c.entityBootstrapStarted.Store(true)
-	watcher, err := bucket.WatchAll(ctx)
+	watcher, err := bucket.Watch(ctx, ">")
 	if err != nil {
 		if ctx.Err() == nil {
 			c.markEntityWatchLost()
@@ -2145,17 +2143,11 @@ func (c *Component) deleteEntityAtRevision(ctx context.Context, entityID string,
 	if revision == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "deleteEntityAtRevision", "revision must be nonzero")
 	}
-	if c.entityStateBucket == nil {
+	if c.entityBucket == nil {
 		return errors.New("ENTITY_STATES authority bucket unavailable")
 	}
-	if err := c.entityStateBucket.Delete(ctx, entityID, jetstream.LastRevision(revision)); err != nil {
+	if err := c.entityBucket.DeleteAtRevision(ctx, entityID, revision); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		if natsclient.IsKVNotFoundError(err) {
-			return natsclient.ErrKVKeyNotFound
-		}
-		if natsclient.IsKVConflictError(err) {
-			return natsclient.ErrKVRevisionMismatch
-		}
 		return err
 	}
 	c.clearEntityPoisonOnDelete(entityID)

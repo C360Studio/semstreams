@@ -105,6 +105,12 @@ Omitting `example.widget.mode` removes it because it belongs to `runtime`; unrel
 client does not retry revision mismatch. If product semantics allow a retry, the component exact-reads, recomputes the
 complete desired group, and calls again with stable logical-request provenance.
 
+Reconcile treats each triple's persisted annotations as desired state too: `Timestamp`, `Confidence`, and `ExpiresAt`
+participate in equality alongside the append-tuple fields. To receive `unchanged`, preserve those annotations from the
+exact read for facts whose desired state has not changed. Do not regenerate a timestamp (for example with `time.Now()`)
+unless advancing that annotation is the intended mutation; a new timestamp correctly commits a new authority revision
+and notifies watchers.
+
 ## Append
 
 `Append` adds exact canonical tuples to one existing entity through an `append` group. Duplicate tuples are an

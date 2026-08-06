@@ -60,7 +60,7 @@ func TestBootSweepInventoriesResidentPoisonAndBoots(t *testing.T) {
 	c := newIngestGuardTestComponent(bucket)
 	c.logger = slog.New(slog.NewTextHandler(logs, nil))
 
-	c.startEntityStateGuard(context.Background(), bucket)
+	c.startEntityStateGuard(context.Background(), c.entityBucket)
 
 	// Ingest boots and queries are READY — a poisoned entity no longer blocks
 	// the surface.
@@ -146,7 +146,7 @@ func TestBootSweepLastRevisionWins(t *testing.T) {
 			bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return watcher, nil }
 			c := newIngestGuardTestComponent(bucket)
 
-			c.startEntityStateGuard(context.Background(), bucket)
+			c.startEntityStateGuard(context.Background(), c.entityBucket)
 
 			if _, ok := poisonInventoryEntry(c, guardTestPoisonID); ok {
 				t.Fatal("superseded poisoned revision must leave no inventory entry")
@@ -176,7 +176,7 @@ func TestEntityStateGuardBootstrapAndTransportFailureAreTransient(t *testing.T) 
 
 	done := make(chan struct{})
 	go func() {
-		c.startEntityStateGuard(context.Background(), bucket)
+		c.startEntityStateGuard(context.Background(), c.entityBucket)
 		close(done)
 	}()
 	waitForIngestCondition(t, c.entityBootstrapStarted.Load)
@@ -220,7 +220,7 @@ func TestEntityStateGuardDeliberateStopDrainsToCloseWithoutMisclassification(t *
 
 	done := make(chan struct{})
 	go func() {
-		c.startEntityStateGuard(context.Background(), bucket)
+		c.startEntityStateGuard(context.Background(), c.entityBucket)
 		close(done)
 	}()
 	select {

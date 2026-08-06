@@ -44,6 +44,21 @@ explicit triple timestamp conflicts with mutation metadata (`pkg/projection/muta
 typed operator responses, including 503 `commit_unknown` with inspect-authority guidance and no blind-retry advice
 (`gateway/lifecycle-gateway/handlers.go:578`, `gateway/lifecycle-gateway/component_test.go:1455`).
 
+## Pre-merge review follow-ups
+
+Reconcile equality explicitly retains persisted annotations as desired state. An annotation-only change applies once
+and its exact repeat is unchanged (`processor/graph-ingest/canonical_mutations_test.go:345`); the adopter contract says
+to preserve observed timestamps, confidence, and expiry when unchanged is intended
+(`docs/operations/34-projection-mutation-client.md:108`, `openspec/specs/projection-mutation-client/spec.md:62`).
+
+`natsclient.KVStore.DeleteAtRevision` owns conditional delete, input validation, and typed not-found/revision-mismatch
+mapping (`natsclient/kv.go:463`, `natsclient/kv_delete_revision_test.go:27`). Graph-ingest now holds one wrapped
+`ENTITY_STATES` handle for exact reads, Create/CAS, conditional delete, and the bounded boot snapshot sweep through
+`Watch(">")` (`processor/graph-ingest/component.go:1158`, `processor/graph-ingest/component.go:2149`). The real-NATS
+test proves a stale delete preserves authority and the matching revision deletes it
+(`natsclient/kv_integration_test.go:205`). Triple-less canonical Create is explicitly legal and persists a valid
+entity carrying only framework-injected facts (`processor/graph-ingest/canonical_mutations_test.go:106`).
+
 ## Verification record
 
 - `task lint` — green after final reviewer corrections.

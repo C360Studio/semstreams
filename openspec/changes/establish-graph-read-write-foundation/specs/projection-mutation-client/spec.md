@@ -104,6 +104,20 @@ identity.
 - **WHEN** a caller safely retries an operation
 - **THEN** its request ID, source, timestamp, trace ID, and triples are unchanged
 
+### Requirement: Reconcile annotations are desired state
+
+Reconcile equality MUST include persisted `Timestamp`, `Confidence`, and `ExpiresAt` annotations. A caller seeking
+`unchanged` MUST preserve the annotations observed by its exact read and MUST NOT regenerate a timestamp unless changing
+that annotation is intended. An annotation-only difference MUST commit once; an exact repeat from the committed
+revision MUST be unchanged.
+
+#### Scenario: Annotation-only desired state commits once
+
+- **GIVEN** a current selected triple and desired state that changes only one persisted annotation
+- **WHEN** the caller reconciles that desired state and then repeats it exactly from the committed revision
+- **THEN** the first reconcile applies and advances the authority revision
+- **AND** the exact repeat is unchanged
+
 ### Requirement: Child-entity model remains separate
 
 The child-entity model MUST remain separate from the mutation client. The client MAY provide create, reconcile,

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/nats-io/nats.go/jetstream"
 )
@@ -452,6 +453,36 @@ func (kv *KVStore) Delete(ctx context.Context, key string) error {
 
 	if kv.logger != nil {
 		kv.logger.Debug("KV delete", slog.String("key", key))
+	}
+
+	return nil
+}
+
+// DeleteAtRevision removes a key only when revision is still current.
+// It makes one revision-fenced delete attempt and never reads or retries.
+func (kv *KVStore) DeleteAtRevision(ctx context.Context, key string, revision uint64) error {
+	if revision == 0 {
+		return errs.WrapInvalid(errors.New("revision must be nonzero"), "KVStore", "DeleteAtRevision", "validate revision")
+	}
+	if err := ValidateKVLiteralKey(key); err != nil {
+		return err
+	}
+
+	ctx, cancel := kv.applyTimeout(ctx)
+	defer cancel()
+
+	if err := kv.bucket.Delete(ctx, key, jetstream.LastRevision(revision)); err != nil {
+		if IsKVNotFoundError(err) {
+			return ErrKVKeyNotFound
+		}
+		if IsKVConflictError(err) {
+			return ErrKVRevisionMismatch
+		}
+		return fmt.Errorf("kv delete %s at revision %d: %w", key, revision, err)
+	}
+
+	if kv.logger != nil {
+		kv.logger.Debug("KV delete at revision", slog.String("key", key), slog.Uint64("revision", revision))
 	}
 
 	return nil
