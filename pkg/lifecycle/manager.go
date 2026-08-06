@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"reflect"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
@@ -31,7 +30,6 @@ var lifecycleMessageType = message.Type{
 type entityStatesReader interface {
 	ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error)
 	Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
-	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
 }
 
 // Manager is the schema-and-discipline layer over ENTITY_STATES
@@ -65,43 +63,6 @@ type Manager struct {
 	// callers polling at dashboard frequencies don't generate
 	// N×interval log lines per drifted entity.
 	driftSeen sync.Map
-
-	// graphStatePoison is sticky for the Manager lifetime. Once any
-	// authoritative ENTITY_STATES value violates the running graph contract,
-	// lifecycle projections and writes remain blocked until operator reset,
-	// canonical reingest, and process restart.
-	graphStatePoison atomic.Pointer[graphStatePoisonLatch]
-
-	// One process-lifetime WatchAll owns authoritative graph-contract
-	// validation. Workflow subscribers use pattern watches and wait for this
-	// guard's clean bootstrap and revision watermark instead of multiplying
-	// full-graph scans.
-	graphStateGuardMu        sync.Mutex
-	graphStateGuardStarted   bool
-	graphStateGuardCtx       context.Context
-	graphStateGuardCancel    context.CancelFunc
-	graphStateGuardReady     chan struct{}
-	graphStateGuardDone      chan struct{}
-	graphStateGuardReadyOnce sync.Once
-	graphStateGuardDoneOnce  sync.Once
-	graphStateGuardResult    atomic.Pointer[graphStateGuardResult]
-	graphStateGuardDegraded  atomic.Pointer[graphStateGuardTransportFailure]
-	graphStateGuardRevision  atomic.Uint64
-	graphStateProgressMu     sync.Mutex
-	graphStateProgress       chan struct{}
-	graphStateGuardWG        sync.WaitGroup
-}
-
-type graphStatePoisonLatch struct {
-	reason graph.StateResetReason
-}
-
-type graphStateGuardResult struct {
-	clean bool
-}
-
-type graphStateGuardTransportFailure struct {
-	err error
 }
 
 // registration holds the per-workflow-type state Manager needs at
@@ -122,17 +83,11 @@ func NewManager(client *natsclient.Client, logger *slog.Logger) *Manager {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	guardCtx, guardCancel := context.WithCancel(context.Background())
 	manager := &Manager{
-		natsClient:            client,
-		logger:                logger,
-		emitter:               newGraphEmitterNATS(client, 5*time.Second),
-		registrations:         make(map[string]*registration),
-		graphStateGuardCtx:    guardCtx,
-		graphStateGuardCancel: guardCancel,
-		graphStateGuardReady:  make(chan struct{}),
-		graphStateGuardDone:   make(chan struct{}),
-		graphStateProgress:    make(chan struct{}),
+		natsClient:    client,
+		logger:        logger,
+		emitter:       newGraphEmitterNATS(client, 5*time.Second),
+		registrations: make(map[string]*registration),
 	}
 	if client != nil {
 		manager.exactReader = graph.NewExactEntityReader(client, 5*time.Second)
@@ -248,9 +203,6 @@ func (m *Manager) ensureBucket(ctx context.Context) (entityStatesReader, error) 
 // KV revision. Returns ErrEntityNotFound when the entity has no
 // triples at all (never created).
 func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.EntityState, uint64, error) {
-	if err := m.graphStateContractError("getEntity"); err != nil {
-		return nil, 0, err
-	}
 	if m.exactReader == nil {
 		return nil, 0, errors.New("lifecycle: exact entity reader unavailable")
 	}
@@ -260,37 +212,9 @@ func (m *Manager) getEntity(ctx context.Context, entityID string) (*graph.Entity
 		if errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound {
 			return nil, 0, fmt.Errorf("%w: entity_id=%q", ErrEntityNotFound, entityID)
 		}
-		m.latchGraphStatePoison(err)
-		if poisonErr := m.graphStateContractError("getEntity"); poisonErr != nil {
-			return nil, 0, poisonErr
-		}
 		return nil, 0, fmt.Errorf("lifecycle: exact read for %q: %w", entityID, err)
 	}
 	return exact.Entity, exact.KVRevision, nil
-}
-
-func (m *Manager) latchGraphStatePoison(err error) bool {
-	var contractErr *graph.StateContractError
-	if !errors.As(err, &contractErr) {
-		return false
-	}
-	if m.graphStatePoison.CompareAndSwap(nil, &graphStatePoisonLatch{reason: contractErr.Reason}) {
-		m.logger.Error("authoritative graph state requires reset; lifecycle access is blocked",
-			slog.String("code", graph.ErrorCodeGraphStateResetRequired),
-			slog.String("reason", string(contractErr.Reason)))
-		m.publishGraphStateGuardReady(false)
-		m.graphStateGuardDoneOnce.Do(func() { close(m.graphStateGuardDone) })
-	}
-	return true
-}
-
-func (m *Manager) graphStateContractError(operation string) error {
-	poison := m.graphStatePoison.Load()
-	if poison == nil {
-		return nil
-	}
-	return errs.WrapFatal(&graph.StateContractError{Reason: poison.reason}, "lifecycle.Manager", operation,
-		"authoritative graph state requires operator reset and canonical reingest")
 }
 
 // Get reads the entity at entityID for the given workflow and

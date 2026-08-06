@@ -16,7 +16,7 @@
 //  5. UDP  mission.command=launch                           → rule fires lifecycle_transition; phase moves planning → flying
 //  6. POST /lifecycle-gateway/workflows/mission/{id}/transition → operator drives flying → completed
 //  7. GET  /lifecycle-gateway/workflows/mission/{id}/history → 2 transition events (rule + operator)
-//  8. WS   /lifecycle-gateway/workflows/mission?stream=true  → live update arrives on concurrent operator patch
+//  8. WS + direct test-only ENTITY_STATES fault injection → unrelated poison A does not block later valid B
 //
 // Discipline:
 //   - Drives the running container (not internal helpers) per
@@ -34,6 +34,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -45,12 +46,15 @@ import (
 	"github.com/c360studio/semstreams/test/e2e/client"
 	"github.com/c360studio/semstreams/test/e2e/scenarios"
 	"github.com/gorilla/websocket"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // MissionEntityID is the identifier seeded by the e2e binary via
 // `--lifecycle-seed`. Matches docker/compose/lifecycle.yml and
 // cmd/e2e-semstreams's --lifecycle-seed flag.
 const MissionEntityID = "c360.test.lifecycle.gcs.mission.m001"
+
+const lifecycleNATSURL = "nats://localhost:34222"
 
 // Config holds runtime settings for the lifecycle scenario.
 type Config struct {
@@ -315,12 +319,17 @@ func (s *Scenario) stageHistory(ctx context.Context, result *scenarios.Result) e
 	return nil
 }
 
-// stageWebSocket opens the watch stream, fires a concurrent operator
-// patch (Note field), and asserts a live update arrives on the stream
-// within WatchEventTimeout. Mission is already in `completed`
-// (terminal), so we patch the operator_writable Note field rather
-// than attempting a transition.
-func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result) error {
+// stageWebSocket opens the watch stream, injects nonmatching poison A, then
+// applies valid B through the operator path and requires that later update on
+// the already-open stream. Mission is already in `completed` (terminal), so B
+// changes the operator-writable Note field rather than phase.
+func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result) (stageErr error) {
+	validation, authority, err := openLifecycleAuthority(ctx)
+	if err != nil {
+		return err
+	}
+	defer closeLifecycleValidation(&stageErr, validation)
+
 	wsURL := &url.URL{
 		Scheme:   s.config.WSScheme,
 		Host:     stripScheme(s.config.BaseURL),
@@ -344,16 +353,39 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 	if err := conn.ReadJSON(&bootstrap); err != nil {
 		return fmt.Errorf("ws read bootstrap: %w", err)
 	}
+	if bootstrap["entity_id"] != MissionEntityID {
+		return fmt.Errorf("ws bootstrap entity=%v, want %q", bootstrap["entity_id"], MissionEntityID)
+	}
 	result.Details["ws_bootstrap"] = bootstrap
 
-	// Fire the patch concurrently after a small delay so the
-	// stream is firmly in live-update mode.
-	patchErr := make(chan error, 1)
-	go func() {
-		time.Sleep(150 * time.Millisecond)
-		body, _ := json.Marshal(map[string]any{"note": "scenario ws patch"})
-		patchErr <- s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/state", body)
+	// The consumed bootstrap proves the production watch is established before
+	// fault injection. A is valid as a KV key but outside the mission workflow.
+	const poisonID = "c360.test.other.gcs.device.poison-a"
+	poisonRevision, err := injectLifecyclePoison(ctx, authority, poisonID)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := authority.Delete(context.Background(), poisonID); err != nil && !errors.Is(err, jetstream.ErrKeyNotFound) {
+			stageErr = errors.Join(stageErr, fmt.Errorf("delete injected poison %q: %w", poisonID, err))
+		}
 	}()
+	result.Details["poison_revision"] = poisonRevision
+
+	// B is a later valid authority write through the production operator seam.
+	const patchedNote = "scenario ws patch after unrelated poison"
+	body, _ := json.Marshal(map[string]any{"note": patchedNote})
+	if err := s.postJSON(ctx, "/lifecycle-gateway/workflows/mission/"+MissionEntityID+"/state", body); err != nil {
+		return fmt.Errorf("operator patch after nonmatching poison: %w", err)
+	}
+	bEntry, err := authority.Get(ctx, MissionEntityID)
+	if err != nil {
+		return fmt.Errorf("read back valid B after patch: %w", err)
+	}
+	if bEntry.Revision() <= poisonRevision {
+		return fmt.Errorf("valid B revision=%d, want later than poison A revision=%d", bEntry.Revision(), poisonRevision)
+	}
+	result.Details["valid_b_revision"] = bEntry.Revision()
 
 	// Wait for the live update that reflects the patch.
 	deadline := time.Now().Add(s.config.WatchEventTimeout)
@@ -365,15 +397,95 @@ func (s *Scenario) stageWebSocket(ctx context.Context, result *scenarios.Result)
 		if err := conn.ReadJSON(&live); err != nil {
 			return fmt.Errorf("ws read live update: %w", err)
 		}
-		if note, _ := live["note"].(string); note == "scenario ws patch" {
+		if note, _ := live["note"].(string); note == patchedNote {
 			result.Details["ws_live_update"] = live
-			if err := <-patchErr; err != nil {
-				return fmt.Errorf("ws patch concurrent: %w", err)
-			}
-			return nil
+			break
 		}
 	}
-	return fmt.Errorf("ws did not deliver live update with note=\"scenario ws patch\" within %s", s.config.WatchEventTimeout)
+	if _, ok := result.Details["ws_live_update"]; !ok {
+		return fmt.Errorf("ws did not deliver valid B after unrelated poison within %s", s.config.WatchEventTimeout)
+	}
+
+	var instances []map[string]any
+	if err := s.getJSON(ctx, "/lifecycle-gateway/workflows/mission", &instances); err != nil {
+		return fmt.Errorf("list valid workflow after poison: %w", err)
+	}
+	foundMission := false
+	for _, instance := range instances {
+		if instance["entity_id"] == MissionEntityID {
+			foundMission = true
+			break
+		}
+	}
+	if !foundMission {
+		return fmt.Errorf("valid B absent from mission list after unrelated poison")
+	}
+	state, err := s.getMissionState(ctx)
+	if err != nil {
+		return fmt.Errorf("exact GET valid B after poison: %w", err)
+	}
+	if state.Note != patchedNote {
+		return fmt.Errorf("exact GET valid B note=%q, want %q", state.Note, patchedNote)
+	}
+
+	newConn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL.String(), header)
+	if err != nil {
+		return fmt.Errorf("new ws after poison: %w", err)
+	}
+	defer func() { _ = newConn.Close() }()
+	if err := newConn.SetReadDeadline(time.Now().Add(s.config.WatchEventTimeout)); err != nil {
+		return fmt.Errorf("new ws set read deadline: %w", err)
+	}
+	var newBootstrap map[string]any
+	if err := newConn.ReadJSON(&newBootstrap); err != nil {
+		return fmt.Errorf("new ws bootstrap after poison: %w", err)
+	}
+	if newBootstrap["entity_id"] != MissionEntityID {
+		return fmt.Errorf("new ws bootstrap entity=%v, want %q", newBootstrap["entity_id"], MissionEntityID)
+	}
+	result.Details["ws_bootstrap_after_poison"] = newBootstrap
+	return nil
+}
+
+func openLifecycleAuthority(ctx context.Context) (*client.NATSValidationClient, jetstream.KeyValue, error) {
+	validation, err := client.NewNATSValidationClient(ctx, lifecycleNATSURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("connect lifecycle NATS validation client: %w", err)
+	}
+	js, err := validation.Client().JetStream()
+	if err != nil {
+		_ = validation.Close(context.Background())
+		return nil, nil, fmt.Errorf("lifecycle validation JetStream: %w", err)
+	}
+	authority, err := js.KeyValue(ctx, client.BucketEntityStates)
+	if err != nil {
+		_ = validation.Close(context.Background())
+		return nil, nil, fmt.Errorf("open %s for fault injection: %w", client.BucketEntityStates, err)
+	}
+	return validation, authority, nil
+}
+
+func closeLifecycleValidation(stageErr *error, validation *client.NATSValidationClient) {
+	if err := validation.Close(context.Background()); err != nil {
+		*stageErr = errors.Join(*stageErr, fmt.Errorf("close lifecycle NATS validation client: %w", err))
+	}
+}
+
+func injectLifecyclePoison(ctx context.Context, authority jetstream.KeyValue, poisonID string) (uint64, error) {
+	poison := []byte(`{"id":"c360.test.other.gcs.device.poison-a","triples":[{"subject":"c360.test.other.gcs.device.poison-a","predicate":"legacy.predicate","object":"poison"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
+	poisonRevision, err := authority.Put(ctx, poisonID, poison)
+	if err != nil {
+		return 0, fmt.Errorf("inject nonmatching authority poison: %w", err)
+	}
+	poisonEntry, err := authority.Get(ctx, poisonID)
+	if err != nil {
+		return 0, fmt.Errorf("read back injected poison: %w", err)
+	}
+	if poisonEntry.Revision() != poisonRevision || !bytes.Equal(poisonEntry.Value(), poison) {
+		return 0, fmt.Errorf("poison readback mismatch: revision=%d want=%d bytes_equal=%t",
+			poisonEntry.Revision(), poisonRevision, bytes.Equal(poisonEntry.Value(), poison))
+	}
+	return poisonRevision, nil
 }
 
 // --- helpers ---

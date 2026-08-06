@@ -166,3 +166,65 @@ and unavailable or internal failure without collapsing them into success.
 - **GIVEN** an operator acts from a stale exact read
 - **WHEN** lifecycle returns revision mismatch
 - **THEN** the gateway exposes the conflict without converting it to success
+
+### Requirement: Authority poison is scoped to the observing lifecycle operation
+
+Lifecycle exact operations MUST validate only the requested authority entity. Poison MUST return the existing typed
+`graph_state_reset_required` classification with no participant, history, relationship result, or mutation request.
+The failure MUST NOT alter later operations on another entity, and a later real read of a repaired entity MUST evaluate
+the repaired current bytes without a Manager-lifetime poison state.
+
+#### Scenario: Poisoned A does not block valid B or repaired A
+
+- **GIVEN** an exact lifecycle operation observes poisoned entity A
+- **WHEN** a later operation reads valid entity B and A is subsequently repaired
+- **THEN** B remains usable and the next exact read evaluates repaired A
+- **AND** the poisoned operation emitted no partial projection or mutation
+
+### Requirement: Lifecycle list narrows workflow scope before authority decode
+
+`List(workflow)` MUST reject nonmatching keys using the registered entity pattern before exact-reading or decoding
+them. Poison outside the requested workflow MUST be irrelevant. Poison in a matching entity MUST fail the whole list
+with typed `graph_state_reset_required` and no partial slice.
+
+#### Scenario: Matching and nonmatching list poison have different scope
+
+- **GIVEN** one valid lifecycle entity, one nonmatching poisoned entity, and one matching poisoned entity
+- **WHEN** the workflow list is evaluated first without and then with the matching poisoned key
+- **THEN** the nonmatching poison is not decoded
+- **AND** the matching poison returns no partial list
+
+### Requirement: Lifecycle watch poison and transport loss are subscription-local
+
+Each successful `Watch` or `WatchEvents` call MUST own exactly one workflow-pattern watcher. A poisoned matching entry
+MUST emit no participant, event, callback, or mutation; it MUST log exactly one WARN for that subscription with
+`workflow`, `entity`, `revision`, code `graph_state_reset_required`, and the canonical reason, then close only that
+subscription. Unexpected watcher transport closure MUST retain the existing `index_not_ready` warning and close only
+that subscription. Context cancellation MUST close quietly. None of these outcomes may block a later subscription.
+
+#### Scenario: Poisoned subscription closes while unrelated subscription continues
+
+- **GIVEN** independent lifecycle subscriptions for workflows A and B
+- **WHEN** A's pattern watcher observes a poisoned matching entry
+- **THEN** A closes without output after one structured warning
+- **AND** B continues to deliver later valid authority updates
+
+#### Scenario: Transport and cancellation remain local
+
+- **GIVEN** one pattern watcher closes unexpectedly and another watch is opened later
+- **WHEN** the later watcher receives a valid update
+- **THEN** the later subscription delivers it
+- **AND** canceling a subscription emits no degradation or poison warning
+
+### Requirement: Asynchronous lifecycle termination retains the value-channel contract
+
+After a watch opens successfully, channel closure MUST remain its sole terminal signal. Lifecycle MUST NOT add a
+terminal-error channel, poison status, metric, configuration field, or gateway mapping. WebSocket consumers MUST retain
+their existing close-on-channel-close behavior.
+
+#### Scenario: Existing adopter API remains unchanged
+
+- **GIVEN** a caller using `Watch` or `WatchEvents`
+- **WHEN** its subscription terminates asynchronously
+- **THEN** the existing value channel closes
+- **AND** the caller is not required to configure or consume a new lifecycle surface

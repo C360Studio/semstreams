@@ -8,17 +8,21 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go"
 )
 
-func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
+func TestGetPoisonIsScopedAndRepairIsObservedOnNextRead(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
-	entityID := "acme.ops.lifecycle.gcs.mission.poisoned"
-	bucket.raw[entityID] = poisonedLifecycleState(entityID)
+	poisonID := "acme.ops.lifecycle.gcs.mission.poisoned-a"
+	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	bucket.raw[poisonID] = poisonedLifecycleState(poisonID)
+	bucket.put(validID, validLifecycleState(validID))
 
-	participant, err := mgr.Get(context.Background(), "fixture", entityID)
+	participant, err := mgr.Get(context.Background(), "fixture", poisonID)
 	if err == nil || !errs.IsFatal(err) {
 		t.Fatalf("Get error = %T %v, want fatal reset-required", err, err)
 	}
@@ -27,13 +31,105 @@ func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
 	}
 	assertResetReason(t, err, graph.GraphStateReasonNoncanonicalPredicate)
 
-	// Sticky means later calls fail before reading, even if the offending key
-	// were repaired in place. Recovery requires the documented wipe/restart/reseed
-	// and process restart boundary.
-	delete(bucket.raw, entityID)
-	participant, err = mgr.Get(context.Background(), "fixture", entityID)
-	if err == nil || !errs.IsFatal(err) || participant != nil {
-		t.Fatalf("second Get = (%#v, %v), want sticky fatal with nil projection", participant, err)
+	participant, err = mgr.Get(context.Background(), "fixture", validID)
+	if err != nil || participant == nil || participant.EntityID() != validID {
+		t.Fatalf("unrelated Get = (%#v, %v), want valid B", participant, err)
+	}
+
+	delete(bucket.raw, poisonID)
+	bucket.put(poisonID, validLifecycleState(poisonID))
+	participant, err = mgr.Get(context.Background(), "fixture", poisonID)
+	if err != nil || participant == nil || participant.EntityID() != poisonID {
+		t.Fatalf("repaired Get = (%#v, %v), want repaired A", participant, err)
+	}
+}
+
+func TestPoisonedMutationPreconditionEmitsNoMutation(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	entityID := "acme.ops.lifecycle.gcs.mission.poisoned"
+	bucket.raw[entityID] = poisonedLifecycleState(entityID)
+
+	err := mgr.Transition(context.Background(), "fixture", entityID, "flying", TransitionSourceRule, "go")
+	if err == nil || !errs.IsFatal(err) {
+		t.Fatalf("Transition error = %T %v, want fatal reset-required", err, err)
+	}
+	if len(emitter.requests) != 0 {
+		t.Fatalf("mutation requests = %d, want zero", len(emitter.requests))
+	}
+}
+
+func TestListFiltersWorkflowBeforeDecodeAndReturnsNoPartialOnMatchingPoison(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	validID := "acme.ops.lifecycle.gcs.mission.valid"
+	nonmatchingPoisonID := "acme.ops.other.gcs.device.poison"
+	bucket.put(validID, validLifecycleState(validID))
+	bucket.raw[nonmatchingPoisonID] = poisonedLifecycleState(nonmatchingPoisonID)
+	bucket.listKeys = []string{nonmatchingPoisonID, validID}
+
+	participants, err := mgr.List(context.Background(), "fixture", ListOptions{})
+	if err != nil || len(participants) != 1 || participants[0].EntityID() != validID {
+		t.Fatalf("List with nonmatching poison = (%#v, %v), want valid entity", participants, err)
+	}
+
+	matchingPoisonID := "acme.ops.lifecycle.gcs.mission.poison"
+	bucket.raw[matchingPoisonID] = poisonedLifecycleState(matchingPoisonID)
+	bucket.listKeys = []string{validID, matchingPoisonID}
+	participants, err = mgr.List(context.Background(), "fixture", ListOptions{})
+	if err == nil || !errs.IsFatal(err) {
+		t.Fatalf("List matching poison error = %T %v, want fatal", err, err)
+	}
+	if participants != nil {
+		t.Fatalf("List matching poison returned partial %#v, want nil", participants)
+	}
+}
+
+type classifiedPoisonRequester struct {
+	entityID string
+}
+
+func (r classifiedPoisonRequester) RequestClassified(
+	context.Context,
+	string,
+	[]byte,
+	time.Duration,
+) ([]byte, error) {
+	msg := &nats.Msg{
+		Header: nats.Header{},
+		Data: []byte(`{"message":"graph_state_reset_required: noncanonical_predicate: entity ` + r.entityID +
+			`","detail":{"reason":"noncanonical_predicate","entity_id":"` + r.entityID + `"}}`),
+	}
+	msg.Header.Set(natsclient.HeaderStatus, natsclient.HeaderStatusError)
+	msg.Header.Set(natsclient.HeaderErrorClass, natsclient.ErrorClassFatal)
+	msg.Header.Set(natsclient.HeaderErrorCode, graph.ErrorCodeGraphStateResetRequired)
+	return natsclient.ClassifyReply(msg)
+}
+
+func TestProductionExactRPCPoisonPreservesClassificationWithoutConcreteCause(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, _ := newTestManager(t)
+	entityID := "acme.ops.lifecycle.gcs.mission.poisoned"
+	mgr.exactReader = graph.NewExactEntityReader(classifiedPoisonRequester{entityID: entityID}, time.Second)
+
+	participant, err := mgr.Get(context.Background(), "fixture", entityID)
+	if participant != nil || err == nil || !errs.IsFatal(err) {
+		t.Fatalf("Get = (%#v, %v), want nil fatal", participant, err)
+	}
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) || classified.Code != graph.ErrorCodeGraphStateResetRequired {
+		t.Fatalf("Get error = %v, want code %q", err, graph.ErrorCodeGraphStateResetRequired)
+	}
+	if classified.Detail["reason"] != string(graph.GraphStateReasonNoncanonicalPredicate) ||
+		classified.Detail["entity_id"] != entityID {
+		t.Fatalf("classified detail = %#v, want poison reason/entity", classified.Detail)
+	}
+	var contractErr *graph.StateContractError
+	if errors.As(err, &contractErr) {
+		t.Fatalf("production RPC unexpectedly preserved concrete StateContractError: %#v", contractErr)
+	}
+	if len(emitter.requests) != 0 {
+		t.Fatalf("mutation requests = %d, want zero", len(emitter.requests))
 	}
 }
 

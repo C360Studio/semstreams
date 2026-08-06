@@ -73,7 +73,9 @@
 - [x] 7.2 Remove ownership buckets/catalog entries, lease config, six explicit settings, schemas, metrics, request
       fields,
       boot wiring, shutdown wiring, and documentation.
-- [x] 7.3 Preserve the graph-state guard and catalog cleanliness check under neutral composition names.
+- [x] 7.3 Preserve the catalog cleanliness check under a neutral composition name. The graph-state-guard preservation
+      clause was truthful for the GS-01 landing and is superseded by R1b / ADR-092; lifecycle validation now rides
+      exact and workflow-pattern reads.
 - [x] 7.4 Update current project context and affected ADR status notes at the coordinated runtime cutover.
 
 ## 8. Verification and coordinated cutover

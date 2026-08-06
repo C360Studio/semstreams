@@ -40,17 +40,11 @@ func newManagerForTest(logger *slog.Logger, emitter graphEmitter, bucket jetstre
 	if logger == nil {
 		logger = slog.Default()
 	}
-	guardCtx, guardCancel := context.WithCancel(context.Background())
 	return &Manager{
-		logger:                logger,
-		emitter:               emitter,
-		exactReader:           bucketExactEntityReader{bucket: bucket},
-		entityStatesBucket:    bucket,
-		registrations:         make(map[string]*registration),
-		graphStateGuardCtx:    guardCtx,
-		graphStateGuardCancel: guardCancel,
-		graphStateGuardReady:  make(chan struct{}),
-		graphStateGuardDone:   make(chan struct{}),
-		graphStateProgress:    make(chan struct{}),
+		logger:             logger,
+		emitter:            emitter,
+		exactReader:        bucketExactEntityReader{bucket: bucket},
+		entityStatesBucket: bucket,
+		registrations:      make(map[string]*registration),
 	}
 }

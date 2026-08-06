@@ -1,8 +1,10 @@
 package lifecycle
 
 import (
+	"bytes"
 	"context"
-	"errors"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -28,483 +30,252 @@ func (w *lifecycleAtomicWatcher) Stop() error {
 	return nil
 }
 
-func TestLifecycleWatchBootstrapIsAtomicAcrossPredicatePoisonOrdering(t *testing.T) {
+func TestLifecycleMatchingWatchPoisonDoesNotBlockUnrelatedExactRead(t *testing.T) {
 	t.Parallel()
-	validID := "acme.ops.lifecycle.gcs.mission.valid"
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison"
-	valid := validLifecycleWatchEntry(t, validID, 1)
-	poison := &fakeKVEntry{key: poisonID, value: poisonedLifecycleState(poisonID), revision: 2, created: time.Now()}
+	mgr, _, bucket := newTestManager(t)
 
-	for _, tc := range []struct {
-		name    string
-		entries []jetstream.KeyValueEntry
-	}{
-		{name: "valid then poison", entries: []jetstream.KeyValueEntry{valid, poison}},
-		{name: "poison then valid", entries: []jetstream.KeyValueEntry{poison, valid}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mgr, _, bucket := newTestManager(t)
-			guard := newLifecycleAtomicWatcher()
-			pattern := newLifecycleAtomicWatcher()
-			bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return guard, nil }
-			bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return pattern, nil }
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			delivered, err := mgr.WatchEvents(ctx, "fixture")
-			if err != nil {
-				t.Fatalf("WatchEvents: %v", err)
-			}
-			pattern.updates <- valid
-			pattern.updates <- nil
-			for _, entry := range tc.entries {
-				guard.updates <- entry
-			}
-			waitForLifecycleWatch(t, func() bool { return mgr.graphStatePoison.Load() != nil })
-			select {
-			case got, ok := <-delivered:
-				if ok {
-					t.Fatalf("partial bootstrap delivery = %#v, want none", got)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("workflow watch did not close after guard poison")
-			}
-			mgr.graphStateGuardCancel()
-			mgr.graphStateGuardWG.Wait()
-		})
-	}
-}
+	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	bucket.put(validID, validLifecycleState(validID))
 
-func TestLifecycleWatchLivePoisonClosesProjectionGate(t *testing.T) {
-	t.Parallel()
-	mgr, _, _ := newTestManager(t)
-	markLifecycleGuardClean(mgr)
-	reg, err := mgr.lookupByWorkflow("fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
 	watcher := newLifecycleAtomicWatcher()
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	delivered := make(chan Event, 4)
-	go mgr.runWatchLoop(ctx, reg, watcher,
-		func(id string, p Participant) bool {
-			delivered <- Event{Op: Upserted, EntityID: id, Participant: p}
-			return true
-		},
-		nil)
-
-	bootstrapID := "acme.ops.lifecycle.gcs.mission.bootstrap"
-	watcher.updates <- validLifecycleWatchEntry(t, bootstrapID, 1)
-	watcher.updates <- nil
-	select {
-	case got := <-delivered:
-		if got.EntityID != bootstrapID {
-			t.Fatalf("bootstrap entity = %q, want %q", got.EntityID, bootstrapID)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("clean bootstrap was not released")
-	}
-
-	poisonID := "acme.ops.lifecycle.gcs.mission.poison"
-	watcher.updates <- &fakeKVEntry{key: poisonID, value: poisonedLifecycleState(poisonID), revision: 2, created: time.Now()}
-	watcher.updates <- validLifecycleWatchEntry(t, "acme.ops.lifecycle.gcs.mission.after", 3)
-	waitForLifecycleWatch(t, func() bool { return mgr.graphStatePoison.Load() != nil })
-	select {
-	case got := <-delivered:
-		t.Fatalf("delivery after live poison = %#v, want none", got)
-	case <-time.After(30 * time.Millisecond):
-	}
-}
-
-func TestLifecycleWatchRevisionBarrierBlocksLaterValidBehindEarlierPoison(t *testing.T) {
-	t.Parallel()
-	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	pattern := newLifecycleAtomicWatcher()
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return guard, nil }
-	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return pattern, nil }
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	out, err := mgr.WatchEvents(ctx, "fixture")
-	if err != nil {
-		t.Fatalf("WatchEvents: %v", err)
-	}
-	guard.updates <- nil
-	waitForLifecycleWatch(t, func() bool {
-		result := mgr.graphStateGuardResult.Load()
-		return result != nil && result.clean
-	})
-
-	// The pattern subscription is deliberately scheduled ahead of the
-	// authoritative subscription. Revision 3 must not escape until the guard
-	// has validated through revision 3; revision 2 is poison, so it must never
-	// escape at all.
-	pattern.updates <- validLifecycleWatchEntry(t, "acme.ops.lifecycle.gcs.mission.after", 3)
-	select {
-	case got := <-out:
-		t.Fatalf("revision 3 escaped its authoritative barrier: %#v", got)
-	case <-time.After(30 * time.Millisecond):
-	}
-	poisonID := "acme.ops.other.gcs.device.poison"
-	guard.updates <- &fakeKVEntry{
-		key: poisonID, value: poisonedLifecycleState(poisonID), revision: 2, created: time.Now(),
-	}
-	waitForLifecycleWatch(t, func() bool { return mgr.graphStatePoison.Load() != nil })
-	select {
-	case got, ok := <-out:
-		if ok {
-			t.Fatalf("revision 3 delivered after earlier poison: %#v", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("workflow watch did not close after earlier authoritative poison")
-	}
-	mgr.graphStateGuardCancel()
-	mgr.graphStateGuardWG.Wait()
-}
-
-func TestLifecycleWatchUnexpectedTransportCloseDoesNotLatchResetRequired(t *testing.T) {
-	t.Parallel()
-	mgr, _, _ := newTestManager(t)
-	markLifecycleGuardClean(mgr)
-	reg, err := mgr.lookupByWorkflow("fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
-	watcher := newLifecycleAtomicWatcher()
-	delivered := make(chan Event, 1)
-	done := make(chan struct{})
-	go func() {
-		mgr.runWatchLoop(context.Background(), reg, watcher,
-			func(id string, p Participant) bool {
-				delivered <- Event{Op: Upserted, EntityID: id, Participant: p}
-				return true
-			}, nil)
-		close(done)
-	}()
-
-	close(watcher.updates)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("watch loop did not stop after unexpected close")
-	}
-	if mgr.graphStatePoison.Load() != nil {
-		t.Fatal("transport close was misclassified as graph-state poison")
-	}
-	select {
-	case got := <-delivered:
-		t.Fatalf("partial bootstrap delivery = %#v, want none", got)
-	default:
-	}
-}
-
-func TestLifecycleWatcherStartFailuresAreTransientIndexNotReady(t *testing.T) {
-	t.Parallel()
-	for _, tc := range []struct {
-		name      string
-		configure func(*fakeBucket)
-	}{
-		{
-			name: "authoritative guard",
-			configure: func(bucket *fakeBucket) {
-				bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) {
-					return nil, errors.New("guard unavailable")
-				}
-			},
-		},
-		{
-			name: "workflow pattern",
-			configure: func(bucket *fakeBucket) {
-				bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) {
-					return newLifecycleAtomicWatcher(), nil
-				}
-				bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) {
-					return nil, errors.New("pattern unavailable")
-				}
-			},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mgr, _, bucket := newTestManager(t)
-			tc.configure(bucket)
-			_, err := mgr.Watch(context.Background(), "fixture")
-			if err == nil || !serrs.IsTransient(err) {
-				t.Fatalf("Watch error = %T %v, want transient", err, err)
-			}
-			var classified *serrs.ClassifiedError
-			if !errors.As(err, &classified) || classified.Code != graph.ErrorCodeIndexNotReady {
-				t.Fatalf("Watch error = %v, want code %q", err, graph.ErrorCodeIndexNotReady)
-			}
-			mgr.graphStateGuardCancel()
-			mgr.graphStateGuardWG.Wait()
-		})
-	}
-}
-
-func TestLifecycleWatchCloseAfterCancellationDoesNotReportPoison(t *testing.T) {
-	t.Parallel()
-	mgr, _, _ := newTestManager(t)
-	markLifecycleGuardClean(mgr)
-	reg, err := mgr.lookupByWorkflow("fixture")
-	if err != nil {
-		t.Fatal(err)
-	}
-	watcher := newLifecycleAtomicWatcher()
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		mgr.runWatchLoop(ctx, reg, watcher, func(string, Participant) bool { return true }, nil)
-		close(done)
-	}()
-
-	cancel()
-	close(watcher.updates)
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("watch loop did not stop after cancellation")
-	}
-	if mgr.graphStatePoison.Load() != nil {
-		t.Fatal("normal cancellation was misreported as graph poison")
-	}
-}
-
-func TestLifecycleManagerUsesOneAuthoritativeGuardForManyWorkflowWatches(t *testing.T) {
-	t.Parallel()
-	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	var watchAllCalls atomic.Int64
-	var patternCalls atomic.Int64
-	var patterns []string
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) {
-		watchAllCalls.Add(1)
-		return guard, nil
-	}
-	bucket.watchFactory = func(pattern string) (jetstream.KeyWatcher, error) {
-		patternCalls.Add(1)
-		patterns = append(patterns, pattern)
-		return newLifecycleAtomicWatcher(), nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	_, first, err := mgr.startWatch(ctx, "fixture", "Watch")
-	if err != nil {
-		t.Fatalf("first startWatch: %v", err)
-	}
-	defer first.Stop()
-	_, second, err := mgr.startWatch(ctx, "fixture", "WatchEvents")
-	if err != nil {
-		t.Fatalf("second startWatch: %v", err)
-	}
-	defer second.Stop()
-
-	if got := watchAllCalls.Load(); got != 1 {
-		t.Fatalf("WatchAll calls = %d, want one shared authoritative scan", got)
-	}
-	if got := patternCalls.Load(); got != 2 {
-		t.Fatalf("pattern Watch calls = %d, want one per subscriber", got)
-	}
-	for i, pattern := range patterns {
-		if pattern != "*.*.lifecycle.gcs.mission.*" {
-			t.Fatalf("pattern[%d] = %q, want workflow EntityIDPattern", i, pattern)
-		}
-	}
-
-	guard.updates <- nil
-	waitForLifecycleWatch(t, func() bool {
-		result := mgr.graphStateGuardResult.Load()
-		return result != nil && result.clean
-	})
-	mgr.graphStateGuardCancel()
-	mgr.graphStateGuardWG.Wait()
-}
-
-func TestLifecycleManagerConcurrentWatchesStillOpenOneAuthoritativeGuard(t *testing.T) {
-	t.Parallel()
-	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	var watchAllCalls atomic.Int64
-	var patternCalls atomic.Int64
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) {
-		watchAllCalls.Add(1)
-		return guard, nil
-	}
-	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) {
-		patternCalls.Add(1)
-		return newLifecycleAtomicWatcher(), nil
-	}
-
-	const subscribers = 16
-	type result struct {
-		watcher jetstream.KeyWatcher
-		err     error
-	}
-	results := make(chan result, subscribers)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	for range subscribers {
-		go func() {
-			_, watcher, err := mgr.startWatch(ctx, "fixture", "Watch")
-			results <- result{watcher: watcher, err: err}
-		}()
-	}
-	for range subscribers {
-		got := <-results
-		if got.err != nil {
-			t.Fatalf("concurrent startWatch: %v", got.err)
-		}
-		if err := got.watcher.Stop(); err != nil {
-			t.Fatalf("stop pattern watcher: %v", err)
-		}
-	}
-	if got := watchAllCalls.Load(); got != 1 {
-		t.Fatalf("concurrent WatchAll calls = %d, want one", got)
-	}
-	if got := patternCalls.Load(); got != subscribers {
-		t.Fatalf("concurrent pattern Watch calls = %d, want %d", got, subscribers)
-	}
-	mgr.graphStateGuardCancel()
-	mgr.graphStateGuardWG.Wait()
-}
-
-func TestLifecycleSharedGuardPoisonOutsideWorkflowBlocksBufferedProjection(t *testing.T) {
-	t.Parallel()
-	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	pattern := newLifecycleAtomicWatcher()
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return guard, nil }
-	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return pattern, nil }
-
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return watcher, nil }
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out, err := mgr.Watch(ctx, "fixture")
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	pattern.updates <- validLifecycleWatchEntry(t, "acme.ops.lifecycle.gcs.mission.buffered", 1)
 
-	outsideID := "acme.ops.other.gcs.device.poison"
-	guard.updates <- &fakeKVEntry{
-		key: outsideID, value: poisonedLifecycleState(outsideID), revision: 2, created: time.Now(),
+	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 2)
+	requireValueChannelClosed(t, out, "matching poison subscription")
+
+	participant, err := mgr.Get(context.Background(), "fixture", validID)
+	if err != nil {
+		t.Fatalf("unrelated exact read after matching watch poison: %v", err)
 	}
-	waitForLifecycleWatch(t, func() bool { return mgr.graphStatePoison.Load() != nil })
-	select {
-	case participant, ok := <-out:
-		if ok {
-			t.Fatalf("projection escaped before shared guard completed: %#v", participant)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("workflow watch did not close after shared-guard poison")
+	if participant.EntityID() != validID {
+		t.Fatalf("unrelated exact read entity = %q, want %q", participant.EntityID(), validID)
 	}
-	mgr.graphStateGuardCancel()
-	mgr.graphStateGuardWG.Wait()
 }
 
-func TestLifecycleSharedGuardNormalShutdownClosesWatchesWithoutPoison(t *testing.T) {
+func TestLifecyclePoisonClosesOnlyMatchingSubscription(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	pattern := newLifecycleAtomicWatcher()
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return guard, nil }
-	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return pattern, nil }
+	other := lifecycle{}.fixtureWorkflow()
+	other.Name = "other"
+	other.EntityIDPattern = "*.*.other.gcs.mission.*"
+	if err := mgr.Register(other); err != nil {
+		t.Fatalf("Register other: %v", err)
+	}
+
+	fixtureWatcher := newLifecycleAtomicWatcher()
+	otherWatcher := newLifecycleAtomicWatcher()
+	bucket.watchFactory = func(pattern string) (jetstream.KeyWatcher, error) {
+		switch pattern {
+		case "*.*.lifecycle.gcs.mission.*":
+			return fixtureWatcher, nil
+		case "*.*.other.gcs.mission.*":
+			return otherWatcher, nil
+		default:
+			t.Fatalf("unexpected watch pattern %q", pattern)
+			return nil, nil
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fixtureOut, err := mgr.Watch(ctx, "fixture")
+	if err != nil {
+		t.Fatalf("Watch fixture: %v", err)
+	}
+	otherOut, err := mgr.Watch(ctx, "other")
+	if err != nil {
+		t.Fatalf("Watch other: %v", err)
+	}
+
+	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	fixtureWatcher.updates <- poisonLifecycleWatchEntry(poisonID, 2)
+	requireValueChannelClosed(t, fixtureOut, "fixture poison subscription")
+
+	validID := "acme.ops.other.gcs.mission.valid-b"
+	otherWatcher.updates <- validLifecycleWatchEntry(t, validID, 3)
+	select {
+	case participant := <-otherOut:
+		if participant == nil || participant.EntityID() != validID {
+			t.Fatalf("other subscription participant = %#v, want %q", participant, validID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("unrelated subscription did not continue after matching poison")
+	}
+}
+
+func TestLifecycleWatchEventsPoisonEmitsNoEvent(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	watcher := newLifecycleAtomicWatcher()
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return watcher, nil }
+	out, err := mgr.WatchEvents(context.Background(), "fixture")
+	if err != nil {
+		t.Fatalf("WatchEvents: %v", err)
+	}
+	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 7)
+	select {
+	case event, ok := <-out:
+		if ok {
+			t.Fatalf("poison emitted event %#v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("WatchEvents did not close after matching poison")
+	}
+}
+
+func TestLifecycleWatchPoisonWarningNamesSubscriptionAndAuthorityEntryOnce(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	bucket := newFakeBucket()
+	mgr := newManagerForTest(logger, &fakeEmitter{bucket: bucket}, bucket)
+	if err := mgr.Register(lifecycle{}.fixtureWorkflow()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	watcher := newLifecycleAtomicWatcher()
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return watcher, nil }
 
 	out, err := mgr.Watch(context.Background(), "fixture")
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	done := make(chan struct{})
-	go func() {
-		mgr.graphStateGuardCancel()
-		mgr.graphStateGuardWG.Wait()
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("Manager shutdown did not join shared graph-state guard")
+	poisonID := "acme.ops.lifecycle.gcs.mission.poison-a"
+	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 41)
+	watcher.updates <- poisonLifecycleWatchEntry(poisonID, 42)
+	requireValueChannelClosed(t, out, "poison subscription")
+
+	const message = "lifecycle workflow watch encountered poisoned graph state; closing subscription"
+	logged := logs.String()
+	if got := strings.Count(logged, message); got != 1 {
+		t.Fatalf("poison warning count = %d, want 1; logs=%s", got, logged)
 	}
-	select {
-	case _, ok := <-out:
-		if ok {
-			t.Fatal("watch delivered during normal Manager shutdown")
+	for _, fragment := range []string{
+		`"level":"WARN"`,
+		`"workflow":"fixture"`,
+		`"entity":"` + poisonID + `"`,
+		`"revision":41`,
+		`"code":"` + graph.ErrorCodeGraphStateResetRequired + `"`,
+		`"reason":"` + string(graph.GraphStateReasonNoncanonicalPredicate) + `"`,
+	} {
+		if !strings.Contains(logged, fragment) {
+			t.Fatalf("poison warning missing %s; logs=%s", fragment, logged)
 		}
-	case <-time.After(time.Second):
-		t.Fatal("workflow watch did not close on shared-guard shutdown")
-	}
-	if mgr.graphStatePoison.Load() != nil {
-		t.Fatal("normal shared-guard shutdown was misreported as graph poison")
 	}
 }
 
-func TestLifecycleSharedGuardTransportCloseIsTransientDegraded(t *testing.T) {
+func TestLifecycleWatchTransportCloseIsLocalAndLaterSubscriptionWorks(t *testing.T) {
 	t.Parallel()
 	mgr, _, bucket := newTestManager(t)
-	guard := newLifecycleAtomicWatcher()
-	pattern := newLifecycleAtomicWatcher()
-	bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return guard, nil }
-	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return pattern, nil }
+	first := newLifecycleAtomicWatcher()
+	second := newLifecycleAtomicWatcher()
+	var calls atomic.Int64
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) {
+		if calls.Add(1) == 1 {
+			return first, nil
+		}
+		return second, nil
+	}
 
-	out, err := mgr.Watch(context.Background(), "fixture")
+	firstOut, err := mgr.Watch(context.Background(), "fixture")
+	if err != nil {
+		t.Fatalf("first Watch: %v", err)
+	}
+	close(first.updates)
+	requireValueChannelClosed(t, firstOut, "transport-closed subscription")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	secondOut, err := mgr.Watch(ctx, "fixture")
+	if err != nil {
+		t.Fatalf("second Watch: %v", err)
+	}
+	validID := "acme.ops.lifecycle.gcs.mission.valid-b"
+	second.updates <- validLifecycleWatchEntry(t, validID, 2)
+	select {
+	case participant := <-secondOut:
+		if participant == nil || participant.EntityID() != validID {
+			t.Fatalf("later subscription participant = %#v, want %q", participant, validID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("later subscription did not work after transport close")
+	}
+}
+
+func TestLifecycleWatchCancellationIsQuiet(t *testing.T) {
+	t.Parallel()
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	bucket := newFakeBucket()
+	mgr := newManagerForTest(logger, &fakeEmitter{bucket: bucket}, bucket)
+	if err := mgr.Register(lifecycle{}.fixtureWorkflow()); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	watcher := newLifecycleAtomicWatcher()
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) { return watcher, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	out, err := mgr.Watch(ctx, "fixture")
 	if err != nil {
 		t.Fatalf("Watch: %v", err)
 	}
-	close(guard.updates)
-	select {
-	case _, ok := <-out:
-		if ok {
-			t.Fatal("watch delivered after shared-guard transport failure")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("workflow watch did not close after shared-guard transport failure")
+	cancel()
+	requireValueChannelClosed(t, out, "canceled subscription")
+	if strings.Contains(logs.String(), `"level":"WARN"`) {
+		t.Fatalf("cancellation emitted warning: %s", logs.String())
 	}
-	if mgr.graphStatePoison.Load() != nil {
-		t.Fatal("shared-guard transport close was misclassified as reset poison")
-	}
-	if mgr.graphStateGuardDegraded.Load() == nil {
-		t.Fatal("shared-guard transport close did not mark Manager degraded")
-	}
+}
 
-	_, err = mgr.Watch(context.Background(), "fixture")
+func TestLifecycleWatcherStartFailuresAreTransientIndexNotReady(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	bucket.watchFactory = func(string) (jetstream.KeyWatcher, error) {
+		return nil, context.DeadlineExceeded
+	}
+	_, err := mgr.Watch(context.Background(), "fixture")
 	if err == nil || !serrs.IsTransient(err) {
-		t.Fatalf("Watch after degradation = %T %v, want transient", err, err)
+		t.Fatalf("Watch error = %T %v, want transient", err, err)
 	}
-	var classified *serrs.ClassifiedError
-	if !errors.As(err, &classified) || classified.Code != graph.ErrorCodeIndexNotReady {
-		t.Fatalf("Watch after degradation = %v, want code %q", err, graph.ErrorCodeIndexNotReady)
-	}
-	mgr.graphStateGuardCancel()
-	mgr.graphStateGuardWG.Wait()
 }
 
-func validLifecycleWatchEntry(t *testing.T, entityID string, revision uint64) jetstream.KeyValueEntry {
-	t.Helper()
-	data, err := graph.MarshalEntityState(&graph.EntityState{
+func validLifecycleState(entityID string) *graph.EntityState {
+	return &graph.EntityState{
 		ID: entityID,
 		Triples: []message.Triple{{
 			Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "planning",
 		}},
-	})
+	}
+}
+
+func validLifecycleWatchEntry(t *testing.T, entityID string, revision uint64) jetstream.KeyValueEntry {
+	t.Helper()
+	data, err := graph.MarshalEntityState(validLifecycleState(entityID))
 	if err != nil {
 		t.Fatalf("MarshalEntityState: %v", err)
 	}
 	return &fakeKVEntry{key: entityID, value: data, revision: revision, created: time.Now()}
 }
 
-func waitForLifecycleWatch(t *testing.T, condition func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if condition() {
-			return
-		}
-		time.Sleep(time.Millisecond)
+func poisonLifecycleWatchEntry(entityID string, revision uint64) jetstream.KeyValueEntry {
+	return &fakeKVEntry{
+		key: entityID, value: poisonedLifecycleState(entityID), revision: revision, created: time.Now(),
 	}
-	t.Fatal("timed out waiting for watcher state")
 }
 
-func markLifecycleGuardClean(mgr *Manager) {
-	mgr.publishGraphStateGuardReady(true)
-	mgr.graphStateGuardRevision.Store(^uint64(0))
+func requireValueChannelClosed(t *testing.T, out <-chan Participant, name string) {
+	t.Helper()
+	select {
+	case participant, ok := <-out:
+		if ok {
+			t.Fatalf("%s emitted %#v", name, participant)
+		}
+	case <-time.After(time.Second):
+		t.Fatalf("%s did not close", name)
+	}
 }

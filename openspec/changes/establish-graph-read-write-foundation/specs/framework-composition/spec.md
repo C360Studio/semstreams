@@ -15,11 +15,11 @@ ports own their surviving responsibilities with less adopter knowledge.
 - **GIVEN** no accepted target contract requires semantic owner claims or leases
 - **WHEN** both composition roots are built after the cutover
 - **THEN** neither constructs an ownership registry or service
-- **AND** the graph-state guard and catalog check remain independently wired
+- **AND** the catalog cleanliness check remains independently wired
 
 ### Requirement: Composition roots register explicit capability sets
 
-Both framework binaries MUST register the same graph mutation protocol, exact-read adapter, graph-state guard, and local
+Both framework binaries MUST register the same graph mutation protocol, exact-read adapter, and local
 projection dependencies. Neither binary MAY retain ownership buckets, services, shutdown joins, tokens, or legacy
 mutation subjects. A grep of all binaries that import migrated packages MUST prove explicit parity.
 
