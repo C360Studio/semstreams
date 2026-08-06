@@ -1001,7 +1001,7 @@ type entitySnapshot struct {
 // ENTITY_STATES KV bucket. A missing entity returns a DELETED snapshot with
 // nil State rather than an error.
 func (rp *Processor) fetchCurrentEntityState(ctx context.Context, entityID string) (entitySnapshot, error) {
-	entityBucket, err := gtypes.OpenCatalogBucket(ctx, rp.natsClient, gtypes.BucketEntityStates)
+	entityBucket, err := gtypes.OpenCatalogReader(ctx, rp.natsClient, gtypes.BucketEntityStates)
 	if err != nil {
 		return entitySnapshot{}, errs.WrapTransient(err, "Processor", "fetchCurrentEntityState", "get ENTITY_STATES bucket")
 	}

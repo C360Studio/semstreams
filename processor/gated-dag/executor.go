@@ -3,6 +3,7 @@ package gateddagexec
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/gateddag"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 // dispatchJob is the bounded-dispatcher work item: one dispatchable unit.
@@ -352,15 +354,15 @@ func (e *executor) maybeCompleteFanOut(ctx context.Context) {
 	e.log.Info("gated-dag: fan-out complete", slog.String("instance", e.cfg.FanOutInstanceID))
 }
 
-// startUnitWatch opens a raw KV watch over ENTITY_STATES filtered to the unit
+// startUnitWatch opens a catalog KV watch over ENTITY_STATES filtered to the unit
 // prefix and nudges the trigger on every unit write (#363). The goroutine owns
 // the watcher's lifetime via ctx.
 func (e *executor) startUnitWatch(ctx context.Context) error {
-	bucket, err := graph.OpenCatalogBucket(ctx, e.nc, graph.BucketEntityStates)
+	reader, err := graph.OpenCatalogReader(ctx, e.nc, graph.BucketEntityStates)
 	if err != nil {
 		return err
 	}
-	watcher, err := e.nc.NewKVStore(bucket).Watch(ctx, e.cfg.UnitEntityPrefix+".>")
+	watcher, err := watchCatalogReader(ctx, reader, e.cfg.UnitEntityPrefix+".>")
 	if err != nil {
 		return err
 	}
@@ -384,6 +386,20 @@ func (e *executor) startUnitWatch(ctx context.Context) error {
 		}
 	}()
 	return nil
+}
+
+func watchCatalogReader(
+	ctx context.Context,
+	reader interface {
+		Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+	},
+	pattern string,
+) (jetstream.KeyWatcher, error) {
+	watcher, err := reader.Watch(ctx, pattern)
+	if err != nil {
+		return nil, fmt.Errorf("kv watch %s: %w", pattern, err)
+	}
+	return watcher, nil
 }
 
 // claimThenDispatch is the bounded worker body: commit the durable claim BEFORE

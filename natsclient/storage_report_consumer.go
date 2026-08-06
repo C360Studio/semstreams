@@ -146,7 +146,7 @@ func NewStorageReportConsumer(
 			// reader and must not create — pointing everyone at the reader seam
 			// would have misdirected the one caller that legitimately provisions.
 			errors.New("a ReportWatchStore is required; the bucket's declared owner binds it through "+
-				"graph.EnsureCatalogBucket, any other consumer through graph.OpenCatalogBucket "+
+				"graph.EnsureCatalogBucket, any other consumer through graph.OpenCatalogReader "+
 				"(with graph.BucketStorageReport)"),
 			"StorageReportConsumer", "New", "validate configuration")
 	}

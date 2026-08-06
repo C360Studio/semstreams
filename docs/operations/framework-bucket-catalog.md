@@ -5,9 +5,12 @@ framework guarantees in **one descriptor catalog** (`graph/kvcatalog.go`:
 name, responsible component, class, retention policy, write policy, History). Writers
 acquire buckets through `natsclient.EnsureFrameworkBucket` (create-or-open,
 reconcile the live bucket to the declared policy, verify, fail the owner's
-`Start` closed); readers bind through `natsclient.OpenFrameworkBucket`
-(must-exist, never creates). `graph.EnsureCatalogBucket` /
-`graph.OpenCatalogBucket` are the name-resolving conveniences.
+`Start` closed). Framework owners use the name-resolving
+`graph.EnsureCatalogBucket` seam. Framework readers use
+`graph.OpenCatalogReader`: it binds must-exist, never creates, and returns a
+deliberately read-only capability whose dynamic type cannot satisfy
+`jetstream.KeyValue` or a mutation interface. `natsclient` contains the
+catalog-independent acquisition mechanisms behind those graph seams.
 
 This is a **breaking release** for adopters in four visible ways.
 
@@ -24,15 +27,16 @@ failed to get ENTITY_STATES bucket: framework bucket "ENTITY_STATES" is not
 ready: its owner (graph-ingest) has not provisioned it in this deployment
 ```
 
-What to do: deploy or wait for the owning component; retry with backoff on the
-`index_not_ready` code (the same code graph-index already emits for a
-not-sound index). A reader can no longer mask a missing owner by conjuring an
-empty bucket — if you were relying on that, the queries were reading from a
-bucket nothing wrote.
+What to do: preserve and inspect the canonical `index_not_ready`
+classification (the same code graph-index already emits for a not-sound
+index), then choose the response appropriate to that caller: retry, fail the
+request, or expose a degraded posture. A reader can no longer mask a missing
+owner by conjuring an empty bucket — if you were relying on that, the queries
+were reading from a bucket nothing wrote.
 
-The same applies to the agentic graph-query tool registration: on a deployment
-without graph-ingest, the `query_*` tools are warn-and-skipped at boot and
-`ENTITY_STATES` stays absent.
+The agentic graph-query tools register unconditionally and bind this reader
+seam lazily on execution. Without graph-ingest, execution returns the same
+classified not-ready outcome and `ENTITY_STATES` stays absent.
 
 ## 2. Removed `graph/query.Config` fields
 
@@ -102,8 +106,8 @@ grep -rn "index_not_ready" --include="*.go" .
 Rules of thumb going forward:
 
 - **Owners** (you own the bucket's writes): `graph.EnsureCatalogBucket`.
-- **Readers**: `graph.OpenCatalogBucket`; treat `index_not_ready` as
-  retry-with-backoff.
+- **Readers**: `graph.OpenCatalogReader`; preserve canonical outcome
+  classifications and keep retry/fail/degraded response policy local.
 - **Application/product buckets** (AGENT_LOOPS, flow stores, personas, ...)
   are outside the catalog by rule — keep using `CreateKeyValueBucket`.
 - Never spell a catalog bucket name as a string literal — reference the

@@ -214,7 +214,7 @@ func OwnerOf(bucket string) string {
 // EnsureCatalogBucket resolves a catalog bucket by name and acquires it
 // through the OWNER seam (natsclient.EnsureFrameworkBucket): create-or-open,
 // reconcile to the declared policy, verify, or fail the caller's Start closed.
-// Only a bucket's declared owner calls this; readers use OpenCatalogBucket.
+// Only a bucket's declared owner calls this; readers use OpenCatalogReader.
 // A name outside the catalog is an invalid-config error naming it.
 func EnsureCatalogBucket(ctx context.Context, client *natsclient.Client, name string) (jetstream.KeyValue, error) {
 	spec, ok := SpecFor(name)
@@ -226,17 +226,41 @@ func EnsureCatalogBucket(ctx context.Context, client *natsclient.Client, name st
 	return natsclient.EnsureFrameworkBucket(ctx, client, spec)
 }
 
-// OpenCatalogBucket resolves a catalog bucket by name and binds it must-exist
+// CatalogReader is the read-only capability returned by OpenCatalogReader.
+// Its method set is the exact union consumed by current framework catalog
+// readers. The underlying write-capable JetStream handle is never exposed.
+type CatalogReader interface {
+	Get(ctx context.Context, key string) (jetstream.KeyValueEntry, error)
+	Watch(ctx context.Context, keys string, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+	WatchAll(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+	Keys(ctx context.Context, opts ...jetstream.WatchOpt) ([]string, error)
+	ListKeys(ctx context.Context, opts ...jetstream.WatchOpt) (jetstream.KeyLister, error)
+	ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error)
+	Status(ctx context.Context) (jetstream.KeyValueStatus, error)
+}
+
+// catalogReader is deliberately private and delegates only CatalogReader's
+// read/watch/status methods. Its dynamic type cannot satisfy
+// jetstream.KeyValue or any mutation-only interface.
+type catalogReader struct {
+	CatalogReader
+}
+
+// OpenCatalogReader resolves a catalog bucket by name and binds it must-exist
 // through the READER seam (natsclient.OpenFrameworkBucket): it NEVER creates
 // and never reconciles; an absent bucket yields a classified not-ready error
 // naming the catalog owner. A name outside the catalog is an invalid-config
 // error naming it.
-func OpenCatalogBucket(ctx context.Context, client *natsclient.Client, name string) (jetstream.KeyValue, error) {
+func OpenCatalogReader(ctx context.Context, client *natsclient.Client, name string) (CatalogReader, error) {
 	spec, ok := SpecFor(name)
 	if !ok {
 		return nil, errs.WrapInvalid(
 			fmt.Errorf("bucket %q is not in the framework KV catalog", name),
-			"graph", "OpenCatalogBucket", "resolve framework bucket")
+			"graph", "OpenCatalogReader", "resolve framework bucket")
 	}
-	return natsclient.OpenFrameworkBucket(ctx, client, spec)
+	bucket, err := natsclient.OpenFrameworkBucket(ctx, client, spec)
+	if err != nil {
+		return nil, err
+	}
+	return &catalogReader{CatalogReader: bucket}, nil
 }

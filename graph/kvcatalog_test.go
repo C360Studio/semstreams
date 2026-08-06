@@ -1,12 +1,60 @@
 package graph
 
 import (
+	"context"
+	"errors"
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestCatalogReader_ExportedSurfaceIsReadOnly pins the complete exported
+// capability. Adding a method is an API change and must re-enter the exported-
+// surface gate; in particular, no mutation or raw-handle escape hatch belongs
+// here.
+func TestCatalogReader_ExportedSurfaceIsReadOnly(t *testing.T) {
+	typeOfReader := reflect.TypeOf((*CatalogReader)(nil)).Elem()
+	methods := make([]string, 0, typeOfReader.NumMethod())
+	for i := 0; i < typeOfReader.NumMethod(); i++ {
+		methods = append(methods, typeOfReader.Method(i).Name)
+	}
+	sort.Strings(methods)
+
+	assert.Equal(t, []string{
+		"Get",
+		"Keys",
+		"ListKeys",
+		"ListKeysFiltered",
+		"Status",
+		"Watch",
+		"WatchAll",
+	}, methods)
+}
+
+// TestOpenCatalogReader_InvalidNamePreservesClassification proves catalog
+// resolution still fails before client access and retains the canonical
+// invalid outcome shape.
+func TestOpenCatalogReader_InvalidNamePreservesClassification(t *testing.T) {
+	_, err := OpenCatalogReader(context.Background(), nil, "OUTGOING_INDEX_TYPO")
+	require.Error(t, err)
+
+	var classified *errs.ClassifiedError
+	require.True(t, errors.As(err, &classified))
+	assert.Equal(t, errs.ErrorInvalid, classified.Class)
+	assert.Empty(t, classified.Code)
+	assert.Nil(t, classified.Detail)
+	assert.Equal(t, "graph", classified.Component)
+	assert.Equal(t, "OpenCatalogReader", classified.Operation)
+	assert.Contains(t, err.Error(), `bucket "OUTGOING_INDEX_TYPO" is not in the framework KV catalog`)
+	wrapped := errors.Unwrap(classified)
+	require.Error(t, wrapped)
+	assert.EqualError(t, errors.Unwrap(wrapped), `bucket "OUTGOING_INDEX_TYPO" is not in the framework KV catalog`)
+}
 
 // TestKVCatalog_EveryRowValidates: every shipped descriptor must pass the
 // seam's fail-closed validation — a catalog row the seam would refuse is a

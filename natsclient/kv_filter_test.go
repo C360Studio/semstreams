@@ -24,6 +24,19 @@ func (l *testKeyLister) Stop() error {
 
 var _ jetstream.KeyLister = (*testKeyLister)(nil)
 
+type filteredKeysOnly struct {
+	lister  jetstream.KeyLister
+	filters []string
+}
+
+func (r *filteredKeysOnly) ListKeysFiltered(
+	_ context.Context,
+	filters ...string,
+) (jetstream.KeyLister, error) {
+	r.filters = append([]string(nil), filters...)
+	return r.lister, nil
+}
+
 func TestCollectFilteredKeys_ReturnsCompleteSnapshot(t *testing.T) {
 	lister := &testKeyLister{keys: make(chan string, 2)}
 	lister.keys <- "one"
@@ -57,5 +70,19 @@ func TestCollectFilteredKeys_CancellationWhileWaiting(t *testing.T) {
 	keys, err := collectFilteredKeys(ctx, lister)
 	assert.True(t, errors.Is(err, context.Canceled))
 	assert.Nil(t, keys)
+	assert.True(t, lister.stopped)
+}
+
+func TestFilteredKeysAcceptsMinimalReader(t *testing.T) {
+	lister := &testKeyLister{keys: make(chan string, 1)}
+	lister.keys <- "one"
+	close(lister.keys)
+	reader := &filteredKeysOnly{lister: lister}
+
+	keys, err := FilteredKeys(context.Background(), reader, "domain.>")
+
+	require.NoError(t, err)
+	assert.Equal(t, []string{"one"}, keys)
+	assert.Equal(t, []string{"domain.>"}, reader.filters)
 	assert.True(t, lister.stopped)
 }

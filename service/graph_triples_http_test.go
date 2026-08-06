@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +25,46 @@ var fixedTime = time.Date(2026, 4, 20, 12, 0, 0, 0, time.UTC)
 func withFixedTime(triple message.Triple) message.Triple {
 	triple.Timestamp = fixedTime
 	return triple
+}
+
+type failingGraphTripleReader struct {
+	graph.CatalogReader
+	err      error
+	deadline time.Time
+}
+
+func (r *failingGraphTripleReader) Keys(ctx context.Context, _ ...jetstream.WatchOpt) ([]string, error) {
+	r.deadline, _ = ctx.Deadline()
+	return nil, r.err
+}
+
+func (r *failingGraphTripleReader) Get(ctx context.Context, _ string) (jetstream.KeyValueEntry, error) {
+	r.deadline, _ = ctx.Deadline()
+	return nil, r.err
+}
+
+func TestGraphTripleKeysPreservesCallerPolicy(t *testing.T) {
+	sentinel := errors.New("list failed")
+	reader := &failingGraphTripleReader{err: sentinel}
+	started := time.Now()
+
+	_, err := graphTripleKeys(context.Background(), reader)
+
+	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, "kv keys")
+	require.WithinDuration(t, started.Add(5*time.Second), reader.deadline, time.Second)
+}
+
+func TestGraphTripleEntryPreservesCallerPolicy(t *testing.T) {
+	sentinel := errors.New("read failed")
+	reader := &failingGraphTripleReader{err: sentinel}
+	started := time.Now()
+
+	_, err := graphTripleEntry(context.Background(), reader, "entity-id")
+
+	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, "kv get entity-id")
+	require.WithinDuration(t, started.Add(5*time.Second), reader.deadline, time.Second)
 }
 
 // ---- parseTripleQueryParams ----
