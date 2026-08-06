@@ -103,7 +103,9 @@ func (kv *KVStore) Get(ctx context.Context, key string) (*KVEntry, error) {
 // watermark directly against it. Prefer this over the last watch entry's
 // Delta()==0: that cache is stale exactly in the committed-but-not-yet-delivered
 // window this target must see through.
-func BucketLastSeq(ctx context.Context, bucket jetstream.KeyValue) (uint64, error) {
+func BucketLastSeq(ctx context.Context, bucket interface {
+	Status(context.Context) (jetstream.KeyValueStatus, error)
+}) (uint64, error) {
 	status, err := bucket.Status(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("kv status: %w", err)

@@ -213,6 +213,15 @@ func DefaultConfig() Config {
 // schema defines the configuration schema for graph-index component
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+type entityStatesReader interface {
+	Get(context.Context, string) (jetstream.KeyValueEntry, error)
+	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+}
+
+type entityStatesStatusReader interface {
+	Status(context.Context) (jetstream.KeyValueStatus, error)
+}
+
 // Component implements the graph-index processor
 type Component struct {
 	// Component metadata
@@ -230,11 +239,11 @@ type Component struct {
 	aliasBucket        *natsclient.KVStore
 	predicateBucket    *natsclient.KVStore
 	nameBucket         *natsclient.KVStore
-	entityStatesBucket jetstream.KeyValue // raw: read-only watcher, no CAS needed
+	entityStatesBucket entityStatesReader
 	// entityStatesStatusBucket is a separate JetStream KV handle used only for
 	// Status/LastSeq reads. nats.go's KV handle caches stream info internally, and
 	// concurrent Status and Get calls on one handle race under -race.
-	entityStatesStatusBucket jetstream.KeyValue
+	entityStatesStatusBucket entityStatesStatusReader
 
 	// Lifecycle state
 	mu              sync.RWMutex
@@ -647,15 +656,8 @@ func (c *Component) Start(ctx context.Context) error {
 		)
 	}
 
-	// Wait for input KV bucket (ENTITY_STATES) with bounded startup attempts
-	js, err := c.natsClient.JetStream()
-	if err != nil {
-		cancel()
-		return errs.Wrap(err, "Component", "Start", "JetStream connection")
-	}
-
 	// Wait for ENTITY_STATES bucket and start the watcher goroutine
-	if err := c.waitAndWatchEntityStates(ctx, js); err != nil {
+	if err := c.waitAndWatchEntityStates(ctx); err != nil {
 		cancel()
 		return err
 	}
@@ -846,7 +848,7 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 // ============================================================================
 
 // watchEntityStates watches the ENTITY_STATES KV bucket and indexes entity updates
-func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyValue) {
+func (c *Component) watchEntityStates(ctx context.Context, bucket entityStatesReader) {
 	defer c.wg.Done()
 
 	watcher, err := bucket.WatchAll(ctx)
@@ -943,7 +945,7 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyV
 
 // waitAndWatchEntityStates waits for the ENTITY_STATES bucket with bounded retries,
 // then starts the watcher goroutine that feeds entity updates to the worker pool.
-func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.JetStream) error {
+func (c *Component) waitAndWatchEntityStates(ctx context.Context) error {
 	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
 	}
@@ -956,7 +958,7 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 	entityWatcher := resource.NewWatcher(
 		graph.BucketEntityStates,
 		func(checkCtx context.Context) error {
-			_, err := js.KeyValue(checkCtx, graph.BucketEntityStates)
+			_, err := graph.OpenCatalogReader(checkCtx, c.natsClient, graph.BucketEntityStates)
 			return err
 		},
 		watcherCfg,
@@ -969,13 +971,16 @@ func (c *Component) waitAndWatchEntityStates(ctx context.Context, js jetstream.J
 		)
 	}
 
-	var err error
-	if c.entityStatesBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
+	entityReader, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketEntityStates)
+	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "get entity bucket after availability check")
 	}
-	if c.entityStatesStatusBucket, err = js.KeyValue(ctx, graph.BucketEntityStates); err != nil {
+	c.entityStatesBucket = entityReader
+	statusReader, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketEntityStates)
+	if err != nil {
 		return errs.Wrap(err, "Component", "Start", "get entity status bucket after availability check")
 	}
+	c.entityStatesStatusBucket = statusReader
 
 	c.wg.Add(1)
 	go c.watchEntityStates(ctx, c.entityStatesBucket)

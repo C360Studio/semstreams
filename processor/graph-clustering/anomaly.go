@@ -59,14 +59,14 @@ func (a *graphProviderAdapter) GetIncomingRelationships(ctx context.Context, ent
 // Unlike graphProviderAdapter, this implementation preserves predicate information
 // which is required by the TransitivityDetector to filter by transitive predicates.
 type kvRelationshipQuerier struct {
-	outgoingBucket jetstream.KeyValue
-	incomingBucket jetstream.KeyValue
+	outgoingBucket outgoingBucketReader
+	incomingBucket incomingBucketReader
 	logger         *slog.Logger
 }
 
 func newKVRelationshipQuerier(
-	outgoingBucket jetstream.KeyValue,
-	incomingBucket jetstream.KeyValue,
+	outgoingBucket outgoingBucketReader,
+	incomingBucket incomingBucketReader,
 	logger *slog.Logger,
 ) *kvRelationshipQuerier {
 	return &kvRelationshipQuerier{

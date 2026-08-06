@@ -516,6 +516,19 @@ func DefaultConfig() Config {
 // schema defines the configuration schema for graph-clustering component
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+type entityBucketReader interface {
+	Get(context.Context, string) (jetstream.KeyValueEntry, error)
+	Keys(context.Context, ...jetstream.WatchOpt) ([]string, error)
+}
+
+type outgoingBucketReader interface {
+	Get(context.Context, string) (jetstream.KeyValueEntry, error)
+}
+
+type incomingBucketReader interface {
+	ListKeysFiltered(context.Context, ...string) (jetstream.KeyLister, error)
+}
+
 // Component implements the graph-clustering processor
 type Component struct {
 	// Component metadata
@@ -531,9 +544,9 @@ type Component struct {
 	// Domain resources
 	communityBucket jetstream.KeyValue
 	summaryBucket   jetstream.KeyValue // COMMUNITY_SUMMARIES — worker-owned summary store
-	entityBucket    jetstream.KeyValue
-	outgoingBucket  jetstream.KeyValue
-	incomingBucket  jetstream.KeyValue
+	entityBucket    entityBucketReader
+	outgoingBucket  outgoingBucketReader
+	incomingBucket  incomingBucketReader
 
 	// Community detection
 	detector clustering.CommunityDetector
@@ -1123,42 +1136,46 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 
 // waitForDependencies waits for all required KV buckets and stores references.
 func (c *Component) waitForDependencies(ctx context.Context) error {
-	js, err := c.natsClient.JetStream()
-	if err != nil {
-		return errs.Wrap(err, "Component", "waitForDependencies", "JetStream connection")
-	}
-
 	watcherCfg := resource.DefaultConfig()
 	watcherCfg.StartupAttempts = c.config.StartupAttempts
 	watcherCfg.StartupInterval = time.Duration(c.config.StartupInterval) * time.Millisecond
 	watcherCfg.Logger = c.logger
 
 	// Wait for ENTITY_STATES bucket
-	entityBucket, err := c.waitForBucket(ctx, js, graph.BucketEntityStates, watcherCfg)
-	if err != nil {
+	if err := c.waitForBucket(ctx, graph.BucketEntityStates, watcherCfg); err != nil {
 		return err
+	}
+	entityBucket, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketEntityStates)
+	if err != nil {
+		return errs.Wrap(err, "Component", "waitForBucket", fmt.Sprintf("get %s bucket", graph.BucketEntityStates))
 	}
 	c.entityBucket = entityBucket
 
 	// Wait for OUTGOING_INDEX bucket
-	outgoingBucket, err := c.waitForBucket(ctx, js, graph.BucketOutgoingIndex, watcherCfg)
-	if err != nil {
+	if err := c.waitForBucket(ctx, graph.BucketOutgoingIndex, watcherCfg); err != nil {
 		return err
+	}
+	outgoingBucket, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketOutgoingIndex)
+	if err != nil {
+		return errs.Wrap(err, "Component", "waitForBucket", fmt.Sprintf("get %s bucket", graph.BucketOutgoingIndex))
 	}
 	c.outgoingBucket = outgoingBucket
 
 	// Wait for INCOMING_INDEX bucket
-	incomingBucket, err := c.waitForBucket(ctx, js, graph.BucketIncomingIndex, watcherCfg)
-	if err != nil {
+	if err := c.waitForBucket(ctx, graph.BucketIncomingIndex, watcherCfg); err != nil {
 		return err
+	}
+	incomingBucket, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketIncomingIndex)
+	if err != nil {
+		return errs.Wrap(err, "Component", "waitForBucket", fmt.Sprintf("get %s bucket", graph.BucketIncomingIndex))
 	}
 	c.incomingBucket = incomingBucket
 
 	return nil
 }
 
-// waitForBucket waits for a KV bucket to become available and returns it.
-func (c *Component) waitForBucket(ctx context.Context, js jetstream.JetStream, bucketName string, cfg resource.Config) (jetstream.KeyValue, error) {
+// waitForBucket waits for a catalog KV bucket to become available.
+func (c *Component) waitForBucket(ctx context.Context, bucketName string, cfg resource.Config) error {
 	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+bucketName); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+bucketName), slog.Any("error", err))
 	}
@@ -1166,24 +1183,20 @@ func (c *Component) waitForBucket(ctx context.Context, js jetstream.JetStream, b
 	watcher := resource.NewWatcher(
 		bucketName,
 		func(checkCtx context.Context) error {
-			_, err := js.KeyValue(checkCtx, bucketName)
+			_, err := graph.OpenCatalogReader(checkCtx, c.natsClient, bucketName)
 			return err
 		},
 		cfg,
 	)
 
 	if !watcher.WaitForStartup(ctx) {
-		return nil, errs.WrapTransient(
+		return errs.WrapTransient(
 			fmt.Errorf("bucket %s not available after %d attempts", bucketName, c.config.StartupAttempts),
 			"Component", "waitForBucket", "dependency not available",
 		)
 	}
 
-	bucket, err := js.KeyValue(ctx, bucketName)
-	if err != nil {
-		return nil, errs.Wrap(err, "Component", "waitForBucket", fmt.Sprintf("get %s bucket", bucketName))
-	}
-	return bucket, nil
+	return nil
 }
 
 // initProviderAndDetector creates the graph provider and community detector.
@@ -1819,9 +1832,9 @@ func (c *Component) runCommunityDetection(ctx context.Context) {
 
 // kvProvider implements clustering.Provider using NATS KV buckets
 type kvProvider struct {
-	entityBucket   jetstream.KeyValue
-	outgoingBucket jetstream.KeyValue
-	incomingBucket jetstream.KeyValue
+	entityBucket   entityBucketReader
+	outgoingBucket outgoingBucketReader
+	incomingBucket incomingBucketReader
 	logger         *slog.Logger
 
 	// explicitNeighbors memoizes each entity's "both"-direction explicit neighbor
@@ -1852,9 +1865,9 @@ type kvProvider struct {
 
 // newKVProvider creates a graph provider that reads from KV buckets
 func newKVProvider(
-	entityBucket jetstream.KeyValue,
-	outgoingBucket jetstream.KeyValue,
-	incomingBucket jetstream.KeyValue,
+	entityBucket entityBucketReader,
+	outgoingBucket outgoingBucketReader,
+	incomingBucket incomingBucketReader,
 	logger *slog.Logger,
 ) *kvProvider {
 	return &kvProvider{
@@ -2015,7 +2028,7 @@ type relationshipEntry struct {
 // The outgoing format is a single key (entityID) with a JSON array of
 // {to_entity_id, predicate} entries — unchanged after composite-key sharding (gh#474).
 // Do NOT use this for INCOMING_INDEX; call getIncomingNeighbors instead.
-func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket jetstream.KeyValue, entityID string) ([]string, error) {
+func (p *kvProvider) getNeighborsFromBucket(ctx context.Context, bucket outgoingBucketReader, entityID string) ([]string, error) {
 	entry, err := bucket.Get(ctx, entityID)
 	if err != nil {
 		if err == jetstream.ErrKeyNotFound {
@@ -2385,7 +2398,7 @@ func (c *Component) resolveReviewLLMClient() llm.Client {
 
 // kvEntityQuerier implements clustering.EntityQuerier using NATS KV
 type kvEntityQuerier struct {
-	entityBucket jetstream.KeyValue
+	entityBucket entityBucketReader
 	logger       *slog.Logger
 
 	// latchPoison, when set, receives every authoritative decode failure so
@@ -2399,7 +2412,7 @@ type kvEntityQuerier struct {
 }
 
 // newKVEntityQuerier creates an entity querier that reads from ENTITY_STATES
-func newKVEntityQuerier(entityBucket jetstream.KeyValue, logger *slog.Logger) *kvEntityQuerier {
+func newKVEntityQuerier(entityBucket entityBucketReader, logger *slog.Logger) *kvEntityQuerier {
 	return &kvEntityQuerier{
 		entityBucket: entityBucket,
 		logger:       logger,

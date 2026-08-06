@@ -236,6 +236,12 @@ const (
 // schema defines the configuration schema for graph-embedding component
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+type entityStatesReader interface {
+	Get(context.Context, string) (jetstream.KeyValueEntry, error)
+	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+	Status(context.Context) (jetstream.KeyValueStatus, error)
+}
+
 // Component implements the graph-embedding processor
 type Component struct {
 	// Component metadata
@@ -262,7 +268,7 @@ type Component struct {
 	// count; the log stays a single actionable line rather than a flood.
 	noContentStoreWarn sync.Once
 	entityCoalescer    *cache.CoalescingSet
-	entityStatesBucket jetstream.KeyValue
+	entityStatesBucket entityStatesReader
 
 	// hop1Mu is the single-writer hop-1 seam (#629): every hop-1 EMBEDDING_INDEX
 	// mutation — the watcher's immediate-mode update, the watcher's tombstone
@@ -1190,11 +1196,6 @@ func contentStoreOutcome(store *objectstore.Store, err error, bucket string) (*o
 
 // waitForDependenciesAndStartWatcher waits for ENTITY_STATES bucket and starts the entity watcher.
 func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) error {
-	js, err := c.natsClient.JetStream()
-	if err != nil {
-		return errs.Wrap(err, "Component", "waitForDependenciesAndStartWatcher", "JetStream connection")
-	}
-
 	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
 	}
@@ -1207,7 +1208,7 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 	entityWatcher := resource.NewWatcher(
 		graph.BucketEntityStates,
 		func(checkCtx context.Context) error {
-			_, err := js.KeyValue(checkCtx, graph.BucketEntityStates)
+			_, err := graph.OpenCatalogReader(checkCtx, c.natsClient, graph.BucketEntityStates)
 			return err
 		},
 		watcherCfg,
@@ -1220,7 +1221,7 @@ func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) erro
 		)
 	}
 
-	entityBucket, err := js.KeyValue(ctx, graph.BucketEntityStates)
+	entityBucket, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketEntityStates)
 	if err != nil {
 		return errs.Wrap(err, "Component", "waitForDependenciesAndStartWatcher", "get entity bucket")
 	}
@@ -1421,7 +1422,7 @@ func (c *Component) publishReadinessStatus(ctx context.Context, status graph.Ind
 // ============================================================================
 
 // watchEntityStates watches the ENTITY_STATES KV bucket and queues entities for embedding
-func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyValue) {
+func (c *Component) watchEntityStates(ctx context.Context, bucket entityStatesReader) {
 	defer c.wg.Done()
 	c.bootstrapStarted.Store(true)
 

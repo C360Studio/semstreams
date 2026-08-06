@@ -62,7 +62,16 @@ func (c *Component) computeIndexStatus(ctx context.Context) graph.IndexStatusRes
 	if statusBucket == nil {
 		// Unit-test/early-construction fallback. Production Start always creates a
 		// separate status handle before installing query subscriptions.
-		statusBucket = c.entityStatesBucket
+		statusBucket, _ = c.entityStatesBucket.(entityStatesStatusReader)
+	}
+	if statusBucket == nil {
+		c.logger.Warn("index status: ENTITY_STATES status reader unavailable")
+		return graph.IndexStatusResponse{
+			Ready:             false,
+			State:             graph.IndexStateDegraded,
+			IndexedRevision:   indexed,
+			BootstrapComplete: c.indexBootstrapped.Load(),
+		}
 	}
 	c.statusTargetMu.Lock()
 	target, err := natsclient.BucketLastSeq(ctx, statusBucket)
