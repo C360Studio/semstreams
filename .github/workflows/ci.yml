@@ -88,9 +88,6 @@ jobs:
         # Fast-feedback duplicate of the coverage in the Test job's go test.
         run: go test ./test/natsclient/
 
-      - name: Test-infrastructure policy guard
-        run: go test ./test/testinfra/
-
   test:
     name: Test
     runs-on: ubuntu-latest
