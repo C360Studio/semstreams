@@ -2,10 +2,10 @@
 // Children, References, LookupByEntityID, AssertRuleWritable,
 // FieldType, GetWorkflowDefinition, ListWorkflows).
 //
-// All query ops read from ENTITY_STATES via the direct KV handle —
-// graph-ingest remains the single writer; the harness only emits
-// through it via the Manager state-change operations defined in
-// manager.go.
+// List and Watch use the catalog reader for key enumeration and workflow-pattern
+// subscriptions; exact projections use the admitted exact-read adapter.
+// graph-ingest remains the single writer, and the harness emits only canonical
+// mutations through the Manager state-change operations in manager.go.
 package lifecycle
 
 import (
@@ -34,9 +34,6 @@ import (
 // secondary-index work documented in ADR-049's deferred section.
 // The API stays stable across that migration.
 func (m *Manager) List(ctx context.Context, workflow string, opts ListOptions) ([]Participant, error) {
-	if err := m.graphStateContractError("List"); err != nil {
-		return nil, err
-	}
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return nil, err
@@ -170,7 +167,7 @@ func (m *Manager) Watch(ctx context.Context, workflow string) (<-chan Participan
 // creates/phase-changes, and Deleted (Participant nil) for reclaims
 // (KeyValueDelete/KeyValuePurge) whose key matches the workflow's
 // EntityIDPattern. Bootstrap-then-live like Watch for Upserted; Deleted
-// events are normally live, but the WatchAll bootstrap can also replay a
+// events are normally live, but the pattern-watch bootstrap can also replay a
 // key whose latest revision is a tombstone — so a Deleted may arrive
 // during initial values too. Either way treat Deleted as "ensure absent"
 // (idempotent), never "remove a row I saw upserted." Lets an observer
@@ -206,12 +203,8 @@ func (m *Manager) WatchEvents(ctx context.Context, workflow string) (<-chan Even
 }
 
 // startWatch resolves the workflow and opens one pattern subscription for that
-// workflow. A single Manager-owned WatchAll guard validates the authoritative
-// graph; per-workflow watches no longer multiply full-graph bootstrap scans.
+// workflow. Validation rides that subscription's matching entries.
 func (m *Manager) startWatch(ctx context.Context, workflow, caller string) (*registration, jetstream.KeyWatcher, error) {
-	if err := m.graphStateContractError(caller); err != nil {
-		return nil, nil, err
-	}
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return nil, nil, err
@@ -220,166 +213,12 @@ func (m *Manager) startWatch(ctx context.Context, workflow, caller string) (*reg
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := m.ensureGraphStateGuard(bucket); err != nil {
-		return nil, nil, fmt.Errorf("lifecycle: %s start graph-state guard: %w", caller, err)
-	}
 	watcher, err := bucket.Watch(ctx, reg.workflow.EntityIDPattern)
 	if err != nil {
 		return nil, nil, errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady,
 			fmt.Errorf("lifecycle: %s pattern watch for workflow %q: %w", caller, reg.workflow.Name, err))
 	}
 	return reg, watcher, nil
-}
-
-func (m *Manager) ensureGraphStateGuard(bucket entityStatesReader) error {
-	m.graphStateGuardMu.Lock()
-	defer m.graphStateGuardMu.Unlock()
-	if m.graphStateGuardStarted {
-		if failure := m.graphStateGuardDegraded.Load(); failure != nil {
-			return m.graphStateGuardNotReady(failure.err)
-		}
-		return nil
-	}
-	if err := m.graphStateContractError("graphStateGuard"); err != nil {
-		return err
-	}
-	watcher, err := bucket.WatchAll(m.graphStateGuardCtx)
-	if err != nil {
-		return m.graphStateGuardNotReady(fmt.Errorf("open authoritative %s WatchAll: %w", graph.BucketEntityStates, err))
-	}
-	m.graphStateGuardStarted = true
-	m.graphStateGuardWG.Add(1)
-	go m.runGraphStateGuard(watcher)
-	return nil
-}
-
-func (m *Manager) runGraphStateGuard(watcher jetstream.KeyWatcher) {
-	defer m.graphStateGuardWG.Done()
-	defer watcher.Stop()
-	for {
-		select {
-		case <-m.graphStateGuardCtx.Done():
-			m.publishGraphStateGuardReady(false)
-			m.graphStateGuardDoneOnce.Do(func() { close(m.graphStateGuardDone) })
-			return
-		case <-m.graphStateGuardDone:
-			return
-		case entry, ok := <-watcher.Updates():
-			if !ok {
-				if m.graphStateGuardCtx.Err() != nil {
-					m.publishGraphStateGuardReady(false)
-					m.graphStateGuardDoneOnce.Do(func() { close(m.graphStateGuardDone) })
-					return
-				}
-				m.markGraphStateGuardDegraded(errors.New("authoritative ENTITY_STATES watcher closed unexpectedly"))
-				return
-			}
-			if entry == nil {
-				m.publishGraphStateGuardReady(true)
-				continue
-			}
-			if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
-				m.advanceGraphStateGuardRevision(entry.Revision())
-				continue
-			}
-			var state graph.EntityState
-			if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-				m.latchGraphStatePoison(err)
-				return
-			}
-			m.advanceGraphStateGuardRevision(entry.Revision())
-		}
-	}
-}
-
-// advanceGraphStateGuardRevision publishes the highest authoritative KV
-// revision processed cleanly. WatchAll is ordered, so this also proves every
-// earlier revision was observed without graph-state poison.
-func (m *Manager) advanceGraphStateGuardRevision(revision uint64) {
-	if revision == 0 {
-		return
-	}
-	m.graphStateProgressMu.Lock()
-	defer m.graphStateProgressMu.Unlock()
-	if revision <= m.graphStateGuardRevision.Load() {
-		return
-	}
-	m.graphStateGuardRevision.Store(revision)
-	close(m.graphStateProgress)
-	m.graphStateProgress = make(chan struct{})
-}
-
-// waitGraphStateGuardRevision prevents a faster pattern subscription from
-// dispatching revision R until the authoritative WatchAll guard has validated
-// through at least R. Waiting on a rotating signal keeps the barrier
-// constant-space rather than buffering graph entries.
-func (m *Manager) waitGraphStateGuardRevision(ctx context.Context, revision uint64) bool {
-	if revision == 0 {
-		return m.waitGraphStateGuard(ctx)
-	}
-	for {
-		if m.graphStatePoison.Load() != nil || m.graphStateGuardDegraded.Load() != nil {
-			return false
-		}
-		m.graphStateProgressMu.Lock()
-		if m.graphStateGuardRevision.Load() >= revision {
-			m.graphStateProgressMu.Unlock()
-			return m.waitGraphStateGuard(ctx)
-		}
-		progress := m.graphStateProgress
-		m.graphStateProgressMu.Unlock()
-		select {
-		case <-ctx.Done():
-			return false
-		case <-m.graphStateGuardDone:
-			return false
-		case <-progress:
-		}
-	}
-}
-
-func (m *Manager) graphStateGuardNotReady(err error) error {
-	return errs.ClassifiedCode(errs.ErrorTransient, graph.ErrorCodeIndexNotReady, err)
-}
-
-func (m *Manager) markGraphStateGuardDegraded(err error) {
-	if err == nil {
-		err = errors.New("authoritative ENTITY_STATES watcher is unavailable")
-	}
-	if m.graphStateGuardDegraded.CompareAndSwap(nil, &graphStateGuardTransportFailure{err: err}) {
-		m.logger.Warn("authoritative graph-state guard degraded",
-			slog.String("code", graph.ErrorCodeIndexNotReady),
-			slog.String("error", err.Error()))
-		m.publishGraphStateGuardReady(false)
-		m.graphStateGuardDoneOnce.Do(func() { close(m.graphStateGuardDone) })
-	}
-}
-
-func (m *Manager) publishGraphStateGuardReady(clean bool) {
-	m.graphStateGuardReadyOnce.Do(func() {
-		m.graphStateGuardResult.Store(&graphStateGuardResult{clean: clean})
-		close(m.graphStateGuardReady)
-	})
-}
-
-func (m *Manager) waitGraphStateGuard(ctx context.Context) bool {
-	select {
-	case <-ctx.Done():
-		return false
-	case <-m.graphStateGuardDone:
-		return false
-	case <-m.graphStateGuardReady:
-	}
-	if m.graphStatePoison.Load() != nil || m.graphStateGuardDegraded.Load() != nil || m.graphStateGuardCtx.Err() != nil {
-		return false
-	}
-	select {
-	case <-m.graphStateGuardDone:
-		return false
-	default:
-	}
-	result := m.graphStateGuardResult.Load()
-	return result != nil && result.clean
 }
 
 // runWatchLoop drives one workflow-pattern watch over ENTITY_STATES, invoking
@@ -396,24 +235,14 @@ func (m *Manager) runWatchLoop(
 	onDelete func(entityID string) bool,
 ) {
 	defer watcher.Stop()
-	if !m.waitGraphStateGuard(ctx) {
-		return
-	}
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-m.graphStateGuardDone:
 			return
 		case entry, ok := <-watcher.Updates():
 			if !ok {
 				if ctx.Err() != nil {
 					return
-				}
-				select {
-				case <-m.graphStateGuardDone:
-					return
-				default:
 				}
 				m.logger.Warn("lifecycle workflow watcher degraded",
 					slog.String("code", graph.ErrorCodeIndexNotReady),
@@ -424,15 +253,18 @@ func (m *Manager) runWatchLoop(
 			if entry == nil {
 				continue
 			}
-			if m.graphStatePoison.Load() != nil {
-				return
-			}
-			if !m.waitGraphStateGuardRevision(ctx, entry.Revision()) {
-				return
-			}
 
-			delivery, keep := m.prepareWatchEntry(reg, entry)
-			if m.graphStatePoison.Load() != nil {
+			delivery, keep, err := m.prepareWatchEntry(reg, entry)
+			if err != nil {
+				var contractErr *graph.StateContractError
+				if errors.As(err, &contractErr) {
+					m.logger.Warn("lifecycle workflow watch encountered poisoned graph state; closing subscription",
+						slog.String("workflow", reg.workflow.Name),
+						slog.String("entity", entry.Key()),
+						slog.Uint64("revision", entry.Revision()),
+						slog.String("code", graph.ErrorCodeGraphStateResetRequired),
+						slog.String("reason", string(contractErr.Reason)))
+				}
 				return
 			}
 			if !keep {
@@ -452,30 +284,30 @@ type lifecycleWatchDelivery struct {
 }
 
 // prepareWatchEntry decodes and projects one entry from a workflow-pattern
-// watch. The Manager-owned WatchAll guard separately validates the complete
-// graph and its revision barrier has already proved this entry cannot overtake
-// an earlier poison.
-func (m *Manager) prepareWatchEntry(reg *registration, entry jetstream.KeyValueEntry) (lifecycleWatchDelivery, bool) {
+// watch. Validation belongs to this subscription's matching read path.
+func (m *Manager) prepareWatchEntry(
+	reg *registration,
+	entry jetstream.KeyValueEntry,
+) (lifecycleWatchDelivery, bool, error) {
 	if entry.Operation() == jetstream.KeyValueDelete || entry.Operation() == jetstream.KeyValuePurge {
 		if !matchPattern(reg.workflow.EntityIDPattern, entry.Key()) {
-			return lifecycleWatchDelivery{}, false
+			return lifecycleWatchDelivery{}, false, nil
 		}
-		return lifecycleWatchDelivery{entityID: entry.Key(), deleted: true}, true
+		return lifecycleWatchDelivery{entityID: entry.Key(), deleted: true}, true, nil
 	}
 
 	var state graph.EntityState
 	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-		m.latchGraphStatePoison(err)
-		return lifecycleWatchDelivery{}, false
+		return lifecycleWatchDelivery{}, false, err
 	}
 	if !matchPattern(reg.workflow.EntityIDPattern, entry.Key()) {
-		return lifecycleWatchDelivery{}, false
+		return lifecycleWatchDelivery{}, false, nil
 	}
 	participant, ok := m.projectWatchState(reg, entry.Key(), &state)
 	if !ok {
-		return lifecycleWatchDelivery{}, false
+		return lifecycleWatchDelivery{}, false, nil
 	}
-	return lifecycleWatchDelivery{entityID: entry.Key(), participant: participant}, true
+	return lifecycleWatchDelivery{entityID: entry.Key(), participant: participant}, true, nil
 }
 
 func (m *Manager) deliverWatchEntry(
@@ -517,9 +349,6 @@ func (m *Manager) projectWatchState(reg *registration, entityID string, state *g
 // bucket History=1 because each phase mutation atomically carries the retained
 // occurrence-discriminated records forward. This is not an unbounded audit log.
 func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error) {
-	if err := m.graphStateContractError("History"); err != nil {
-		return nil, err
-	}
 	reg, err := m.lookupByWorkflow(workflow)
 	if err != nil {
 		return nil, err

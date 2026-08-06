@@ -7,8 +7,9 @@
 // This package is a SUBSTRATE CONVENTION LAYER, not a workflow engine.
 // It provides:
 //   - A Participant interface apps implement on their domain state structs
-//   - A Manager harness that handles KV storage, restart recovery,
-//     and operator API integration
+//   - A Manager harness that projects exact graph authority reads, emits
+//     canonical graph mutations, supports restart recovery, and integrates
+//     with operator APIs
 //   - A Transitions table that declares valid phase transitions per workflow
 //   - Struct-tag-based operator-writability declaration (default-deny)
 //
@@ -19,6 +20,22 @@
 //   - A replacement for components (components remain the execution layer)
 //
 // See ADR-047 for the full rationale.
+//
+// # Authority poison locality
+//
+// Lifecycle is a scoped authoritative reader, not a cached derived-view owner.
+// Exact operations validate only the requested entity. List narrows keys to the
+// registered workflow before decoding; poison in that workflow fails the whole
+// call with no partial result, while nonmatching poison is irrelevant. A failed
+// mutation precondition emits no graph mutation.
+//
+// Watch and WatchEvents each own one workflow-pattern subscription. Poison in a
+// matching entry emits no participant or event, logs the workflow, entity,
+// revision, reset code, and reason once, then closes only that subscription.
+// Unexpected transport closure is likewise subscription-local. Context
+// cancellation is quiet. After a successful open, value-channel closure remains
+// the sole terminal signal; there is no terminal-error channel, lifecycle poison
+// status, metric, or configuration surface.
 //
 // # Participation is per-entity, not per-deployment
 //

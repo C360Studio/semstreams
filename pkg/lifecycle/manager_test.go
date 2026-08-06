@@ -128,13 +128,13 @@ func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) 
 // + manager_query.go exercise. We implement only the methods the
 // Manager calls; the rest panic if invoked.
 type fakeBucket struct {
-	mu              sync.Mutex
-	entries         map[string]*fakeBucketEntry
-	raw             map[string][]byte
-	history         map[string][]jetstream.KeyValueEntry
-	nextRev         uint64
-	watchFactory    func(string) (jetstream.KeyWatcher, error)
-	watchAllFactory func() (jetstream.KeyWatcher, error)
+	mu           sync.Mutex
+	entries      map[string]*fakeBucketEntry
+	raw          map[string][]byte
+	history      map[string][]jetstream.KeyValueEntry
+	nextRev      uint64
+	watchFactory func(string) (jetstream.KeyWatcher, error)
+	listKeys     []string
 }
 
 type fakeBucketEntry struct {
@@ -252,10 +252,7 @@ func (b *fakeBucket) Watch(_ context.Context, pattern string, _ ...jetstream.Wat
 	return b.watchFactory(pattern)
 }
 func (b *fakeBucket) WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
-	if b.watchAllFactory == nil {
-		panic("fakeBucket.WatchAll not implemented")
-	}
-	return b.watchAllFactory()
+	panic("fakeBucket.WatchAll exists only for jetstream.KeyValue fixture conformance")
 }
 func (b *fakeBucket) WatchFiltered(context.Context, []string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error) {
 	panic("fakeBucket.WatchFiltered not implemented")
@@ -264,8 +261,20 @@ func (b *fakeBucket) Keys(context.Context, ...jetstream.WatchOpt) ([]string, err
 	panic("fakeBucket.Keys not implemented")
 }
 func (b *fakeBucket) ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error) {
-	panic("fakeBucket.ListKeys not implemented")
+	keys := make(chan string, len(b.listKeys))
+	for _, key := range b.listKeys {
+		keys <- key
+	}
+	close(keys)
+	return &fakeKeyLister{keys: keys}, nil
 }
+
+type fakeKeyLister struct {
+	keys <-chan string
+}
+
+func (l *fakeKeyLister) Keys() <-chan string { return l.keys }
+func (l *fakeKeyLister) Stop() error         { return nil }
 func (b *fakeBucket) ListKeysFiltered(context.Context, ...string) (jetstream.KeyLister, error) {
 	panic("fakeBucket.ListKeysFiltered not implemented")
 }
@@ -805,7 +814,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=808 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=817 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
