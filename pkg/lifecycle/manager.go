@@ -28,6 +28,12 @@ var lifecycleMessageType = message.Type{
 	Version:  "v1",
 }
 
+type entityStatesReader interface {
+	ListKeys(context.Context, ...jetstream.WatchOpt) (jetstream.KeyLister, error)
+	Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+}
+
 // Manager is the schema-and-discipline layer over ENTITY_STATES
 // (ADR-049). Workflow types register at startup via Manager.Register;
 // state changes route through graph-ingest via revision-fenced reconcile;
@@ -46,12 +52,11 @@ type Manager struct {
 	emitter     graphEmitter
 	exactReader graph.ExactEntityReader
 
-	// entityStatesBucket is the direct KV handle for ENTITY_STATES.
-	// Used for reads (Get, List, History) and Watch — graph-ingest
-	// is the single writer, but anyone can read. Lazily initialized
-	// on first use; in the test path it's pre-populated.
+	// entityStatesBucket is the catalog reader for ENTITY_STATES List and Watch
+	// operations. Exact entity reads use exactReader. Graph-ingest remains the
+	// single writer. Lazily initialized on first use; in tests it is pre-populated.
 	bucketMu           sync.Mutex
-	entityStatesBucket jetstream.KeyValue
+	entityStatesBucket entityStatesReader
 
 	mu            sync.RWMutex
 	registrations map[string]*registration
@@ -222,7 +227,7 @@ func (m *Manager) lookupByWorkflow(workflow string) (*registration, error) {
 // ensureBucket lazy-initializes the ENTITY_STATES bucket handle.
 // graph-ingest owns the bucket's lifecycle; the Manager just opens
 // an existing handle.
-func (m *Manager) ensureBucket(ctx context.Context) (jetstream.KeyValue, error) {
+func (m *Manager) ensureBucket(ctx context.Context) (entityStatesReader, error) {
 	m.bucketMu.Lock()
 	defer m.bucketMu.Unlock()
 	if m.entityStatesBucket != nil {
@@ -231,7 +236,7 @@ func (m *Manager) ensureBucket(ctx context.Context) (jetstream.KeyValue, error) 
 	if m.natsClient == nil {
 		return nil, fmt.Errorf("lifecycle: NATS client unavailable (test-mode Manager constructed without an ENTITY_STATES bucket)")
 	}
-	bucket, err := m.natsClient.GetKeyValueBucket(ctx, graph.BucketEntityStates)
+	bucket, err := graph.OpenCatalogReader(ctx, m.natsClient, graph.BucketEntityStates)
 	if err != nil {
 		return nil, fmt.Errorf("lifecycle: open %s bucket: %w", graph.BucketEntityStates, err)
 	}

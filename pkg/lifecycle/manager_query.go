@@ -231,7 +231,7 @@ func (m *Manager) startWatch(ctx context.Context, workflow, caller string) (*reg
 	return reg, watcher, nil
 }
 
-func (m *Manager) ensureGraphStateGuard(bucket jetstream.KeyValue) error {
+func (m *Manager) ensureGraphStateGuard(bucket entityStatesReader) error {
 	m.graphStateGuardMu.Lock()
 	defer m.graphStateGuardMu.Unlock()
 	if m.graphStateGuardStarted {

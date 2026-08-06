@@ -159,6 +159,10 @@ func DefaultConfig() Config {
 // schema defines the configuration schema for graph-index-temporal component
 var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
+type entityStatesWatcher interface {
+	WatchAll(context.Context, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+}
+
 // Component implements the graph-index-temporal processor
 type Component struct {
 	// Component metadata
@@ -412,12 +416,7 @@ func (c *Component) Initialize() error {
 }
 
 // waitForEntityBucket waits for the ENTITY_STATES bucket to be available and returns it
-func (c *Component) waitForEntityBucket(ctx context.Context) (jetstream.KeyValue, error) {
-	js, err := c.natsClient.JetStream()
-	if err != nil {
-		return nil, errs.Wrap(err, "Component", "waitForEntityBucket", "JetStream connection")
-	}
-
+func (c *Component) waitForEntityBucket(ctx context.Context) (entityStatesWatcher, error) {
 	// Report waiting stage
 	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
 		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
@@ -432,7 +431,7 @@ func (c *Component) waitForEntityBucket(ctx context.Context) (jetstream.KeyValue
 	entityWatcher := resource.NewWatcher(
 		graph.BucketEntityStates,
 		func(checkCtx context.Context) error {
-			_, err := js.KeyValue(checkCtx, graph.BucketEntityStates)
+			_, err := graph.OpenCatalogReader(checkCtx, c.natsClient, graph.BucketEntityStates)
 			return err
 		},
 		watcherCfg,
@@ -445,7 +444,11 @@ func (c *Component) waitForEntityBucket(ctx context.Context) (jetstream.KeyValue
 		)
 	}
 
-	return js.KeyValue(ctx, graph.BucketEntityStates)
+	reader, err := graph.OpenCatalogReader(ctx, c.natsClient, graph.BucketEntityStates)
+	if err != nil {
+		return nil, err
+	}
+	return reader, nil
 }
 
 // Start begins processing (must be initialized first)
@@ -597,7 +600,7 @@ func (c *Component) initLifecycleReporter(ctx context.Context) {
 // ============================================================================
 
 // watchEntityStates watches the ENTITY_STATES KV bucket and indexes entities with temporal data
-func (c *Component) watchEntityStates(ctx context.Context, bucket jetstream.KeyValue) {
+func (c *Component) watchEntityStates(ctx context.Context, bucket entityStatesWatcher) {
 	defer c.wg.Done()
 	c.bootstrapStarted.Store(true)
 

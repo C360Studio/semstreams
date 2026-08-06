@@ -15,6 +15,10 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
+type entityStatesWatcher interface {
+	Watch(context.Context, string, ...jetstream.WatchOpt) (jetstream.KeyWatcher, error)
+}
+
 // watchEntityStates creates KV watchers for entity state changes.
 //
 // Contract validation rides the pattern-watch input path itself: every value a
@@ -103,14 +107,9 @@ func (rp *Processor) getEffectiveBucketPatterns() map[string][]string {
 // graphStateGuardDegraded for the process lifetime, so an unretried transient
 // miss would permanently disable rule evaluation with only a Warn to show for
 // it. Same bounded-startup primitive the sibling ENTITY_STATES readers use.
-func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName string) (jetstream.KeyValue, error) {
+func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName string) (entityStatesWatcher, error) {
 	if bucketName != gtypes.BucketEntityStates {
 		return nil, unsupportedEntityWatchBucket(bucketName)
-	}
-
-	js, err := rp.natsClient.JetStream()
-	if err != nil {
-		return nil, errs.Wrap(err, "Processor", "getEntityStatesBucket", "JetStream connection")
 	}
 
 	attempts, interval := rp.config.startupWaitBudget()
@@ -122,7 +121,7 @@ func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName strin
 	bucketWatcher := resource.NewWatcher(
 		bucketName,
 		func(checkCtx context.Context) error {
-			_, checkErr := js.KeyValue(checkCtx, bucketName)
+			_, checkErr := gtypes.OpenCatalogReader(checkCtx, rp.natsClient, bucketName)
 			return checkErr
 		},
 		watcherCfg,
@@ -136,7 +135,11 @@ func (rp *Processor) getEntityStatesBucket(ctx context.Context, bucketName strin
 		)
 	}
 
-	return js.KeyValue(ctx, bucketName)
+	reader, err := gtypes.OpenCatalogReader(ctx, rp.natsClient, bucketName)
+	if err != nil {
+		return nil, err
+	}
+	return reader, nil
 }
 
 // startWatcherForBucketPattern starts a KV watcher for a specific bucket and pattern.
