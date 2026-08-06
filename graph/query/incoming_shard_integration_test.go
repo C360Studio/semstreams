@@ -11,6 +11,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,12 +27,17 @@ import (
 // provisionGraphBuckets provisions the three buckets the query client binds,
 // the way their owners do — through the catalog seam. The client is a READER
 // now: it never creates, so a standalone test must stand in for the owners.
-func provisionGraphBuckets(ctx context.Context, t *testing.T, nc *natsclient.Client) {
+func provisionGraphBuckets(
+	ctx context.Context, t *testing.T, nc *natsclient.Client,
+) map[string]jetstream.KeyValue {
 	t.Helper()
+	owners := make(map[string]jetstream.KeyValue, 3)
 	for _, name := range []string{graph.BucketEntityStates, graph.BucketSpatialIndex, graph.BucketIncomingIndex} {
-		_, err := graph.EnsureCatalogBucket(ctx, nc, name)
+		bucket, err := graph.EnsureCatalogBucket(ctx, nc, name)
 		require.NoError(t, err, "provision %s as its owner would", name)
+		owners[name] = bucket
 	}
+	return owners
 }
 
 func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
@@ -43,7 +49,7 @@ func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 	// (gh#474 Codex #4 — AllowUngatedReads is the explicit opt-out from fail-closed).
 	cfg := DefaultConfig()
 	cfg.AllowUngatedReads = true
-	provisionGraphBuckets(ctx, t, tc.Client)
+	owners := provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, cfg)
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -60,12 +66,12 @@ func TestGetIncomingEdges_ShardedCompositeKeys(t *testing.T) {
 		target + "." + srcA + "." + graph.EncodePredicateToken("robotics.relation.controls"),
 		target + "." + srcB + "." + graph.EncodePredicateToken("robotics.relation.observes"),
 	} {
-		_, putErr := qc.incomingBucket.Put(ctx, key, []byte{})
+		_, putErr := owners[graph.BucketIncomingIndex].Put(ctx, key, []byte{})
 		require.NoError(t, putErr)
 	}
 	// A legacy raw/noncanonical predicate suffix is poison under the production
 	// target6.source6.hex(predicate3) contract and must not create a third source.
-	_, err = qc.incomingBucket.Put(ctx, target+"."+poisonSource+".rel.observes", []byte{})
+	_, err = owners[graph.BucketIncomingIndex].Put(ctx, target+"."+poisonSource+".rel.observes", []byte{})
 	require.NoError(t, err)
 
 	sources, err := qc.GetIncomingEdges(ctx, target)
@@ -85,14 +91,14 @@ func TestGetEntityConnections_PropagatesIncomingReadinessError(t *testing.T) {
 	defer func() { _ = tc.Terminate() }()
 
 	cfg := DefaultConfig() // fail closed: no graph-index status responder is running.
-	provisionGraphBuckets(context.Background(), t, tc.Client)
+	owners := provisionGraphBuckets(context.Background(), t, tc.Client)
 	client, err := NewClient(context.Background(), tc.Client, cfg)
 	require.NoError(t, err)
 	qc := client.(*natsClient)
 	require.NoError(t, qc.ensureBuckets(context.Background()))
 
 	entityID := "acme.ops.robotics.gcs.drone.001"
-	_, err = qc.entityBucket.Put(context.Background(), entityID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
+	_, err = owners[graph.BucketEntityStates].Put(context.Background(), entityID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -110,7 +116,7 @@ func TestGetEntityRejectsPredicatePoisonWithoutCachingPartialState(t *testing.T)
 	defer func() { _ = tc.Terminate() }()
 
 	ctx := context.Background()
-	provisionGraphBuckets(ctx, t, tc.Client)
+	owners := provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)
@@ -118,7 +124,7 @@ func TestGetEntityRejectsPredicatePoisonWithoutCachingPartialState(t *testing.T)
 
 	entityID := "acme.ops.robotics.gcs.drone.001"
 	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
-	_, err = qc.entityBucket.Put(ctx, entityID, poisoned)
+	_, err = owners[graph.BucketEntityStates].Put(ctx, entityID, poisoned)
 	require.NoError(t, err)
 
 	entity, err := qc.GetEntity(ctx, entityID)
@@ -137,14 +143,14 @@ func TestDirectQueryClient_LivePoisonInvalidatesCachedViews(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	provisionGraphBuckets(ctx, t, tc.Client)
+	owners := provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)
 	require.NoError(t, qc.ensureBuckets(ctx))
 
 	validID := "acme.ops.robotics.gcs.drone.001"
-	validRev, err := qc.entityBucket.Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
+	validRev, err := owners[graph.BucketEntityStates].Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return qc.entityObservedRev.Load() >= validRev }, time.Second, 10*time.Millisecond)
 	entity, err := qc.GetEntity(ctx, validID)
@@ -154,7 +160,7 @@ func TestDirectQueryClient_LivePoisonInvalidatesCachedViews(t *testing.T) {
 	require.True(t, cached)
 
 	poisonID := "acme.ops.robotics.gcs.drone.002"
-	_, err = qc.entityBucket.Put(ctx, poisonID, []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`)) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
+	_, err = owners[graph.BucketEntityStates].Put(ctx, poisonID, []byte(`{"id":"acme.ops.robotics.gcs.drone.002","triples":[{"subject":"acme.ops.robotics.gcs.drone.002","predicate":"legacy.predicate","object":"old"}]}`)) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	require.NoError(t, err)
 	require.Eventually(t, func() bool { return qc.entityStatePoison.Load() != nil }, time.Second, 10*time.Millisecond)
 
@@ -171,14 +177,14 @@ func TestGetEntitiesBatch_DoesNotReturnPartialSuccess(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	provisionGraphBuckets(ctx, t, tc.Client)
+	owners := provisionGraphBuckets(ctx, t, tc.Client)
 	client, err := NewClient(ctx, tc.Client, DefaultConfig())
 	require.NoError(t, err)
 	qc := client.(*natsClient)
 	require.NoError(t, qc.ensureBuckets(ctx))
 
 	validID := "acme.ops.robotics.gcs.drone.001"
-	_, err = qc.entityBucket.Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
+	_, err = owners[graph.BucketEntityStates].Put(ctx, validID, []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[]}`))
 	require.NoError(t, err)
 
 	entities, err := qc.GetEntitiesBatch(ctx, []string{validID, "acme.ops.robotics.gcs.drone.999"})

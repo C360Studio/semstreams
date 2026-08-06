@@ -543,11 +543,12 @@ func (kv *KVStore) KeysByFilter(ctx context.Context, pattern string) ([]string, 
 	return keys, nil
 }
 
-// FilteredKeys returns keys matching a NATS wildcard pattern from a raw jetstream.KeyValue bucket.
-// Use this for components that hold jetstream.KeyValue directly instead of *KVStore.
+// FilteredKeys returns keys matching a NATS wildcard pattern from a KV reader.
 // The pattern should be a valid NATS subject filter (e.g., "0.>" for level-0 community keys).
 // Returns nil, nil when no keys match.
-func FilteredKeys(ctx context.Context, kv jetstream.KeyValue, pattern string) ([]string, error) {
+func FilteredKeys(ctx context.Context, kv interface {
+	ListKeysFiltered(ctx context.Context, filters ...string) (jetstream.KeyLister, error)
+}, pattern string) ([]string, error) {
 	lister, err := kv.ListKeysFiltered(ctx, pattern)
 	if err != nil {
 		if errors.Is(err, jetstream.ErrNoKeysFound) || errors.Is(err, jetstream.ErrKeyNotFound) {

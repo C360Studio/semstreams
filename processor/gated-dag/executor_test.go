@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/gateddag"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/require"
 )
 
@@ -133,6 +134,31 @@ func (r *recordingSubmit) ids() []string {
 // dispatcher; submit is the recorder).
 func newEvalExecutor(cfg Config, reader graphReader, sub func(dispatchJob) error) *executor {
 	return &executor{cfg: cfg, log: discardLogger(), reader: reader, submit: sub}
+}
+
+type failingCatalogWatcher struct {
+	err     error
+	pattern string
+}
+
+func (w *failingCatalogWatcher) Watch(
+	_ context.Context,
+	pattern string,
+	_ ...jetstream.WatchOpt,
+) (jetstream.KeyWatcher, error) {
+	w.pattern = pattern
+	return nil, w.err
+}
+
+func TestWatchCatalogReaderPreservesCallerPolicy(t *testing.T) {
+	sentinel := errors.New("watch failed")
+	reader := &failingCatalogWatcher{err: sentinel}
+
+	_, err := watchCatalogReader(context.Background(), reader, "unit.>")
+
+	require.ErrorIs(t, err, sentinel)
+	require.ErrorContains(t, err, "kv watch unit.>")
+	require.Equal(t, "unit.>", reader.pattern)
 }
 
 // fakeStall records edge-triggered stall publishes (#365.3).

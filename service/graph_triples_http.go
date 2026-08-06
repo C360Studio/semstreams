@@ -15,6 +15,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,8 @@ import (
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
+	"github.com/nats-io/nats.go/jetstream"
 )
 
 const (
@@ -175,15 +178,12 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 		return []message.Triple{}, nil
 	}
 
-	bucket, err := graph.OpenCatalogBucket(ctx, m.natsClient, graph.BucketEntityStates)
+	reader, err := graph.OpenCatalogReader(ctx, m.natsClient, graph.BucketEntityStates)
 	if err != nil {
 		return nil, fmt.Errorf("open %s bucket: %w", graph.BucketEntityStates, err)
 	}
 
-	store := m.natsClient.NewKVStore(bucket)
-
-	// Keys() returns nil, nil when the bucket is empty (KVStore handles ErrNoKeysFound).
-	keys, err := store.Keys(ctx)
+	keys, err := graphTripleKeys(ctx, reader)
 	if err != nil {
 		return nil, fmt.Errorf("list entity keys: %w", err)
 	}
@@ -195,7 +195,7 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 			break
 		}
 
-		entry, err := store.Get(ctx, key)
+		entry, err := graphTripleEntry(ctx, reader, key)
 		if err != nil {
 			// Key may have been deleted between Keys() and Get(); skip gracefully.
 			m.logger.Debug("graph triples: skipping key after fetch error",
@@ -204,7 +204,7 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 		}
 
 		var entity graph.EntityState
-		if err := graph.UnmarshalEntityState(entry.Value, &entity); err != nil {
+		if err := graph.UnmarshalEntityState(entry.Value(), &entity); err != nil {
 			return nil, fmt.Errorf("decode authoritative entity %q: %w", key, err)
 		}
 
@@ -219,4 +219,32 @@ func (m *Manager) queryGraphTriples(ctx context.Context, params tripleQueryParam
 	}
 
 	return results, nil
+}
+
+func graphTripleKeys(ctx context.Context, reader graph.CatalogReader) ([]string, error) {
+	ctx, cancel := context.WithTimeout(ctx, natsclient.DefaultKVOptions().Timeout)
+	defer cancel()
+
+	keys, err := reader.Keys(ctx)
+	if err != nil {
+		if errors.Is(err, jetstream.ErrNoKeysFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("kv keys: %w", err)
+	}
+	return keys, nil
+}
+
+func graphTripleEntry(ctx context.Context, reader graph.CatalogReader, key string) (jetstream.KeyValueEntry, error) {
+	ctx, cancel := context.WithTimeout(ctx, natsclient.DefaultKVOptions().Timeout)
+	defer cancel()
+
+	entry, err := reader.Get(ctx, key)
+	if err != nil {
+		if natsclient.IsKVNotFoundError(err) {
+			return nil, natsclient.ErrKVKeyNotFound
+		}
+		return nil, fmt.Errorf("kv get %s: %w", key, err)
+	}
+	return entry, nil
 }

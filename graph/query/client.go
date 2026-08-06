@@ -85,9 +85,9 @@ type natsClient struct {
 	statusBindWait time.Duration
 
 	// KV bucket handles
-	entityBucket   jetstream.KeyValue
-	spatialBucket  jetstream.KeyValue
-	incomingBucket jetstream.KeyValue
+	entityBucket   gtypes.CatalogReader
+	spatialBucket  gtypes.CatalogReader
+	incomingBucket gtypes.CatalogReader
 
 	// Metrics
 	queryCount  int64
@@ -158,19 +158,19 @@ func (qc *natsClient) ensureBuckets(ctx context.Context) error {
 		return nil
 	}
 
-	entityBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketEntityStates)
+	entityBucket, err := gtypes.OpenCatalogReader(ctx, qc.natsClient, gtypes.BucketEntityStates)
 	if err != nil {
 		return fmt.Errorf("failed to get ENTITY_STATES bucket: %w", err)
 	}
 	qc.entityBucket = entityBucket
 
-	spatialBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketSpatialIndex)
+	spatialBucket, err := gtypes.OpenCatalogReader(ctx, qc.natsClient, gtypes.BucketSpatialIndex)
 	if err != nil {
 		return fmt.Errorf("failed to get SPATIAL_INDEX bucket: %w", err)
 	}
 	qc.spatialBucket = spatialBucket
 
-	incomingBucket, err := gtypes.OpenCatalogBucket(ctx, qc.natsClient, gtypes.BucketIncomingIndex)
+	incomingBucket, err := gtypes.OpenCatalogReader(ctx, qc.natsClient, gtypes.BucketIncomingIndex)
 	if err != nil {
 		return fmt.Errorf("failed to get INCOMING_INDEX bucket: %w", err)
 	}

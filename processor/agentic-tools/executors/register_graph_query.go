@@ -2,7 +2,6 @@ package executors
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -25,7 +24,7 @@ import (
 // bucket does not exist at registration time. The registry is built once per
 // process: a registration-time skip would lose all five tools for the process
 // lifetime on exactly the first-install path. Instead the executor registers
-// immediately and every execution binds must-exist via OpenCatalogBucket
+// immediately and every execution binds must-exist via OpenCatalogReader
 // (cached after the first success), returning the seam's classified not-ready
 // error — naming the owner, graph-ingest — until the owner has provisioned
 // the bucket. The reader still NEVER creates (a reader create here once raced
@@ -46,59 +45,62 @@ func registerGraphQuery(_ context.Context, tools *agentictools.ExecutorRegistry,
 	return nil
 }
 
-// graphQueryKVAdapter bridges natsclient.KVStore to the KVGetter shape
+// graphQueryKVAdapter bridges graph.CatalogReader to the KVGetter shape
 // GraphQueryExecutor consumes, resolving the ENTITY_STATES bucket LAZILY at
 // execution time: bind must-exist through the catalog reader seam, cache the
-// store on first success (mutex-guarded), and until then surface the seam's
-// classified not-ready error naming the catalog owner. natsclient.KVEntry has
-// Value/Revision as fields; the local wrapper types forward them as methods.
-// Kept in this file so the adapter stays next to its only caller.
+// reader on first success (mutex-guarded), and until then surface the seam's
+// classified not-ready error naming the catalog owner. JetStream entries have
+// the same Value/Revision method shape the local executor consumes.
 type graphQueryKVAdapter struct {
 	natsClient *natsclient.Client
 
-	mu    sync.Mutex
-	store *natsclient.KVStore // cached after the first successful bind
+	mu     sync.Mutex
+	reader graph.CatalogReader // cached after the first successful bind
 }
 
-// bind resolves the ENTITY_STATES store, caching the handle on first success.
+// bind resolves the ENTITY_STATES reader, caching it on first success.
 // It NEVER creates the bucket: an absent bucket is the seam's classified
 // not-ready error (its owner, graph-ingest, has not provisioned it yet), and
 // the next execution simply retries the bind.
-func (a *graphQueryKVAdapter) bind(ctx context.Context) (*natsclient.KVStore, error) {
+func (a *graphQueryKVAdapter) bind(ctx context.Context) (graph.CatalogReader, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.store != nil {
-		return a.store, nil
+	if a.reader != nil {
+		return a.reader, nil
 	}
-	bucket, err := graph.OpenCatalogBucket(ctx, a.natsClient, graph.BucketEntityStates)
+	reader, err := graph.OpenCatalogReader(ctx, a.natsClient, graph.BucketEntityStates)
 	if err != nil {
 		return nil, err
 	}
-	a.store = a.natsClient.NewKVStore(bucket)
-	return a.store, nil
+	a.reader = reader
+	return a.reader, nil
 }
 
 func (a *graphQueryKVAdapter) Get(ctx context.Context, key string) (KVEntry, error) {
-	store, err := a.bind(ctx)
+	reader, err := a.bind(ctx)
 	if err != nil {
 		return nil, err
 	}
-	entry, err := store.Get(ctx, key)
+	entry, err := getGraphQueryEntry(ctx, reader, key)
 	if err != nil {
-		if errors.Is(err, natsclient.ErrKVKeyNotFound) {
+		return nil, err
+	}
+	return entry, nil
+}
+
+func getGraphQueryEntry(ctx context.Context, reader graph.CatalogReader, key string) (KVEntry, error) {
+	ctx, cancel := context.WithTimeout(ctx, natsclient.DefaultKVOptions().Timeout)
+	defer cancel()
+
+	entry, err := reader.Get(ctx, key)
+	if err != nil {
+		if natsclient.IsKVNotFoundError(err) {
 			// Map the store's sentinel onto the executor's, so a missing
 			// entity reports ToolErrorNotFound rather than a network failure
 			// (the executor matches ErrKeyNotFound by identity).
 			return nil, ErrKeyNotFound
 		}
-		return nil, err
+		return nil, fmt.Errorf("kv get %s: %w", key, err)
 	}
-	return &graphQueryKVEntry{entry: entry}, nil
+	return entry, nil
 }
-
-type graphQueryKVEntry struct {
-	entry *natsclient.KVEntry
-}
-
-func (e *graphQueryKVEntry) Value() []byte    { return e.entry.Value }
-func (e *graphQueryKVEntry) Revision() uint64 { return e.entry.Revision }
