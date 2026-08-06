@@ -6,7 +6,7 @@ changing their bytes or rejection behavior.
 
 ## Boundary inventory
 
-Each entry records current bytes, semantic owner, missing decision, rebuild effect, owning change, shared-contract
+Each entry records current bytes, responsible component, missing decision, rebuild effect, owning change, shared-contract
 status, and migration state in that order.
 
 Shared-contract status has four allowed values:
@@ -46,8 +46,6 @@ Migration state has five allowed values:
   config key contract; nonconforming; pending.
 - Lifecycle entity state and watches: entity IDs and workflow patterns; `pkg/lifecycle`; six-part entity bound and
   filter grammar; possible state rebuild; entity-ID contract; unassessed; pending.
-- Ownership claims and presence: registry keys, owner IDs, and incarnation tokens; `pkg/ownership`; owner and registry
-  bounds; possible clean rebuild; ownership contract; unassessed; pending.
 - Entity state, suffix, and ingest guard: six-part IDs, suffixes, and stream-derived guards; graph ingest; entity and
   stream bounds; bucket-specific rebuild; graph ingest contract; unassessed; pending.
 - PREDICATE, PREDICATE_CATALOG, NAME, and INCOMING: current graph-index composite and catalog keys; graph index; fixed
@@ -102,9 +100,6 @@ allowed values as the boundary inventory.
 - `config/manager.go`: fixed `version`, `platform`, `nats`, and `model_registry` keys plus lossy
   `components.<sanitizeNATSKey(name)>` and `services.<sanitizeNATSKey(name)>`; runtime config; fixed-key declaration and
   collision-free name layout; config migration required for lossy names; config key contract; nonconforming; pending.
-- `pkg/ownership/registry.go`, `claim_reader.go`, and `revival.go`: `_registry` claims plus
-  `heartbeat.<ownerID>` presence and exact watches; ownership; owner-ID and registry-key bounds; possible claims and
-  presence rebuild; ownership contract; unassessed; pending.
 - `pkg/lifecycle/manager.go` and `manager_query.go`: raw six-part entity IDs, ListKeys, configured entity filters, and
   WatchAll; lifecycle state; entity bound and workflow-filter grammar; follows ENTITY_STATES migration; entity-ID and
   lifecycle contracts; unassessed; pending.
@@ -185,7 +180,7 @@ were traced to their operations, which caught boundaries such as governance viol
 KV field. The covered production source families are:
 
 - `natsclient`, `component`, `config`, `flowstore`, `flowtemplate`, and `persona`;
-- `pkg/lifecycle`, `pkg/ownership`, and `pkg/dispatch`;
+- `pkg/lifecycle` and `pkg/dispatch`;
 - `graph/query`, `graph/embedding`, `graph/clustering`, `graph/structural`, and `graph/inference`;
 - graph ingest, index, query, clustering, embedding, spatial, and temporal processors;
 - rule, agentic-loop, agentic-tools, agentic-dispatch, and research-graph processors;

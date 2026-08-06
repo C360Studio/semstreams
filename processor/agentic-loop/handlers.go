@@ -256,9 +256,9 @@ func (h *MessageHandler) SetPlatform(p types.PlatformMeta) {
 
 // maybeBuildTodoMessage reads the loop's current todo list and
 // formats it as a system message. Returns the zero ChatMessage on
-// disabled reader, missing platform, empty list, or read failure.
-// Read errors are logged at Debug level — the model just doesn't see
-// the block for this iteration; the next iteration retries.
+// disabled reader, missing platform, empty list, or read failure. Persistent
+// malformed records are warned; transient read failures remain debug-level.
+// Either way the model omits the block and the next iteration retries.
 func (h *MessageHandler) maybeBuildTodoMessage(ctx context.Context, loopID string) agentic.ChatMessage {
 	if h.todoReader == nil || h.platform.Org == "" || h.platform.Platform == "" || loopID == "" {
 		return agentic.ChatMessage{}
@@ -266,10 +266,16 @@ func (h *MessageHandler) maybeBuildTodoMessage(ctx context.Context, loopID strin
 	loopEntityID := agentic.LoopExecutionEntityID(h.platform.Org, h.platform.Platform, loopID)
 	todos, err := h.todoReader.ReadTodos(ctx, loopEntityID)
 	if err != nil {
-		h.logger.Debug("todo read failed; iteration omits the todo block",
+		attrs := []any{
 			slog.String("loop_id", loopID),
 			slog.String("loop_entity_id", loopEntityID),
-			slog.Any("error", err))
+			slog.Any("error", err),
+		}
+		if errors.Is(err, ErrMalformedTodoRecord) {
+			h.logger.Warn("malformed todo state; iteration omits the todo block", attrs...)
+		} else {
+			h.logger.Debug("todo read failed; iteration omits the todo block", attrs...)
+		}
 		return agentic.ChatMessage{}
 	}
 	return BuildTodoStateMessage(todos)

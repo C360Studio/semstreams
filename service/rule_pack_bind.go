@@ -1,26 +1,21 @@
 package service
 
 import (
-	"context"
-	"errors"
 	"fmt"
-	"log/slog"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	rulepackcontract "github.com/c360studio/semstreams/pkg/rulepack"
 )
 
-// ProjectionBinder is the narrow composition contract implemented by rule
-// processors. Preflight is side-effect-free; SetOwnedReplacer is one-time.
+// ProjectionBinder is implemented by rule processors that use reconciled
+// projection writes. Contracts are validated before any client is injected.
 type ProjectionBinder interface {
 	ProjectionBindings() (packID string, contracts []projection.Contract)
 	PreflightProjectionMutations() error
-	SetOwnedReplacer(projection.OwnedReplacer) error
+	SetPredicateReconciler(projection.PredicateReconciler) error
 }
 
-// ProjectionBinders enumerates every managed component that implements
-// ProjectionBinder.
+// ProjectionBinders returns enabled components that require projection clients.
 func (m *Manager) ProjectionBinders() []ProjectionBinder {
 	cmService, exists := m.services["component-manager"]
 	if !exists {
@@ -30,14 +25,13 @@ func (m *Manager) ProjectionBinders() []ProjectionBinder {
 	if !ok {
 		return nil
 	}
-
-	var out []ProjectionBinder
+	var result []ProjectionBinder
 	for _, managed := range cm.GetManagedComponents() {
 		if binder, ok := managed.Component.(ProjectionBinder); ok {
-			out = append(out, binder)
+			result = append(result, binder)
 		}
 	}
-	return out
+	return result
 }
 
 type rulePackMutationPlan struct {
@@ -46,21 +40,13 @@ type rulePackMutationPlan struct {
 	contracts []projection.Contract
 }
 
-// BindRulePackContracts preflights the complete enabled pack set before the
-// first ownership or heartbeat side effect, then binds exactly one public
-// mutation client per contract-bearing pack and injects only OwnedReplacer.
-// Call once before Manager.StartAll.
-func BindRulePackContracts(
-	ctx context.Context,
-	manager *Manager,
-	ownerReg *ownership.Registry,
-	heartbeater *ownership.Heartbeater,
-	_ *slog.Logger,
-) error {
+// ConfigureRulePackMutations validates every enabled pack before injecting one
+// canonical mutation client per contract-bearing processor.
+func ConfigureRulePackMutations(manager *Manager) error {
 	if manager == nil {
 		return fmt.Errorf("rule-pack mutation composition requires a service manager")
 	}
-	plans, err := preflightRulePackMutations(manager, ownerReg, heartbeater)
+	plans, err := preflightRulePackMutations(manager)
 	if err != nil {
 		return err
 	}
@@ -68,46 +54,28 @@ func BindRulePackContracts(
 		if len(plan.contracts) == 0 {
 			continue
 		}
-		client, err := projection.BindMutationClient(ctx, projection.MutationClientConfig{
-			NATS:        manager.natsClient,
-			Registry:    ownerReg,
-			Heartbeater: heartbeater,
-			Owner:       "rule-pack." + plan.packID,
-			Contracts:   plan.contracts,
+		client, err := projection.NewMutationClient(projection.MutationClientConfig{
+			NATS: manager.natsClient, Contracts: plan.contracts,
 		})
 		if err != nil {
-			ownerID := "rule-pack." + plan.packID
-			if errors.Is(err, ownership.ErrOwnerAlreadyBound) {
-				return fmt.Errorf("rule pack owner %q already bound: %w", ownerID, err)
-			}
-			return fmt.Errorf("bind mutation client for rule pack %q: %w", plan.packID, err)
+			return fmt.Errorf("build mutation client for rule pack %q: %w", plan.packID, err)
 		}
-		if err := plan.binder.SetOwnedReplacer(client); err != nil {
-			return fmt.Errorf("inject owned replacer for rule pack %q: %w", plan.packID, err)
+		if err := plan.binder.SetPredicateReconciler(client); err != nil {
+			return fmt.Errorf("inject predicate reconciler for rule pack %q: %w", plan.packID, err)
 		}
 	}
 	return nil
 }
 
-func preflightRulePackMutations(
-	manager *Manager,
-	ownerReg *ownership.Registry,
-	heartbeater *ownership.Heartbeater,
-) ([]rulePackMutationPlan, error) {
+func preflightRulePackMutations(manager *Manager) ([]rulePackMutationPlan, error) {
 	binders := manager.ProjectionBinders()
 	plans := make([]rulePackMutationPlan, 0, len(binders))
 	seen := make(map[string]struct{}, len(binders))
-	var aggregate []projection.Contract
-
-	// Freeze and validate every processor snapshot before reading any effective
-	// binding. This keeps a later pack's derivation failure ahead of all
-	// dependency, Registry, heartbeat, injection, and mutation side effects.
 	for index, binder := range binders {
 		if err := binder.PreflightProjectionMutations(); err != nil {
 			return nil, fmt.Errorf("preflight enabled rule processor %d: %w", index, err)
 		}
 	}
-
 	for _, binder := range binders {
 		packID, contracts := binder.ProjectionBindings()
 		if err := rulepackcontract.ValidateID(packID); err != nil {
@@ -122,54 +90,13 @@ func preflightRulePackMutations(
 			if manager.natsClient == nil {
 				return nil, fmt.Errorf("rule pack %q mutation client requires NATS", packID)
 			}
-			if err := validateRulePackMutationDependencies(packID, copies, ownerReg, heartbeater); err != nil {
-				return nil, err
-			}
-			if _, err := projection.Derive("rule-pack."+packID, copies...); err != nil {
+			if err := projection.ValidateContracts(copies); err != nil {
 				return nil, fmt.Errorf("validate contracts for rule pack %q: %w", packID, err)
 			}
-			aggregate = append(aggregate, copies...)
 		}
-		plans = append(plans, rulePackMutationPlan{
-			binder:    binder,
-			packID:    packID,
-			contracts: copies,
-		})
-	}
-	if len(aggregate) > 0 {
-		if _, err := projection.Derive("rule-pack-preflight-all", aggregate...); err != nil {
-			return nil, fmt.Errorf("enabled rule-pack projection overlap: %w", err)
-		}
+		plans = append(plans, rulePackMutationPlan{binder: binder, packID: packID, contracts: copies})
 	}
 	return plans, nil
-}
-
-func validateRulePackMutationDependencies(
-	packID string,
-	contracts []projection.Contract,
-	ownerReg *ownership.Registry,
-	heartbeater *ownership.Heartbeater,
-) error {
-	requiresRegistry := false
-	requiresHeartbeat := false
-	for _, contract := range contracts {
-		if len(contract.Groups) > 0 || len(contract.ForeignEdges) > 0 {
-			requiresRegistry = true
-		}
-		for _, group := range contract.Groups {
-			if group.Mode == ownership.ModeReplaceOwned ||
-				group.Mode == ownership.ModeCASTransition {
-				requiresHeartbeat = true
-			}
-		}
-	}
-	if requiresRegistry && ownerReg == nil {
-		return fmt.Errorf("rule pack %q projection contracts require an ownership registry", packID)
-	}
-	if requiresHeartbeat && heartbeater == nil {
-		return fmt.Errorf("rule pack %q owning projection contracts require a heartbeater", packID)
-	}
-	return nil
 }
 
 func cloneRulePackContracts(contracts []projection.Contract) []projection.Contract {
@@ -180,7 +107,6 @@ func cloneRulePackContracts(contracts []projection.Contract) []projection.Contra
 	for i, contract := range contracts {
 		copies[i] = contract
 		copies[i].BirthPredicates = append([]string(nil), contract.BirthPredicates...)
-		copies[i].ForeignEdges = append([]projection.ForeignEdge(nil), contract.ForeignEdges...)
 		copies[i].Groups = make([]projection.PredicateGroup, len(contract.Groups))
 		for j, group := range contract.Groups {
 			copies[i].Groups[j] = group

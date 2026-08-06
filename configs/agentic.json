@@ -127,6 +127,13 @@
         "ports": {
           "inputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "entity_stream",
               "subject": "entity.>",
               "type": "jetstream",
@@ -163,6 +170,13 @@
             }
           ],
           "outputs": [
+            {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
             {
               "name": "rule_out",
               "subject": "rule.triggered.alert",
@@ -273,6 +287,13 @@
           ],
           "outputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "agent.request",
               "type": "jetstream",
               "subject": "agent.request.*",
@@ -372,6 +393,13 @@
             }
           ],
           "outputs": [
+            {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
             {
               "name": "tool.result",
               "type": "jetstream",

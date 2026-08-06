@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -322,6 +323,9 @@ func (g *FlowGraph) extractConnectionID(portConfig component.Portable) string {
 func (g *FlowGraph) ConnectComponentsByPatterns() error {
 	// Clear existing edges
 	g.edges = g.edges[:0]
+	if err := g.validateGraphMutationProviders(); err != nil {
+		return err
+	}
 
 	// Build connection maps by pattern and connection ID
 	publishers := g.buildPublisherMap()   // Output ports
@@ -344,6 +348,43 @@ func (g *FlowGraph) ConnectComponentsByPatterns() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "ConnectComponentsByPatterns", fmt.Sprintf("validation warnings: %v", warnings))
 	}
 
+	return nil
+}
+
+// validateGraphMutationProviders validates only the declared component graph.
+// It does not inspect NATS subscriptions or processes and therefore makes no
+// leader-election or account-wide cardinality claim.
+func (g *FlowGraph) validateGraphMutationProviders() error {
+	candidates := 0
+	providers := 0
+	for componentName, node := range g.nodes {
+		for _, port := range append(append([]PortInfo(nil), node.InputPorts...), node.OutputPorts...) {
+			isMutation := (port.Pattern == PatternRequest && strings.HasPrefix(port.ConnectionID, "graph.mutation.")) ||
+				(port.Interface != nil && port.Interface.Type == graphmutation.InterfaceType)
+			if !isMutation {
+				continue
+			}
+			candidates++
+			if port.Pattern != PatternRequest || port.ConnectionID != graphmutation.SubjectFamily ||
+				port.Interface == nil || port.Interface.Type != graphmutation.InterfaceType ||
+				port.Interface.Version != graphmutation.InterfaceVersion || !port.Required {
+				return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "validateGraphMutationProviders",
+					fmt.Sprintf("component %s port %s is not a required nats-request %s %s port on %s",
+						componentName, port.Name, graphmutation.InterfaceType, graphmutation.InterfaceVersion,
+						graphmutation.SubjectFamily))
+			}
+			if port.Direction == component.DirectionInput {
+				providers++
+			}
+		}
+	}
+	if candidates == 0 {
+		return nil
+	}
+	if providers != 1 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "validateGraphMutationProviders",
+			fmt.Sprintf("graph mutation flow requires exactly one compatible provider, found %d", providers))
+	}
 	return nil
 }
 

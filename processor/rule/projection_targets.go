@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 )
 
@@ -25,7 +24,7 @@ type projectionTargetIndex struct {
 }
 
 type projectionTargetGroup struct {
-	mode       ownership.WriteMode
+	mode       projection.WriteMode
 	predicates map[string]struct{}
 	ordered    []string
 }
@@ -38,7 +37,7 @@ func buildProjectionTargetIndex(contracts []projection.Contract) (*projectionTar
 		return index, nil
 	}
 	copies := cloneProjectionContracts(contracts)
-	if _, err := projection.Derive("rule-pack-preflight", copies...); err != nil {
+	if err := projection.ValidateContracts(copies); err != nil {
 		return nil, fmt.Errorf("validate projection contracts: %w", err)
 	}
 	for _, contract := range copies {
@@ -72,7 +71,6 @@ func cloneProjectionContracts(contracts []projection.Contract) []projection.Cont
 	for i, contract := range contracts {
 		copies[i] = contract
 		copies[i].BirthPredicates = append([]string(nil), contract.BirthPredicates...)
-		copies[i].ForeignEdges = append([]projection.ForeignEdge(nil), contract.ForeignEdges...)
 		copies[i].Groups = make([]projection.PredicateGroup, len(contract.Groups))
 		for j, group := range contract.Groups {
 			copies[i].Groups[j] = group
@@ -110,9 +108,9 @@ func (index *projectionTargetIndex) resolve(contract, group, predicate string) (
 			group,
 		)
 	}
-	if targetGroup.mode != ownership.ModeReplaceOwned {
+	if targetGroup.mode != projection.ModeReconcile {
 		return projectionTarget{}, fmt.Errorf(
-			"projection group %q in contract %q uses mode %q, not replace-owned",
+			"projection group %q in contract %q uses mode %q, not reconcile",
 			group,
 			contract,
 			targetGroup.mode,

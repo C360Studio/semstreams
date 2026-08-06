@@ -151,11 +151,11 @@ func TestRegisterBuiltins_NilRegistryErrors(t *testing.T) {
 	}
 }
 
-type noOpOwnedReplacer struct{}
+type noOpPredicateReconciler struct{}
 
-func (noOpOwnedReplacer) ReplaceOwned(
+func (noOpPredicateReconciler) Reconcile(
 	context.Context,
-	projection.ReplaceOwnedMutation,
+	projection.ReconcileMutation,
 ) (projection.MutationReceipt, error) {
 	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
 }
@@ -178,7 +178,7 @@ func TestRegisterWriteTodosUsesProjectionCapability(t *testing.T) {
 	registry := agentictools.NewExecutorRegistry()
 	if err := registerWriteTodos(
 		registry,
-		noOpOwnedReplacer{},
+		noOpPredicateReconciler{},
 		component.PlatformMeta{Org: "acme", Platform: "test"},
 		slog.Default(),
 	); err != nil {

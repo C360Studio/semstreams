@@ -214,8 +214,8 @@ func TestDefaultConfig(t *testing.T) {
 	// port config, matching the existing treatment of agent.request etc.
 	// agent.toolcall.proposed added in ADR-039 — published before dispatch
 	// when governance mode is audit or enforce).
-	if len(cfg.Ports.Outputs) != 8 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 8", len(cfg.Ports.Outputs))
+	if len(cfg.Ports.Outputs) != 9 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 9", len(cfg.Ports.Outputs))
 	}
 
 	// Verify KV ports
@@ -244,9 +244,16 @@ func TestDefaultConfig(t *testing.T) {
 
 	// Verify specific output subjects
 	expectedOutputs := map[string]string{
-		"agent.request":  "agent.request.*",
-		"tool.execute":   "tool.execute.*",
-		"agent.complete": "agent.complete.*",
+		"graph_mutations": "graph.mutation.>",
+		"agent.request":   "agent.request.*",
+		"tool.execute":    "tool.execute.*",
+		"agent.complete":  "agent.complete.*",
+	}
+	for _, port := range cfg.Ports.Outputs {
+		if port.Name == "graph_mutations" &&
+			(port.Type != "nats-request" || port.Interface != "semstreams.graph.mutation" || !port.Required) {
+			t.Errorf("graph_mutations output is not the required typed request port: %#v", port)
+		}
 	}
 	for name, subject := range expectedOutputs {
 		found := false

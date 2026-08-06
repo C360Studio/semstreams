@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -413,145 +414,150 @@ func (s *TieredScenario) executeValidateEntityTriples(ctx context.Context, resul
 	return nil
 }
 
-// executeValidateReferentialStub validates ADR-056 Decision-4's fourth path: when
-// a write carries a RELATIONSHIP triple whose Object is a valid 6-part entity ID
-// that no producer independently creates, graph-ingest materialises an
-// envelope-bearing referential-integrity stub for that target so the reference
-// always resolves to a node (load-bearing for traversal, and what makes the
-// must-exist flip safe). This is the e2e coverage gap ADR-056 tracked as "gated to
-// 4c": the only relationship-emitting production processor (IoT sensor) also
-// emits its zone target, so nothing else exercises this path. Structural tier — no ML.
-//
-// The fixture drives the create_with_triples mutation lane (the cs-api lane that
-// runs ensureRelationshipTargetsExist) directly, with a target under a dedicated
-// e2e prefix that no processor emits, so the stub is the ONLY thing that can create it.
-func (s *TieredScenario) executeValidateReferentialStub(ctx context.Context, result *Result) error {
-	const (
-		referrerID    = "c360.platform.e2e.referential.referrer.001"
-		danglingID    = "c360.platform.e2e.referential.target.001"
-		relationPred  = "test.e2e.references"
-		createSubject = "graph.mutation.entity.create_with_triples"
-	)
-
-	// 1. Create the referrer carrying a relationship triple to the dangling target.
-	req := graph.CreateEntityWithTriplesRequest{
-		Entity: &graph.EntityState{
-			ID:          referrerID,
-			MessageType: message.Type{Domain: "e2e", Category: "referential", Version: "v1"},
-		},
-		Triples: []message.Triple{
-			{Subject: referrerID, Predicate: relationPred, Object: danglingID, Confidence: 1.0},
-		},
-		RequestID: "e2e-referential-stub",
+// executeValidateCanonicalCreateNoHierarchy proves that the canonical RPC
+// create operation performs only the requested authority birth. Hierarchy
+// inference remains a Graphable-ingestion concern and must not manufacture
+// container entities or inferred membership facts for an RPC caller.
+func (s *TieredScenario) executeValidateCanonicalCreateNoHierarchy(ctx context.Context, result *Result) error {
+	if s.natsClient == nil {
+		return errors.New("canonical create hierarchy contract requires the NATS validation client")
 	}
-	reqData, err := json.Marshal(req)
+
+	token := fmt.Sprintf("%x", time.Now().UnixNano())
+	domain := "rpc" + token
+	system := "system" + token
+	entityType := "leaf" + token
+	entityID := fmt.Sprintf("c360.e2e.%s.%s.%s.001", domain, system, entityType)
+	containerIDs := []string{
+		fmt.Sprintf("c360.e2e.%s.%s.%s.group", domain, system, entityType),
+		fmt.Sprintf("c360.e2e.%s.%s.group.container", domain, system),
+		fmt.Sprintf("c360.e2e.%s.group.container.level", domain),
+	}
+
+	mutationClient, err := graphmutation.NewClient(s.natsClient, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("marshal create_with_triples request: %w", err)
+		return fmt.Errorf("construct graph mutation client: %w", err)
 	}
-
-	// ADR-060: RequestClassified surfaces handler failures via err; a hard
-	// failure no longer returns an in-body Success=false.
-	if _, err := s.natsClient.RequestClassified(ctx, createSubject, reqData, 10*time.Second); err != nil {
-		return fmt.Errorf("create_with_triples request failed: %w", err)
-	}
-
-	// 2. Poll for the referential stub on the dangling target. ensureRelationshipTargetsExist
-	//    blocks (wg.Wait) before the mutation reply, so this typically resolves on the first
-	//    read; the bounded poll absorbs any KV/cache visibility lag.
-	stub, getErr := s.natsClient.GetEntity(ctx, danglingID)
-	for attempt := 0; (getErr != nil || stub == nil) && attempt < 20; attempt++ {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-		stub, getErr = s.natsClient.GetEntity(ctx, danglingID)
-	}
-	if stub == nil {
-		return fmt.Errorf("referential stub %s was not created within timeout — fourth path (ensureReferencedEntityExists) did not fire", danglingID)
-	}
-
-	// 3. Assert the envelope-bearing stub markers (ADR-056 4b) through the
-	//    canonical graph constants shared with the producer.
-	hasMarker, hasReferencedBy, hasStubOwner := false, false, false
-	var referencedByValue, stubOwnerValue any
-	for _, t := range stub.Triples {
-		switch t.Predicate {
-		case graph.PredStubMarker:
-			hasMarker = true
-		case graph.PredStubReferencedBy:
-			hasReferencedBy = true
-			referencedByValue = t.Object
-		case graph.PredStubOwner:
-			hasStubOwner = true
-			stubOwnerValue = t.Object
-		}
-	}
-
-	result.Metrics["referential_stub_triples"] = len(stub.Triples)
-	result.Details["referential_stub_validation"] = map[string]any{
-		"referrer_id":         referrerID,
-		"dangling_target_id":  danglingID,
-		"stub_created":        true,
-		"has_stub_marker":     hasMarker,
-		"has_referenced_by":   hasReferencedBy,
-		"has_stub_owner":      hasStubOwner,
-		"referenced_by_value": referencedByValue,
-		"stub_owner_value":    stubOwnerValue,
-		"stub_version":        stub.Version,
-		"message":             fmt.Sprintf("Fourth path created referential stub %s (marker=%v, referenced_by=%v, owner=%v)", danglingID, hasMarker, referencedByValue, stubOwnerValue),
-	}
-
-	if !hasMarker || !hasReferencedBy || !hasStubOwner {
-		return fmt.Errorf("referential stub %s missing required markers: %s=%v, %s=%v, %s=%v",
-			danglingID, graph.PredStubMarker, hasMarker, graph.PredStubReferencedBy, hasReferencedBy,
-			graph.PredStubOwner, hasStubOwner)
-	}
-	if got := fmt.Sprintf("%v", referencedByValue); got != referrerID {
-		return fmt.Errorf("referential stub %s %s = %q, want %q", danglingID, graph.PredStubReferencedBy, got, referrerID)
-	}
-	// Envelope-bearing stub must record a non-empty owner — the ADR-055
-	// "no ownerless births" property the must-exist flip relies on.
-	if owner, ok := stubOwnerValue.(string); !ok || owner == "" {
-		return fmt.Errorf("referential stub %s %s is empty — an envelope-bearing stub must record an owner",
-			danglingID, graph.PredStubOwner)
-	}
-
-	result.Metrics["referential_stub_valid"] = 1
-
-	// ADR-060 breaking-change negative-path gate: drive a FAILURE over the real
-	// graph-ingest wire and assert the unified error contract. A must-exist
-	// update against a never-created entity must return a typed
-	// *errs.ClassifiedError carrying Code entity_not_found + the invalid class —
-	// NOT a 200-shaped success body with success=false (the pre-ADR-060 shape
-	// this break removed). Green happy-path e2e is necessary but not sufficient
-	// for a wire break, so this tier (which runs graph-ingest) asserts the
-	// failure shape over the wire.
-	missingReq, _ := json.Marshal(graph.UpdateEntityRequest{
-		Entity:    &graph.EntityState{ID: "c360.platform.e2e.referential.never-created.001"},
-		RequestID: "e2e-mutation-error-contract",
+	response, err := mutationClient.Create(ctx, graph.CreateEntityRequest{
+		Entity: &graph.EntityState{
+			ID:          entityID,
+			MessageType: message.Type{Domain: "e2e", Category: "canonical_create_contract", Version: "v1"},
+		},
+		Triples: []message.Triple{{
+			Subject: entityID, Predicate: "test.state.value", Object: "explicit",
+			Source: "e2e-structural", Timestamp: time.Now().UTC(), Confidence: 1,
+		}},
+		RequestID: "e2e-no-hierarchy-" + token,
 	})
-	_, mutErr := s.natsClient.RequestClassified(ctx, "graph.mutation.entity.update", missingReq, 10*time.Second)
-	if mutErr == nil {
-		return fmt.Errorf("ADR-060: update on a never-created entity must return a classified error, got nil")
+	if err != nil {
+		return fmt.Errorf("canonical create request: %w", err)
 	}
-	var ce *errs.ClassifiedError
-	if !errors.As(mutErr, &ce) || ce.Code != graph.ErrorCodeEntityNotFound {
-		return fmt.Errorf("ADR-060: mutation failure must be a *errs.ClassifiedError with Code=entity_not_found; got %T: %v", mutErr, mutErr)
+	for _, triple := range response.Entity.Triples {
+		if triple.Context == "inference.hierarchy" {
+			return fmt.Errorf("canonical create inferred hierarchy fact on source: %+v", triple)
+		}
 	}
-	if !errs.IsInvalid(mutErr) {
-		return fmt.Errorf("ADR-060: entity_not_found must classify invalid (gateway 404); err=%v", mutErr)
+
+	reader := graph.NewExactEntityReader(s.natsClient, 10*time.Second)
+	for _, containerID := range containerIDs {
+		if _, readErr := reader.ReadExactEntity(ctx, containerID); !isExactEntityNotFound(readErr) {
+			return fmt.Errorf("canonical create birthed hierarchy container %s: %v", containerID, readErr)
+		}
 	}
-	result.Metrics["mutation_error_contract_valid"] = 1
+
+	result.Metrics["canonical_create_hierarchy_births"] = 0
+	result.Details["canonical_create_no_hierarchy"] = map[string]any{
+		"entity_id":            entityID,
+		"authority_revision":   response.KVRevision,
+		"absent_container_ids": containerIDs,
+	}
 	return nil
 }
 
-// pathRAGResponse represents the parsed GraphQL response for PathRAG queries
+// executeValidateRelationshipNoStub proves that a canonical relationship fact
+// is retained on its source while an absent target remains absent. Components
+// decide whether and when to create referenced entities; graph-ingest does not
+// synthesize referential stubs.
+func (s *TieredScenario) executeValidateRelationshipNoStub(ctx context.Context, result *Result) error {
+	if s.natsClient == nil {
+		return errors.New("relationship no-stub contract requires the NATS validation client")
+	}
+
+	token := fmt.Sprintf("%x", time.Now().UnixNano())
+	sourceID := "c360.e2e.relationship.source.node" + token + ".001"
+	targetID := "c360.e2e.relationship.target.node" + token + ".001"
+	relationship := message.Triple{
+		Subject: sourceID, Predicate: "test.link.target", Object: targetID,
+		Datatype: message.EntityReferenceDatatype, Source: "e2e-structural",
+		Timestamp: time.Now().UTC(), Confidence: 1,
+	}
+
+	mutationClient, err := graphmutation.NewClient(s.natsClient, 10*time.Second)
+	if err != nil {
+		return fmt.Errorf("construct graph mutation client: %w", err)
+	}
+	response, err := mutationClient.Create(ctx, graph.CreateEntityRequest{
+		Entity: &graph.EntityState{
+			ID:          sourceID,
+			MessageType: message.Type{Domain: "e2e", Category: "relationship_contract", Version: "v1"},
+		},
+		Triples:   []message.Triple{relationship},
+		RequestID: "e2e-no-stub-" + token,
+	})
+	if err != nil {
+		return fmt.Errorf("canonical relationship create request: %w", err)
+	}
+
+	reader := graph.NewExactEntityReader(s.natsClient, 10*time.Second)
+	exactSource, err := reader.ReadExactEntity(ctx, sourceID)
+	if err != nil {
+		return fmt.Errorf("exact read relationship source: %w", err)
+	}
+	if exactSource.KVRevision != response.KVRevision {
+		return fmt.Errorf("relationship source revision = %d, create revision = %d",
+			exactSource.KVRevision, response.KVRevision)
+	}
+	if !containsExactRelationship(exactSource.Entity, relationship) {
+		return fmt.Errorf("relationship source %s did not preserve requested relationship to %s", sourceID, targetID)
+	}
+	_, targetErr := reader.ReadExactEntity(ctx, targetID)
+	if !isExactEntityNotFound(targetErr) {
+		return fmt.Errorf("absent relationship target %s was not typed not-found: %v", targetID, targetErr)
+	}
+
+	result.Metrics["relationship_stub_births"] = 0
+	result.Details["relationship_no_stub"] = map[string]any{
+		"source_id":          sourceID,
+		"target_id":          targetID,
+		"authority_revision": exactSource.KVRevision,
+		"target_error_code":  graph.ErrorCodeEntityNotFound,
+	}
+	return nil
+}
+
+func containsExactRelationship(entity *graph.EntityState, want message.Triple) bool {
+	if entity == nil {
+		return false
+	}
+	for _, triple := range entity.Triples {
+		if triple.Subject == want.Subject && triple.Predicate == want.Predicate &&
+			triple.Object == want.Object && triple.Datatype == want.Datatype {
+			return true
+		}
+	}
+	return false
+}
+
+func isExactEntityNotFound(err error) bool {
+	var classified *errs.ClassifiedError
+	return errors.As(err, &classified) && classified.Code == graph.ErrorCodeEntityNotFound
+}
+
 type pathRAGResponse struct {
 	Data struct {
 		PathSearch struct {
 			Entities  []pathRAGEntity `json:"entities"`
-			Paths     [][]pathRAGStep `json:"paths"` // Each path is a sequence of steps
+			Paths     [][]pathRAGStep `json:"paths"`
 			Truncated bool            `json:"truncated"`
 		} `json:"pathSearch"`
 	} `json:"data"`
@@ -1236,19 +1242,18 @@ func (s *TieredScenario) temporalSearchIDs(ctx context.Context, startTime, endTi
 // It creates an entity whose observation instant is a fixed historical time, then
 // asserts temporalSearch finds it in the OBSERVED window but NOT in the write-time
 // (now) window — proving event-time, not processing-time, is the bucket key.
-// Structural-only: it creates a dedicated entity (like validate-referential-stub)
-// rather than relying on tier test data, which carries no observation predicate.
+// Structural-only: it creates a dedicated entity rather than relying on tier
+// test data, which carries no observation predicate.
 func (s *TieredScenario) executeTestTemporalObservedTime(ctx context.Context, result *Result) error {
 	const (
-		entityID      = "c360.platform.e2e.eventtime.observation.001"
-		observedPred  = "time.observation.recorded"
-		createSubject = "graph.mutation.entity.create_with_triples"
+		entityID     = "c360.platform.e2e.eventtime.observation.001"
+		observedPred = "time.observation.recorded"
 	)
 	// Fixed historical observation instant, well away from "now" (write-time).
 	observedAt := time.Date(2024, 11, 15, 12, 0, 0, 0, time.UTC)
 
 	// 1. Create an entity carrying ONLY a historical observation timestamp.
-	req := graph.CreateEntityWithTriplesRequest{
+	req := graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
 			MessageType: message.Type{Domain: "e2e", Category: "eventtime", Version: "v1"},
@@ -1258,12 +1263,12 @@ func (s *TieredScenario) executeTestTemporalObservedTime(ctx context.Context, re
 		},
 		RequestID: "e2e-temporal-observed-time",
 	}
-	reqData, err := json.Marshal(req)
+	mutationClient, err := graphmutation.NewClient(s.natsClient, 10*time.Second)
 	if err != nil {
-		return fmt.Errorf("marshal create_with_triples request: %w", err)
+		return fmt.Errorf("construct graph mutation client: %w", err)
 	}
-	if _, err := s.natsClient.RequestClassified(ctx, createSubject, reqData, 10*time.Second); err != nil {
-		return fmt.Errorf("create_with_triples request failed: %w", err)
+	if _, err := mutationClient.Create(ctx, req); err != nil {
+		return fmt.Errorf("entity create request failed: %w", err)
 	}
 
 	// 2. The OBSERVED-time window must return the entity (event-time keying).
@@ -1526,9 +1531,12 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 	aliasQuery := map[string]any{
 		"query": `query($aliasOrID: String!) {
 			entityByAlias(aliasOrID: $aliasOrID) {
-				id
-				type
-				properties
+				entity {
+					id
+					type
+					properties
+				}
+				kvRevision
 			}
 		}`,
 		"variables": map[string]any{"aliasOrID": serialNumber},
@@ -1566,9 +1574,12 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 	var aliasResp struct {
 		Data struct {
 			EntityByAlias *struct {
-				ID         string         `json:"id"`
-				Type       string         `json:"type"`
-				Properties map[string]any `json:"properties"`
+				Entity *struct {
+					ID         string         `json:"id"`
+					Type       string         `json:"type"`
+					Properties map[string]any `json:"properties"`
+				} `json:"entity"`
+				KVRevision uint64 `json:"kvRevision"`
 			} `json:"entityByAlias"`
 		} `json:"data"`
 		Errors []struct {
@@ -1584,11 +1595,11 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 		return fmt.Errorf("entityByAlias GraphQL error: %s", aliasResp.Errors[0].Message)
 	}
 
-	entity := aliasResp.Data.EntityByAlias
+	exact := aliasResp.Data.EntityByAlias
 
 	result.Metrics["entity_by_alias_latency_ms"] = latency.Milliseconds()
 
-	if entity == nil {
+	if exact == nil || exact.Entity == nil {
 		// Alias not resolved - this is a HARD failure since we're testing real alias resolution
 		result.Details["entity_by_alias_validation"] = map[string]any{
 			"success":            false,
@@ -1599,6 +1610,10 @@ func (s *TieredScenario) executeTestEntityByAlias(ctx context.Context, result *R
 		}
 		return fmt.Errorf("entityByAlias failed to resolve serial number %s - alias not indexed (check iot.sensor.serial predicate indexing)", serialNumber)
 	}
+	if exact.KVRevision == 0 {
+		return errors.New("entityByAlias returned zero authority KV revision")
+	}
+	entity := exact.Entity
 
 	// Validate the returned entity matches expected
 	if entity.ID != expectedEntityID {

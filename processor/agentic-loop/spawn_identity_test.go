@@ -9,12 +9,12 @@ import (
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
-// gh#159 / ADR-056 4c-pre-1: WriteSpawnIdentity births the loop-execution
-// entity via create_with_triples using LoopExecutionEntity.Triples() as the
+// WriteSpawnIdentity births the loop-execution entity through canonical create
+// using LoopExecutionEntity.Triples() as the
 // origin triple set. These tests exercise the pure predicate-set contract on
 // LoopExecutionEntity directly — the same contract that was previously tested
 // through buildSpawnIdentityTriples before it was removed (the logic moved to
-// agentic.LoopExecutionEntity). The wire-level birth behaviour (create_with_triples
+// agentic.LoopExecutionEntity). The wire-level birth behaviour (create
 // request/response, idempotency on already-exists) is covered by the integration
 // tests in graph_writer_integration_test.go.
 //

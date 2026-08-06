@@ -10,6 +10,7 @@ package graphingest
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -59,7 +60,7 @@ func TestBootSweepInventoriesResidentPoisonAndBoots(t *testing.T) {
 	c := newIngestGuardTestComponent(bucket)
 	c.logger = slog.New(slog.NewTextHandler(logs, nil))
 
-	c.startEntityStateGuard(context.Background(), bucket)
+	c.startEntityStateGuard(context.Background(), c.entityBucket)
 
 	// Ingest boots and queries are READY — a poisoned entity no longer blocks
 	// the surface.
@@ -109,9 +110,7 @@ func TestBootSweepInventoriesResidentPoisonAndBoots(t *testing.T) {
 	if err != nil {
 		t.Fatalf("valid entity read failed during poison incident: %v", err)
 	}
-	if string(result) != string(guardTestValidBytes(guardTestValidID)) {
-		t.Fatalf("valid entity read = %s, want stored bytes", result)
-	}
+	assertGuardExactEntity(t, result, guardTestValidID, 4)
 }
 
 // TestBootSweepLastRevisionWins: a key whose poisoned snapshot revision is
@@ -147,7 +146,7 @@ func TestBootSweepLastRevisionWins(t *testing.T) {
 			bucket.watchAllFactory = func() (jetstream.KeyWatcher, error) { return watcher, nil }
 			c := newIngestGuardTestComponent(bucket)
 
-			c.startEntityStateGuard(context.Background(), bucket)
+			c.startEntityStateGuard(context.Background(), c.entityBucket)
 
 			if _, ok := poisonInventoryEntry(c, guardTestPoisonID); ok {
 				t.Fatal("superseded poisoned revision must leave no inventory entry")
@@ -177,7 +176,7 @@ func TestEntityStateGuardBootstrapAndTransportFailureAreTransient(t *testing.T) 
 
 	done := make(chan struct{})
 	go func() {
-		c.startEntityStateGuard(context.Background(), bucket)
+		c.startEntityStateGuard(context.Background(), c.entityBucket)
 		close(done)
 	}()
 	waitForIngestCondition(t, c.entityBootstrapStarted.Load)
@@ -221,7 +220,7 @@ func TestEntityStateGuardDeliberateStopDrainsToCloseWithoutMisclassification(t *
 
 	done := make(chan struct{})
 	go func() {
-		c.startEntityStateGuard(context.Background(), bucket)
+		c.startEntityStateGuard(context.Background(), c.entityBucket)
 		close(done)
 	}()
 	select {
@@ -305,8 +304,17 @@ func TestQueryDiscoveredPoisonServesConcurrentReadyResponse(t *testing.T) {
 	if concurrent.err != nil {
 		t.Fatalf("concurrent valid response refused after poison discovery: %v", concurrent.err)
 	}
-	if string(concurrent.data) != string(valid) {
-		t.Fatalf("concurrent valid response = %s, want stored bytes", concurrent.data)
+	assertGuardExactEntity(t, concurrent.data, guardTestValidID, 2)
+}
+
+func assertGuardExactEntity(t *testing.T, data []byte, entityID string, revision uint64) {
+	t.Helper()
+	var exact graph.ExactEntity
+	if err := json.Unmarshal(data, &exact); err != nil {
+		t.Fatalf("decode exact entity response: %v", err)
+	}
+	if exact.Entity == nil || exact.Entity.ID != entityID || exact.KVRevision != revision {
+		t.Fatalf("exact entity = %#v, want id=%q revision=%d", exact, entityID, revision)
 	}
 }
 

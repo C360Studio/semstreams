@@ -41,7 +41,7 @@ type recordingPublisher struct {
 	err             error
 }
 
-func (p *recordingPublisher) CreateEntityWithTriples(_ context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+func (p *recordingPublisher) Create(_ context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
 	p.createCalls++
 	if p.err != nil {
 		return p.err
@@ -52,15 +52,7 @@ func (p *recordingPublisher) CreateEntityWithTriples(_ context.Context, entityID
 	return nil
 }
 
-func (p *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
-	if p.err != nil {
-		return p.err
-	}
-	p.triples = append(p.triples, triple)
-	return nil
-}
-
-func (p *recordingPublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+func (p *recordingPublisher) Append(_ context.Context, triples []message.Triple) error {
 	p.batchCalls++
 	if p.err != nil {
 		return p.err

@@ -8,8 +8,23 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/fusion"
 )
+
+func TestComponent_OutputPorts(t *testing.T) {
+	c := newTestComponent(&fakeLoopStore{}, nil)
+	outputs := c.OutputPorts()
+	if len(outputs) != 1 {
+		t.Fatalf("OutputPorts = %d, want canonical mutation port", len(outputs))
+	}
+	request, ok := outputs[0].Config.(component.NATSRequestPort)
+	if !ok || !outputs[0].Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
+		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
+		t.Fatalf("graph mutation output drift: %#v", outputs[0])
+	}
+}
 
 // fakeLoopStore replaces natsLoopStore. Records reads + writes so
 // the test can assert on key ordering, envelope shape, and miss vs

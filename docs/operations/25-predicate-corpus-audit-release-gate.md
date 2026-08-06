@@ -113,7 +113,7 @@ go test ./vocabulary \
 go test ./test \
   -run '^TestReferenceConfigs_AllTripleRefsResolveToKnownPredicates$' \
   -count=1
-go test ./processor/rule ./processor/gated-dag ./pkg/lifecycle ./pkg/ownership ./pkg/projection \
+go test ./processor/rule ./processor/gated-dag ./pkg/lifecycle ./pkg/projection \
   -count=1
 ```
 

@@ -13,7 +13,7 @@
 // Every list the framework enforces from is a DERIVED view of this table:
 // FrameworkOwnedBuckets() (the rule update_kv write guard) filters
 // Write == WriteOwnerOnly; the pre-start legacy-drift backstop
-// (AssertOwnedBucketsClean) filters Retention.Kind == RetentionNoLifecycle.
+// (EnsureCatalogRetentionClean) filters Retention.Kind == RetentionNoLifecycle.
 // There is no parallel hand-maintained list to forget a member from — the
 // contract test (test/contract) mechanically rejects any non-test file outside
 // this package that names a catalog bucket in a string literal.
@@ -28,20 +28,11 @@ package graph
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/nats-io/nats.go/jetstream"
 )
-
-// ownerPresenceTTL is OWNER_PRESENCE's declared bounded TTL — the ADR-056
-// liveness staleness floor (ttl_hint >= 3 x max(boot_time, gc_pause_budget)).
-// pkg/ownership.PresenceTTL carries the same value next to the heartbeat
-// interval derived from it; a cross-pin test in pkg/ownership asserts the two
-// can never drift (graph cannot import pkg/ownership — ownership acquires its
-// buckets through this catalog, so the dependency points the other way).
-const ownerPresenceTTL = 120 * time.Second
 
 // KVCatalog returns the full descriptor table. The slice is rebuilt per call
 // so no caller can mutate the catalog for another.
@@ -66,11 +57,13 @@ func KVCatalog() []natsclient.BucketSpec {
 
 	entityStates := owned(BucketEntityStates, "graph-ingest",
 		"Entity state storage for graph-ingest", natsclient.ClassAuthoritative)
-	// Owner decision 2026-07-28: History 1. Nothing reads deeper ENTITY_STATES
-	// history (the only History() consumer is Lifecycle's workflow buckets);
-	// deploys where the retired tool-registration create had won the race with
-	// History 3 are reconciled down at acquisition — destructive-but-unread,
-	// and the seam WARNs naming both values.
+	// Owner decision 2026-07-28, corrected 2026-08-05: History 1 bounds
+	// per-revision storage on the authoritative, all-entity hot bucket. Lifecycle
+	// operator history is a fixed occurrence-record window carried in each
+	// participant's current value; it does not consume KV revision history.
+	// Deploys where the retired tool-registration create won the boot race with
+	// History 3 are reconciled down at acquisition, and the seam WARNs naming
+	// both values.
 	entityStates.History = 1
 
 	graphStatus := owned(BucketGraphStatus, "graph-index/graph-embedding (readiness producers)",
@@ -99,37 +92,13 @@ func KVCatalog() []natsclient.BucketSpec {
 	// usable interval. At depth 1 or 2 there is nothing to reach back to and
 	// every rate in the account reports unknown for as long as the loop lasts.
 	// Ten rows also give an operator a recent trend to eyeball
-	// (`nats kv history`), which is why OWNER_CLAIMS carries the same depth for
-	// its own audit trail.
+	// (`nats kv history`).
 	//
 	// The cost is bounded and self-referential: this bucket appears in the
 	// inventory it publishes, so the depth is also what keeps the observer from
 	// becoming the growth problem it exists to detect — ten small rows per
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
-
-	ownerClaims := owned(BucketOwnerClaims, "ownership registry (composition root)",
-		"ADR-056 owner-claim registry — single _registry epoch key (no TTL)",
-		natsclient.ClassOperational)
-	// The epoch write IS the registration audit trail; History answers "who
-	// registered what, when" across recent deploys (was ownership's
-	// ownerClaimsHistory before the catalog owned it).
-	ownerClaims.History = 10
-
-	ownerPresence := natsclient.BucketSpec{
-		Name:        BucketOwnerPresence,
-		Owner:       "ownership registry (composition root)",
-		Description: "ADR-056 owner liveness heartbeats — bucket-TTL staleness backstop",
-		Class:       natsclient.ClassOperational,
-		// The TTL is the liveness contract: converged to, never stripped —
-		// the live proof that retention is a per-descriptor policy, not a
-		// "framework-owned means no retention" global rule.
-		Retention: natsclient.RetentionPolicy{Kind: natsclient.RetentionBoundedTTL, TTL: ownerPresenceTTL},
-		Write:     natsclient.WriteOwnerOnly,
-		Posture:   natsclient.PostureOwnerCreates,
-		History:   1,
-		Replicas:  1,
-	}
 
 	componentStatus := natsclient.BucketSpec{
 		Name:        BucketComponentStatus,
@@ -182,8 +151,6 @@ func KVCatalog() []natsclient.BucketSpec {
 
 		// Framework operational plane.
 		graphStatus,
-		ownerClaims,
-		ownerPresence,
 		storageReport,
 
 		// Diagnostic plane.

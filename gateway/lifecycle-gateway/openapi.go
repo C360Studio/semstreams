@@ -83,7 +83,7 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 				},
 				POST: &service.OperationSpec{
 					Summary:     "Create a workflow instance",
-					Description: "Creates a new instance of the registered workflow from an operator-supplied initial state, via the ownership-aware lifecycle Manager. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow's registered state struct, and must include the entity ID and an initial phase declared in the workflow's transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. A degraded commit (write landed durably, read-back could not complete) also responds 201, carrying `degraded` and `degraded_reason` instead of the instance — it is a success and must not be retried.",
+					Description: "Creates a new instance of the registered workflow from an operator-supplied initial state through the lifecycle Manager and canonical graph mutation port. This is the BIRTH lane and the only route carrying a full initial-state envelope — the must-exist lanes (state patch, transition) stay envelope-free and require an existing entity; nothing auto-vivifies. Create-or-fail: a duplicate entity ID returns 409 and never overwrites, so there is no upsert lane on the operator surface. The body is the workflow's registered state struct, and must include the entity ID and an initial phase declared in the workflow's transitions table. Responds 201 with the committed state projected from the causal mutation response, not the submitted body echoed. If delivery occurred without a valid mutation response, responds 503 with code `commit_unknown`; callers must inspect authoritative state before deciding whether another mutation is safe.",
 					Tags:        []string{"Lifecycle"},
 					Parameters: []service.ParameterSpec{
 						{Name: "type", In: "path", Required: true, Description: "Workflow type identifier (matches Participant.Workflow())", Schema: service.Schema{Type: "string"}},
@@ -97,8 +97,9 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 						"201": {Description: "Created — authoritative committed instance state", ContentType: "application/json"},
 						"400": {Description: "Malformed initial state, missing entity ID, an entity ID outside the workflow's declared pattern, or an initial phase not declared in the transitions table"},
 						"404": {Description: "Workflow type not registered"},
-						"409": {Description: "An instance with that entity ID is already lifecycle-managed, or this process's ownership was superseded by another incarnation"},
+						"409": {Description: "An instance with that entity ID is already lifecycle-managed, including a concurrent lifecycle attachment"},
 						"413": {Description: "Body exceeds max_body_bytes"},
+						"503": {Description: "Mutation service unavailable or commit outcome unknown; inspect authoritative state before deciding whether another mutation is safe"},
 					},
 				},
 			},
@@ -121,7 +122,7 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 			"/workflows/{type}/{id}/history": {
 				GET: &service.OperationSpec{
 					Summary:     "List phase-transition history",
-					Description: "Returns the phase-transition history derived from KV revision replay. Each entry includes from/to phases, wallclock timestamp, the TransitionSource (rule/operator/component/framework), and any operator-supplied note.",
+					Description: "Returns the fixed recent operator window of phase-transition records retained in the participant entity. Each entry includes from/to phases, wallclock timestamp, the TransitionSource (rule/operator/component/framework), and any supplied note. This is not an unbounded audit log.",
 					Tags:        []string{"Lifecycle"},
 					Parameters: []service.ParameterSpec{
 						{Name: "type", In: "path", Required: true, Description: "Workflow type identifier", Schema: service.Schema{Type: "string"}},
@@ -170,6 +171,7 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 						"405": {Description: "Method not allowed (POST only)"},
 						"409": {Description: "Optimistic-concurrency retries exhausted"},
 						"413": {Description: "Request body exceeds max_body_bytes"},
+						"503": {Description: "Mutation service unavailable or commit outcome unknown; inspect authoritative state before deciding whether another mutation is safe"},
 					},
 				},
 			},
@@ -192,7 +194,9 @@ func lifecycleGatewayOpenAPISpec() *service.OpenAPISpec {
 						"400": {Description: "Invalid body OR target phase undeclared OR edge undeclared OR current phase terminal"},
 						"404": {Description: "Workflow or entity not found"},
 						"405": {Description: "Method not allowed (POST only)"},
+						"409": {Description: "Authority revision mismatch"},
 						"413": {Description: "Request body exceeds max_body_bytes"},
+						"503": {Description: "Mutation service unavailable or commit outcome unknown; inspect authoritative state before deciding whether another mutation is safe"},
 					},
 				},
 			},

@@ -1,6 +1,6 @@
 package projection
 
-//revive:disable:max-public-structs The public mutation API uses explicit request, receipt, and typed-error structs.
+//revive:disable:max-public-structs Explicit request and result structs keep the API legible.
 
 import (
 	"context"
@@ -11,23 +11,19 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/ownership"
 )
 
-// MutationClientConfig binds one immutable mutation client to an owner and its
-// complete projection-contract set.
+// MutationClientConfig configures one immutable contract-validating client.
 type MutationClientConfig struct {
-	NATS        *natsclient.Client
-	Registry    *ownership.Registry
-	Heartbeater *ownership.Heartbeater
-	Owner       string
-	Contracts   []Contract
-	Timeout     time.Duration
-	Retry       natsclient.RetryConfig
+	NATS      *natsclient.Client
+	Contracts []Contract
+	Timeout   time.Duration
 }
 
-// MutationMetadata carries stable correlation and provenance for one logical
-// mutation across every transport attempt and authoritative verification.
+// MutationMetadata carries correlation and triple provenance. Create and Append
+// require RequestID and Source. A caller retrying one logical Create or Append
+// must set Timestamp once and reuse the complete Metadata; regenerating it would
+// change tuple identity. Other fields remain operation-specific.
 type MutationMetadata struct {
 	RequestID string
 	TraceID   string
@@ -35,8 +31,7 @@ type MutationMetadata struct {
 	Timestamp time.Time
 }
 
-// CreateMutation creates one authoritative entity with its complete initial
-// projection facts.
+// CreateMutation requests strict creation of one entity.
 type CreateMutation struct {
 	Contract string
 	Entity   *graph.EntityState
@@ -44,9 +39,8 @@ type CreateMutation struct {
 	Metadata MutationMetadata
 }
 
-// ReplaceOwnedMutation reconciles the complete replace-owned predicate set
-// declared by one contract.
-type ReplaceOwnedMutation struct {
+// ReconcileMutation requests replacement of one declared predicate group.
+type ReconcileMutation struct {
 	Contract string
 	Group    string
 	EntityID string
@@ -54,64 +48,78 @@ type ReplaceOwnedMutation struct {
 	Metadata MutationMetadata
 }
 
-// AppendEvidenceMutation appends evidence for exactly one existing entity.
-type AppendEvidenceMutation struct {
+// AppendMutation requests set-valued addition to one declared predicate group.
+type AppendMutation struct {
 	Contract string
+	Group    string
 	EntityID string
-	Evidence []message.Triple
+	Triples  []message.Triple
 	Metadata MutationMetadata
 }
 
-// CommitState reports what the client can prove about the authoritative write.
+// DeleteMutation requests revision-fenced deletion of one entity.
+type DeleteMutation struct {
+	EntityID         string
+	ExpectedRevision uint64
+	Metadata         MutationMetadata
+}
+
+// CommitState reports what the client can prove about mutation commitment.
 type CommitState string
 
-// Commit states describe progressively stronger knowledge about whether the
-// authoritative mutation was applied.
 const (
+	// CommitNotCommitted proves the mutation did not commit.
 	CommitNotCommitted CommitState = "not-committed"
-	CommitUnknown      CommitState = "unknown"
-	CommitCommitted    CommitState = "committed"
-	CommitVerified     CommitState = "verified"
+	// CommitUnknown reports that delivery occurred without a valid reply.
+	CommitUnknown CommitState = "unknown"
+	// CommitVerified reports a valid authoritative mutation response.
+	CommitVerified CommitState = "verified"
 )
 
-// MutationReceipt is returned on both successful and commit-aware error paths.
+// MutationReceipt contains the authoritative result and commitment evidence.
 type MutationReceipt struct {
 	Entity     *graph.EntityState
 	KVRevision uint64
 	Commit     CommitState
-	Degraded   bool
 }
 
-// MutationOperation identifies the public capability that produced an outcome.
+// MutationOperation identifies the client operation that produced a result.
 type MutationOperation string
 
-// Mutation operations identify each public mutation-client capability.
 const (
-	MutationOperationBind              MutationOperation = "bind"
-	MutationOperationCreate            MutationOperation = "create-with-triples"
-	MutationOperationReplaceOwned      MutationOperation = "replace-owned"
-	MutationOperationAppendEvidence    MutationOperation = "append-evidence"
+	// MutationOperationCreate identifies strict entity creation.
+	MutationOperationCreate MutationOperation = "create"
+	// MutationOperationReconcile identifies predicate-set reconciliation.
+	MutationOperationReconcile MutationOperation = "reconcile"
+	// MutationOperationAppend identifies set-valued triple addition.
+	MutationOperationAppend MutationOperation = "append"
+	// MutationOperationDelete identifies revision-fenced entity deletion.
+	MutationOperationDelete MutationOperation = "delete"
+	// MutationOperationReadAuthoritative identifies an exact authority read.
 	MutationOperationReadAuthoritative MutationOperation = "read-authoritative"
 )
 
-// MutationErrorKind is the stable caller-facing mutation failure taxonomy.
+// MutationErrorKind is the stable caller-facing mutation failure category.
 type MutationErrorKind string
 
-// Mutation error kinds form the stable caller-facing failure taxonomy.
 const (
-	MutationInvalid             MutationErrorKind = "invalid"
-	MutationNotFound            MutationErrorKind = "not-found"
-	MutationConflict            MutationErrorKind = "conflict"
-	MutationRevisionConflict    MutationErrorKind = "revision-conflict"
-	MutationStaleOwnerToken     MutationErrorKind = "stale-owner-token"
-	MutationUnavailable         MutationErrorKind = "unavailable"
-	MutationCommitUnknown       MutationErrorKind = "commit-unknown"
-	MutationCommittedUnverified MutationErrorKind = "committed-unverified"
-	MutationInternal            MutationErrorKind = "internal"
+	// MutationInvalid reports a request rejected before mutation.
+	MutationInvalid MutationErrorKind = "invalid"
+	// MutationNotFound reports a required entity that does not exist.
+	MutationNotFound MutationErrorKind = "not-found"
+	// MutationConflict reports strict-create or semantic conflict.
+	MutationConflict MutationErrorKind = "conflict"
+	// MutationRevisionConflict reports a stale expected authority revision.
+	MutationRevisionConflict MutationErrorKind = "revision-conflict"
+	// MutationUnavailable reports no available mutation responder.
+	MutationUnavailable MutationErrorKind = "unavailable"
+	// MutationCommitUnknown reports delivery without a valid response.
+	MutationCommitUnknown MutationErrorKind = "commit-unknown"
+	// MutationInternal reports an unclassified framework failure.
+	MutationInternal MutationErrorKind = "internal"
 )
 
-// MutationError preserves the existing classified or sentinel cause while
-// adding operation and commit knowledge.
+// MutationError preserves operation, classification, and commitment evidence.
 type MutationError struct {
 	Operation MutationOperation
 	Kind      MutationErrorKind
@@ -126,13 +134,9 @@ func (e *MutationError) Error() string {
 	if e == nil {
 		return "projection mutation failed"
 	}
-	if e.Err != nil {
-		return fmt.Sprintf("projection mutation %s failed (%s, %s): %v", e.Operation, e.Kind, e.Commit, e.Err)
-	}
-	return fmt.Sprintf("projection mutation %s failed (%s, %s)", e.Operation, e.Kind, e.Commit)
+	return fmt.Sprintf("projection mutation %s failed (%s, %s): %v", e.Operation, e.Kind, e.Commit, e.Err)
 }
 
-// Unwrap preserves existing errors.As and errors.Is behavior.
 func (e *MutationError) Unwrap() error {
 	if e == nil {
 		return nil
@@ -140,24 +144,29 @@ func (e *MutationError) Unwrap() error {
 	return e.Err
 }
 
-// EntityCreator is the least-privilege atomic entity-birth capability.
+// EntityCreator creates one entity through the canonical mutation port.
 type EntityCreator interface {
-	CreateWithTriples(context.Context, CreateMutation) (MutationReceipt, error)
+	Create(context.Context, CreateMutation) (MutationReceipt, error)
 }
 
-// OwnedReplacer is the least-privilege owned-state reconciliation capability.
-type OwnedReplacer interface {
-	ReplaceOwned(context.Context, ReplaceOwnedMutation) (MutationReceipt, error)
+// PredicateReconciler reconciles one declared predicate group.
+type PredicateReconciler interface {
+	Reconcile(context.Context, ReconcileMutation) (MutationReceipt, error)
 }
 
-// EvidenceAppender is the least-privilege append-only evidence capability.
-type EvidenceAppender interface {
-	AppendEvidence(context.Context, AppendEvidenceMutation) (MutationReceipt, error)
+// TripleAppender appends set-valued triples to an existing entity.
+type TripleAppender interface {
+	Append(context.Context, AppendMutation) (MutationReceipt, error)
 }
 
-// AuthoritativeReader is the least-privilege graph-ingest source-of-truth read.
+// EntityDeleter deletes one entity at an expected authority revision.
+type EntityDeleter interface {
+	Delete(context.Context, DeleteMutation) (MutationReceipt, error)
+}
+
+// AuthoritativeReader reads entity bytes and their same-entry KV revision.
 type AuthoritativeReader interface {
-	ReadAuthoritative(context.Context, string) (*graph.EntityState, error)
+	ReadAuthoritative(context.Context, string) (*graph.ExactEntity, error)
 }
 
 //revive:enable:max-public-structs

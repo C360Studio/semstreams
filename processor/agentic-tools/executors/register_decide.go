@@ -10,7 +10,7 @@ import (
 )
 
 // registerDecide wires the coordinator's decide terminal tool. The tool
-// publishes triples via the graph.mutation.triple.add NATS surface (same
+// publishes triples via the graph.mutation.triple.append NATS surface (same
 // path rule actions use). A registry-level failure (duplicate name)
 // returns the error so RegisterBuiltins can surface it at boot.
 func registerDecide(tools *agentictools.ExecutorRegistry, natsClient *natsclient.Client, platform component.PlatformMeta, restrictedDecideActions []string, logger *slog.Logger) error {

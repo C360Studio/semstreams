@@ -1,10 +1,19 @@
 package executors
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/c360studio/semstreams/agentic"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/pkg/errs"
+	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
 // webEmitTimeout bounds how long the per-tool emission path will wait
@@ -38,3 +47,27 @@ var webEmitFailuresTotal = promauto.NewCounterVec(
 	},
 	[]string{"tool", "reason"},
 )
+
+// publishWebObservation makes entity lifecycle explicit. A definite create
+// conflict means the stable URL entity already exists, so this component
+// appends the new observation. Transport ambiguity is returned without a
+// second mutation attempt.
+func publishWebObservation(
+	ctx context.Context,
+	publisher agentictools.TriplePublisher,
+	entityID string,
+	triples []message.Triple,
+) error {
+	err := publisher.Create(ctx, entityID, agentic.WebObservationMessageType(), triples)
+	if err == nil {
+		return nil
+	}
+	var classified *errs.ClassifiedError
+	if !errors.As(err, &classified) || classified.Code != graph.ErrorCodeEntityExists {
+		return fmt.Errorf("create web observation: %w", err)
+	}
+	if err := publisher.Append(ctx, triples); err != nil {
+		return fmt.Errorf("append existing web observation: %w", err)
+	}
+	return nil
+}

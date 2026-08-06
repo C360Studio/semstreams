@@ -57,8 +57,9 @@ authority returns typed `entity_already_exists`; no stub exception or hierarchy 
 
 ### Requirement: Duplicate-resistant append evidence
 
-Append MUST validate canonical tuples against an `append` group and consume per-subject partial results. It MUST retry
-only caller-selected failed or unknown subjects; it MUST NOT infer a cross-subject transaction.
+Append MUST validate canonical tuples against an `append` group and consume per-subject partial results. The client MUST
+make one request and MUST NOT retry automatically. A caller MAY submit a new request for selected failed or unknown
+subjects according to its own operation-specific policy; neither side may infer a cross-subject transaction.
 
 #### Scenario: Partial append remains explicit
 
@@ -103,6 +104,20 @@ identity.
 - **WHEN** a caller safely retries an operation
 - **THEN** its request ID, source, timestamp, trace ID, and triples are unchanged
 
+### Requirement: Reconcile annotations are desired state
+
+Reconcile equality MUST include persisted `Timestamp`, `Confidence`, and `ExpiresAt` annotations. A caller seeking
+`unchanged` MUST preserve the annotations observed by its exact read and MUST NOT regenerate a timestamp unless changing
+that annotation is intended. An annotation-only difference MUST commit once; an exact repeat from the committed
+revision MUST be unchanged.
+
+#### Scenario: Annotation-only desired state commits once
+
+- **GIVEN** a current selected triple and desired state that changes only one persisted annotation
+- **WHEN** the caller reconciles that desired state and then repeats it exactly from the committed revision
+- **THEN** the first reconcile applies and advances the authority revision
+- **AND** the exact repeat is unchanged
+
 ### Requirement: Child-entity model remains separate
 
 The child-entity model MUST remain separate from the mutation client. The client MAY provide create, reconcile,
@@ -116,7 +131,8 @@ predicates, linkage, ordering, cardinality, query behavior, or structured-litera
 
 ### Requirement: Todo and lesson writers use narrow atomic replacement
 
-Todo and lesson writers MUST use local contract-bound reconcile with an exact-read revision. Ownership bootstrap,
+Todo and lesson writers MUST use local contract-bound reconcile with an exact-read revision. Each operation performs one
+exact read and one mutation request and surfaces classified outcomes without automatic retry. Ownership bootstrap,
 binding, and heartbeat failures are not part of their startup path.
 
 #### Scenario: A lesson reconcile has bounded conflict handling
@@ -125,6 +141,33 @@ binding, and heartbeat failures are not part of their startup path.
 - **WHEN** reconcile returns revision mismatch
 - **THEN** the writer applies its declared caller policy or returns the conflict
 - **AND** no lease or owner token is consulted
+
+### Requirement: Todo reconciliation preserves explicit record boundaries
+
+The todo writer MUST encode each logical item as one deterministic JSON object in an `agent.todo.record` triple. The
+object MUST contain `id`, `content`, `status`, `position`, and `updated_at` with the existing logical validation. Each
+call MUST reconcile the complete desired record set; omitted items are removed and an empty list clears the group. The
+predicate MUST be rule-opaque, and successful tool metadata MUST expose logical `todo_count` but no storage-shaped
+`triple_count`.
+
+The exact reader MUST decode all record triples and return the logical list ordered by position. A missing entity or an
+entity with no record triples MUST produce an empty list. Any malformed record MUST fail the complete list with no
+partial result. The five legacy todo predicates, positional grouping, aliases, dual writes, and compatibility reads MUST
+NOT remain.
+
+#### Scenario: A malformed item cannot shear the list
+
+- **GIVEN** an exact entity read contains valid todo records and one malformed `agent.todo.record`
+- **WHEN** `TodoReader` decodes the current list
+- **THEN** it returns an error and no todo items
+- **AND** it never combines fields across records or silently skips the malformed item
+
+#### Scenario: Complete-list reconcile removes omitted items
+
+- **GIVEN** the current entity contains records A and B
+- **WHEN** `write_todos` reconciles a complete desired list containing only B
+- **THEN** record A is removed and B remains
+- **AND** the result reports `todo_count` equal to one without `triple_count`
 
 ## ADDED Requirements
 

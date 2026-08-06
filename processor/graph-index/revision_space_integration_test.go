@@ -10,6 +10,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
@@ -103,36 +104,38 @@ func startIndex(ctx context.Context, t *testing.T, nc *natsclient.Client) *Compo
 // kv_revision.
 func createEntity(ctx context.Context, t *testing.T, nc *natsclient.Client, entityID string) uint64 {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{
-		"entity": graph.EntityState{
-			ID: entityID,
-			Triples: []message.Triple{{
-				Subject: entityID, Predicate: "core.identity.type", Object: "drone",
-				Timestamp: time.Now(), Confidence: 1.0,
-			}},
+	now := time.Now()
+	client, err := graphmutation.NewClient(nc, 5*time.Second)
+	require.NoError(t, err)
+	response, err := client.Create(ctx, graph.CreateEntityRequest{
+		Entity: &graph.EntityState{
+			ID:          entityID,
+			MessageType: message.Type{Domain: "test", Category: "revision", Version: "v1"},
+			Version:     1,
+			UpdatedAt:   now,
 		},
+		Triples: []message.Triple{{
+			Subject: entityID, Predicate: "core.identity.type", Object: "drone",
+			Timestamp: now, Confidence: 1.0,
+		}},
 	})
 	require.NoError(t, err)
-	return revisionFromMutation(ctx, t, nc, graphingest.SubjectEntityCreate, body)
+	return response.KVRevision
 }
 
 func addTriple(ctx context.Context, t *testing.T, nc *natsclient.Client, entityID string) uint64 {
 	t.Helper()
-	body, err := json.Marshal(map[string]any{
-		"triple": message.Triple{
+	client, err := graphmutation.NewClient(nc, 5*time.Second)
+	require.NoError(t, err)
+	response, err := client.Append(ctx, graph.AppendTriplesRequest{
+		Triples: []message.Triple{{
 			Subject: entityID, Predicate: "core.identity.label", Object: "second",
 			Timestamp: time.Now(), Confidence: 1.0,
-		},
+		}},
 	})
 	require.NoError(t, err)
-	return revisionFromMutation(ctx, t, nc, graphingest.SubjectTripleAdd, body)
-}
-
-func revisionFromMutation(ctx context.Context, t *testing.T, nc *natsclient.Client, subject string, body []byte) uint64 {
-	t.Helper()
-	raw, err := nc.RequestClassified(ctx, subject, body, 5*time.Second)
-	require.NoError(t, err, "mutation on %s", subject)
-	var resp graph.MutationResponse
-	require.NoError(t, json.Unmarshal(raw, &resp))
-	return resp.KVRevision
+	require.Len(t, response.Results, 1)
+	require.Equal(t, entityID, response.Results[0].EntityID)
+	require.Contains(t, []graph.MutationOutcome{graph.MutationApplied, graph.MutationUnchanged}, response.Results[0].Outcome)
+	return response.Results[0].KVRevision
 }

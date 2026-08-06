@@ -13,12 +13,11 @@ const CategoryModelEndpoint = "model_endpoint"
 //
 // Registry decision (mirrors LoopExecutionMessageType, ADR-056 typed-origin —
 // intentionally pinned, not implicit): this type is MUTATION-ONLY. It is stamped
-// on CreateEntityWithTriplesRequest.Entity.MessageType when WriteModelEndpoints
-// births the endpoint entity, purely as PRODUCER IDENTITY for ownership
-// arbitration; it is NEVER published as a BaseMessage payload and is therefore
+// on CreateEntityRequest.Entity.MessageType when WriteModelEndpoints births the
+// endpoint entity, purely as producer identity; it is NEVER published as a BaseMessage payload and is therefore
 // NOT registered in the payload registry (payload_registry.go) and never
 // round-trips through payload decoding. A model endpoint is a config-derived
-// FACT about the world, born once at startup via create_with_triples — not a
+// FACT about the world, born once at startup via entity.create — not a
 // wire message. If a future producer needs to PUBLISH a model_endpoint message
 // over NATS (not merely stamp it at create), that producer must add the init()
 // registration at that point — until then, registering it would advertise a

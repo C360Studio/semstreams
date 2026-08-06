@@ -2,7 +2,10 @@ package scenarios
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -35,6 +38,33 @@ func TestTieredVariantsIncludeGraphRoundTripStageExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestStructuralVariantIncludesCanonicalMutationContractStages(t *testing.T) {
+	t.Parallel()
+
+	want := map[string]int{
+		"validate-canonical-create-no-hierarchy": 1,
+		"validate-relationship-no-stub":          1,
+	}
+	for _, stage := range (&TieredScenario{}).getStagesForVariant("structural") {
+		if _, ok := want[stage.name]; ok {
+			want[stage.name]--
+		}
+	}
+	for name, remaining := range want {
+		if remaining != 0 {
+			t.Fatalf("structural stage %q count mismatch: remaining=%d", name, remaining)
+		}
+	}
+
+	for _, variant := range []string{"statistical", "semantic"} {
+		for _, stage := range (&TieredScenario{}).getStagesForVariant(variant) {
+			if stage.name == "validate-canonical-create-no-hierarchy" || stage.name == "validate-relationship-no-stub" {
+				t.Fatalf("%s unexpectedly includes structural-only stage %q", variant, stage.name)
+			}
+		}
+	}
+}
+
 func TestValidateTitleReplacementRejectsAppendInsteadOfReplace(t *testing.T) {
 	t.Parallel()
 
@@ -49,6 +79,17 @@ func TestValidateTitleReplacementRejectsAppendInsteadOfReplace(t *testing.T) {
 	entity.Triples = entity.Triples[1:]
 	if err := validateTitleReplacement(entity, "before", "after"); err != nil {
 		t.Fatalf("validateTitleReplacement rejected exact replacement: %v", err)
+	}
+}
+
+func TestGraphRoundTripUsesExactEntityGraphQLShape(t *testing.T) {
+	t.Parallel()
+
+	if !strings.Contains(graphQLExactEntityQuery, "entity { id triples") {
+		t.Fatalf("query does not select the nested authority entity: %s", graphQLExactEntityQuery)
+	}
+	if !strings.Contains(graphQLExactEntityQuery, "kvRevision") {
+		t.Fatalf("query does not select authority revision evidence: %s", graphQLExactEntityQuery)
 	}
 }
 
@@ -78,6 +119,50 @@ func TestResponseErrorPreservesAllGraphQLErrors(t *testing.T) {
 	if err == nil || err.Error() != "GraphQL errors: index not ready; watermark missing" {
 		t.Fatalf("responseError = %v", err)
 	}
+}
+
+func TestQueryGraphQLEntityConsumesExactEntityResult(t *testing.T) {
+	t.Parallel()
+
+	const entityID = "c360.e2e.core.graph.canary.fixture"
+	httpClient := &http.Client{Transport: graphRoundTripTransport(func(r *http.Request) (*http.Response, error) {
+		var request struct {
+			Query string `json:"query"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			return nil, err
+		}
+		if !strings.Contains(request.Query, "entity { id triples") ||
+			!strings.Contains(request.Query, "kvRevision") {
+			t.Errorf("query does not select ExactEntity fields: %s", request.Query)
+		}
+		body := `{"data":{"entity":{"entity":{"id":"` + entityID +
+			`","triples":[{"subject":"` + entityID +
+			`","predicate":"dc.terms.title","object":"after"}]},"kvRevision":2}}}`
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(body)),
+		}, nil
+	})}
+
+	probe := &GraphRoundTripProbe{
+		graphqlURL: "http://graphql.test/query",
+		httpClient: httpClient,
+	}
+	entity, err := probe.queryGraphQLEntity(context.Background(), entityID)
+	if err != nil {
+		t.Fatalf("queryGraphQLEntity: %v", err)
+	}
+	if err := validateTitleReplacement(entity, "before", "after"); err != nil {
+		t.Fatalf("exact GraphQL entity did not reach the validator: %v", err)
+	}
+}
+
+type graphRoundTripTransport func(*http.Request) (*http.Response, error)
+
+func (transport graphRoundTripTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
 }
 
 func TestValidateMutationTraceEntries(t *testing.T) {
@@ -126,9 +211,9 @@ func TestValidateMutationTraceEntries(t *testing.T) {
 				}
 			case "reused-span":
 				entries[1].SpanID = entries[0].SpanID
-				replace := expected[mutationReplaceSubject]
-				replace.SpanID = entries[0].SpanID
-				expected[mutationReplaceSubject] = replace
+				reconcile := expected[mutationReconcileSubject]
+				reconcile.SpanID = entries[0].SpanID
+				expected[mutationReconcileSubject] = reconcile
 			}
 			_, err := validateMutationTraceEntries(entries, expected)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
@@ -149,15 +234,15 @@ func mutationTraceFixture() (map[string]mutationTraceExpectation, []client.Messa
 		mutationCreateSubject: {
 			EntityID: traceEntityID, RequestID: "create-request", TraceID: traceFixtureID, SpanID: "1111111111111111",
 		},
-		mutationReplaceSubject: {
+		mutationReconcileSubject: {
 			EntityID: traceEntityID, RequestID: "replace-request", TraceID: traceFixtureID, SpanID: "2222222222222222",
 		},
 	}
 	entries := []client.MessageEntry{
 		{Subject: mutationCreateSubject, TraceID: traceFixtureID, SpanID: "1111111111111111",
 			RawData: json.RawMessage(`{"entity":{"id":"c360.e2e.core.graph.canary.fixture"},"trace_id":"0123456789abcdef0123456789abcdef","request_id":"create-request"}`)},
-		{Subject: mutationReplaceSubject, TraceID: traceFixtureID, SpanID: "2222222222222222",
-			RawData: json.RawMessage(`{"entity":{"id":"c360.e2e.core.graph.canary.fixture"},"trace_id":"0123456789abcdef0123456789abcdef","request_id":"replace-request"}`)},
+		{Subject: mutationReconcileSubject, TraceID: traceFixtureID, SpanID: "2222222222222222",
+			RawData: json.RawMessage(`{"entity_id":"c360.e2e.core.graph.canary.fixture","trace_id":"0123456789abcdef0123456789abcdef","request_id":"replace-request"}`)},
 	}
 	return expected, entries
 }

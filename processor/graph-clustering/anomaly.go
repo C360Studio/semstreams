@@ -219,7 +219,7 @@ func (c *Component) initAnomalyDetection(ctx context.Context) error {
 
 // setupRelationshipApplier creates and configures the relationship applier for auto-apply.
 // This enables automatic creation of virtual edges for high-confidence semantic gaps.
-// Uses the mutation API (graph.mutation.triple.add) to go through graph-ingest for proper indexing.
+// Uses the mutation API (graph.mutation.triple.append) to go through graph-ingest for proper indexing.
 func (c *Component) setupRelationshipApplier() error {
 	applier := inference.NewMutationRelationshipApplier(c.natsClient, c.logger)
 	c.anomalyOrchestrator.SetApplier(applier)

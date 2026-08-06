@@ -1224,7 +1224,7 @@
     },
     "pack_id": {
       "type": "string",
-      "description": "Required stable rule-pack projection owner and graph-event producer identity",
+      "description": "Required stable rule-pack projection and graph-event producer identity",
       "minLength": 1,
       "maxLength": 246,
       "pattern": "^[A-Za-z0-9_=-]+$",
@@ -1237,7 +1237,7 @@
     },
     "projection_contracts": {
       "type": "array",
-      "description": "Optional explicit projection authorization superset; omit to derive minimal replace-owned groups and statically provable entity scope from initial actions. Birth predicates foreign edges indexing profile and message type are explicit-only",
+      "description": "Optional explicit local projection contract; omit to derive minimal reconcile groups and statically provable entity scope from initial actions. Birth predicates indexing profile and message type are explicit-only",
       "items": {
         "type": "object",
         "properties": {
@@ -1251,27 +1251,6 @@
           "entity_pattern": {
             "type": "string",
             "description": "entity_pattern"
-          },
-          "foreign_edges": {
-            "type": "array",
-            "description": "foreign_edges",
-            "items": {
-              "type": "object",
-              "properties": {
-                "mode": {
-                  "type": "string",
-                  "description": "mode"
-                },
-                "predicate": {
-                  "type": "string",
-                  "description": "predicate"
-                },
-                "target_pattern": {
-                  "type": "string",
-                  "description": "target_pattern"
-                }
-              }
-            }
           },
           "groups": {
             "type": "array",

@@ -2,6 +2,9 @@
 
 ## Status
 
+**Ownership-bucket evidence amended by ADR-091 — 2026-08-05.** `OWNER_CLAIMS` and `OWNER_PRESENCE` are retired;
+the remaining ingestion and retention questions continue to stand or fall independently.
+
 **Proposed — 2026-07-08. Design-only (no code). Adversarially reviewed (4
 code-grounded lenses); revised to fold the findings + a decentralized-reactive
 reclamation model. Pending re-review before Accept.** Grounded in the

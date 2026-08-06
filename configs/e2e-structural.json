@@ -248,7 +248,10 @@
         "enable_graph_integration": true,
         "ports": {
           "inputs": [{"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}],
-          "outputs": [{"name": "workflow_triggers", "subject": "workflow.trigger.*", "type": "jetstream"}]
+          "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
+            {"name": "workflow_triggers", "subject": "workflow.trigger.*", "type": "jetstream"}
+          ]
         },
         "entity_watch_buckets": {"ENTITY_STATES": ["*.*.*.*.*.*"]},
         "inline_rules": [
@@ -279,13 +282,13 @@
       "config": {
         "ports": {
           "inputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
             {"name": "objectstore_in", "subject": "objectstore.stored.entity", "type": "jetstream", "interface": "storage.stored.v1"},
             {"name": "sensor_in", "subject": "sensor.processed.entity", "type": "jetstream", "interface": "iot.sensor.v1"}
           ],
           "outputs": [{"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}]
         },
-        "enable_hierarchy": true,
-        "enforce_owner_lease": true
+        "enable_hierarchy": true
       }
     },
     "graph-index": {
@@ -355,7 +358,7 @@
       "config": {
         "ports": {
           "inputs": [{"name": "http", "subject": ":8082", "type": "http"}],
-          "outputs": [{"name": "queries", "subject": "graph.query.*", "type": "nats-request"}, {"name": "mutations", "subject": "graph.mutation.*", "type": "nats-request"}]
+          "outputs": [{"name": "queries", "subject": "graph.query.*", "type": "nats-request"}]
         },
         "graphql_path": "/graphql",
         "mcp_path": "/mcp",

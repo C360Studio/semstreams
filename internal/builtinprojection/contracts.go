@@ -4,15 +4,12 @@ package builtinprojection
 
 import (
 	"github.com/c360studio/semstreams/agentic"
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
 
-// OwnerID and the contract/group names identify the built-in agentic
-// projection owner and its immutable contract bindings.
+// Contract and group names identify the built-in agentic mutation schemas.
 const (
-	OwnerID                   = "agentic-loop-graph-writer"
 	LoopExecutionContractName = "agentic.loop-execution"
 	TodoGroupName             = "todos"
 	LessonRecordContractName  = "agentic.lesson-record"
@@ -41,13 +38,9 @@ func Contracts() []projection.Contract {
 			},
 			Groups: []projection.PredicateGroup{{
 				Name: TodoGroupName,
-				Mode: ownership.ModeReplaceOwned,
+				Mode: projection.ModeReconcile,
 				Predicates: []string{
-					agvocab.TodoID,
-					agvocab.TodoContent,
-					agvocab.TodoStatus,
-					agvocab.TodoPosition,
-					agvocab.TodoUpdatedAt,
+					agvocab.TodoRecord,
 				},
 			}},
 		},
@@ -70,7 +63,7 @@ func Contracts() []projection.Contract {
 			},
 			Groups: []projection.PredicateGroup{{
 				Name: LessonLifecycleGroupName,
-				Mode: ownership.ModeReplaceOwned,
+				Mode: projection.ModeReconcile,
 				Predicates: []string{
 					agvocab.LessonStatus,
 					agvocab.LessonSupersededBy,

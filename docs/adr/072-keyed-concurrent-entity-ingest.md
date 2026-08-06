@@ -11,6 +11,12 @@ post-Part-1 code and the corrected resolution below is folded into the `graph-in
 `keyed-dispatch` capability specs. Implementation follows on
 `feat/graph-ingest-concurrent-ingest` via the `graph-ingest-keyed-dispatch` openspec change.
 
+**Current graph-reference behavior:** ADR-091 supersedes this ADR's historical
+relationship-target stub write. Graph ingest no longer calls
+`ensureRelationshipTargetsExist` or creates an entity for an absent target. The
+relationship is valid, and readers observe its target as unresolved/not found
+until the target entity is written.
+
 **Four code-grounded reviews hardened this before any code.** Round 1 (NEEDS-REWORK) →
 per-entity applied-sequence guard (B1), primitive panic recovery (H2), corrected
 CAS/backpressure claims (H1/M1). Round 2 (NEEDS-ANOTHER-REWORK) found the sequence guard
@@ -114,13 +120,13 @@ This single choice resolves all three axes at once:
   arrival-order merge *requires*. (Naive concurrency does not have this.)
 - **CAS contention (same entity):** one entity ID is only ever on one lane at a time,
   so there are **no concurrent CAS writes to that entity's OWN key** — no self-inflicted
-  revision-mismatch retries. *Not* an absolute "no shared-key writes" guarantee: ingesting
-  entity A also writes OTHER keys — relationship-target stubs
-  (`ensureRelationshipTargetsExist`), foreign edges, and shared hierarchy containers — so
-  cross-lane contention on those keys is real (entity-birth, hierarchy, relationship-dense
-  workloads). Those are made **safe by atomic create-if-absent + CAS retry, not by lane
-  affinity** (no lost update). The `cas_retries` metric is therefore a contention
-  *observability* signal, not a proof of correct keying (adversarial review H1).
+  revision-mismatch retries. The accepted design originally qualified this with writes to
+  OTHER keys, including relationship-target stubs (`ensureRelationshipTargetsExist`).
+  ADR-091 removed that write path: absent relationship targets are valid and receive no
+  automatic entity birth. Foreign edges and shared hierarchy containers can still create
+  cross-lane contention; atomic create-if-absent and CAS retry, not lane affinity, make
+  those writes safe. The `cas_retries` metric is therefore a contention observability
+  signal, not a proof of correct keying (adversarial review H1).
 
 **Primitive placement: a new generic keyed-ordered pool in `pkg/dispatch`**, composed
 by graph-ingest — *not* hand-rolled in graph-ingest, and *not* a new mode on

@@ -16,92 +16,46 @@ import (
 
 const absentSubjectID = "c360.platform.robotics.mav1.drone.absent01"
 
-// Codex C1. "Degraded" means A WRITE COMMITTED but its post-write read-back
-// failed. A FAILED mutation and a NO-OP are neither, and marking them degraded
-// is actively dangerous: pkg/projection's AppendEvidence checks
-// response.Degraded BEFORE it looks at FailedSubjects, so a degraded-flagged
-// failure enters committed verification and can be reported as committed.
-//
-// An absent entity produces exactly that shape when the revision read-back is
-// issued unconditionally — the append writes nothing AND the read-back cannot
-// find the entity.
-func TestHandleTripleAddBatch_AbsentEntityIsFailedNotDegraded(t *testing.T) {
+func TestHandleCanonicalAppend_AbsentEntityIsExplicitNotFound(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	triple := dedupTriple(absentSubjectID)
-	requestData, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{triple}})
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
 	require.NoError(t, err)
 
-	body, err := comp.handleTripleAddBatch(ctx, requestData)
-	require.NoError(t, err, "an absent subject is a partial-failure body, not a typed error")
+	body, err := comp.handleCanonicalAppend(ctx, requestData)
+	require.NoError(t, err, "an absent subject is an explicit subject result")
 
-	var resp graph.AddTriplesBatchResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(body, &resp))
-
-	require.Contains(t, resp.FailedSubjects, absentSubjectID,
-		"fixture sanity: the absent subject must be reported as failed")
-	assert.False(t, resp.Degraded,
-		"a subject that FAILED did not commit, so it must not be flagged degraded — "+
-			"the client checks Degraded before FailedSubjects and would treat it as committed")
-	assert.Empty(t, resp.DegradedReason)
-	assert.Zero(t, resp.KVRevision, "nothing committed, so there is no revision to report")
-	assert.Zero(t, resp.WrittenCount)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, absentSubjectID, resp.Results[0].EntityID)
+	assert.Equal(t, graph.MutationEntityNotFound, resp.Results[0].Outcome)
+	assert.Zero(t, resp.Results[0].KVRevision)
+	assert.Nil(t, resp.Results[0].Error)
 }
 
-func TestHandleTripleRemove_AbsentEntityIsNoOpNotDegraded(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	requestData, err := json.Marshal(graph.RemoveTripleRequest{
-		Subject: absentSubjectID, Predicate: "robotics.battery.level",
-	})
-	require.NoError(t, err)
-
-	body, err := comp.handleTripleRemove(ctx, requestData)
-	require.NoError(t, err, "removing from an absent entity is an idempotent no-op success")
-
-	var resp graph.RemoveTripleResponse
-	require.NoError(t, json.Unmarshal(body, &resp))
-
-	assert.False(t, resp.Removed, "nothing was removed")
-	assert.False(t, resp.Degraded,
-		"a no-op committed nothing, so there is no committed write whose echo could be degraded")
-	assert.Empty(t, resp.DegradedReason)
-	assert.Zero(t, resp.KVRevision)
-}
-
-// A SUPPRESSED add is also a no-op: it must report the entity's live revision
-// (so read-your-writes still works) but must never be degraded.
-func TestHandleTripleAdd_SuppressedIsNeverDegraded(t *testing.T) {
+func TestHandleCanonicalAppend_SuppressedIsUnchanged(t *testing.T) {
 	comp, _ := seedDedupEntity(t, dedupSubject)
 	ctx := context.Background()
 	triple := dedupTriple(dedupSubject)
 
-	requestData, err := json.Marshal(graph.AddTripleRequest{Triple: triple})
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
 	require.NoError(t, err)
-	_, err = comp.handleTripleAdd(ctx, requestData)
+	_, err = comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
 
-	body, err := comp.handleTripleAdd(ctx, requestData)
+	body, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
-	var resp graph.AddTripleResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(body, &resp))
-
-	require.True(t, resp.Deduplicated, "fixture sanity: the second add must be suppressed")
-	assert.False(t, resp.Degraded, "a suppressed write committed nothing")
-	assert.NotZero(t, resp.KVRevision, "but it still reports the live revision for read-your-writes")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, graph.MutationUnchanged, resp.Results[0].Outcome)
+	assert.NotZero(t, resp.Results[0].KVRevision)
 }
 
-// Codex C2. revisionAfterMutation issued an INDEPENDENT live Get after the CAS,
-// so a writer committing in the window between them made the handler report
-// THAT writer's revision. Because our own mutation genuinely committed, the
-// rule engine's tracker records the later revision as its own and shouldSkipRule
-// then consumes it — silently dropping the external change.
-//
-// The external commit is injected deterministically on the read-back Get, which
-// is exactly the window in question. No sleeps.
-func TestHandleTripleAdd_ReportsItsOwnCASRevisionNotALaterWriters(t *testing.T) {
+func TestHandleCanonicalAppend_ReportsItsOwnCASRevision(t *testing.T) {
 	comp, bucket := createTestComponentWithMockKVBucket(t)
 	ctx := context.Background()
 	require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
@@ -109,129 +63,33 @@ func TestHandleTripleAdd_ReportsItsOwnCASRevisionNotALaterWriters(t *testing.T) 
 	}))
 
 	triple := dedupTriple(dedupSubject)
-	requestData, err := json.Marshal(graph.AddTripleRequest{Triple: triple})
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
 	require.NoError(t, err)
 
-	// One Get belongs to the CAS itself. Any Get AFTER that is a post-hoc
-	// re-read, and the hook makes an external writer win that window.
-	probe := injectExternalCommitOnReadback(t, comp, bucket, 1)
-
-	body, err := comp.handleTripleAdd(ctx, requestData)
-	// Disarm before any verification read, or this test's own Get would trip
-	// the injection and move the revision it is about to compare against.
-	probe.disarm()
-	require.NoError(t, err)
-	var resp graph.AddTripleResponse
-	require.NoError(t, json.Unmarshal(body, &resp))
-
-	assert.Zero(t, probe.postCASGets(),
-		"the committed path must not re-read the revision: a re-read is exactly the window "+
-			"in which another writer commits and the handler returns THAT writer's revision")
-	if external := probe.externalRevision(); external != 0 {
-		assert.NotEqual(t, external, resp.KVRevision,
-			"the handler returned the later external writer's revision")
-	}
-	assert.NotZero(t, resp.KVRevision, "a committed write must report its own revision")
-	_, liveRevision := readDedupEntity(t, comp, dedupSubject)
-	assert.Equal(t, liveRevision, resp.KVRevision,
-		"with no external writer, the reported revision is the one this CAS produced")
-}
-
-func TestHandleTripleRemove_ReportsItsOwnCASRevisionNotALaterWriters(t *testing.T) {
-	comp, bucket := createTestComponentWithMockKVBucket(t)
-	ctx := context.Background()
-	triple := dedupTriple(dedupSubject)
-	require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-		ID: dedupSubject, Triples: []message.Triple{triple}, Version: 1, UpdatedAt: time.Now(),
-	}))
-
-	requestData, err := json.Marshal(graph.RemoveTripleRequest{
-		Subject: dedupSubject, Predicate: triple.Predicate,
-	})
-	require.NoError(t, err)
-
-	// RemoveTriple does an existence Get, then the CAS Get. Anything after is a
-	// post-hoc re-read.
-	probe := injectExternalCommitOnReadback(t, comp, bucket, 2)
-
-	body, err := comp.handleTripleRemove(ctx, requestData)
-	probe.disarm() // see the add-lane test: disarm before the verification read
-	require.NoError(t, err)
-	var resp graph.RemoveTripleResponse
-	require.NoError(t, json.Unmarshal(body, &resp))
-
-	require.True(t, resp.Removed, "fixture sanity: the removal must have committed")
-	assert.Zero(t, probe.postCASGets(),
-		"the committed path must not re-read the revision")
-	if external := probe.externalRevision(); external != 0 {
-		assert.NotEqual(t, external, resp.KVRevision,
-			"the handler returned the later external writer's revision")
-	}
-	assert.NotZero(t, resp.KVRevision)
-	_, liveRevision := readDedupEntity(t, comp, dedupSubject)
-	assert.Equal(t, liveRevision, resp.KVRevision,
-		"with no external writer, the reported revision is the one this CAS produced")
-}
-
-// readbackProbe reports what happened at the post-CAS seam.
-type readbackProbe struct {
-	gets             *int
-	casGets          int
-	externalRevision func() uint64
-	disarm           func()
-}
-
-// postCASGets is how many Get calls the handler made AFTER its CAS — i.e. how
-// many post-hoc re-reads it performed. Zero is the contract.
-func (p readbackProbe) postCASGets() int {
-	extra := *p.gets - p.casGets
-	if extra < 0 {
-		return 0
-	}
-	return extra
-}
-
-// injectExternalCommitOnReadback makes an external writer WIN the window
-// between the handler's own CAS and any post-hoc revision re-read — the window
-// Codex C2 names. casGets is how many Get calls the handler legitimately makes
-// for the CAS itself; the hook fires on the first Get beyond that.
-//
-// Under a handler that re-reads, the hook fires, an external write lands, and
-// the handler observes the external writer's revision. Under a handler that
-// returns its own CAS revision there is no post-CAS Get at all, the hook never
-// fires, and postCASGets stays zero — which is itself the assertion.
-//
-// Deterministic injection at the exact seam, no sleeps.
-func injectExternalCommitOnReadback(t *testing.T, comp *Component, bucket *mockKVBucket, casGets int) readbackProbe {
-	t.Helper()
-	var externalRevision uint64
 	gets := 0
-	bucket.getFunc = func(ctx context.Context, key string) (jetstream.KeyValueEntry, error) {
+	bucket.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 		gets++
-		if gets != casGets+1 {
-			return mockGetPassthrough(bucket, key)
-		}
-		// Another writer commits, right here in the window. Clearing the hook
-		// first keeps this write (and everything after) on the normal path.
-		bucket.getFunc = nil
-		external := dedupTriple(key)
-		external.Object = "c360.platform.robotics.mav1.drone.external"
-		if err := comp.AddTriple(ctx, external); err != nil {
-			t.Errorf("external write failed: %v", err)
-		}
-		entry, err := bucket.Get(ctx, key)
-		if err == nil {
-			externalRevision = entry.Revision()
-		}
-		return entry, err
+		return mockGetPassthrough(bucket, key)
 	}
-	t.Cleanup(func() { bucket.getFunc = nil })
-	return readbackProbe{
-		gets:             &gets,
-		casGets:          casGets,
-		externalRevision: func() uint64 { return externalRevision },
-		disarm:           func() { bucket.getFunc = nil },
+	body, err := comp.handleCanonicalAppend(ctx, requestData)
+	bucket.getFunc = nil
+	require.NoError(t, err)
+	var resp graph.AppendTriplesResponse
+	require.NoError(t, json.Unmarshal(body, &resp))
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, 1, gets, "the committed path performs only the CAS read")
+	assert.NotZero(t, resp.Results[0].KVRevision)
+	_, liveRevision := readDedupEntity(t, comp, dedupSubject)
+	assert.Equal(t, liveRevision, resp.Results[0].KVRevision)
+}
+
+func mockGetPassthrough(bucket *mockKVBucket, key string) (jetstream.KeyValueEntry, error) {
+	bucket.mu.Lock()
+	defer bucket.mu.Unlock()
+	if data, exists := bucket.data[key]; exists {
+		return &mockKVEntry{data: data.value, revision: data.revision, key: key}, nil
 	}
+	return nil, jetstream.ErrKeyNotFound
 }
 
 // structObject has fields whose DECLARATION order (Zebra, Alpha) differs from
@@ -261,14 +119,14 @@ func TestAddLane_StructuredObjectReplayIsSuppressed(t *testing.T) {
 		comp, _ := seedDedupEntity(t, dedupSubject)
 		ctx := context.Background()
 
-		require.NoError(t, comp.AddTriple(ctx, structured(dedupSubject)))
+		appendDedupTriple(ctx, t, comp, structured(dedupSubject))
 		first, revAfterFirst := readDedupEntity(t, comp, dedupSubject)
 		require.Equal(t, 1, countDedupTriples(first, "robotics.payload.descriptor"),
 			"fixture sanity: the structured triple must have been stored")
 
 		// The replay: the identical in-process value, submitted again against
 		// the stored map[string]any form.
-		require.NoError(t, comp.AddTriple(ctx, structured(dedupSubject)))
+		appendDedupTriple(ctx, t, comp, structured(dedupSubject))
 
 		after, revAfter := readDedupEntity(t, comp, dedupSubject)
 		assert.Equal(t, revAfterFirst, revAfter,
@@ -290,12 +148,12 @@ func TestAddLane_StructuredObjectReplayIsSuppressed(t *testing.T) {
 		comp, _ := seedDedupEntity(t, dedupSubject)
 		ctx := context.Background()
 
-		require.NoError(t, comp.AddTriple(ctx, bigInt(dedupSubject)))
+		appendDedupTriple(ctx, t, comp, bigInt(dedupSubject))
 		first, revAfterFirst := readDedupEntity(t, comp, dedupSubject)
 		require.Equal(t, 1, countDedupTriples(first, "robotics.payload.sequence"),
 			"fixture sanity: the triple must have been stored")
 
-		require.NoError(t, comp.AddTriple(ctx, bigInt(dedupSubject)))
+		appendDedupTriple(ctx, t, comp, bigInt(dedupSubject))
 
 		after, revAfter := readDedupEntity(t, comp, dedupSubject)
 		assert.Equal(t, revAfterFirst, revAfter,

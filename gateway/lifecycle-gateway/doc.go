@@ -23,7 +23,7 @@
 //   - GET    {prefix}                                     → list registered workflow types + instance counts
 //   - GET    {prefix}/{type}                              → list instances (Phase/Active/Match/Limit/Offset query params)
 //   - GET    {prefix}/{type}/{id}                         → get full instance state
-//   - GET    {prefix}/{type}/{id}/history                 → phase transition history (KV revision replay)
+//   - GET    {prefix}/{type}/{id}/history                 → bounded recent phase-transition records
 //   - GET    {prefix}/{type}/{id}/children                → child instance summaries
 //   - POST   {prefix}/{type}/{id}/state                   → operator patch (validates lifecycle:"operator_writable")
 //   - POST   {prefix}/{type}/{id}/transition              → operator-initiated transition (validates transitions table)

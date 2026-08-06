@@ -17,12 +17,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-type recordingTodoReplacer struct {
-	requests []projection.ReplaceOwnedMutation
+type recordingTodoReconciler struct {
+	requests []projection.ReconcileMutation
 	err      error
 }
 
-func (w *recordingTodoReplacer) ReplaceOwned(_ context.Context, req projection.ReplaceOwnedMutation) (projection.MutationReceipt, error) {
+func (w *recordingTodoReconciler) Reconcile(_ context.Context, req projection.ReconcileMutation) (projection.MutationReceipt, error) {
 	if w.err != nil {
 		return projection.MutationReceipt{}, w.err
 	}
@@ -31,7 +31,7 @@ func (w *recordingTodoReplacer) ReplaceOwned(_ context.Context, req projection.R
 	return projection.MutationReceipt{Commit: projection.CommitVerified}, nil
 }
 
-func newWriteTodosExecutor(writer projection.OwnedReplacer) *WriteTodosExecutor {
+func newWriteTodosExecutor(writer projection.PredicateReconciler) *WriteTodosExecutor {
 	return NewWriteTodosExecutor(writer, types.PlatformMeta{Org: "acme", Platform: "test"})
 }
 
@@ -40,7 +40,7 @@ func todosArg(items ...map[string]any) map[string]any {
 }
 
 func TestWriteTodosExecutor_ListTools(t *testing.T) {
-	e := newWriteTodosExecutor(&recordingTodoReplacer{})
+	e := newWriteTodosExecutor(&recordingTodoReconciler{})
 	tools := e.ListTools()
 	if len(tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(tools))
@@ -62,10 +62,12 @@ func TestWriteTodosExecutor_ListTools(t *testing.T) {
 }
 
 // TestWriteTodosExecutor_HappyPath pins the canonical write shape: one atomic
-// group replacement carrying five desired triples per todo.
+// group reconcile carrying one deterministic JSON record triple per todo.
 func TestWriteTodosExecutor_HappyPath(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
+	frozen := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
+	e.SetClock(func() time.Time { return frozen })
 
 	args := todosArg(
 		map[string]any{"id": "1", "content": "Survey rules", "status": "completed"},
@@ -90,19 +92,19 @@ func TestWriteTodosExecutor_HappyPath(t *testing.T) {
 	}
 
 	if got := len(w.requests); got != 1 {
-		t.Fatalf("replace count = %d, want 1", got)
+		t.Fatalf("reconcile count = %d, want 1", got)
 	}
 	wantLoopEntityID := agentic.LoopExecutionEntityID("acme", "test", "loop-abc")
 	req := w.requests[0]
 	if req.EntityID != wantLoopEntityID || req.Contract != "agentic.loop-execution" || req.Group != "todos" {
-		t.Fatalf("replace target = %#v", req)
+		t.Fatalf("reconcile target = %#v", req)
 	}
 	if req.Metadata.RequestID != "write-todos:loop-abc:call-1" {
 		t.Errorf("request ID = %q", req.Metadata.RequestID)
 	}
 
 	batch := req.Desired
-	if got, want := len(batch), 3*todoTriplesPerItem; got != want {
+	if got, want := len(batch), 3; got != want {
 		t.Fatalf("triple count = %d, want %d", got, want)
 	}
 
@@ -115,21 +117,23 @@ func TestWriteTodosExecutor_HappyPath(t *testing.T) {
 			t.Errorf("batch[%d].source = %q, want %q (operator distinguishes write_todos from other writers)",
 				i, tr.Source, writeTodosToolSource)
 		}
+		if tr.Predicate != agvocab.TodoRecord {
+			t.Errorf("batch[%d].predicate = %q, want %q", i, tr.Predicate, agvocab.TodoRecord)
+		}
+		if tr.Datatype != agvocab.TodoRecordJSONDatatype {
+			t.Errorf("batch[%d].datatype = %q, want %q", i, tr.Datatype, agvocab.TodoRecordJSONDatatype)
+		}
 	}
 
-	// Position is derived from array index, not user-supplied. Verify
-	// the third todo has position=2.
-	foundThirdPosition := false
-	for _, tr := range batch {
-		if tr.Predicate != agvocab.TodoPosition {
-			continue
-		}
-		if tr.Object == 2 {
-			foundThirdPosition = true
-		}
+	wantRecords := []string{
+		`{"id":"1","content":"Survey rules","status":"completed","position":0,"updated_at":"2026-05-09T12:00:00Z"}`,
+		`{"id":"2","content":"Draft new rule","status":"in_progress","position":1,"updated_at":"2026-05-09T12:00:00Z"}`,
+		`{"id":"3","content":"Wire e2e test","status":"pending","position":2,"updated_at":"2026-05-09T12:00:00Z"}`,
 	}
-	if !foundThirdPosition {
-		t.Errorf("expected one TodoPosition triple with object=2 (third todo); did not find it")
+	for i, tr := range batch {
+		if got, ok := tr.Object.(string); !ok || got != wantRecords[i] {
+			t.Errorf("batch[%d].object = %#v, want deterministic record %q", i, tr.Object, wantRecords[i])
+		}
 	}
 
 	// ToolResult content is informational — the agent reads back via
@@ -150,13 +154,19 @@ func TestWriteTodosExecutor_HappyPath(t *testing.T) {
 	if got, _ := res.Metadata["loop_entity_id"].(string); got != wantLoopEntityID {
 		t.Errorf("metadata.loop_entity_id = %q, want %q", got, wantLoopEntityID)
 	}
+	if got, _ := res.Metadata["todo_count"].(int); got != 3 {
+		t.Errorf("metadata.todo_count = %d, want 3", got)
+	}
+	if _, exists := res.Metadata["triple_count"]; exists {
+		t.Error("metadata.triple_count must be removed; it exposes the storage representation")
+	}
 }
 
 // TestWriteTodosExecutor_EmptyListClears verifies that submitting an
 // empty array clears prior state without writing anything new — the
 // agent's way to "delete the list."
 func TestWriteTodosExecutor_EmptyListClears(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -172,7 +182,7 @@ func TestWriteTodosExecutor_EmptyListClears(t *testing.T) {
 		t.Fatalf("ToolResult.Error = %q, want empty", res.Error)
 	}
 	if len(w.requests) != 1 || len(w.requests[0].Desired) != 0 {
-		t.Errorf("empty list must issue one empty desired replacement; got %#v", w.requests)
+		t.Errorf("empty list must issue one empty desired reconcile; got %#v", w.requests)
 	}
 }
 
@@ -223,7 +233,7 @@ func TestWriteTodosExecutor_ValidationRejection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			w := &recordingTodoReplacer{}
+			w := &recordingTodoReconciler{}
 			e := newWriteTodosExecutor(w)
 			res, err := e.Execute(context.Background(), agentic.ToolCall{
 				ID:        "c",
@@ -250,7 +260,7 @@ func TestWriteTodosExecutor_ValidationRejection(t *testing.T) {
 // TestWriteTodosExecutor_MissingLoopIDIsInternal surfaces a
 // dispatcher-layer bug rather than a self-correctable args mistake.
 func TestWriteTodosExecutor_MissingLoopIDIsInternal(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
@@ -269,7 +279,7 @@ func TestWriteTodosExecutor_MissingLoopIDIsInternal(t *testing.T) {
 	}
 }
 
-func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
+func TestWriteTodosExecutor_ReconcileFailureClassification(t *testing.T) {
 	t.Parallel()
 
 	mutationFailure := func(
@@ -279,7 +289,7 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 		cause error,
 	) error {
 		return &projection.MutationError{
-			Operation: projection.MutationOperationReplaceOwned,
+			Operation: projection.MutationOperationReconcile,
 			Kind:      kind,
 			Class:     class,
 			Commit:    commit,
@@ -287,9 +297,7 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 		}
 	}
 	unavailableCause := errors.New("transport unavailable")
-	staleCause := errors.New("stale owner lease")
 	unknownCause := errors.New("response lost after write")
-	unverifiedCause := errors.New("authoritative verification failed")
 	verifiedErrorCause := errors.New("impossible post-verification error")
 	invalidCause := errors.New("invalid replacement")
 	conflictCause := errors.New("replacement conflict")
@@ -321,18 +329,6 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 			wantRetry:     true,
 		},
 		{
-			name:  "stale owner token is permission and non-retryable",
-			cause: staleCause,
-			failure: mutationFailure(
-				projection.MutationStaleOwnerToken,
-				projection.CommitNotCommitted,
-				errs.ErrorInvalid,
-				staleCause,
-			),
-			wantKind:     agentic.ToolErrorPermission,
-			wantMutation: true,
-		},
-		{
 			name:  "commit unknown is non-retryable",
 			cause: unknownCause,
 			failure: mutationFailure(
@@ -342,18 +338,6 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 				unknownCause,
 			),
 			wantKind:     agentic.ToolErrorUnknown,
-			wantMutation: true,
-		},
-		{
-			name:  "committed unverified is internal and non-retryable",
-			cause: unverifiedCause,
-			failure: mutationFailure(
-				projection.MutationCommittedUnverified,
-				projection.CommitCommitted,
-				errs.ErrorFatal,
-				unverifiedCause,
-			),
-			wantKind:     agentic.ToolErrorInternal,
 			wantMutation: true,
 		},
 		{
@@ -438,8 +422,8 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			replacer := &recordingTodoReplacer{err: test.failure}
-			executor := newWriteTodosExecutor(replacer)
+			reconciler := &recordingTodoReconciler{err: test.failure}
+			executor := newWriteTodosExecutor(reconciler)
 			result, err := executor.Execute(context.Background(), agentic.ToolCall{
 				ID:     "c",
 				Name:   WriteTodosToolName,
@@ -449,7 +433,7 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 				),
 			})
 			if err == nil {
-				t.Fatal("expected wrapped replace error")
+				t.Fatal("expected wrapped reconcile error")
 			}
 			if result.ErrorKind != test.wantKind {
 				t.Errorf("ErrorKind = %q, want %q", result.ErrorKind, test.wantKind)
@@ -486,7 +470,7 @@ func TestWriteTodosExecutor_ReplaceFailureClassification(t *testing.T) {
 // dispatcher contract: the executor should never see a name other
 // than WriteTodosToolName.
 func TestWriteTodosExecutor_UnknownToolNameIsRoutingBug(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
 	res, err := e.Execute(context.Background(), agentic.ToolCall{
 		ID:     "c",
@@ -503,11 +487,11 @@ func TestWriteTodosExecutor_UnknownToolNameIsRoutingBug(t *testing.T) {
 
 // TestWriteTodosExecutor_DeterministicClock pins the SetClock contract
 // (Stage 3.7). Tests inject a frozen clock; the executor stamps that
-// time onto Triple.Timestamp and the agent.todo.updated_at value, so
+// time onto Triple.Timestamp and the record's updated_at value, so
 // assertions about timestamp equality become deterministic instead of
 // "today, ish" tolerances.
 func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
 	frozen := time.Date(2026, 5, 9, 12, 0, 0, 0, time.UTC)
 	e.SetClock(func() time.Time { return frozen })
@@ -528,11 +512,18 @@ func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
 		if !tr.Timestamp.Equal(frozen) {
 			t.Errorf("triple[%d].Timestamp = %v, want %v", i, tr.Timestamp, frozen)
 		}
-		if tr.Predicate == agvocab.TodoUpdatedAt {
-			got, _ := tr.Object.(string)
-			if got != frozen.Format(time.RFC3339Nano) {
-				t.Errorf("TodoUpdatedAt object = %q, want %q", got, frozen.Format(time.RFC3339Nano))
-			}
+		var record struct {
+			UpdatedAt string `json:"updated_at"`
+		}
+		encoded, ok := tr.Object.(string)
+		if !ok {
+			t.Fatalf("triple[%d].Object = %#v, want JSON string", i, tr.Object)
+		}
+		if err := json.Unmarshal([]byte(encoded), &record); err != nil {
+			t.Fatalf("decode triple[%d] record: %v", i, err)
+		}
+		if record.UpdatedAt != frozen.Format(time.RFC3339Nano) {
+			t.Errorf("record.updated_at = %q, want %q", record.UpdatedAt, frozen.Format(time.RFC3339Nano))
 		}
 	}
 }
@@ -544,7 +535,7 @@ func TestWriteTodosExecutor_DeterministicClock(t *testing.T) {
 // NOT crash the dispatch goroutine via panic from
 // LoopExecutionEntityID.
 func TestWriteTodosExecutor_MalformedLoopIDSurfacesAsInternal(t *testing.T) {
-	w := &recordingTodoReplacer{}
+	w := &recordingTodoReconciler{}
 	e := newWriteTodosExecutor(w)
 
 	res, err := e.Execute(context.Background(), agentic.ToolCall{

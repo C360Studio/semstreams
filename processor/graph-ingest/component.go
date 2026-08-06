@@ -18,13 +18,13 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/graph/inference"
 	"github.com/c360studio/semstreams/graph/readiness"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/dispatch"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/retry"
 	semtypes "github.com/c360studio/semstreams/pkg/types"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -49,6 +49,8 @@ var (
 
 	mutationRejectionsOnce sync.Once
 	mutationRejectionsVec  *prometheus.CounterVec
+	mutationOutcomesOnce   sync.Once
+	mutationOutcomesVec    *prometheus.CounterVec
 
 	batchMissingOnce sync.Once
 	batchMissingVec  *prometheus.CounterVec
@@ -57,18 +59,6 @@ var (
 	predicateContractRejectionsVec    *prometheus.CounterVec
 	entityStateContractRejectionsOnce sync.Once
 	entityStateContractRejectionsVec  *prometheus.CounterVec
-
-	stubRestampsOnce    sync.Once
-	stubRestampsCounter prometheus.Counter
-
-	foreignEdgeUnclaimedOnce sync.Once
-	foreignEdgeUnclaimedVec  *prometheus.CounterVec
-
-	foreignEdgeDroppedOnce sync.Once
-	foreignEdgeDroppedVec  *prometheus.CounterVec
-
-	ownerLeaseMismatchOnce sync.Once
-	ownerLeaseMismatchVec  *prometheus.CounterVec
 
 	processingDurationOnce      sync.Once
 	processingDurationHistogram prometheus.Histogram
@@ -134,11 +124,9 @@ func getIndexingProfileDefaultMetric(registry *metric.MetricsRegistry) *promethe
 // getMutationRejectionsMetric returns the process-wide counter for rejected
 // graph-mutation requests, labelled by subject + reason (the MutationResponse
 // ErrorCode — a bounded closed set). It operationalizes ADR-055 §3's "loud
-// fail-fast" observability: since the must-exist flip shipped (v1.0.0-beta.112),
-// a triple.add targeting a non-existent entity surfaces here as
-// reason=entity_not_found instead of silently auto-vivifying. It also meters the
-// other rejection classes (validation, CAS conflict, create-or-fail, owner-lease
-// stale), giving the ADR-054 cost-ledger discipline its operating baseline.
+// fail-fast" observability. Append, reconcile, and delete against an absent
+// entity report entity_not_found. Other bounded classes include validation,
+// revision conflict, and strict-create conflict.
 func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
 	mutationRejectionsOnce.Do(func() {
 		mutationRejectionsVec = prometheus.NewCounterVec(prometheus.CounterOpts{
@@ -154,6 +142,23 @@ func getMutationRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.C
 		}
 	})
 	return mutationRejectionsVec
+}
+
+func getMutationOutcomesMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
+	mutationOutcomesOnce.Do(func() {
+		mutationOutcomesVec = prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "semstreams",
+			Subsystem: "graph_ingest",
+			Name:      "graph_mutation_outcomes_total",
+			Help:      "Canonical graph mutation outcomes by bounded operation and outcome",
+		}, []string{"operation", "outcome"})
+		if registry != nil {
+			_ = registry.RegisterCounterVec("graph-ingest", "graph_mutation_outcomes_total", mutationOutcomesVec)
+		} else {
+			_ = prometheus.DefaultRegisterer.Register(mutationOutcomesVec)
+		}
+	})
+	return mutationOutcomesVec
 }
 
 func getPredicateContractRejectionsMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
@@ -188,108 +193,6 @@ func getEntityStateContractRejectionsMetric(registry *metric.MetricsRegistry) *p
 		}
 	})
 	return entityStateContractRejectionsVec
-}
-
-// getStubRestampsMetric returns the process-wide stub-restamp counter (gh#435):
-// referential stubs re-stamped as a real birth on create_with_triples instead of
-// rejected as entity_already_exists. A DISTINCT, positive signal so a paid-run
-// monitor can tell a healthy stub→real path from a true graph-write reject.
-func getStubRestampsMetric(registry *metric.MetricsRegistry) prometheus.Counter {
-	stubRestampsOnce.Do(func() {
-		stubRestampsCounter = prometheus.NewCounter(prometheus.CounterOpts{
-			Namespace: "semstreams",
-			Subsystem: "graph_ingest",
-			Name:      "stub_restamps_total",
-			Help:      "Referential-integrity stubs re-stamped as a real birth on create_with_triples (gh#435) — a healthy stub→real path, NOT a rejection.",
-		})
-		if registry != nil {
-			_ = registry.RegisterCounter("graph-ingest", "stub_restamps_total", stubRestampsCounter)
-		} else {
-			_ = prometheus.DefaultRegisterer.Register(stubRestampsCounter)
-		}
-	})
-	return stubRestampsCounter
-}
-
-// getForeignEdgeUnclaimedMetric returns the process-wide counter for the
-// ADR-056 Decision-4 T2-seam reject: a foreign-subject edge (Subject != the
-// ingested entity) whose producing (message_type, predicate) has no registered
-// ForeignEdgeClaim. For W0 increment 4a this is OBSERVE-ONLY — the edge is still
-// routed (deprecated-on-arrival); the metric counts edges CLASSIFIED-unclaimed at
-// the seam, NOT routing failures. The hard reject + the ADR-055 must-exist flip
-// are gated on this reading zero over a bake window (4c). NOTE: today no
-// production producer emits foreign edges (OMS/StoredMessage emit none), so this
-// reads zero in cmd/semstreams BY ABSENCE, not because producers migrated.
-// Labels: message_type (the dotted registry key, '_invalid' for an unregistered/
-// zero type — both bounded, closed sets) and predicate (exact vocabulary string).
-func getForeignEdgeUnclaimedMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
-	foreignEdgeUnclaimedOnce.Do(func() {
-		foreignEdgeUnclaimedVec = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "semstreams",
-			Subsystem: "graph_ingest",
-			Name:      "foreign_edge_unclaimed_total",
-			Help:      "Unclaimed foreign-subject (message_type,predicate) pairs at the T2-seam — no registered ForeignEdgeClaim (ADR-056 Decision 4; observe-only, edge still routed). Counted once per ingest per pair (deduped), so it is a hatch-not-empty signal, not a per-edge volume",
-		}, []string{"message_type", "predicate"})
-		if registry != nil {
-			_ = registry.RegisterCounterVec("graph-ingest", "foreign_edge_unclaimed_total", foreignEdgeUnclaimedVec)
-		} else {
-			_ = prometheus.DefaultRegisterer.Register(foreignEdgeUnclaimedVec)
-		}
-	})
-	return foreignEdgeUnclaimedVec
-}
-
-// getForeignEdgeDroppedMetric returns the process-wide counter for foreign edges
-// the routing seam DROPPED rather than routed (ADR-056 Decision-4 4c-pre-2). It
-// is DISTINCT from foreign_edge_unclaimed_total on purpose: that counter is the
-// flip-gate's hatch-empty signal (a CLAIMED-as-unclaimed pair); this counter
-// meters a *claimed* edge that could not be routed because its target was absent
-// and its mode forbade materialising it. Folding the two would corrupt the
-// flip-gate reading (a Strict drop would keep the hatch counter non-zero for an
-// unrelated reason). Labels: message_type ('_invalid' for an unregistered/zero
-// type), predicate (exact vocabulary string), and reason — a bounded closed set:
-// 'strict_absent_target' (EdgeStrict, target absent) and 'conditional_deferred'
-// (EdgeConditional/EdgeBackfill, routed-with-warn until the PENDING_EDGES buffer
-// lands).
-func getForeignEdgeDroppedMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
-	foreignEdgeDroppedOnce.Do(func() {
-		foreignEdgeDroppedVec = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "semstreams",
-			Subsystem: "graph_ingest",
-			Name:      "foreign_edge_dropped_total",
-			Help:      "Foreign-subject edges dropped or deferred at the routing seam by claim mode (ADR-056 Decision 4). Labels: message_type, predicate, reason (strict_absent_target|conditional_deferred). DISTINCT from foreign_edge_unclaimed_total (the hatch-empty flip-gate signal)",
-		}, []string{"message_type", "predicate", "reason"})
-		if registry != nil {
-			_ = registry.RegisterCounterVec("graph-ingest", "foreign_edge_dropped_total", foreignEdgeDroppedVec)
-		} else {
-			_ = prometheus.DefaultRegisterer.Register(foreignEdgeDroppedVec)
-		}
-	})
-	return foreignEdgeDroppedVec
-}
-
-// getOwnerLeaseMismatchMetric returns the process-wide counter for the
-// ADR-056 PR-3 observe-only lease check: an owned write whose OwnerToken does
-// not match the live owner claim's "<owner>#<incarnation>" at the graph-ingest
-// write seam. OBSERVE-ONLY — the write always commits in PR-3; the reject flip
-// is a later PR. Labels: message_type (dotted registry key; '_invalid' for
-// unregistered/zero) and predicate (the specific owned predicate whose live
-// incarnation differed). Mirrors getForeignEdgeUnclaimedMetric in structure.
-func getOwnerLeaseMismatchMetric(registry *metric.MetricsRegistry) *prometheus.CounterVec {
-	ownerLeaseMismatchOnce.Do(func() {
-		ownerLeaseMismatchVec = prometheus.NewCounterVec(prometheus.CounterOpts{
-			Namespace: "semstreams",
-			Subsystem: "graph_ingest",
-			Name:      "owner_lease_mismatch_total",
-			Help:      "Observe-only count of owned writes whose OwnerToken did not match the live owner lease (ADR-056 PR-3; reject is a later PR — write always commits here). Labels: message_type, predicate.",
-		}, []string{"message_type", "predicate"})
-		if registry != nil {
-			_ = registry.RegisterCounterVec("graph-ingest", "owner_lease_mismatch_total", ownerLeaseMismatchVec)
-		} else {
-			_ = prometheus.DefaultRegisterer.Register(ownerLeaseMismatchVec)
-		}
-	})
-	return ownerLeaseMismatchVec
 }
 
 // getProcessingDurationMetric returns the process-wide histogram of per-message
@@ -367,10 +270,9 @@ func getRedeliveriesDroppedMetric(registry *metric.MetricsRegistry) prometheus.C
 // during entity merge (ADR-072). Incremented each time MergeEntity's CAS
 // callback re-runs (attempt > 1) — the previous attempt's revision-checked Put
 // lost the CAS and retried. This is a **cross-entity contention-observability**
-// signal, NOT a proof of keying correctness (review H1): an entity's OWN key is
+// signal, NOT a proof of keying correctness: an entity's own key is
 // never written concurrently under keying, but legitimate cross-entity
-// referential writes (relationship-target stubs, foreign edges, shared
-// hierarchy containers) DO touch shared keys and retry. Expect ~0 on workloads
+// hierarchy container and inverse writes do touch shared keys and retry. Expect ~0 on workloads
 // without hierarchy / dense relationships / entity-birth churn; a spike is a
 // workload signal, not necessarily a bug.
 func getCasRetriesMetric(registry *metric.MetricsRegistry) prometheus.Counter {
@@ -390,35 +292,24 @@ func getCasRetriesMetric(registry *metric.MetricsRegistry) prometheus.Counter {
 	return casRetriesCounter
 }
 
-// dedupLane names the add-lane entry point that submitted a suppressed
+// dedupLane names the append entry point that submitted a suppressed
 // duplicate. The label set is a CLOSED enum declared here, never a
 // caller-supplied string: the value is chosen at each in-repo call site, so
 // label cardinality is bounded by this list no matter what a producer sends.
 type dedupLane string
 
 const (
-	// dedupLaneAdd is Component.AddTriple — the graph.mutation.triple.add
-	// handler and every in-process caller of the exported single-add method
-	// (the rule engine's add_triple, agentic tool writers, the inference
-	// applier's NATS adder).
-	dedupLaneAdd dedupLane = "add"
-	// dedupLaneAddBatch is Component.AddTriples — the
-	// graph.mutation.triple.add_batch handler and pkg/projection's
-	// AppendEvidence, which rides the same subject.
-	dedupLaneAddBatch dedupLane = "add_batch"
+	// dedupLaneAddBatch is the canonical append mutation lane.
+	dedupLaneAddBatch dedupLane = "append"
 	// dedupLaneHierarchy is hierarchy inference's in-process adder
 	// (tripleAdderAdapter), the lane that produced gh#713: createEntity calls
 	// GetHierarchyTriples unconditionally, and its container-inverse and
 	// sibling-inverse edges commit through here on every re-registration.
 	dedupLaneHierarchy dedupLane = "hierarchy"
-	// dedupLaneForeignEdge is the ADR-056 foreign-edge regroup
-	// (appendForeignEdges), which re-routes cross-entity edges onto their own
-	// subjects and therefore re-asserts them on every republish of the primary.
-	dedupLaneForeignEdge dedupLane = "foreign_edge"
 )
 
 // getDuplicateTriplesSuppressedMetric returns the process-wide counter of
-// add-lane triples suppressed because the target entity already carried an
+// append triples suppressed because the target entity already carried an
 // identical six-field tuple (subject, predicate, object, datatype, source,
 // context). It exists so a silently-skipped write is distinguishable from
 // absent traffic: without it, "the lane wrote nothing" and "the lane never ran"
@@ -433,7 +324,7 @@ func getDuplicateTriplesSuppressedMetric(registry *metric.MetricsRegistry) *prom
 			Namespace: "semstreams",
 			Subsystem: "graph_ingest",
 			Name:      "duplicate_triples_suppressed_total",
-			Help:      "Add-lane triples not appended because the entity already carried an identical six-field tuple. Label: lane (add|add_batch|hierarchy|foreign_edge), a closed enum.",
+			Help:      "Append triples not written because the entity already carried an identical six-field tuple. Label: lane (append|hierarchy), a closed enum.",
 		}, []string{"lane"})
 		if registry != nil {
 			_ = registry.RegisterCounterVec("graph-ingest", "duplicate_triples_suppressed_total", duplicateTriplesSuppressedVec)
@@ -449,14 +340,6 @@ type Config struct {
 	Ports              *component.PortConfig `json:"ports" schema:"type:ports,description:Port configuration,category:basic"`
 	EnableHierarchy    bool                  `json:"enable_hierarchy" schema:"type:bool,description:Enable hierarchy inference,default:false,category:advanced"`
 	EnableTypeSiblings *bool                 `json:"enable_type_siblings" schema:"type:bool,description:Enable sibling edges between same-type entities (default true when hierarchy enabled),category:advanced"`
-	// EnforceOwnerLease flips the ADR-056 owner-lease check from observe-only
-	// (PR-3: meter owner_lease_mismatch_total + Warn, write commits) to a hard
-	// reject (PR-5): a write whose OwnerToken does not match the live owner of a
-	// contested predicate is refused with ErrorCodeOwnerLeaseStale. Default false
-	// preserves the observe-only bake posture; operators flip it on per-deploy
-	// once the mismatch metric reads zero. All fail-open cases (empty token,
-	// no claim reader, legacy/pre-fence owner, reader blip) stay fail-open.
-	EnforceOwnerLease bool `json:"enforce_owner_lease" schema:"type:bool,description:Reject writes whose OwnerToken does not match the live owner lease (ADR-056 PR-5); default false keeps observe-only metering,default:false,category:advanced"`
 	// IngestLanes is the number of keyed-concurrent ingest lanes (ADR-072,
 	// gh#480). Messages are partitioned by entity ID (same entity → one lane →
 	// serial in arrival order, preserving the arrival-order merge; different
@@ -476,6 +359,9 @@ func (c *Config) Validate() error {
 	}
 	if len(c.Ports.Outputs) == 0 {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
+	}
+	if _, err := canonicalMutationProvider(c.Ports); err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", err.Error())
 	}
 	// IngestLanes < 1 clamps to serial (ADR-072). Clamp rather than reject so a
 	// mis-set 0/negative degrades to safe-serial instead of failing boot.
@@ -510,6 +396,13 @@ func DefaultConfig() Config {
 					Config: component.JetStreamPort{
 						DeliverPolicy: "all", // Idempotent: catch up on historical entities
 					},
+				},
+				{
+					Name:      "mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
 				},
 			},
 			Outputs: []component.PortDefinition{
@@ -583,36 +476,12 @@ type tripleAdderAdapter struct {
 }
 
 // AddTriple routes hierarchy inference's container-inverse and sibling-inverse
-// edges through the shared add lane, labelled so their suppressed duplicates
+// edges through the shared append implementation, labelled so their suppressed duplicates
 // are attributable to hierarchy rather than to an operator-issued mutation
 // (gh#713: createEntity re-derives these on every re-registration).
 func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Triple) error {
 	_, _, err := a.component.addTripleLane(ctx, triple, dedupLaneHierarchy)
 	return err
-}
-
-// ownershipClaimReader classifies a producer's foreign-edge predicates and
-// resolves the live owner+incarnation for the ADR-056 write-time lease check.
-//
-// UnclaimedForeignEdges returns the subset of predicates with no covering
-// ForeignEdgeClaim (the observe-only seam metric, Decision 4).
-//
-// ForeignEdgeMode returns one predicate's covering EdgeMode so the routing seam
-// can branch (NoBirthStub→stub, Strict→drop, Conditional/Backfill→deferred).
-//
-// OwnerOf returns the live (owner, incarnation) recorded at RegisterOwner time
-// for the OwnerClaim that governs (entityID, predicate) in an owning mode
-// (Decision 2). ok=false means the predicate is unclaimed or append-evidence —
-// the lease check skips it. incarnation may be "" even when ok=true for a
-// legacy/pre-fence claim; the PR-3 check MUST fail-open in that case (do NOT
-// reject — the lease is not enforceable against a legacy owner).
-//
-// *ownership.ClaimReader is the production implementation; tests inject a fake.
-// Kept as an interface so all seams are unit-testable without NATS.
-type ownershipClaimReader interface {
-	UnclaimedForeignEdges(ctx context.Context, producer string, predicates []string) ([]string, error)
-	ForeignEdgeMode(ctx context.Context, producer, predicate string) (ownership.EdgeMode, bool, error)
-	OwnerOf(ctx context.Context, entityID, predicate string) (owner, incarnation string, ok bool, err error)
 }
 
 // Component implements the graph-ingest processor
@@ -627,20 +496,10 @@ type Component struct {
 	logger     *slog.Logger
 
 	// Domain resources
-	entityBucket      *natsclient.KVStore            // KV operations with CAS support
-	entityStateBucket jetstream.KeyValue             // raw bucket for the boot snapshot sweep
-	entityCache       cache.Cache[graph.EntityState] // Read-through cache for query handlers
-	suffixBucket      *natsclient.KVStore            // KV suffix index: suffix → fullID
-	suffixCache       cache.Cache[string]            // TTL cache for suffix resolution
-
-	// ADR-056 Decision-4 T2-seam + PR-3 owner-lease check: read-only view of
-	// registered ForeignEdgeClaims and owning OwnerClaims. nil when OWNER_CLAIMS
-	// is absent (resourceless/unmigrated deploy) — both seams graceful-skip.
-	// An interface so seams are unit-testable with a fake; *ownership.ClaimReader
-	// is production. foreignEdgeWarnedKeys dedupes the one-time WARN per
-	// (message_type|predicate) so an unclaimed producer logs once, not per message.
-	claimReader           ownershipClaimReader
-	foreignEdgeWarnedKeys sync.Map
+	entityBucket *natsclient.KVStore            // authoritative KV operations, snapshot watch, and CAS support
+	entityCache  cache.Cache[graph.EntityState] // Read-through cache for query handlers
+	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
+	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
 
 	// maxPrefixResponseBytesOverride, when > 0, replaces the package-level
 	// maxPrefixResponseBytes byte budget in handleQueryPrefixNATS. It exists
@@ -735,18 +594,15 @@ type Component struct {
 	entitiesUpdated               prometheus.Counter
 	indexingProfileDefault        *prometheus.CounterVec
 	mutationRejections            *prometheus.CounterVec
+	mutationOutcomes              *prometheus.CounterVec
 	batchMissing                  *prometheus.CounterVec
 	predicateContractRejections   *prometheus.CounterVec
 	entityStateContractRejections *prometheus.CounterVec
-	stubRestamps                  prometheus.Counter
-	foreignEdgeUnclaimed          *prometheus.CounterVec
-	foreignEdgeDropped            *prometheus.CounterVec
-	ownerLeaseMismatch            *prometheus.CounterVec // ADR-056 PR-3 observe-only lease-mismatch counter
 	processingDuration            prometheus.Histogram   // gh#480 per-message apply time (processing half)
 	ingestLag                     prometheus.Histogram   // gh#480 message age at processing start (queue-wait half)
 	redeliveriesDropped           prometheus.Counter     // ADR-072 stale redeliveries dropped by the applied-sequence guard
 	casRetries                    prometheus.Counter     // ADR-072 entity-merge CAS-conflict retries (contention observability)
-	duplicateTriplesSuppressed    *prometheus.CounterVec // add-lane duplicates not appended, by lane (closed enum)
+	duplicateTriplesSuppressed    *prometheus.CounterVec // append duplicates not stored, by lane (closed enum)
 	poisonedEntities              prometheus.Gauge       // per-entity poison inventory size (single gauge, no per-entity labels)
 	metricsRegistry               *metric.MetricsRegistry
 
@@ -816,13 +672,10 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 		entitiesUpdated:               getEntitiesUpdatedMetric(deps.MetricsRegistry),
 		indexingProfileDefault:        getIndexingProfileDefaultMetric(deps.MetricsRegistry),
 		mutationRejections:            getMutationRejectionsMetric(deps.MetricsRegistry),
+		mutationOutcomes:              getMutationOutcomesMetric(deps.MetricsRegistry),
 		batchMissing:                  getBatchMissingMetric(deps.MetricsRegistry),
 		predicateContractRejections:   getPredicateContractRejectionsMetric(deps.MetricsRegistry),
 		entityStateContractRejections: getEntityStateContractRejectionsMetric(deps.MetricsRegistry),
-		stubRestamps:                  getStubRestampsMetric(deps.MetricsRegistry),
-		foreignEdgeUnclaimed:          getForeignEdgeUnclaimedMetric(deps.MetricsRegistry),
-		foreignEdgeDropped:            getForeignEdgeDroppedMetric(deps.MetricsRegistry),
-		ownerLeaseMismatch:            getOwnerLeaseMismatchMetric(deps.MetricsRegistry),
 		processingDuration:            getProcessingDurationMetric(deps.MetricsRegistry),
 		ingestLag:                     getIngestLagMetric(deps.MetricsRegistry),
 		redeliveriesDropped:           getRedeliveriesDroppedMetric(deps.MetricsRegistry),
@@ -1080,7 +933,7 @@ func (c *Component) Start(ctx context.Context) error {
 	// self-watch on ENTITY_STATES (poison-response-scoping D1). A transport
 	// failure degrades only queries; ingest writers still boot so operators
 	// can repair state through canonical writes before restart.
-	c.startEntityStateGuard(ctx, c.entityStateBucket)
+	c.startEntityStateGuard(ctx, c.entityBucket)
 
 	// Initialize lifecycle reporter (throttled for high-throughput ingestion)
 	c.initLifecycleReporter(ctx)
@@ -1240,7 +1093,6 @@ func (c *Component) initStorage(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "KV bucket creation")
 	}
 	c.entityBucket = c.natsClient.NewKVStore(bucket)
-	c.entityStateBucket = bucket
 
 	// Entity query cache (HybridCache: LRU capacity + TTL freshness)
 	entityCache, err := cache.NewFromConfig[graph.EntityState](ctx, cache.Config{
@@ -1287,19 +1139,6 @@ func (c *Component) initStorage(ctx context.Context) error {
 	}
 	c.ingestGuardBucket = c.natsClient.NewKVStore(guardBucket)
 
-	// ADR-056 Decision-4 T2-seam: open OWNER_CLAIMS read-only to classify
-	// foreign-subject edges against registered ForeignEdgeClaims. graph-ingest
-	// boots AFTER main's EnsureBuckets, so in an ownership-enabled deploy the
-	// bucket exists. If it is absent (resourceless / unmigrated deploy) or
-	// transiently unopenable, graceful-skip: leave claimReader nil and the seam
-	// routes without classifying (observe-only, no behavior change).
-	if reader, err := ownership.NewClaimReader(ctx, c.natsClient, c.logger); err != nil {
-		c.logger.Info("graph-ingest: ownership claim reader unavailable — foreign-edge classification disabled this boot (observe-only seam skipped)",
-			slog.Any("error", err))
-	} else {
-		c.claimReader = reader
-	}
-
 	return nil
 }
 
@@ -1316,9 +1155,9 @@ func (c *Component) initStorage(ctx context.Context) error {
 // key, so gap-resets cannot inflate the received set and the nil
 // end-of-snapshot marker means the full resident state was seen. Raising the
 // bucket's history depth invalidates this marker math.
-func (c *Component) startEntityStateGuard(ctx context.Context, bucket jetstream.KeyValue) {
+func (c *Component) startEntityStateGuard(ctx context.Context, bucket *natsclient.KVStore) {
 	c.entityBootstrapStarted.Store(true)
-	watcher, err := bucket.WatchAll(ctx)
+	watcher, err := bucket.Watch(ctx, ">")
 	if err != nil {
 		if ctx.Err() == nil {
 			c.markEntityWatchLost()
@@ -1743,27 +1582,11 @@ func (c *Component) decodeEntity(subject string, data []byte) (*graph.EntityStat
 	return entity, nil
 }
 
-// ingestEntity merges an extracted Graphable entity into ENTITY_STATES and
-// regroups any cross-entity edges onto their own subjects (ADR-055 §5 T2). It is
-// the orchestration the Fact-arrival consumer runs once decode+extract have
-// produced an EntityState: split foreign-subject edges off the primary, merge
-// the primary (envelope-bearing), then route the edges via the evidence-append
-// path. Exposed as a method so the merge+regroup wire is testable end-to-end
-// without standing up the decoder.
+// ingestEntity merges one Graphable projection into its authority entity.
 func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState) error {
 	if err := c.prepareFactProjection(entity); err != nil {
 		return err
 	}
-
-	// ADR-055 §5 T2 + ADR-056 Decision 4: a Graphable may legitimately emit
-	// cross-entity edges whose Subject != EntityID() (sensorml inverse isHostedBy,
-	// federation/objectstore pass-throughs); extractEntityFromMessage files every
-	// triple under the primary key. Normalize at the shared write boundary (split
-	// the foreign-subject edges off the primary + classify them), merge only the
-	// primary's own facts (envelope-bearing), then route the foreign edges onto
-	// their own subjects below.
-	own, foreign := c.normalizeProjection(ctx, entity.ID, entity.MessageType, entity.Triples)
-	entity.Triples = own
 
 	// Structural-identity predicate gate on the Graphable ingest path
 	// (unconditionally fail-closed; the primary vector for product/source-authored
@@ -1777,9 +1600,9 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 
 	// Store entity in KV bucket — MERGE semantics (gh#177). Earlier code
 	// used CreateEntity (Put = full-replace) here, which clobbered any
-	// pre-existing triples on the entity. The atomic mutation handlers
-	// (create_with_triples, update_with_triples, triple.add) all merge;
-	// the jetstream consumer path was the lone outlier and silently
+	// pre-existing triples on the entity. The Graphable lane merges while the
+	// four explicit mutation operations apply their own strict semantics; the
+	// JetStream consumer path previously replaced all state and silently
 	// erased lifecycle-managed entity state on every subsequent
 	// Graphable arrival.
 	if err := c.MergeEntity(ctx, entity); err != nil {
@@ -1788,8 +1611,6 @@ func (c *Component) ingestEntity(ctx context.Context, entity *graph.EntityState)
 			slog.Any("error", err))
 		return err
 	}
-
-	c.routeForeignEdges(ctx, entity.ID, entity.MessageType, foreign)
 
 	c.logger.Debug("Entity ingested",
 		slog.String("entity_id", entity.ID),
@@ -1818,10 +1639,16 @@ func (c *Component) prepareFactProjection(entity *graph.EntityState) error {
 	// entity. Fill only this fact-arrival lane, before the authoritative seam;
 	// mutation, direct persistence, and replay receive no such fill.
 	entity.Triples = fillFactProjectionSubjects(entity.ID, entity.Triples)
+	for index, triple := range entity.Triples {
+		if triple.Subject != entity.ID {
+			return errs.WrapInvalid(
+				fmt.Errorf("triple[%d] subject %q does not match Graphable entity %q", index, triple.Subject, entity.ID),
+				"Component", "ingestEntity", "validate projected entity subject",
+			)
+		}
+	}
 
-	// Preflight the complete Graphable projection before splitting foreign
-	// subjects. This guarantees a malformed foreign edge cannot commit the
-	// primary entity first.
+	// Preflight the complete Graphable projection before persistence.
 	if err := graph.ValidateEntityStateContract(entity); err != nil {
 		return errs.WrapInvalid(err, "Component", "ingestEntity", "validate projected entity state")
 	}
@@ -1846,367 +1673,6 @@ func fillFactProjectionSubjects(entityID string, triples []message.Triple) []mes
 		return filled
 	}
 	return triples
-}
-
-// normalizeProjection is the SHARED projection-normalization seam (ADR-056
-// Decision 4): EVERY graph-ingest write path that accepts a set of projected
-// triples — fact-arrival ingestEntity AND the mutation API create_with_triples /
-// update_with_triples — passes them through here before committing to
-// ENTITY_STATES, so foreign-edge enforcement is LANE-INDEPENDENT (not
-// fact-arrival-only; the mutation API is a graph write API, not a bypass). It
-// splits the triples against their primary subject, classifies the foreign-
-// subject edges against the registered ForeignEdgeClaims (observe-only — the
-// foreign_edge_unclaimed_total metric + once-WARN; see classifyForeignEdges),
-// and returns the own-subject triples to commit on the primary plus the foreign
-// edges for the caller to route via routeForeignEdges AFTER the primary commit
-// (so a failed primary write never orphans a routed edge).
-//
-// primaryID is the entity the projected write targets (entity.ID for
-// fact-arrival, req.Entity.ID for the mutation API). mt is the producer identity
-// (entity.MessageType) for the claim lookup + metric label. For all current
-// callers foreign is empty (single-subject batches; cs-api's singleSubject guard
-// is a migration guard for missing framework support, not the desired shape) —
-// so this is a behavioural no-op today and the foundation a foreign-edge producer
-// (e.g. cs-api SensorML hierarchies, once it drops singleSubject) builds on.
-func (c *Component) normalizeProjection(ctx context.Context, primaryID string, mt message.Type, triples []message.Triple) (own, foreign []message.Triple) {
-	own, foreign = partitionTriplesBySubject(primaryID, triples)
-	if len(foreign) > 0 {
-		c.logger.Warn("projected write emitted cross-entity edges; regrouping onto their subjects",
-			slog.String("primary_id", primaryID),
-			slog.Int("foreign_triples", len(foreign)),
-			slog.Any("foreign_subjects", distinctSubjects(foreign)))
-		c.classifyForeignEdges(ctx, mt, foreign)
-	}
-	return own, foreign
-}
-
-const (
-	// invalidMessageTypeLabel bounds the metric label for a producer that
-	// registered no/zero MessageType — it cannot match an exact-producer claim,
-	// so it gets a single bounded label rather than smearing cardinality.
-	invalidMessageTypeLabel = "_invalid"
-	// dropReasonStrictAbsent — an EdgeStrict foreign edge dropped because its
-	// target was absent (the target must pre-exist by causal ordering).
-	dropReasonStrictAbsent = "strict_absent_target"
-	// dropReasonConditionalDeferred — an EdgeConditional/EdgeBackfill foreign
-	// edge routed-with-warn pending the PENDING_EDGES buffer increment.
-	dropReasonConditionalDeferred = "conditional_deferred"
-)
-
-// foreignTargetExists reports whether a foreign-edge target entity already
-// exists, so routeForeignEdges can decide stub-vs-append-vs-drop WITHOUT relying
-// on AddTriples' auto-vivify else-branch (which the ADR-055 must-exist flip
-// later removes). A transient read error fails toward the LESS destructive
-// outcome — treat as "exists" so the edge is APPENDED (matching today's
-// best-effort behaviour) rather than DROPPED; a Strict drop on a read blip would
-// lose a legitimately-present edge. TOCTOU note: a concurrent DeleteEntity
-// between this Get and the AddTriples append is benign WHILE auto-vivify is
-// present (the append re-vivifies); the flip increment makes the post-check
-// append must-exist and owns closing that window.
-func (c *Component) foreignTargetExists(ctx context.Context, subject string) bool {
-	if _, err := c.entityBucket.Get(ctx, subject); err == nil {
-		return true
-	} else if natsclient.IsKVNotFoundError(err) {
-		return false
-	}
-	return true
-}
-
-// routeForeignEdges regroups foreign-subject edges onto their own subjects after
-// the primary commit (ADR-056 Decision 4). It is best-effort and called AFTER
-// the primary write succeeds — a failed edge is logged, not fatal to the primary
-// write that already landed.
-//
-// 4c-pre-2 replaces the old bare-AddTriples append with a per-edge must-exist
-// policy: for an absent target it branches on the covering ForeignEdgeClaim's
-// EdgeMode — NoBirthStub materialises the framework's referential-integrity stub
-// then appends (the only thing that ever births the sensorml-child target;
-// load-bearing especially on the update_with_triples lane, which — unlike the
-// fact-arrival/create_with_triples lanes — does NOT run ensureRelationshipTargetsExist
-// upstream); Strict drops the edge loudly (metric + one-time WARN); an UNCLAIMED
-// edge stays routed deprecated-on-arrival so the hatch-empty flip-gate can still
-// drain it; Conditional/Backfill are deferred to a later increment (PENDING_EDGES
-// buffer) and route-with-warn in the interim. A present target always appends,
-// regardless of mode. When no claim reader is wired (resourceless/unmigrated
-// deploy) the seam graceful-skips to the legacy bare append.
-//
-// mt is the producer identity (entity.MessageType) for the claim lookup + metric
-// label. AddTriples validates the batch all-or-nothing, so one malformed edge
-// drops the whole appended batch; no current producer emits one.
-func (c *Component) routeForeignEdges(ctx context.Context, primaryID string, mt message.Type, foreign []message.Triple) {
-	if len(foreign) == 0 {
-		return
-	}
-
-	// Graceful-skip: with no registered-claim view we cannot resolve modes, so
-	// fall back to the legacy bare append (preserves the observe-only contract on
-	// a resourceless/unmigrated deploy).
-	if c.claimReader == nil {
-		c.appendForeignEdges(ctx, primaryID, foreign)
-		return
-	}
-
-	label := mt.Key()
-	if !mt.IsValid() {
-		label = invalidMessageTypeLabel
-	}
-
-	toAppend := make([]message.Triple, 0, len(foreign))
-	for _, edge := range foreign {
-		// Present target: append regardless of mode. The own existence check
-		// makes this correct both before and after the flip removes auto-vivify.
-		if c.foreignTargetExists(ctx, edge.Subject) {
-			toAppend = append(toAppend, edge)
-			continue
-		}
-
-		mode, claimed, err := c.claimReader.ForeignEdgeMode(ctx, mt.Key(), edge.Predicate)
-		if err != nil {
-			// Read blip — fail-open (never block routing), route deprecated-on-arrival.
-			c.logger.Warn("graph-ingest: foreign-edge mode lookup failed — routing edge anyway (observe-only fail-open)",
-				slog.String("message_type", label), slog.String("predicate", edge.Predicate), slog.Any("error", err))
-			toAppend = append(toAppend, edge)
-			continue
-		}
-
-		switch {
-		case !claimed:
-			// UNCLAIMED + absent: the deprecated-on-arrival hatch. Stay routed so
-			// foreign_edge_unclaimed_total (metered upstream in classifyForeignEdges)
-			// can still reach zero over the flip-gate bake window. Post-ADR-055 the
-			// append no longer auto-vivifies the absent target — AddTriples rejects
-			// it (appendForeignEdges warn-not-fails), so an unclaimed edge to a
-			// not-yet-born target is dropped, not silently birthed. Draining this
-			// counter to zero is the rollout gate for the must-exist flip.
-			toAppend = append(toAppend, edge)
-		case mode == ownership.EdgeNoBirthStub:
-			// Backstop: materialise the envelope-bearing stub then append. Idempotent
-			// (no-op if the upstream ensureRelationshipTargetsExist already won the race).
-			if serr := c.ensureReferencedEntityExists(ctx, edge.Subject, primaryID, mt); serr != nil {
-				c.logger.Warn("graph-ingest: no-birth-stub materialisation failed — routing edge anyway (target may dangle)",
-					slog.String("message_type", label), slog.String("predicate", edge.Predicate),
-					slog.String("target", edge.Subject), slog.Any("error", serr))
-			}
-			toAppend = append(toAppend, edge)
-		case mode == ownership.EdgeStrict:
-			// Loud-drop: a Strict edge's target must pre-exist by causal ordering.
-			c.foreignEdgeDropped.WithLabelValues(label, edge.Predicate, dropReasonStrictAbsent).Inc()
-			c.warnForeignEdgeDropOnce(dropReasonStrictAbsent, label, edge)
-			// NOT appended.
-		case mode == ownership.EdgeConditional || mode == ownership.EdgeBackfill:
-			// DEFERRED to the PENDING_EDGES increment. No live producer reaches here
-			// today; route-with-warn so it is observable, not silent. Post-ADR-055 the
-			// append no longer auto-vivifies an absent target — AddTriples rejects it
-			// (warn-not-fails), same as the unclaimed hatch above.
-			c.foreignEdgeDropped.WithLabelValues(label, edge.Predicate, dropReasonConditionalDeferred).Inc()
-			c.warnForeignEdgeDropOnce(dropReasonConditionalDeferred, label, edge)
-			toAppend = append(toAppend, edge)
-		default:
-			// Unknown/forward-compat mode: treat as hatch, route-with-warn.
-			toAppend = append(toAppend, edge)
-		}
-	}
-
-	c.appendForeignEdges(ctx, primaryID, toAppend)
-}
-
-// appendForeignEdges routes a foreign-edge batch onto its subjects via the
-// evidence-append path (AddTriples = append-by-subject, no MessageType restamp),
-// logging a partial failure without failing the primary write.
-func (c *Component) appendForeignEdges(ctx context.Context, primaryID string, foreign []message.Triple) {
-	if len(foreign) == 0 {
-		return
-	}
-	if result, aerr := c.addTriplesLane(ctx, foreign, dedupLaneForeignEdge); aerr != nil {
-		c.logger.Warn("failed to regroup cross-entity edges onto their subjects",
-			slog.String("primary_id", primaryID),
-			slog.Int("failed_subjects", len(result.FailedSubjects)),
-			slog.Any("error", aerr))
-	}
-}
-
-// warnForeignEdgeDropOnce logs a one-time WARN per (reason, message_type,
-// predicate), deduped via foreignEdgeWarnedKeys with a distinct "fe-drop|" prefix
-// so it never collides with classifyForeignEdges' unclaimed-WARN keys.
-func (c *Component) warnForeignEdgeDropOnce(reason, label string, edge message.Triple) {
-	warnKey := "fe-drop|" + reason + "|" + label + "|" + edge.Predicate
-	if _, warned := c.foreignEdgeWarnedKeys.LoadOrStore(warnKey, struct{}{}); warned {
-		return
-	}
-	c.logger.Warn("graph-ingest: foreign-subject edge dropped/deferred at routing seam (ADR-056 Decision 4)",
-		slog.String("message_type", label),
-		slog.String("predicate", edge.Predicate),
-		slog.String("target", edge.Subject),
-		slog.String("reason", reason))
-}
-
-// classifyForeignEdges runs the ADR-056 Decision-4 T2-seam reject in OBSERVE-ONLY
-// mode (W0 increment 4a): it classifies the foreign-subject edges' predicates
-// against the registered ForeignEdgeClaims for this producer (one epoch read) and
-// counts the unclaimed ones on foreign_edge_unclaimed_total, with a one-time WARN
-// per (message_type,predicate). It does NOT change routing — the edges are still
-// appended by the caller's AddTriples (deprecated-on-arrival). The hard reject +
-// the ADR-055 must-exist flip are 4c. No-op when no claim reader is wired
-// (graceful-skip). The metric counts edges CLASSIFIED-unclaimed at the seam, NOT
-// routing failures (relevant to 4c's hatch-empty gate semantics).
-func (c *Component) classifyForeignEdges(ctx context.Context, mt message.Type, foreign []message.Triple) {
-	if c.claimReader == nil {
-		return
-	}
-	// Producer key = the dotted registry MessageType. An invalid/zero type (a
-	// producer that registered none) cannot match an exact-producer claim; bound
-	// its metric label to "_invalid" so a malformed producer can't smear
-	// cardinality, but still classify (a Producer-empty claim may cover it).
-	producer := mt.Key()
-	label := producer
-	if !mt.IsValid() {
-		label = invalidMessageTypeLabel
-	}
-
-	preds := make([]string, 0, len(foreign))
-	for _, t := range foreign {
-		preds = append(preds, t.Predicate)
-	}
-	unclaimed, err := c.claimReader.UnclaimedForeignEdges(ctx, producer, preds)
-	if err != nil {
-		// Read blip — stay observe-only and fail-open (never block ingest). One
-		// log, no metric (this batch could not be classified).
-		c.logger.Warn("graph-ingest: foreign-edge claim classification failed — routing without classifying (observe-only)",
-			slog.String("message_type", label), slog.Any("error", err))
-		return
-	}
-	for _, p := range unclaimed {
-		c.foreignEdgeUnclaimed.WithLabelValues(label, p).Inc()
-		warnKey := label + "|" + p
-		if _, warned := c.foreignEdgeWarnedKeys.LoadOrStore(warnKey, struct{}{}); !warned {
-			c.logger.Warn("graph-ingest: foreign-subject edge has no registered ForeignEdgeClaim — routed deprecated-on-arrival (ADR-056 Decision 4; register a claim before the must-exist flip)",
-				slog.String("message_type", label),
-				slog.String("predicate", p))
-		}
-	}
-}
-
-// leaseViolation is the first confirmed owner-lease mismatch found in a
-// request's owned-predicate set. checkOwnerLease returns a non-nil
-// *leaseViolation ONLY when enforcement (Config.EnforceOwnerLease) is on AND a
-// mismatch is confirmed; the handler then rejects the write with
-// ErrorCodeOwnerLeaseStale. In the default observe-only posture it is always nil
-// (the mismatch is still metered + Warn-logged).
-type leaseViolation struct {
-	predicate     string // the contested owned predicate
-	expectedOwner string // live owner id (no incarnation nonce — safe for the caller-facing error)
-	got           string // the request's presented OwnerToken
-}
-
-// detail renders the caller-facing reject message. It names the live owner that
-// holds the lease and the contested predicate, but deliberately omits the live
-// incarnation nonce (a liveness fence surfaced only in the operator Warn log).
-func (v *leaseViolation) detail() string {
-	return fmt.Sprintf("owner lease stale: predicate %q is held by live owner %q; the request's OwnerToken does not match",
-		v.predicate, v.expectedOwner)
-}
-
-// checkOwnerLease is the ADR-056 owner-lease check at the graph-ingest write
-// seam. It inspects each owned predicate being written against the live
-// OwnerClaim in the registry. On a mismatch (the request's OwnerToken != the
-// live "<owner>#<incarnation>") it ALWAYS meters owner_lease_mismatch_total + a
-// Warn. Whether it BLOCKS depends on Config.EnforceOwnerLease:
-//
-//   - PR-3 default (EnforceOwnerLease=false): observe-only — returns nil, the
-//     write always commits. This is the bake posture.
-//   - PR-5 enforce (EnforceOwnerLease=true): a confirmed mismatch returns a
-//     non-nil *leaseViolation; the handler rejects the write before it commits
-//     with ErrorCodeOwnerLeaseStale.
-//
-// ownedPredicates is the deduped set of owned-write predicates for this request
-// (own/addOwn predicates + RemoveTriples predicates on the update lanes).
-// messageType is the bounded metric label (registry key or "_invalid").
-//
-// Two-state skip (return nil — never reject):
-//   - ownerToken == ""  → legacy/unowned writer (the single agreed skip signal).
-//   - claimReader == nil → resourceless/unmigrated deploy graceful-skip.
-//
-// Per-predicate (fail-open paths return nil even under enforcement):
-//   - err != nil  → Warn + stop (fail-open; honor a mismatch already confirmed
-//     on an earlier predicate, but never block on a reader blip alone).
-//   - ok == false → continue (unclaimed/append-evidence — not lease-governed).
-//   - ok == true && incarnation == "" → fail-open (legacy/pre-fence owner; lease
-//     not enforceable — no metric, no Warn, no reject).
-//   - ok == true && incarnation != "" → compare ownerToken vs "<owner>#<incarnation>";
-//     mismatch → meter + Warn, capture the first violation, continue.
-func (c *Component) checkOwnerLease(ctx context.Context, entityID, messageType, ownerToken string, ownedPredicates []string) *leaseViolation {
-	// Two-state skip.
-	if ownerToken == "" {
-		return nil
-	}
-	if c.claimReader == nil {
-		return nil
-	}
-	if len(ownedPredicates) == 0 {
-		return nil
-	}
-
-	var violation *leaseViolation
-	for _, pred := range ownedPredicates {
-		owner, incarnation, ok, err := c.claimReader.OwnerOf(ctx, entityID, pred)
-		if err != nil {
-			// Fail-open: a transient reader blip must never block a write. Stop
-			// checking here (PR-3 behavior), but still honor a mismatch already
-			// confirmed on an earlier predicate when enforcing.
-			c.logger.Warn("graph-ingest: owner-lease read failed — skipping lease check for this predicate (fail-open)",
-				slog.String("entity_id", entityID),
-				slog.String("predicate", pred),
-				slog.String("message_type", messageType),
-				slog.Any("error", err))
-			return c.leaseVerdict(violation)
-		}
-		if !ok {
-			// Unclaimed / append-evidence — not lease-governed.
-			continue
-		}
-		if incarnation == "" {
-			// Legacy/pre-fence owning claim: the lease is not enforceable.
-			// Fail-open — no metric, no Warn, no reject.
-			continue
-		}
-		// Compare the request token against the live owner's expected token.
-		// ExpectedOwnerToken keeps the "<owner>#<incarnation>" format in
-		// pkg/ownership — graph-ingest never composes it (ADR-056 PR-3.5).
-		expected := ownership.ExpectedOwnerToken(owner, incarnation).Wire()
-		if ownerToken != expected {
-			c.ownerLeaseMismatch.WithLabelValues(messageType, pred).Inc()
-			if c.config.EnforceOwnerLease {
-				c.logger.Warn("graph-ingest: OwnerToken mismatch — write REJECTED (owner_lease_stale; enforce_owner_lease on)",
-					slog.String("entity_id", entityID),
-					slog.String("predicate", pred),
-					slog.String("message_type", messageType),
-					slog.String("owner_token", ownerToken),
-					slog.String("expected_token", expected))
-			} else {
-				c.logger.Warn("graph-ingest: OwnerToken mismatch — write proceeds (observe-only; set enforce_owner_lease to reject)",
-					slog.String("entity_id", entityID),
-					slog.String("predicate", pred),
-					slog.String("message_type", messageType),
-					slog.String("owner_token", ownerToken),
-					slog.String("expected_token", expected))
-			}
-			if violation == nil {
-				violation = &leaseViolation{predicate: pred, expectedOwner: owner, got: ownerToken}
-			}
-		}
-	}
-	return c.leaseVerdict(violation)
-}
-
-// leaseVerdict gates the reject on the enforcement toggle: it surfaces a
-// confirmed violation ONLY when Config.EnforceOwnerLease is set, so the default
-// observe-only path never blocks a write even after a mismatch has been
-// metered + Warn-logged.
-func (c *Component) leaseVerdict(v *leaseViolation) *leaseViolation {
-	if v != nil && c.config.EnforceOwnerLease {
-		return v
-	}
-	return nil
 }
 
 // extractEntityFromMessage extracts an EntityState from a BaseMessage
@@ -2266,41 +1732,6 @@ func (c *Component) extractEntityFromMessage(msg *message.BaseMessage) (*graph.E
 	}
 
 	return entity, nil
-}
-
-// partitionTriplesBySubject splits a Graphable's triples into those belonging to
-// the primary entity and "foreign" triples whose Subject names a DIFFERENT
-// entity. A triple is primary when its Subject equals entityID, or is empty (the
-// historical filing target — extractEntityFromMessage has always placed
-// subject-less triples on the primary). Foreign triples are cross-entity edges —
-// e.g. sensorml's inverse isHostedBy stamped on the child subject — that the
-// single-key filing in extractEntityFromMessage would otherwise misfile under the
-// primary entity (ADR-055 §5 T2). This function only classifies; the caller
-// routes foreign triples to their correct subject.
-func partitionTriplesBySubject(entityID string, triples []message.Triple) (own, foreign []message.Triple) {
-	for _, t := range triples {
-		if t.Subject == "" || t.Subject == entityID {
-			own = append(own, t)
-			continue
-		}
-		foreign = append(foreign, t)
-	}
-	return own, foreign
-}
-
-// distinctSubjects returns the sorted set of distinct Subjects across the triples,
-// for low-cardinality operator logging of where regrouped edges were routed.
-func distinctSubjects(triples []message.Triple) []string {
-	seen := make(map[string]struct{}, len(triples))
-	for _, t := range triples {
-		seen[t.Subject] = struct{}{}
-	}
-	out := make([]string, 0, len(seen))
-	for s := range seen {
-		out = append(out, s)
-	}
-	sort.Strings(out)
-	return out
 }
 
 // hasIndexingProfileTriple reports whether the entity already carries a
@@ -2375,7 +1806,7 @@ func stampExplicitIndexingProfile(entity *graph.EntityState, profile string) {
 // fallback floor when nothing was declared:
 //
 //   - ≥1 profile triple present (an explicit declaration was stamped upstream,
-//     or a real producer is upgrading a profile-less stub): keep the FIRST and
+//     or an incoming producer is supplying one to an existing unprofiled entity): keep the FIRST and
 //     drop any duplicates. No floor, no metric.
 //   - 0 profile triples present: apply the registry floor
 //     (indexingProfileFloorFor) and append it; increment
@@ -2433,14 +1864,12 @@ func validateEntityID(id string) error {
 	return semtypes.ValidateEntityID(id)
 }
 
-// CreateEntity creates a new entity in the graph using upsert (Put)
-// semantics. Existing callers that need last-writer-wins behavior stay
-// on this path. Atomic-create callers (the NATS mutation handlers' POST
-// 409 path) use
-// CreateEntityStrict, which fails fast with natsclient.ErrKVKeyExists
-// when the ID is already present.
+// CreateEntity atomically creates a new entity. Existing keys are never
+// overwritten; callers observe natsclient.ErrKVKeyExists and decide whether
+// that conflict is acceptable for their operation.
 func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState) error {
-	return c.createEntity(ctx, entity, false)
+	_, _, err := c.createEntityWithReceipt(ctx, entity)
+	return err
 }
 
 // MergeEntity ingests a streaming-consumer EntityState (typically built
@@ -2454,9 +1883,8 @@ func (c *Component) CreateEntity(ctx context.Context, entity *graph.EntityState)
 // UpdatedAt) while monotonically bumping Version.
 //
 // Closes gh#177: the prior code called CreateEntity (Put = full-
-// replace) from handleMessage, which erased any triples written via
-// the atomic mutation handlers (create_with_triples, update_with_
-// triples, triple.add) — all of which merge. The jetstream consumer
+// replace) from handleMessage, which erased triples written through mutation
+// request/reply. The JetStream consumer
 // path was the lone outlier. Lifecycle-managed entities surfaced this
 // most loudly: Manager.Create stamped the phase triple, then the
 // first Graphable arrival via a downstream processor wiped it.
@@ -2476,11 +1904,9 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	// candidate (create: candidate + hierarchy/profile stamps; merge:
 	// MergeTriples keeps every incoming triple), so an invalid candidate never
 	// commits under its own key, and classifyStoredStateRMWError keeps the
-	// caller-vs-resident attribution honest. Every production lane into
-	// MergeEntity already runs one caller-blaming full pass before side effects
-	// (prepareFactProjection on the Graphable ingest lane;
-	// validateMutationEntityState on the create_with_triples stub-restamp
-	// lane), so the pass here was a third full validation per mutation on the
+	// caller-vs-resident attribution honest. The Graphable ingest lane already
+	// runs one caller-blaming full pass before side effects, so the pass here was a
+	// third full validation per mutation on the
 	// per-key-serialized hot path (ADR-072). Two narrow ergonomic changes for
 	// un-preflighted direct callers: (1) an incoming entity.indexing.profile
 	// triple dropped pre-merge on an already-profiled entity is no longer
@@ -2490,8 +1916,8 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 	// GetHierarchyTriples COMMITS container entities + inverse contains-edges +
 	// sibling edges before the write gate rejects the candidate itself — that
 	// pre-committed content is contract-valid and identical to what a later
-	// legitimate birth of the same ID would create, and dangling container
-	// references are tolerated by the referential-stub design.
+	// legitimate birth of the same ID would create. References to absent entities
+	// are valid graph facts and remain observable as unresolved references.
 	if err := validateEntityID(entity.ID); err != nil {
 		return err
 	}
@@ -2574,9 +2000,9 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		// The indexing profile is the exception: it is create-time-immutable
 		// (ADR-054), but MergeTriples is newer-wins, so a re-arrival declaring a
 		// different profile would override the create-time one. Drop the incoming
-		// profile before merging WHEN the existing entity already carries one; a
-		// profile-less stub keeps the incoming declaration as its true birth
-		// (reconcileIndexingProfile stamps it below).
+		// profile before merging WHEN the existing entity already carries one. An
+		// existing unprofiled entity keeps the incoming declaration so
+		// reconcileIndexingProfile can apply it below.
 		newer := entity.Triples
 		if hasIndexingProfileTriple(&existing) {
 			newer = triplesWithoutPredicate(newer, vocabulary.EntityIndexingProfile)
@@ -2586,9 +2012,8 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		if entity.StorageRef != nil {
 			existing.StorageRef = entity.StorageRef
 		}
-		// ADR-054: a real producer merging into a profile-less referential-
-		// integrity stub is that entity's true birth — reconcile stamps the
-		// profile (kept from the incoming declaration, else floor). For an
+		// ADR-054: when a producer merges into an existing unprofiled entity,
+		// reconcile stamps the profile (kept from the incoming declaration, else floor). For an
 		// already-profiled entity this is a no-op (keep-first preserves the
 		// create-time value), so a re-arrival never re-profiles.
 		c.reconcileIndexingProfile(&existing)
@@ -2625,41 +2050,28 @@ func (c *Component) MergeEntity(ctx context.Context, entity *graph.EntityState) 
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples_in", len(entity.Triples)))
 
-	c.ensureRelationshipTargetsExist(ctx, entity)
-
 	return nil
 }
 
-// CreateEntityStrict creates a new entity atomically — if the ID is
-// already present, returns natsclient.ErrKVKeyExists without
-// overwriting. Closes the concurrent-create TOCTOU window the
-// graph.mutation.entity.create handler used to have when it relied
-// on exists-check + Put.
-func (c *Component) CreateEntityStrict(ctx context.Context, entity *graph.EntityState) error {
-	return c.createEntity(ctx, entity, true)
-}
-
-// createEntity is the shared body for CreateEntity / CreateEntityStrict.
-// atomicCreate=true switches the KV write from Put (upsert) to
-// Create (atomic key-create); everything else (hierarchy inference,
-// referential integrity stubs, cache invalidation, metrics) is
-// identical.
-func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState, atomicCreate bool) error {
+func (c *Component) createEntityWithReceipt(
+	ctx context.Context,
+	entity *graph.EntityState,
+) (*graph.EntityState, uint64, error) {
 	if entity == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
+		return nil, 0, errs.WrapInvalid(errs.ErrInvalidData, "Component", "CreateEntity", "entity cannot be nil")
 	}
 
 	// Validate entity ID format
 	if err := validateEntityID(entity.ID); err != nil {
-		return err
+		return nil, 0, err
 	}
 	if err := graph.ValidateEntityStateContract(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
+		return nil, 0, errs.WrapInvalid(err, "Component", "CreateEntity", "validate entity state contract")
 	}
 
 	// Check context
 	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "CreateEntity", "context cancelled")
+		return nil, 0, errs.Wrap(err, "Component", "CreateEntity", "context cancelled")
 	}
 
 	// SYNCHRONOUS HIERARCHY INFERENCE:
@@ -2687,28 +2099,18 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 	data, err := graph.MarshalEntityState(entity)
 	if err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
+		return nil, 0, errs.Wrap(err, "Component", "CreateEntity", "entity serialization")
 	}
 
-	// Store in KV bucket. Put is upsert (last-writer-wins); Create is
-	// atomic create-or-fail (returns natsclient.ErrKVKeyExists on
-	// conflict). The ErrKVKeyExists sentinel is bubbled verbatim so
-	// handlers can branch with errors.Is.
-	var writeErr error
-	var committedRev uint64
-	if atomicCreate {
-		committedRev, writeErr = c.entityBucket.Create(ctx, entity.ID, data)
-		if writeErr != nil && errors.Is(writeErr, natsclient.ErrKVKeyExists) {
-			// Expected conflict shape — don't count as a component
-			// error and don't wrap (preserves sentinel identity).
-			return writeErr
-		}
-	} else {
-		committedRev, writeErr = c.entityBucket.Put(ctx, entity.ID, data)
+	// Atomic create-or-fail is the only admitted birth primitive. Preserve the
+	// conflict sentinel so the calling component can make its own decision.
+	committedRev, writeErr := c.entityBucket.Create(ctx, entity.ID, data)
+	if writeErr != nil && errors.Is(writeErr, natsclient.ErrKVKeyExists) {
+		return nil, 0, writeErr
 	}
 	if writeErr != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
+		return nil, 0, errs.Wrap(writeErr, "Component", "CreateEntity", "KV store")
 	}
 
 	// Committed valid bytes at a known revision — clear any stale poison
@@ -2731,300 +2133,28 @@ func (c *Component) createEntity(ctx context.Context, entity *graph.EntityState,
 		slog.String("entity_id", entity.ID),
 		slog.Int("triples", len(entity.Triples)))
 
-	c.ensureRelationshipTargetsExist(ctx, entity)
-
-	return nil
+	return entity.Clone(), committedRev, nil
 }
 
-// ensureRelationshipTargetsExist walks the entity's relationship triples
-// and, for each referenced entity that doesn't yet exist, creates a
-// stub. Bounded to 5 concurrent KV ops. Errors are best-effort —
-// referential integrity is a fallback, not a hard contract — so a
-// failure is logged but does not propagate.
-//
-// Extracted from createEntity to keep that function under the
-// revive.toml function-length cap (50 statements).
-func (c *Component) ensureRelationshipTargetsExist(ctx context.Context, entity *graph.EntityState) {
-	// Deduplicate target IDs — multiple triples may reference the same entity.
-	uniqueTargets := make(map[string]struct{})
-	for _, triple := range entity.Triples {
-		if triple.IsRelationship() {
-			targetID, ok := triple.Object.(string)
-			if ok && targetID != "" && targetID != entity.ID {
-				uniqueTargets[targetID] = struct{}{}
-			}
-		}
-	}
-
-	sem := make(chan struct{}, 5)
-	var wg sync.WaitGroup
-
-	for targetID := range uniqueTargets {
-		if ctx.Err() != nil {
-			break
-		}
-
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-
-			// Acquire semaphore with context cancellation support.
-			select {
-			case <-ctx.Done():
-				return
-			case sem <- struct{}{}:
-				defer func() { <-sem }()
-			}
-
-			if ctx.Err() != nil {
-				return
-			}
-
-			if err := c.ensureReferencedEntityExists(ctx, id, entity.ID, entity.MessageType); err != nil {
-				c.logger.Debug("failed to ensure referenced entity exists",
-					slog.String("target", id),
-					slog.String("referenced_by", entity.ID),
-					slog.Any("error", err))
-			}
-		}(targetID)
-	}
-
-	wg.Wait()
-}
-
-// Referential-integrity stub identity (ADR-056 Decision 4 lane-ii). The stub is
-// the framework's no-birth referential producer: a referenced target with no
-// independent producer (e.g. sensorml/cs-api children, only ever referenced via
-// a parent's hierarchy) is materialized here. The stub is now a FIRST-CLASS,
-// ENVELOPE-BEARING artifact — it carries stubMessageType so the ADR-055
-// "no envelope-less ownerless births" invariant is literally true — but it stays
-// PROFILE-LESS so MergeEntity still detects the real producer's later merge as
-// the entity's true birth (reconcileIndexingProfile keys on profile-absence,
-// component.go:1414-1419).
-// Stub identity now lives in the graph package (graph.StubMessageType +
-// graph.PredStub*) so the producer here and enumerating consumers — notably the
-// gated-DAG executor, which must not dispatch a stub (gh#429) — share one
-// definition. These locals alias the shared contract.
-var stubMessageType = graph.StubMessageType
-
-const (
-	predStubMarker        = graph.PredStubMarker
-	predStubReferencedBy  = graph.PredStubReferencedBy
-	predStubOwner         = graph.PredStubOwner
-	stubReferentialSource = "graph-ingest-referential-integrity"
-)
-
-// ensureReferencedEntityExists creates a stub entity if the referenced entity
-// doesn't exist — the referential-integrity guarantee that a referenced ID
-// always resolves to a node (ADR-056 Decision 4 lane-ii). referencedByType is
-// the MessageType of the entity that referenced it (the reachable producer
-// identity at this seam); the ADR's "the producer's registered ForeignEdgeClaim
-// MessageType" is NOT reachable here (we hold only the source entity, not a
-// claim), so the stub records the source type — or, for an untyped source (a
-// gateway that does not stamp MessageType), the framework referential producer.
-func (c *Component) ensureReferencedEntityExists(ctx context.Context, entityID, referencedBy string, referencedByType message.Type) error {
-	// NOTE: the stub Create below deliberately does NOT invalidateEntityCacheEntry.
-	// This is safe only because the query read path never negative-caches (a
-	// not-found Get returns without a cache Set), and Create only transitions
-	// absent→present — so no reader can hold a cached value for the absent key.
-	// If negative caching is ever added, this path MUST invalidate here.
-	// Check if entity already exists
-	_, err := c.entityBucket.Get(ctx, entityID)
-	if err == nil {
-		return nil // Entity exists, nothing to do
-	}
-
-	stubOwner := stubReferentialSource
-	if referencedByType.IsValid() {
-		stubOwner = referencedByType.Key()
-	}
-
-	// Entity doesn't exist - create an envelope-bearing stub.
-	// Version is set to 1 to match the invariant held by every other
-	// canonical EntityState write path. When the real entity
-	// later arrives, the merge path increments Version to 2 and overwrites
-	// MessageType with the real producer's (component.go:1410).
-	now := time.Now()
-	stub := &graph.EntityState{
-		ID:          entityID,
-		Version:     1,
-		UpdatedAt:   now,
-		MessageType: stubMessageType,
-		Triples: []message.Triple{
-			{Subject: entityID, Predicate: predStubMarker, Object: true, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
-			{Subject: entityID, Predicate: predStubReferencedBy, Object: referencedBy, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
-			{Subject: entityID, Predicate: predStubOwner, Object: stubOwner, Source: stubReferentialSource, Timestamp: now, Confidence: 1.0},
-		},
-	}
-
-	data, err := graph.MarshalEntityState(stub)
-	if err != nil {
-		return fmt.Errorf("marshal stub entity: %w", err)
-	}
-
-	// Atomic create-if-absent (gh#429). The Get above is only a fast-path: a real
-	// producer can birth this entity between that Get (saw absent) and this write.
-	// A Put would clobber the real entity back to a stub envelope — which, once
-	// gated-DAG filters stubs, silently makes a real unit un-dispatchable. Create
-	// returns ErrKVKeyExists on a concurrent create, which we map to a no-op
-	// success — so we stub ONLY if the ID is genuinely still absent and never
-	// overwrite a real (or sibling-stub) entity.
-	if _, err := c.entityBucket.Create(ctx, entityID, data); err != nil {
-		if errors.Is(err, natsclient.ErrKVKeyExists) {
-			return nil // raced with a real (or sibling stub) create — do not clobber
-		}
-		return fmt.Errorf("store stub entity: %w", err)
-	}
-
-	c.logger.Debug("created envelope-bearing referential-integrity stub",
-		slog.String("entity_id", entityID),
-		slog.String("referenced_by", referencedBy),
-		slog.String("stub_owner", stubOwner))
-
-	return nil
-}
-
-// UpdateEntity updates an existing entity
-func (c *Component) UpdateEntity(ctx context.Context, entity *graph.EntityState) error {
-	if entity == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "UpdateEntity", "entity cannot be nil")
-	}
-
-	// Validate entity ID format
-	if err := validateEntityID(entity.ID); err != nil {
-		return err
-	}
-	if err := graph.ValidateEntityStateContract(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "UpdateEntity", "validate entity state contract")
-	}
-
-	// Check context
-	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "UpdateEntity", "context cancelled")
-	}
-
-	// Serialize entity
-	data, err := graph.MarshalEntityState(entity)
-	if err != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "UpdateEntity", "entity serialization")
-	}
-
-	// Update in KV bucket
-	rev, err := c.entityBucket.Put(ctx, entity.ID, data)
-	if err != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "UpdateEntity", "KV store")
-	}
-	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
-
-	// Invalidate cache on write (cache consistency; bumps the coherence generation)
-	c.invalidateEntityCacheEntry(entity.ID)
-
-	// Update metrics
-	atomic.AddInt64(&c.messagesProcessed, 1)
-	atomic.AddInt64(&c.bytesProcessed, int64(len(data)))
-	c.lastActivity.Store(time.Now())
-	c.entitiesUpdated.Inc()
-
-	c.logger.Debug("entity updated",
-		slog.String("entity_id", entity.ID),
-		slog.Uint64("version", entity.Version))
-
-	return nil
-}
-
-// updateEntityAtRevision is the CAS-protected variant of UpdateEntity.
-// It only commits if the entity's KV revision still matches expectedRev,
-// otherwise returns natsclient.ErrKVRevisionMismatch. This closes the
-// resurrect-after-delete window the plain UpdateEntity → Put path has:
-// a concurrent DeleteEntity that lands between the caller's read and
-// this write would otherwise turn an update into a silent re-create.
-//
-// Used by the mutation handlers' must-exist contract
-// (graph.mutation.entity.update / .update_with_triples). UpdateEntity
-// itself stays Put-based for callers that want last-writer-wins.
-func (c *Component) updateEntityAtRevision(ctx context.Context, entity *graph.EntityState, expectedRev uint64) error {
-	if entity == nil {
-		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "updateEntityAtRevision", "entity cannot be nil")
-	}
-
-	if err := validateEntityID(entity.ID); err != nil {
-		return err
-	}
-	if err := graph.ValidateEntityStateContract(entity); err != nil {
-		return errs.WrapInvalid(err, "Component", "updateEntityAtRevision", "validate entity state contract")
-	}
-
-	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "updateEntityAtRevision", "context cancelled")
-	}
-
-	data, err := graph.MarshalEntityState(entity)
-	if err != nil {
-		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "updateEntityAtRevision", "entity serialization")
-	}
-
-	rev, err := c.entityBucket.Update(ctx, entity.ID, data, expectedRev)
-	if err != nil {
-		// ErrKVRevisionMismatch and other KV errors propagate verbatim so
-		// callers can branch with errors.Is(..., natsclient.ErrKVRevisionMismatch).
-		atomic.AddInt64(&c.errors, 1)
-		return err
-	}
-	c.clearEntityPoisonOnCommit(ctx, entity.ID, rev)
-
-	// Invalidate cache on write (cache consistency; bumps the coherence generation)
-	c.invalidateEntityCacheEntry(entity.ID)
-
-	atomic.AddInt64(&c.messagesProcessed, 1)
-	atomic.AddInt64(&c.bytesProcessed, int64(len(data)))
-	c.lastActivity.Store(time.Now())
-	c.entitiesUpdated.Inc()
-
-	c.logger.Debug("entity updated (CAS)",
-		slog.String("entity_id", entity.ID),
-		slog.Uint64("expected_revision", expectedRev),
-		slog.Uint64("version", entity.Version))
-
-	return nil
-}
-
-// DeleteEntity removes an entity from the graph
-func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
-	// Validate entity ID format
+func (c *Component) deleteEntityAtRevision(ctx context.Context, entityID string, revision uint64) error {
 	if err := validateEntityID(entityID); err != nil {
 		return err
 	}
-
-	// Check context
-	if err := ctx.Err(); err != nil {
-		return errs.Wrap(err, "Component", "DeleteEntity", "context cancelled")
+	if revision == 0 {
+		return errs.WrapInvalid(errs.ErrInvalidData, "Component", "deleteEntityAtRevision", "revision must be nonzero")
 	}
-
-	// Delete from KV bucket
-	if err := c.entityBucket.Delete(ctx, entityID); err != nil {
+	if c.entityBucket == nil {
+		return errors.New("ENTITY_STATES authority bucket unavailable")
+	}
+	if err := c.entityBucket.DeleteAtRevision(ctx, entityID, revision); err != nil {
 		atomic.AddInt64(&c.errors, 1)
-		return errs.Wrap(err, "Component", "DeleteEntity", "KV delete")
+		return err
 	}
-
-	// The poisoned bytes (if any) are gone — clear the inventory entry (D3a).
-	// Delete + recreate is the canonical wire repair for a poisoned entity.
 	c.clearEntityPoisonOnDelete(entityID)
-
-	// Invalidate cache on delete (cache consistency; bumps the coherence generation)
 	c.invalidateEntityCacheEntry(entityID)
-
-	// Remove suffix index entries (best-effort)
 	c.removeSuffixIndex(ctx, entityID)
-
-	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
-	c.logger.Debug("entity deleted", slog.String("entity_id", entityID))
-
 	return nil
 }
 
@@ -3037,9 +2167,8 @@ func (c *Component) DeleteEntity(ctx context.Context, entityID string) error {
 // that query via graph.ingest.query.* (e.g. the gated-DAG executor reading the
 // whole unit set right after committing a claim, or any read-after-mutate via
 // the NATS mutation API). This is the single invalidation primitive for every
-// write path (CreateEntity/UpdateEntity/DeleteEntity/MergeEntity and the
-// triple-add / update_with_triples handlers) so the coherence guard below is
-// uniform.
+// write path (canonical create/reconcile/append/delete, Graphable merge, and
+// hierarchy inference) so the coherence guard below is uniform.
 //
 // Read-after-write cache-coherence contract: a repopulating Set is dropped if
 // the key was invalidated during the read window, so a slow reader cannot
@@ -3097,10 +2226,9 @@ func (c *Component) repopulateEntityCacheEntry(id string, entity graph.EntitySta
 	}
 }
 
-// errNoOpAddDuplicate exits an add-lane CAS closure when every submitted triple
+// errNoOpAddDuplicate exits an append CAS closure when every submitted triple
 // is already stored under an identical six-field tuple: a TRUE no-op. It
-// follows the errNoOpRemove precedent below for the same reason — the closure
-// must not exit by returning the current bytes, because UpdateWithRetry
+// uses a sentinel because the closure must not exit by returning the current bytes: UpdateWithRetry
 // CAS-writes whatever the closure returns, so `return current, nil` would be an
 // identity rewrite (revision bump + ENTITY_STATES watcher re-fire), not a skip.
 // A restart replaying its derived triples must be invisible downstream, and a
@@ -3114,7 +2242,7 @@ func (c *Component) repopulateEntityCacheEntry(id string, entity graph.EntitySta
 // IsKVConflictError sniffs for ("key exists", "wrong last sequence").
 var errNoOpAddDuplicate = errors.New("add triple: every submitted triple is already stored (no-op)")
 
-// recordSuppressedDuplicates meters triples the add lane declined to append
+// recordSuppressedDuplicates meters triples the append path declined to store
 // because the entity already carried them. Nil-guarded so it is safe on a
 // hand-built Component (the test-construction pattern) that reaches it without
 // full metric wiring.
@@ -3125,18 +2253,9 @@ func (c *Component) recordSuppressedDuplicates(lane dedupLane, suppressed int) {
 	c.duplicateTriplesSuppressed.WithLabelValues(string(lane)).Add(float64(suppressed))
 }
 
-// AddTriple adds a triple to an entity using CAS for concurrency safety.
-// A triple already stored under an identical six-field tuple is suppressed and
-// nothing is committed; see addTripleLane.
-func (c *Component) AddTriple(ctx context.Context, triple message.Triple) error {
-	_, _, err := c.addTripleLane(ctx, triple, dedupLaneAdd)
-	return err
-}
-
-// addTripleLane is AddTriple's body, carrying the lane label for the
-// suppressed-duplicate metric and reporting whether the triple was suppressed
-// so the request handler can echo it. deduplicated=true means the write was a
-// no-op: nothing committed, no revision advanced, and err is nil.
+// addTripleLane applies one hierarchy append, carrying the lane label for the
+// suppressed-duplicate metric. deduplicated=true means the write was a no-op:
+// nothing committed, no revision advanced, and err is nil.
 //
 // committedRevision is the EXACT revision this call's CAS produced, and is 0
 // whenever nothing committed (suppressed, or an error). It is deliberately not
@@ -3180,7 +2299,7 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 			return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
 		}
 
-		// Add-lane deduplication, INSIDE the CAS closure and BEFORE the
+		// Append deduplication, INSIDE the CAS closure and BEFORE the
 		// revision-checked write. `entity` was decoded from the bytes read at
 		// the revision this iteration will CAS against, so a request that loses
 		// the CAS re-runs here against the winner's committed state and
@@ -3225,38 +2344,12 @@ func (c *Component) addTripleLane(ctx context.Context, triple message.Triple, la
 	c.clearEntityPoisonOnCommit(ctx, triple.Subject, 0)
 
 	// Read-after-write coherence: the entity-query cache must not serve the
-	// pre-add state on the next graph.ingest.query.* read.
+	// pre-append state on the next graph.ingest.query.* read.
 	c.invalidateEntityCacheEntry(triple.Subject)
 	return false, casRevision, nil
 }
 
-// AddTriples adds many triples in one call, batching per entity. Triples
-// sharing the same Subject collapse to a single CAS read-modify-write on
-// that entity's KV record — N triples on the same loop entity become
-// 1 round-trip to graph-ingest, not N. Triples spanning multiple
-// entities issue one CAS per entity in deterministic subject order.
-//
-// Atomicity scope: per-entity, not cross-entity. If two entities are
-// in the batch and the first commits but the second exhausts CAS
-// retries, the first stays committed. This trade-off is acceptable
-// for the primary use case (write_todos, ADR-036) where every triple
-// shares one Subject (the loop entity). Multi-subject callers that
-// need cross-entity atomicity should use UpdateEntityWithTriples
-// instead.
-//
-// A triple already stored on its subject under an identical six-field tuple is
-// suppressed and never appended; writtenCount counts only NEW tuples, so a
-// fully-duplicate batch returns (0, nil, nil) — success with nothing written.
-//
-// Returns nil on full success. On partial failure returns an error
-// whose message names the failing subjects; the per-subject error
-// detail surfaces via the handler's FailedSubjects response field.
-func (c *Component) AddTriples(ctx context.Context, triples []message.Triple) (writtenCount int, failedSubjects map[string]string, err error) {
-	result, err := c.addTriplesLane(ctx, triples, dedupLaneAddBatch)
-	return result.Written, result.FailedSubjects, err
-}
-
-// addTriplesResult is one add-lane batch's outcome. Grouped into a struct
+// addTriplesResult is one internal append batch's outcome. Grouped into a struct
 // rather than a fifth and sixth return value so the batch handler can ask the
 // two questions it actually needs — "did THIS subject commit, and at which
 // revision" — without a positional argument pile.
@@ -3268,6 +2361,16 @@ type addTriplesResult struct {
 	Deduplicated int
 	// FailedSubjects maps each subject that rolled back to its per-subject error.
 	FailedSubjects map[string]string
+	// NotFoundSubjects identifies definite absent targets separately from
+	// subject-local internal failures.
+	NotFoundSubjects map[string]struct{}
+	// SubjectErrors preserves typed subject-local failures for the canonical
+	// partial-result wire without erasing earlier receipts.
+	SubjectErrors map[string]error
+	// UnchangedSubjects identifies subjects whose submitted tuples were all
+	// already present. The canonical handler uses this explicit classification
+	// instead of inferring an attempted no-op from a later readable entity.
+	UnchangedSubjects map[string]struct{}
 	// CommittedRevisions holds the EXACT revision each subject's CAS produced,
 	// keyed by subject. A subject that was wholly suppressed or that failed is
 	// ABSENT — presence in this map is the authoritative answer to "did this
@@ -3325,6 +2428,9 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 
 	var writtenCount, deduplicated int
 	failedSubjects := make(map[string]string)
+	notFoundSubjects := make(map[string]struct{})
+	subjectErrors := make(map[string]error)
+	unchangedSubjects := make(map[string]struct{})
 	committedRevisions := make(map[string]uint64)
 	// allAbsences tracks whether EVERY per-subject failure was an ADR-055
 	// entity-not-found rejection. When true the aggregated error wraps
@@ -3347,6 +2453,7 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			for _, s := range subjects[i:] {
 				failedSubjects[s] = ctxErr.Error()
+				subjectErrors[s] = ctxErr
 			}
 			// A cancelled batch is NOT a pure entity-not-found batch.
 			allAbsences = false
@@ -3376,7 +2483,7 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 				return nil, retry.NonRetryable(natsclient.ErrKVKeyNotFound)
 			}
 
-			// Add-lane deduplication, INSIDE the CAS closure and BEFORE the
+			// Append deduplication, INSIDE the CAS closure and BEFORE the
 			// revision-checked write, against the state read at the revision
 			// this iteration will CAS on — see addTripleLane for why a pre-read
 			// outside the loop would be a TOCTOU regression. This also collapses
@@ -3409,10 +2516,16 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 			if errors.Is(casErr, errNoOpAddDuplicate) {
 				c.recordSuppressedDuplicates(lane, groupSuppressed)
 				deduplicated += groupSuppressed
+				unchangedSubjects[subject] = struct{}{}
 				continue
 			}
 			atomic.AddInt64(&c.errors, 1)
 			failedSubjects[subject] = casErr.Error()
+			if errors.Is(casErr, natsclient.ErrKVKeyNotFound) {
+				notFoundSubjects[subject] = struct{}{}
+			} else {
+				subjectErrors[subject] = casErr
+			}
 			var stateErr *graph.StateContractError
 			if poisonErr == nil && errors.As(casErr, &stateErr) {
 				poisonErr = casErr
@@ -3439,6 +2552,9 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 		Written:            writtenCount,
 		Deduplicated:       deduplicated,
 		CommittedRevisions: committedRevisions,
+		NotFoundSubjects:   notFoundSubjects,
+		SubjectErrors:      subjectErrors,
+		UnchangedSubjects:  unchangedSubjects,
 	}
 	if len(failedSubjects) == 0 {
 		return result, nil
@@ -3471,129 +2587,6 @@ func (c *Component) addTriplesLane(ctx context.Context, triples []message.Triple
 	}
 	return result, errs.Wrap(innerErr, "Component", "AddTriples", "batch CAS partial failure")
 }
-
-// errNoOpRemove exits RemoveTriple's CAS closure when no stored triple
-// matches the predicate: a TRUE no-op. The caller maps it to nil success
-// BEFORE any KV write, so the closure's only success exit is a
-// MarshalEntityState-validated candidate (gh#562 review M1 — previously the
-// closure returned the current bytes and UpdateWithRetry CAS-rewrote them
-// verbatim, bumping the revision and re-firing every ENTITY_STATES watcher).
-var errNoOpRemove = errors.New("remove triple: no matching predicate (no-op)")
-
-// RemoveTriple removes a triple from an entity using CAS for concurrency safety.
-// A removal that matched nothing is a silent success; see removeTripleReported
-// when the caller needs to know whether anything was actually committed.
-func (c *Component) RemoveTriple(ctx context.Context, subject, predicate string) error {
-	_, _, err := c.removeTripleReported(ctx, subject, predicate)
-	return err
-}
-
-// removeTripleReported is RemoveTriple's body, additionally reporting whether a
-// write was COMMITTED. removed=false means the call was a true no-op — the
-// entity was absent, or no stored triple carried the predicate — so no revision
-// advanced and no watcher fired.
-//
-// A caller that attributes the entity's post-call revision to itself MUST
-// consult this: on a no-op the live revision was produced by some OTHER writer,
-// and claiming it (the rule engine's per-rule feedback-loop tracker does
-// exactly that) makes the claimant drop that other writer's genuine change.
-// committedRevision is the EXACT revision this call's CAS produced, and is 0
-// whenever nothing committed. Like the add lane's, it is not a post-hoc read:
-// see UpdateWithRetryRev for why re-reading is not equivalent (Codex C2).
-func (c *Component) removeTripleReported(ctx context.Context, subject, predicate string) (removed bool, committedRevision uint64, err error) {
-	if validateErr := validateEntityID(subject); validateErr != nil {
-		return false, 0, errs.WrapInvalid(validateErr, "Component", "RemoveTriple", "validate subject")
-	}
-	if _, parseErr := vocabulary.ParsePredicate(predicate); parseErr != nil {
-		return false, 0, errs.WrapInvalid(parseErr, "Component", "RemoveTriple", "validate predicate")
-	}
-
-	// Check context
-	if ctxErr := ctx.Err(); ctxErr != nil {
-		return false, 0, errs.Wrap(ctxErr, "Component", "RemoveTriple", "context cancelled")
-	}
-
-	// Check if entity exists first - if not, nothing to remove
-	_, err = c.entityBucket.Get(ctx, subject)
-	if err != nil {
-		if natsclient.IsKVNotFoundError(err) {
-			return false, 0, nil // Entity doesn't exist, nothing to remove
-		}
-		atomic.AddInt64(&c.errors, 1)
-		return false, 0, errs.Wrap(err, "Component", "RemoveTriple", "entity lookup")
-	}
-
-	// Use UpdateWithRetry for atomic read-modify-write with CAS
-	casRevision, err := c.entityBucket.UpdateWithRetryRev(ctx, subject, func(current []byte) ([]byte, error) {
-		if len(current) == 0 {
-			// Entity was deleted between our check and update - nothing to do
-			return nil, natsclient.ErrKVKeyNotFound
-		}
-
-		// Deserialize existing entity.
-		// gh#562: trusted decode on the owner's own RMW read;
-		// MarshalEntityState below re-validates the final candidate.
-		var entity graph.EntityState
-		if err := graph.UnmarshalEntityStateTrusted(current, &entity); err != nil {
-			return nil, c.classifyStoredStateRMWError(ctx, subject, current, err) // Non-retryable
-		}
-
-		// Remove matching triples
-		filtered := make([]message.Triple, 0, len(entity.Triples))
-		for _, t := range entity.Triples {
-			if t.Predicate != predicate {
-				filtered = append(filtered, t)
-			}
-		}
-
-		// No matching predicate: exit via sentinel, NOT by returning the
-		// current bytes — UpdateWithRetry CAS-writes whatever the closure
-		// returns, so `return current, nil` would be an identity rewrite
-		// (revision bump + watcher re-fire), not a skip. The caller maps
-		// the sentinel to silent success with no write committed.
-		if len(filtered) == len(entity.Triples) {
-			return nil, errNoOpRemove
-		}
-
-		entity.Triples = filtered
-		entity.Version++
-		entity.UpdatedAt = time.Now()
-
-		data, err := graph.MarshalEntityState(&entity)
-		if err != nil {
-			return nil, c.classifyStoredStateRMWError(ctx, subject, current, err)
-		}
-		return data, nil
-	})
-
-	// Handle errors - ErrKVKeyNotFound means entity was deleted, which is fine
-	if err != nil {
-		// True no-op: no triple matched the predicate. Silent success with
-		// NO write committed — bytes and revision untouched, so no cache
-		// invalidation is needed either.
-		if errors.Is(err, errNoOpRemove) {
-			return false, 0, nil
-		}
-		// Check if it's a wrapped "not found" error
-		if natsclient.IsKVNotFoundError(err) {
-			return false, 0, nil // Entity was deleted, nothing to remove
-		}
-		atomic.AddInt64(&c.errors, 1)
-		return false, 0, errs.Wrap(err, "Component", "RemoveTriple", "CAS update")
-	}
-
-	// Committed via the write gate — clear any stale poison entry (D3b).
-	c.clearEntityPoisonOnCommit(ctx, subject, 0)
-
-	// Read-after-write coherence: drop the cached entity so a query reflects
-	// the removed predicate (consumers clear markers via remove on reset).
-	c.invalidateEntityCacheEntry(subject)
-	return true, casRevision, nil
-}
-
-// ============================================================================
-// Suffix Index Operations
-// ============================================================================
 
 // entitySuffixKeys returns the suffix index keys for a given entity ID.
 // Entity ID format: org.platform.domain.system.type.instance

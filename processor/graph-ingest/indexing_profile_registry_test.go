@@ -84,37 +84,40 @@ func TestIndexingProfileRegistry_KeysTrackDomainVersionConstants(t *testing.T) {
 	}
 }
 
-// TestIndexingProfile_AddTriple_DoesNotStamp locks the ADR-055 invariant:
-// triple.add is NOT a stamp seam. An entity updated via triple.add carries no
+// TestIndexingProfile_Append_DoesNotStamp locks the indexing invariant:
+// append is NOT a stamp seam. An entity updated via append carries no
 // additional profile triple — reconcileIndexingProfile is not on this path.
 // The entity must be pre-created (ADR-055 deleted the auto-vivify path);
-// triple.add to a pre-existing entity must NOT re-stamp indexing metadata.
-func TestIndexingProfile_AddTriple_DoesNotStamp(t *testing.T) {
+// Appending to a pre-existing entity must NOT re-stamp indexing metadata.
+func TestIndexingProfile_Append_DoesNotStamp(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
 	const id = "c360.platform.test.sys.widget.addtriple1"
 	// Pre-create the entity via the create seam so it exists in ENTITY_STATES.
-	req := graph.CreateEntityWithTriplesRequest{Entity: &graph.EntityState{ID: id}}
+	req := graph.CreateEntityRequest{Entity: &graph.EntityState{ID: id, MessageType: testWidgetMessageType()}}
 	data, err := json.Marshal(req)
 	require.NoError(t, err)
-	_, err = comp.handleEntityCreateWithTriples(ctx, data)
+	_, err = comp.handleCanonicalCreate(ctx, data)
 	require.NoError(t, err)
 
 	// Record the profile triples stamped at create time so we can assert
-	// that triple.add does NOT add more.
+	// that append does NOT add more.
 	esBefore := storedEntity(t, comp, id)
 	profilesBefore := profileValues(esBefore)
 
-	// Now add a user triple via the triple.add path.
+	// Now add a user triple via the append path.
 	tr := message.Triple{Subject: id, Predicate: "evidence.note.value", Object: "v", Confidence: 1.0}
-	require.NoError(t, comp.AddTriple(ctx, tr))
+	appendData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{tr}})
+	require.NoError(t, err)
+	_, err = comp.handleCanonicalAppend(ctx, appendData)
+	require.NoError(t, err)
 
 	esAfter := storedEntity(t, comp, id)
 	assert.Equal(t, profilesBefore, profileValues(esAfter),
-		"triple.add must NOT stamp or change the indexing profile (ADR-055: only create seam stamps)")
+		"append must NOT stamp or change the indexing profile (only the create seam stamps)")
 	assert.Equal(t, nonProfileTripleCount(esBefore)+1, nonProfileTripleCount(esAfter),
-		"the entity holds exactly one additional user triple after AddTriple")
+		"the entity holds exactly one additional user triple after append")
 }
 
 // End-to-end through the production create handler: a REGISTERED type floors to
@@ -130,9 +133,9 @@ func TestIndexingProfile_RegistryFloor_RegisteredTypeNoMetric(t *testing.T) {
 	before := testutil.ToFloat64(counter)
 
 	const id = "c360.platform.agentic.sys.request.001"
-	req := graph.CreateEntityWithTriplesRequest{Entity: &graph.EntityState{ID: id, MessageType: mt}}
+	req := graph.CreateEntityRequest{Entity: &graph.EntityState{ID: id, MessageType: mt}}
 	data, _ := json.Marshal(req)
-	_, err := comp.handleEntityCreateWithTriples(ctx, data)
+	_, err := comp.handleCanonicalCreate(ctx, data)
 	require.NoError(t, err)
 
 	es := storedEntity(t, comp, id)
@@ -153,9 +156,9 @@ func TestIndexingProfile_RegistryFloor_UnregisteredFiresMetric(t *testing.T) {
 	before := testutil.ToFloat64(counter)
 
 	const id = "c360.platform.gapdomain.sys.gapcat.001"
-	req := graph.CreateEntityWithTriplesRequest{Entity: &graph.EntityState{ID: id, MessageType: mt}}
+	req := graph.CreateEntityRequest{Entity: &graph.EntityState{ID: id, MessageType: mt}}
 	data, _ := json.Marshal(req)
-	_, err := comp.handleEntityCreateWithTriples(ctx, data)
+	_, err := comp.handleCanonicalCreate(ctx, data)
 	require.NoError(t, err)
 
 	es := storedEntity(t, comp, id)

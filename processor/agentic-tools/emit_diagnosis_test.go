@@ -23,11 +23,11 @@ func newEmitDiagnosisExecutor(publisher TriplePublisher) *EmitDiagnosisExecutor 
 }
 
 // TestEmitDiagnosisExecutor_BirthsFindingEntity confirms emit_diagnosis BIRTHS
-// the finding entity via create_with_triples (gh#390), NOT via add_batch. Each
+// the finding entity via canonical create, NOT via append. Each
 // call mints a NEW ops.diagnosis.finding.{uuid} entity; graph-ingest enforces
-// must-exist on add/add_batch, so a bare batch would be rejected and the finding
-// would silently never land (e2e:ops: 0/3 findings). create_with_triples is
-// atomic, preserving the no-partial-finding contract.
+// must-exist on append, so an append would be rejected and the finding would
+// silently never land (e2e:ops: 0/3 findings). Create is atomic, preserving the
+// no-partial-finding contract.
 func TestEmitDiagnosisExecutor_BirthsFindingEntity(t *testing.T) {
 	pub := &recordingPublisher{}
 	e := newEmitDiagnosisExecutor(pub)
@@ -37,10 +37,10 @@ func TestEmitDiagnosisExecutor_BirthsFindingEntity(t *testing.T) {
 	}
 	// Exactly one BIRTH, and no append-path call (the entity didn't exist yet).
 	if pub.createCalls != 1 {
-		t.Errorf("CreateEntityWithTriples call count = %d, want 1 (single atomic birth)", pub.createCalls)
+		t.Errorf("Create call count = %d, want 1 (single atomic birth)", pub.createCalls)
 	}
 	if pub.batchCalls != 0 {
-		t.Errorf("AddTriplesBatch call count = %d, want 0 (the finding entity must be created, not appended)", pub.batchCalls)
+		t.Errorf("Append call count = %d, want 0 (the finding entity must be created, not appended)", pub.batchCalls)
 	}
 	// Born with the ops_diagnosis typed-origin envelope on the finding entity ID.
 	if got, want := pub.createdMsgType.Key(), agentic.OpsDiagnosisMessageType().Key(); got != want {

@@ -34,7 +34,8 @@ but those aren't EntityState-shaped and can't directly drive rules.
 So the chain is wired through **entity-state triples** on the
 research-pipeline loop entity instead. Each component stamps a small
 atomic batch of triples (e.g., `research.classify.complete`,
-`research.route.action`) on the loop entity via `graph.mutation.*`
+`research.route.action`) on the loop entity via the declared
+`semstreams.graph.mutation` v1 request port (`graph.mutation.>` family)
 after its envelope lands; rules fire on the false→true transition of
 those triples' presence via standard entity-state semantics.
 

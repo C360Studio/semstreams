@@ -312,6 +312,13 @@
           ],
           "outputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "rule_out",
               "subject": "rule.triggered.alert",
               "type": "jetstream"
@@ -477,6 +484,13 @@
         "ports": {
           "inputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "objectstore_in",
               "subject": "objectstore.stored.entity",
               "type": "jetstream",
@@ -500,8 +514,7 @@
             }
           ]
         },
-        "enable_hierarchy": true,
-        "enforce_owner_lease": true
+        "enable_hierarchy": true
       }
     },
     "graph-index": {
@@ -641,6 +654,13 @@
           ],
           "outputs": [
             {
+              "name": "graph_mutations",
+              "subject": "graph.mutation.>",
+              "type": "nats-request",
+              "interface": "semstreams.graph.mutation",
+              "required": true
+            },
+            {
               "name": "communities",
               "subject": "COMMUNITY_INDEX",
               "type": "kv",
@@ -722,12 +742,6 @@
               "name": "queries",
               "subject": "graph.query.*",
               "type": "nats-request"
-            },
-            {
-              "name": "mutations",
-              "subject": "graph.mutation.*",
-              "type": "nats-request",
-              "description": "Graph mutation requests"
             }
           ]
         },

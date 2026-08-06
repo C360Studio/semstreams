@@ -3,7 +3,7 @@
 // Package agentictools_test — integration test for emit_lesson (ADR-080),
 // driven through the PRODUCTION tool wire: a ToolCall published to
 // tool.execute.emit_lesson is executed by a real agentic-tools Component, which
-// births the lesson entity through a real graph-ingest create_with_triples
+// births the lesson entity through the real graph-ingest create
 // handler over live NATS/KV, and publishes a ToolResult to tool.result.*. This
 // exercises the assembled system end-to-end, not a helper-direct executor call,
 // including the content-derived idempotency path.
@@ -46,7 +46,7 @@ func lessonTestClient(t *testing.T) *natsclient.Client {
 }
 
 // startGraphIngestForLessons stands up a real graph-ingest Component that owns
-// the create_with_triples mutation handler emit_lesson births through.
+// the canonical create mutation handler emit_lesson births through.
 func startGraphIngestForLessons(t *testing.T, natsClient *natsclient.Client) {
 	t.Helper()
 	cfg := graphingest.DefaultConfig()

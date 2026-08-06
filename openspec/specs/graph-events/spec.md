@@ -62,10 +62,8 @@ digest of the unsigned 64-bit big-endian byte-length-framed domain separator
 Pack and rule IDs MUST NOT be normalized or embedded directly into an entity-ID segment, and trigger producers MUST
 NOT reuse the alert namespace. Every rule processor MUST declare a non-empty PackID regardless of whether graph
 integration is enabled. Empty identity MUST fail configuration and factory construction before rule activation.
-PackID MUST contain 1–246 ASCII bytes and MUST match exactly `[A-Za-z0-9_=-]+`; the 246-byte maximum MUST keep the
-derived `rule-pack.<PackID>` owner key within 256 bytes. It MUST be one literal KV token, so the owner key always has
-exactly two positions. Empty, 247-byte, Unicode, whitespace, colon, dot, slash, wildcard,
-and every other outside-alphabet value MUST fail without normalization. PackID MUST have no implicit default,
+PackID MUST contain 1–246 ASCII bytes and MUST match exactly `[A-Za-z0-9_=-]+`. Empty, 247-byte, Unicode, whitespace,
+colon, dot, slash, wildcard, and every other outside-alphabet value MUST fail without normalization. PackID MUST have no implicit default,
 component-name fallback, random value, normalization, or config-derived hash, and MUST remain static across runtime
 updates. Replicas using the same exact pack/rule pair MUST resolve to one stable canonical 105-byte entity; changing
 either exact pack ID or rule ID MUST resolve to a different identity, so independently composed packs may reuse local
@@ -75,9 +73,9 @@ The operator schema MUST require `pack_id` unconditionally and MUST expose `minL
 pattern `^[A-Za-z0-9_=-]+$`. The public default-config construction API MUST require the caller to supply and validate
 PackID rather than return an activation-ready anonymous configuration. Config validation, direct rule factories, and
 composition activation MUST enforce the same byte bound and alphabet. Two enabled rule processors in one composition
-MUST NOT declare the same PackID: duplicate identity MUST fail the complete composition before projection binding,
+MUST NOT declare the same PackID: duplicate identity MUST fail the complete composition before projection validation,
 watcher creation, rule activation, event construction, or graph publication. A processor declaring projection
-contracts without PackID MUST fail configuration rather than having its ownership binding silently skipped.
+contracts without PackID MUST fail configuration rather than producing unstable event lineage.
 
 #### Scenario: a maximum canonical source produces a bounded deterministic alert ID
 
@@ -139,7 +137,7 @@ contracts without PackID MUST fail configuration rather than having its ownershi
 - **GIVEN** PackIDs of one ASCII byte and 246 ASCII bytes matching `[A-Za-z0-9_=-]+`
 - **WHEN** operator-schema validation, config construction, direct rule-factory construction, and composition
   activation validate them
-- **THEN** every boundary accepts them and a 246-byte value produces a 256-byte `rule-pack.<PackID>` owner key
+- **THEN** every boundary accepts both values without normalization
 - **AND** the schema requires `pack_id` with `minLength: 1`, `maxLength: 246`, and pattern
   `^[A-Za-z0-9_=-]+$`
 - **AND** empty, 247-byte, Unicode, whitespace, colon, dot, slash, wildcard, or otherwise outside-alphabet values are
@@ -149,9 +147,9 @@ contracts without PackID MUST fail configuration rather than having its ownershi
 
 - **GIVEN** two enabled rule processors declare the same exact PackID
 - **WHEN** composition validates rule-pack identities
-- **THEN** the complete composition fails before projection binding, watcher creation, rule activation, event
+- **THEN** the complete composition fails before projection validation, watcher creation, rule activation, event
   construction, or graph publication
-- **AND** the collision is not reduced to a log-and-skip ownership warning
+- **AND** the collision is not reduced to a log-and-skip warning
 
 #### Scenario: explicit PackID remains stable across disabled publication
 
@@ -176,4 +174,3 @@ contracts without PackID MUST fail configuration rather than having its ownershi
 - **WHEN** `Event.Validate` runs
 - **THEN** it rejects the event without filling defaults or mutating any field or map
 - **AND** the publisher rejects the same event before external side effects
-

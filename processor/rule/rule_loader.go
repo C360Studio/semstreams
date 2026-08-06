@@ -131,9 +131,9 @@ func (rp *Processor) prepareInitialRules() error {
 		return err
 	}
 	for _, definition := range snapshot {
-		if err := validateRuleReplaceOwnedActions(targets, definition); err != nil {
+		if err := validateRuleReconcileActions(targets, definition); err != nil {
 			return fmt.Errorf(
-				"replace_owned envelope validation failed for rule %s: %w",
+				"reconcile_predicates envelope validation failed for rule %s: %w",
 				definition.ID,
 				err,
 			)
@@ -186,9 +186,9 @@ func (rp *Processor) loadRules() error {
 			continue
 		}
 
-		// ADR-056 Decision 3: enforce the replace_owned envelope at the
+		// Enforce the reconcile_predicates contract envelope at the
 		// PROCESSOR level (the envelope is rp.config.ProjectionContracts, which
-		// the stateless rule factory does not see). A replace_owned action
+		// the stateless rule factory does not see). A reconcile_predicates action
 		// naming a predicate outside the pack's owned-replace contracts — or a
 		// non-literal predicate — HARD-FAILS the load. Unlike a malformed
 		// individual rule (which is logged + skipped so siblings still load), a

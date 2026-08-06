@@ -130,6 +130,7 @@
             {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
             {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
             {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
@@ -193,6 +194,7 @@
             {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
           ],
           "outputs": [
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
             {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
           ]
         }
@@ -206,7 +208,7 @@
         "enable_hierarchy": true,
         "ports": {
           "inputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats"}
+            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
           ],
           "outputs": [
             {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}

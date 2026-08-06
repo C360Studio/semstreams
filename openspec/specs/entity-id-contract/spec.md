@@ -182,7 +182,7 @@ handle empty before calling this non-empty validator.
 
 Every framework graph boundary MUST apply the canonical literal contract to literal producers, Graphable subjects,
 classified entity references, mutation requests, final ENTITY_STATES candidates, authoritative replay decoders,
-derived-index key builders, schemas, tools, and reference configurations. Every lifecycle, ownership, projection,
+derived-index key builders, schemas, tools, and reference configurations. Every lifecycle, projection,
 rule-watch, gateway, and other entity-pattern declaration MUST use the canonical pattern contract before activation.
 
 The authoritative final-candidate marshal seam and every independent authoritative replay decoder MUST validate the
@@ -239,7 +239,7 @@ expose a permissive mode, legacy validator, normalization shim, alias table, or 
 
 #### Scenario: configuration cannot disable the contract
 
-- **WHEN** a deployment loads graph-ingest, lifecycle, ownership, projection, or rule configuration
+- **WHEN** a deployment loads graph-ingest, lifecycle, projection, or rule configuration
 - **THEN** no option exists to accept noncanonical entity IDs or patterns
 
 ### Requirement: ObjectStore validates entity identity before entity-derived object I/O
@@ -318,15 +318,16 @@ MUST identify actual substitution syntax, and MUST NOT exempt the resolved runti
 
 ### Requirement: The pre-v1 beta cutover is a clean owned-source break
 
-The breaking beta release MUST announce the exact entity-ID contract change and update SemStreams plus every owned
-reference repository's source, schemas, tools, configurations, fixtures, and exact query expectations to zero
-violations. Before the new binary/configuration is used, the release procedure MUST wipe all incompatible NATS state,
-restart, reseed from the updated canonical owned sources, and rerun affected product e2e.
+The breaking beta release MUST announce the exact entity-ID contract change and update every in-repo source, schema,
+tool, configuration, fixture, and exact-query expectation to zero violations. Before the new binary/configuration is
+used, the release procedure MUST wipe incompatible NATS state, restart, reseed from canonical sources, and rerun
+affected framework E2E. Downstream repositories receive a migration notice and may be checked as a communication-only
+wire census; they are not edited or allowed to redesign the framework contract in this change.
 
 This change MUST NOT require or provide persisted-state export, preservation, old-state audit, online/in-place
 migration, compatibility readers, alias/rename ledgers, permissive dual contracts, or rollback to beta state. These
-owned-reference source updates and fresh-state product proofs remain coordinated v1 release and archive gates; they
-MUST NOT block local framework graph-index work after its named clean pre-v1 prerequisites pass.
+Downstream migration and product proofs occur after the coordinated framework cutover and MUST NOT block local
+framework graph-index work after its named clean pre-v1 prerequisites pass.
 
 Malformed current writes or entity data injected directly into NATS MUST still fail through the canonical typed
 contract before state or derived output. This fail-fast behavior MUST NOT be presented as support for upgrading old
@@ -374,4 +375,3 @@ depend on this change being archived.
 - **WHEN** graph-index fixed-arity activation is evaluated
 - **THEN** activation remains blocked until maximum key/filter match sets pass pinned real-NATS conformance
 - **AND** the dependent graph-index correctness, performance, readiness, and ADR gates also pass
-

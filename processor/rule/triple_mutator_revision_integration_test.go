@@ -25,6 +25,7 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	graphingest "github.com/c360studio/semstreams/processor/graph-ingest"
@@ -33,11 +34,11 @@ import (
 const revisionClaimEntityID = "c360.platform.robotics.mav1.drone.revclaim1"
 
 type revisionClaimHarness struct {
-	ctx     context.Context
-	ingest  *graphingest.Component
-	mutator TripleMutator
-	tracker *Processor
-	bucket  *natsclient.KVStore
+	ctx       context.Context
+	mutations *graphmutation.Client
+	mutator   TripleMutator
+	tracker   *Processor
+	bucket    *natsclient.KVStore
 }
 
 func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
@@ -69,14 +70,16 @@ func newRevisionClaimHarness(t *testing.T) *revisionClaimHarness {
 
 	bucket, err := graph.EnsureCatalogBucket(ctx, testClient.Client, graph.BucketEntityStates)
 	require.NoError(t, err)
+	mutations, err := graphmutation.NewClient(testClient.Client, MutationTimeout)
+	require.NoError(t, err)
 
 	tracker := &Processor{ownRevisions: make(map[ruleRevKey]map[uint64]time.Time)}
 	return &revisionClaimHarness{
-		ctx:     ctx,
-		ingest:  ingest,
-		mutator: newTripleMutator(testClient.Client, tracker),
-		tracker: tracker,
-		bucket:  testClient.Client.NewKVStore(bucket),
+		ctx:       ctx,
+		mutations: mutations,
+		mutator:   newTripleMutator(testClient.Client, tracker),
+		tracker:   tracker,
+		bucket:    testClient.Client.NewKVStore(bucket),
 	}
 }
 
@@ -104,32 +107,44 @@ func ruleTriple(object string) message.Triple {
 
 func (h *revisionClaimHarness) seedEntity(t *testing.T) {
 	t.Helper()
-	require.NoError(t, h.ingest.CreateEntity(h.ctx, &graph.EntityState{
-		ID: revisionClaimEntityID,
+	_, err := h.mutations.Create(h.ctx, graph.CreateEntityRequest{
+		Entity: &graph.EntityState{
+			ID:          revisionClaimEntityID,
+			MessageType: message.Type{Domain: "test", Category: "revision-claim", Version: "v1"},
+			Version:     1,
+			UpdatedAt:   time.Now(),
+		},
 		Triples: []message.Triple{{
 			Subject:   revisionClaimEntityID,
 			Predicate: "entity.type.class",
 			Object:    "robotics.drone",
+			Source:    "revision-claim-test",
 			Timestamp: time.Now(),
 		}},
-		Version:   1,
-		UpdatedAt: time.Now(),
-	}))
+		RequestID: "revision-claim-seed",
+	})
+	require.NoError(t, err)
 }
 
 // externalWrite advances the entity's revision from a writer that is NOT the
 // rule under test — the change the rule's watcher must still see.
 func (h *revisionClaimHarness) externalWrite(t *testing.T, object string) uint64 {
 	t.Helper()
-	require.NoError(t, h.ingest.AddTriple(h.ctx, message.Triple{
-		Subject:    revisionClaimEntityID,
-		Predicate:  "external.writer.mark",
-		Object:     object,
-		Source:     "some-other-component",
-		Timestamp:  time.Now(),
-		Confidence: 1.0,
-	}))
-	return h.liveRevision(t)
+	response, err := h.mutations.Append(h.ctx, graph.AppendTriplesRequest{
+		Triples: []message.Triple{{
+			Subject:    revisionClaimEntityID,
+			Predicate:  "external.writer.mark",
+			Object:     object,
+			Source:     "some-other-component",
+			Timestamp:  time.Now(),
+			Confidence: 1.0,
+		}},
+		RequestID: "revision-claim-external-" + object,
+	})
+	require.NoError(t, err)
+	require.Len(t, response.Results, 1)
+	require.Equal(t, graph.MutationApplied, response.Results[0].Outcome)
+	return response.Results[0].KVRevision
 }
 
 func TestTripleMutator_SuppressedAddDoesNotClaimAnotherWritersRevision(t *testing.T) {

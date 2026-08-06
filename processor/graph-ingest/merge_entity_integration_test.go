@@ -3,8 +3,7 @@
 // Integration tests for MergeEntity — the merge-not-replace semantics
 // the JetStream consumer path uses (handleMessage) to ingest
 // Graphable arrivals without clobbering pre-existing triples written
-// via the atomic mutation handlers (create_with_triples,
-// update_with_triples, triple.add).
+// via the atomic create, reconcile, and append mutation handlers.
 //
 // gh#177 regression coverage: the canonical failure mode the issue
 // captures is "Manager.Create stamps phase triple; subsequent
@@ -196,7 +195,7 @@ func TestIntegration_HandleMessage_DoesNotClobber(t *testing.T) {
 	seed := newSeedEntity(entityID,
 		message.Triple{Subject: entityID, Predicate: "mission.state.phase", Object: "planning", Timestamp: now, Confidence: 1.0},
 	)
-	require.NoError(t, c.CreateEntityStrict(ctx, seed))
+	require.NoError(t, c.CreateEntity(ctx, seed))
 
 	// Step 2: build a BaseMessage carrying a Graphable that stamps
 	// one extra triple (mission.command.requested=launch). This is the shape

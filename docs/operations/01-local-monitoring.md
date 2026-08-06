@@ -78,20 +78,25 @@ Access dashboards: Grafana sidebar > Dashboards > SemStreams folder.
 
 Index types: `predicate`, `incoming`, `outgoing`, `alias`, `spatial`, `temporal`, `structural`, `embedding`, `community`.
 
-### Graph-Ingest Ownership / Foreign Edges (ADR-056)
+### Graph Mutation Outcomes (ADR-091)
 
 | Metric | Description | Useful query |
 |--------|-------------|--------------|
-| `semstreams_graph_ingest_foreign_edge_unclaimed_total{message_type,predicate}` | Foreign-subject edges (Subject ≠ the written entity) classified at the graph-ingest write boundary with **no registered `ForeignEdgeClaim`** for the producing `(message_type, predicate)` | `sum by (message_type, predicate) (increase(semstreams_graph_ingest_foreign_edge_unclaimed_total[1h]))` → which producers emit unclaimed foreign edges |
+| `semstreams_graph_mutation_outcomes_total{operation,outcome}` | Bounded outcomes for create, reconcile, append, and delete | `sum by (operation, outcome) (increase(semstreams_graph_mutation_outcomes_total[1h]))` |
 
-**What it means.** When a producer writes a relationship edge whose Subject is a *different* entity than the one it owns (e.g. a SensorML `isHostedBy` edge from a child component onto its parent system), graph-ingest classifies it against the registered foreign-edge claims at the shared write boundary (fact-arrival *and* the mutation API). This counter increments — once per `(message_type, predicate)` per ingest — when no claim covers it. Post-ADR-055 must-exist flip (`v1.0.0-beta.112`): an unclaimed edge to an *existing* target is still routed to its subject (deprecated-on-arrival, and counted here), but an unclaimed edge to an *absent* target is now **dropped-with-warn** instead of auto-vivifying it. Claimed `NoBirthStub` targets are materialized born-first, so they are safe.
+**What it means.** The counter records graph-ingest's observed command result without an entity-ID label. Outcomes
+include applied, unchanged, not-found, exists, revision mismatch, invalid input, and other bounded classified failures.
 
 **How to read it.**
 
-- **Zero = healthy** — either no producer emits foreign edges, or every foreign-edge producer has registered its `ForeignEdgeClaim` (the migrated/conformant state). A conformant gateway (e.g. semconnect cs-api once it registers its `isHostedBy` claim + stamps `Entity.MessageType`) reads zero here.
-- **Non-zero = a producer is emitting foreign edges without a declared claim.** Action: that producer registers a `ForeignEdgeClaim` (via a `projection.Contract` bound at boot) for the named `(message_type, predicate)`. If `message_type` shows as `_invalid`, the producer is not stamping `Entity.MessageType` on its mutation requests — a prerequisite for the claim to match.
+- A sustained `revision_mismatch` rate means writers are contending on observed state. Components decide whether a
+  fresh exact read and bounded retry fits their domain.
+- `entity_not_found` means a must-exist operation raced or preceded birth. The framework does not create a stub.
+- Transport-level `commit_unknown` is returned to the caller rather than retried automatically; it is not a server
+  outcome that can be reconstructed from this counter.
 
-**Why it matters.** The ADR-055 must-exist flip (shipped `v1.0.0-beta.112`) already closed the foreign-edge auto-vivify hatch — an unclaimed edge to an *absent* target is dropped, not birthed. This counter is the migration/health signal that gated the flip: it must read **zero over a bake window**, i.e. every foreign-edge producer has registered its `ForeignEdgeClaim`. As of 2026-06-19 all registered producers (cs-api/semteams/semops) report zero — the bake is complete. A stricter blanket reject of *all* unclaimed foreign edges (including those onto existing targets) remains a possible future increment, still gated on this counter. Watch it after any new foreign-edge-emitting producer ships — a non-zero value names exactly which producer must register a claim.
+Relationship targets may be absent. That is valid eventual graph state and is reported during dereference rather than
+through a writer-authorization metric.
 
 ### Rules Engine
 

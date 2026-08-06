@@ -2,10 +2,12 @@ package graphingest
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -30,17 +32,14 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 		wantInvalid   bool
 		wantSubstring string
 	}{
-		{
-			name:    "empty slice — noop, not an error",
-			triples: nil,
-		},
+		{name: "empty slice is invalid", triples: nil, wantInvalid: true, wantSubstring: "triples cannot be empty"},
 		{
 			name: "empty Subject on first triple",
 			triples: []message.Triple{
 				{Subject: "", Predicate: "p.q.r", Object: "x", Timestamp: now, Confidence: 1.0},
 			},
 			wantInvalid:   true,
-			wantSubstring: "subject cannot be empty",
+			wantSubstring: "entity state contract violation: id",
 		},
 		{
 			name: "empty Predicate on first triple",
@@ -57,7 +56,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 				{Subject: "", Predicate: "p.q.r", Object: "y", Timestamp: now, Confidence: 1.0},
 			},
 			wantInvalid:   true,
-			wantSubstring: "subject cannot be empty",
+			wantSubstring: "entity state contract violation: id",
 		},
 		{
 			name: "valid first, empty-predicate second — whole batch rejected",
@@ -74,18 +73,18 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			// AddTriples touches c.entityBucket only AFTER validation
-			// passes. Cases that should reject pre-CAS never reach the
-			// nil bucket. The two cases that pass validation (empty
-			// slice; single valid triple) either short-circuit
-			// (nil-slice noop) or fail at CAS — we only assert the
-			// validation phase here.
+			// Canonical append touches c.entityBucket only after validating the
+			// complete request, so these cases prove rejection is pre-I/O.
 			c := &Component{}
-			written, failed, err := c.AddTriples(context.Background(), tt.triples)
+			data, marshalErr := json.Marshal(graph.AppendTriplesRequest{Triples: tt.triples})
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			_, err := c.handleCanonicalAppend(context.Background(), data)
 
 			if tt.wantInvalid {
 				if err == nil {
-					t.Fatalf("expected validation error, got nil (written=%d failed=%v)", written, failed)
+					t.Fatal("expected validation error, got nil")
 				}
 				if !errs.IsInvalid(err) {
 					t.Errorf("expected ErrorInvalid class, got %T: %v", err, err)
@@ -93,23 +92,7 @@ func TestAddTriples_ValidationRejectsBeforeCAS(t *testing.T) {
 				if tt.wantSubstring != "" && !strings.Contains(err.Error(), tt.wantSubstring) {
 					t.Errorf("error %q should contain %q", err.Error(), tt.wantSubstring)
 				}
-				if written != 0 {
-					t.Errorf("validation rejection must not commit any triples (written=%d)", written)
-				}
-				if len(failed) != 0 {
-					t.Errorf("validation rejection has no FailedSubjects (got %v)", failed)
-				}
 				return
-			}
-
-			// Empty-slice case: nil-slice noop, no error, no work.
-			if len(tt.triples) == 0 {
-				if err != nil {
-					t.Errorf("empty batch should be a noop, got err=%v", err)
-				}
-				if written != 0 {
-					t.Errorf("empty batch must not commit anything (written=%d)", written)
-				}
 			}
 		})
 	}

@@ -201,6 +201,22 @@ func TestKVStore_ErrorDetection(t *testing.T) {
 		assert.True(t, IsKVConflictError(err))
 		assert.Equal(t, ErrKVRevisionMismatch, err)
 	})
+
+	t.Run("revision-fenced delete", func(t *testing.T) {
+		key := "revision-delete-key"
+		revision, err := kvStore.Put(ctx, key, []byte("current"))
+		require.NoError(t, err)
+
+		err = kvStore.DeleteAtRevision(ctx, key, revision+1)
+		assert.ErrorIs(t, err, ErrKVRevisionMismatch)
+		_, err = kvStore.Get(ctx, key)
+		require.NoError(t, err, "stale delete must preserve the current value")
+
+		err = kvStore.DeleteAtRevision(ctx, key, revision)
+		require.NoError(t, err)
+		_, err = kvStore.Get(ctx, key)
+		assert.ErrorIs(t, err, ErrKVKeyNotFound)
+	})
 }
 
 func TestKVStore_Watch(t *testing.T) {

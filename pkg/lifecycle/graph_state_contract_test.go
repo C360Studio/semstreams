@@ -9,7 +9,6 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/nats-io/nats.go/jetstream"
 )
 
 func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
@@ -38,33 +37,66 @@ func TestGetLatchesGraphStatePoisonAndReturnsNoProjection(t *testing.T) {
 	}
 }
 
-func TestHistoryReturnsNoPartialEventsWhenAnyRevisionIsPoisoned(t *testing.T) {
+func TestHistoryReturnsNoPartialEventsWhenCurrentEntityIsPoisoned(t *testing.T) {
 	t.Parallel()
 
 	mgr, _, bucket := newTestManager(t)
 	entityID := "acme.ops.lifecycle.gcs.mission.history"
-	valid, err := graph.MarshalEntityState(&graph.EntityState{
-		ID: entityID,
-		Triples: []message.Triple{{
-			Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "planning",
-		}},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	bucket.history[entityID] = []jetstream.KeyValueEntry{
-		&fakeKVEntry{key: entityID, value: valid, revision: 1, created: time.Now()},
-		&fakeKVEntry{key: entityID, value: poisonedLifecycleState(entityID), revision: 2, created: time.Now()},
-	}
+	bucket.raw[entityID] = poisonedLifecycleState(entityID)
 
 	events, err := mgr.History(context.Background(), "fixture", entityID)
 	if err == nil || !errs.IsFatal(err) {
 		t.Fatalf("History error = %T %v, want fatal reset-required", err, err)
 	}
 	if events != nil {
-		t.Fatalf("History events = %#v, want nil rather than partial revision replay", events)
+		t.Fatalf("History events = %#v, want nil rather than partial transition records", events)
 	}
 	assertResetReason(t, err, graph.GraphStateReasonNoncanonicalPredicate)
+}
+
+func TestHistoryRejectsMalformedTransitionRecordAsAWhole(t *testing.T) {
+	t.Parallel()
+
+	mgr, _, bucket := newTestManager(t)
+	entityID := "acme.ops.lifecycle.gcs.mission.malformed-history"
+	bucket.put(entityID, &graph.EntityState{
+		ID: entityID,
+		Triples: []message.Triple{
+			{Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "planning"},
+			{Subject: entityID, Predicate: transitionPredicateTo, Object: "planning", Context: "transition-1"},
+		},
+	})
+
+	events, err := mgr.History(context.Background(), "fixture", entityID)
+	if err == nil {
+		t.Fatal("History error=nil, want malformed transition record error")
+	}
+	if events != nil {
+		t.Fatalf("History events=%#v, want nil on malformed record", events)
+	}
+}
+
+func TestHistoryRejectsTransitionRecordDriftFromCurrentPhase(t *testing.T) {
+	t.Parallel()
+
+	mgr, _, bucket := newTestManager(t)
+	entityID := "acme.ops.lifecycle.gcs.mission.drifted-history"
+	record := newTransitionRecord("", "planning", time.Now(), TransitionSourceFramework, "created")
+	bucket.put(entityID, &graph.EntityState{
+		ID: entityID,
+		Triples: append(
+			[]message.Triple{{Subject: entityID, Predicate: "mission.lifecycle.phase", Object: "flying"}},
+			transitionRecordsToTriples(entityID, []transitionRecord{record})...,
+		),
+	})
+
+	events, err := mgr.History(context.Background(), "fixture", entityID)
+	if !errors.Is(err, ErrInvalidTransitionRecord) {
+		t.Fatalf("History error=%v, want ErrInvalidTransitionRecord", err)
+	}
+	if events != nil {
+		t.Fatalf("History events=%#v, want nil on phase/record drift", events)
+	}
 }
 
 func poisonedLifecycleState(entityID string) []byte {

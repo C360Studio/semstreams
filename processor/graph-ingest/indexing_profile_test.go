@@ -18,12 +18,11 @@ import (
 )
 
 // ADR-054 Phase 1: graph-ingest stamps a single-valued entity.indexing.profile
-// triple at every entity-CREATION seam (create_with_triples, Graphable arrival,
-// stub→real upgrade), resolving via precedence envelope > Graphable
+// triple at every entity-CREATION seam (canonical create and Graphable arrival),
+// resolving via precedence envelope > Graphable
 // IndexingProfiler > fallback floor (default control). It is NEVER stamped on a
-// plain update (immutable after create) except via the explicit envelope
-// override on update_with_triples. These tests drive the production mutation
-// handlers and create seams against the mock KV bucket.
+// re-arrival (immutable after create). These tests drive the production
+// mutation handlers and create seams against the mock KV bucket.
 
 const testProfileEntityID = "c360.platform.test.sys.widget.001"
 
@@ -68,19 +67,19 @@ func profileValues(es *graph.EntityState) []string {
 	return out
 }
 
-// --- create_with_triples (production handler) ---
+// --- canonical create (production handler) ---
 
-func TestIndexingProfile_CreateWithTriples_DefaultsToControlFloor(t *testing.T) {
+func TestIndexingProfile_Create_DefaultsToControlFloor(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	req := graph.CreateEntityWithTriplesRequest{
+	req := graph.CreateEntityRequest{
 		Entity:  &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
 		Triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "robotics", "status", "armed"), Object: true, Timestamp: time.Now()}},
 	}
 	data, _ := json.Marshal(req)
 
-	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
+	respData, err := comp.handleCanonicalCreate(context.Background(), data)
 	require.NoError(t, err)
-	var resp graph.CreateEntityWithTriplesResponse
+	var resp graph.CreateEntityResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
 
 	es := storedEntity(t, comp, testProfileEntityID)
@@ -89,18 +88,18 @@ func TestIndexingProfile_CreateWithTriples_DefaultsToControlFloor(t *testing.T) 
 	assert.Equal(t, 1, nonProfileTripleCount(es), "the stamp must not displace the user triple")
 }
 
-func TestIndexingProfile_CreateWithTriples_EnvelopeProfileWins(t *testing.T) {
+func TestIndexingProfile_Create_EnvelopeProfileWins(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	req := graph.CreateEntityWithTriplesRequest{
+	req := graph.CreateEntityRequest{
 		Entity:          &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
 		Triples:         []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "hello", Timestamp: time.Now()}},
 		IndexingProfile: vocabulary.IndexingProfileContent,
 	}
 	data, _ := json.Marshal(req)
 
-	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
+	respData, err := comp.handleCanonicalCreate(context.Background(), data)
 	require.NoError(t, err)
-	var resp graph.CreateEntityWithTriplesResponse
+	var resp graph.CreateEntityResponse
 	require.NoError(t, json.Unmarshal(respData, &resp))
 
 	es := storedEntity(t, comp, testProfileEntityID)
@@ -108,72 +107,15 @@ func TestIndexingProfile_CreateWithTriples_EnvelopeProfileWins(t *testing.T) {
 		"explicit envelope profile must win over the floor")
 }
 
-func TestIndexingProfile_CreateWithTriples_InvalidEnvelopeFallsToFloor(t *testing.T) {
+func TestIndexingProfile_Create_InvalidEnvelopeRejected(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
-	req := graph.CreateEntityWithTriplesRequest{
+	req := graph.CreateEntityRequest{
 		Entity:          &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
 		IndexingProfile: "not-a-real-profile",
 	}
 	data, _ := json.Marshal(req)
 
-	respData, err := comp.handleEntityCreateWithTriples(context.Background(), data)
-	require.NoError(t, err)
-	var resp graph.CreateEntityWithTriplesResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-
-	es := storedEntity(t, comp, testProfileEntityID)
-	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
-		"an invalid envelope profile is treated as absent and falls to the floor")
-}
-
-// --- update_with_triples explicit override ---
-
-func TestIndexingProfile_UpdateOverride_ReplacesProfile(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	// Create with the control floor.
-	createReq := graph.CreateEntityWithTriplesRequest{
-		Entity: &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
-	}
-	createData, _ := json.Marshal(createReq)
-	_, err := comp.handleEntityCreateWithTriples(ctx, createData)
-	require.NoError(t, err)
-	require.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(storedEntity(t, comp, testProfileEntityID)))
-
-	// Override to content via the explicit envelope channel.
-	updateReq := graph.UpdateEntityWithTriplesRequest{
-		Entity:          &graph.EntityState{ID: testProfileEntityID},
-		IndexingProfile: vocabulary.IndexingProfileContent,
-	}
-	updateData, _ := json.Marshal(updateReq)
-	respData, err := comp.handleEntityUpdateWithTriples(ctx, updateData)
-	require.NoError(t, err)
-	var resp graph.MutationResponse
-	require.NoError(t, json.Unmarshal(respData, &resp))
-
-	es := storedEntity(t, comp, testProfileEntityID)
-	assert.Equal(t, []string{vocabulary.IndexingProfileContent}, profileValues(es),
-		"explicit override must REPLACE the profile (single-valued, no accumulation)")
-}
-
-func TestIndexingProfile_UpdateOverride_InvalidRejected(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	createReq := graph.CreateEntityWithTriplesRequest{Entity: &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()}}
-	createData, _ := json.Marshal(createReq)
-	_, err := comp.handleEntityCreateWithTriples(ctx, createData)
-	require.NoError(t, err)
-
-	updateReq := graph.UpdateEntityWithTriplesRequest{
-		Entity:          &graph.EntityState{ID: testProfileEntityID},
-		IndexingProfile: "bogus",
-	}
-	updateData, _ := json.Marshal(updateReq)
-	// ADR-060: an invalid explicit override is rejected as a typed error
-	// (invalid_request), not an in-body Success=false.
-	respData, err := comp.handleEntityUpdateWithTriples(ctx, updateData)
+	respData, err := comp.handleCanonicalCreate(context.Background(), data)
 	require.Error(t, err, "an invalid explicit override must be rejected (not silently dropped)")
 	assert.Nil(t, respData, "a hard failure returns no body")
 	var ce *errs.ClassifiedError
@@ -258,48 +200,19 @@ func TestIndexingProfile_ReArrival_DoesNotAccumulateOrReProfile(t *testing.T) {
 		"re-arrival must keep the create-time profile and stay single-valued")
 }
 
-// --- stub → real upgrade ---
-
-func TestIndexingProfile_StubUpgrade_StampsOnRealArrival(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	ctx := context.Background()
-
-	// Simulate a referential-integrity stub already present (no profile).
-	stub := &graph.EntityState{
-		ID:      testProfileEntityID,
-		Version: 1,
-		Triples: []message.Triple{{Subject: testProfileEntityID, Predicate: "core.identity.stub", Object: true, Timestamp: time.Now()}},
-	}
-	stubData, _ := json.Marshal(stub)
-	_, err := comp.entityBucket.Put(ctx, testProfileEntityID, stubData)
-	require.NoError(t, err)
-	require.Empty(t, profileValues(storedEntity(t, comp, testProfileEntityID)), "stub starts with no profile")
-
-	// Real producer arrives and merges into the stub: this is the entity's true
-	// birth, so the profile must be stamped now (floor, since none declared).
-	realArrival := &testGraphablePayload{id: testProfileEntityID, triples: []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "doc", "body", "text"), Object: "real", Timestamp: time.Now()}}}
-	entity, err := comp.extractEntityFromMessage(message.NewBaseMessage(realArrival.Schema(), realArrival, "test"))
-	require.NoError(t, err)
-	require.NoError(t, comp.MergeEntity(ctx, entity))
-
-	es := storedEntity(t, comp, testProfileEntityID)
-	assert.Equal(t, []string{vocabulary.IndexingProfileControl}, profileValues(es),
-		"a real producer merging into a profile-less stub must stamp the profile")
-}
-
 // --- ADR-054 §1 invariant: the structural graph is NEVER gated by profile ---
 
 func TestIndexingProfile_StructuralGraphNeverGated_TraceEntityStaysQueryable(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	ctx := context.Background()
 
-	req := graph.CreateEntityWithTriplesRequest{
+	req := graph.CreateEntityRequest{
 		Entity:          &graph.EntityState{ID: testProfileEntityID, MessageType: testWidgetMessageType()},
 		Triples:         []message.Triple{{Subject: testProfileEntityID, Predicate: semantictest.Predicate(t, "audit", "event", "kind"), Object: "trace-line", Timestamp: time.Now()}},
 		IndexingProfile: vocabulary.IndexingProfileTrace,
 	}
 	createData, _ := json.Marshal(req)
-	_, err := comp.handleEntityCreateWithTriples(ctx, createData)
+	_, err := comp.handleCanonicalCreate(ctx, createData)
 	require.NoError(t, err)
 
 	// A 'trace' entity is excluded from EMBEDDING (Phase 3) but must remain
@@ -346,12 +259,12 @@ func TestIndexingProfile_FloorMetric_FiresExactlyOnFloor(t *testing.T) {
 	counter := getIndexingProfileDefaultMetric(nil).WithLabelValues(mt.Key())
 
 	create := func(id, profile string) {
-		req := graph.CreateEntityWithTriplesRequest{
+		req := graph.CreateEntityRequest{
 			Entity:          &graph.EntityState{ID: id, MessageType: mt},
 			IndexingProfile: profile,
 		}
 		data, _ := json.Marshal(req)
-		_, err := comp.handleEntityCreateWithTriples(ctx, data)
+		_, err := comp.handleCanonicalCreate(ctx, data)
 		require.NoError(t, err)
 	}
 

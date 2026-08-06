@@ -1,189 +1,86 @@
-# NATS Request vs RequestWithRetry — When to use which
+# NATS Request and Retry Policy
 
-## TL;DR
+Request/reply failure is not one category. Choose the call shape from the operation's commit semantics and lifecycle
+context, not from whether the subject happens to be called a query or mutation.
 
-```
-If the call writes state (mutation):
-  → use RequestWithRetry with DefaultRetryConfig
-  → MUST be idempotent on the responder side
+## Decision table
 
-If the call reads state (query) in STEADY STATE (responder already up):
-  → use bare Request / RequestClassified
-  → timeout = real signal; surface to the caller
+| Call class | API | Retry policy |
+|---|---|---|
+| Canonical graph mutation | `RequestClassified` through the graph mutation client | Exactly one transport attempt |
+| Steady-state query | `RequestClassified` | Exactly one attempt; surface timeout |
+| Cold-start/readiness probe | `RequestReadyClassified` | Short probes within one bounded readiness budget |
+| Explicitly idempotent non-graph request | `RequestWithRetryClassified` | Contract-authorized redelivery only |
 
-If the call reads state at COLD START / initial reconcile / post-reconnect
-(the responder may not be subscribed yet):
-  → use RequestReady / RequestReadyClassified
-  → short probe timeout + bounded budget
-  → "not ready yet" is retried; a hung responder still fails within the budget
-```
+Do not select `RequestWithRetryClassified` merely because a call writes state. Data-level convergence does not prove
+that replaying an ambiguous request is safe or that the second response describes the first attempt.
 
-This rule is permanent. Don't make ad-hoc choices per call site.
+## Canonical graph mutations
 
-## Why the distinction matters
+Create, reconcile, append, and delete always use one `RequestClassified` transport attempt. The typed graph client
+preserves what the transport can prove:
 
-`natsClient.RequestWithRetry(..., DefaultRetryConfig())` retries 3
-times with 100ms → 2s exponential backoff on **any error** —
-including "no responders" (subscriber not yet subscribed) and
-timeout (responder hung, slow, or genuinely broken).
+- A definite validation, not-found, exists, or revision-mismatch response means no write occurred.
+- `unavailable` means NATS reported no responder, so the request was not delivered.
+- `deadline` means the context was already done before send, so the request was not delivered.
+- `commit_unknown` covers a post-send timeout or disconnect and a malformed or semantically invalid success reply.
+  The request may have committed, but no valid reply proves its result.
+- Matching state found later proves only current state; it does not prove which request authored it.
 
-For a **mutation** that's idempotent at the data level (writing the
-same triple twice → same graph state), retry-on-any-error is
-exactly the right policy. The dominant failure mode is "graph
-responder isn't subscribed yet" during startup races, restarts, or
-NATS reconnects. Without retry, the mutation silently fails, the
-caller logs-and-swallows, downstream readers see incomplete state,
-and nobody notices until a graph audit reveals the gap.
+The framework never automatically retries a graph mutation. A component may choose a new attempt after a definite
+non-commit. For example, after `revision_mismatch` it can exact-read, recompute the complete desired state, and issue
+one new reconcile according to its domain policy. It must not automatically retry `commit_unknown`.
 
-For a **query**, retry-on-any-error is wrong. A genuinely hung
-responder turns a 5s timeout into ~12.7s of wallclock retry storm.
-That masks "responder is broken" as latency, breaks alerting, and
-delays user-visible error surfacing. The right behavior for a
-**steady-state** query is: timeout → return the error → caller
-decides whether to retry, fall back, or surface to the user.
+## Steady-state queries
 
-## The third bucket: cold-start / readiness-gated reads (gh#420)
-
-The steady-state query rule assumes the responder **exists** — so a
-timeout means "hung." That assumption breaks for a read issued at
-**cold start**, on a component's **initial reconcile**, or right
-after a **NATS reconnect**, where the responder may simply not be
-subscribed yet. There, a timeout means "not ready yet," and bare
-`Request` degrades badly: whether an absent responder surfaces as a
-fast `nats.ErrNoResponders` or a full-timeout hang is **server-config
-dependent** (see `request_integration_test.go`), so the read can burn
-the entire query timeout before failing — then the caller skips a
-pass and waits for a backstop. gh#420 (gated-dag's boot read hanging
-the full 30s `query_timeout`) is the canonical case.
-
-`RequestReady` / `RequestReadyClassified` handle this without
-reintroducing the query anti-pattern:
-
-- **Short per-attempt probe timeout** + **bounded total budget**. A
-  not-yet-subscribed responder fails a probe fast and is retried;
-  the moment the responder comes up, the next probe succeeds.
-- **A received reply — including a handler-error reply — STOPS the
-  loop.** A reply means the responder is up; only a *silent* responder
-  (never replies) is retried, and only until the budget is spent. So a
-  genuinely hung responder is **bounded by the total budget** (via the
-  short per-attempt probe) rather than hanging on one long timeout — the
-  short probe is what saves you, not the retry, so keep the probe short.
-- Use `IsNoResponders(err)` to distinguish a never-appeared responder
-  from a hung one *when the server fast-fails*. But the loop must
-  retry on a plain probe **timeout** too — fast-fail is server-config
-  dependent (see `request_integration_test.go`), so a no-fast-fail
-  server surfaces an absent responder as a timeout, not `ErrNoResponders`.
-  Never "optimize" the loop to retry only `IsNoResponders`.
-
-**Only the OUTERMOST lifecycle-triggered reader uses `RequestReady*`.**
-A steady-state handler that *forwards* to a downstream responder (e.g.
-a `graph-query` handler serving an inbound query by calling
-`graph.ingest.query.*`) stays `Request*` — even though the very first
-request at cold system boot can race the downstream's readiness.
-Readiness tolerance belongs to the outermost lifecycle-triggered read
-(the component reading on its own `Start()`/reconcile), **not** the
-intermediate request-driven hop. Converting a passthrough hop reintroduces
-the hung-responder mask for *all* steady-state traffic through it, and
-double-counts the budget inside the caller's own timeout. When in doubt:
-*is this read triggered by the component's own lifecycle, or by an
-inbound request?* Only the former converts.
-
-**Signal a never-appeared responder — don't let it go silent.** A
-misconfigured subject (typo, responder never deployed) now burns the
-whole budget on every boot/reconcile and then classifies transient — a
-lifecycle loop will log-and-skip forever, laundering a config error into
-a permanent slow-loop. Callers of `RequestReady*` MUST, on budget
-exhaustion, check `IsNoResponders(err)` and emit a **distinct, actionable
-signal** (a one-shot Warn naming the subject + a metric where the
-component has one) so "responder never appeared" is loud, not silence.
-
-This is a **cold-start / first-read** tool. Once readiness is
-established, subsequent reads are steady-state — keep using `Request`
-so a later hung responder surfaces immediately.
-
-## Idempotency rule (mutation responders)
-
-Any responder that handles a request through `RequestWithRetry`
-**must** be safe receiving the same request twice. The retry path
-will re-deliver to the responder if the first attempt's response
-gets lost (e.g., subscriber crash between processing and reply).
-
-For graph-mutation responders this is structural: the graph is a
-set of triples, so adding `(s, p, o)` twice = same state, removing
-already-removed = no-op success. New mutation responders should
-preserve this property — if a responder needs to count requests or
-log every receive, add a request-ID dedup cache before relying on
-the retry path.
-
-## Concrete shape
+Use `RequestClassified` and surface timeout. Retrying a hung responder turns a useful failure signal into a longer
+latency spike and multiplies load on an unhealthy dependency.
 
 ```go
-// MUTATION: retry on transient failures
-respData, err := natsClient.RequestWithRetry(
-    ctx, mutationSubject, reqData, mutationTimeout,
-    natsclient.DefaultRetryConfig(),
+data, err := natsClient.RequestClassified(ctx, querySubject, request, queryTimeout)
+```
+
+The caller decides whether to fall back, retry at a higher application boundary, or report the failure.
+
+## Cold-start and readiness-gated reads
+
+A component's initial reconcile or post-reconnect read may run before its responder subscribes. Use
+`RequestReadyClassified` only at that outer lifecycle boundary:
+
+```go
+data, err := natsClient.RequestReadyClassified(
+    ctx,
+    querySubject,
+    request,
+    natsclient.DefaultReadinessProbeTimeout,
+    natsclient.DefaultReadinessBudget,
 )
 ```
 
-```go
-// STEADY-STATE QUERY: no retry, surface timeout
-respData, err := natsClient.Request(
-    ctx, querySubject, reqData, queryTimeout,
-)
-```
+The helper uses short probes within a bounded total budget. A received reply, including a classified handler error,
+stops the loop. It retries silence because absence may surface as either no-responders or timeout depending on server
+configuration. On budget exhaustion, callers should emit an actionable signal naming the dependency.
 
-```go
-// COLD-START / RECONCILE READ: short probe + bounded budget
-respData, err := natsClient.RequestReadyClassified(
-    ctx, querySubject, reqData,
-    natsclient.DefaultReadinessProbeTimeout, // per-attempt (2s)
-    natsclient.DefaultReadinessBudget,       // total (30s)
-)
-```
+Only the outer lifecycle-triggered reader uses this helper. A request handler forwarding to another responder remains
+single-attempt; nesting readiness loops hides steady-state failures and double-counts caller budgets.
 
-## Current call-site survey (2026-04-28, beta.20 — pre-gh#420)
+## Explicitly idempotent non-graph requests
 
-> This snapshot predates the readiness bucket. It lists "Queries" as
-> bare `Request`, but most now use `RequestClassified` (ADR-060). The
-> gh#420 sweep re-classifies the lifecycle-triggered reads within it
-> into the readiness bucket; treat the categories below as the
-> mutation/steady-state split, not the final inventory.
+`RequestWithRetryClassified` remains available for a non-graph operation whose own contract explicitly authorizes
+redelivery after transport ambiguity. The responder must be safe if the first attempt committed and only its reply was
+lost. This is a per-operation decision, not a package default.
 
-### Mutations (using RequestWithRetry)
+Before using it, document:
 
-- `processor/agentic-loop/graph_writer.go` — trajectory triples
-- `processor/rule/triple_mutator.go` — rule-driven add_triple /
-  remove_triple actions
-- `graph/inference/applier.go` — inference-emitted triples
-- `processor/agentic-tools/decide.go` — decide tool's terminal
-  triple (coordinator pattern)
+1. the stable logical request identity;
+2. why duplicate delivery cannot duplicate externally visible effects;
+3. which errors are retried and the bounded budget; and
+4. how operators distinguish exhaustion from a handler rejection.
 
-### Queries (using bare Request)
+If those facts are not explicit, use `RequestClassified` and let the component own the next action.
 
-- `processor/graph-query/*` — all graph queries
-- `graph/query/client.go` — graph-index queries
-- `processor/graph-query/pathrag.go` — including the
-  `graph.ingest.query.entity` existence check (pure read)
-- `processor/graph-clustering/similarity.go` — similarity query
-- `gateway/http/http.go`, `gateway/graph-gateway/component.go` —
-  gateway query proxies
-- `graph/llm/nats_content_fetcher.go` — content fetch
+## Classified replies
 
-If you find a new call site that doesn't fit a bucket, the default
-is to surface it: open a ticket with the call site path, the
-subject, and what state (if any) it writes.
-
-**Cold-start reads (gh#420) are a distinct third category.** A query
-issued during a component's own `Start()` / initial reconcile /
-post-reconnect resubscribe belongs in the readiness bucket
-(`RequestReady*`), not the steady-state query bucket — the responder
-may not be up yet. The distinguishing test: *is this read triggered by
-an incoming request/event (steady state) or by the component's own
-lifecycle (cold start)?* The latter uses `RequestReady*`.
-
-## History
-
-The pattern was inconsistent through beta.19. Beta.20 codified the
-rule and audited every site. The original incident:
-`feedback_approval_required_gap.md`'s sibling memory
-`feedback_nats_request_retry_audit.md` has the full story.
+Use classified request APIs for new code. Plain `Request` and `RequestWithHeaders` do not inspect response error
+headers and can misdecode an error body as success. `RequestClassified`, `RequestReadyClassified`, and the explicitly
+authorized retry variant all preserve handler class/code plus transport errors.

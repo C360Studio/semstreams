@@ -245,14 +245,29 @@ func BuildPortFromDefinition(def PortDefinition, direction Direction) Port {
 		}
 		port.Config = jsPort
 	case "nats-request":
-		timeout := def.Timeout
-		if timeout == "" {
-			timeout = "1s" // Default timeout
-		}
-		port.Config = NATSRequestPort{
+		requestPort := NATSRequestPort{
 			Subject: def.Subject,
-			Timeout: timeout,
+			Timeout: def.Timeout,
 		}
+		if def.Interface != "" {
+			requestPort.Interface = &InterfaceContract{Type: def.Interface, Version: "v1"}
+		}
+		if configPort, ok := def.Config.(NATSRequestPort); ok {
+			if configPort.Subject != "" {
+				requestPort.Subject = configPort.Subject
+			}
+			if configPort.Timeout != "" {
+				requestPort.Timeout = configPort.Timeout
+			}
+			requestPort.Retries = configPort.Retries
+			if configPort.Interface != nil {
+				requestPort.Interface = configPort.Interface
+			}
+		}
+		if requestPort.Timeout == "" {
+			requestPort.Timeout = "1s"
+		}
+		port.Config = requestPort
 	case "kv-watch", "kvwatch":
 		// Parse KV watch config
 		bucket := def.Bucket

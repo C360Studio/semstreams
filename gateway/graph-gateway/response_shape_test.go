@@ -187,10 +187,10 @@ func routedSubjectShapes() []routedSubjectShape {
 			env(graph.CompoundPredicateData{}), true},
 
 		// --- NON-envelope producers ---------------------------------------
-		{"graph.query.entity", "graph.ingest.query.entity -> graph-ingest, raw EntityState",
-			raw(graph.EntityState{ID: "acme.ops.test.system.widget.001"}), false},
-		{"graph.query.entityByAlias", "processor/graph-query/query.go:144 alias->entity, raw EntityState",
-			raw(graph.EntityState{ID: "acme.ops.test.system.widget.001"}), false},
+		{"graph.query.entity", "graph.ingest.query.entity -> graph-ingest, exact entity plus KV revision",
+			raw(graph.ExactEntity{Entity: &graph.EntityState{ID: "acme.ops.test.system.widget.001"}, KVRevision: 1}), false},
+		{"graph.query.entityByAlias", "processor/graph-query/query.go alias->exact entity plus KV revision",
+			raw(graph.ExactEntity{Entity: &graph.EntityState{ID: "acme.ops.test.system.widget.001"}, KVRevision: 1}), false},
 		{"graph.query.prefix", "processor/graph-ingest/query.go PrefixQueryResponse{entities,next_cursor}",
 			raw(graph.PrefixQueryResponse{Entities: []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}}}), false},
 		{"graph.query.relationships", "processor/graph-query/query.go:342 decodes the index envelope, re-marshals the array",

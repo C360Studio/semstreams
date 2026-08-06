@@ -12,6 +12,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -50,6 +51,17 @@ func startBatchTestComponent(t *testing.T) (context.Context, *Component) {
 	return ctx, c
 }
 
+func appendThroughCanonicalHandler(t *testing.T, ctx context.Context, c *Component, triples []message.Triple) graph.AppendTriplesResponse {
+	t.Helper()
+	request, err := json.Marshal(graph.AppendTriplesRequest{Triples: triples})
+	require.NoError(t, err)
+	body, err := c.handleCanonicalAppend(ctx, request)
+	require.NoError(t, err)
+	var response graph.AppendTriplesResponse
+	require.NoError(t, json.Unmarshal(body, &response))
+	return response
+}
+
 // TestIntegration_AddTriples_SingleSubjectIsOneCAS pins the load-bearing
 // optimisation behind ADR-036 §Stage 2: many triples sharing one Subject
 // commit in a single CAS round-trip. Failure shows up as multiple
@@ -73,17 +85,16 @@ func TestIntegration_AddTriples_SingleSubjectIsOneCAS(t *testing.T) {
 	baseTripleCount := len(preEntity.Triples)
 
 	triples := []message.Triple{
-		{Subject: entityID, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
-		{Subject: entityID, Predicate: "agent.todo.content", Object: "Write code", Timestamp: now, Confidence: 1.0},
-		{Subject: entityID, Predicate: "agent.todo.status", Object: "pending", Timestamp: now, Confidence: 1.0},
-		{Subject: entityID, Predicate: "agent.todo.position", Object: 0, Timestamp: now, Confidence: 1.0},
-		{Subject: entityID, Predicate: "agent.todo.updated-at", Object: now.Format(time.RFC3339), Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "test.batch.id", Object: "1", Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "test.batch.content", Object: "Write code", Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "test.batch.status", Object: "pending", Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "test.batch.position", Object: 0, Timestamp: now, Confidence: 1.0},
+		{Subject: entityID, Predicate: "test.batch.updated-at", Object: now.Format(time.RFC3339), Timestamp: now, Confidence: 1.0},
 	}
 
-	written, failed, err := c.AddTriples(ctx, triples)
-	require.NoError(t, err)
-	require.Empty(t, failed)
-	assert.Equal(t, 5, written)
+	response := appendThroughCanonicalHandler(t, ctx, c, triples)
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, graph.MutationApplied, response.Results[0].Outcome)
 
 	// Single CAS → version increments by exactly 1 (not 5 — one per triple).
 	entry, err := c.entityBucket.Get(ctx, entityID)
@@ -121,17 +132,18 @@ func TestIntegration_AddTriples_MultiSubjectGroupsByEntity(t *testing.T) {
 	require.NoError(t, json.Unmarshal(preB.Value, &preEntityB))
 
 	triples := []message.Triple{
-		{Subject: idA, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
-		{Subject: idB, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
-		{Subject: idA, Predicate: "agent.todo.status", Object: "pending", Timestamp: now, Confidence: 1.0},
-		{Subject: idB, Predicate: "agent.todo.status", Object: "in_progress", Timestamp: now, Confidence: 1.0},
-		{Subject: idA, Predicate: "agent.todo.position", Object: 0, Timestamp: now, Confidence: 1.0},
+		{Subject: idA, Predicate: "test.batch.id", Object: "1", Timestamp: now, Confidence: 1.0},
+		{Subject: idB, Predicate: "test.batch.id", Object: "1", Timestamp: now, Confidence: 1.0},
+		{Subject: idA, Predicate: "test.batch.status", Object: "pending", Timestamp: now, Confidence: 1.0},
+		{Subject: idB, Predicate: "test.batch.status", Object: "in_progress", Timestamp: now, Confidence: 1.0},
+		{Subject: idA, Predicate: "test.batch.position", Object: 0, Timestamp: now, Confidence: 1.0},
 	}
 
-	written, failed, err := c.AddTriples(ctx, triples)
-	require.NoError(t, err)
-	require.Empty(t, failed)
-	assert.Equal(t, 5, written)
+	response := appendThroughCanonicalHandler(t, ctx, c, triples)
+	require.Len(t, response.Results, 2)
+	for _, result := range response.Results {
+		assert.Equal(t, graph.MutationApplied, result.Outcome)
+	}
 
 	entryA, err := c.entityBucket.Get(ctx, idA)
 	require.NoError(t, err)
@@ -159,28 +171,18 @@ func TestIntegration_AddTriples_ValidationRejectsWholeBatch(t *testing.T) {
 	now := time.Now()
 
 	triples := []message.Triple{
-		{Subject: entityID, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
-		{Subject: "", Predicate: "agent.todo.status", Object: "pending", Timestamp: now, Confidence: 1.0}, // bad
+		{Subject: entityID, Predicate: "test.batch.id", Object: "1", Timestamp: now, Confidence: 1.0},
+		{Subject: "", Predicate: "test.batch.status", Object: "pending", Timestamp: now, Confidence: 1.0}, // bad
 	}
 
-	written, failed, err := c.AddTriples(ctx, triples)
+	request, err := json.Marshal(graph.AppendTriplesRequest{Triples: triples})
+	require.NoError(t, err)
+	_, err = c.handleCanonicalAppend(ctx, request)
 	require.Error(t, err)
-	assert.Empty(t, failed, "pre-CAS validation failure has no FailedSubjects")
-	assert.Equal(t, 0, written)
 
 	// Confirm the valid triple was NOT silently committed.
 	_, err = c.entityBucket.Get(ctx, entityID)
 	assert.Error(t, err, "no partial commit on validation failure")
-}
-
-// TestIntegration_AddTriples_EmptyBatchIsNoop covers the degenerate case.
-func TestIntegration_AddTriples_EmptyBatchIsNoop(t *testing.T) {
-	ctx, c := startBatchTestComponent(t)
-
-	written, failed, err := c.AddTriples(ctx, nil)
-	require.NoError(t, err)
-	assert.Empty(t, failed)
-	assert.Equal(t, 0, written)
 }
 
 // TestIntegration_HandleTripleAddBatch_RoundTrip exercises the
@@ -197,33 +199,27 @@ func TestIntegration_HandleTripleAddBatch_RoundTrip(t *testing.T) {
 	// ADR-055: pre-create the entity before adding triples (must-exist).
 	require.NoError(t, c.MergeEntity(ctx, &graph.EntityState{ID: entityID}))
 
-	req := graph.AddTriplesBatchRequest{
+	req := graph.AppendTriplesRequest{
 		Triples: []message.Triple{
-			{Subject: entityID, Predicate: "agent.todo.id", Object: "1", Timestamp: now, Confidence: 1.0},
-			{Subject: entityID, Predicate: "agent.todo.status", Object: "pending", Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: "test.batch.id", Object: "1", Timestamp: now, Confidence: 1.0},
+			{Subject: entityID, Predicate: "test.batch.status", Object: "pending", Timestamp: now, Confidence: 1.0},
 		},
 	}
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respBytes, err := c.handleTripleAddBatch(ctx, reqBytes)
+	respBytes, err := c.handleCanonicalAppend(ctx, reqBytes)
 	require.NoError(t, err)
 
-	var resp graph.AddTriplesBatchResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.Equal(t, 2, resp.WrittenCount)
-	assert.Empty(t, resp.FailedSubjects)
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, graph.MutationApplied, resp.Results[0].Outcome)
 }
 
-// TestIntegration_AddTriples_PreservesInputOrderWithinSubject pins the
-// invariant that ADR-036 Stage 4's prompt assembler depends on:
-// triples emitted in input order are stored in input order on the
-// entity. write_todos writes [id, content, status, position,
-// updated_at] interleaved per item; ReconstructTodos parses the
-// stored slice in stride-of-5 to recover items. If a future
-// graph-ingest change reorders, dedups, or sorts triples on write
-// (e.g. for query efficiency), this test fails loudly so the change
-// also needs an ADR-036 Stage 4 update.
+// TestIntegration_AddTriples_PreservesInputOrderWithinSubject pins the append
+// lane's first-input ordering. Ordering is useful for stable reads but is not a
+// record-correlation mechanism; compound records must carry explicit identity.
 func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
@@ -247,10 +243,9 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 		})
 	}
 
-	written, failed, err := c.AddTriples(ctx, triples)
-	require.NoError(t, err)
-	require.Empty(t, failed)
-	assert.Equal(t, len(want), written)
+	response := appendThroughCanonicalHandler(t, ctx, c, triples)
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, graph.MutationApplied, response.Results[0].Outcome)
 
 	entry, err := c.entityBucket.Get(ctx, entityID)
 	require.NoError(t, err)
@@ -273,7 +268,7 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 		got = append(got, s)
 	}
 	require.Len(t, got, len(want), "exactly %d test.order.label triples must be present", len(want))
-	assert.Equal(t, want, got, "ADR-036 Stage 4 ReconstructTodos parses by stride; input order must be preserved")
+	assert.Equal(t, want, got, "append must preserve first-input order within one subject")
 }
 
 // TestIntegration_HandleTripleAddBatch_InvalidJSON pins the
@@ -282,9 +277,12 @@ func TestIntegration_AddTriples_PreservesInputOrderWithinSubject(t *testing.T) {
 func TestIntegration_HandleTripleAddBatch_InvalidJSON(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
-	respBytes, err := c.handleTripleAddBatch(ctx, []byte("not json"))
+	respBytes, err := c.handleCanonicalAppend(ctx, []byte("not json"))
 	// ADR-060: a malformed envelope is a typed invalid_request reject (no body).
-	requireClassifiedReject(t, respBytes, err, graph.ErrorCodeInvalidRequest, "invalid request")
+	assert.Nil(t, respBytes)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, graph.ErrorCodeInvalidRequest, classified.Code)
 }
 
 // TestIntegration_HandleTripleAdd_AbsentEntityRejects verifies ADR-055
@@ -295,21 +293,23 @@ func TestIntegration_HandleTripleAdd_AbsentEntityRejects(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	const subject = "c360.test.absent.single.entity.001"
-	req := graph.AddTripleRequest{
-		Triple: message.Triple{
+	req := graph.AppendTriplesRequest{
+		Triples: []message.Triple{{
 			Subject:    subject,
 			Predicate:  "evidence.note.value",
 			Object:     "should-not-land",
 			Confidence: 1.0,
-		},
+		}},
 	}
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respBytes, handlerErr := c.handleTripleAdd(ctx, reqBytes)
-	// ADR-060: a single must-exist add on an absent entity is a typed
-	// entity_not_found reject (invalid class), no longer an in-body Success=false.
-	requireClassifiedReject(t, respBytes, handlerErr, graph.ErrorCodeEntityNotFound, "")
+	respBytes, handlerErr := c.handleCanonicalAppend(ctx, reqBytes)
+	require.NoError(t, handlerErr)
+	var response graph.AppendTriplesResponse
+	require.NoError(t, json.Unmarshal(respBytes, &response))
+	require.Len(t, response.Results, 1)
+	assert.Equal(t, graph.MutationEntityNotFound, response.Results[0].Outcome)
 
 	// State must be unchanged: entity must still not exist.
 	_, getErr := c.entityBucket.Get(ctx, subject)
@@ -325,7 +325,7 @@ func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
 	ctx, c := startBatchTestComponent(t)
 
 	const subject = "c360.test.absent.batch.entity.001"
-	req := graph.AddTriplesBatchRequest{
+	req := graph.AppendTriplesRequest{
 		Triples: []message.Triple{
 			{Subject: subject, Predicate: "evidence.note.value", Object: "should-not-land", Confidence: 1.0},
 		},
@@ -333,14 +333,14 @@ func TestIntegration_HandleTripleAddBatch_AbsentEntityRejects(t *testing.T) {
 	reqBytes, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respBytes, handlerErr := c.handleTripleAddBatch(ctx, reqBytes)
-	require.NoError(t, handlerErr, "handler must not return a Go error; rejections are in the response body")
+	respBytes, handlerErr := c.handleCanonicalAppend(ctx, reqBytes)
+	require.NoError(t, handlerErr)
 
-	var resp graph.AddTriplesBatchResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(respBytes, &resp))
-	assert.Equal(t, 0, resp.WrittenCount, "no triples must be written for an absent entity")
-	require.Len(t, resp.FailedSubjects, 1, "FailedSubjects must name the one failing subject")
-	assert.Contains(t, resp.FailedSubjects, subject, "FailedSubjects must include the absent subject")
+	require.Len(t, resp.Results, 1)
+	assert.Equal(t, graph.MutationEntityNotFound, resp.Results[0].Outcome)
+	assert.Equal(t, subject, resp.Results[0].EntityID)
 
 	// State must be unchanged: entity must still not exist.
 	_, getErr := c.entityBucket.Get(ctx, subject)

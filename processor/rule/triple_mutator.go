@@ -1,147 +1,91 @@
-// Package rule provides triple mutation support via NATS request/response
 package rule
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	gtypes "github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
-// NATS subjects for graph mutations (must match processor/graph-ingest/mutations.go)
-const (
-	SubjectTripleAdd    = "graph.mutation.triple.add"
-	SubjectTripleRemove = "graph.mutation.triple.remove"
-	MutationTimeout     = 5 * time.Second
-)
+// MutationTimeout bounds each individual canonical graph request.
+const MutationTimeout = 5 * time.Second
 
-// tripleMutator implements TripleMutator using NATS request/response.
-// It calls the graph processor's mutation handlers and tracks KV revisions
-// against the originating ruleID to prevent per-rule feedback loops.
 type tripleMutator struct {
-	natsClient      *natsclient.Client
+	mutations       *graphmutation.Client
+	reader          graph.ExactEntityReader
 	revisionTracker revisionTracker
 }
 
-// revisionTracker is the interface for tracking KV revisions we generate.
-// This is implemented by the Processor to break per-rule feedback loops.
 type revisionTracker interface {
 	trackRuleRevision(ruleID, entityID string, revision uint64)
 }
 
-// newTripleMutator creates a new TripleMutator that uses NATS request/response.
-func newTripleMutator(natsClient *natsclient.Client, tracker revisionTracker) TripleMutator {
+func newTripleMutator(client *natsclient.Client, tracker revisionTracker) TripleMutator {
+	mutations, _ := graphmutation.NewClient(client, MutationTimeout)
 	return &tripleMutator{
-		natsClient:      natsClient,
+		mutations:       mutations,
+		reader:          graph.NewExactEntityReader(client, MutationTimeout),
 		revisionTracker: tracker,
 	}
 }
 
-// AddTriple adds a triple via NATS request/response and returns the KV revision.
-// The ruleID identifies the originating rule so the revision can be tracked
-// against that rule for per-rule feedback loop prevention. Pass an empty
-// ruleID for ad-hoc mutations that should not be tracked.
-func (m *tripleMutator) AddTriple(ctx context.Context, ruleID string, triple message.Triple) (uint64, error) {
-	if m.natsClient == nil {
-		return 0, fmt.Errorf("NATS client not available")
+func (m *tripleMutator) AddTriple(
+	ctx context.Context,
+	ruleID string,
+	triple message.Triple,
+) (uint64, error) {
+	if m == nil || m.mutations == nil {
+		return 0, fmt.Errorf("graph mutation client not available")
 	}
-
-	// Build request
-	req := gtypes.AddTripleRequest{
-		Triple: triple,
-	}
-	reqData, err := json.Marshal(req)
+	response, err := m.mutations.Append(ctx, graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
 	if err != nil {
-		return 0, fmt.Errorf("marshal request: %w", err)
+		return 0, fmt.Errorf("append triple: %w", err)
 	}
-
-	// RequestWithRetryClassified handles transient "no responders" errors when
-	// graph-gateway is restarting or its subscription hasn't yet
-	// propagated. Without retry, rule-driven add_triple actions
-	// silently fail during graph-gateway startup races. The mutation
-	// is idempotent (graph is a set of triples; same triple twice =
-	// same state), so retry is safe.
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := m.natsClient.RequestWithRetryClassified(ctx, SubjectTripleAdd, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return 0, fmt.Errorf("NATS request failed: %w", err)
+	result := response.Results[0]
+	if result.Outcome == graph.MutationFailed {
+		return 0, fmt.Errorf("append triple for %s failed: %s/%s", triple.Subject, result.Error.Class, result.Error.Code)
 	}
-
-	// Parse the success response for the KV revision. ADR-060: a handler
-	// failure now arrives as the classified err above, so the legacy
-	// !resp.Success second check is gone.
-	var resp gtypes.AddTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return 0, fmt.Errorf("unmarshal response: %w", err)
+	switch result.Outcome {
+	case graph.MutationApplied:
+		if m.revisionTracker != nil && ruleID != "" {
+			m.revisionTracker.trackRuleRevision(ruleID, triple.Subject, result.KVRevision)
+		}
+		return result.KVRevision, nil
+	case graph.MutationUnchanged:
+		return result.KVRevision, nil
+	case graph.MutationEntityNotFound:
+		return 0, fmt.Errorf("entity not found: %s", triple.Subject)
+	default:
+		return 0, fmt.Errorf("unexpected append outcome %q", result.Outcome)
 	}
-
-	// Track the revision to prevent this rule from re-triggering on its own
-	// write — but ONLY when this call actually produced it.
-	//
-	// Deduplicated means the add lane suppressed the triple because an identical
-	// six-field tuple was already stored: nothing was committed, so the live
-	// revision the handler reports belongs to whoever wrote last. Tracking it
-	// would arm shouldSkipRule against ANOTHER writer's revision, and since that
-	// skip consumes the entry and returns true exactly once, the rule's watcher
-	// would silently drop a genuine external change to this entity.
-	//
-	// This is not a rare shape: actions.go builds add_triple with a constant
-	// Source and empty Context, varying only Timestamp — all excluded from
-	// add-lane identity — so every re-assertion of the same (subject, predicate,
-	// object) is suppressed.
-	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" && !resp.Deduplicated {
-		m.revisionTracker.trackRuleRevision(ruleID, triple.Subject, resp.KVRevision)
-	}
-
-	return resp.KVRevision, nil
 }
 
-// RemoveTriple removes a triple via NATS request/response and returns the KV revision.
-// See AddTriple for the meaning of ruleID.
-func (m *tripleMutator) RemoveTriple(ctx context.Context, ruleID, subject, predicate string) (uint64, error) {
-	if m.natsClient == nil {
-		return 0, fmt.Errorf("NATS client not available")
+func (m *tripleMutator) RemoveTriple(
+	ctx context.Context,
+	ruleID string,
+	entityID string,
+	predicate string,
+) (uint64, error) {
+	if m == nil || m.mutations == nil || m.reader == nil {
+		return 0, fmt.Errorf("graph mutation client not available")
 	}
-
-	// Build request
-	req := gtypes.RemoveTripleRequest{
-		Subject:   subject,
-		Predicate: predicate,
-	}
-	reqData, err := json.Marshal(req)
+	exact, err := m.reader.ReadExactEntity(ctx, entityID)
 	if err != nil {
-		return 0, fmt.Errorf("marshal request: %w", err)
+		return 0, fmt.Errorf("read entity before reconcile: %w", err)
 	}
-
-	// RequestWithRetryClassified: same rationale as AddTriple. Removing
-	// already-removed is a no-op success on the responder side, so
-	// duplicate retries converge to the same state.
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := m.natsClient.RequestWithRetryClassified(ctx, SubjectTripleRemove, reqData, MutationTimeout, natsclient.DefaultRetryConfig())
+	response, err := m.mutations.Reconcile(ctx, graph.ReconcilePredicatesRequest{
+		EntityID: entityID, ExpectedRevision: exact.KVRevision,
+		Predicates: []string{predicate}, Desired: nil,
+	})
 	if err != nil {
-		return 0, fmt.Errorf("NATS request failed: %w", err)
+		return 0, fmt.Errorf("remove predicate %s from %s: %w", predicate, entityID, err)
 	}
-
-	// Parse the success response for the KV revision. ADR-060: handler
-	// failures arrive as the classified err above.
-	var resp gtypes.RemoveTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return 0, fmt.Errorf("unmarshal response: %w", err)
+	if response.Outcome == graph.MutationApplied && m.revisionTracker != nil && ruleID != "" {
+		m.revisionTracker.trackRuleRevision(ruleID, entityID, response.KVRevision)
 	}
-
-	// Same rule as AddTriple's tracking gate: !resp.Removed means no stored
-	// triple carried the predicate (or the entity was gone), so nothing was
-	// committed and the reported revision is some other writer's. This hazard
-	// pre-dates add-lane deduplication — RemoveTriple has had a no-op path since
-	// the errNoOpRemove sentinel landed — but it is the same defect and is fixed
-	// here rather than left as a known exception.
-	if m.revisionTracker != nil && resp.KVRevision > 0 && ruleID != "" && resp.Removed {
-		m.revisionTracker.trackRuleRevision(ruleID, subject, resp.KVRevision)
-	}
-
-	return resp.KVRevision, nil
+	return response.KVRevision, nil
 }

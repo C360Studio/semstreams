@@ -195,14 +195,13 @@ func (e *EmitDiagnosisExecutor) emitDiagnosis(ctx context.Context, call agentic.
 	// finding entity being born.
 	//
 	// gh#390: each call mints a NEW ops.diagnosis.finding.{uuid} entity, so this
-	// is a BIRTH — the entity must be CREATED via create_with_triples carrying a
-	// typed-origin envelope, NOT appended via add_batch. graph-ingest enforces
-	// must-exist on triple.add / add_batch, so the pre-fix AddTriplesBatch was
-	// rejected ("kv: key not found") and the finding silently never landed in
-	// the graph (e2e:ops: 0/3 findings). create_with_triples is atomic
+	// is a BIRTH — the entity must be CREATED via entity.create carrying a
+	// typed-origin envelope, not appended. Append is must-exist, so the old
+	// append-before-birth path returned not-found and the finding never landed in
+	// the graph (e2e:ops: 0/3 findings). entity.create is atomic
 	// (all-or-nothing), preserving the no-partial-finding contract.
 	triples := buildEmitDiagnosisTriples(diagnosisEntityID, loopEntityID, args, now)
-	if err := e.publisher.CreateEntityWithTriples(ctx, diagnosisEntityID, agentic.OpsDiagnosisMessageType(), triples); err != nil {
+	if err := e.publisher.Create(ctx, diagnosisEntityID, agentic.OpsDiagnosisMessageType(), triples); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("publish diagnosis triples: %v", err),

@@ -685,7 +685,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "mutation_out",
 					Direction: component.DirectionOutput,
-					Config:    component.NATSRequestPort{Subject: "graph.mutation.upsert"},
+					Config:    component.NATSRequestPort{Subject: "example.mutation.upsert"},
 				},
 			},
 		)
@@ -695,7 +695,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "mutation_in",
 					Direction: component.DirectionInput,
-					Config:    component.NATSRequestPort{Subject: "graph.mutation.>"},
+					Config:    component.NATSRequestPort{Subject: "example.mutation.>"},
 				},
 			},
 			nil,
@@ -712,7 +712,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 
 		edge := edges[0]
 		assert.Equal(t, PatternRequest, edge.Pattern)
-		assert.Equal(t, "graph.mutation.upsert", edge.ConnectionID)
+		assert.Equal(t, "example.mutation.upsert", edge.ConnectionID)
 	})
 
 	t.Run("no self-connection when single component has both request port sides", func(t *testing.T) {

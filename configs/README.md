@@ -58,11 +58,13 @@ Full-featured deployment with external ML services for embeddings and LLM enhanc
 
 ## Graph-Backend Deployments (`graph-backend.json`)
 
-Some downstream consumers — typically gateways or sister-repos that publish mutations directly via `graph.mutation.triple.*` request/reply and read via `graph.index.query.*` / `graph.query.entity` / `graph.spatial.query.*` — need the framework as a **graph backend**, not as a full source-data pipeline.
+Some downstream consumers need the framework as a **graph backend**, not as a full source-data pipeline. Their
+components declare the typed `semstreams.graph.mutation` v1 request port for graph changes and use the admitted graph
+query surfaces for reads.
 
 `configs/graph-backend.json` wires only the five graph processors plus the minimum services:
 
-- `graph-ingest` — mutation responder (auto-wires `graph.mutation.triple.{add,add_batch,remove}` request handlers regardless of input port declarations)
+- `graph-ingest` — provider for strict create, revision-fenced reconcile/delete, and exact-tuple append
 - `graph-index` — entity-state KV watcher → predicate / outgoing / incoming / alias index responders
 - `graph-index-spatial` — entity-state KV watcher → spatial query responder
 - `graph-index-temporal` — entity-state KV watcher → temporal query responder
@@ -70,15 +72,17 @@ Some downstream consumers — typically gateways or sister-repos that publish mu
 
 Plus `service-manager` + `component-manager` only. No `udp`, `iot_sensor`, `document_processor`, `objectstore`, `rule`, `graph-gateway`, file inputs/outputs — those are all part of the source-data pipeline that a gateway-backed deployment does not use.
 
-### Dummy input port on `graph-ingest`
+### Required mutation-provider port on `graph-ingest`
 
-`graph-ingest.Config.Validate()` requires `len(Ports.Inputs) >= 1` even when the component is responding to mutation handlers rather than reading from a JetStream pipeline. The example uses a benign dummy:
+Graph-ingest declares the mutation API as a required input `nats-request` port. This is an executable composition
+contract, not documentation-only metadata:
 
 ```json
-{"name": "unused_in", "subject": "_graph_backend.unused.ingest", "type": "nats"}
+{"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
 ```
 
-The `nats` port type (vs `jetstream`) is the key — declaring a `jetstream` input would force `EnsureStream` for a stream that never receives publishes.
+The four operation leaves resolve from this family. No dummy input, hidden subject fallback, or mutation stream is
+required. A Graphable JetStream input may be declared separately when the deployment ingests fact messages.
 
 ### Port types — when to use which
 
@@ -90,7 +94,9 @@ The `nats` port type (vs `jetstream`) is the key — declaring a `jetstream` inp
 | `kv` / `kv-write` | Write into a NATS KV bucket | Bucket must exist |
 | `nats-request` | Reply to NATS request/reply messages on the subject | No stream; subject is a request endpoint |
 
-`graph-ingest`'s `graph.mutation.*` handlers are wired automatically by `setupMutationHandlers` — they do not need to be declared as ports. Same for `graph-query`'s `graph.query.>` handlers (these DO appear as `nats-request` ports for documentation, but the component would still respond if the port were absent).
+Graph mutation requesters declare matching output ports. Flow validation requires exactly one compatible provider and
+permits many requesters. The declared topology resolves subjects; components do not fall back to hidden mutation
+constants when a port is absent.
 
 ## Graph Component Architecture
 
@@ -324,7 +330,7 @@ HTTP gateway for GraphQL and MCP access.
         {"name": "http", "subject": ":8084", "type": "http"}
       ],
       "outputs": [
-        {"name": "mutations", "subject": "graph.mutation.*", "type": "nats-request"}
+        {"name": "mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
       ]
     },
     "graphql_path": "/graphql",

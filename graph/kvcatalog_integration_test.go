@@ -15,10 +15,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestIntegration_RetentionPolicyIsPerDescriptor is the spec scenario
-// "retention policy is a per-descriptor fact, not a global rule": the SAME
-// seam, driven by two catalog descriptors, preserves OWNER_PRESENCE's declared
-// bounded TTL while stripping EMBEDDING_INDEX's foreign TTL.
+// TestIntegration_RetentionPolicyIsPerDescriptor proves a no-lifecycle
+// descriptor strips a foreign TTL through the catalog acquisition seam.
 func TestIntegration_RetentionPolicyIsPerDescriptor(t *testing.T) {
 	ctx := context.Background()
 	tc := natsclient.NewTestClient(t, natsclient.WithKV())
@@ -38,22 +36,6 @@ func TestIntegration_RetentionPolicyIsPerDescriptor(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, time.Duration(0), maxAge,
 		"EMBEDDING_INDEX's foreign TTL must be STRIPPED (declared no-lifecycle)")
-
-	// OWNER_PRESENCE acquired through the same seam: its declared 120s TTL is
-	// the liveness contract — applied on create, preserved on re-acquisition.
-	presence, err := EnsureCatalogBucket(ctx, client, BucketOwnerPresence)
-	require.NoError(t, err)
-	maxAge, _, err = natsclient.BucketRetention(ctx, presence)
-	require.NoError(t, err)
-	assert.Equal(t, ownerPresenceTTL, maxAge,
-		"OWNER_PRESENCE's declared TTL must be applied")
-
-	presence, err = EnsureCatalogBucket(ctx, client, BucketOwnerPresence)
-	require.NoError(t, err)
-	maxAge, _, err = natsclient.BucketRetention(ctx, presence)
-	require.NoError(t, err)
-	assert.Equal(t, ownerPresenceTTL, maxAge,
-		"OWNER_PRESENCE's declared TTL must be PRESERVED by re-acquisition — the same seam that strips a no-lifecycle bucket's TTL")
 }
 
 // TestIntegration_OpenCatalogBucket_AbsentNamesTheCatalogOwner: the reader

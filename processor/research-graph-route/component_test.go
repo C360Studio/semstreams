@@ -12,7 +12,9 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/agentic/research"
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/llm"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/model"
 )
 
@@ -254,8 +256,14 @@ func TestComponent_DiscoverableSurface(t *testing.T) {
 	if len(ports) != 1 {
 		t.Errorf("InputPorts: got %d, want 1", len(ports))
 	}
-	if len(c.OutputPorts()) != 0 {
-		t.Errorf("OutputPorts: got %d, want 0 (route_search writes via KV, not NATS)", len(c.OutputPorts()))
+	outputs := c.OutputPorts()
+	if len(outputs) != 1 {
+		t.Fatalf("OutputPorts: got %d, want canonical mutation port", len(outputs))
+	}
+	request, ok := outputs[0].Config.(component.NATSRequestPort)
+	if !ok || !outputs[0].Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
+		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
+		t.Errorf("graph mutation output drift: %#v", outputs[0])
 	}
 }
 

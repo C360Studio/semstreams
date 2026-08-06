@@ -850,3 +850,57 @@ func TestEmitLessonExecutor_PublisherFailureReleasesBudget(t *testing.T) {
 		t.Errorf("per-loop budget must be released on publish failure, got %d", n)
 	}
 }
+
+func TestRequireSameLessonIdentity(t *testing.T) {
+	t.Parallel()
+	const lessonID = "acme.test.agent.lesson.record.11111111-1111-5111-8111-111111111111"
+	const loopID = "acme.test.agent.agentic-loop.execution.loop-ops-abc"
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	requestedArgs := emitLessonArgs{
+		Category: "testing", Summary: "preserve semantic identity",
+		Polarity: "best_practice", Severity: "warning", Detail: "requested detail",
+		InjectionForm: "Verify first.",
+		Evidence: []string{
+			"acme.test.agent.agentic-loop.execution.loop-one",
+			"acme.test.agent.agentic-loop.execution.loop-two",
+		},
+		AppliesTo: []string{"tag:go", "id:acme.test.agent"},
+	}
+	requested := buildEmitLessonTriples(lessonID, loopID, requestedArgs, "ops", now)
+
+	// Mutable/non-identity fields may differ after the first birth, and the two
+	// identity collections are order-insensitive.
+	existingArgs := requestedArgs
+	existingArgs.Polarity = "avoid"
+	existingArgs.Severity = "critical"
+	existingArgs.Detail = "curated detail"
+	existingArgs.InjectionForm = "Use the curated form."
+	existingArgs.Evidence = []string{requestedArgs.Evidence[1], requestedArgs.Evidence[0]}
+	existingArgs.AppliesTo = []string{requestedArgs.AppliesTo[1], requestedArgs.AppliesTo[0]}
+	existing := buildEmitLessonTriples(lessonID, loopID, existingArgs, "ops", now.Add(-time.Hour))
+	if err := requireSameLessonIdentity(existing, requested); err != nil {
+		t.Fatalf("same content-derived identity rejected: %v", err)
+	}
+
+	t.Run("summary mismatch", func(t *testing.T) {
+		mismatch := append([]message.Triple(nil), existing...)
+		for index := range mismatch {
+			if mismatch[index].Predicate == agvocab.LessonSummary {
+				mismatch[index].Object = "different identity"
+			}
+		}
+		if err := requireSameLessonIdentity(mismatch, requested); err == nil {
+			t.Fatal("mismatched summary accepted")
+		}
+	})
+
+	t.Run("duplicate category", func(t *testing.T) {
+		malformed := append([]message.Triple(nil), existing...)
+		malformed = append(malformed, message.Triple{
+			Subject: lessonID, Predicate: agvocab.LessonCategory, Object: requestedArgs.Category,
+		})
+		if err := requireSameLessonIdentity(malformed, requested); err == nil {
+			t.Fatal("duplicate identity field accepted")
+		}
+	})
+}

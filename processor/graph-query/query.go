@@ -269,8 +269,21 @@ func (c *Component) handleQueryPrefix(ctx context.Context, data []byte) ([]byte,
 }
 
 func validateEntityQueryResponse(data []byte) error {
+	var response struct {
+		Entity     json.RawMessage `json:"entity"`
+		KVRevision uint64          `json:"kvRevision"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil {
+		return fmt.Errorf("decode exact entity query response: %w", err)
+	}
+	if len(response.Entity) == 0 || string(response.Entity) == "null" {
+		return errors.New("validate exact entity query response: missing entity")
+	}
+	if response.KVRevision == 0 {
+		return errors.New("validate exact entity query response: zero KV revision")
+	}
 	var entity graph.EntityState
-	if err := graph.UnmarshalEntityState(data, &entity); err != nil {
+	if err := graph.UnmarshalEntityState(response.Entity, &entity); err != nil {
 		return fmt.Errorf("validate entity query response: %w", err)
 	}
 	return nil

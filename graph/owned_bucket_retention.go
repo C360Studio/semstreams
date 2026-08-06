@@ -11,15 +11,15 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 )
 
-// AssertOwnedBucketsClean is the PRE-START LEGACY-DRIFT BACKSTOP for the
+// EnsureCatalogRetentionClean is the PRE-START LEGACY-DRIFT BACKSTOP for the
 // framework KV catalog's no-lifecycle buckets (ADR-068 D1). It has exactly ONE
-// honest job: a catalog bucket whose OWNER IS NOT DEPLOYED in this composition
-// never has its acquisition seam called — e.g. an EMBEDDING_INDEX left behind
-// by a prior semantic deploy when booting a statistical configuration — so one
-// boot-time pass over the catalog strips prior-boot/out-of-band retention dirt
-// (or fails boot closed) for those owner-absent buckets.
+// honest job: a catalog bucket unused by the current composition never has its
+// acquisition seam called — e.g. an EMBEDDING_INDEX left behind by a prior
+// semantic deploy when booting a statistical configuration — so one boot-time
+// pass over the catalog strips prior-boot/out-of-band retention dirt (or fails
+// boot closed) for those inactive buckets.
 //
-// Everything else is the seam's job, not this pass's: every deployed owner
+// Everything else is the seam's job, not this pass's: every active component
 // acquires its buckets through natsclient.EnsureFrameworkBucket inside its own
 // Start — create-or-open, reconcile to the declared policy, verify, fail that
 // Start closed — which covers prior-boot dirt AND this boot's create-races AND
@@ -33,21 +33,21 @@ import (
 //
 // Each bucket is bound READ-ONLY / MUST-EXIST (never created) / SKIP-IF-ABSENT:
 // a guarded bucket that does not exist cannot carry a foreign TTL, and its true
-// owner creates it clean through the seam. The backstop therefore imposes no
+// component creates it clean through the seam. The backstop therefore imposes no
 // bucket-creation ordering and never forces a resourceless deploy to provision
 // a bucket it does not use (feedback_unconditional_resource_wiring).
-func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, logger *slog.Logger) error {
+func EnsureCatalogRetentionClean(ctx context.Context, client *natsclient.Client, logger *slog.Logger) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	if client == nil {
 		return errs.WrapInvalid(errors.New("nil NATS client"),
-			"graph", "AssertOwnedBucketsClean", "NATS client is required for the owned-bucket retention backstop")
+			"graph", "EnsureCatalogRetentionClean", "NATS client is required for the catalog-retention backstop")
 	}
 
 	js, err := client.JetStream()
 	if err != nil {
-		return errs.WrapTransient(err, "graph", "AssertOwnedBucketsClean", "get JetStream context")
+		return errs.WrapTransient(err, "graph", "EnsureCatalogRetentionClean", "get JetStream context")
 	}
 
 	for _, spec := range KVCatalog() {
@@ -64,12 +64,12 @@ func AssertOwnedBucketsClean(ctx context.Context, client *natsclient.Client, log
 		// tier-gated bucket is passed over.
 		if _, err := client.GetKeyValueBucket(ctx, bucket); err != nil {
 			if errors.Is(err, jetstream.ErrBucketNotFound) {
-				logger.Debug("owned-bucket retention backstop: bucket absent, skipping",
+				logger.Debug("catalog-retention backstop: bucket absent, skipping",
 					slog.String("bucket", bucket))
 				continue
 			}
-			return errs.WrapTransient(err, "graph", "AssertOwnedBucketsClean",
-				fmt.Sprintf("probe owned bucket %q", bucket))
+			return errs.WrapTransient(err, "graph", "EnsureCatalogRetentionClean",
+				fmt.Sprintf("probe catalog bucket %q", bucket))
 		}
 
 		// Reconcile-then-assert on the existing bucket's backing stream. The atom

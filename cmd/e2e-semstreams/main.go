@@ -141,17 +141,15 @@ func run() error {
 	}
 
 	lifecycleManager := lifecycle.NewManager(natsClient, logger)
-	hbCtx, ownershipShutdown := service.WireOwnershipShutdown(ctx, lifecycleManager)
-	defer ownershipShutdown()
-	ownerReg, staticOwnerHB, mutationClient, err := service.WireOwnership(
-		hbCtx, natsClient, lifecycleManager, logger, builtinprojection.Contracts()...,
+	mutationClient, err := service.WireGraphRuntime(
+		ctx, natsClient, logger, builtinprojection.Contracts()...,
 	)
 	if err != nil {
-		return fmt.Errorf("wire ownership: %w", err)
+		return fmt.Errorf("wire graph runtime: %w", err)
 	}
 	lessonCurator := agentictools.NewLessonCurator(mutationClient, mutationClient, logger)
 	lessonCurationSub, err := natsClient.SubscribeForRequests(
-		hbCtx,
+		ctx,
 		lessoncuration.SubjectPromote,
 		lessoncuration.Handler(lessonCurator),
 	)
@@ -198,9 +196,6 @@ func run() error {
 	// pre-start would deadlock (emit retry holds the goroutine that would
 	// otherwise call StartAll). See gh#170.
 	svcDeps.LifecycleManager = lifecycleManager
-	// ADR-058 Phase B — static heartbeater goroutine under the ServiceManager's
-	// ordered shutdown.
-	manager.RegisterInstance("ownership", service.NewOwnershipService(ownerReg, staticOwnerHB, metricsRegistry, logger))
 
 	// Register workflows (must come after Manager is constructed).
 	if err := svcDeps.LifecycleManager.Register(mission.WorkflowDeclaration()); err != nil {
@@ -213,14 +208,14 @@ func run() error {
 
 	// ADR-058 Phase B — agent-run milestone subscriber (ADR-053 D6) under the
 	// ServiceManager's ordered shutdown. Mirrors cmd/semstreams wiring (identical
-	// RegisterInstance block — the half-migration guard). Registered AFTER
-	// "ownership" so StopAll stops it first; Start CAN abort boot on a genuine
-	// consumer-start failure (D3 hard dependency); stream-absent graceful-skips.
+	// RegisterInstance block — the half-migration guard). Registered before
+	// component services so StopAll stops it after their event publishers. Lifecycle
+	// terminal mutations remain coordinator/component work through declared ports.
+	// Start can abort boot on a genuine consumer-start failure; stream absence skips.
 	manager.RegisterInstance("milestone", service.NewMilestoneService(
 		agentrun.NewMilestoneSubscriber(
 			svcDeps.LifecycleManager,
 			agentrun.NewNATSLoopTripleReader(natsClient),
-			agentrun.NewNATSTriplePublisher(natsClient),
 			platform.Org,
 			platform.Platform,
 			logger,
@@ -234,15 +229,14 @@ func run() error {
 		return err
 	}
 
-	// ADR-056 #278 inc 2 — bind each rule pack's projection contracts under the
-	// ownership substrate. Done HERE (after configureAndCreateServices constructs
+	// Validate each rule pack's local projection-contract composition. Done HERE
+	// (after configureAndCreateServices constructs
 	// the rule processors) and BEFORE StartAll runs inside runWithSignalHandling.
 	// SAME shared helper as cmd/semstreams. Pack contracts are read ONCE,
 	// statically; this is the ONLY rule-pack bind site and must NEVER be invoked
-	// from the hot-reload path. Every composition, overlap, ownership/liveness
-	// bind, and mutation-client injection error is a boot gate. Repeated owning
-	// and claim-free binds can fail at different one-time guards.
-	if err := service.BindRulePackContracts(hbCtx, manager, ownerReg, staticOwnerHB, logger); err != nil {
+	// from the hot-reload path. Every composition, overlap, and mutation-client
+	// injection error is a boot gate. Repeated binding reaches the one-time guard.
+	if err := service.ConfigureRulePackMutations(manager); err != nil {
 		return fmt.Errorf("validate rule-pack composition: %w", err)
 	}
 

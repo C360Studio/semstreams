@@ -2,15 +2,14 @@ package llmwrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // TriplePublisher is the narrow surface the research-graph chain
@@ -22,58 +21,28 @@ import (
 // paired with their respective complete triples — a partial write would
 // corrupt the dispatch).
 //
-// Three emission shapes:
+// Two emission shapes:
 //
-//   - CreateEntityWithTriples: BIRTH. The FIRST write to a pipeline loop
-//     entity must CREATE it with a typed-origin MessageType envelope —
-//     graph-ingest enforces must-exist on triple.add / add_batch, so a bare
-//     batch to a never-created entity is rejected ("kv: key not found") and
-//     the chain stalls before any rule fires (gh#390). The research_graph
-//     kickoff uses this; subsequent per-stage stamps append.
-//   - AddTriple: single-triple convenience. Available for symmetry with
-//     the agentictools.TriplePublisher pattern; the chain's per-stage
-//     stamps all batch.
-//   - AddTriplesBatch: atomic per-Subject APPEND onto an already-born
-//     entity. The graph-ingest handler groups triples by Subject and
-//     CAS-applies them per entity, so a batch sharing one Subject is fully
-//     atomic.
+//   - Create: birth the pipeline loop with its typed-origin envelope. Append is
+//     must-exist, so the research_graph kickoff uses strict entity.create.
+//   - Append: append exact tuples onto an existing entity. The wire response
+//     reports each subject independently; stage stamps share one subject.
 //
 // Production satisfies it with *natsClient adapter; tests substitute an
 // in-memory recorder so the per-component handler suites don't need a
 // live NATS connection.
 type TriplePublisher interface {
-	CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error
-	AddTriple(ctx context.Context, triple message.Triple) error
-	AddTriplesBatch(ctx context.Context, triples []message.Triple) error
+	Create(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error
+	Append(ctx context.Context, triples []message.Triple) error
 }
 
-const (
-	// graphMutationAddSubject is the single-triple graph-ingest path.
-	graphMutationAddSubject = "graph.mutation.triple.add"
-
-	// graphMutationAddBatchSubject is the atomic per-Subject CAS path
-	// (ADR-036 Stage 2). Used by AddTriplesBatch for co-located triples
-	// where partial-write orphans would corrupt downstream rule matching.
-	graphMutationAddBatchSubject = "graph.mutation.triple.add_batch"
-
-	// graphMutationCreateWithTriplesSubject births an entity with a
-	// typed-origin envelope, carrying triples atomically. The correct verb
-	// for the FIRST write to a pipeline loop entity (gh#390) — add / add_batch
-	// enforce must-exist and reject a never-created entity.
-	graphMutationCreateWithTriplesSubject = "graph.mutation.entity.create_with_triples"
-
-	// graphMutationTimeout matches the bounds used by decide /
-	// agentic-loop / write_todos against the same handler.
-	graphMutationTimeout = 5 * time.Second
-)
+const graphMutationTimeout = 5 * time.Second
 
 // natsTriplePublisher adapts natsclient.Client to TriplePublisher. The
-// Request paths use RequestWithRetry so transient "no responders" errors
-// (graph-gateway restart, subscription propagation lag) don't silently
-// drop chain-state triples — the chain's dispatch depends on these
-// landing.
+// The graph mutation client sends every request once. Transport ambiguity is
+// returned to the component; no automatic retry occurs.
 type natsTriplePublisher struct {
-	client *natsclient.Client
+	client *graphmutation.Client
 }
 
 // NewNATSTriplePublisher builds a TriplePublisher backed by the
@@ -85,99 +54,52 @@ func NewNATSTriplePublisher(client *natsclient.Client) TriplePublisher {
 	if client == nil {
 		return nil
 	}
-	return &natsTriplePublisher{client: client}
+	wire, _ := graphmutation.NewClient(client, graphMutationTimeout)
+	return &natsTriplePublisher{client: wire}
 }
 
-func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Triple) error {
-	req := graph.AddTripleRequest{Triple: triple}
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal add-triple request: %w", err)
-	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := p.client.RequestWithRetryClassified(ctx, graphMutationAddSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", graphMutationAddSubject, err)
-	}
-	// ADR-060: handler failures arrive as the classified err above.
-	var resp graph.AddTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal response: %w", err)
-	}
-	return nil
-}
-
-func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []message.Triple) error {
+func (p *natsTriplePublisher) Append(ctx context.Context, triples []message.Triple) error {
 	if len(triples) == 0 {
 		return nil
 	}
-	req := graph.AddTriplesBatchRequest{Triples: triples}
-	reqData, err := json.Marshal(req)
+	if p == nil || p.client == nil {
+		return errors.New("graph mutation client is required")
+	}
+	response, err := p.client.Append(ctx, graph.AppendTriplesRequest{Triples: triples})
 	if err != nil {
-		return fmt.Errorf("marshal batch-add request: %w", err)
+		return fmt.Errorf("append graph triples: %w", err)
 	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := p.client.RequestWithRetryClassified(ctx, graphMutationAddBatchSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", graphMutationAddBatchSubject, err)
-	}
-	var resp graph.AddTriplesBatchResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal batch response: %w", err)
-	}
-	// ADR-060: a whole-batch failure arrives as the classified err above. A
-	// PARTIAL batch (some subjects committed) returns a success body with
-	// FailedSubjects populated (per-subject errors in the map), handled here.
-	if len(resp.FailedSubjects) > 0 {
-		return fmt.Errorf("graph-ingest partial batch (written=%d, failed=%v)",
-			resp.WrittenCount, resp.FailedSubjects)
+	for _, result := range response.Results {
+		switch result.Outcome {
+		case graph.MutationApplied, graph.MutationUnchanged:
+			continue
+		case graph.MutationFailed:
+			return fmt.Errorf("append graph triples for %s: %s/%s", result.EntityID, result.Error.Class, result.Error.Code)
+		default:
+			return fmt.Errorf("append graph triples for %s: %s", result.EntityID, result.Outcome)
+		}
 	}
 	return nil
 }
 
-// CreateEntityWithTriples births a graph entity (ENTITY_STATES) with the given
-// typed-origin MessageType envelope, carrying triples atomically via
-// graph.mutation.entity.create_with_triples. This is the correct verb for the
-// FIRST write to a research-pipeline loop entity: graph-ingest enforces
-// must-exist on triple.add / add_batch, so a bare batch to a never-created
-// entity is rejected ("kv: key not found"), the whole batch lands written=0,
-// and the chain stalls before R0 ever fires (gh#390). Subsequent per-stage
-// stamps use AddTriplesBatch to append onto the now-existing entity.
-//
-// EntityExists is treated as idempotent-success: a freshly minted pipeline loop
-// ID should never collide, but a redelivery / retry of the kickoff must not
-// fail the chain. (The agentic-loop spawn path additionally reads back to
-// confirm typed origin — see graph_writer.go — but a unique-per-dispatch rg_*
-// id makes a foreign collision a non-concern here; treating exists as success
-// keeps the best-effort, non-fatal kickoff contract.)
-//
-// PRECONDITION for the blind EntityExists path: the caller MUST mint a
-// unique-per-dispatch entityID (the rg_* loop id is a fresh uuid8 per
-// researchGraph invocation). A caller passing a STABLE/reused entityID (e.g. a
-// config-name or loop+index id) must NOT bless EntityExists blindly — it has to
-// read back and verify the typed origin like graph_writer.createEntityWithTriples
-// does, or a foreign/auto-vivified entity colliding on that stable id would be
-// silently laundered into a "born" pipeline loop.
-func (p *natsTriplePublisher) CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
-	req := graph.CreateEntityWithTriplesRequest{
+// Create births a graph entity with its typed-origin MessageType and initial
+// triples through graph.mutation.entity.create. Append is must-exist, so this is
+// the required first write for a research-pipeline loop entity. A collision is
+// returned as the classified create conflict; this helper does not retry or
+// reinterpret matching authority as its own success.
+func (p *natsTriplePublisher) Create(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+	if p == nil || p.client == nil {
+		return errors.New("graph mutation client is required")
+	}
+	_, err := p.client.Create(ctx, graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
 			MessageType: msgType,
-			Triples:     triples,
 		},
 		Triples: triples,
-	}
-	reqData, err := json.Marshal(req)
+	})
 	if err != nil {
-		return fmt.Errorf("marshal create_with_triples request: %w", err)
-	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	if _, err := p.client.RequestWithRetryClassified(ctx, graphMutationCreateWithTriplesSubject, reqData, graphMutationTimeout, natsclient.DefaultRetryConfig()); err != nil {
-		var ce *errs.ClassifiedError
-		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityExists {
-			return nil
-		}
-		return fmt.Errorf("request %s: %w", graphMutationCreateWithTriplesSubject, err)
+		return fmt.Errorf("create graph entity: %w", err)
 	}
 	return nil
 }
@@ -210,7 +132,7 @@ func StampOrchestrationTriples(ctx context.Context, pub TriplePublisher, logger 
 		}
 		return nil
 	}
-	if err := pub.AddTriplesBatch(ctx, triples); err != nil {
+	if err := pub.Append(ctx, triples); err != nil {
 		if logger != nil {
 			logger.Warn("orchestration triple-stamp failed; chain rules may not fire",
 				"stage", stage, "loop_id", loopID, "triple_count", len(triples), "error", err)
@@ -222,7 +144,7 @@ func StampOrchestrationTriples(ctx context.Context, pub TriplePublisher, logger 
 
 // BirthLoopEntityWithTriples births the research-pipeline loop entity with a
 // typed-origin MessageType envelope, carrying the kickoff triples atomically via
-// create_with_triples. This is the FIRST stamp on a pipeline loop entity — the
+// entity.create. This is the FIRST stamp on a pipeline loop entity — the
 // entity must be CREATED (not auto-vivified) so subsequent per-stage stamps can
 // append onto it; a bare add_batch to a never-created entity is rejected by
 // graph-ingest's must-exist contract and the chain stalls before any rule fires
@@ -242,7 +164,7 @@ func BirthLoopEntityWithTriples(ctx context.Context, pub TriplePublisher, logger
 		}
 		return nil
 	}
-	if err := pub.CreateEntityWithTriples(ctx, entityID, msgType, triples); err != nil {
+	if err := pub.Create(ctx, entityID, msgType, triples); err != nil {
 		if logger != nil {
 			logger.Warn("orchestration loop-birth failed; chain rules may not fire",
 				"stage", stage, "loop_id", loopID, "entity_id", entityID, "triple_count", len(triples), "error", err)

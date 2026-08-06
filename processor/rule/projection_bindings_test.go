@@ -5,7 +5,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
 	"github.com/stretchr/testify/require"
@@ -24,7 +23,7 @@ func TestProcessorProjectionBindings(t *testing.T) {
 			EntityPattern: "acme.ops.robotics.gcs.drone.*",
 			Groups: []projection.PredicateGroup{{
 				Name:       "state",
-				Mode:       ownership.ModeReplaceOwned,
+				Mode:       projection.ModeReconcile,
 				Predicates: []string{"drone.status.state"},
 			}},
 		},
@@ -50,24 +49,24 @@ func TestProcessorProjectionBindings(t *testing.T) {
 	}
 }
 
-func TestProcessorSetOwnedReplacerIsOneTimeAfterPreflight(t *testing.T) {
+func TestProcessorSetPredicateReconcilerIsOneTimeAfterPreflight(t *testing.T) {
 	t.Parallel()
 	cfg := mustTestConfig(t, "one-time-replacer")
-	cfg.ProjectionContracts = replaceOwnedTestContracts(t)
+	cfg.ProjectionContracts = reconcileTestContracts(t)
 	processor, err := NewProcessor(nil, &cfg)
 	require.NoError(t, err)
 
-	first := &capturingOwnedReplacer{}
-	second := &capturingOwnedReplacer{}
-	require.ErrorContains(t, processor.SetOwnedReplacer(first), "preflight has not completed")
+	first := &capturingPredicateReconciler{}
+	second := &capturingPredicateReconciler{}
+	require.ErrorContains(t, processor.SetPredicateReconciler(first), "preflight has not completed")
 	require.NoError(t, processor.PreflightProjectionMutations())
-	require.NoError(t, processor.SetOwnedReplacer(first))
-	require.ErrorContains(t, processor.SetOwnedReplacer(second), "already configured")
-	require.Same(t, first, processor.ownedReplacer)
+	require.NoError(t, processor.SetPredicateReconciler(first))
+	require.ErrorContains(t, processor.SetPredicateReconciler(second), "already configured")
+	require.Same(t, first, processor.reconciler)
 
-	_, err = processor.ownedReplacer.ReplaceOwned(
+	_, err = processor.reconciler.Reconcile(
 		context.Background(),
-		projection.ReplaceOwnedMutation{},
+		projection.ReconcileMutation{},
 	)
 	require.NoError(t, err)
 	require.Len(t, first.requests, 1)
@@ -75,7 +74,7 @@ func TestProcessorSetOwnedReplacerIsOneTimeAfterPreflight(t *testing.T) {
 }
 
 // TestProcessorProjectionBindings_ContractsRequirePack verifies projection
-// ownership cannot be constructed without its required pack identity.
+// a rule-pack mutation binding cannot be constructed without its required pack identity.
 func TestProcessorProjectionBindings_ContractsRequirePack(t *testing.T) {
 	t.Parallel()
 

@@ -58,8 +58,9 @@ PROV(-O); `vocabulary/standards.go` already carries a full PROV-O constant secti
    **content-derived identity** (UUIDv5 over category + scope + summary + evidence — re-emitting
    the identical lesson cannot mint a second entity); and lifecycle status. **Lessons are born
    `proposed`; only `active` lessons are injectable.** Promotion and retirement ride the
-   canonical replace lane (`update_with_triples` via rule `replace_owned` or a product
-   curation writer, ADR-056); the default promotion gate is operator/product review, with
+   canonical graph-mutation request/reply port, using predicate reconciliation with an
+   expected entity revision for CAS conflict detection (ADR-091); the default promotion
+   gate is operator/product review, with
    auto-promotion available only as explicit product config (ADR-027 Phase-2 philosophy). This
    one lifecycle answers three review findings at once: nothing LLM-authored shapes another
    agent's behavior without a gate (ADR-026/027 posture preserved), the retirement writer is

@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/c360studio/semstreams/pkg/ownership"
 	"github.com/c360studio/semstreams/pkg/projection"
 )
 
@@ -29,23 +28,16 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 				Groups: []projection.PredicateGroup{
 					{
 						Name:       "status",
-						Mode:       ownership.ModeReplaceOwned,
+						Mode:       projection.ModeReconcile,
 						Predicates: []string{"drone.status.state", "drone.status.battery"},
 					},
 					{
 						Name:       "notes",
-						Mode:       ownership.ModeAppendEvidence,
+						Mode:       projection.ModeAppend,
 						Predicates: []string{"drone.status.note"},
 					},
 				},
 				BirthPredicates: []string{"drone.identity.serial", "drone.identity.model"},
-				ForeignEdges: []projection.ForeignEdge{
-					{
-						Predicate:     "test.drone.assigned-to",
-						Mode:          ownership.EdgeConditional,
-						TargetPattern: "acme.ops.robotics.gcs.mission.*",
-					},
-				},
 				IndexingProfile: "signal",
 			},
 		},
@@ -55,7 +47,7 @@ func TestConfigPackIDProjectionContractsRoundTrip(t *testing.T) {
 			Name:    "retire drone",
 			Enabled: true,
 			OnEnter: []Action{{
-				Type:               ActionTypeReplaceOwned,
+				Type:               ActionTypeReconcilePredicates,
 				ProjectionContract: "drone.status",
 				ProjectionGroup:    "status",
 				Predicate:          "drone.status.state",
@@ -104,7 +96,7 @@ func TestConfigUnmarshalPreservesDefaultsWhileOmissionSelectsDerivation(t *testi
 		EntityPattern: "acme.ops.test.system.record.*",
 		Groups: []projection.PredicateGroup{{
 			Name:       "state",
-			Mode:       ownership.ModeReplaceOwned,
+			Mode:       projection.ModeReconcile,
 			Predicates: []string{"test.config.old"},
 		}},
 	}}
@@ -172,7 +164,7 @@ func TestConfigUnmarshalProjectionContractsPresenceAndAtomicErrors(t *testing.T)
 				EntityPattern: "acme.ops.test.system.record.*",
 				Groups: []projection.PredicateGroup{{
 					Name:       "state",
-					Mode:       ownership.ModeReplaceOwned,
+					Mode:       projection.ModeReconcile,
 					Predicates: []string{"test.config.keep"},
 				}},
 			}}
@@ -190,7 +182,7 @@ func TestConfigUnmarshalProjectionContractsPresenceAndAtomicErrors(t *testing.T)
 	}
 }
 
-func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
+func TestRuleProcessorSchemaExposesReconcileSelectors(t *testing.T) {
 	t.Parallel()
 
 	inlineRules := schema.Properties["inline_rules"]
@@ -204,7 +196,7 @@ func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
 	for _, selector := range []string{"projection_contract", "projection_group"} {
 		property, ok := onEnter.Items.Properties[selector]
 		if !ok {
-			t.Fatalf("replace_owned selector %q absent from action schema", selector)
+			t.Fatalf("reconcile_predicates selector %q absent from action schema", selector)
 		}
 		if property.Type != "string" {
 			t.Fatalf("%s schema type = %q, want string", selector, property.Type)
@@ -213,7 +205,7 @@ func TestRuleProcessorSchemaExposesReplaceOwnedSelectors(t *testing.T) {
 	contracts := schema.Properties["projection_contracts"]
 	for _, phrase := range []string{
 		"omit to derive minimal",
-		"explicit projection authorization superset",
+		"explicit local projection contract",
 		"explicit-only",
 	} {
 		if !strings.Contains(contracts.Description, phrase) {

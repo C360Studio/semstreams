@@ -2,334 +2,167 @@
 
 ## Purpose
 
-Defines the **lifecycle harness** (`pkg/lifecycle`, ADR-047) — the substrate that gives a
-named, long-lived instance a phase, durable KV-backed state, restart recovery, an audit
-trail recoverable by KV revision replay, and a uniform operator API across products.
+Define the reusable named-instance lifecycle surface over canonical graph exact reads and mutations. Lifecycle records
+domain phases and transitions; it does not arbitrate graph writers or create missing entities for transitions.
 
-An app declares a state struct implementing `Participant` and registers it as a `Workflow`;
-the framework provides `Manager` (Get/Create/Update/Transition/Complete/Fail/Despawn),
-delete-visible observation, rule integration (`lifecycle_*` actions and
-`$entity.lifecycle.*` substitutions), and the operator gateway routes.
-
-**Lifecycle participation is a property of the ENTITY, not the component or the request.**
-A short-lived handler may read and write a Participant-implementing entity without claiming
-participation; long-lived participants implement `Participant` and drive `Manager`.
-
-Two postures recur across these requirements and are load-bearing rather than incidental:
-
-- **Registration records, ownership refuses.** Registration validates what is knowable
-  about a type (projectability), not what is knowable only about a deployment. It
-  deliberately permits one schema registered under a second name, because that is how a
-  partial migration presents a cross-owner overlap; the ownership substrate rejects the
-  overlapping *claim*, so a mid-migration deployment degrades instead of failing to boot.
-- **A committed write is never reported as a failure.** Answers are derived from the causal
-  mutation response, not from a read issued afterwards — a post-hoc read can fail after a
-  durable commit and can observe another writer's later state, so it answers a different
-  question than "what did this request commit".
-
-### What this capability does NOT cover
-
-- **The operator gateway authenticates nothing, by ruled posture (gh#854, 2026-08-02).**
-  Every route — including the mutating create/patch/transition lanes — is open to any caller
-  who can reach the HTTP listener. This mirrors the graph seam's ruled trust boundary
-  (predicate-contract: mutation-lane access IS the boundary; identity lives in deployment
-  infrastructure): deployments MUST gate the listener at the network layer — reverse proxy,
-  mTLS, or network policy — and unauthorized requests then fail closed at the layer that
-  actually holds identity. The decision reopens only on recorded triggers (multi-principal
-  operator access from a sister, exposure beyond a trusted network, per-operator audit
-  attribution) — see gh#854 for the ruling.
-- **It is not a workflow engine.** No DSL, no state-machine runtime, no separate event bus.
-  Apps own work logic, state schema, and which phase follows which; the harness owns
-  storage, recovery, history, and the operator surface. Multi-step orchestration is
-  expressed as coordinated rules firing components (see `rule-engine`), not here.
-- **It does not own the graph write path.** Reclamation and phase writes are emitted as
-  `graph.mutation.*` operations; per-predicate merge, owner-lease enforcement, and
-  ENTITY_STATES authority belong to `graph-ingest` and `graph-state-contract`.
-- **It does not define any product's phases or entity semantics** — those are app-owned,
-  per the Product Boundary in `openspec/project.md`.
-- **Operator-creatability of a given workflow is not yet modelled** (gh#824): the create
-  route currently advertises every registered workflow, including ones whose lifecycle ID
-  field is unreachable from JSON and which therefore cannot be created through it.
 ## Requirements
-### Requirement: Lifecycle entity reclamation
 
-The Manager SHALL provide `Despawn(ctx, workflow, entityID)` that reclaims a
-lifecycle entity by deleting it from `ENTITY_STATES` through the graph-ingest
-`graph.mutation.entity.delete` mutation, so no consumer hand-rolls the raw
-delete. `Despawn` reclaims only; it does not itself transition the entity to a
-terminal phase. The operation is idempotent — reclaiming an already-absent entity
-succeeds. The `workflow` argument SHALL be a registered workflow whose
-`EntityIDPattern` matches `entityID`; a mismatch is an error and emits no delete.
+### Requirement: Workflow registration validates projectability and local contract shape
 
-#### Scenario: Reclaim a terminal entity
+Workflow registration MUST reject a schema type that cannot implement `Participant`, an invalid entity-ID pattern,
+invalid lifecycle predicates, or an incompatible local projection contract. Registration records workflow capability;
+it MUST NOT claim semantic predicates or reject cross-component overlap. Runtime conflicts are observed through CAS.
 
-- **GIVEN** an entity that a caller has moved to a terminal phase via `Complete`/`Fail`
-- **WHEN** the caller invokes `Despawn(ctx, workflow, entityID)`
-- **THEN** the Manager emits `graph.mutation.entity.delete` for `entityID`
-- **AND** the entity is removed from `ENTITY_STATES`
+#### Scenario: Two workflows have overlapping predicates
 
-#### Scenario: Despawn is idempotent
+- **GIVEN** two workflows project an overlapping lifecycle predicate
+- **WHEN** each valid workflow registers
+- **THEN** registration may succeed
+- **AND** no claim, lease, token, heartbeat, or global overlap record is created
 
-- **GIVEN** an entity that is already absent from `ENTITY_STATES`
-- **WHEN** the caller invokes `Despawn(ctx, workflow, entityID)`
-- **THEN** the call returns success without error
+### Requirement: Lifecycle creation is strict and discoverable
 
-#### Scenario: Despawn rejects an unregistered or non-matching workflow
+Creation MUST validate that the entity ID matches the workflow pattern before mutation. When the authority entity is
+absent, lifecycle MUST use strict canonical `entity.create`. When an exact authority read finds an existing entity with
+no lifecycle phase for this workflow, lifecycle MUST attach the lifecycle dimension with a revision-fenced canonical
+`entity.reconcile`, preserving unrelated predicates. An existing entity that already carries the workflow's lifecycle
+phase MUST return the classified conflict. Success MUST be causally downstream of the committed entity mutation. The
+operator lifecycle surface returns that committed instance in `CreateResult`; it does not expose a KV revision.
+Revision exposure remains the responsibility of the canonical mutation client's `Create` result.
 
-- **WHEN** `Despawn` is called with a `workflow` that is not registered, or whose `EntityIDPattern` does not match `entityID`
-- **THEN** the Manager returns an error
-- **AND** emits no delete mutation
+#### Scenario: Out-of-pattern birth is refused
 
-### Requirement: Transition-then-reclaim convenience
+- **GIVEN** an entity ID outside the workflow pattern
+- **WHEN** creation is attempted
+- **THEN** creation fails before graph mutation
+- **AND** no direct-get-only orphan is created
 
-The Manager SHALL provide `DespawnWith(ctx, workflow, entityID, source, note)`
-that transitions the entity to its workflow's terminal phase and then reclaims
-it, for the common cull path. The two graph-ingest operations are NOT atomic;
-the behavior on partial failure SHALL be documented and recoverable: if the
-terminal transition succeeds but the delete fails (or the process dies between
-them), the entity is left terminal-but-present and a subsequent `Despawn`
-reclaims it — no partial or corrupt state results.
+#### Scenario: Existing authority entity receives the lifecycle dimension
 
-#### Scenario: Cull in one call
+- **GIVEN** the authority entity exists without the workflow's lifecycle phase
+- **WHEN** lifecycle creation is attempted
+- **THEN** lifecycle exact-reads the entity and revision-fenced reconciles the initial lifecycle predicates
+- **AND** unrelated predicates on the authority entity are preserved
 
-- **WHEN** the caller invokes `DespawnWith(ctx, workflow, entityID, source, note)` on a non-terminal entity
-- **THEN** the Manager transitions the entity to its terminal phase (producing the phase write and audit `TransitionEvent`)
-- **AND** then emits `graph.mutation.entity.delete` for `entityID`
+#### Scenario: Existing lifecycle instance remains a conflict
 
-#### Scenario: Partial failure is recoverable
+- **GIVEN** the authority entity already carries the workflow's lifecycle phase
+- **WHEN** creation is attempted again
+- **THEN** the caller receives the classified exists outcome
+- **AND** no automatic retry or matching-state success conversion occurs
 
-- **GIVEN** the terminal transition has committed but the delete failed
-- **WHEN** the caller retries with `Despawn(ctx, workflow, entityID)`
-- **THEN** the entity is reclaimed
-- **AND** no partial or corrupt state remains
+### Requirement: Operator birth attribution is explicit
 
-### Requirement: Delete-visible lifecycle observation
+A lifecycle birth initiated through an operator surface MUST record the operator as the transition source. Framework
+code MAY record the framework as source only for framework-initiated birth. Provenance MUST be supplied by the caller
+that knows it.
 
-The Manager SHALL provide `WatchEvents(ctx, workflow)` returning a channel of
-lifecycle events, each carrying an operation (`Upserted` or `Deleted`), the
-`EntityID`, and — for `Upserted` — the projected `Participant`. A reclaim
-(`KeyValueDelete`/`KeyValuePurge`) whose key matches the workflow
-`EntityIDPattern` SHALL be delivered as a `Deleted` event, so an observer learns
-of reclaims without running a parallel raw KV watch. The existing
-`Watch(ctx, workflow) <-chan Participant` SHALL remain unchanged (upsert-only),
-so current callers are not affected.
+#### Scenario: Operator creates an instance
 
-#### Scenario: Observer sees a reclaim
+- **WHEN** the instance history is read after operator creation
+- **THEN** the first event attributes the operator
 
-- **GIVEN** an observer subscribed via `WatchEvents(ctx, workflow)`
-- **WHEN** an entity matching the workflow pattern is deleted from `ENTITY_STATES`
-- **THEN** the observer receives an event with `Op == Deleted` and the deleted `EntityID`
+### Requirement: Must-exist lifecycle operations never create state
 
-#### Scenario: Observer sees an upsert with projected state
+Every transition or reconcile against an absent entity MUST return typed `entity_not_found`. It MUST NOT create state,
+a placeholder target, or a pending operation. The component decides whether later retry is meaningful.
 
-- **GIVEN** an observer subscribed via `WatchEvents(ctx, workflow)`
-- **WHEN** an entity matching the workflow pattern is created or its phase changes
-- **THEN** the observer receives an event with `Op == Upserted`, the `EntityID`, and the projected `Participant`
+#### Scenario: Transition races birth
 
-#### Scenario: Existing Watch is unaffected
+- **GIVEN** a lifecycle transition arrives before entity birth
+- **WHEN** graph-ingest evaluates it
+- **THEN** it returns typed not-found
+- **AND** no placeholder entity is created
 
-- **GIVEN** a caller using the existing `Watch(ctx, workflow) <-chan Participant`
+### Requirement: Lifecycle transitions use exact revision evidence
+
+A transition MUST exact-read the entity and reconcile the complete lifecycle predicate group using the same-entry
+nonzero KV revision. A definite revision mismatch MAY be handled only by a bounded component policy that re-reads and
+recomputes desired state. `commit_unknown` MUST NOT be automatically retried.
+
+The same reconcile MUST replace the current phase while retaining a fixed window of the 64 most recent transition
+occurrences in the current entity. Each occurrence MUST use the framework `lifecycle.transition.*` predicate family
+with one nonempty transition ID in `Triple.Context`. `History` MUST exact-read and strictly decode that current window;
+it MUST NOT replay KV revisions, create another store, return a partial result from malformed records, expose a history
+size knob, or imply that the bounded operator window is an unbounded audit log.
+
+#### Scenario: Ambiguous transition remains visible
+
+- **GIVEN** a transition request may have committed and its reply is lost
+- **WHEN** lifecycle receives `commit_unknown`
+- **THEN** it returns the ambiguity to its caller
+- **AND** it does not infer authorship from a later matching read
+
+#### Scenario: Transition history survives History one
+
+- **GIVEN** `ENTITY_STATES` retains one KV revision
+- **WHEN** an entity is created, transitions, and the stack restarts
+- **THEN** `History` returns the retained transition occurrences from the current entity
+- **AND** current phase uses replace semantics while occurrence records retain distinct contexts
+
+### Requirement: Lifecycle entity reclamation is conditional
+
+Lifecycle delete MUST exact-read the entity, submit its nonzero KV revision to `entity.delete`, and propagate typed
+not-found, revision-mismatch, poison, unavailable, and `commit_unknown` outcomes. Delete has no relationship cascade,
+target cleanup, or automatic retry.
+
+#### Scenario: A newer transition cannot be deleted by stale reclaim
+
+- **GIVEN** lifecycle read entity A at revision R and A advanced to R+1
+- **WHEN** reclamation submits expected revision R
+- **THEN** delete returns typed revision mismatch
+- **AND** A at R+1 remains authoritative
+
+### Requirement: Lifecycle relationship references are source-derived
+
+`Manager.References` MUST return the target entity ID and predicate recorded on each matching source triple. It MUST
+NOT read or hydrate the target, report a target workflow or phase, fabricate a placeholder, or imply target existence.
+An unresolved object ID remains a valid relationship fact under eventual consistency.
+
+#### Scenario: Reference target is absent
+
+- **GIVEN** lifecycle-managed source A contains a declared relationship to absent B
+- **WHEN** `Manager.References` reads A
+- **THEN** it returns B's ID and the source predicate
+- **AND** it performs no target birth or target-state read
+
+### Requirement: Transition-then-reclaim preserves causal revision
+
+Transition-then-reclaim MUST preserve the transition's exact committing revision and use it for conditional delete. A
+lost mutation reply MUST return `commit_unknown` and stop before deletion.
+
+#### Scenario: Ambiguous transition stops reclamation
+
+- **GIVEN** the transition reply is lost after possible delivery
+- **WHEN** transition-then-reclaim handles the outcome
+- **THEN** it returns `commit_unknown`
+- **AND** it does not issue delete against a predicted revision
+
+### Requirement: Delete-visible observation is explicit
+
+The lifecycle observation surface MUST offer an explicit delete-visible watch when callers need tombstones. The
+existing upsert-only watch MUST retain its behavior so callers do not silently begin receiving deletion events.
+
+#### Scenario: Delete-visible watcher observes removal
+
+- **GIVEN** a lifecycle entity is deleted
+- **WHEN** a caller consumes the delete-visible watch
+- **THEN** it receives one removal observation for that entity
+
+#### Scenario: Existing watch remains upsert-only
+
+- **GIVEN** a caller consumes the existing upsert-only watch
 - **WHEN** an entity is deleted
-- **THEN** the delete is not delivered on that channel (upsert-only behavior preserved)
+- **THEN** no tombstone is delivered on that channel
 
-### Requirement: A created instance MUST be reachable by every surface that can list it
+### Requirement: Operator surfaces preserve every reachable condition
 
-Lifecycle creation MUST refuse an entity ID that does not match the workflow's
-declared `EntityIDPattern`, and MUST refuse it before any KV write. A create that
-commits an out-of-pattern ID produces an instance that is readable by direct
-`Get` but invisible to `List` and `Watch` — which filter by the same pattern —
-and unreclaimable, because reclamation validates the pattern and refuses. The
-surface would then report a successful birth that the same surface cannot
-discover or delete.
+The operator gateway MUST preserve typed create, reconcile, delete, exact-read, and `commit_unknown` outcomes. It MUST
+map invalid input to a client error, revision or exists conflicts to conflict responses, missing state to not-found,
+and unavailable or internal failure without collapsing them into success.
 
-Owner-lease enforcement MUST NOT be relied on to cover this: an out-of-pattern
-write is *unclaimed* rather than *stale*, so a lease check passes it through even
-under strict enforcement.
+#### Scenario: Operator sees revision conflict
 
-The refusal MUST use the same sentinel the reclamation path already uses, and
-MUST render as a client error on any operator surface, never as a server fault.
-
-#### Scenario: an out-of-pattern entity ID is refused
-
-- **GIVEN** a workflow whose declared entity-ID pattern is `*.*.lifecycle.gcs.mission.*`
-- **WHEN** creation is requested for an entity ID outside that pattern
-- **THEN** creation fails with the entity-ID-pattern-mismatch sentinel
-- **AND** no entity is written
-- **AND** an operator surface renders it as a client error
-
-#### Scenario: an in-pattern entity ID is created and is discoverable
-
-- **GIVEN** a workflow and an entity ID matching its declared pattern
-- **WHEN** creation succeeds
-- **THEN** the instance is returned by a list of that workflow's instances
-
-### Requirement: A committed birth MUST NOT be reported as a failure
-
-Lifecycle creation MUST report success whenever the write committed durably, even
-when the post-write read-back could not be completed. The mutation contract
-defines a degraded response as a committed write whose read-back failed and which
-callers MUST NOT retry; reporting that as an error causes an operator to retry a
-birth that already happened, and the retry then reports a conflict.
-
-The answer returned to the caller MUST be derived from the causal mutation
-response rather than from a separate read issued afterwards. A separate read can
-fail after a durable commit, and can also observe another writer's later state —
-so it answers a different question than "what did this request commit".
-
-Where a degraded commit leaves no projectable state, the surface MUST still
-report success and MUST signal the degradation, rather than converting it into a
-failure or a conflict.
-
-#### Scenario: read-back fails after a durable commit
-
-- **GIVEN** a creation whose write committed durably
-- **AND** whose post-write read-back could not be completed
-- **WHEN** the result is reported
-- **THEN** the caller is told the creation succeeded
-- **AND** the degradation is signalled rather than the request being failed
-
-#### Scenario: the reported state is the state this request committed
-
-- **GIVEN** a successful creation
-- **WHEN** the committed state is returned
-- **THEN** it is derived from the mutation response for this request
-
-### Requirement: An operator-initiated birth MUST be attributed to the operator
-
-A lifecycle creation initiated through an operator surface MUST record the
-operator as the transition source in its audit trail, not the framework. History
-recovers provenance from that audit triple, so a framework attribution on an
-operator-initiated create writes a false answer into the audit record of the
-highest-privilege operation the surface exposes.
-
-The audit attribution MUST be supplied by the caller that knows the provenance,
-in the same way the transition lane already supplies it — not defaulted at the
-point where the triples are built.
-
-#### Scenario: a birth created through the operator surface
-
-- **GIVEN** an instance created through an operator surface
-- **WHEN** its history is read
-- **THEN** the first event's source is the operator
-
-#### Scenario: a birth created in-process by the framework
-
-- **GIVEN** an instance created by framework code
-- **WHEN** its history is read
-- **THEN** the first event's source is the framework
-
-### Requirement: Workflow registration MUST reject a state type that cannot be projected
-
-Registering a workflow MUST fail when a pointer to the declared `Schema` type
-does not implement the `Participant` contract. Allocation of a fresh instance
-from `Schema` followed by an unchecked conversion to `Participant` happens on
-every projection path, so an unconformant Schema is a panic waiting for the
-first request that reaches one.
-
-This MUST be validated at registration rather than left to the first request. The
-reachability differs sharply by path: the read paths reach the conversion only
-for an entity that already exists, while a creation path reaches it with no
-precondition beyond a registered workflow and a non-empty body — so on a fresh
-deployment the first external request is the trigger.
-
-Registration MUST NOT additionally require that the declared workflow name equal
-the name the Schema's own `Workflow()` reports. That equality is a real wiring
-invariant, but enforcing it at registration would convert a **documented
-observe-only runtime posture into a boot failure**: registering one schema under
-a second name is how a partial migration presents a cross-owner overlap, and the
-Manager is deliberately non-fatal there so a mid-migration deployment does not
-brick. Overlap rejection belongs to the ownership substrate, which refuses the
-claim, not to registration, which records it.
-
-The hazard that equality was reaching for is closed instead by binding a create
-to the registration the **caller selected**, rather than re-deriving one from the
-Participant's own constant. Re-deriving would let a request routed as one
-workflow write with another's pattern, transitions, owner token, and audit
-predicates — and, where only the alias is registered, fail a valid advertised
-route with a false not-found.
-
-#### Scenario: a Schema that does not implement the contract
-
-- **GIVEN** a workflow declaration whose Schema type does not implement Participant on its pointer
-- **WHEN** the workflow is registered
-- **THEN** registration fails naming the workflow and the offending type
-- **AND** no request path can reach an unchecked conversion for that workflow
-
-#### Scenario: a Schema whose reported workflow name disagrees with the declaration
-
-- **GIVEN** a workflow registered under a name that its Schema's `Workflow()` does not report
-- **WHEN** the workflow is registered
-- **THEN** registration succeeds
-- **AND** the ownership substrate, not registration, is what refuses a genuine cross-owner overlap
-
-#### Scenario: a create is routed to an aliased registration
-
-- **GIVEN** a workflow registered only under an alias whose Schema reports a different, unregistered name
-- **WHEN** a create is routed to the alias
-- **THEN** the write uses the alias registration's pattern, transitions, and audit predicates
-- **AND** the create does not fail with not-found
-
-### Requirement: Must-exist lanes MUST NOT create state
-
-Operator state patch and transition MUST require an existing lifecycle-managed
-entity and MUST NOT create one. Only the creation lane brings an instance into
-being. A lane that silently created state on the way past would make "this
-instance exists" unfalsifiable from the operator surface, and would give the same
-surface two creation paths with different validation.
-
-This contract MUST be pinned against the production implementation, not against a
-substitute that reimplements it. A guard asserted only through a hand-written
-double proves the double, and cannot observe a regression in the code that ships.
-
-#### Scenario: patching an absent instance
-
-- **GIVEN** an entity ID with no lifecycle-managed instance
-- **WHEN** an operator state patch is applied to it
-- **THEN** the patch fails with entity-not-found
-- **AND** no instance exists afterwards
-
-#### Scenario: transitioning an absent instance
-
-- **GIVEN** an entity ID with no lifecycle-managed instance
-- **WHEN** an operator transition is requested for it
-- **THEN** the transition fails with entity-not-found
-- **AND** no instance exists afterwards
-
-### Requirement: The operator surface MUST map every condition its callees can raise
-
-Every domain sentinel reachable from an operator route MUST map to a status that
-names what happened, and MUST preserve its message. A domain condition rendered
-as a generic server fault with a canned message tells an operator that the
-service is broken when in fact their request was refused for a knowable reason.
-
-Adding a route to this surface MUST include an audit of the sentinels the new
-callee can raise, because a sentinel that was previously unreachable becomes
-reachable the moment a route can reach it. Two instances of this shape are known:
-a duplicate-create sentinel that was unmapped until a creation route existed, and
-an ownership-quiesce sentinel that a creation route makes reachable.
-
-An ownership-quiesce refusal in particular MUST reach the caller intact — it
-means another incarnation has taken over and the caller should retry against the
-live owner, which is unactionable if reported as an internal error.
-
-#### Scenario: a superseded process attempts a create
-
-- **GIVEN** a process whose ownership has been superseded by another incarnation
-- **WHEN** it creates through the operator surface
-- **THEN** the response status distinguishes the refusal from a server fault
-- **AND** the response carries the reason rather than a generic message
-
-#### Scenario: a request body exceeds the configured limit
-
-- **GIVEN** a configured maximum request-body size
-- **WHEN** a request to any body-carrying operator lane exceeds it
-- **THEN** the response reports the payload as too large
-- **AND** the status matches what the surface's published interface advertises
-
-#### Scenario: a stream upgrade is requested with a non-read method
-
-- **GIVEN** a request carrying the stream-upgrade query parameter
-- **WHEN** its method is not a read
-- **THEN** it is not routed to the stream upgrade
-- **AND** any error response uses the surface's uniform error envelope
-
+- **GIVEN** an operator acts from a stale exact read
+- **WHEN** lifecycle returns revision mismatch
+- **THEN** the gateway exposes the conflict without converting it to success

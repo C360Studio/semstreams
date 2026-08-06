@@ -22,6 +22,19 @@ and resolves the one gap this ADR left open — Participant *identity*
 gains a Graphable origin via a generic `ParticipantEntity` adapter
 while transitions stay on the CAS wire defined here.
 
+**Amended 2026-08-05 (gh#843):** `ENTITY_STATES` remains at `History=1`.
+`Manager.History` no longer performs impossible revision archaeology. Each
+phase mutation replaces the current phase and atomically carries a fixed window
+of the 64 most recent occurrence-discriminated `lifecycle.transition.*`
+records in the Participant's current entity value. `Triple.Context` is the
+transition ID. The window is for operators, not unbounded audit; no history
+knob or parallel store was added.
+
+**Partially superseded by [ADR-091](091-graph-mutation-authority-without-semantic-ownership.md):** lifecycle now uses
+the canonical four-operation mutation port and exact authority reads; semantic owner claims, leases, and tokens are
+retired. `Manager.References` returns source-derived `RelationshipReference` values containing only target ID and
+predicate. It does not read the target or imply that it exists.
+
 ## Context
 
 ### What ADR-047 shipped
@@ -149,7 +162,11 @@ When a new subsystem considers owning a private KV bucket:
 1. The data IS facts the graph should reason over
 2. You want graph queries / inference / community detection to
    see the state
-3. You want the graph's revision history to provide audit for free
+3. You want one queryable current state shared by graph consumers. This does
+   **not** provide durable audit for free: `ENTITY_STATES` has `History=1`.
+   Lifecycle retains only its fixed 64-occurrence operator window inside the
+   current entity; compliance or unbounded audit needs a separately justified
+   retention surface.
 4. Multiple consumer surfaces (rules, GraphQL, dashboards, inference)
    need to read the same state through their natural interface
 5. You don't need fine-grained CAS that graph-ingest's batched
@@ -170,10 +187,11 @@ shape per the sketches):
 | `phase` | triple in ENTITY_STATES | Per-predicate latest-wins covers replace semantics; rules can match on `triple.mission.phase`; inference sees the distribution |
 | `owner_org_id` | triple | Pure metadata |
 | `note` | triple | Pure metadata |
-| `last_transition_source` etc. | triples (framework-stamped) | Source attribution comes for free in History via revision replay |
+| `last_transition_source` etc. | triples (framework-stamped) | Optional current-value summaries for domain projections |
 | References (drone, area) | triples (entity ID objects) | First-class graph relationships |
 | Children (capture_session) | triples (parent.owns_child = child_id) | First-class subtree relationships |
-| Audit (full history) | KV revisions on ENTITY_STATES | No parallel audit bucket; operator-controlled bucket history depth |
+| Recent transitions | occurrence-discriminated triples in the current entity | Fixed 64-event operator window; survives `History=1` without a parallel store |
+| Audit (unbounded) | not provided | No named consumer justifies an audit store; add ObjectStore offload only when one exists |
 
 No field defends a private bucket on the rubric. The harness emits
 through graph-ingest like every other subsystem.
@@ -226,9 +244,8 @@ mgr.Register(Workflow{
         "mission.note",
     },
 
-    // Framework stamps these on every transition; readable from
-    // the entity's triples at each KV revision; History reconstructs
-    // the timeline + source attribution from them.
+    // Optional workflow-specific latest-transition summaries. History uses
+    // framework lifecycle.transition.* occurrence records instead.
     AuditPredicates: AuditSpec{
         Source: "mission.last_transition_source",
         At:     "mission.last_transition_at",
@@ -286,7 +303,7 @@ GetRaw(ctx, entityID) (graph.EntityState, error)        // debug escape hatch (P
 
 // Subtree (operator-controlled)
 Children(ctx, parentEntityID, opts ChildOptions) ([]ChildResult, error)  // depth-1 (P2)
-References(ctx, entityID) ([]ReferenceStub, error)                       // depth-1 (P3)
+References(ctx, entityID) ([]RelationshipReference, error)              // source-derived, depth-1 (P3)
 
 // State changes (CAS-on-condition via UpdateEntityWithTriplesRequest)
 Create(ctx, initial Participant) error
@@ -305,8 +322,7 @@ GetWorkflowDefinition(workflow string) (WorkflowDef, bool)
 // Streaming
 Watch(ctx, workflow string) (<-chan Participant, error)  // KV.Watch on ENTITY_STATES filtered by EntityIDPattern
 
-// History — graph revisions filtered to phase changes; source
-// attribution reads from the audit predicates stamped at write time
+// History — fixed recent occurrence window stored in the current entity
 History(ctx, workflow, entityID string) ([]TransitionEvent, error)
 ```
 
@@ -498,11 +514,10 @@ Before beta.86 tags:
   natively. Queries like "show me all flying missions" work
   through GraphQL without per-workflow special-casing. Rule
   conditions can match on workflow state directly.
-- **Audit is the graph's revision history.** No parallel audit
-  bucket; no separate retention story; History reads from
-  ENTITY_STATES revisions with source attribution recovered from
-  the audit-predicate triples stamped at each write. The
-  always-`framework` Triggered bug is structurally fixed.
+- **Transition history stays in current graph state.** No parallel audit
+  bucket; no separate retention story. As amended above, History reads the
+  fixed occurrence window retained in the current ENTITY_STATES value, not KV
+  revision archaeology. Source attribution is stored on each occurrence.
 - **Single source of truth.** No drift risk between MISSIONS and
   ENTITY_STATES — there's only one store.
 - **Smaller harness code.** lifecycle-gateway shrinks (~600 → ~300

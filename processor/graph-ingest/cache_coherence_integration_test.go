@@ -34,13 +34,13 @@ func queryEntityViaPrefix(t *testing.T, ctx context.Context, nc *natsclient.Clie
 	return nil
 }
 
-// TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead is the
+// TestIntegration_CacheCoherence_AppendVisibleAfterPrefixRead is the
 // regression lock for the read-after-write gap the gated-DAG executor surfaced:
 // the entity-query cache (30s TTL) was NOT invalidated by the NATS mutation
-// handlers, so a query within the TTL after an update_with_triples / triple.add
+// handlers, so a query within the TTL after an append
 // returned the pre-write entity. The executor read a unit's claim marker as
 // absent right after committing it and re-dispatched on every pass.
-func TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead(t *testing.T) {
+func TestIntegration_CacheCoherence_AppendVisibleAfterPrefixRead(t *testing.T) {
 	ctx := context.Background()
 	c, nc := startPrefixTestComponent(t)
 
@@ -52,29 +52,26 @@ func TestIntegration_CacheCoherence_UpdateWithTriplesVisibleAfterPrefixRead(t *t
 	require.NotNil(t, got)
 	require.Nil(t, got.GetTriple("test.coherence.marker"), "marker not present yet")
 
-	// Commit a new predicate via update_with_triples (the executor's claim path).
-	updReq := graph.UpdateEntityWithTriplesRequest{
-		Entity:     &graph.EntityState{ID: id},
-		AddTriples: []message.Triple{{Subject: id, Predicate: "test.coherence.marker", Object: "v1", Timestamp: time.Now(), Confidence: 1.0}},
-	}
+	// Commit a new predicate via canonical append.
+	updReq := graph.AppendTriplesRequest{Triples: []message.Triple{{Subject: id, Predicate: "test.coherence.marker", Object: "v1", Timestamp: time.Now(), Confidence: 1.0}}}
 	updData, err := json.Marshal(updReq)
 	require.NoError(t, err)
-	_, err = nc.RequestClassified(ctx, "graph.mutation.entity.update_with_triples", updData, 5*time.Second)
+	_, err = nc.RequestClassified(ctx, "graph.mutation.triple.append", updData, 5*time.Second)
 	require.NoError(t, err)
 
 	// The very next prefix read MUST reflect the new marker (no stale cache).
 	got = queryEntityViaPrefix(t, ctx, nc, id)
 	require.NotNil(t, got)
-	require.NotNil(t, got.GetTriple("test.coherence.marker"), "update_with_triples must be visible on the next prefix read (cache invalidated)")
+	require.NotNil(t, got.GetTriple("test.coherence.marker"), "append must be visible on the next prefix read (cache invalidated)")
 
-	// Same contract for triple.add.
-	addReq := graph.AddTripleRequest{Triple: message.Triple{Subject: id, Predicate: "test.coherence.added", Object: "v2", Timestamp: time.Now(), Confidence: 1.0}}
+	// Same contract for a second append.
+	addReq := graph.AppendTriplesRequest{Triples: []message.Triple{{Subject: id, Predicate: "test.coherence.added", Object: "v2", Timestamp: time.Now(), Confidence: 1.0}}}
 	addData, err := json.Marshal(addReq)
 	require.NoError(t, err)
-	_, err = nc.RequestClassified(ctx, "graph.mutation.triple.add", addData, 5*time.Second)
+	_, err = nc.RequestClassified(ctx, "graph.mutation.triple.append", addData, 5*time.Second)
 	require.NoError(t, err)
 
 	got = queryEntityViaPrefix(t, ctx, nc, id)
 	require.NotNil(t, got)
-	require.NotNil(t, got.GetTriple("test.coherence.added"), "triple.add must be visible on the next prefix read (cache invalidated)")
+	require.NotNil(t, got.GetTriple("test.coherence.added"), "append must be visible on the next prefix read (cache invalidated)")
 }

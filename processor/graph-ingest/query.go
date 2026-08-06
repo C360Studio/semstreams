@@ -77,10 +77,11 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 			fmt.Errorf("invalid request: %w", err))
 	}
 
-	// Validate request
-	if req.ID == "" {
+	// Validate before any authority I/O. Exact reads never reinterpret malformed
+	// identity as absence.
+	if err := semtypes.ValidateEntityID(req.ID); err != nil {
 		return nil, errs.ClassifiedCode(errs.ErrorInvalid, graph.ErrorCodeInvalidRequest,
-			errors.New("invalid request: empty id"))
+			fmt.Errorf("invalid request: entity ID: %w", err))
 	}
 
 	// Get entity from KV bucket
@@ -101,7 +102,24 @@ func (c *Component) handleQueryEntityNATS(ctx context.Context, data []byte) ([]b
 	if err := c.validateEntityQueryValue(ctx, req.ID, entry.Value, entry.Revision); err != nil {
 		return nil, err
 	}
-	return entry.Value, nil
+	var entity graph.EntityState
+	if err := graph.UnmarshalEntityState(entry.Value, &entity); err != nil {
+		return nil, errs.ClassifiedCode(errs.ErrorFatal, graph.ErrorCodeGraphStateResetRequired,
+			fmt.Errorf("decode validated entity %s at revision %d: %w", req.ID, entry.Revision, err))
+	}
+	if entity.ID != req.ID {
+		stateErr := &graph.StateContractError{
+			Reason:   graph.GraphStateReasonNoncanonicalEntityID,
+			EntityID: req.ID,
+			Err:      fmt.Errorf("authority key contains entity %q", entity.ID),
+		}
+		c.inventoryEntityPoison(ctx, stateErr, entry.Revision)
+		return nil, graph.ClassifyStateContractError(stateErr)
+	}
+	return json.Marshal(graph.ExactEntity{
+		Entity:     entity.Clone(),
+		KVRevision: entry.Revision,
+	})
 }
 
 // handleQueryBatchNATS handles batch entity query requests via NATS request/reply

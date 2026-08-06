@@ -601,16 +601,7 @@ func buildDefaultOutputPorts() []component.Port {
 	defaultCfg := DefaultConfig()
 	ports := make([]component.Port, len(defaultCfg.Ports.Outputs))
 	for i, portDef := range defaultCfg.Ports.Outputs {
-		ports[i] = component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionOutput,
-			Required:    false,
-			Description: portDef.Description,
-			Config: component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			},
-		}
+		ports[i] = component.BuildPortFromDefinition(portDef, component.DirectionOutput)
 	}
 	return ports
 }
@@ -1030,15 +1021,13 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
 
-	// Birth the loop-execution entity via create_with_triples (ADR-056 4c-pre-1):
-	// gives the entity a typed MessageType envelope and a proper origin contract
-	// instead of the old triple.add_batch auto-vivify path.
+	// Birth the loop-execution entity via entity.create. This gives the entity a
+	// typed MessageType envelope and a proper origin contract.
 	//
 	// WriteSpawnIdentity returns an error on genuine birth failure (not
 	// already-exists — idempotent re-spawn is fine). A failed birth means graph
 	// semantics are NOT intact for this loop: subsequent completion/failure/
-	// trajectory writes would reference an entity the ownership substrate cannot
-	// attribute. We treat this as a hard precondition failure and halt the loop
+	// trajectory writes would reference an absent entity. We treat this as a hard precondition failure and halt the loop
 	// so it enters a clean failure state rather than silently producing
 	// unattributed graph mutations.
 	//

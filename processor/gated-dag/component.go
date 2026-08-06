@@ -12,6 +12,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
@@ -211,7 +212,7 @@ func (c *Component) Start(ctx context.Context) error {
 				}
 			},
 		},
-		claimer: &natsClaimer{nc: c.natsClient, predicate: c.cfg.ClaimPredicate},
+		claimer: newNATSClaimer(c.natsClient, c.cfg.ClaimPredicate),
 		pub:     &natsPublisher{nc: c.natsClient, subject: c.cfg.DispatchSubject, fanOutWorkflow: c.cfg.FanOutWorkflow},
 	}
 	if err := exec.start(ctx); err != nil {
@@ -272,15 +273,28 @@ func (c *Component) Meta() component.Metadata {
 // not a configured port).
 func (c *Component) InputPorts() []component.Port { return []component.Port{} }
 
-// OutputPorts returns the dispatch subject as the single output port.
+// OutputPorts returns the dispatch subject and required graph mutation port.
 func (c *Component) OutputPorts() []component.Port {
-	return []component.Port{{
-		Name:        "dispatch",
-		Direction:   component.DirectionOutput,
-		Required:    true,
-		Description: "Dispatch reference (unit entity ID) for a dispatchable unit",
-		Config:      component.NATSPort{Subject: c.cfg.DispatchSubject},
-	}}
+	return []component.Port{
+		{
+			Name:        "dispatch",
+			Direction:   component.DirectionOutput,
+			Required:    true,
+			Description: "Dispatch reference (unit entity ID) for a dispatchable unit",
+			Config:      component.NATSPort{Subject: c.cfg.DispatchSubject},
+		},
+		{
+			Name:      "graph_mutations",
+			Direction: component.DirectionOutput,
+			Required:  true,
+			Config: component.NATSRequestPort{
+				Subject: graphmutation.SubjectFamily,
+				Interface: &component.InterfaceContract{
+					Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion,
+				},
+			},
+		},
+	}
 }
 
 // ConfigSchema returns the configuration schema.

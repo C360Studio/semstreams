@@ -188,7 +188,7 @@ then noncanonical hex. Multiple-fault inputs MUST return the same winning code, 
 ### Requirement: Existing boundaries remain unchanged until their owning migration
 
 Implementation MUST inventory every production `KVStore` and raw-bucket key/filter boundary and publish a checked-in
-owning-migration ledger. The ledger MUST record the boundary, current accepted shape and stored bytes, semantic owner,
+owning-migration ledger. The ledger MUST record the boundary, current accepted shape and stored bytes, responsible component,
 shared-contract status, missing semantic bound/codec/layout decision, rebuild consequence, owning change, and state.
 
 This prerequisite MUST NOT add validation to existing Get, Put, Create, Update, UpdateWithRetry, UpdateJSON, Delete,

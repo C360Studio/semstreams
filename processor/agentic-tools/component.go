@@ -929,24 +929,7 @@ func (c *Component) OutputPorts() []component.Port {
 
 	ports := make([]component.Port, len(c.config.Ports.Outputs))
 	for i, portDef := range c.config.Ports.Outputs {
-		port := component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionOutput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-		}
-		// Use JetStreamPort for jetstream type ports, NATSPort for others
-		if portDef.Type == "jetstream" {
-			port.Config = component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			}
-		} else {
-			port.Config = component.NATSPort{
-				Subject: portDef.Subject,
-			}
-		}
-		ports[i] = port
+		ports[i] = component.BuildPortFromDefinition(portDef, component.DirectionOutput)
 	}
 	return ports
 }

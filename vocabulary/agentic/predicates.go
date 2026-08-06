@@ -805,7 +805,7 @@ const (
 // lower-kebab segments (domain.category.property), so the flat conceptual
 // shorthand in design.md (lesson.category, lesson.injection_form) is realized
 // as agent.lesson.category, agent.lesson.injection-form, etc. — multi-word
-// properties use hyphens exactly as agent.todo.updated-at / ops.diagnosis.
+// properties use hyphens exactly as agent.scratch.created-at / ops.diagnosis.
 // observed-role do. Two-segment or underscored strings fail ParsePredicate and
 // panic at registration.
 const (
@@ -895,70 +895,35 @@ const (
 	// by a lifecycle transition. RFC3339 UTC. Rule-matchable, and crucially the
 	// replay-stable ordering key for brief-assembly injection: the matcher
 	// orders active lessons by severity → created-at → entity-ID. A triple's
-	// Timestamp field is re-stamped on every replace_owned promotion/retirement
+	// Timestamp field is re-stamped on every reconcile promotion/retirement
 	// (single-valued lifecycle writes carry a fresh Timestamp), and the entity's
 	// UpdatedAt / KV revision advance on every write — so neither is a stable
 	// sort key. Only this birth triple is invariant across a curator's edits AND
 	// an ADR-073 from-zero reingest, so the injected order is identical on
 	// replay. NOT part of content-identity (idempotency unchanged; first-write-
-	// wins preserves the FIRST emit's created-at) and NOT in any replace-owned
+	// wins preserves the FIRST emit's created-at) and NOT in any reconcile
 	// lifecycle set. Mirrors agent.scratch.created-at.
 	// Example: "2026-07-19T12:00:00Z"
 	// DataType: time.Time
 	LessonCreatedAt = "agent.lesson.created-at"
 )
 
-// Todo Predicates (ADR-036 — Agent-Private Observable State)
+// Todo record predicate (ADR-036 — Agent-Private Observable State).
 //
-// Written by the write_todos tool onto the owning agent's loop entity.
-// Each todo item produces five triples on the loop entity, keyed by the
-// todo's stable ID, so the prompt assembler can reconstruct the full
-// list across iterations even after context compaction.
-//
-// Discipline (ADR-036 §Decision):
-//   - The owning agent is the sole writer and sole interpreter of
-//     content. Other readers (rules, ops agent, debug UI) may match
-//     structural facts (status enums, counts, transitions) but MUST
-//     NOT predicate on TodoContent. The rule-validator enforces this
-//     via the RuleOpaque metadata flag on TodoContent.
-//   - Each call to write_todos replaces the prior list (full-list
-//     replace, not delta-merge). The executor removes triples for
-//     todos no longer present and writes the new set in a single
-//     batch.
+// Each write_todos call reconciles one record triple per item on the owning
+// loop entity. The object is a deterministic JSON string with id, content,
+// status, position, and updated_at fields. The complete record is rule-opaque:
+// TodoState and TodoReader are the supported logical access surface, so rules
+// never infer correlations from raw storage fields.
 const (
-	// TodoID is the stable identifier the agent assigned to a todo
-	// item. Used to correlate the five triples that describe one item.
-	// Example: "1", "2", "task-a"
-	// DataType: string
-	TodoID = "agent.todo.id"
+	// TodoRecord stores one complete todo item as deterministic JSON.
+	// DataType: string carrying TodoRecordJSONDatatype.
+	TodoRecord = "agent.todo.record"
 
-	// TodoContent is the free-form description of the todo item.
-	// Owner-interpretable only. Rule-opaque — rules MUST NOT predicate
-	// on this field; the rule-validator rejects any rule whose
-	// condition.field names this predicate. See ADR-036 Rule 1.
-	// Example: "Survey existing rules"
-	// DataType: string
-	TodoContent = "agent.todo.content"
-
-	// TodoStatus is the structural state of the todo item. Rule-matchable.
-	// Values: "pending" | "in_progress" | "completed".
-	// Example: "in_progress"
-	// DataType: string
-	TodoStatus = "agent.todo.status"
-
-	// TodoPosition is the zero-based ordinal of the todo within the list.
-	// The prompt assembler sorts by this field when reconstructing the
-	// list for re-injection.
-	// Example: 0, 1, 2
-	// DataType: int
-	TodoPosition = "agent.todo.position"
-
-	// TodoUpdatedAt is the wall-clock timestamp of the last write to
-	// this todo. Rule-matchable for stuck-detector predicates
-	// ("status=in_progress AND updated_at < now-30m").
-	// Example: "2026-05-09T14:22:00Z"
-	// DataType: time.Time
-	TodoUpdatedAt = "agent.todo.updated-at"
+	// TodoRecordJSONDatatype uses the repository's compact RDF datatype
+	// convention (for example xsd:string) to identify a JSON literal without
+	// changing Triple.Object from its persisted string representation.
+	TodoRecordJSONDatatype = "rdf:JSON"
 )
 
 // Scratch Predicates (ADR-036 §Future candidates — agent.scratch.*)
@@ -968,11 +933,11 @@ const (
 // scratchpad call mints a stable scratch.id and lands four triples
 // correlated by the shared Context stamp carried on all four (the id
 // is also the Context value). Context, not the scratch.id Object, is
-// what groups them — it is one of the six add-lane identity fields, so
+// what groups them — it is one of the six append tuple identity fields, so
 // it also keeps two calls with the same text or character count from
 // collapsing into one entry. The agent is the sole writer and sole interpreter of
 // content; rule-opaque flagging on agent.scratch.text mirrors the
-// ADR-036 discipline applied to TodoContent.
+// ADR-036 discipline applied to TodoRecord.
 //
 // The semspec ask (2026-05-12, scratchpad proposal) framed this as
 // pre-commit reasoning runway for mid-tier models that struggle under

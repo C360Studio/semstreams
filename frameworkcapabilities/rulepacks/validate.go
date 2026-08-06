@@ -37,10 +37,10 @@ func ValidateConfig(cfg *config.Config) error {
 }
 
 // ValidateRuntimeUpdate rejects rule-processor composition changes that cannot
-// preserve the static owner binding established before ComponentManager.Start.
+// preserve the static mutation configuration established before ComponentManager.Start.
 // Rule definitions and the explicitly supported runtime fields have their own
 // processor-local update path; replacing or newly enabling the component would
-// construct an unbound processor after BindRulePackContracts has already run.
+// construct an unconfigured processor after ConfigureRulePackMutations has already run.
 func ValidateRuntimeUpdate(instanceName string, previous *types.ComponentConfig, proposed types.ComponentConfig) error {
 	return rulepackcontract.ValidateRuntimeUpdate(instanceName, previous, proposed)
 }

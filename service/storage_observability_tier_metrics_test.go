@@ -186,10 +186,10 @@ func TestInheritedPressure_DoesNotEvictOwnBoundFindingsFromTheHealthMessage(t *t
 		// Alphabetically ahead of the own-bound row, which is what makes name
 		// order the wrong tiebreak.
 		inheritedPressureRow("KV_AGENT_LOOPS", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_ALIAS_INDEX", natsclient.TierFile, natsclient.PressureCritical),
+		inheritedPressureRow("KV_COMMUNITY_INDEX", natsclient.TierFile, natsclient.PressureCritical),
 		inheritedPressureRow("KV_ENTITY_STATES", natsclient.TierFile, natsclient.PressureCritical),
 		inheritedPressureRow("KV_GRAPH_STATUS", natsclient.TierFile, natsclient.PressureCritical),
-		inheritedPressureRow("KV_OWNER_CLAIMS", natsclient.TierFile, natsclient.PressureCritical),
-		inheritedPressureRow("KV_OWNER_PRESENCE", natsclient.TierFile, natsclient.PressureCritical),
 		inheritedPressureRow("KV_STORAGE_REPORT", natsclient.TierFile, natsclient.PressureCritical),
 		withPressure(resourceRow("ZEBRA_EVENTS", natsclient.TierFile), natsclient.PressureCritical),
 	}

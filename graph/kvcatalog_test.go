@@ -18,7 +18,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 21, "the catalog carries the 21 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 19, "the catalog carries the 19 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -37,30 +37,18 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 
 	// GRAPH_STATUS keeps its readiness replay depth.
 	assert.Equal(t, uint8(3), spec(BucketGraphStatus).History)
-	// OWNER_CLAIMS keeps its registration audit depth.
-	assert.Equal(t, uint8(10), spec(BucketOwnerClaims).History)
-
-	// OWNER_PRESENCE is the live bounded-ttl proof: retention is per-descriptor.
-	presence := spec(BucketOwnerPresence)
-	assert.Equal(t, natsclient.RetentionBoundedTTL, presence.Retention.Kind)
-	assert.Equal(t, ownerPresenceTTL, presence.Retention.TTL)
-
 	// COMPONENT_STATUS: diagnostic / write-open / retention-unmanaged (#717).
 	status := spec(BucketComponentStatus)
 	assert.Equal(t, natsclient.ClassDiagnostic, status.Class)
 	assert.Equal(t, natsclient.WriteOpen, status.Write)
 	assert.Equal(t, natsclient.RetentionUnmanaged, status.Retention.Kind)
 
-	// Everything except COMPONENT_STATUS is owner-only and, except
-	// OWNER_PRESENCE, no-lifecycle.
+	// Everything except COMPONENT_STATUS is owner-only and no-lifecycle.
 	for _, s := range KVCatalog() {
 		if s.Name == BucketComponentStatus {
 			continue
 		}
 		assert.Equal(t, natsclient.WriteOwnerOnly, s.Write, "%s must be owner-only", s.Name)
-		if s.Name == BucketOwnerPresence {
-			continue
-		}
 		assert.Equal(t, natsclient.RetentionNoLifecycle, s.Retention.Kind,
 			"%s must declare no lifecycle retention", s.Name)
 	}
@@ -93,21 +81,17 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 }
 
 // TestFrameworkOwnedBuckets_ProductionView pins the production derived view:
-// the retained buckets of the retired hand list PLUS the two ownership buckets the
-// derivation newly covers (they were always owner-written; the hand list had
-// simply never been extended to them — the drift class the catalog kills),
-// and NOT the write-open COMPONENT_STATUS.
+// the retained framework buckets and NOT the write-open COMPONENT_STATUS.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
-	assert.Len(t, owned, 20)
+	assert.Len(t, owned, 18)
 	for _, name := range []string{
 		BucketEntityStates, BucketPredicateIndex, BucketIncomingIndex, BucketOutgoingIndex,
 		BucketAliasIndex, BucketNameIndex, BucketEntitySuffixIndex, BucketSpatialIndex,
 		BucketTemporalIndex, BucketTemporalIndexReverse,
 		BucketEmbeddingIndex, BucketEmbeddingDedup, BucketCommunityIndex,
 		BucketCommunitySummaries, BucketAnomalyIndex,
-		BucketGraphIngestAppliedSeq, BucketGraphStatus,
-		BucketOwnerClaims, BucketOwnerPresence, BucketStorageReport,
+		BucketGraphIngestAppliedSeq, BucketGraphStatus, BucketStorageReport,
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}

@@ -11,6 +11,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -204,9 +205,9 @@ func (a *DirectRelationshipApplier) ApplyRelationship(
 	return nil
 }
 
-// MutationRelationshipApplier sends triple add requests to graph-ingest via NATS request/reply.
+// MutationRelationshipApplier sends triple append requests to graph-ingest via NATS request/reply.
 // This is the preferred applier for cross-processor mutations as it goes through the
-// proper ingestion pipeline (graph.mutation.triple.add -> graph-ingest -> indexing).
+// canonical graph mutation pipeline (triple.append -> graph-ingest -> indexing).
 type MutationRelationshipApplier struct {
 	natsClient *natsclient.Client
 	logger     *slog.Logger
@@ -254,27 +255,25 @@ func (a *MutationRelationshipApplier) ApplyRelationship(
 		Context:    "auto-applied",
 	}
 
-	req := graph.AddTripleRequest{Triple: triple}
-	data, err := json.Marshal(req)
+	req := graph.AppendTriplesRequest{Triples: []message.Triple{triple}}
+	mutationClient, err := graphmutation.NewClient(a.natsClient, 5*time.Second)
 	if err != nil {
-		return errs.WrapInvalid(err, "MutationRelationshipApplier", "ApplyRelationship",
-			"failed to serialize request")
+		return errs.WrapFatal(err, "MutationRelationshipApplier", "ApplyRelationship", "build mutation client")
 	}
-
-	// RequestWithRetryClassified handles transient "no responders" errors when
-	// graph-gateway is restarting or its subscription hasn't yet
-	// propagated. Inference-emitted triples are idempotent on the
-	// responder side (same triple twice = same graph state), so
-	// retry is safe and avoids silently dropping inferred edges.
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err
-	// rather than silently mis-decoding legacy "error: " body as success JSON.
-	// ADR-060: a handler failure arrives as the classified err below (no in-body
-	// Success=false), so no response decode is needed — the success body carries
-	// nothing this caller uses.
-	if _, err := a.natsClient.RequestWithRetryClassified(ctx, "graph.mutation.triple.add", data, 5*time.Second, natsclient.DefaultRetryConfig()); err != nil {
+	response, err := mutationClient.Append(ctx, req)
+	if err != nil {
 		return errs.WrapTransient(err, "MutationRelationshipApplier", "ApplyRelationship",
 			fmt.Sprintf("mutation request failed: %s -> %s -> %s",
 				suggestion.FromEntity, suggestion.Predicate, suggestion.ToEntity))
+	}
+	result := response.Results[0]
+	if result.Outcome == graph.MutationFailed {
+		return fmt.Errorf("append failed for %s: %s/%s",
+			suggestion.FromEntity, result.Error.Class, result.Error.Code)
+	}
+	if result.Outcome != graph.MutationApplied && result.Outcome != graph.MutationUnchanged {
+		return errs.WrapFatal(errs.ErrDataCorrupted, "MutationRelationshipApplier", "ApplyRelationship",
+			fmt.Sprintf("unexpected append outcome %q", result.Outcome))
 	}
 
 	a.logger.Debug("Applied inferred relationship via mutation API",

@@ -18,14 +18,13 @@ const CategoryTrajectoryStep = "trajectory_step"
 // entity origin contract — key "agentic.trajectory_step.v1".
 //
 // Registry decision (mirrors LoopExecutionMessageType, ADR-056 typed-origin):
-// MUTATION-ONLY. Stamped on CreateEntityWithTriplesRequest.Entity.MessageType
+// MUTATION-ONLY. Stamped on CreateEntityRequest.Entity.MessageType
 // when WriteTrajectorySteps births a step entity; NEVER published as a
 // BaseMessage payload, NOT registered in the payload registry, never decoded.
-// A trajectory step is a metadata fact born once via create_with_triples (large
+// A trajectory step is a metadata fact born once via entity.create (large
 // content lives in ObjectStore via ContentStorable) — not a wire message. The
-// step entity MUST be created with this envelope, not auto-vivified by
-// triple.add: graph-ingest enforces must-exist and would reject the step's
-// metadata triples otherwise (gh#390).
+// step entity MUST be created with this envelope; append is must-exist and
+// rejects metadata for an absent entity.
 func TrajectoryStepMessageType() message.Type {
 	return message.Type{
 		Domain:   Domain,

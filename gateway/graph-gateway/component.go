@@ -139,11 +139,6 @@ func (c *Config) ApplyDefaults() {
 					Type:    "nats-request",
 					Subject: "graph.query.*",
 				},
-				{
-					Name:    "mutations",
-					Type:    "nats-request",
-					Subject: "graph.mutation.*",
-				},
 			}
 		} else {
 			// Ensure the queries port is always present — graph-gateway
@@ -185,11 +180,6 @@ func DefaultConfig() Config {
 					Name:    "queries",
 					Type:    "nats-request",
 					Subject: "graph.query.*",
-				},
-				{
-					Name:    "mutations",
-					Type:    "nats-request",
-					Subject: "graph.mutation.*",
 				},
 			},
 		},
@@ -1580,9 +1570,9 @@ func buildIntrospectionSchema() map[string]interface{} {
 				"kind": "OBJECT",
 				"name": "Query",
 				"fields": []map[string]interface{}{
-					fieldDef("entity", "Entity", argDef("id", "String!")),
+					fieldDef("entity", "ExactEntity", argDef("id", "String!")),
 					fieldDef("entitiesByPrefix", "[Entity]", argDef("prefix", "String!"), argDef("limit", "Int")),
-					fieldDef("entityByAlias", "Entity", argDef("alias", "String!")),
+					fieldDef("entityByAlias", "ExactEntity", argDef("alias", "String!")),
 					fieldDef("relationships", "[Relationship]", argDef("entityId", "String!"), argDef("direction", "String")),
 					fieldDef("entityIdHierarchy", "HierarchyResult", argDef("prefix", "String!"), argDef("limit", "Int")),
 					fieldDef("pathSearch", "PathSearchResult", argDef("startEntity", "String!"), argDef("maxDepth", "Int"), argDef("maxNodes", "Int"),
@@ -1608,6 +1598,7 @@ func buildIntrospectionSchema() map[string]interface{} {
 					fieldDef("searchGraph", "GlobalSearchResult", argDef("query", "String!"), argDef("level", "Int"), argDef("maxCommunities", "Int"), argDef("summarizeThreshold", "Int"), argDef("includeSummaries", "Boolean"), argDef("includeRelationships", "Boolean"), argDef("includeSources", "Boolean")),
 				},
 			},
+			objectTypeDef("ExactEntity", fieldDef("entity", "Entity"), fieldDef("kvRevision", "Uint64")),
 			typeDef("OBJECT", "Entity", "id", "triples"),
 			typeDef("OBJECT", "Triple", "subject", "predicate", "object"),
 			typeDef("OBJECT", "Relationship", "from", "to", "predicate"),
@@ -1635,7 +1626,16 @@ func buildIntrospectionSchema() map[string]interface{} {
 			typeDef("SCALAR", "Int"),
 			typeDef("SCALAR", "Float"),
 			typeDef("SCALAR", "Boolean"),
+			typeDef("SCALAR", "Uint64"),
 		},
+	}
+}
+
+func objectTypeDef(name string, fields ...map[string]interface{}) map[string]interface{} {
+	return map[string]interface{}{
+		"kind":   "OBJECT",
+		"name":   name,
+		"fields": fields,
 	}
 }
 

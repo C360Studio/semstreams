@@ -227,7 +227,9 @@ inputs:
 outputs:
   - name: mutations
     type: nats-request
-    subjects: ["graph.mutation.*"]
+    subject: "graph.mutation.>"
+    interface: "semstreams.graph.mutation"
+    required: true
 reads:  # Direct KV access (not ports, just dependencies)
   - ENTITY_STATES
   - OUTGOING_INDEX

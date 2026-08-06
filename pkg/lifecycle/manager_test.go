@@ -13,6 +13,7 @@ import (
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
+	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -23,85 +24,68 @@ import (
 type fakeEmitter struct {
 	mu       sync.Mutex
 	bucket   *fakeBucket
-	requests []*graph.UpdateEntityWithTriplesRequest
+	requests []*graph.ReconcilePredicatesRequest
 	deletes  []*graph.DeleteEntityRequest
 	// deleteErr, when non-nil, makes delete() fail WITHOUT touching the
 	// bucket — used to drive the DespawnWith partial-failure recovery path
 	// (transition committed, delete failed, entity terminal-but-present).
 	deleteErr error
-	// createDegraded makes create() report a COMMITTED-but-unreadable write:
-	// the mutation contract's Degraded shape. The bucket is still written, so
-	// the state genuinely exists — only the response carries no Entity.
-	createDegraded bool
 	// createResponseMutator rewrites the Entity on the create RESPONSE without
 	// touching what was stored, so a test can tell the causal response apart
 	// from a later Get of the same entity.
 	createResponseMutator func(*graph.EntityState)
-	// createLosesReply commits the write and then reports ErrAlreadyExists —
-	// the shape the emitter's own retry produces when the first reply is lost.
-	createLosesReply bool
-	// forceRevisionMismatch makes update() fail CAS regardless of revision.
+	// forceRevisionMismatch makes reconcile() fail CAS regardless of revision.
 	forceRevisionMismatch bool
+	// afterReconcile runs after the reconcile commit and before its response.
+	// It deterministically models a newer writer racing DespawnWith.
+	afterReconcile func(*graph.ReconcilePredicatesResponse)
 }
 
-// update mirrors graph-ingest's handleEntityUpdateWithTriples semantics:
-// CAS-on-condition when ExpectedRevision > 0; otherwise must-exist
-// (entity not found if absent); naive-append merge (NOT
-// per-predicate-latest-wins — that's a read-time concern via
-// extractTripleScalar). Per ADR-049 reviewer B1 the test substrate
-// MUST match production or it masks bugs.
-func (f *fakeEmitter) update(_ context.Context, req *graph.UpdateEntityWithTriplesRequest) (*graph.UpdateEntityWithTriplesResponse, error) {
+// reconcile mirrors the canonical predicate-authority mutation: the named
+// predicates become exactly Desired at ExpectedRevision, while unrelated
+// predicates and entity metadata are preserved.
+func (f *fakeEmitter) reconcile(_ context.Context, req *graph.ReconcilePredicatesRequest) (*graph.ReconcilePredicatesResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, req)
-	currentRev := f.bucket.revOf(req.Entity.ID)
-	if f.forceRevisionMismatch && f.bucket.exists(req.Entity.ID) {
+	currentRev := f.bucket.revOf(req.EntityID)
+	if f.forceRevisionMismatch && f.bucket.exists(req.EntityID) {
 		return nil, fmt.Errorf("%w: forced", errs.ErrRevisionMismatch)
 	}
-	if !f.bucket.exists(req.Entity.ID) {
-		// ADR-060: production update() returns (nil, <error wrapping ErrEntityNotFound>).
+	if !f.bucket.exists(req.EntityID) {
 		return nil, fmt.Errorf("%w: entity not found", ErrEntityNotFound)
 	}
 	if req.ExpectedRevision > 0 && req.ExpectedRevision != currentRev {
-		// ADR-060: production update() now returns (nil, <classified error>)
-		// matching errs.ErrRevisionMismatch on the CAS-conflict path.
 		return nil, errs.ErrRevisionMismatch
 	}
-	current := f.bucket.get(req.Entity.ID)
-	merged := current.Triples
-	if len(req.RemoveTriples) > 0 {
-		removeSet := map[string]struct{}{}
-		for _, p := range req.RemoveTriples {
-			removeSet[p] = struct{}{}
-		}
-		kept := make([]message.Triple, 0, len(merged))
-		for _, t := range merged {
-			if _, drop := removeSet[t.Predicate]; drop {
-				continue
-			}
-			kept = append(kept, t)
-		}
-		merged = kept
+	current := f.bucket.get(req.EntityID)
+	authoritative := make(map[string]struct{}, len(req.Predicates))
+	for _, predicate := range req.Predicates {
+		authoritative[predicate] = struct{}{}
 	}
-	// Replace-by-(subject,predicate) via MergeTriples — mirrors the
-	// production graph-ingest update_with_triples add-leg (gh#244). Must
-	// match the handler or this mock silently tests a different contract
-	// than the wire it stands in for.
-	merged = graph.MergeTriples(merged, req.AddTriples)
-	state := *req.Entity
-	state.Triples = merged
-	f.bucket.put(req.Entity.ID, &state)
-	return &graph.UpdateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
-		Entity:           &state,
-	}, nil
+	triples := make([]message.Triple, 0, len(current.Triples)+len(req.Desired))
+	for _, item := range current.Triples {
+		if _, replace := authoritative[item.Predicate]; !replace {
+			triples = append(triples, item)
+		}
+	}
+	triples = append(triples, req.Desired...)
+	state := *current
+	state.Triples = triples
+	f.bucket.put(req.EntityID, &state)
+	response := &graph.ReconcilePredicatesResponse{
+		Outcome: graph.MutationApplied, Entity: &state, KVRevision: f.bucket.revOf(req.EntityID),
+	}
+	if f.afterReconcile != nil {
+		f.afterReconcile(response)
+	}
+	return response, nil
 }
 
-// create mirrors graph-ingest's handleEntityCreateWithTriples — atomic
+// create mirrors canonical entity.create — atomic
 // create-or-fail. Returns ErrAlreadyExists when the entity is already
-// present (the per-entity CAS race surface for fresh-create per
-// ADR-049 reviewer B2).
-func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTriplesRequest) (*graph.CreateEntityWithTriplesResponse, error) {
+// present.
+func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityRequest) (*graph.CreateEntityResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.bucket.exists(req.Entity.ID) {
@@ -111,31 +95,16 @@ func (f *fakeEmitter) create(_ context.Context, req *graph.CreateEntityWithTripl
 	state := *req.Entity
 	state.Triples = req.Triples
 	f.bucket.put(req.Entity.ID, &state)
-	if f.createLosesReply {
-		return nil, fmt.Errorf("%w: entity already exists", ErrAlreadyExists)
-	}
-	if f.createDegraded {
-		return &graph.CreateEntityWithTriplesResponse{
-			MutationResponse: graph.MutationResponse{Degraded: true, DegradedReason: "read-back unavailable"},
-			TriplesAdded:     len(req.Triples),
-		}, nil
-	}
 	respState := state
 	if f.createResponseMutator != nil {
 		respState.Triples = append([]message.Triple(nil), state.Triples...)
 		f.createResponseMutator(&respState)
 	}
-	return &graph.CreateEntityWithTriplesResponse{
-		MutationResponse: graph.MutationResponse{KVRevision: f.bucket.revOf(req.Entity.ID)},
-		Entity:           &respState,
-		TriplesAdded:     len(req.Triples),
+	return &graph.CreateEntityResponse{
+		Outcome: graph.MutationApplied, Entity: &respState, KVRevision: f.bucket.revOf(req.Entity.ID),
 	}, nil
 }
 
-// delete mirrors graph-ingest's handleEntityDelete — idempotent
-// reclaim. Removes the entity from the bucket and reports whether it
-// existed (DeleteEntityResponse.Deleted); an already-absent entity is a
-// no-op success, matching the production handler.
 func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) (*graph.DeleteEntityResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -143,8 +112,16 @@ func (f *fakeEmitter) delete(_ context.Context, req *graph.DeleteEntityRequest) 
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
-	existed := f.bucket.remove(req.EntityID)
-	return &graph.DeleteEntityResponse{Deleted: existed}, nil
+	if f.bucket.revOf(req.EntityID) == 0 {
+		return nil, ErrEntityNotFound
+	}
+	if req.ExpectedRevision != f.bucket.revOf(req.EntityID) {
+		return nil, errs.ErrRevisionMismatch
+	}
+	f.bucket.remove(req.EntityID)
+	return &graph.DeleteEntityResponse{
+		EntityID: req.EntityID, Outcome: graph.MutationApplied, ExpectedRevision: req.ExpectedRevision,
+	}, nil
 }
 
 // fakeBucket is the minimal jetstream.KeyValue surface Manager.getEntity
@@ -207,8 +184,6 @@ func (b *fakeBucket) put(id string, state *graph.EntityState) {
 	b.entries[id] = &fakeBucketEntry{state: state, revision: b.nextRev, createdAt: time.Now()}
 }
 
-// remove deletes an entry and reports whether it existed (mirrors the
-// graph-ingest delete handler's Deleted flag).
 func (b *fakeBucket) remove(id string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -390,6 +365,167 @@ func TestManager_RoundTripCreateGetTransition(t *testing.T) {
 	}
 }
 
+func TestManager_HistoryReadsTransitionRecordsFromCurrentEntity(t *testing.T) {
+	t.Parallel()
+	mgr, _, _ := newTestManager(t)
+	ctx := context.Background()
+
+	id := "c360.platform1.lifecycle.gcs.mission.history-current"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning", OwnerOrgID: "acme"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if err := mgr.Transition(ctx, "fixture", id, "flying", TransitionSourceRule, "launched"); err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+
+	events, err := mgr.History(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("History len=%d, want 2: %#v", len(events), events)
+	}
+	if got := events[0]; got.From != "" || got.To != "planning" || got.Triggered != TransitionSourceFramework || got.Note != "created" {
+		t.Errorf("birth event=%#v, want framework create -> planning", got)
+	}
+	if got := events[1]; got.From != "planning" || got.To != "flying" || got.Triggered != TransitionSourceRule || got.Note != "launched" {
+		t.Errorf("transition event=%#v, want rule planning -> flying", got)
+	}
+}
+
+func TestManager_TransitionTimestampAdvancesPastRecordedFuture(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+
+	id := "c360.platform1.lifecycle.gcs.mission.monotonic-time"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	state := bucket.get(id)
+	records, err := decodeTransitionRecords(id, state.Triples)
+	if err != nil {
+		t.Fatalf("decode birth record: %v", err)
+	}
+	future := time.Now().Add(time.Hour)
+	records[0].event.At = future
+	retained := state.Triples[:0]
+	for _, item := range state.Triples {
+		if !isTransitionRecordPredicate(item.Predicate) {
+			retained = append(retained, item)
+		}
+	}
+	state.Triples = append(retained, transitionRecordsToTriples(id, records)...)
+	bucket.put(id, state)
+
+	if err := mgr.Transition(ctx, "fixture", id, "flying", TransitionSourceRule, "clock-regression"); err != nil {
+		t.Fatalf("Transition: %v", err)
+	}
+	events, err := mgr.History(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("History len = %d, want 2", len(events))
+	}
+	if !events[1].At.After(events[0].At) {
+		t.Fatalf("transition timestamp %s did not advance past recorded %s", events[1].At, events[0].At)
+	}
+}
+
+func TestManager_ReferencesReportsSourceRelationshipWithoutTarget(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+
+	reg, err := mgr.lookupByWorkflow("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.workflow.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assignment.drone"}}
+	sourceID := "c360.platform1.lifecycle.gcs.mission.references"
+	targetID := "c360.platform1.assets.flight.drone.absent"
+	if err := mgr.Create(ctx, &fixtureMission{ID: sourceID, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	state := bucket.get(sourceID)
+	state.Triples = append(state.Triples, message.Triple{
+		Subject: sourceID, Predicate: "mission.assignment.drone", Object: targetID,
+	})
+	bucket.put(sourceID, state)
+
+	references, err := mgr.References(ctx, sourceID)
+	if err != nil {
+		t.Fatalf("References: %v", err)
+	}
+	if len(references) != 1 || references[0].EntityID != targetID ||
+		references[0].Predicate != "mission.assignment.drone" {
+		t.Fatalf("references = %#v", references)
+	}
+	if bucket.exists(targetID) {
+		t.Fatal("References materialized or required an absent target")
+	}
+}
+
+func TestManager_TransitionRecordsAreOccurrenceDiscriminatedAndBounded(t *testing.T) {
+	t.Parallel()
+	mgr, _, bucket := newTestManager(t)
+	ctx := context.Background()
+
+	reg, err := mgr.lookupByWorkflow("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg.workflow.Transitions = Transitions{
+		"planning": {"flying"},
+		"flying":   {"planning"},
+	}
+
+	id := "c360.platform1.lifecycle.gcs.mission.history-cap"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	phase := "planning"
+	for i := 0; i < transitionHistoryLimit+7; i++ {
+		next := "flying"
+		if phase == "flying" {
+			next = "planning"
+		}
+		if err := mgr.Transition(ctx, "fixture", id, next, TransitionSourceComponent, fmt.Sprintf("step-%d", i)); err != nil {
+			t.Fatalf("Transition %d: %v", i, err)
+		}
+		phase = next
+	}
+
+	events, err := mgr.History(ctx, "fixture", id)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(events) != transitionHistoryLimit {
+		t.Fatalf("History len=%d, want fixed cap %d", len(events), transitionHistoryLimit)
+	}
+	state := bucket.get(id)
+	contexts := make(map[string]map[string]struct{})
+	for _, item := range state.Triples {
+		if !isTransitionRecordPredicate(item.Predicate) {
+			continue
+		}
+		if item.Context == "" {
+			t.Fatalf("transition triple %q has empty occurrence context", item.Predicate)
+		}
+		if contexts[item.Context] == nil {
+			contexts[item.Context] = make(map[string]struct{})
+		}
+		if _, duplicate := contexts[item.Context][item.Predicate]; duplicate {
+			t.Fatalf("occurrence %q has duplicate predicate %q", item.Context, item.Predicate)
+		}
+		contexts[item.Context][item.Predicate] = struct{}{}
+	}
+	if len(contexts) != transitionHistoryLimit {
+		t.Fatalf("record occurrence count=%d, want %d", len(contexts), transitionHistoryLimit)
+	}
+}
+
 func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
 	t.Parallel()
 	mgr, _, _ := newTestManager(t)
@@ -401,6 +537,24 @@ func TestManager_TransitionRejectsInvalidEdge(t *testing.T) {
 	err := mgr.Transition(ctx, "fixture", id, "completed", TransitionSourceRule, "")
 	if !errors.Is(err, ErrInvalidTransition) {
 		t.Fatalf("expected ErrInvalidTransition, got %v", err)
+	}
+}
+
+func TestManager_TransitionRejectsUnknownSourceBeforeMutation(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, _ := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.invalid-source"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	err := mgr.Transition(ctx, "fixture", id, "flying", TransitionSource("typo"), "")
+	if !errors.Is(err, ErrInvalidTransition) {
+		t.Fatalf("Transition error=%v, want ErrInvalidTransition", err)
+	}
+	if len(emitter.requests) != 0 {
+		t.Fatalf("reconcile requests=%d, want none for invalid source", len(emitter.requests))
 	}
 }
 
@@ -651,7 +805,7 @@ func TestWorkflowValidateRejectsNon6SegmentPattern(t *testing.T) {
 	t.Parallel()
 	bad := Workflow{
 		Name:            "bad",
-		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=654 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
+		EntityIDPattern: "*.lifecycle.gcs.mission.*", // entity-id-audit:classify intentional-malformed "*.lifecycle.gcs.mission.*" line=808 column=20 surface=go-field:Workflow.EntityIDPattern entity_id_pattern_invalid:arity five segment rejection fixture
 		Transitions:     Transitions{"planning": {}},
 		PhasePredicate:  "workflow.lifecycle.phase",
 		Schema:          reflect.TypeOf(fixtureMission{}),
@@ -666,7 +820,7 @@ func TestWorkflowValidateRejectsNoncanonicalDeclaredPredicate(t *testing.T) {
 	t.Parallel()
 	bad := lifecycle{}.fixtureWorkflow()
 	bad.ReferencePredicates = []ReferenceSpec{{Predicate: "mission.assigned_drone"}} // predicate-audit:unrelated {"column":28,"surface":"go-assignment:ReferencePredicates","value":"","basis":"reviewed:predicate-container-values-audited"}
-	// predicate-audit:invalid {"location":"line:638:column:56","kind":"stored-predicate","value":"mission.assigned_drone","reason":"arity"}
+	// predicate-audit:invalid {"location":"line:822:column:56","kind":"stored-predicate","value":"mission.assigned_drone","reason":"arity"}
 
 	err := bad.validate()
 	if err == nil {
@@ -761,7 +915,7 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 	// Count predicate emissions: phase + 4 audit fields = 5 expected.
 	// If diff is spurious on zero-value Note field, we'd see > 5.
 	gotPreds := map[string]bool{}
-	for _, tr := range last.AddTriples {
+	for _, tr := range last.Desired {
 		gotPreds[tr.Predicate] = true
 	}
 	if _, ok := gotPreds["mission.identity.owner-org-id"]; ok {
@@ -771,7 +925,7 @@ func TestManager_DiffSkipsZeroValueOnMissingPredicate(t *testing.T) {
 
 // --- Despawn / DespawnWith (gh#497) ---
 
-func TestManager_Despawn_ReclaimsAndIsIdempotent(t *testing.T) {
+func TestManager_Despawn_ReclaimsAtExactRevisionAndRejectsAbsence(t *testing.T) {
 	t.Parallel()
 	mgr, emitter, bucket := newTestManager(t)
 	ctx := context.Background()
@@ -788,12 +942,14 @@ func TestManager_Despawn_ReclaimsAndIsIdempotent(t *testing.T) {
 	if bucket.exists(id) {
 		t.Errorf("entity should be gone from ENTITY_STATES after Despawn")
 	}
-	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id {
+	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id || emitter.deletes[0].ExpectedRevision == 0 {
 		t.Errorf("expected exactly 1 delete for %q, got %+v", id, emitter.deletes)
 	}
-	// Idempotent: despawning an already-absent entity succeeds.
-	if err := mgr.Despawn(ctx, "fixture", id); err != nil {
-		t.Errorf("Despawn on absent entity should be idempotent success, got %v", err)
+	if err := mgr.Despawn(ctx, "fixture", id); !errors.Is(err, ErrEntityNotFound) {
+		t.Errorf("Despawn on absent entity error = %v, want ErrEntityNotFound", err)
+	}
+	if len(emitter.deletes) != 1 {
+		t.Errorf("absent entity emitted a delete: %+v", emitter.deletes)
 	}
 }
 
@@ -839,7 +995,7 @@ func TestManager_DespawnWith_TransitionsThenReclaims(t *testing.T) {
 	}
 	sawTerminal := false
 	for _, r := range emitter.requests {
-		for _, tr := range r.AddTriples {
+		for _, tr := range r.Desired {
 			if tr.Predicate == "mission.lifecycle.phase" && tr.Object == "aborted" {
 				sawTerminal = true
 			}
@@ -850,6 +1006,66 @@ func TestManager_DespawnWith_TransitionsThenReclaims(t *testing.T) {
 	}
 	if len(emitter.deletes) != 1 || emitter.deletes[0].EntityID != id {
 		t.Errorf("expected exactly 1 delete for %q, got %+v", id, emitter.deletes)
+	}
+}
+
+func TestManager_DespawnWith_DoesNotDeleteNewerStateAfterTerminalCommit(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dsp-race"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var transitionRevision uint64
+	emitter.afterReconcile = func(response *graph.ReconcilePredicatesResponse) {
+		transitionRevision = response.KVRevision
+		newer := bucket.get(id)
+		newer.Triples = append(newer.Triples, message.Triple{
+			Subject: id, Predicate: "test.concurrent.value", Object: "newer",
+		})
+		bucket.put(id, newer)
+	}
+
+	err := mgr.DespawnWith(ctx, "fixture", id, TransitionSourceRule, "raced-cull")
+	if !errors.Is(err, errs.ErrRevisionMismatch) {
+		t.Fatalf("DespawnWith error = %v, want revision mismatch", err)
+	}
+	if !bucket.exists(id) {
+		t.Fatal("DespawnWith deleted state newer than its terminal transition")
+	}
+	if len(emitter.deletes) != 1 || emitter.deletes[0].ExpectedRevision != transitionRevision {
+		t.Fatalf("delete = %+v, want transition revision %d", emitter.deletes, transitionRevision)
+	}
+	if got := extractTripleScalar(bucket.get(id).Triples, id, "test.concurrent.value"); got != "newer" {
+		t.Fatalf("newer concurrent state = %q, want preserved", got)
+	}
+}
+
+func TestManager_DespawnWith_PreservesDeleteCommitUnknown(t *testing.T) {
+	t.Parallel()
+	mgr, emitter, bucket := newTestManager(t)
+	ctx := context.Background()
+	id := "c360.platform1.lifecycle.gcs.mission.dsp-unknown"
+	if err := mgr.Create(ctx, &fixtureMission{ID: id, PhaseF: "planning"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	emitter.deleteErr = &projection.MutationError{
+		Operation: projection.MutationOperationDelete,
+		Kind:      projection.MutationCommitUnknown,
+		Commit:    projection.CommitUnknown,
+		Err:       errors.New("reply lost after delivery"),
+	}
+
+	err := mgr.DespawnWith(ctx, "fixture", id, TransitionSourceRule, "ambiguous-cull")
+	var mutationErr *projection.MutationError
+	if !errors.As(err, &mutationErr) || mutationErr.Kind != projection.MutationCommitUnknown ||
+		mutationErr.Commit != projection.CommitUnknown {
+		t.Fatalf("DespawnWith error = %#v, want commit_unknown", mutationErr)
+	}
+	if !bucket.exists(id) {
+		t.Fatal("fake ambiguous delete must leave authority present")
 	}
 }
 
@@ -1026,43 +1242,10 @@ func TestCreateFromOperator_ProjectsTheCausalResponseNotALaterRead(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateFromOperator: %v", err)
 	}
-	if result.Degraded {
-		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
-	}
 	got := result.Instance.(*fixtureMission).OwnerOrgID
 	if got != "from-the-causal-response" {
 		t.Errorf("OwnerOrgID = %q, want %q — the result must be projected from the mutation response for THIS request, not from a later read",
 			got, "from-the-causal-response")
-	}
-}
-
-// TestCreateFromOperator_DegradedCommitIsSuccess pins the other half: a write
-// that committed durably but could not be read back is a SUCCESS with a signal.
-// Reporting it as an error makes the operator retry a birth that already
-// happened, and the mutation contract forbids that retry.
-func TestCreateFromOperator_DegradedCommitIsSuccess(t *testing.T) {
-	mgr, emitter, _ := newTestManager(t)
-	ctx := context.Background()
-	emitter.createDegraded = true
-
-	const id = "c360.platform1.lifecycle.gcs.mission.degraded"
-	result, err := mgr.CreateFromOperator(ctx, "fixture",
-		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
-	if err != nil {
-		t.Fatalf("a degraded commit must not be an error: %v", err)
-	}
-	if !result.Degraded {
-		t.Fatal("degraded commit was not signalled — the caller cannot tell it from a fully-read-back create")
-	}
-	if result.DegradedReason == "" {
-		t.Error("degraded commit carries no reason — an operator has nothing to act on")
-	}
-	if result.Instance != nil {
-		t.Error("degraded commit returned an Instance; there was nothing projectable")
-	}
-	// The write really did land — that is what makes retrying wrong.
-	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
-		t.Errorf("degraded create did not commit: %v", getErr)
 	}
 }
 
@@ -1091,13 +1274,10 @@ func TestCreateFromOperator_UsesTheRouteSelectedRegistration(t *testing.T) {
 	}
 
 	const id = "c360.platform1.lifecycle.gcs.mission.aliased"
-	result, err := mgr.CreateFromOperator(ctx, "fixture-alias",
+	_, err := mgr.CreateFromOperator(ctx, "fixture-alias",
 		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
 	if err != nil {
 		t.Fatalf("create against the alias route: %v — the route's registration was discarded and re-looked-up by the Participant's own constant", err)
-	}
-	if result.Degraded {
-		t.Fatalf("unexpected degraded commit: %s", result.DegradedReason)
 	}
 	if _, getErr := mgr.Get(ctx, "fixture-alias", id); getErr != nil {
 		t.Errorf("instance not readable under the route's workflow: %v", getErr)
@@ -1115,34 +1295,6 @@ func TestCreateFromOperator_RejectsUnknownFields(t *testing.T) {
 		[]byte(`{"entity_id":"c360.platform1.lifecycle.gcs.mission.unk","phase":"planning","not_a_field":"dropped"}`))
 	if !errors.Is(err, ErrInvalidInitialState) {
 		t.Fatalf("err = %v, want ErrInvalidInitialState — an unpersistable key must not be silently dropped behind a 201", err)
-	}
-}
-
-// TestCreate_LostReplyIsNotReportedAsADuplicate pins the correction to the
-// lost-reply path: the emitter retries, so an ErrAlreadyExists may be THIS
-// request's own committed write whose reply was lost. Reporting a conflict for
-// a birth this request just made is a wrong answer on a public surface.
-func TestCreate_LostReplyIsNotReportedAsADuplicate(t *testing.T) {
-	mgr, emitter, _ := newTestManager(t)
-	ctx := context.Background()
-
-	// Commit, then report the failure the lost reply would produce.
-	emitter.createLosesReply = true
-
-	const id = "c360.platform1.lifecycle.gcs.mission.lostreply"
-	result, err := mgr.CreateFromOperator(ctx, "fixture",
-		[]byte(`{"entity_id":"`+id+`","phase":"planning"}`))
-	if errors.Is(err, ErrAlreadyExists) {
-		t.Fatal("a lost reply for this request's own committed write was reported as a duplicate")
-	}
-	if err != nil {
-		t.Fatalf("CreateFromOperator: %v", err)
-	}
-	if !result.Degraded {
-		t.Error("a recovered lost-reply commit should report as degraded so the caller knows the read-back did not happen")
-	}
-	if _, getErr := mgr.Get(ctx, "fixture", id); getErr != nil {
-		t.Errorf("the write did not actually commit: %v", getErr)
 	}
 }
 

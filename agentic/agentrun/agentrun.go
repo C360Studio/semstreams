@@ -191,7 +191,7 @@ func WorkflowDeclaration() lifecycle.Workflow {
 			Note:   predicateAuditNote,
 		},
 		// No OperatorWritablePredicates — run phase is closed to operator writes;
-		// only lifecycle_transition rule actions and the framework itself drive transitions.
+		// declared lifecycle_transition rule actions drive transitions.
 	}
 }
 
@@ -248,8 +248,8 @@ func Mint(ctx context.Context, mgr MintableManager, org, platform, rootLoopID st
 // MintableManager is the narrowest interface Mint requires — Create + Get only.
 // This lets the rule engine's LifecycleManager satisfy the Mint call without
 // requiring Transition (which the rule path never uses for minting).
-// Production callers use *lifecycle.Manager which satisfies both MintableManager
-// and MockableManager. The rule engine's LifecycleManager satisfies MintableManager.
+// Production callers use *lifecycle.Manager. The rule engine's
+// LifecycleManager satisfies MintableManager.
 type MintableManager interface {
 	// Get reads the entity at entityID for the given workflow.
 	Get(ctx context.Context, workflow, entityID string) (lifecycle.Participant, error)
@@ -290,7 +290,7 @@ const maxAncestryHops = 32
 //
 // Returns lifecycle.ErrEntityNotFound when neither the typed path nor the walk
 // can locate a valid run entity.
-func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReader, org, platform, loopID string) (*AgentRun, error) {
+func ResolveRun(ctx context.Context, runs RunStateReader, reader LoopTripleReader, org, platform, loopID string) (*AgentRun, error) {
 	logger := slog.Default()
 
 	loopEntityID, err := agentic.TryLoopExecutionEntityID(org, platform, loopID)
@@ -308,7 +308,7 @@ func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReade
 		if err != nil {
 			return nil, fmt.Errorf("agentrun.ResolveRun: build run entity ID from triple: %w", err)
 		}
-		participant, err := mgr.Get(ctx, WorkflowName, runEntityID)
+		participant, err := runs.Get(ctx, WorkflowName, runEntityID)
 		if err != nil {
 			return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get: %w", err)
 		}
@@ -340,7 +340,7 @@ func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReade
 			if err != nil {
 				return nil, fmt.Errorf("agentrun.ResolveRun: build run entity ID from ancestry root: %w", err)
 			}
-			participant, err := mgr.Get(ctx, WorkflowName, runEntityID)
+			participant, err := runs.Get(ctx, WorkflowName, runEntityID)
 			if err != nil {
 				return nil, fmt.Errorf("agentrun.ResolveRun: Manager.Get (ancestry root): %w", err)
 			}
@@ -365,15 +365,6 @@ func ResolveRun(ctx context.Context, mgr MockableManager, reader LoopTripleReade
 	return nil, fmt.Errorf("agentrun.ResolveRun: ancestry walk exceeded %d hops without reaching root for loop %q", maxAncestryHops, loopID)
 }
 
-// TriplePublisher is the narrow interface MilestoneHandlers use to write
-// milestone triples onto the run entity (or any entity) via graph-ingest.
-// Reuse the TripleMutator interface shape from the rule action executor; a
-// concrete natsclient-backed implementation satisfies this.
-type TriplePublisher interface {
-	// AddTriple writes a triple via graph-ingest. Returns the KV revision after write.
-	AddTriple(ctx context.Context, ruleID string, triple message.Triple) (uint64, error)
-}
-
 // LoopTerminalEvent carries the terminal event data passed to MilestoneHandlers.
 // Product handlers receive this along with the pre-resolved *AgentRun.
 type LoopTerminalEvent struct {
@@ -395,44 +386,28 @@ type LoopTerminalEvent struct {
 }
 
 // MilestoneHandler is the product-registered handler for terminal loop events.
-// Implementations receive the pre-resolved *AgentRun and a TriplePublisher so
-// they can stamp milestone triples directly onto the run entity via graph-ingest
-// (NOT via Manager — see ADR-053 D5 for the cardinality contract).
+// Implementations receive the pre-resolved *AgentRun. Handlers that need graph
+// mutations must emit work through a component's declared mutation port; the
+// milestone subscriber owns no hidden graph-write capability.
 type MilestoneHandler interface {
-	OnLoopTerminal(ctx context.Context, ev LoopTerminalEvent, run *AgentRun, pub TriplePublisher) error
+	OnLoopTerminal(ctx context.Context, ev LoopTerminalEvent, run *AgentRun) error
 }
 
-// MockableManager is the subset of *lifecycle.Manager that MilestoneSubscriber
-// uses, expressed as an interface so tests can inject a mock without constructing
-// a real Manager. Production callers use *lifecycle.Manager which satisfies this.
-type MockableManager interface {
+// RunStateReader is the read-only lifecycle surface used to resolve an
+// AgentRun. The milestone subscriber observes terminal events and run state; it
+// has no lifecycle mutation capability.
+type RunStateReader interface {
 	// Get reads the entity at entityID for the given workflow and projects its
 	// triples into a fresh Participant. Returns lifecycle.ErrEntityNotFound when absent.
 	Get(ctx context.Context, workflow, entityID string) (lifecycle.Participant, error)
-	// Transition moves the entity to newPhase. Used by the terminal-authority
-	// zombie-prevention path (D3). Never called with Manager.Complete — use
-	// an explicit terminal phase.
-	Transition(ctx context.Context, workflow, entityID, newPhase string, source lifecycle.TransitionSource, note string) error
-	// Create attaches lifecycle to the entity at initial.EntityID(). Returns
-	// lifecycle.ErrAlreadyExists when already lifecycle-managed.
-	Create(ctx context.Context, initial lifecycle.Participant) error
 }
 
 // MilestoneSubscriber decodes terminal loop events from NATS (agent.complete.*
 // and agent.failed.*), pre-resolves the run, and fans out to registered handlers
-// (ADR-053 D6, D3).
-//
-// Terminal authority (D3): the subscriber initiates a run → failed/cancelled
-// transition ONLY when the terminating loop IS the run root AND the run is still
-// in "dispatched" with no children (zombie prevention). Product/coordinator closes
-// runs via lifecycle_transition rule actions in all other cases.
-//
-// Never call Manager.Complete — with executing→3 terminals it is non-deterministic
-// (manager.go:671). Always use Manager.Transition with an explicit terminal.
+// (ADR-053 D6). It observes run state but never mutates lifecycle phase.
 type MilestoneSubscriber struct {
-	mgr      MockableManager
+	runs     RunStateReader
 	reader   LoopTripleReader
-	pub      TriplePublisher
 	handlers []MilestoneHandler
 	org      string
 	platform string
@@ -440,28 +415,26 @@ type MilestoneSubscriber struct {
 }
 
 // NewMilestoneSubscriber constructs a subscriber wired to the given concrete
-// lifecycle.Manager, reader, publisher, org, and platform. Handlers are
+// lifecycle.Manager, reader, org, and platform. Handlers are
 // registered separately via AddHandler. A nil logger falls back to slog.Default.
 //
 // Production callers use this constructor with a *lifecycle.Manager.
-// Test callers use NewMilestoneSubscriberWithManager with a mock.
+// Test callers use NewMilestoneSubscriberWithRunStateReader with a fake reader.
 func NewMilestoneSubscriber(
 	mgr *lifecycle.Manager,
 	reader LoopTripleReader,
-	pub TriplePublisher,
 	org, platform string,
 	logger *slog.Logger,
 ) *MilestoneSubscriber {
-	return NewMilestoneSubscriberWithManager(mgr, reader, pub, org, platform, logger)
+	return NewMilestoneSubscriberWithRunStateReader(mgr, reader, org, platform, logger)
 }
 
-// NewMilestoneSubscriberWithManager constructs a subscriber with any
-// MockableManager (real or test double). Prefer NewMilestoneSubscriber for
-// production callers.
-func NewMilestoneSubscriberWithManager(
-	mgr MockableManager,
+// NewMilestoneSubscriberWithRunStateReader constructs a subscriber with a
+// read-only run-state dependency. Prefer NewMilestoneSubscriber for production
+// callers.
+func NewMilestoneSubscriberWithRunStateReader(
+	runs RunStateReader,
 	reader LoopTripleReader,
-	pub TriplePublisher,
 	org, platform string,
 	logger *slog.Logger,
 ) *MilestoneSubscriber {
@@ -469,9 +442,8 @@ func NewMilestoneSubscriberWithManager(
 		logger = slog.Default()
 	}
 	return &MilestoneSubscriber{
-		mgr:      mgr,
+		runs:     runs,
 		reader:   reader,
-		pub:      pub,
 		org:      org,
 		platform: platform,
 		logger:   logger,
@@ -488,7 +460,8 @@ func (s *MilestoneSubscriber) AddHandler(h MilestoneHandler) {
 // HandleEvent processes a raw NATS message payload from agent.complete.* or
 // agent.failed.* subjects. It decodes the BaseMessage envelope, demuxes by
 // payload category (not subject — cancellation rides agent.complete), resolves
-// the AgentRun, applies terminal-authority logic (D3), and fans out to handlers.
+// the AgentRun and fans out to handlers. Lifecycle mutations remain the
+// coordinator/component's responsibility through declared ports.
 //
 // Panic guard: each handler invocation is wrapped in a recover so a panicking
 // product handler does not crash the subscriber goroutine.
@@ -571,38 +544,6 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 		return nil
 	}
 
-	// Terminal authority (D3): if the terminating loop IS the run root AND the run is
-	// still in "dispatched" (no children handed off yet), transition the run to
-	// failed/cancelled to prevent a zombie. This is the ONLY framework-initiated terminal
-	// transition.
-	//
-	// The root check uses run.RunID() (derived from the resolved run entity), NOT ev.RunID
-	// (the wire field). The wire RunID is populated from LoopEntity.RunID which is set at
-	// spawn via SetRunID — but the root/coordinator loop itself was NOT spawned with a RunID
-	// (it predates the run_scope:new rule firing). Instead, the run_scope=new path stamps
-	// agent.loop.run on the firing entity via tripleMutator; ResolveRun reads that triple and
-	// resolves the run. The wire ev.RunID is therefore "" for root terminations — using it
-	// as the identity check would make D3 unreachable.
-	if run != nil && run.PhaseField == "dispatched" {
-		if runID, ok := run.RunID(); ok && ev.LoopID == runID {
-			terminalPhase := "failed"
-			if ev.Category == agentic.CategoryLoopCancelled {
-				terminalPhase = "cancelled"
-			}
-			reason := fmt.Sprintf("root loop %s terminated in %s before any child handoff", ev.LoopID, ev.Outcome)
-			s.logger.Info("agentrun: HandleEvent: zombie prevention — transitioning dispatched root run to terminal",
-				slog.String("run_entity_id", run.EntityIDField),
-				slog.String("loop_id", ev.LoopID),
-				slog.String("terminal_phase", terminalPhase))
-			if transErr := s.mgr.Transition(ctx, WorkflowName, run.EntityIDField, terminalPhase,
-				lifecycle.TransitionSourceFramework, reason); transErr != nil {
-				s.logger.Warn("agentrun: HandleEvent: zombie-prevention transition failed",
-					slog.String("run_entity_id", run.EntityIDField),
-					slog.Any("error", transErr))
-			}
-		}
-	}
-
 	// Fan out to product handlers with panic guard.
 	for i, h := range s.handlers {
 		func(idx int, handler MilestoneHandler) {
@@ -614,7 +555,7 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 						slog.Any("panic", r))
 				}
 			}()
-			if handlerErr := handler.OnLoopTerminal(ctx, ev, run, s.pub); handlerErr != nil {
+			if handlerErr := handler.OnLoopTerminal(ctx, ev, run); handlerErr != nil {
 				s.logger.Warn("agentrun: MilestoneHandler error",
 					slog.Int("handler_index", idx),
 					slog.String("loop_id", ev.LoopID),
@@ -632,7 +573,7 @@ func (s *MilestoneSubscriber) HandleEvent(ctx context.Context, data []byte) erro
 func (s *MilestoneSubscriber) resolveRunForEvent(ctx context.Context, ev LoopTerminalEvent) (*AgentRun, error) {
 	// Fast path: RunEntityID is on the wire (ADR-053 D8 typed propagation).
 	if ev.RunEntityID != "" {
-		participant, err := s.mgr.Get(ctx, WorkflowName, ev.RunEntityID)
+		participant, err := s.runs.Get(ctx, WorkflowName, ev.RunEntityID)
 		if err != nil {
 			// Run entity not found — may be a non-run loop. Log and return nil run.
 			s.logger.Debug("agentrun: resolveRunForEvent: Manager.Get from wire RunEntityID failed",
@@ -653,7 +594,7 @@ func (s *MilestoneSubscriber) resolveRunForEvent(ctx context.Context, ev LoopTer
 	}
 
 	// Slow path: use ResolveRun (typed triple + ancestry walk).
-	run, err := ResolveRun(ctx, s.mgr, s.reader, s.org, s.platform, ev.LoopID)
+	run, err := ResolveRun(ctx, s.runs, s.reader, s.org, s.platform, ev.LoopID)
 	if err != nil {
 		if errors.Is(err, lifecycle.ErrEntityNotFound) {
 			// No run entity — this loop is not in a run. Return nil, no error.
@@ -684,7 +625,7 @@ type StartConfig struct {
 // Start wires the MilestoneSubscriber to the live NATS connection using DURABLE
 // JetStream consumers. agent.complete.* and agent.failed.* are published into the
 // AGENT JetStream stream by the agentic-loop component; core Subscribe would drop
-// events during subscriber downtime, violating D3/milestone restart-recovery.
+// events during subscriber downtime, violating milestone event delivery.
 //
 // Two stable durable consumers are created (one per filter subject). They survive
 // subscriber restarts and resume from the last-acked message.

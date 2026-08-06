@@ -22,6 +22,7 @@ import (
 	"github.com/c360studio/semstreams/graph/llm"
 	"github.com/c360studio/semstreams/graph/readiness"
 	"github.com/c360studio/semstreams/graph/structural"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
@@ -462,6 +463,13 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
+					Name:      "graph_mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
+				},
+				{
 					Name:    "communities",
 					Type:    "kv-write",
 					Subject: graph.BucketCommunityIndex,
@@ -483,6 +491,13 @@ func DefaultConfig() Config {
 				},
 			},
 			Outputs: []component.PortDefinition{
+				{
+					Name:      "graph_mutations",
+					Type:      "nats-request",
+					Subject:   graphmutation.SubjectFamily,
+					Interface: graphmutation.InterfaceType,
+					Required:  true,
+				},
 				{
 					Name:    "communities",
 					Type:    "kv-write",

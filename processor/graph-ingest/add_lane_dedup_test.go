@@ -3,14 +3,12 @@ package graphingest
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/nats-io/nats.go/jetstream"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -70,6 +68,12 @@ func countDedupTriples(stored graph.EntityState, predicate string) int {
 	return count
 }
 
+func appendDedupTriple(ctx context.Context, t *testing.T, comp *Component, triple message.Triple) {
+	t.Helper()
+	_, _, err := comp.addTripleLane(ctx, triple, dedupLaneAddBatch)
+	require.NoError(t, err)
+}
+
 // Task 2.3: errors.Is must reach the sentinel through
 // retry.NonRetryable(fmt.Errorf("update function error: %w", err)) — if it did
 // not, every suppressed write would surface as a CAS failure instead of a
@@ -94,14 +98,14 @@ func TestAddTriple_DuplicateSuppressed_NoRevisionAdvance(t *testing.T) {
 	ctx := context.Background()
 	triple := dedupTriple(dedupSubject)
 
-	require.NoError(t, comp.AddTriple(ctx, triple))
+	appendDedupTriple(ctx, t, comp, triple)
 	afterFirst, revAfterFirst := readDedupEntity(t, comp, dedupSubject)
 	require.Equal(t, 1, countDedupTriples(afterFirst, triple.Predicate))
 
 	errorsBefore := atomic.LoadInt64(&comp.errors)
-	suppressedBefore := testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAdd)))
+	suppressedBefore := testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAddBatch)))
 
-	require.NoError(t, comp.AddTriple(ctx, triple), "a duplicate add is a success, not a failure")
+	appendDedupTriple(ctx, t, comp, triple)
 
 	afterSecond, revAfterSecond := readDedupEntity(t, comp, dedupSubject)
 	assert.Equal(t, revAfterFirst, revAfterSecond, "no KV revision may advance on a duplicate add")
@@ -111,7 +115,7 @@ func TestAddTriple_DuplicateSuppressed_NoRevisionAdvance(t *testing.T) {
 	assert.Equal(t, errorsBefore, atomic.LoadInt64(&comp.errors),
 		"suppression must not increment the component error counter")
 	assert.InDelta(t, suppressedBefore+1,
-		testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAdd))), 0.0001,
+		testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAddBatch))), 0.0001,
 		"the suppression must be observable on the add lane")
 }
 
@@ -136,12 +140,12 @@ func TestAddTriple_ExcludedFieldsDoNotDefeatSuppression(t *testing.T) {
 
 			first := dedupTriple(subject)
 			first.Timestamp = time.Now()
-			require.NoError(t, comp.AddTriple(ctx, first))
+			appendDedupTriple(ctx, t, comp, first)
 			_, revAfterFirst := readDedupEntity(t, comp, subject)
 
 			second := dedupTriple(subject)
 			tt.mutate(&second)
-			require.NoError(t, comp.AddTriple(ctx, second))
+			appendDedupTriple(ctx, t, comp, second)
 
 			stored, rev := readDedupEntity(t, comp, subject)
 			assert.Equal(t, revAfterFirst, rev, "%s must not make it a distinct assertion", tt.name)
@@ -157,12 +161,12 @@ func TestAddTriple_DistinctTupleStillAppends(t *testing.T) {
 	ctx := context.Background()
 
 	first := dedupTriple(dedupSubject)
-	require.NoError(t, comp.AddTriple(ctx, first))
+	appendDedupTriple(ctx, t, comp, first)
 	_, revAfterFirst := readDedupEntity(t, comp, dedupSubject)
 
 	second := dedupTriple(dedupSubject)
 	second.Object = "c360.platform.robotics.mav1.drone.003"
-	require.NoError(t, comp.AddTriple(ctx, second))
+	appendDedupTriple(ctx, t, comp, second)
 
 	stored, rev := readDedupEntity(t, comp, dedupSubject)
 	assert.Greater(t, rev, revAfterFirst, "a new tuple must advance the revision")
@@ -188,7 +192,7 @@ func TestAddTriple_ConcurrentIdenticalAppendsStoreOneTuple(t *testing.T) {
 		go func(index int) {
 			defer wg.Done()
 			<-start // explicit synchronization, no sleeps
-			errsOut[index] = comp.AddTriple(ctx, triple)
+			_, _, errsOut[index] = comp.addTripleLane(ctx, triple, dedupLaneAddBatch)
 		}(i)
 	}
 	close(start)
@@ -240,7 +244,7 @@ func TestAddTriples_PartialDuplicateCommitsOnlyTheNewTuples(t *testing.T) {
 	ctx := context.Background()
 
 	first := dedupTriple(dedupSubject)
-	require.NoError(t, comp.AddTriple(ctx, first))
+	appendDedupTriple(ctx, t, comp, first)
 	_, revBefore := readDedupEntity(t, comp, dedupSubject)
 
 	second := dedupTriple(dedupSubject)
@@ -305,7 +309,7 @@ func TestAddTriples_SuppressionDoesNotMisclassifyMixedBatch(t *testing.T) {
 	ctx := context.Background()
 
 	present := dedupTriple(dedupSubject)
-	require.NoError(t, comp.AddTriple(ctx, present))
+	appendDedupTriple(ctx, t, comp, present)
 
 	const absentSubject = "c360.platform.robotics.mav1.drone.999"
 	absent := dedupTriple(absentSubject)
@@ -329,11 +333,11 @@ func TestSuppressedDuplicateCounter_IsLaneAttributed(t *testing.T) {
 	comp, _ := seedDedupEntity(t, dedupSubject)
 	ctx := context.Background()
 	triple := dedupTriple(dedupSubject)
-	require.NoError(t, comp.AddTriple(ctx, triple))
+	appendDedupTriple(ctx, t, comp, triple)
 
 	adder := &tripleAdderAdapter{component: comp}
 	hierarchyBefore := testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneHierarchy)))
-	addBefore := testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAdd)))
+	addBefore := testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAddBatch)))
 
 	require.NoError(t, adder.AddTriple(ctx, triple))
 
@@ -341,231 +345,70 @@ func TestSuppressedDuplicateCounter_IsLaneAttributed(t *testing.T) {
 		testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneHierarchy))), 0.0001,
 		"hierarchy inference's in-process adder must be attributable to its own lane")
 	assert.InDelta(t, addBefore,
-		testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAdd))), 0.0001,
+		testutil.ToFloat64(comp.duplicateTriplesSuppressed.WithLabelValues(string(dedupLaneAddBatch))), 0.0001,
 		"and must not be charged to the operator-mutation lane")
 }
 
-// Task 4.2/4.3 on the wire: the handler echoes Deduplicated and still reports
-// the entity's LIVE revision, never zero, on a suppressed write.
-func TestHandleTripleAdd_ReportsDeduplicatedAndLiveRevision(t *testing.T) {
+// The canonical append outcome is the wire-level dedup discriminator. A real
+// append is applied; a duplicate-only append is unchanged and carries the
+// current revision without advancing it.
+func TestHandleCanonicalAppend_ReportsAppliedThenUnchanged(t *testing.T) {
 	comp, _ := seedDedupEntity(t, dedupSubject)
 	ctx := context.Background()
 	triple := dedupTriple(dedupSubject)
 	triple.Predicate = "robotics.battery.level"
 	triple.Object = 85.5
 
-	requestData, err := json.Marshal(graph.AddTripleRequest{Triple: triple})
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
 	require.NoError(t, err)
 
-	firstBody, err := comp.handleTripleAdd(ctx, requestData)
+	firstBody, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
-	var first graph.AddTripleResponse
+	var first graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(firstBody, &first))
-	assert.False(t, first.Deduplicated, "the first add is a real write")
-	require.NotZero(t, first.KVRevision)
+	require.Len(t, first.Results, 1)
+	assert.Equal(t, graph.MutationApplied, first.Results[0].Outcome)
+	require.NotZero(t, first.Results[0].KVRevision)
 
-	secondBody, err := comp.handleTripleAdd(ctx, requestData)
+	secondBody, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err, "a duplicate add must be a success reply, not a typed error")
-	var second graph.AddTripleResponse
+	var second graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(secondBody, &second))
-	assert.True(t, second.Deduplicated, "the reply must say the tuple was already present")
-	assert.Equal(t, first.KVRevision, second.KVRevision,
+	require.Len(t, second.Results, 1)
+	assert.Equal(t, graph.MutationUnchanged, second.Results[0].Outcome)
+	assert.Equal(t, first.Results[0].KVRevision, second.Results[0].KVRevision,
 		"a suppressed write reports the live UNCHANGED revision, never zero")
 }
 
-func TestHandleTripleAddBatch_ReportsDeduplicatedAndLiveRevision(t *testing.T) {
+func TestHandleCanonicalAppend_CollapsesWithinRequestDuplicates(t *testing.T) {
 	comp, _ := seedDedupEntity(t, dedupSubject)
 	ctx := context.Background()
 	triple := dedupTriple(dedupSubject)
 
-	requestData, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{triple, triple}})
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple, triple}})
 	require.NoError(t, err)
 
-	firstBody, err := comp.handleTripleAddBatch(ctx, requestData)
+	firstBody, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
-	var first graph.AddTriplesBatchResponse
+	var first graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(firstBody, &first))
-	assert.Equal(t, 1, first.WrittenCount, "the within-request repeat collapses")
-	assert.Equal(t, 1, first.Deduplicated)
-	require.NotZero(t, first.KVRevision)
+	require.Len(t, first.Results, 1)
+	assert.Equal(t, graph.MutationApplied, first.Results[0].Outcome)
+	require.NotZero(t, first.Results[0].KVRevision)
+	stored, _ := readDedupEntity(t, comp, dedupSubject)
+	assert.Equal(t, 1, countDedupTriples(stored, triple.Predicate), "the within-request repeat collapses")
 
-	secondBody, err := comp.handleTripleAddBatch(ctx, requestData)
+	secondBody, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
-	var second graph.AddTriplesBatchResponse
+	var second graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(secondBody, &second))
-	assert.Equal(t, 0, second.WrittenCount)
-	assert.Equal(t, 2, second.Deduplicated,
-		"written + deduplicated must equal the submitted count")
-	assert.Empty(t, second.FailedSubjects)
-	assert.Equal(t, first.KVRevision, second.KVRevision,
+	require.Len(t, second.Results, 1)
+	assert.Equal(t, graph.MutationUnchanged, second.Results[0].Outcome)
+	assert.Equal(t, first.Results[0].KVRevision, second.Results[0].KVRevision,
 		"a suppressed batch reports the live UNCHANGED revision, never zero")
 }
 
-// Review H1: RemoveTripleResponse.Removed was hard-coded true, so a caller
-// could not tell a committed removal from a no-op — and the revision it
-// reports on a no-op is some other writer's.
-func TestHandleTripleRemove_ReportsWhetherAnythingWasRemoved(t *testing.T) {
-	comp, _ := seedDedupEntity(t, dedupSubject)
-	ctx := context.Background()
-	triple := dedupTriple(dedupSubject)
-	triple.Predicate = "robotics.battery.level"
-	triple.Object = 85.5
-	require.NoError(t, comp.AddTriple(ctx, triple))
-
-	requestData, err := json.Marshal(graph.RemoveTripleRequest{
-		Subject: dedupSubject, Predicate: triple.Predicate,
-	})
-	require.NoError(t, err)
-
-	firstBody, err := comp.handleTripleRemove(ctx, requestData)
-	require.NoError(t, err)
-	var first graph.RemoveTripleResponse
-	require.NoError(t, json.Unmarshal(firstBody, &first))
-	assert.True(t, first.Removed, "a removal that matched must report removed")
-	require.NotZero(t, first.KVRevision)
-
-	secondBody, err := comp.handleTripleRemove(ctx, requestData)
-	require.NoError(t, err, "a no-op removal is still a success")
-	var second graph.RemoveTripleResponse
-	require.NoError(t, json.Unmarshal(secondBody, &second))
-	assert.False(t, second.Removed,
-		"nothing matched the predicate, so the response must not claim a removal")
-	assert.Equal(t, first.KVRevision, second.KVRevision,
-		"a no-op reports the live UNCHANGED revision — which is why Removed must be honest")
-}
-
-// mockGetPassthrough reproduces mockKVBucket.Get's default behavior so a
-// getFunc override can serve the CAS read normally and fail only the
-// post-write read-back that follows it.
-func mockGetPassthrough(bucket *mockKVBucket, key string) (jetstream.KeyValueEntry, error) {
-	bucket.mu.Lock()
-	defer bucket.mu.Unlock()
-	if data, exists := bucket.data[key]; exists {
-		return &mockKVEntry{data: data.value, revision: data.revision, key: key}, nil
-	}
-	return nil, jetstream.ErrKeyNotFound
-}
-
-// SUPERSEDED PREMISE, kept deliberately as a guard on what replaced it.
-//
-// Review M1 required a failed post-write read-back to degrade rather than
-// report a bare zero, because the caller's read-your-writes check
-// (IndexedRevision >= myRev) is satisfied vacuously by zero. Codex C2 then
-// removed the post-write read-back from the COMMITTED path entirely — the
-// handler now returns the exact revision its own CAS produced — so on that path
-// there is no read to fail and the M1 hazard cannot arise at all.
-//
-// What survives is the NO-OP path, which still takes a live read because a
-// suppressed write has no revision of its own to report. Codex C1 governs it:
-// a no-op committed nothing, so a failed live read reports NO revision and is
-// NOT degraded. Marking it degraded is the C1 defect, because AppendEvidence
-// branches on Degraded before it inspects FailedSubjects.
-//
-// So this test now pins: committed → real revision, never degraded, whatever
-// the bucket does afterwards; no-op with a failing live read → no revision,
-// still not degraded.
-func TestTripleHandlers_RevisionEchoFailureIsNeverDegraded(t *testing.T) {
-	triple := dedupTriple(dedupSubject)
-	addData, err := json.Marshal(graph.AddTripleRequest{Triple: triple})
-	require.NoError(t, err)
-	batchData, err := json.Marshal(graph.AddTriplesBatchRequest{Triples: []message.Triple{triple}})
-	require.NoError(t, err)
-	removeData, err := json.Marshal(graph.RemoveTripleRequest{
-		Subject: dedupSubject, Predicate: triple.Predicate,
-	})
-	require.NoError(t, err)
-
-	tests := []struct {
-		name string
-		// casGets is how many Get calls the handler makes for the CAS itself.
-		casGets int
-		// seeded is the entity's starting triples, chosen so the FIRST invoke
-		// commits and the SECOND is a no-op: the add lanes start empty (first
-		// add appends, second is a duplicate); remove starts with the triple
-		// present (first remove commits, second matches nothing).
-		seeded []message.Triple
-		invoke func(comp *Component, ctx context.Context) ([]byte, error)
-	}{
-		{
-			name:    "triple.add",
-			casGets: 1,
-			seeded:  []message.Triple{},
-			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
-				return comp.handleTripleAdd(ctx, addData)
-			},
-		},
-		{
-			name:    "triple.add_batch",
-			casGets: 1,
-			seeded:  []message.Triple{},
-			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
-				return comp.handleTripleAddBatch(ctx, batchData)
-			},
-		},
-		{
-			// RemoveTriple does an existence Get before its CAS Get.
-			name:    "triple.remove",
-			casGets: 2,
-			seeded:  []message.Triple{triple},
-			invoke: func(comp *Component, ctx context.Context) ([]byte, error) {
-				return comp.handleTripleRemove(ctx, removeData)
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			comp, bucket := createTestComponentWithMockKVBucket(t)
-			ctx := context.Background()
-			require.NoError(t, comp.CreateEntity(ctx, &graph.EntityState{
-				ID: dedupSubject, Triples: tt.seeded, Version: 1, UpdatedAt: time.Now(),
-			}))
-
-			// First call COMMITS (add appends a new tuple; remove removes one).
-			// Every Get past the CAS fails, proving the committed path does not
-			// depend on one: the revision comes from its own CAS.
-			failPastCAS := func() {
-				gets := 0
-				bucket.getFunc = func(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
-					gets++
-					if gets > tt.casGets {
-						return nil, errors.New("simulated post-write read failure")
-					}
-					return mockGetPassthrough(bucket, key)
-				}
-			}
-			failPastCAS()
-			body, handlerErr := tt.invoke(comp, ctx)
-			bucket.getFunc = nil
-			require.NoError(t, handlerErr)
-			var committed graph.MutationResponse
-			require.NoError(t, json.Unmarshal(body, &committed))
-			assert.NotZero(t, committed.KVRevision,
-				"a committed write reports its own CAS revision and needs no read-back")
-			assert.False(t, committed.Degraded,
-				"nothing was re-read, so nothing could fail; a commit is not degraded")
-
-			// Second call is a NO-OP (the add is now a duplicate; the remove
-			// matches nothing). Its live read fails.
-			failPastCAS()
-			body, handlerErr = tt.invoke(comp, ctx)
-			bucket.getFunc = nil
-			require.NoError(t, handlerErr, "a no-op is a success")
-			var noop graph.MutationResponse
-			require.NoError(t, json.Unmarshal(body, &noop))
-			assert.False(t, noop.Degraded,
-				"a no-op committed nothing, so there is no committed write whose echo could be "+
-					"degraded — and a client branches on Degraded before FailedSubjects")
-			assert.Empty(t, noop.DegradedReason)
-			assert.Zero(t, noop.KVRevision,
-				"the live read failed, so report no revision rather than a fabricated one")
-		})
-	}
-}
-
-// A multi-subject batch has no single entity revision. That is UNDEFINED, not
-// degraded — reporting nothing is the correct answer.
-func TestHandleTripleAddBatch_MultiSubjectReportsNoRevisionAndIsNotDegraded(t *testing.T) {
+func TestHandleCanonicalAppend_MultiSubjectReportsIndependentRevisions(t *testing.T) {
 	comp, _ := seedDedupEntity(t, dedupSubject)
 	ctx := context.Background()
 	const otherSubject = "c360.platform.robotics.mav1.drone.007"
@@ -575,18 +418,21 @@ func TestHandleTripleAddBatch_MultiSubjectReportsNoRevisionAndIsNotDegraded(t *t
 
 	first := dedupTriple(dedupSubject)
 	second := dedupTriple(otherSubject)
-	requestData, err := json.Marshal(graph.AddTriplesBatchRequest{
+	requestData, err := json.Marshal(graph.AppendTriplesRequest{
 		Triples: []message.Triple{first, second},
 	})
 	require.NoError(t, err)
 
-	body, err := comp.handleTripleAddBatch(ctx, requestData)
+	body, err := comp.handleCanonicalAppend(ctx, requestData)
 	require.NoError(t, err)
-	var resp graph.AddTriplesBatchResponse
+	var resp graph.AppendTriplesResponse
 	require.NoError(t, json.Unmarshal(body, &resp))
-	assert.Equal(t, 2, resp.WrittenCount)
-	assert.Zero(t, resp.KVRevision, "a batch spanning entities has no single revision")
-	assert.False(t, resp.Degraded, "having no single revision is undefined, not degraded")
+	require.Len(t, resp.Results, 2)
+	for _, result := range resp.Results {
+		assert.Equal(t, graph.MutationApplied, result.Outcome)
+		assert.NotZero(t, result.KVRevision)
+		assert.Nil(t, result.Error)
+	}
 }
 
 // No-backfill posture: an entity that already accumulated duplicates keeps
@@ -608,7 +454,7 @@ func TestAddTriple_PreExistingStoredDuplicatesAreKeptAndStillSuppress(t *testing
 	require.Equal(t, 2, countDedupTriples(before, triple.Predicate),
 		"the pre-existing duplicates must survive the read unchanged")
 
-	require.NoError(t, comp.AddTriple(ctx, triple))
+	appendDedupTriple(ctx, t, comp, triple)
 
 	after, revAfter := readDedupEntity(t, comp, dedupSubject)
 	assert.Equal(t, revBefore, revAfter)

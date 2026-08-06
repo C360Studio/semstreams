@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/stretchr/testify/assert"
@@ -64,9 +66,12 @@ func TestComponent_MetricsUpdate_EntityOperations(t *testing.T) {
 	// The metric counter should have been called via Inc()
 	assert.NotNil(t, comp.entitiesUpdated, "component should have entitiesUpdated metric")
 
-	// Update entity
-	entity.Version = 2
-	require.NoError(t, comp.UpdateEntity(ctx, entity))
+	// Append a fact through the admitted mutation lane.
+	triple := message.Triple{Subject: entity.ID, Predicate: "test.metric.value", Object: "updated"}
+	data, err := json.Marshal(graph.AppendTriplesRequest{Triples: []message.Triple{triple}})
+	require.NoError(t, err)
+	_, err = comp.handleCanonicalAppend(ctx, data)
+	require.NoError(t, err)
 
 	// Metric should be incremented again
 	// Note: We can't easily check the exact value due to Prometheus counter semantics,

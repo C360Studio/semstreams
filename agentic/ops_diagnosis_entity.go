@@ -16,13 +16,12 @@ const CategoryOpsDiagnosis = "ops_diagnosis"
 // entity origin contract — key "agentic.ops_diagnosis.v1".
 //
 // Registry decision (mirrors LoopExecutionMessageType, ADR-056 typed-origin):
-// MUTATION-ONLY. Stamped on CreateEntityWithTriplesRequest.Entity.MessageType
+// MUTATION-ONLY. Stamped on CreateEntityRequest.Entity.MessageType
 // when EmitDiagnosisExecutor births a finding entity; NEVER published as a
 // BaseMessage payload, NOT registered in the payload registry, never decoded.
 // Each emit_diagnosis call mints a fresh ops.diagnosis.finding.{uuid} entity
-// that MUST be CREATED with this envelope, not auto-vivified by triple.add —
-// graph-ingest enforces must-exist and would reject the finding's triples
-// otherwise (gh#390).
+// that MUST be created with this envelope; append is must-exist and rejects an
+// absent finding entity.
 func OpsDiagnosisMessageType() message.Type {
 	return message.Type{
 		Domain:   Domain,

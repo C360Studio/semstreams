@@ -295,15 +295,15 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		logger.Debug("Manager.StartAll: Service started successfully", "name", name)
 	}
 
-	// There is deliberately NO post-start owned-bucket retention pass here. Its
+	// There is deliberately NO post-start catalog-retention pass here. Its
 	// entire justified class — a bucket created dirty during this boot's own
-	// startup — is reconciled AT CREATION inside each owner's Start by the
+	// startup — is reconciled AT CREATION inside each component's Start by the
 	// bucket acquisition seam (natsclient.EnsureFrameworkBucket), earlier and
 	// more precisely than a sweep could; a seam failure fails that component's
 	// Start, which the component-start barrier turns into a failed boot before
 	// completeHTTPSetup brings the surface up. The one class the seam cannot
-	// reach (a catalog bucket whose owner is absent from this composition) is
-	// covered by the pre-start legacy-drift backstop in WireOwnershipSubstrate.
+	// reach (a catalog bucket unused by this composition) is
+	// covered by the pre-start legacy-drift backstop in WireGraphRuntime.
 
 	// Now that all services are started, register their HTTP handlers and start the server
 	logger.Debug("Manager.StartAll: Completing HTTP setup with service handlers")

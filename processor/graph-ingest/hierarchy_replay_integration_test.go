@@ -14,7 +14,7 @@
 // re-fire and the request lane does.
 //
 // A test that only re-submits triples through add_batch never reaches that
-// trigger, so this test replays through CreateEntityStrict — the same 409 path
+// trigger, so this test replays through CreateEntity — the same conflict path
 // a re-registering producer takes.
 
 package graphingest
@@ -129,7 +129,7 @@ func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing
 	require.NoError(t, seed.Initialize())
 	require.NoError(t, seed.Start(ctx))
 	for _, id := range replayEntityIDs {
-		require.NoError(t, seed.CreateEntityStrict(ctx, replayEntity(id)))
+		require.NoError(t, seed.CreateEntity(ctx, replayEntity(id)))
 	}
 	require.NoError(t, seed.Stop(5*time.Second))
 
@@ -164,7 +164,7 @@ func TestComponent_HierarchyReplay_UnchangedEntitiesAdvanceNoRevision(t *testing
 
 	// ---- Replay the UNCHANGED entities through the 409 path. -------------
 	for _, id := range replayEntityIDs {
-		err := replay.CreateEntityStrict(ctx, replayEntity(id))
+		err := replay.CreateEntity(ctx, replayEntity(id))
 		require.ErrorIs(t, err, natsclient.ErrKVKeyExists,
 			"%s already exists, so its re-registration must be a 409 — that is the trigger", id)
 	}

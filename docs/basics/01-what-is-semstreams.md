@@ -102,16 +102,16 @@ Entities stored in NATS KV with version tracking:
 }
 ```
 
-### Governed Semantic State
+### Typed Graph Mutations
 
-For single-writer ingestion, triples can simply be merged into the entity. For shared graph state, SemStreams treats
-predicate groups as owned state: a component declares which predicates it may replace, which facts it only appends as
-evidence, and which cross-entity edges it can produce.
+Graphable ingestion merges event facts into the entity. Components that intentionally change current state use a local
+projection contract over the typed graph mutation port: strict create, complete-set reconcile, set-valued append, or
+revision-fenced delete. Local contracts validate a component's own requests; they do not grant global semantic ownership.
 
 This matters for domains where graph facts are operational state, not just observations: lifecycle phases, resource
 PATCH/PUT fields, command status, mission progress, quality records, topology, or agent-written findings. The graph
-remains the queryable audit trail, while the write contract prevents unrelated components from silently overwriting each
-other.
+remains queryable current state, while exact reads and CAS expose real conflicts instead of predicting an exclusive
+semantic author.
 
 See [Governed Semantic State](../concepts/28-governed-semantic-state.md) for the contract.
 

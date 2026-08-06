@@ -219,9 +219,9 @@ The core Graphable interface intentionally excludes:
 
 This keeps the interface minimal. Additional capabilities are added via separate interfaces when needed.
 
-Graphable also does not declare ownership. A payload can say "these are the triples I emit"; a graph projection contract
-says whether those predicates are replace-owned state, CAS-transition state, append-only evidence, or foreign edges. See
-[Governed Semantic State](../concepts/28-governed-semantic-state.md) for how shared graph writes are governed.
+Graphable also does not grant mutation authority. A payload says "these are the triples I emit"; components that later
+change current graph state use the typed mutation port's strict create, complete-set reconcile, set-valued append, or
+revision-fenced delete operation. See [ADR-091](../adr/091-graph-mutation-authority-without-semantic-ownership.md).
 
 ## Interface Composition
 

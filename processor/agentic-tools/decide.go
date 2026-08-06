@@ -14,6 +14,7 @@ import (
 
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/graph"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -69,13 +70,7 @@ var decideActionRestrictedTotal = promauto.NewCounterVec(
 // terminal decision tool.
 const DecideToolName = "decide"
 
-// decideMutationSubject is the NATS request/reply subject the graph-ingest
-// component handles to add triples. Kept consistent with rule and graph
-// writer callers (processor/rule/triple_mutator.go, processor/agentic-loop/
-// graph_writer.go).
-const decideMutationSubject = "graph.mutation.triple.add"
-
-// decideMutationTimeout bounds each per-triple add request.
+// decideMutationTimeout bounds each per-triple append request.
 const decideMutationTimeout = 5 * time.Second
 
 // decideToolSource is the Source field on triples this tool publishes. It
@@ -83,41 +78,11 @@ const decideMutationTimeout = 5 * time.Second
 // mutations at a glance in graph.
 const decideToolSource = "coordinator-decide"
 
-// TriplePublisher is the narrow surface agent-private state tools use to
-// write triples. Production satisfies it with a natsclient.Client adapter;
-// tests use an in-memory recorder so they don't need a real NATS
-// connection.
-//
-// Two emission shapes:
-//
-//   - AddTriple — single-triple convenience. Used by callers that emit
-//     across multiple subjects per logical operation where per-subject
-//     atomicity is not required (web_search and http_request, where
-//     URL-entity triples and loop-back-link triples target distinct
-//     subjects and a partial write only loses the back-link
-//     observably).
-//
-//   - AddTriplesBatch — atomic per-Subject. The graph-ingest handler
-//     groups triples by Subject and CAS-applies them per entity, so a
-//     batch sharing one Subject is fully atomic. Used by decide /
-//     emit_diagnosis / scratchpad — each emits a co-emitted set on a
-//     single entity where partial-write orphans would corrupt the
-//     downstream rule-matching contract.
-//
-// See project_addtriplebatch_migration_followup memory for the
-// migration history; write_todos has used the batch path since
-// ADR-036 Stage 2 (2026-05-09).
-//
-//   - CreateEntityWithTriples — BIRTH. The correct verb for the FIRST write to
-//     a NEW entity (emit_diagnosis mints a fresh ops.diagnosis.finding.{uuid}
-//     per call). graph-ingest enforces must-exist on triple.add / add_batch, so
-//     a bare batch to a never-created entity is rejected ("kv: key not found")
-//     and the finding silently never lands (gh#390). decide / scratchpad APPEND
-//     onto the already-born loop entity and do NOT use this.
+// TriplePublisher exposes the two graph facts tools need: atomic birth and
+// append. Each call is attempted once; the component owns any retry policy.
 type TriplePublisher interface {
-	CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error
-	AddTriple(ctx context.Context, triple message.Triple) error
-	AddTriplesBatch(ctx context.Context, triples []message.Triple) error
+	Create(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error
+	Append(ctx context.Context, triples []message.Triple) error
 }
 
 // DecideExecutor is the coordinator's terminal tool. A coordinator agent
@@ -439,7 +404,7 @@ func (e *DecideExecutor) decide(ctx context.Context, call agentic.ToolCall) (age
 	// loop entity with the next_action triple but no decision_reason
 	// on graph-ingest degradation — downstream rules would match an
 	// inconsistent snapshot. The atomic batch eliminates that window.
-	if err := e.publisher.AddTriplesBatch(ctx, triples); err != nil {
+	if err := e.publisher.Append(ctx, triples); err != nil {
 		return agentic.ToolResult{
 			CallID:    call.ID,
 			Error:     fmt.Sprintf("publish decide triples: %v", err),
@@ -664,133 +629,59 @@ func parseDecideArgs(raw map[string]any) (decideArgs, error) {
 	return args, nil
 }
 
-// natsTriplePublisher adapts natsclient.Client to TriplePublisher.
-// Routes single-triple writes through graph.mutation.triple.add and
-// batches through graph.mutation.triple.add_batch (the atomic per-
-// Subject CAS path landed in ADR-036 Stage 2). The two subjects
-// share the same retry policy — both mutation surfaces are
-// idempotent at graph-ingest (a triple is set-of, a batch is
-// deduplicated).
+// natsTriplePublisher adapts the canonical mutation client to TriplePublisher.
 type natsTriplePublisher struct {
-	client *natsclient.Client
+	client *graphmutation.Client
 }
 
-// natsTriplesBatchSubject is the atomic per-Subject CAS path. Used
-// by AddTriplesBatch — co-located triples (all sharing one Subject)
-// land all-or-nothing, eliminating partial-write orphans on
-// graph-ingest degradation.
-const natsTriplesBatchSubject = "graph.mutation.triple.add_batch"
-
-// natsTriplesBatchTimeout is the round-trip budget for the batch
-// mutation. Matches write_todos's existing writeTodosTimeout (5s)
-// since both write through the same handler.
 const natsTriplesBatchTimeout = 5 * time.Second
 
-// NewNATSTriplePublisher builds a TriplePublisher backed by the shared
-// graph.mutation.triple.add NATS surface.
+// NewNATSTriplePublisher builds a publisher backed by the canonical mutation port.
 func NewNATSTriplePublisher(client *natsclient.Client) TriplePublisher {
-	return &natsTriplePublisher{client: client}
+	if client == nil {
+		return &natsTriplePublisher{}
+	}
+	wire, _ := graphmutation.NewClient(client, natsTriplesBatchTimeout)
+	return &natsTriplePublisher{client: wire}
 }
 
-func (p *natsTriplePublisher) AddTriple(ctx context.Context, triple message.Triple) error {
-	req := graph.AddTripleRequest{Triple: triple}
-	reqData, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshal add-triple request: %w", err)
-	}
-	// RequestWithRetryClassified handles transient "no responders" errors when
-	// graph-gateway is restarting or its subscription hasn't yet
-	// propagated. The decide tool's terminal action is the triple
-	// downstream rules trigger on — silent failure here breaks the
-	// coordinator pattern's workflow. Idempotent (graph is a set of
-	// triples), so retry is safe.
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := p.client.RequestWithRetryClassified(ctx, decideMutationSubject, reqData, decideMutationTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", decideMutationSubject, err)
-	}
-	// ADR-060: handler failures arrive as the classified err above.
-	var resp graph.AddTripleResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal response: %w", err)
-	}
-	return nil
-}
-
-// AddTriplesBatch routes through graph.mutation.triple.add_batch —
-// the atomic per-Subject CAS path. Callers that emit co-located
-// triples (all sharing one Subject — decide/emit_diagnosis/scratchpad)
-// rely on the all-or-nothing semantics to avoid partial-write
-// orphans when graph-ingest degrades. Same retry policy as AddTriple;
-// both mutation surfaces are idempotent at graph-ingest.
-func (p *natsTriplePublisher) AddTriplesBatch(ctx context.Context, triples []message.Triple) error {
+func (p *natsTriplePublisher) Append(ctx context.Context, triples []message.Triple) error {
 	if len(triples) == 0 {
-		// No-op: callers that conditionally accumulate triples may
-		// hand an empty slice rather than special-casing the gate.
 		return nil
 	}
-	req := graph.AddTriplesBatchRequest{Triples: triples}
-	reqData, err := json.Marshal(req)
+	if p == nil || p.client == nil {
+		return errors.New("graph mutation client is required")
+	}
+	response, err := p.client.Append(ctx, graph.AppendTriplesRequest{Triples: triples})
 	if err != nil {
-		return fmt.Errorf("marshal batch-add request: %w", err)
+		return fmt.Errorf("append graph triples: %w", err)
 	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	respData, err := p.client.RequestWithRetryClassified(ctx, natsTriplesBatchSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig())
-	if err != nil {
-		return fmt.Errorf("request %s: %w", natsTriplesBatchSubject, err)
-	}
-	var resp graph.AddTriplesBatchResponse
-	if err := json.Unmarshal(respData, &resp); err != nil {
-		return fmt.Errorf("unmarshal batch response: %w", err)
-	}
-	// ADR-060: a whole-batch failure arrives as the classified err above. A
-	// PARTIAL batch (some subjects committed) returns a success body with
-	// FailedSubjects populated (per-subject errors in the map), handled here.
-	if len(resp.FailedSubjects) > 0 {
-		return fmt.Errorf("graph-ingest partial batch (written=%d, failed=%v)",
-			resp.WrittenCount, resp.FailedSubjects)
+	for _, result := range response.Results {
+		switch result.Outcome {
+		case graph.MutationApplied, graph.MutationUnchanged:
+			continue
+		case graph.MutationFailed:
+			return fmt.Errorf("append graph triples for %s: %s/%s", result.EntityID, result.Error.Class, result.Error.Code)
+		default:
+			return fmt.Errorf("append graph triples for %s: %s", result.EntityID, result.Outcome)
+		}
 	}
 	return nil
 }
 
-// natsCreateWithTriplesSubject births an entity with a typed-origin envelope,
-// carrying triples atomically. The correct verb for the FIRST write to a NEW
-// entity (gh#390) — add / add_batch enforce must-exist and reject a
-// never-created entity.
-const natsCreateWithTriplesSubject = "graph.mutation.entity.create_with_triples"
-
-// CreateEntityWithTriples births a graph entity (ENTITY_STATES) with the given
-// typed-origin MessageType envelope, carrying triples atomically via
-// graph.mutation.entity.create_with_triples. The correct verb for the FIRST
-// write to a NEW entity: graph-ingest enforces must-exist on triple.add /
-// add_batch, so a bare batch to a never-created entity is rejected ("kv: key
-// not found") and the write silently never lands (gh#390).
-//
-// EntityExists is treated as idempotent-success: emit_diagnosis mints a fresh
-// uuid per finding, so a collision is reachable only via NATS redelivery of the
-// SAME create carrying the SAME envelope. A caller passing a STABLE/reused
-// entityID must read back to verify the typed origin instead (see
-// graph_writer.go createEntityWithTriples) rather than inherit this blind path.
-func (p *natsTriplePublisher) CreateEntityWithTriples(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
-	req := graph.CreateEntityWithTriplesRequest{
+func (p *natsTriplePublisher) Create(ctx context.Context, entityID string, msgType message.Type, triples []message.Triple) error {
+	if p == nil || p.client == nil {
+		return errors.New("graph mutation client is required")
+	}
+	_, err := p.client.Create(ctx, graph.CreateEntityRequest{
 		Entity: &graph.EntityState{
 			ID:          entityID,
 			MessageType: msgType,
-			Triples:     triples,
 		},
 		Triples: triples,
-	}
-	reqData, err := json.Marshal(req)
+	})
 	if err != nil {
-		return fmt.Errorf("marshal create_with_triples request: %w", err)
-	}
-	// gh#93 Phase 2: Classified variant surfaces handler errors via err.
-	if _, err := p.client.RequestWithRetryClassified(ctx, natsCreateWithTriplesSubject, reqData, natsTriplesBatchTimeout, natsclient.DefaultRetryConfig()); err != nil {
-		var ce *errs.ClassifiedError
-		if errors.As(err, &ce) && ce.Code == graph.ErrorCodeEntityExists {
-			return nil
-		}
-		return fmt.Errorf("request %s: %w", natsCreateWithTriplesSubject, err)
+		return fmt.Errorf("create graph entity: %w", err)
 	}
 	return nil
 }

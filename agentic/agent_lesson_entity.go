@@ -22,13 +22,12 @@ const CategoryAgentLesson = "agent_lesson"
 //
 // Registry decision (mirrors OpsDiagnosisMessageType / LoopExecutionMessageType,
 // ADR-056 typed-origin): MUTATION-ONLY. Stamped on
-// CreateEntityWithTriplesRequest.Entity.MessageType when EmitLessonExecutor
+// CreateEntityRequest.Entity.MessageType when EmitLessonExecutor
 // births a lesson entity; NEVER published as a BaseMessage payload, NOT
 // registered in the payload registry, never decoded. Each emit_lesson call
 // mints a content-derived agent.lesson.record.{uuid5} entity that MUST be
-// CREATED with this envelope, not auto-vivified by triple.add — graph-ingest
-// enforces must-exist and would reject the lesson's triples otherwise
-// (the gh#390 failure shape emit_diagnosis already hit).
+// created with this envelope; append is must-exist and rejects an absent lesson
+// entity.
 func AgentLessonMessageType() message.Type {
 	return message.Type{
 		Domain:   Domain,

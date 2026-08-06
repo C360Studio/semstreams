@@ -16,14 +16,14 @@
 // operator dashboards parse one envelope. The mapping from
 // pkg/lifecycle errors → HTTP status is centralized in `errorToStatus`,
 // which is the single place to read it — this comment used to restate
-// the table and went stale the first time the table grew. 4xx keeps the
-// underlying message; only 500 is canned (details go to the log).
+// the table and went stale the first time the table grew. Lifecycle 4xx
+// errors keep their underlying message; typed mutation errors use stable
+// operator codes and safe messages. Internal details stay in the log.
 //
 // Adding a route to this surface owes a re-audit of the sentinels its new
 // callee can raise: a sentinel unreachable before a route existed becomes
-// reachable the moment one does. Two instances so far — ErrAlreadyExists
-// (unmapped until a create route existed) and ErrOwnerQuiesced (reachable
-// via create's quiesce check).
+// reachable the moment one does. ErrAlreadyExists was unmapped until the
+// create route made strict birth conflicts reachable.
 package lifecyclegateway
 
 import (
@@ -37,7 +37,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/lifecycle"
+	"github.com/c360studio/semstreams/pkg/projection"
 )
 
 // writeBodyReadError renders a request-body read/decode failure. An oversize
@@ -57,12 +59,13 @@ func (c *Component) writeBodyReadError(w http.ResponseWriter, err error, context
 	c.recordRequest(false, "invalid body")
 }
 
-// errorResponse is the uniform error envelope. Single field is
-// intentional — dashboards render `error` directly without per-error
-// per-endpoint parsing logic. When pkg/errs gains structured codes
-// (post-v1), this envelope grows additively.
+// errorResponse is the uniform error envelope. Dashboards may continue to
+// render Error directly. Code is additive and present when the framework has
+// a stable operator-facing classification; callers must not infer retry safety
+// from HTTP status alone.
 type errorResponse struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 // serveHTTP is the catch-all entrypoint registered on the parent
@@ -295,7 +298,7 @@ func (c *Component) handleSubresource(w http.ResponseWriter, r *http.Request, wo
 	}
 }
 
-// handleHistory returns the KV-revision-derived phase history.
+// handleHistory returns the participant's bounded recent transition records.
 func (c *Component) handleHistory(w http.ResponseWriter, r *http.Request, workflow, entityID string) {
 	if r.Method != http.MethodGet {
 		w.Header().Set("Allow", "GET")
@@ -377,8 +380,8 @@ func (c *Component) handleStatePatch(w http.ResponseWriter, r *http.Request, wor
 // upsert lane on the operator surface, so a retried request is
 // distinguishable from a fresh one.
 //
-// Returns 201 with the authoritative committed state read back through the
-// Manager, not the request body echoed — a caller renders what landed.
+// Returns 201 with the authoritative committed state projected from the causal
+// mutation response, not the request body echoed — a caller renders what landed.
 func (c *Component) handleCreateInstance(w http.ResponseWriter, r *http.Request, workflow string) {
 	r.Body = http.MaxBytesReader(w, r.Body, c.config.MaxBodyBytes)
 	body, err := io.ReadAll(r.Body)
@@ -390,16 +393,6 @@ func (c *Component) handleCreateInstance(w http.ResponseWriter, r *http.Request,
 	result, err := c.manager.CreateFromOperator(r.Context(), workflow, body)
 	if err != nil {
 		c.writeErrorFromLifecycle(w, "create", err)
-		return
-	}
-	// A degraded commit is a SUCCESS: the write landed durably and the mutation
-	// contract forbids retrying it. 201 with the flag, never a 5xx.
-	if result.Degraded {
-		c.writeJSON(w, http.StatusCreated, map[string]any{
-			"degraded":        true,
-			"degraded_reason": result.DegradedReason,
-		})
-		c.recordRequest(true, "")
 		return
 	}
 	c.writeJSON(w, http.StatusCreated, result.Instance)
@@ -535,20 +528,33 @@ func (c *Component) writeError(w http.ResponseWriter, status int, msg string) {
 	c.writeJSON(w, status, errorResponse{Error: msg})
 }
 
+func (c *Component) writeCodedError(w http.ResponseWriter, status int, code, msg string) {
+	c.writeJSON(w, status, errorResponse{Error: msg, Code: code})
+}
+
 // writeErrorFromLifecycle maps a pkg/lifecycle error to the right
 // HTTP status and writes the envelope. Records the failure for
 // metrics.
 //
-// For mapped sentinels (status != 500), the underlying pkg/lifecycle
+// Typed projection failures use mutationOperatorError's stable code and safe
+// message. For mapped lifecycle sentinels (status != 500), the underlying
 // message ships through verbatim — operators NEED "field=X is not
-// operator_writable" / "transition from terminal" detail to fix
-// their request. For unmapped errors (status 500, infra-shaped), the
-// response carries a canned "internal error" + label so the wire
-// doesn't leak NATS subjects, KV keys, or trace IDs to potentially
-// untrusted operators; the full error is logged at Error level for
-// post-hoc inspection (S1 reviewer fix — verbose-leak on 500-class
-// was the trade-off space).
+// operator_writable" / "transition from terminal" detail to fix their request.
+// For unmapped errors (status 500, infra-shaped), the response carries a canned
+// "internal error" + label so the wire doesn't leak NATS subjects, KV keys, or
+// trace IDs to potentially untrusted operators; the full error is logged at
+// Error level for post-hoc inspection.
 func (c *Component) writeErrorFromLifecycle(w http.ResponseWriter, label string, err error) {
+	if mapped, ok := mutationOperatorError(err); ok {
+		if mapped.status == http.StatusInternalServerError {
+			c.logger.Error("lifecycle-gateway: internal mutation error",
+				slog.String("op", label),
+				slog.String("error", err.Error()))
+		}
+		c.writeCodedError(w, mapped.status, mapped.code, fmt.Sprintf("%s: %s", label, mapped.message))
+		c.recordRequest(false, err.Error())
+		return
+	}
 	status := errorToStatus(err)
 	if status == http.StatusInternalServerError {
 		c.logger.Error("lifecycle-gateway: internal error",
@@ -563,11 +569,71 @@ func (c *Component) writeErrorFromLifecycle(w http.ResponseWriter, label string,
 	c.recordRequest(false, err.Error())
 }
 
-// errorToStatus maps pkg/lifecycle sentinels to HTTP status codes.
+type operatorMutationError struct {
+	status  int
+	code    string
+	message string
+}
+
+// mutationOperatorError translates the canonical mutation client's closed
+// failure vocabulary into the lifecycle operator contract. In particular,
+// commit_unknown means delivery occurred without a valid authoritative reply:
+// the gateway cannot claim failure or success, and must never suggest a blind
+// retry. The caller must inspect current authority state before deciding what
+// action is safe.
+func mutationOperatorError(err error) (operatorMutationError, bool) {
+	var mutationErr *projection.MutationError
+	if !errors.As(err, &mutationErr) {
+		return operatorMutationError{}, false
+	}
+
+	code := mutationErr.Code
+	switch mutationErr.Kind {
+	case projection.MutationInvalid:
+		if code == "" {
+			code = graph.ErrorCodeInvalidRequest
+		}
+		return operatorMutationError{http.StatusBadRequest, code, "invalid graph mutation"}, true
+	case projection.MutationNotFound:
+		if code == "" {
+			code = graph.ErrorCodeEntityNotFound
+		}
+		return operatorMutationError{http.StatusNotFound, code, "entity not found"}, true
+	case projection.MutationConflict:
+		if code == "" {
+			code = graph.ErrorCodeEntityExists
+		}
+		return operatorMutationError{http.StatusConflict, code, "entity already exists"}, true
+	case projection.MutationRevisionConflict:
+		if code == "" {
+			code = graph.ErrorCodeRevisionMismatch
+		}
+		return operatorMutationError{http.StatusConflict, code, "authority revision mismatch"}, true
+	case projection.MutationUnavailable:
+		return operatorMutationError{http.StatusServiceUnavailable, "unavailable", "mutation service unavailable; mutation was not committed"}, true
+	case projection.MutationCommitUnknown:
+		return operatorMutationError{
+			status: http.StatusServiceUnavailable,
+			code:   "commit_unknown",
+			message: "mutation commit outcome is unknown; inspect authoritative state " +
+				"before deciding whether another mutation is safe",
+		}, true
+	case projection.MutationInternal:
+		return operatorMutationError{http.StatusInternalServerError, "internal", "internal mutation error (operator details in server log)"}, true
+	default:
+		return operatorMutationError{http.StatusInternalServerError, "internal", "internal mutation error (operator details in server log)"}, true
+	}
+}
+
+// errorToStatus maps canonical mutation errors and pkg/lifecycle sentinels to
+// HTTP status codes.
 // The mapping is the operator-facing contract: when a 404 vs 400 vs
 // 409 distinction changes here, dashboards must follow. Anything
 // unrecognised maps to 500 — the gateway doesn't gloss errors.
 func errorToStatus(err error) int {
+	if mapped, ok := mutationOperatorError(err); ok {
+		return mapped.status
+	}
 	switch {
 	case errors.Is(err, lifecycle.ErrWorkflowNotRegistered):
 		return http.StatusNotFound
@@ -590,12 +656,6 @@ func errorToStatus(err error) int {
 		return http.StatusBadRequest
 	case errors.Is(err, lifecycle.ErrEntityIDPatternMismatch):
 		return http.StatusBadRequest
-	case errors.Is(err, lifecycle.ErrOwnerQuiesced):
-		// Not a server fault: another incarnation took over this owner, and the
-		// caller should retry against the live one. Reported as 409 with the
-		// message preserved (see writeErrorFromLifecycle) — its own contract
-		// says the refusal is loud and surfaces to the caller.
-		return http.StatusConflict
 	case errors.Is(err, lifecycle.ErrEntityNotLifecycleManaged):
 		return http.StatusNotFound
 	}

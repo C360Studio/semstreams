@@ -59,8 +59,8 @@ func truncateLoopDescription(s string, maxBytes int) string {
 //
 // EntityID() and Triples() together form the typed origin contract — the
 // same data set that processor/agentic-loop's buildSpawnIdentityTriples
-// emitted, now expressed through graph.Graphable so it can be born via
-// create_with_triples instead of triple.add_batch auto-vivification.
+// emitted, now expressed through graph.Graphable so it can be born via the
+// canonical entity-create operation.
 //
 // This type lives in the agentic package (below processor/agentic-loop in
 // the import graph) to keep the dependency direction agentic → processor
@@ -155,13 +155,12 @@ func (e *LoopExecutionEntity) Triples() []message.Triple {
 // matching the agentic convention: tool_call, loop_created, approval_pending).
 //
 // Registry decision (ADR-056, intentionally pinned — not implicit): this type is
-// MUTATION-ONLY. It is stamped on CreateEntityWithTriplesRequest.Entity.MessageType
-// at birth purely as PRODUCER IDENTITY for ownership arbitration; it is NEVER
+// MUTATION-ONLY. It is stamped on CreateEntityRequest.Entity.MessageType at
+// birth purely as producer identity; it is NEVER
 // published as a BaseMessage payload and is therefore NOT registered in the
 // payload registry (payload_registry.go) and never round-trips through
-// payload decoding. This mirrors core.identity.stub.v1 (the referential-integrity
-// stub envelope): both are envelope-bearing graph-origin markers, not wire
-// payloads. If a future producer needs to PUBLISH a loop_execution message over
+// payload decoding. It is an envelope-bearing graph-origin marker, not a wire
+// payload. If a future producer needs to PUBLISH a loop_execution message over
 // NATS (not merely stamp it at create), that producer must add the init()
 // registration at that point — until then, registering it would advertise a
 // decode path that does not exist.

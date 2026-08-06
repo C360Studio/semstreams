@@ -2,6 +2,9 @@
 
 ## Status
 
+**Amended by ADR-091 — 2026-08-05.** The classified RPC mechanism remains. `owner_lease_stale` is retired, and
+`commit_unknown` is a typed mutation-client transport outcome rather than a server assertion that a mutation failed.
+
 **Accepted (scope/decision) — amended 2026-06-23.** This ADR **names a responsibility, decides a
 target shape, AND decides its migration as ONE idiomatic breaking change.** Pre-1.0, and we own
 every consumer (semconnect, semteams), so per the "take the break now, no compat shim" discipline

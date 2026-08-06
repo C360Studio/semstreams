@@ -193,15 +193,11 @@ type atomicBatchFailurePublisher struct {
 	failWith error
 }
 
-func (p *atomicBatchFailurePublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, _ []message.Triple) error {
-	panic("atomicBatchFailurePublisher: CreateEntityWithTriples should not be called; scratchpad APPENDS onto the existing loop entity via AddTriplesBatch")
+func (p *atomicBatchFailurePublisher) Create(_ context.Context, _ string, _ message.Type, _ []message.Triple) error {
+	panic("atomicBatchFailurePublisher: Create should not be called; scratchpad appends to the loop entity")
 }
 
-func (p *atomicBatchFailurePublisher) AddTriple(_ context.Context, _ message.Triple) error {
-	panic("atomicBatchFailurePublisher: AddTriple should not be called; scratchpad uses AddTriplesBatch")
-}
-
-func (p *atomicBatchFailurePublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+func (p *atomicBatchFailurePublisher) Append(_ context.Context, triples []message.Triple) error {
 	if p.failWith != nil {
 		// Atomic semantics: record nothing on failure. The graph-
 		// ingest CAS path either commits all of `triples` for the

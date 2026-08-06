@@ -7,7 +7,7 @@
 Lifecycle delete MUST exact-read the entity, submit its nonzero KV revision to conditional `entity.delete`, and
 propagate
 typed not-found, revision-mismatch, poison, unavailable, and `commit_unknown` outcomes. It MUST NOT consult an owner
-token, lease, incarnation, quiescence state, or overlap registry. Delete has no relationship cascade or stub cleanup.
+token, lease, incarnation, quiescence state, or overlap registry. Delete has no relationship cascade or target cleanup.
 
 #### Scenario: A newer transition cannot be deleted by a stale reclaim
 
@@ -46,7 +46,7 @@ overlap. Any genuine runtime conflict is observed through CAS outcomes.
 ### Requirement: Must-exist lanes MUST NOT create state
 
 Every lifecycle transition and reconcile against an absent entity MUST return typed `entity_not_found`. It MUST NOT
-create state, a referential stub, or a pending operation. The component decides whether a later retry is meaningful.
+create state, a placeholder target, or a pending operation. The component decides whether a later retry is meaningful.
 
 #### Scenario: A transition racing birth reports absence
 
@@ -54,6 +54,18 @@ create state, a referential stub, or a pending operation. The component decides 
 - **WHEN** graph-ingest evaluates it
 - **THEN** it returns typed not-found
 - **AND** no placeholder entity is created
+
+### Requirement: Lifecycle relationship references are source-derived
+
+`Manager.References` MUST return only the target entity ID and predicate recorded on matching source triples. It MUST
+NOT read or hydrate the target, report a target workflow or phase, fabricate a placeholder, or imply target existence.
+
+#### Scenario: Reference target is unresolved
+
+- **GIVEN** source A records a declared relationship to absent B
+- **WHEN** `Manager.References` reads A
+- **THEN** it returns B's ID and the source predicate
+- **AND** it performs no target read or birth
 
 ### Requirement: The operator surface MUST map every condition its callees can raise
 

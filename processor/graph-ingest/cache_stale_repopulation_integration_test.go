@@ -73,13 +73,14 @@ func TestIntegration_CacheStaleRepopulationRace(t *testing.T) {
 	// rev2: commit the marker while the reader is paused. AddTriple commits a new
 	// revision AND invalidates the cache (bumps the coherence generation) — this
 	// is the concurrent write W2 the paused reader's rev1 read did not see.
-	require.NoError(t, c.AddTriple(ctx, message.Triple{
+	_, _, err := c.addTripleLane(ctx, message.Triple{
 		Subject:    id,
 		Predicate:  semantictest.Predicate(t, "test", "stale", "marker"),
 		Object:     "committed",
 		Timestamp:  time.Now(),
 		Confidence: 1.0,
-	}))
+	}, dedupLaneAddBatch)
+	require.NoError(t, err)
 
 	// Release the paused reader so it attempts its (now stale) repopulating Set.
 	close(releaseReader)

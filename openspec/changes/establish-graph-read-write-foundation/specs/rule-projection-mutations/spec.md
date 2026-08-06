@@ -78,18 +78,19 @@ preflighted envelope; dynamic contract/group selection and arbitrary predicates 
 - **THEN** the replacement snapshot is fully preflighted before activation
 - **AND** the running snapshot is not mutated in place
 
-### Requirement: Rule reconcile uses exact revision with one bounded retry
+### Requirement: Rule reconcile uses exact revision with one mutation attempt
 
-Before reconcile, the rule executor MUST exact-read the entity and submit the returned nonzero revision. On definite
-`revision_mismatch`, it MUST perform one fresh exact read and one retry. A second mismatch is a visible action failure.
-`commit_unknown` MUST NOT be automatically retried. Successful receipts MUST retain the exact committing revision.
+Before reconcile, the rule executor MUST exact-read the entity and submit the returned nonzero revision in one mutation
+request. It MUST surface definite `revision_mismatch` and `commit_unknown` outcomes without automatically reading or
+retrying again. Successful receipts MUST retain the exact committing revision. The component owns any future,
+operation-specific retry policy.
 
-#### Scenario: Fighting writers do not spin forever
+#### Scenario: A racing writer produces one visible conflict
 
-- **GIVEN** another writer wins both the initial reconcile and the single retry
-- **WHEN** the second revision mismatch is returned
-- **THEN** the rule action fails visibly
-- **AND** no retry knob, loop, or ownership arbitration is introduced
+- **GIVEN** another writer commits after the rule action's exact read
+- **WHEN** the rule reconcile returns revision mismatch
+- **THEN** the rule action surfaces the conflict visibly
+- **AND** no automatic retry, retry knob, loop, or ownership arbitration is introduced
 
 ### Requirement: Rule mutation names use reconcile and append semantics
 
@@ -128,7 +129,7 @@ payloads, and components continue to execute work.
 
 **Reason**: the replacement wire is retired.
 
-**Migration**: reconcile preserves receipts and classified outcomes under the added bounded-retry requirement.
+**Migration**: reconcile preserves receipts and classified outcomes under the one-attempt requirement above.
 
 ### Requirement: The raw rule replacement transport is retired
 

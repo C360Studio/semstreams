@@ -24,9 +24,9 @@ import (
 // Workflow declares a workflow type to Manager.Register. All fields
 // except Name + Phases + Transitions + PhasePredicate + Schema are
 // optional — the harness degrades gracefully when richer schema
-// information is absent (composed gateway view falls back to the
-// bare entity; History stamps a synthetic source if no AuditPredicates
-// are declared).
+// information is absent (the composed gateway view falls back to the bare
+// entity). Transition history is framework-owned and does not require a
+// workflow-specific audit declaration.
 type Workflow struct {
 	// Name is the workflow type identifier (e.g. "mission",
 	// "csapi-system"). Must match what the Participant's Workflow()
@@ -73,26 +73,22 @@ type Workflow struct {
 	// have no operator-writable surface (e.g. fully rule-driven).
 	OperatorWritablePredicates []string
 
-	// AuditPredicates declares the framework-stamped audit-trail
-	// predicates. Manager.Transition writes these atomically with
-	// the phase change; Manager.History reads them back to
-	// reconstruct TransitionEvent records with source attribution.
-	// Optional — omit to disable audit-triple stamping (History
-	// then synthesizes Triggered=framework from KV revision
-	// timestamps only).
+	// AuditPredicates declares optional workflow-specific latest-transition
+	// summary predicates. Manager.Transition replaces these atomically with the
+	// phase change. Manager.History does not depend on them; it reads the
+	// framework-owned bounded occurrence records.
 	AuditPredicates AuditSpec
 
-	// ChildWorkflows declares workflow types that this workflow OWNS
-	// as children. Each ChildSpec declares the LinkPredicate that
+	// ChildWorkflows declares workflow types managed as children of this
+	// workflow. Each ChildSpec declares the LinkPredicate that
 	// establishes the parent→child relationship via a triple on the
 	// parent. Optional — omit for workflows without owned children.
 	ChildWorkflows []ChildSpec
 
 	// ReferencePredicates declares predicates linking this workflow
-	// to OTHER entities WITHOUT lifecycle ownership (the target has
-	// its own lifetime). Manager.References returns light stubs for
-	// these; operator dashboards render them as cross-workflow
-	// hyperlinks. Optional.
+	// to other entities with independent lifetimes. Manager.References
+	// returns source-derived relationship references for these predicates;
+	// it does not read or assert the existence of the target. Optional.
 	ReferencePredicates []ReferenceSpec
 }
 
@@ -107,11 +103,8 @@ type Workflow struct {
 //	From   : the previous phase (the phase the entity transitioned out of)
 //	Note   : the optional free-text note carried in the Transition call
 //
-// History reads these back at each KV revision to populate
-// TransitionEvent records. With no AuditPredicates declared,
-// History still surfaces phase changes — Triggered defaults to
-// framework, From is reconstructed from the previous revision's
-// PhasePredicate, Note is empty.
+// These are current-value summaries for domain projections. History uses the
+// separate lifecycle.transition.* occurrence family.
 type AuditSpec struct {
 	Source string // typically "<workflow>.last_transition_source"
 	At     string // typically "<workflow>.last_transition_at"
@@ -141,10 +134,9 @@ type ChildSpec struct {
 	LinkPredicate string
 }
 
-// ReferenceSpec declares a predicate linking this workflow to
-// another entity WITHOUT lifecycle ownership. Manager.References
-// projects matching triples as ReferenceStub records — light
-// pointers, not full entity loads.
+// ReferenceSpec declares a predicate linking this workflow to another entity.
+// Manager.References projects matching source triples as
+// RelationshipReference records without reading the target.
 type ReferenceSpec struct {
 	// Predicate is the triple predicate carrying the target
 	// entity's EntityID as Object.
@@ -152,11 +144,8 @@ type ReferenceSpec struct {
 
 	// TargetPattern is an optional 6-part glob narrowing what
 	// shape of entity-ID is expected as the target (e.g.
-	// "*.fleet.drone.*"). Informational today — Manager.References
-	// uses it to determine whether the target is itself
-	// lifecycle-managed (matches some registered workflow's
-	// EntityIDPattern) so the stub can carry the target's phase.
-	// Optional.
+	// "*.fleet.drone.*"). Informational today; it does not cause target
+	// hydration or imply that a matching target currently exists. Optional.
 	TargetPattern string
 }
 
@@ -359,24 +348,14 @@ type ChildResult struct {
 	State Participant `json:"state"`
 }
 
-// ReferenceStub is one entry in the Manager.References result. Light
-// pointer to a referenced entity; the target is NOT loaded into
-// memory beyond an identity-and-phase peek.
-type ReferenceStub struct {
-	// EntityID is the target entity's ID.
+// RelationshipReference is one relationship fact derived from a source
+// entity. It reports what the source says without reading the target or
+// claiming that the target currently exists.
+type RelationshipReference struct {
+	// EntityID is the referenced target ID recorded by the source triple.
 	EntityID string `json:"entity_id"`
 
 	// Predicate is the reference predicate (the value of the
 	// matching ReferenceSpec.Predicate).
 	Predicate string `json:"predicate"`
-
-	// Workflow is the target's workflow type IF the target is
-	// itself lifecycle-managed (matches a registered EntityIDPattern).
-	// Empty otherwise — operator dashboards render the bare
-	// entity_id and link to graph-gateway.
-	Workflow string `json:"workflow,omitempty"`
-
-	// Phase is the target's current phase IF the target is
-	// lifecycle-managed. Empty otherwise.
-	Phase string `json:"phase,omitempty"`
 }

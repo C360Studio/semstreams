@@ -12,6 +12,7 @@ import (
 
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/vocabulary"
 )
 
@@ -438,9 +439,9 @@ func (h *HierarchyInference) ensureContainerExists(ctx context.Context, containe
 
 	_, err = h.entityManager.CreateEntity(ctx, containerEntity)
 	if err != nil {
-		// Check if it's a "already exists" error (race condition with another goroutine)
-		// In that case, it's not a failure - the container exists
-		if strings.Contains(err.Error(), "exists") {
+		// Another writer may win the same atomic container birth. That definite
+		// conflict means the desired container exists; no string matching needed.
+		if errors.Is(err, natsclient.ErrKVKeyExists) {
 			h.containerCacheMu.Lock()
 			h.containerCache[containerID] = true
 			h.containerCacheMu.Unlock()

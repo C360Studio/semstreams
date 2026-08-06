@@ -512,18 +512,10 @@ func (m *Manager) projectWatchState(reg *registration, entityID string, state *g
 	return target, true
 }
 
-// History returns the phase-transition history for the entity at
-// entityID, derived from ENTITY_STATES revision replay. Each
-// TransitionEvent represents one phase change.
-//
-// Reconstruction reads each historical revision, decodes its
-// EntityState, and extracts the phase + audit-predicate values.
-// Triggered + Note come from the audit triples Manager.Transition
-// stamped at write time — no parallel audit store needed.
-//
-// The always-`framework` bug (the gap that ADR-049 closes) is
-// structurally fixed: the real source is in the audit triple, so
-// History reads it back rather than synthesizing a constant.
+// History returns the bounded operator transition window recorded in the
+// participant's current ENTITY_STATES value. The records survive restart with
+// bucket History=1 because each phase mutation atomically carries the retained
+// occurrence-discriminated records forward. This is not an unbounded audit log.
 func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]TransitionEvent, error) {
 	if err := m.graphStateContractError("History"); err != nil {
 		return nil, err
@@ -532,75 +524,25 @@ func (m *Manager) History(ctx context.Context, workflow, entityID string) ([]Tra
 	if err != nil {
 		return nil, err
 	}
-	bucket, err := m.ensureBucket(ctx)
+	state, _, err := m.getEntity(ctx, entityID)
 	if err != nil {
 		return nil, err
 	}
-	entries, err := bucket.History(ctx, entityID)
+	if !hasTriple(state.Triples, entityID, reg.workflow.PhasePredicate) {
+		return nil, fmt.Errorf("%w: workflow=%q entity_id=%q",
+			ErrEntityNotLifecycleManaged, reg.workflow.Name, entityID)
+	}
+	records, err := decodeTransitionRecords(entityID, state.Triples)
 	if err != nil {
-		if errors.Is(err, jetstream.ErrKeyNotFound) {
-			return nil, fmt.Errorf("%w: workflow=%q entity_id=%q",
-				ErrEntityNotFound, reg.workflow.Name, entityID)
-		}
 		return nil, fmt.Errorf("lifecycle: History for %q: %w", entityID, err)
 	}
-
-	events := make([]TransitionEvent, 0, len(entries))
-	// previousPhase tracks the last observed phase across revisions,
-	// including non-phase-changing intermediate revisions (e.g. an
-	// operator UpdateFromOperator that touches only Note). Such
-	// revisions are skipped at :233-235 because currentPhase ==
-	// previousPhase, so the next genuine transition's From still
-	// reflects the prior phase rather than the intervening no-op.
-	// During mid-rollout, revisions written before AuditPredicates.From
-	// existed fall back to this reconstruction; once .From is stamped
-	// the :253-256 read takes precedence.
-	previousPhase := ""
-	for _, entry := range entries {
-		if entry.Operation() == jetstream.KeyValueDelete ||
-			entry.Operation() == jetstream.KeyValuePurge {
-			events = append(events, TransitionEvent{
-				From:      previousPhase,
-				To:        "<deleted>",
-				At:        entry.Created(),
-				Triggered: TransitionSourceFramework,
-			})
-			previousPhase = "<deleted>"
-			continue
-		}
-		var state graph.EntityState
-		if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
-			m.latchGraphStatePoison(err)
-			return nil, m.graphStateContractError("History")
-		}
-		currentPhase := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
-		if currentPhase == "" || currentPhase == previousPhase {
-			continue
-		}
-		event := TransitionEvent{
-			From:      previousPhase,
-			To:        currentPhase,
-			At:        entry.Created(),
-			Triggered: TransitionSourceFramework,
-		}
-		// Recover source attribution from audit triples stamped
-		// at this revision (the ADR-049 mechanism that closes the
-		// always-framework bug).
-		if pred := reg.workflow.AuditPredicates.Source; pred != "" {
-			if src := extractTripleScalar(state.Triples, entityID, pred); src != "" {
-				event.Triggered = TransitionSource(src)
-			}
-		}
-		if pred := reg.workflow.AuditPredicates.Note; pred != "" {
-			event.Note = extractTripleScalar(state.Triples, entityID, pred)
-		}
-		if pred := reg.workflow.AuditPredicates.From; pred != "" {
-			if from := extractTripleScalar(state.Triples, entityID, pred); from != "" {
-				event.From = from
-			}
-		}
-		events = append(events, event)
-		previousPhase = currentPhase
+	currentPhase := extractTripleScalar(state.Triples, entityID, reg.workflow.PhasePredicate)
+	if err := validateTransitionRecordChain(records, currentPhase); err != nil {
+		return nil, fmt.Errorf("lifecycle: History for %q: %w", entityID, err)
+	}
+	events := make([]TransitionEvent, len(records))
+	for i := range records {
+		events[i] = records[i].event
 	}
 	return events, nil
 }
@@ -677,17 +619,11 @@ func (m *Manager) Children(ctx context.Context, parentEntityID string, opts Chil
 	return results, nil
 }
 
-// References returns ReferenceStub entries for every ReferencePredicate
-// triple on the entity. Stubs are light — Workflow + Phase are
-// populated only when the target itself is lifecycle-managed
-// (matches some registered EntityIDPattern).
-//
-// Cost model: 1 read for the source entity plus 1 additional read per
-// lifecycle-managed reference target (so a `Phase` peek can be filled
-// in). References pointing at non-lifecycle entities skip the second
-// read. References does NOT call References transitively — the returned
-// stubs are depth-1 only; following them is the caller's job.
-func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceStub, error) {
+// References returns source-derived relationship facts for every declared
+// ReferencePredicate on the entity. It performs exactly one authority read for
+// the source. Targets are not hydrated, classified, or checked for existence;
+// an unresolved object ID is valid eventual graph state.
+func (m *Manager) References(ctx context.Context, entityID string) ([]RelationshipReference, error) {
 	state, _, err := m.getEntity(ctx, entityID)
 	if err != nil {
 		return nil, err
@@ -698,7 +634,7 @@ func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceS
 			entityID)
 	}
 
-	var stubs []ReferenceStub
+	var references []RelationshipReference
 	for _, refSpec := range reg.workflow.ReferencePredicates {
 		for _, t := range state.Triples {
 			if t.Predicate != refSpec.Predicate {
@@ -708,20 +644,14 @@ func (m *Manager) References(ctx context.Context, entityID string) ([]ReferenceS
 			if !ok {
 				continue
 			}
-			stub := ReferenceStub{
+			reference := RelationshipReference{
 				EntityID:  targetID,
 				Predicate: refSpec.Predicate,
 			}
-			if targetReg := m.findRegistrationForEntity(targetID); targetReg != nil {
-				stub.Workflow = targetReg.workflow.Name
-				if target, _, err := m.getEntity(ctx, targetID); err == nil {
-					stub.Phase = extractTripleScalar(target.Triples, targetID, targetReg.workflow.PhasePredicate)
-				}
-			}
-			stubs = append(stubs, stub)
+			references = append(references, reference)
 		}
 	}
-	return stubs, nil
+	return references, nil
 }
 
 // LookupByEntityID resolves an entityID to a Participant by matching

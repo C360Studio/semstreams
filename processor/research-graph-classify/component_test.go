@@ -14,6 +14,7 @@ import (
 	"github.com/c360studio/semstreams/agentic/research"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/query"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -30,11 +31,10 @@ type recordingPublisher struct {
 	addErr error
 }
 
-// CreateEntityWithTriples satisfies the widened llmwrap.TriplePublisher
-// interface. The classify component only APPENDS onto the already-born pipeline
-// loop entity (the kickoff births it — gh#390), so this is never exercised here;
-// present for interface conformance.
-func (r *recordingPublisher) CreateEntityWithTriples(_ context.Context, _ string, _ message.Type, triples []message.Triple) error {
+// Create satisfies llmwrap.TriplePublisher. The classify component only appends
+// onto the already-born pipeline loop entity, so this is present for interface
+// conformance and is not exercised here.
+func (r *recordingPublisher) Create(_ context.Context, _ string, _ message.Type, triples []message.Triple) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	dup := append([]message.Triple(nil), triples...)
@@ -42,14 +42,7 @@ func (r *recordingPublisher) CreateEntityWithTriples(_ context.Context, _ string
 	return r.addErr
 }
 
-func (r *recordingPublisher) AddTriple(_ context.Context, triple message.Triple) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.batch = append(r.batch, []message.Triple{triple})
-	return r.addErr
-}
-
-func (r *recordingPublisher) AddTriplesBatch(_ context.Context, triples []message.Triple) error {
+func (r *recordingPublisher) Append(_ context.Context, triples []message.Triple) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	dup := append([]message.Triple(nil), triples...)
@@ -425,8 +418,14 @@ func TestDiscoverableSurface(t *testing.T) {
 	if ports := c.InputPorts(); len(ports) == 0 {
 		t.Errorf("InputPorts should have at least one port")
 	}
-	if ports := c.OutputPorts(); len(ports) != 0 {
-		t.Errorf("OutputPorts should be empty (component emits to KV, not NATS subjects)")
+	ports := c.OutputPorts()
+	if len(ports) != 1 {
+		t.Fatalf("OutputPorts = %d, want canonical mutation port", len(ports))
+	}
+	request, ok := ports[0].Config.(component.NATSRequestPort)
+	if !ok || !ports[0].Required || request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
+		request.Interface.Type != graphmutation.InterfaceType || request.Interface.Version != graphmutation.InterfaceVersion {
+		t.Errorf("graph mutation output drift: %#v", ports[0])
 	}
 
 	if schema := c.ConfigSchema(); schema.Properties == nil {

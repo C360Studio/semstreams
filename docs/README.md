@@ -48,8 +48,8 @@
 - [Rules Engine](advanced/06-rules-engine.md) - Condition-based actions
 - [Community Detection](concepts/07-community-detection.md) - LPA algorithm
 - [Query Access](concepts/11-query-access.md) - HTTP facade, typed adapters, and MCP status
-- [Governed Semantic State](concepts/28-governed-semantic-state.md) - Ownership for shared graph facts
-- [Raw-Lane Plus Current-State Projection](concepts/29-raw-lane-and-current-state-projection.md) - Bounded raw lanes + governed current-state projection for high-rate feeds
+- [Graph Mutation Authority](adr/091-graph-mutation-authority-without-semantic-ownership.md) - Typed mutation intent, exact reads, and revision conflicts
+- [Raw-Lane Plus Current-State Projection](concepts/29-raw-lane-and-current-state-projection.md) - Bounded raw lanes + revision-fenced current-state projection for high-rate feeds
 
 ## Vocabulary & Standards
 
@@ -88,7 +88,7 @@ Ingesting graph entities from external sources (semsource, other sem* services):
 
 ## Optional Framework Adapters
 
-Optional adapters are selected explicitly and must satisfy the ownership and admission rules in
+Optional adapters are selected explicitly and must satisfy the package-admission and composition rules in
 [ADR-075](adr/075-framework-package-admission-and-composition.md). OpenTelemetry is currently the only optional
 framework adapter. Product protocols and standards are composed by their owning product binaries rather than by the
 SemStreams production binary.

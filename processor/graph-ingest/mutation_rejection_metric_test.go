@@ -53,7 +53,9 @@ func TestMeteredMutation_SuccessDoesNotMeter(t *testing.T) {
 
 	wrapped := comp.meteredMutation(subj, func(_ context.Context, _ []byte) ([]byte, error) {
 		// ADR-060: any (body, nil) reply is a success body.
-		data, _ := json.Marshal(graph.MutationResponse{Timestamp: 1})
+		data, _ := json.Marshal(graph.AppendTriplesResponse{Results: []graph.AppendSubjectResult{{
+			EntityID: "a.b.c.d.e.f", Outcome: graph.MutationApplied, KVRevision: 1,
+		}}})
 		return data, nil
 	})
 
