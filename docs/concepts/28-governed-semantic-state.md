@@ -41,9 +41,15 @@ the real conflict.
 
 ## Retry belongs to the component
 
-The framework sends each mutation request once. A definite `revision_mismatch` proves that no write occurred, so a
-component may choose to exact-read again, recompute its desired state, and retry. The rule engine's reconcile action,
-for example, permits one such bounded retry.
+The framework sends each mutation request once. A definite `revision_mismatch` proves that no write occurred, but a
+retry is safe only when the owning component can reconstruct its intent from fresh authority. The rule engine cannot
+replay an old `ExecutionContext`: its reconcile action makes one exact read and one mutation attempt, then returns a
+classified mismatch visibly with no second read or mutation.
+
+Lifecycle transitions have different semantics. `Transition` and `TransitionWith` own a bounded local loop that, on
+each definite conflict attempt, re-reads authority and rebuilds phase and edge validation, the retained occurrence
+chain, audit values, projection, optional mutator output, desired predicates, and expected revision. This is not a
+shared retry policy or a claim about `UpdateFromOperator`.
 
 `unavailable` (no responder) and `deadline` (context already done before send) are definite non-commits.
 `commit_unknown` means a send was attempted but a timeout, disconnect, malformed reply, or semantically invalid

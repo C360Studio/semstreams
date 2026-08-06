@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/projection"
 	"github.com/c360studio/semstreams/vocabulary"
@@ -80,6 +81,7 @@ type capturingPredicateReconciler struct {
 	requests []projection.ReconcileMutation
 	receipt  projection.MutationReceipt
 	err      error
+	onCall   func()
 }
 
 func (replacer *capturingPredicateReconciler) Reconcile(
@@ -87,6 +89,9 @@ func (replacer *capturingPredicateReconciler) Reconcile(
 	request projection.ReconcileMutation,
 ) (projection.MutationReceipt, error) {
 	replacer.requests = append(replacer.requests, request)
+	if replacer.onCall != nil {
+		replacer.onCall()
+	}
 	return replacer.receipt, replacer.err
 }
 
@@ -340,6 +345,49 @@ func TestReconcileTracksReceiptAndPreservesTypedError(t *testing.T) {
 	require.ErrorIs(t, err, cause)
 	require.Equal(t, projection.MutationInvalid, gotMutation.Kind)
 	require.Equal(t, projection.CommitNotCommitted, gotMutation.Commit)
+}
+
+func TestReconcileRevisionMismatchDoesNotReplayExecutionContext(t *testing.T) {
+	t.Parallel()
+	entityID := "acme.ops.robotics.gcs.drone.001"
+	state := &MatchState{RuleID: "rule-a", Iteration: 3}
+	execution := &ExecutionContext{
+		EntityID:    entityID,
+		State:       state,
+		MessageData: map[string]any{"value": "observed-at-evaluation"},
+	}
+	mismatch := &projection.MutationError{
+		Operation: projection.MutationOperationReconcile,
+		Kind:      projection.MutationRevisionConflict,
+		Code:      graph.ErrorCodeRevisionMismatch,
+		Class:     errs.ErrorInvalid,
+		Commit:    projection.CommitNotCommitted,
+		Err: errs.ClassifiedCode(
+			errs.ErrorInvalid,
+			graph.ErrorCodeRevisionMismatch,
+			errors.New("authority changed"),
+		),
+	}
+	replacer := &capturingPredicateReconciler{err: mismatch}
+	replacer.onCall = func() {
+		// If the action replayed the old ExecutionContext after the mismatch,
+		// recomputation would observe this changed value and make another call.
+		execution.MessageData["value"] = "changed-after-first-attempt"
+	}
+	executor := reconcileExecutor(t, replacer, nil)
+
+	err := executor.Execute(
+		context.Background(),
+		reconcileAction(reconcilePredicate, "$message.value"),
+		execution,
+	)
+	var gotMutation *projection.MutationError
+	require.ErrorAs(t, err, &gotMutation)
+	require.Same(t, mismatch, gotMutation)
+	require.Equal(t, projection.MutationRevisionConflict, gotMutation.Kind)
+	require.Equal(t, projection.CommitNotCommitted, gotMutation.Commit)
+	require.Len(t, replacer.requests, 1, "revision mismatch must not replay the old ExecutionContext")
+	require.Equal(t, "observed-at-evaluation", replacer.requests[0].Desired[0].Object)
 }
 
 func TestReconcileFileAndHotReloadUseFrozenTargetIndex(t *testing.T) {

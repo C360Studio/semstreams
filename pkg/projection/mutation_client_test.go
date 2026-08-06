@@ -284,6 +284,12 @@ func TestRevisionMismatchRemainsDefinite(t *testing.T) {
 	if !errors.As(err, &mutationErr) || mutationErr.Kind != MutationRevisionConflict || receipt.Commit != CommitNotCommitted {
 		t.Fatalf("receipt = %#v, error = %#v", receipt, mutationErr)
 	}
+	if len(requester.requests) != 2 {
+		t.Fatalf("requests = %d, want exactly one exact read and one mutation", len(requester.requests))
+	}
+	if got := []string{requester.requests[0].subject, requester.requests[1].subject}; got[0] != "graph.ingest.query.entity" || got[1] != "graph.mutation.entity.reconcile" {
+		t.Fatalf("request subjects = %v, want exact read then reconcile with no third request", got)
+	}
 }
 
 func projectionTestContract(t *testing.T) Contract {
