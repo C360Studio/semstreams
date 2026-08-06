@@ -11,7 +11,6 @@ import (
 
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/pkg/revlag"
 )
@@ -35,10 +34,9 @@ func (e *tombstoneEntry) Bucket() string                  { return "ENTITY_STATE
 func newTombstoneComponent(t *testing.T, index *mockKVBucket) *Component {
 	t.Helper()
 	return &Component{
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
-		watermark:         revlag.New(),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		storage:   embedding.NewStorage(index, newMockKVBucket()),
+		watermark: revlag.New(),
 	}
 }
 
@@ -145,12 +143,11 @@ func TestQueueEntityForEmbedding_WritesEmptyContentHash(t *testing.T) {
 
 	index := newMockKVBucket()
 	c := &Component{
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
-		watermark:         revlag.New(),
-		embedder:          embedding.NewBM25Embedder(embedding.BM25Config{Dimensions: 384, K1: 1.5, B: 0.75}),
-		config:            Config{EmbedderType: "bm25"},
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		storage:   embedding.NewStorage(index, newMockKVBucket()),
+		watermark: revlag.New(),
+		embedder:  embedding.NewBM25Embedder(embedding.BM25Config{Dimensions: 384, K1: 1.5, B: 0.75}),
+		config:    Config{EmbedderType: "bm25"},
 	}
 
 	c.queueEntityForEmbedding(context.Background(), entityID, 1, entity)

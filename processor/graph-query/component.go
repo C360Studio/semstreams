@@ -105,12 +105,8 @@ func DefaultConfig() Config {
 
 // Component implements the graph query coordinator
 type Component struct {
-	config     Config
-	natsClient natsRequester
-	// rawNATSClient is the concrete client for the catalog bucket seam
-	// (lifecycle reporting); nil in interface-faked unit tests, in which case
-	// the reporter degrades to the no-op.
-	rawNATSClient *natsclient.Client
+	config        Config
+	natsClient    natsRequester
 	pathSearcher  *PathSearcher
 	router        *StaticRouter
 	logger        *slog.Logger
@@ -164,9 +160,6 @@ type Component struct {
 	// Prometheus metrics for observability
 	promMetrics *queryMetrics
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
 }
@@ -205,7 +198,6 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 	comp := &Component{
 		config:               config,
 		natsClient:           deps.NATSClient, // Assign to interface field
-		rawNATSClient:        deps.NATSClient,
 		pathSearcher:         NewPathSearcher(deps.NATSClient, config.QueryTimeout, config.MaxDepth, logger),
 		logger:               logger,
 		modelRegistry:        deps.ModelRegistry,
@@ -357,14 +349,6 @@ func (c *Component) Initialize() error {
 	return nil
 }
 
-// initLifecycleReporter initializes the lifecycle reporter for status
-// tracking. It routes through the catalog helper — the former raw
-// js.CreateOrUpdateKeyValue here bypassed both the natsclient wrapper (and
-// its circuit breaker) and the shared bucket shape.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.rawNATSClient, "graph-query", c.logger)
-}
-
 // initLLMClassifier wires the LLM query classifier if the model registry
 // has a query_classification capability configured. Gracefully degrades to
 // keyword-only classification on any error.
@@ -461,9 +445,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Wire answer synthesizer (LLM if available, template fallback otherwise)
 	c.initAnswerSynthesizer()
 
-	// Initialize lifecycle reporter (throttled for high-throughput queries)
-	c.initLifecycleReporter(componentCtx)
-
 	// Create router for static routing
 	c.router = NewStaticRouter(c.logger)
 
@@ -484,17 +465,9 @@ func (c *Component) Start(ctx context.Context) error {
 	watcherCfg.Logger = c.logger
 	watcherCfg.OnAvailable = func() {
 		c.enableGraphRAG(componentCtx)
-		// Report recovery from degraded state
-		if err := c.lifecycleReporter.ReportStage(componentCtx, "idle"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
 	}
 	watcherCfg.OnLost = func() {
 		c.disableGraphRAG()
-		// Report degraded state due to missing dependency
-		if err := c.lifecycleReporter.ReportStage(componentCtx, "degraded_missing_"+graph.BucketCommunityIndex); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "degraded_missing_"+graph.BucketCommunityIndex), slog.Any("error", err))
-		}
 	}
 
 	c.communityWatcher = resource.NewWatcher(
@@ -506,11 +479,6 @@ func (c *Component) Start(ctx context.Context) error {
 		watcherCfg,
 	)
 
-	// Report waiting stage before dependency check (COMMUNITY_INDEX is optional but we report waiting)
-	if err := c.lifecycleReporter.ReportStage(componentCtx, "waiting_for_"+graph.BucketCommunityIndex); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketCommunityIndex), slog.Any("error", err))
-	}
-
 	// Try to get bucket during startup
 	if c.communityWatcher.WaitForStartup(componentCtx) {
 		// Bucket available - enable GraphRAG immediately
@@ -521,10 +489,6 @@ func (c *Component) Start(ctx context.Context) error {
 		// Bucket not available - start background checking
 		c.logger.Info("COMMUNITY_INDEX bucket not available at startup, GraphRAG disabled (will retry)")
 		c.communityWatcher.StartBackgroundCheck(componentCtx)
-		// Report degraded state due to missing optional dependency
-		if err := c.lifecycleReporter.ReportStage(componentCtx, "degraded_missing_"+graph.BucketCommunityIndex); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "degraded_missing_"+graph.BucketCommunityIndex), slog.Any("error", err))
-		}
 	}
 
 	// Independently watch/retry the OPTIONAL COMMUNITY_SUMMARIES bucket. Decoupled
@@ -533,11 +497,6 @@ func (c *Component) Start(ctx context.Context) error {
 	c.startSummaryBucketWatcher(componentCtx)
 
 	c.started = true
-
-	// Report initial idle state
-	if err := c.lifecycleReporter.ReportStage(componentCtx, "idle"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-	}
 
 	c.logger.Info("graph-query coordinator started")
 	return nil
@@ -753,15 +712,6 @@ func (c *Component) disableGraphRAG() {
 	// 1. The watcher will handle the bucket disappearing gracefully
 	// 2. When bucket returns, we'll get the OnAvailable callback
 	// The communityCache.IsAvailable() check in handlers will prevent queries
-}
-
-// reportQuerying reports the querying stage (throttled to avoid KV spam)
-func (c *Component) reportQuerying(ctx context.Context) {
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "querying"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "querying"), slog.Any("error", err))
-		}
-	}
 }
 
 // recordSuccess records successful query metrics

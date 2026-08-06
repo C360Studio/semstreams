@@ -334,13 +334,6 @@ The component uses resource watchers to handle missing optional dependencies:
 3. **Recovery**: Background checking continues at `recheck_interval`
 4. **Restoration**: When bucket becomes available, GraphRAG is automatically enabled
 
-Lifecycle reporting tracks degraded states via `COMPONENT_STATUS` KV bucket:
-
-- `waiting_for_COMMUNITY_INDEX`: Checking for bucket during startup
-- `degraded_missing_COMMUNITY_INDEX`: Bucket unavailable, GraphRAG disabled
-- `idle`: All dependencies available, normal operation
-- `querying`: Processing queries (throttled reporting)
-
 ## Input Ports
 
 | Port Name | Type | Subject | Purpose |

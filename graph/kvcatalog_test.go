@@ -66,7 +66,7 @@ func TestKVCatalog_EveryRowValidates(t *testing.T) {
 		assert.False(t, seen[spec.Name], "catalog row %q must be declared exactly once", spec.Name)
 		seen[spec.Name] = true
 	}
-	assert.Len(t, seen, 19, "the catalog carries the 19 retained framework-guaranteed buckets")
+	assert.Len(t, seen, 18, "the catalog carries the 18 retained framework-guaranteed buckets")
 }
 
 // TestKVCatalog_DeclaredPolicies pins the architect-census policy decisions
@@ -85,17 +85,8 @@ func TestKVCatalog_DeclaredPolicies(t *testing.T) {
 
 	// GRAPH_STATUS keeps its readiness replay depth.
 	assert.Equal(t, uint8(3), spec(BucketGraphStatus).History)
-	// COMPONENT_STATUS: diagnostic / write-open / retention-unmanaged (#717).
-	status := spec(BucketComponentStatus)
-	assert.Equal(t, natsclient.ClassDiagnostic, status.Class)
-	assert.Equal(t, natsclient.WriteOpen, status.Write)
-	assert.Equal(t, natsclient.RetentionUnmanaged, status.Retention.Kind)
-
-	// Everything except COMPONENT_STATUS is owner-only and no-lifecycle.
+	// Every catalog bucket is owner-only and no-lifecycle.
 	for _, s := range KVCatalog() {
-		if s.Name == BucketComponentStatus {
-			continue
-		}
 		assert.Equal(t, natsclient.WriteOwnerOnly, s.Write, "%s must be owner-only", s.Name)
 		assert.Equal(t, natsclient.RetentionNoLifecycle, s.Retention.Kind,
 			"%s must declare no lifecycle retention", s.Name)
@@ -128,8 +119,7 @@ func TestFrameworkOwnedBuckets_DerivesFromWritePolicy(t *testing.T) {
 		"a write-open entry must never appear in the owned set")
 }
 
-// TestFrameworkOwnedBuckets_ProductionView pins the production derived view:
-// the retained framework buckets and NOT the write-open COMPONENT_STATUS.
+// TestFrameworkOwnedBuckets_ProductionView pins the production derived view.
 func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	owned := FrameworkOwnedBuckets()
 	assert.Len(t, owned, 18)
@@ -143,8 +133,6 @@ func TestFrameworkOwnedBuckets_ProductionView(t *testing.T) {
 	} {
 		assert.True(t, IsFrameworkOwnedBucket(name), "%s must be framework-owned", name)
 	}
-	assert.False(t, IsFrameworkOwnedBucket(BucketComponentStatus),
-		"COMPONENT_STATUS is write-open by declaration (#717), not owned")
 	assert.False(t, IsFrameworkOwnedBucket("CONTEXT_INDEX"),
 		"the retired provenance-only bucket must not remain in the generic write guard")
 	assert.False(t, IsFrameworkOwnedBucket("STRUCTURAL_INDEX"),

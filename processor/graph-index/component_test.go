@@ -1209,9 +1209,6 @@ func createTestComponentWithMockKV(t *testing.T) *Component {
 	graphIndexComp.aliasBucket = nc.NewKVStore(mocks.alias)
 	graphIndexComp.predicateBucket = nc.NewKVStore(mocks.predicate)
 	graphIndexComp.nameBucket = nc.NewKVStore(mocks.name)
-	// Initialize lifecycle reporter (normally done in Start())
-	graphIndexComp.lifecycleReporter = component.NewNoOpLifecycleReporter()
-
 	// Register mock refs for later retrieval by helper functions.
 	registerMocks(graphIndexComp, mocks)
 

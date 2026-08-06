@@ -68,8 +68,6 @@ func (c *Component) setupQueryHandlers(ctx context.Context) error {
 // handleQueryEntity handles entity query requests (passthrough to graph-ingest)
 func (c *Component) handleQueryEntity(ctx context.Context, data []byte) ([]byte, error) {
 	// Report querying stage (throttled to avoid KV spam)
-	c.reportQuerying(ctx)
-
 	// Parse and validate request
 	var req map[string]string
 	if err := json.Unmarshal(data, &req); err != nil {
@@ -195,8 +193,6 @@ func (c *Component) handleQueryEntityByAlias(ctx context.Context, data []byte) (
 // design question (filed as a follow-up if the threshold actually
 // bites in practice).
 func (c *Component) handleQueryBatch(ctx context.Context, data []byte) ([]byte, error) {
-	c.reportQuerying(ctx)
-
 	// Validate request shape early — empty IDs is a no-op at the
 	// graph-ingest side, but malformed JSON should surface as
 	// ErrorInvalid at the caller (matches handleQueryEntity).
@@ -316,8 +312,6 @@ func validateEntityPrefixQueryResponse(data []byte) error {
 // handleQueryRelationships handles relationship query requests (passthrough to graph-index)
 func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) ([]byte, error) {
 	// Report querying stage (throttled to avoid KV spam)
-	c.reportQuerying(ctx)
-
 	// Parse and validate request
 	var req struct {
 		EntityID  string `json:"entity_id"`
@@ -399,8 +393,6 @@ func (c *Component) handleQueryRelationships(ctx context.Context, data []byte) (
 // handlePathSearch handles PathRAG traversal queries
 func (c *Component) handlePathSearch(ctx context.Context, data []byte) ([]byte, error) {
 	// Report querying stage (throttled to avoid KV spam)
-	c.reportQuerying(ctx)
-
 	var req PathSearchRequest
 	if err := json.Unmarshal(data, &req); err != nil {
 		return nil, errs.WrapInvalid(err, "GraphQuery", "handlePathSearch", "parse request")

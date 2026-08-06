@@ -46,7 +46,7 @@ func (rp *Processor) watchEntityStates(ctx context.Context) error {
 	for bucketName, patterns := range bucketPatterns {
 		for _, pattern := range patterns {
 			if err := rp.startWatcherForBucketPattern(watcherCtx, bucketName, pattern); err != nil {
-				rp.markGraphStateGuardDegraded(ctx, fmt.Errorf("start %s pattern %q: %w", bucketName, pattern, err))
+				rp.markGraphStateGuardDegraded(fmt.Errorf("start %s pattern %q: %w", bucketName, pattern, err))
 				return errs.ClassifiedCode(errs.ErrorTransient, gtypes.ErrorCodeIndexNotReady, err)
 			}
 		}
@@ -60,15 +60,10 @@ func (rp *Processor) watchEntityStates(ctx context.Context) error {
 // unexpectedly, so rule evaluation can no longer trust its view of graph
 // state. Sticky for the process lifetime, like reset-required, but with the
 // distinct index-not-ready code (transport fault, not contract poison).
-func (rp *Processor) markGraphStateGuardDegraded(ctx context.Context, err error) {
+func (rp *Processor) markGraphStateGuardDegraded(err error) {
 	if rp.graphStateGuardDegraded.CompareAndSwap(false, true) {
 		rp.logger.Warn("Rule evaluation disabled: graph-state guard degraded",
 			"code", gtypes.ErrorCodeIndexNotReady, "error", err)
-		if rp.lifecycleReporter != nil {
-			if reportErr := rp.lifecycleReporter.ReportStage(ctx, "degraded"); reportErr != nil {
-				rp.logger.Warn("Failed to report degraded lifecycle stage", "error", reportErr)
-			}
-		}
 		rp.graphStateGuardDoneOnce.Do(func() { close(rp.graphStateGuardDone) })
 	}
 }
@@ -503,7 +498,7 @@ func (rp *Processor) handleEntityUpdatesForKey(
 					watcher.Stop()
 					return
 				}
-				rp.markGraphStateGuardDegraded(ctx, errors.New("rule pattern watcher closed unexpectedly"))
+				rp.markGraphStateGuardDegraded(errors.New("rule pattern watcher closed unexpectedly"))
 				watcher.Stop()
 				return
 			}
@@ -532,7 +527,7 @@ func (rp *Processor) handleEntityUpdatesForKey(
 			cursor := classifyEntityWatchEntry(entry)
 			update, err := decodeEntityWatchUpdate(entry, cursor)
 			if err != nil {
-				if rp.markGraphStateResetRequired(ctx, entry.Key(), err) {
+				if rp.markGraphStateResetRequired(entry.Key(), err) {
 					continue
 				}
 				rp.logger.Warn("Failed to unmarshal live entity state for rule evaluation",
@@ -893,7 +888,7 @@ func (rp *Processor) evaluateEntitiesInBatchInternal(
 			entry.mu.Unlock()
 			rp.entityEvaluationFence.release(entityID, entry)
 			rp.entityDispatchGate.RUnlock()
-			if rp.markGraphStateResetRequired(ctx, entityID, err) {
+			if rp.markGraphStateResetRequired(entityID, err) {
 				return
 			}
 			rp.logger.Warn("Failed to fetch entity state for rule evaluation",
@@ -966,7 +961,7 @@ func (rp *Processor) entityPendingWorkAuthorizedLocked(work *entityPendingWork) 
 // contract validation rides the input path, not a dedicated guard watcher.
 // It returns true only for graph-state contract failures so callers can keep
 // their normal transient-error behavior.
-func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID string, err error) bool {
+func (rp *Processor) markGraphStateResetRequired(entityID string, err error) bool {
 	var contractErr *gtypes.StateContractError
 	if !errors.As(err, &contractErr) {
 		return false
@@ -978,11 +973,6 @@ func (rp *Processor) markGraphStateResetRequired(ctx context.Context, entityID s
 			"reason", contractErr.Reason,
 			"entity", entityID,
 			"error", err)
-		if rp.lifecycleReporter != nil {
-			if reportErr := rp.lifecycleReporter.ReportStage(ctx, "reset_required"); reportErr != nil {
-				rp.logger.Warn("Failed to report reset-required lifecycle stage", "error", reportErr)
-			}
-		}
 		rp.graphStateGuardDoneOnce.Do(func() { close(rp.graphStateGuardDone) })
 	}
 	return true

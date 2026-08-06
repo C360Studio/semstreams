@@ -22,9 +22,7 @@ including `PREDICATE_INDEX`, `INCOMING_INDEX`, `OUTGOING_INDEX`, `NAME_INDEX`,
 `COMMUNITY_SUMMARIES`, `ANOMALY_INDEX`, `ENTITY_SUFFIX_INDEX`, and the framework
 operational buckets `GRAPH_INGEST_APPLIED_SEQ` (the ADR-072 redelivery-guard
 stamps), and `GRAPH_STATUS` (the ADR-083 readiness envelopes) — all correctness-critical
-no-eviction state. Retention is a per-descriptor policy, not a global rule. `COMPONENT_STATUS` is
-declared unmanaged (the framework guarantees no retention posture for it — an
-explicit catalog fact, not an omission). Retention is a semantic operation
+no-eviction state. Retention is a per-descriptor policy, not a global rule. Retention is a semantic operation
 (ADR-068), never a storage-policy side effect: age/size eviction is
 reachability-blind and would drop an entity that still has live inbound edges.
 When the guard strips retention it clears ONLY `MaxAge`/`MaxBytes`; any other
@@ -153,12 +151,6 @@ names the catalog owner. The owned set includes `ENTITY_SUFFIX_INDEX` (graph-ing
 not-yet-applied event as already applied and silently drop it), and `GRAPH_STATUS` (a
 forged envelope would fake "graph is ready" past the fail-closed health gate).
 
-`COMPONENT_STATUS` is deliberately declared write-open (class diagnostic, retention
-unmanaged): it has many cross-layer writers and ZERO production readers (only the e2e
-harness consumes it), so write-protecting it would guard state nothing reads. Its
-posture is a catalog fact; a future operational retention decision for it is a one-line
-catalog edit, not a code change.
-
 #### Scenario: a rule update_kv into a framework-owned bucket fails to load
 
 - **GIVEN** a rule pack with an `update_kv` action whose target bucket is a member of
@@ -193,7 +185,7 @@ catalog edit, not a code change.
 #### Scenario: a rule update_kv into a non-owned bucket is still permitted
 
 - **GIVEN** a rule pack with an `update_kv` action whose target bucket is not a member
-  of `FrameworkOwnedBuckets()` (including the write-open `COMPONENT_STATUS`)
+  of `FrameworkOwnedBuckets()` (for example, an application-owned bucket outside the catalog)
 - **WHEN** the rule configuration is validated and the action executes
 - **THEN** the write is permitted, so the guard constrains only owner-only buckets
 

@@ -96,7 +96,6 @@ framework_buckets='ENTITY_STATES|PREDICATE_INDEX|INCOMING_INDEX|OUTGOING_INDEX|A
 framework_buckets="${framework_buckets}|ENTITY_SUFFIX_INDEX|SPATIAL_INDEX|TEMPORAL_INDEX|TEMPORAL_INDEX_REVERSE"
 framework_buckets="${framework_buckets}|EMBEDDING_INDEX|EMBEDDING_DEDUP|COMMUNITY_INDEX|COMMUNITY_SUMMARIES"
 framework_buckets="${framework_buckets}|ANOMALY_INDEX|GRAPH_INGEST_APPLIED_SEQ|GRAPH_STATUS|STORAGE_REPORT"
-framework_buckets="${framework_buckets}|COMPONENT_STATUS"
 grep -rnE "\"(${framework_buckets})\"" --include="*.go" .
 
 # Do you match on the not-ready error? The code is stable; the text is not.

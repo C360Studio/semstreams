@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph/embedding"
 	"github.com/c360studio/semstreams/pkg/revlag"
 	"github.com/nats-io/nats.go/jetstream"
@@ -19,13 +18,12 @@ import (
 func newFindingsTestComponent(t *testing.T, index jetstream.KeyValue) *Component {
 	t.Helper()
 	return &Component{
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		storage:           embedding.NewStorage(index, newMockKVBucket()),
-		watermark:         revlag.New(),
-		failed:            make(map[string]failureInfo),
-		failedGauge:       newEmbeddingFailedGauge(),
-		config:            DefaultConfig(),
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		storage:     embedding.NewStorage(index, newMockKVBucket()),
+		watermark:   revlag.New(),
+		failed:      make(map[string]failureInfo),
+		failedGauge: newEmbeddingFailedGauge(),
+		config:      DefaultConfig(),
 	}
 }
 

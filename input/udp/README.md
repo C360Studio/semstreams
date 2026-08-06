@@ -276,9 +276,7 @@ input.Start(ctx) // Begins receiving datagrams and publishing to NATS
 **Startup Sequence:**
 
 1. Bind UDP socket with retry
-2. Create NATS KV bucket for lifecycle reporting
-3. Start read loop goroutine
-4. Report "idle" stage to lifecycle tracker
+2. Start read loop goroutine
 
 ### Stopping
 

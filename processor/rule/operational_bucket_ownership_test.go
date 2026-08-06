@@ -51,44 +51,6 @@ func TestUpdateKV_RejectsOperationalOwnedBuckets_AtLoad(t *testing.T) {
 	}
 }
 
-// TestUpdateKV_PermitsWriteOpenComponentStatus: COMPONENT_STATUS is a catalog
-// member deliberately declared write-OPEN (#717: many cross-layer writers,
-// zero production readers), so it must NOT appear in the derived owned set —
-// a generic update_kv into it passes both guards. The guard constrains
-// owner-only rows, not catalog membership.
-func TestUpdateKV_PermitsWriteOpenComponentStatus(t *testing.T) {
-	t.Parallel()
-	const bucket = "COMPONENT_STATUS"
-
-	def := Definition{
-		ID:   "component-status-allowed",
-		Type: "expression",
-		Actions: []Action{
-			{
-				Type:    ActionTypeUpdateKV,
-				Bucket:  bucket,
-				Key:     "some-component",
-				Payload: map[string]any{"stage": "idle"},
-			},
-		},
-	}
-	if err := ValidateDefinition(def); err != nil {
-		t.Fatalf("ValidateDefinition must permit update_kv into write-open %s, got: %v", bucket, err)
-	}
-
-	kv := newMockKVWriter()
-	executor := &ActionExecutor{kvWriter: kv}
-	action := Action{
-		Type:    ActionTypeUpdateKV,
-		Bucket:  bucket,
-		Key:     "some-component",
-		Payload: map[string]any{"stage": "idle"},
-	}
-	if err := executor.executeUpdateKV(context.Background(), action, &ExecutionContext{}); err != nil {
-		t.Fatalf("executeUpdateKV must permit a write into write-open %s, got: %v", bucket, err)
-	}
-}
-
 // TestUpdateKV_RejectsOperationalOwnedBuckets_AtRuntime proves the runtime guard
 // (actions.go executeUpdateKV) rejects the same write after substitution, so a
 // dynamically-resolved bucket name cannot smuggle a write past the load-time

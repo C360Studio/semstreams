@@ -44,7 +44,6 @@ const (
 	BucketAnomalyIndex       = "ANOMALY_INDEX"
 
 	// Operational buckets
-	BucketComponentStatus = "COMPONENT_STATUS"
 	// BucketGraphIngestAppliedSeq is graph-ingest's ADR-072 redelivery-guard
 	// durable tier: `(entityID/streamName) → last-applied stream sequence`.
 	// Created and owned exclusively by graph-ingest (processor/graph-ingest);
@@ -54,9 +53,9 @@ const (
 	// no-eviction state, so the retention sweep covers it.
 	BucketGraphIngestAppliedSeq = "GRAPH_INGEST_APPLIED_SEQ"
 	// BucketGraphStatus is the ADR-083 readiness distribution bucket. Producers
-	// (graph-index/graph-embedding) write their liveness envelope; consumers watch
-	// it to answer "(status, fresh|unknown)". It is the single source of truth for
-	// the bucket name — graph/readiness re-exports this constant. Its catalog
+	// (graph-index, graph-embedding, graph-ingest, and rule) write their liveness
+	// envelope; consumers watch it to answer "(status, fresh|unknown)". It is the
+	// single source of truth for the bucket name — graph/readiness re-exports this constant. Its catalog
 	// descriptor declares History 3 (readiness replay depth) and no lifecycle
 	// retention; the acquisition seam and backstop strip only MaxAge/MaxBytes and
 	// leave History untouched.

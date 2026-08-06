@@ -324,18 +324,6 @@ remains stored with each authoritative entity in `ENTITY_STATES`. There is no
 production query-by-context contract; operator and E2E diagnostics may inspect
 bounded authoritative state directly.
 
-#### COMPONENT_STATUS
-
-Component lifecycle status. Tracks current processing stage of long-running components.
-
-| Attribute | Value |
-|-----------|-------|
-| **Created by** | Any component implementing LifecycleReporter |
-| **Key format** | Component name |
-| **Value** | Status JSON (stage, cycle_id, timestamps) |
-
-**Use case**: Operational monitoring, "What stage is graph-clustering in?"
-
 ### Tier 1+ Buckets
 
 Buckets requiring embeddings or community detection, created by statistical/semantic tier processors.
