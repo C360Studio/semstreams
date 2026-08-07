@@ -978,13 +978,21 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 	}
 
 	// Build capability announcement
+	inputPorts, err := r.portsToCapabilities(component.InputPorts())
+	if err != nil {
+		return errs.Wrap(err, "Registry", "publishCapabilities", "resolve input port capabilities")
+	}
+	outputPorts, err := r.portsToCapabilities(component.OutputPorts())
+	if err != nil {
+		return errs.Wrap(err, "Registry", "publishCapabilities", "resolve output port capabilities")
+	}
 	announcement := CapabilityAnnouncement{
 		InstanceName: instanceName,
 		Component:    registration.Name,
 		Type:         registration.Type,
 		Version:      registration.Version,
-		InputPorts:   r.portsToCapabilities(component.InputPorts()),
-		OutputPorts:  r.portsToCapabilities(component.OutputPorts()),
+		InputPorts:   inputPorts,
+		OutputPorts:  outputPorts,
 		Timestamp:    time.Now(),
 		TTL:          60 * time.Second,
 		NodeID:       nodeID,
@@ -1006,30 +1014,28 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 }
 
 // portsToCapabilities converts Port slice to PortCapability slice.
-func (r *Registry) portsToCapabilities(ports []Port) []PortCapability {
+func (r *Registry) portsToCapabilities(ports []Port) ([]PortCapability, error) {
 	capabilities := make([]PortCapability, 0, len(ports))
 	for _, port := range ports {
+		facts, err := factsForPort(port)
+		if err != nil {
+			return nil, err
+		}
 		capability := PortCapability{
 			Name:        port.Name,
 			Description: port.Description,
+			Type:        facts.interaction,
 		}
-
-		// Extract subject and type based on port config type
-		switch cfg := port.Config.(type) {
-		case *NATSStreamPortConfig:
-			capability.Subject = cfg.Subject
-			capability.Type = "stream"
-		case *NATSRequestPortConfig:
-			capability.Subject = cfg.Subject
-			capability.Type = "request"
-		default:
-			capability.Subject = ""
-			capability.Type = "unknown"
+		if len(facts.natsSubjects) > 0 {
+			capability.Subject = facts.natsSubjects[0]
+		}
+		if facts.interfaceContract != nil {
+			capability.Interface = facts.interfaceContract.Type
 		}
 
 		capabilities = append(capabilities, capability)
 	}
-	return capabilities
+	return capabilities, nil
 }
 
 // SubscribeCapabilities subscribes to capability announcements from NATS.

@@ -437,9 +437,7 @@ func (c *Config) ApplyDefaults() {
 			}
 			if !hasAnomaly {
 				c.Ports.Outputs = append(c.Ports.Outputs, component.PortDefinition{
-					Name:    "anomaly_index",
-					Type:    "kv-write",
-					Subject: graph.BucketAnomalyIndex,
+					Name: "anomaly_index", Config: component.KVWritePort{Bucket: graph.BucketAnomalyIndex},
 				})
 			}
 		}
@@ -454,25 +452,17 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Inputs) == 0 {
 			c.Ports.Inputs = []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			}
 		}
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name:      "graph_mutations",
-					Type:      "nats-request",
-					Subject:   graphmutation.SubjectFamily,
-					Interface: graphmutation.InterfaceType,
-					Required:  true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 				},
 				{
-					Name:    "communities",
-					Type:    "kv-write",
-					Subject: graph.BucketCommunityIndex,
+					Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex},
 				},
 			}
 		}
@@ -485,23 +475,18 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
+				{Name: "entity_states", Config: component.KVReadPort{Bucket: graph.BucketEntityStates}},
+				{Name: "outgoing_index", Config: component.KVReadPort{Bucket: graph.BucketOutgoingIndex}},
+				{Name: "incoming_index", Config: component.KVReadPort{Bucket: graph.BucketIncomingIndex}},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "graph_mutations",
-					Type:      "nats-request",
-					Subject:   graphmutation.SubjectFamily,
-					Interface: graphmutation.InterfaceType,
-					Required:  true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 				},
 				{
-					Name:    "communities",
-					Type:    "kv-write",
-					Subject: graph.BucketCommunityIndex,
+					Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex},
 				},
 			},
 		},

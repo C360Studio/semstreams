@@ -39,22 +39,18 @@ type FieldMapping struct {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "raw.>",
-			Interface:   "core .json.v1", // Require GenericJSON
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "raw.>", Interface: &component.InterfaceContract{
+				// Require GenericJSON
+				Type: "core .json.v1"}}, Required: true,
 			Description: "NATS subjects to transform (must be GenericJSON payloads)",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_output",
-			Type:        "nats",
-			Subject:     "mapped.messages",
-			Interface:   "core .json.v1", // Output GenericJSON
-			Required:    true,
+			Name: "nats_output", Config: component.NATSPort{Subject: "mapped.messages", Interface: &component.InterfaceContract{
+				// Output GenericJSON
+				Type: "core .json.v1"}}, Required: true,
 			Description: "NATS subject for transformed messages",
 		},
 	}

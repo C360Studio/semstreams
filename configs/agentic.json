@@ -127,25 +127,35 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "entity_stream",
-              "subject": "entity.>",
-              "type": "jetstream",
-              "description": "Semantic entity events"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "entity.>"
+                ]
+              },
+              "description": "Semantic entity events",
+              "name": "entity_stream"
             }
           ],
           "outputs": [
             {
-              "name": "entity_states",
-              "subject": "ENTITY_STATES",
-              "type": "kv-write",
-              "description": "Entity state KV bucket"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "description": "Entity state KV bucket",
+              "name": "entity_states"
             }
           ]
         },
@@ -162,46 +172,70 @@
         "ports": {
           "inputs": [
             {
-              "name": "rule_toolcall_proposed_in",
-              "subject": "agent.toolcall.proposed.>",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "description": "ADR-039 — proposed tool calls awaiting governance verdict"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.toolcall.proposed.>"
+                ]
+              },
+              "description": "ADR-039 — proposed tool calls awaiting governance verdict",
+              "name": "rule_toolcall_proposed_in"
             }
           ],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "rule_out",
-              "subject": "rule.triggered.alert",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "rule.triggered.alert"
+                ]
+              },
+              "name": "rule_out"
             },
             {
-              "name": "agent_task",
-              "subject": "agent.task.*",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "description": "Agent task triggers from rules"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.task.*"
+                ]
+              },
+              "description": "Agent task triggers from rules",
+              "name": "agent_task"
             },
             {
-              "name": "toolcall_approved_out",
-              "subject": "agent.toolcall.approved.*",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "description": "ADR-039 — approve verdicts to agentic-loop"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.toolcall.approved.*"
+                ]
+              },
+              "description": "ADR-039 — approve verdicts to agentic-loop",
+              "name": "toolcall_approved_out"
             },
             {
-              "name": "toolcall_rejected_out",
-              "subject": "agent.toolcall.rejected.*",
-              "type": "jetstream",
-              "stream_name": "AGENT",
-              "description": "ADR-039 — reject verdicts to agentic-loop"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.toolcall.rejected.*"
+                ]
+              },
+              "description": "ADR-039 — reject verdicts to agentic-loop",
+              "name": "toolcall_rejected_out"
             }
           ]
         },
@@ -261,72 +295,102 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.task.*"
+                ]
+              },
+              "description": "Agent task requests",
               "name": "agent.task",
-              "type": "jetstream",
-              "subject": "agent.task.*",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Agent task requests"
+              "required": true
             },
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.response.>"
+                ]
+              },
+              "description": "Model responses",
               "name": "agent.response",
-              "type": "jetstream",
-              "subject": "agent.response.>",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Model responses"
+              "required": true
             },
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.result.>"
+                ]
+              },
+              "description": "Tool execution results",
               "name": "tool.result",
-              "type": "jetstream",
-              "subject": "tool.result.>",
-              "stream_name": "TOOL",
-              "required": true,
-              "description": "Tool execution results"
+              "required": true
             }
           ],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "agent.request",
-              "type": "jetstream",
-              "subject": "agent.request.*",
-              "stream_name": "AGENT",
-              "description": "Model requests"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.request.*"
+                ]
+              },
+              "description": "Model requests",
+              "name": "agent.request"
             },
             {
-              "name": "tool.execute",
-              "type": "jetstream",
-              "subject": "tool.execute.*",
-              "stream_name": "TOOL",
-              "description": "Tool execution requests"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.execute.*"
+                ]
+              },
+              "description": "Tool execution requests",
+              "name": "tool.execute"
             },
             {
-              "name": "agent.complete",
-              "type": "jetstream",
-              "subject": "agent.complete.*",
-              "stream_name": "AGENT",
-              "description": "Task completions"
-            }
-          ],
-          "kv_write": [
-            {
-              "name": "loops",
-              "type": "kv-write",
-              "bucket": "AGENT_LOOPS",
-              "description": "Loop state storage"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.complete.*"
+                ]
+              },
+              "description": "Task completions",
+              "name": "agent.complete"
             },
             {
-              "name": "trajectories",
-              "type": "kv-write",
-              "bucket": "AGENT_TRAJECTORIES",
-              "description": "Trajectory storage"
+              "config": {
+                "bucket": "AGENT_LOOPS",
+                "kind": "kv-write"
+              },
+              "description": "Loop state storage",
+              "name": "loops"
+            },
+            {
+              "config": {
+                "bucket": "AGENT_TRAJECTORIES",
+                "kind": "kv-write"
+              },
+              "description": "Trajectory storage",
+              "name": "trajectories"
             }
           ]
         }
@@ -352,22 +416,30 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.request.>"
+                ]
+              },
+              "description": "Agent request input",
               "name": "agent.request",
-              "type": "jetstream",
-              "subject": "agent.request.>",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Agent request input"
+              "required": true
             }
           ],
           "outputs": [
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.response.*"
+                ]
+              },
+              "description": "Agent response output",
               "name": "agent.response",
-              "type": "jetstream",
-              "subject": "agent.response.*",
-              "stream_name": "AGENT",
-              "required": true,
-              "description": "Agent response output"
+              "required": true
             }
           ]
         }
@@ -384,37 +456,49 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.execute.>"
+                ]
+              },
+              "description": "Tool execution requests",
               "name": "tool.execute",
-              "type": "jetstream",
-              "subject": "tool.execute.>",
-              "stream_name": "TOOL",
-              "required": true,
-              "description": "Tool execution requests"
+              "required": true
+            },
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-read"
+              },
+              "description": "Entity state KV for graph queries",
+              "name": "entity_states"
             }
           ],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.result.*"
+                ]
+              },
+              "description": "Tool execution results",
               "name": "tool.result",
-              "type": "jetstream",
-              "subject": "tool.result.*",
-              "stream_name": "TOOL",
-              "required": true,
-              "description": "Tool execution results"
-            }
-          ],
-          "kv_read": [
-            {
-              "name": "entity_states",
-              "type": "kv-read",
-              "bucket": "ENTITY_STATES",
-              "description": "Entity state KV for graph queries"
+              "required": true
             }
           ]
         }

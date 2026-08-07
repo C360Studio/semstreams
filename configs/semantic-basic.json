@@ -83,9 +83,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "raw.udp.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.udp.messages"
+                ]
+              },
+              "name": "udp_out"
             }
           ]
         },
@@ -104,17 +108,27 @@
         "ports": {
           "inputs": [
             {
-              "name": "sensor_in",
-              "subject": "raw.udp.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.udp.messages"
+                ]
+              },
+              "name": "sensor_in"
             }
           ],
           "outputs": [
             {
-              "name": "sensor_out",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "domain.iot.sensor.v1"
+              "config": {
+                "interface": {
+                  "type": "domain.iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "name": "sensor_out"
             }
           ]
         }
@@ -128,11 +142,17 @@
         "ports": {
           "inputs": [
             {
-              "name": "sensor_in",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1",
-              "description": "Sensor entity events from IoT processor"
+              "config": {
+                "interface": {
+                  "type": "iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "description": "Sensor entity events from IoT processor",
+              "name": "sensor_in"
             }
           ],
           "outputs": []

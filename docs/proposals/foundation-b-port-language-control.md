@@ -51,40 +51,13 @@ its resolved named type is `github.com/c360studio/semstreams/component.PortDefin
 `component/schema_tags.go:705` is explicitly excluded. This produces 124 literals, 34 files, and 41 enclosing sources;
 no invented grouping is used to reach 45.
 
-## Commands and lifecycle
+## Cutover status
 
-Check the frozen TSV identities against the repository:
+The cutover retains the two TSV files as the immutable historical migration record. The target test accounts for all
+646 ledger identities, requires production decoding and resolution for all 520 surviving configuration rows, accounts
+explicitly for the two approved graph-query deletions, and verifies the 124 frozen Go constructions plus the five
+approved read declarations.
 
-```bash
-GOCACHE=/tmp/semstreams-foundation-b-gocache \
-  go run ./cmd/port-grammar-control -mode check -root .
-```
-
-Preview deterministic rewritten document hashes without writing files:
-
-```bash
-go run ./cmd/port-grammar-control -mode dry-run -root .
-go run ./cmd/port-grammar-control -mode dry-run -root . -apply-dispositions
-```
-
-Write only to a new empty caller-selected temporary root outside the repository, then verify it byte for byte:
-
-```bash
-go run ./cmd/port-grammar-control -mode rewrite -root . -out /tmp/foundation-b-preview -apply-dispositions
-go run ./cmd/port-grammar-control -mode check -root . -out /tmp/foundation-b-preview -apply-dispositions
-```
-
-The tool has no mode that rewrites source configurations or regenerates either authoritative TSV. Dry-run is the safe
-preview path. Rewrite rejects repository overlap, canonical or symlink overlap, and nonempty output roots. The
-completeness test and `check` command report missing, extra, duplicate, moved, or changed rows and Go literals as drift;
-they never update authority.
-
-## Cutover replacement and retirement
-
-The control phase requires all 646 worklist identities to match their frozen legacy source. The actual cutover commit
-replaces this legacy assertion with a test using the real production strict decoder and resolver. That target test must
-account for all 646 ledger identities, require canonical resolution for every surviving identity, and account explicitly
-for the two approved graph-query deletions. No interim manifest, fake resolver, or proof-prefix convention is accepted.
-
-After that production target test is green and the cutover is complete, remove the legacy census, rewriter, CLI, and
-their tests. Retain the accepted worklist and dispositions as the migration record.
+The one-shot live census, production rewriter, and CLI were retired after that target gate passed. They are not an
+ongoing framework subsystem. Test-local helpers retain the ledger-to-target accounting and the proof that mechanical
+configuration rewriting changed only ledger-owned `ports` objects.

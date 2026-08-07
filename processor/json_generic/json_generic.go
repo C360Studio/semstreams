@@ -29,21 +29,16 @@ type Config struct {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "raw.>",
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "raw.>"}, Required: true,
 			Description: "NATS subjects with plain JSON data",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_output",
-			Type:        "nats",
-			Subject:     "generic.messages",
-			Interface:   "core .json.v1", // Output GenericJSON
-			Required:    true,
+			Name: "nats_output", Config: component.NATSPort{Subject: "generic.messages", Interface: &component.InterfaceContract{
+				// Output GenericJSON
+				Type: "core .json.v1"}}, Required: true,
 			Description: "NATS subject for GenericJSON wrapped messages",
 		},
 	}

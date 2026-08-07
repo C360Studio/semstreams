@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -118,26 +119,20 @@ func (c *Config) ApplyDefaults() {
 		c.QueryTimeout = 60 * time.Second
 	}
 	if c.Ports == nil {
-		// Apply full default port config
 		defaultConf := DefaultConfig()
 		c.Ports = defaultConf.Ports
+		c.Ports.Inputs[0].Config = networkPortFromBindAddress(c.BindAddress)
 	} else {
 		// If ports exist but are empty, populate with defaults
 		if len(c.Ports.Inputs) == 0 {
 			c.Ports.Inputs = []component.PortDefinition{
-				{
-					Name:    "http",
-					Type:    "http",
-					Subject: "/graphql",
-				},
+				{Name: "http", Config: networkPortFromBindAddress(c.BindAddress)},
 			}
 		}
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name:    "queries",
-					Type:    "nats-request",
-					Subject: "graph.query.*",
+					Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"},
 				},
 			}
 		} else {
@@ -154,9 +149,7 @@ func (c *Config) ApplyDefaults() {
 			if !hasQueries {
 				c.Ports.Outputs = append([]component.PortDefinition{
 					{
-						Name:    "queries",
-						Type:    "nats-request",
-						Subject: "graph.query.*",
+						Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"},
 					},
 				}, c.Ports.Outputs...)
 			}
@@ -169,18 +162,10 @@ func DefaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{
-					Name:    "http",
-					Type:    "http",
-					Subject: "/graphql",
-				},
+				{Name: "http", Config: networkPortFromBindAddress("localhost:8080")},
 			},
 			Outputs: []component.PortDefinition{
-				{
-					Name:    "queries",
-					Type:    "nats-request",
-					Subject: "graph.query.*",
-				},
+				{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 			},
 		},
 		GraphQLPath:      "/graphql",
@@ -189,6 +174,18 @@ func DefaultConfig() Config {
 		EnablePlayground: false,
 		QueryTimeout:     60 * time.Second,
 	}
+}
+
+func networkPortFromBindAddress(bindAddress string) component.NetworkPort {
+	host, portText, err := net.SplitHostPort(bindAddress)
+	if err != nil {
+		return component.NetworkPort{Protocol: "http"}
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		return component.NetworkPort{Protocol: "http", Host: host}
+	}
+	return component.NetworkPort{Protocol: "http", Host: host, Port: port}
 }
 
 // schema defines the configuration schema for graph-gateway component

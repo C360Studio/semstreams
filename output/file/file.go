@@ -55,20 +55,14 @@ func (c *Config) Validate() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "output.>",
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "output.>"}, Required: true,
 			Description: "NATS subjects to write to files",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "file_output",
-			Type:        "file",
-			Subject:     "/tmp/streamkit/output.jsonl",
-			Required:    false,
+			Name: "file_output", Config: component.FilePort{Path: "/tmp/streamkit/output.jsonl"}, Required: false,
 			Description: "File path for output",
 		},
 	}

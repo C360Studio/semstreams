@@ -390,26 +390,16 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_stream",
-					Type:    "jetstream",
-					Subject: "entity.>",
-					Config: component.JetStreamPort{
-						DeliverPolicy: "all", // Idempotent: catch up on historical entities
-					},
+					Name: "entity_stream", Config: component.JetStreamPort{Subjects: []string{"entity.>"}, DeliverPolicy: "all"}, // Idempotent: catch up on historical entities
+
 				},
 				{
-					Name:      "mutations",
-					Type:      "nats-request",
-					Subject:   graphmutation.SubjectFamily,
-					Interface: graphmutation.InterfaceType,
-					Required:  true,
+					Name: "mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "entity_states",
-					Type:    "kv-write",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_states", Config: component.KVWritePort{Bucket: graph.BucketEntityStates},
 				},
 			},
 		},

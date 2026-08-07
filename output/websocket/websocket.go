@@ -86,9 +86,7 @@ func DefaultConfig() Config {
 	// - Output: WebSocket server network port (encoded in Subject field)
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "semantic.>", // Default to semantic events
+			Name: "nats_input", Config: component.NATSPort{Subject: "semantic.>"}, // Default to semantic events
 			Required:    true,
 			Description: "NATS subjects to listen to",
 		},
@@ -98,9 +96,7 @@ func DefaultConfig() Config {
 	// This matches how the factory extracts config
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "websocket_server",
-			Type:        "network",
-			Subject:     "http://0.0.0.0:8081/ws", // Encoded as URL
+			Name: "websocket_server", Config: component.NetworkPort{Protocol: "http", Host: "0.0.0.0", Port: 8081}, // Encoded as URL
 			Required:    false,
 			Description: "WebSocket server endpoint",
 		},
@@ -804,9 +800,7 @@ func (w *Output) setupSubscriptions(ctx context.Context) error {
 		ports = make([]component.PortDefinition, len(w.subjects))
 		for i, subj := range w.subjects {
 			ports[i] = component.PortDefinition{
-				Name:    fmt.Sprintf("nats_input_%d", i),
-				Type:    "nats",
-				Subject: subj,
+				Name: fmt.Sprintf("nats_input_%d", i), Config: component.NATSPort{Subject: subj},
 			}
 		}
 	}

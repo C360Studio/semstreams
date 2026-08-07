@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -136,35 +137,22 @@ func (c *Config) validatePortsNonEmpty() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "tool.execute",
-			Type:        "jetstream",
-			Subject:     "tool.execute.>",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "tool.execute", Config: component.JetStreamPort{Subjects: []string{"tool.execute.>"}, StreamName: "AGENT"}, Required: true,
 			Description: "Tool execution requests (JetStream)",
 		},
 		{
-			Name:        "tool.list",
-			Type:        "nats",
-			Subject:     "tool.list",
-			Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
+			Name: "tool.list", Config: component.NATSPort{Subject: "tool.list"}, Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
 		},
+		{Name: "entity_states", Config: component.KVReadPort{Bucket: graph.BucketEntityStates}},
+		{Name: "agent_loops", Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:      "graph_mutations",
-			Type:      "nats-request",
-			Subject:   graphmutation.SubjectFamily,
-			Interface: graphmutation.InterfaceType,
-			Required:  true,
+			Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 		},
 		{
-			Name:        "tool.result",
-			Type:        "jetstream",
-			Subject:     "tool.result.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "tool.result", Config: component.JetStreamPort{Subjects: []string{"tool.result.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Tool execution results (JetStream)",
 		},
 	}

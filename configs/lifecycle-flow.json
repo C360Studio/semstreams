@@ -86,9 +86,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "raw.mission.command",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.mission.command"
+                ]
+              },
+              "name": "udp_out"
             }
           ]
         },
@@ -105,17 +109,27 @@
         "ports": {
           "inputs": [
             {
-              "name": "command_in",
-              "subject": "raw.mission.command",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.mission.command"
+                ]
+              },
+              "name": "command_in"
             }
           ],
           "outputs": [
             {
-              "name": "command_out",
-              "subject": "mission.processed.entity",
-              "type": "jetstream",
-              "interface": "mission.command.v1"
+              "config": {
+                "interface": {
+                  "type": "mission.command.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "mission.processed.entity"
+                ]
+              },
+              "name": "command_out"
             }
           ]
         },
@@ -131,25 +145,37 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "mission_in",
-              "subject": "mission.processed.entity",
-              "type": "jetstream",
-              "interface": "mission.command.v1",
-              "description": "Mission command Graphables to land in ENTITY_STATES"
+              "config": {
+                "interface": {
+                  "type": "mission.command.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "mission.processed.entity"
+                ]
+              },
+              "description": "Mission command Graphables to land in ENTITY_STATES",
+              "name": "mission_in"
             }
           ],
           "outputs": [
             {
-              "name": "entity_states",
-              "subject": "ENTITY_STATES",
-              "type": "kv-write"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "name": "entity_states"
             }
           ]
         },
@@ -166,7 +192,17 @@
         "ports": {
           "inputs": [],
           "outputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            }
           ]
         },
         "entity_watch_buckets": {"ENTITY_STATES": ["c360.test.lifecycle.gcs.mission.*"]},
@@ -184,10 +220,14 @@
           "inputs": [],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             }
           ]

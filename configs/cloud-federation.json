@@ -64,10 +64,14 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "ws_data",
-              "subject": "cloud.federated.data",
-              "type": "jetstream",
-              "description": "Data received from edge via WebSocket"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "cloud.federated.data"
+                ]
+              },
+              "description": "Data received from edge via WebSocket",
+              "name": "ws_data"
             }
           ]
         },
@@ -97,9 +101,13 @@
         "ports": {
           "inputs": [
             {
-              "name": "file_in",
-              "subject": "cloud.federated.data",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "cloud.federated.data"
+                ]
+              },
+              "name": "file_in"
             }
           ],
           "outputs": []

@@ -95,17 +95,11 @@ func DefaultConfig() Config {
 	// Output port for received data
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "ws_data",
-			Type:        "nats",
-			Subject:     "federated.data",
-			Required:    false,
+			Name: "ws_data", Config: component.NATSPort{Subject: "federated.data"}, Required: false,
 			Description: "Data messages received via WebSocket",
 		},
 		{
-			Name:        "ws_control",
-			Type:        "nats",
-			Subject:     "federated.control",
-			Required:    false,
+			Name: "ws_control", Config: component.NATSPort{Subject: "federated.control"}, Required: false,
 			Description: "Control messages (requests/replies)",
 		},
 	}

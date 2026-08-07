@@ -156,8 +156,7 @@ func (c *Config) ApplyDefaults() {
 
 func defaultGraphMutationOutput() component.PortDefinition {
 	return component.PortDefinition{
-		Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
-		Interface: graphmutation.InterfaceType, Required: true,
+		Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 	}
 }
 

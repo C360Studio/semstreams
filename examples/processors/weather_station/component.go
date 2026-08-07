@@ -32,19 +32,13 @@ func DefaultConfig() ComponentConfig {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:        "nats_input",
-					Type:        "nats",
-					Subject:     "raw.weather.>",
-					Required:    true,
+					Name: "nats_input", Config: component.NATSPort{Subject: "raw.weather.>"}, Required: true,
 					Description: "NATS subjects with weather JSON data",
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:        "nats_output",
-					Type:        "nats",
-					Subject:     "events.graph.entity.weather",
-					Required:    true,
+					Name: "nats_output", Config: component.NATSPort{Subject: "events.graph.entity.weather"}, Required: true,
 					Description: "NATS subject for Graphable weather readings",
 				},
 			},

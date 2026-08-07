@@ -189,9 +189,7 @@ func (c *Config) ApplyDefaults() {
 		// stay as declared: the component requires none.
 		c.Ports.Inputs = []component.PortDefinition{
 			{
-				Name:    "entity_watch",
-				Type:    "kv-watch",
-				Subject: graph.BucketEntityStates,
+				Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 			},
 		}
 	}
@@ -203,14 +201,10 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 				{
-					Name:   "content_store",
-					Type:   "store-read",
-					Bucket: "MESSAGES",
+					Name: "content_store", Config: component.StoreReadPort{Bucket: "MESSAGES"},
 				},
 			},
 		},

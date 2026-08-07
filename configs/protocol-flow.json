@@ -104,9 +104,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "raw.udp.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.udp.messages"
+                ]
+              },
+              "name": "udp_out"
             }
           ]
         },
@@ -123,19 +127,29 @@
         "ports": {
           "inputs": [
             {
-              "name": "generic_in",
-              "subject": "raw.udp.messages",
-              "type": "jetstream",
-              "description": "Plain JSON from UDP"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.udp.messages"
+                ]
+              },
+              "description": "Plain JSON from UDP",
+              "name": "generic_in"
             }
           ],
           "outputs": [
             {
-              "name": "generic_out",
-              "subject": "generic.messages",
-              "type": "jetstream",
-              "interface": "core .json.v1",
-              "description": "GenericJSON wrapped messages"
+              "config": {
+                "interface": {
+                  "type": "core .json.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "generic.messages"
+                ]
+              },
+              "description": "GenericJSON wrapped messages",
+              "name": "generic_out"
             }
           ]
         }
@@ -149,17 +163,27 @@
         "ports": {
           "inputs": [
             {
-              "name": "filter_in",
-              "subject": "generic.messages",
-              "type": "jetstream",
-              "interface": "core .json.v1"
+              "config": {
+                "interface": {
+                  "type": "core .json.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "generic.messages"
+                ]
+              },
+              "name": "filter_in"
             }
           ],
           "outputs": [
             {
-              "name": "filter_out",
-              "subject": "filtered.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "filtered.messages"
+                ]
+              },
+              "name": "filter_out"
             }
           ]
         },
@@ -174,16 +198,24 @@
         "ports": {
           "inputs": [
             {
-              "name": "map_in",
-              "subject": "filtered.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "filtered.messages"
+                ]
+              },
+              "name": "map_in"
             }
           ],
           "outputs": [
             {
-              "name": "map_out",
-              "subject": "mapped.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "mapped.messages"
+                ]
+              },
+              "name": "map_out"
             }
           ]
         },
@@ -198,10 +230,16 @@
         "ports": {
           "inputs": [
             {
-              "name": "file_in",
-              "subject": "mapped.messages",
-              "type": "jetstream",
-              "interface": "core .json.v1"
+              "config": {
+                "interface": {
+                  "type": "core .json.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "mapped.messages"
+                ]
+              },
+              "name": "file_in"
             }
           ],
           "outputs": []
@@ -219,10 +257,16 @@
         "ports": {
           "inputs": [
             {
-              "name": "http_in",
-              "subject": "mapped.messages",
-              "type": "jetstream",
-              "interface": "core .json.v1"
+              "config": {
+                "interface": {
+                  "type": "core .json.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "mapped.messages"
+                ]
+              },
+              "name": "http_in"
             }
           ],
           "outputs": []
@@ -239,9 +283,13 @@
         "ports": {
           "inputs": [
             {
-              "name": "ws_in",
-              "subject": "raw.udp.messages",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.udp.messages"
+                ]
+              },
+              "name": "ws_in"
             }
           ],
           "outputs": []
@@ -258,10 +306,16 @@
         "ports": {
           "inputs": [
             {
-              "name": "store_in",
-              "subject": "mapped.messages",
-              "type": "jetstream",
-              "interface": "core .json.v1"
+              "config": {
+                "interface": {
+                  "type": "core .json.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "mapped.messages"
+                ]
+              },
+              "name": "store_in"
             }
           ],
           "outputs": []
@@ -282,23 +336,31 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "unused_in",
-              "subject": "_e2e.core.graph.unused",
-              "type": "nats"
+              "config": {
+                "kind": "nats",
+                "subject": "_e2e.core.graph.unused"
+              },
+              "name": "unused_in"
             }
           ],
           "outputs": [
             {
-              "name": "entity_states",
-              "subject": "ENTITY_STATES",
-              "type": "kv-write"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "name": "entity_states"
             }
           ]
         },
@@ -313,16 +375,42 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_watch"
             }
           ],
           "outputs": [
-            {"name": "outgoing_index", "subject": "OUTGOING_INDEX", "type": "kv"},
-            {"name": "incoming_index", "subject": "INCOMING_INDEX", "type": "kv"},
-            {"name": "alias_index", "subject": "ALIAS_INDEX", "type": "kv"},
-            {"name": "predicate_index", "subject": "PREDICATE_INDEX", "type": "kv"}
+            {
+              "config": {
+                "bucket": "OUTGOING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "outgoing_index"
+            },
+            {
+              "config": {
+                "bucket": "INCOMING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "incoming_index"
+            },
+            {
+              "config": {
+                "bucket": "ALIAS_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "alias_index"
+            },
+            {
+              "config": {
+                "bucket": "PREDICATE_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "predicate_index"
+            }
           ]
         },
         "workers": 2,
@@ -337,9 +425,11 @@
         "ports": {
           "inputs": [
             {
-              "name": "query_requests",
-              "subject": "graph.query.>",
-              "type": "nats-request"
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.>"
+              },
+              "name": "query_requests"
             }
           ],
           "outputs": []
@@ -356,10 +446,24 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "http", "subject": ":8084", "type": "http"}
+            {
+              "config": {
+                "host": "0.0.0.0",
+                "kind": "network",
+                "port": 8084,
+                "protocol": "http"
+              },
+              "name": "http"
+            }
           ],
           "outputs": [
-            {"name": "queries", "subject": "graph.query.*", "type": "nats-request"}
+            {
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.*"
+              },
+              "name": "queries"
+            }
           ]
         },
         "graphql_path": "/graphql",

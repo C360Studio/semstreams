@@ -131,9 +131,10 @@ var BuiltinGroupKeys = []string{
 //
 // Two distinct failure shapes:
 //
-//   - Pre-condition skips (nil manager, missing env var, KV bucket
-//     unreachable) are intentional disable paths. They log and proceed —
-//     not an error from this function's perspective.
+//   - Pre-condition skips (nil manager, missing env var) are intentional
+//     disable paths. They log and proceed — not an error from this function's
+//     perspective. Owned KV buckets bind lazily during execution instead of
+//     disabling tools at boot.
 //   - Registry-level failures (duplicate tool names, invalid args) are
 //     misconfigurations that should block boot. Each register_* returns
 //     them; we join them and return the aggregate.
@@ -183,7 +184,7 @@ func RegisterBuiltins(ctx context.Context, reg *agentictools.ExecutorRegistry, d
 	if deps.NATSClient == nil {
 		logger.Warn("nats client not available; skipping stateful tool registration (read_loop_result, decide, emit_diagnosis, emit_lesson, query_entity); web_search and http_request fall back to text-only return without graph emission")
 	} else {
-		gate("read_loop_result", func() error { return registerReadLoopResult(ctx, reg, deps.NATSClient, logger, loopsBucket) })
+		gate("read_loop_result", func() error { return registerReadLoopResult(reg, deps.NATSClient, logger, loopsBucket) })
 		gate("decide", func() error {
 			return registerDecide(reg, deps.NATSClient, deps.Platform, deps.RestrictedDecideActions, logger)
 		})

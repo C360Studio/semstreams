@@ -1,6 +1,6 @@
 # schema=foundation-b-port-language-worklist/v1
 # baseline=61022ae1b4da0309e93ce49ec00c9c64679d09d8
-# authority=owner-accepted census; immutable input; verify with go run ./cmd/port-grammar-control -mode check -root .
+# authority=owner-accepted census; immutable input; verify with go test ./internal/portgrammarcontrol -count=1
 # counts=config:522 mechanical:448 adjudicated:74 go:124
 record_id	record_type	path	pointer	enclosing	lane	ordinal	name	current_kind	current_data	classification	source_line	source_column	source_sha256
 config:configs/agentic.json#/components/agentic-loop/config/ports/inputs/0	config	configs/agentic.json	/components/agentic-loop/config/ports/inputs/0	agentic-loop	inputs	0	agent.task	jetstream	"{""description"":""Agent task requests"",""name"":""agent.task"",""required"":true,""stream_name"":""AGENT"",""subject"":""agent.task.*"",""type"":""jetstream""}"	mechanical	0	0	240b8b2bce34bfbbb3ee6b15b06c46da1faa9e41f75cd7769caf21a4dc2f6e47

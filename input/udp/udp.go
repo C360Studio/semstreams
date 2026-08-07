@@ -207,19 +207,13 @@ func DefaultConfig() InputConfig {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:        "udp_socket",
-					Type:        "network",
-					Subject:     "udp://0.0.0.0:14550",
-					Required:    true,
+					Name: "udp_socket", Config: component.NetworkPort{Protocol: "udp", Host: "0.0.0.0", Port: 14550}, Required: true,
 					Description: "UDP socket listening for incoming data",
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:        "nats_output",
-					Type:        "nats",
-					Subject:     "input.udp.mavlink",
-					Required:    true,
+					Name: "nats_output", Config: component.NATSPort{Subject: "input.udp.mavlink"}, Required: true,
 					Description: "NATS subject for publishing received UDP data",
 				},
 			},

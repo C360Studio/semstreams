@@ -138,33 +138,23 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Inputs) == 0 {
 			c.Ports.Inputs = []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			}
 		}
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name:    "outgoing_index",
-					Type:    "kv-write",
-					Subject: graph.BucketOutgoingIndex,
+					Name: "outgoing_index", Config: component.KVWritePort{Bucket: graph.BucketOutgoingIndex},
 				},
 				{
-					Name:    "incoming_index",
-					Type:    "kv-write",
-					Subject: graph.BucketIncomingIndex,
+					Name: "incoming_index", Config: component.KVWritePort{Bucket: graph.BucketIncomingIndex},
 				},
 				{
-					Name:    "alias_index",
-					Type:    "kv-write",
-					Subject: graph.BucketAliasIndex,
+					Name: "alias_index", Config: component.KVWritePort{Bucket: graph.BucketAliasIndex},
 				},
 				{
-					Name:    "predicate_index",
-					Type:    "kv-write",
-					Subject: graph.BucketPredicateIndex,
+					Name: "predicate_index", Config: component.KVWritePort{Bucket: graph.BucketPredicateIndex},
 				},
 			}
 		}
@@ -177,31 +167,21 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "outgoing_index",
-					Type:    "kv-write",
-					Subject: graph.BucketOutgoingIndex,
+					Name: "outgoing_index", Config: component.KVWritePort{Bucket: graph.BucketOutgoingIndex},
 				},
 				{
-					Name:    "incoming_index",
-					Type:    "kv-write",
-					Subject: graph.BucketIncomingIndex,
+					Name: "incoming_index", Config: component.KVWritePort{Bucket: graph.BucketIncomingIndex},
 				},
 				{
-					Name:    "alias_index",
-					Type:    "kv-write",
-					Subject: graph.BucketAliasIndex,
+					Name: "alias_index", Config: component.KVWritePort{Bucket: graph.BucketAliasIndex},
 				},
 				{
-					Name:    "predicate_index",
-					Type:    "kv-write",
-					Subject: graph.BucketPredicateIndex,
+					Name: "predicate_index", Config: component.KVWritePort{Bucket: graph.BucketPredicateIndex},
 				},
 			},
 		},

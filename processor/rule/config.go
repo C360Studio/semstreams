@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/projection"
@@ -221,25 +222,16 @@ func defaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:        "entity_states",
-					Type:        "kv-watch",
-					Required:    true,
+					Name: "entity_states", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}, Required: true,
 					Description: "Watch entity state changes from ENTITY_STATES KV bucket",
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "graph_mutations",
-					Type:      "nats-request",
-					Subject:   graphmutation.SubjectFamily,
-					Interface: graphmutation.InterfaceType,
-					Required:  true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
 				},
 				{
-					Name:        "control_commands",
-					Type:        "nats",
-					Subject:     "control.*.commands",
-					Required:    false,
+					Name: "control_commands", Config: component.NATSPort{Subject: "control.*.commands"}, Required: false,
 					Description: "Control commands based on rules",
 				},
 			},

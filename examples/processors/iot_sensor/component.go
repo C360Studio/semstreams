@@ -38,21 +38,14 @@ type ComponentConfig struct {
 func DefaultConfig() ComponentConfig {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "raw.sensor.>",
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "raw.sensor.>"}, Required: true,
 			Description: "NATS subjects with sensor JSON data",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_output",
-			Type:        "nats",
-			Subject:     "events.graph.entity.sensor",
-			Interface:   "domain.iot.sensor.v1",
-			Required:    true,
+			Name: "nats_output", Config: component.NATSPort{Subject: "events.graph.entity.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}}, Required: true,
 			Description: "NATS subject for Graphable sensor readings",
 		},
 	}

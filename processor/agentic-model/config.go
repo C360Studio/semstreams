@@ -127,29 +127,18 @@ func (r *RetryConfig) rateLimitDelayDuration(defaultDelay time.Duration) time.Du
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "agent.request",
-			Type:        "jetstream",
-			Subject:     "agent.request.>",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.request", Config: component.JetStreamPort{Subjects: []string{"agent.request.>"}, StreamName: "AGENT"}, Required: true,
 			Description: "Agent request input (JetStream)",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "agent.response",
-			Type:        "jetstream",
-			Subject:     "agent.response.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.response", Config: component.JetStreamPort{Subjects: []string{"agent.response.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Agent response output (JetStream)",
 		},
 		{
-			Name:        "agent.stream",
-			Type:        "nats",
-			Subject:     "agent.stream.*",
-			Description: "Streaming delta chunks (core NATS, fire-and-forget)",
+			Name: "agent.stream", Config: component.NATSPort{Subject: "agent.stream.*"}, Description: "Streaming delta chunks (core NATS, fire-and-forget)",
 		},
 	}
 

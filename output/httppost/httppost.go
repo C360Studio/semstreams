@@ -65,10 +65,7 @@ func (c *Config) Validate() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "output.>",
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "output.>"}, Required: true,
 			Description: "NATS subjects to send via HTTP POST",
 		},
 	}

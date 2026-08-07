@@ -196,10 +196,7 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 	if len(ports) == 0 {
 		ports = []component.PortDefinition{
 			{
-				Name:       "agent_events",
-				Subject:    "agent.>",
-				Type:       "jetstream",
-				StreamName: "AGENT",
+				Name: "agent_events", Config: component.JetStreamPort{Subjects: []string{"agent.>"}, StreamName: "AGENT"},
 			},
 		}
 	}

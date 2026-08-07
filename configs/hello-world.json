@@ -86,9 +86,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "raw.sensor.udp",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.sensor.udp"
+                ]
+              },
+              "name": "udp_out"
             }
           ]
         },
@@ -106,17 +110,27 @@
         "ports": {
           "inputs": [
             {
-              "name": "sensor_in",
-              "subject": "raw.sensor.>",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.sensor.>"
+                ]
+              },
+              "name": "sensor_in"
             }
           ],
           "outputs": [
             {
-              "name": "sensor_out",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1"
+              "config": {
+                "interface": {
+                  "type": "iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "name": "sensor_out"
             }
           ]
         },
@@ -133,24 +147,36 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "sensor_in",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1"
+              "config": {
+                "interface": {
+                  "type": "iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "name": "sensor_in"
             }
           ],
           "outputs": [
             {
-              "name": "entity_states",
-              "subject": "ENTITY_STATES",
-              "type": "kv-write"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "name": "entity_states"
             }
           ]
         },
@@ -166,26 +192,34 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_watch"
             }
           ],
           "outputs": [
             {
-              "name": "outgoing_index",
-              "subject": "OUTGOING_INDEX",
-              "type": "kv"
+              "config": {
+                "bucket": "OUTGOING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "outgoing_index"
             },
             {
-              "name": "incoming_index",
-              "subject": "INCOMING_INDEX",
-              "type": "kv"
+              "config": {
+                "bucket": "INCOMING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "incoming_index"
             },
             {
-              "name": "predicate_index",
-              "subject": "PREDICATE_INDEX",
-              "type": "kv"
+              "config": {
+                "bucket": "PREDICATE_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "predicate_index"
             }
           ]
         },
@@ -202,9 +236,11 @@
         "ports": {
           "inputs": [
             {
-              "name": "query_requests",
-              "subject": "graph.query.>",
-              "type": "nats-request"
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.>"
+              },
+              "name": "query_requests"
             }
           ],
           "outputs": []
@@ -223,16 +259,22 @@
         "ports": {
           "inputs": [
             {
-              "name": "http",
-              "subject": ":8084",
-              "type": "http"
+              "config": {
+                "host": "0.0.0.0",
+                "kind": "network",
+                "port": 8084,
+                "protocol": "http"
+              },
+              "name": "http"
             }
           ],
           "outputs": [
             {
-              "name": "queries",
-              "subject": "graph.query.*",
-              "type": "nats-request"
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.*"
+              },
+              "name": "queries"
             }
           ]
         },
