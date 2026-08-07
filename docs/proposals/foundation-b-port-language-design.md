@@ -19,6 +19,9 @@ Canonical exported kinds are:
 
 `timer`, `network`, `file`, `http-client`, `nats`, `nats-request`, `jetstream`, `kv-watch`, `kv-read`, `kv-write`, `store-read`, `store-provide`.
 
+`kv-watch`, `kv-read`, and `kv-write` remain distinct `PortKind` values, but all three normalize both resource ID and
+connection identity to the common `kv:<bucket>` spelling.
+
 `Portable.Type() string` becomes `Kind() PortKind`. One closed binding table owns kind factory, allowed directions, strict decoding, validation, normalization, resource identity, exclusivity, interface, interaction pattern, connection identifiers, NATS subjects, and stream facts. No custom-kind registration exists.
 
 `PortDefinition` retains `name`, `required`, `description`, and typed `Config Portable`. Definition and runtime `Port` use one wire:

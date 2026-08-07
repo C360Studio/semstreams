@@ -18,7 +18,7 @@ func (f FilePort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (f FilePort) Type() string {
-	return "file"
+// Kind returns the canonical port kind.
+func (f FilePort) Kind() PortKind {
+	return PortKindFile
 }

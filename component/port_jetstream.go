@@ -68,9 +68,9 @@ func (j JetStreamPort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (j JetStreamPort) Type() string {
-	return "jetstream"
+// Kind returns the canonical port kind.
+func (j JetStreamPort) Kind() PortKind {
+	return PortKindJetStream
 }
 
 // ConsumerConfig holds extracted JetStream consumer configuration.

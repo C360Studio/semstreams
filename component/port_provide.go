@@ -29,7 +29,7 @@ func (s StoreProvidePort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier.
-func (s StoreProvidePort) Type() string {
-	return "store-provide"
+// Kind returns the canonical port kind.
+func (s StoreProvidePort) Kind() PortKind {
+	return PortKindStoreProvide
 }
