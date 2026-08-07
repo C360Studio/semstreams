@@ -98,14 +98,14 @@ calls, and captures execution trajectories.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "agent_task", "type": "jetstream", "subject": "agent.task.*"},
-      {"name": "agent_response", "type": "jetstream", "subject": "agent.response.>"},
-      {"name": "tool_result", "type": "jetstream", "subject": "tool.result.>"}
+      {"name":"agent_task","config":{"kind":"jetstream","subjects":["agent.task.*"]}},
+      {"name":"agent_response","config":{"kind":"jetstream","subjects":["agent.response.>"]}},
+      {"name":"tool_result","config":{"kind":"jetstream","subjects":["tool.result.>"]}}
     ],
     "outputs": [
-      {"name": "agent_request", "type": "jetstream", "subject": "agent.request.*"},
-      {"name": "tool_execute", "type": "jetstream", "subject": "tool.execute.*"},
-      {"name": "agent_complete", "type": "jetstream", "subject": "agent.complete.*"},
+      {"name":"agent_request","config":{"kind":"jetstream","subjects":["agent.request.*"]}},
+      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.*"]}},
+      {"name":"agent_complete","config":{"kind":"jetstream","subjects":["agent.complete.*"]}},
       {"name": "loops_bucket", "type": "kv-bucket", "bucket": "AGENT_LOOPS"},
       {"name": "trajectories_bucket", "type": "kv-bucket", "bucket": "AGENT_TRAJECTORIES"}
     ]
@@ -199,10 +199,10 @@ implements retry logic with configurable backoff.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "agent_request", "type": "jetstream", "subject": "agent.request.>"}
+      {"name":"agent_request","config":{"kind":"jetstream","subjects":["agent.request.>"]}}
     ],
     "outputs": [
-      {"name": "agent_response", "type": "jetstream", "subject": "agent.response.*"}
+      {"name":"agent_response","config":{"kind":"jetstream","subjects":["agent.response.*"]}}
     ]
   }
 }
@@ -329,10 +329,10 @@ and returns results.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "tool_execute", "type": "jetstream", "subject": "tool.execute.>"}
+      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.>"]}}
     ],
     "outputs": [
-      {"name": "tool_result", "type": "jetstream", "subject": "tool.result.*"}
+      {"name":"tool_result","config":{"kind":"jetstream","subjects":["tool.result.*"]}}
     ]
   }
 }

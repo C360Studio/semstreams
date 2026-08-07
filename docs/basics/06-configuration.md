@@ -129,10 +129,10 @@ Each component exposes query capabilities via NATS request-reply on configurable
     "ports": {
       "nats_request_port": "graph.ingest.query",
       "inputs": [
-        {"name": "entity_stream", "type": "jetstream", "subject": "entity.>"}
+        {"name":"entity_stream","config":{"kind":"jetstream","subjects":["entity.>"]}}
       ],
       "outputs": [
-        {"name": "entity_states", "type": "kv-write", "subject": "ENTITY_STATES"}
+        {"name":"entity_states","config":{"kind":"kv-write","bucket":"ENTITY_STATES"}}
       ]
     }
   }
@@ -165,10 +165,10 @@ The graph-query component provides unified query routing and orchestration acros
     "max_depth": 10,
     "ports": {
       "inputs": [
-        {"name": "query_entity", "type": "nats-request", "subject": "graph.query.entity"},
-        {"name": "query_relationships", "type": "nats-request", "subject": "graph.query.relationships"},
-        {"name": "query_path_search", "type": "nats-request", "subject": "graph.query.pathSearch"},
-        {"name": "query_capabilities", "type": "nats-request", "subject": "graph.query.capabilities"}
+        {"name":"query_entity","config":{"kind":"nats-request","subject":"graph.query.entity"}},
+        {"name":"query_relationships","config":{"kind":"nats-request","subject":"graph.query.relationships"}},
+        {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}},
+        {"name":"query_capabilities","config":{"kind":"nats-request","subject":"graph.query.capabilities"}}
       ]
     }
   }
@@ -269,7 +269,7 @@ Everything in Rules-Only, plus:
     "batch_size": 50,
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ]
     }
   }
@@ -297,11 +297,11 @@ graph-embedding declares no output ports — it writes `EMBEDDING_INDEX` and
     },
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "communities", "type": "kv-write", "subject": "COMMUNITY_INDEX"},
-        {"name": "anomalies", "type": "kv-write", "subject": "ANOMALY_INDEX"}
+        {"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}},
+        {"name":"anomalies","config":{"kind":"kv-write","bucket":"ANOMALY_INDEX"}}
       ]
     }
   }
@@ -354,7 +354,7 @@ Everything in Native, plus:
     "batch_size": 50,
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ]
     }
   }
@@ -379,11 +379,11 @@ Everything in Native, plus:
     },
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "communities", "type": "kv-write", "subject": "COMMUNITY_INDEX"},
-        {"name": "anomalies", "type": "kv-write", "subject": "ANOMALY_INDEX"}
+        {"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}},
+        {"name":"anomalies","config":{"kind":"kv-write","bucket":"ANOMALY_INDEX"}}
       ]
     }
   }
@@ -401,10 +401,10 @@ Everything in Native, plus:
     "batch_size": 100,
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "spatial_index", "type": "kv-write", "subject": "SPATIAL_INDEX"}
+        {"name":"spatial_index","config":{"kind":"kv-write","bucket":"SPATIAL_INDEX"}}
       ]
     }
   }
@@ -422,10 +422,10 @@ Everything in Native, plus:
     "batch_size": 100,
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "temporal_index", "type": "kv-write", "subject": "TEMPORAL_INDEX"}
+        {"name":"temporal_index","config":{"kind":"kv-write","bucket":"TEMPORAL_INDEX"}}
       ]
     }
   }

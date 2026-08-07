@@ -29,6 +29,7 @@ var (
 type Component struct {
 	name       string
 	config     Config
+	inputs     []component.Port
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 
@@ -94,10 +95,28 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if err := config.Validate(); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
 	}
+	if len(config.Ports.Inputs) == 0 {
+		config.Ports.Inputs = []component.PortDefinition{{
+			Name: "agent_events", Config: component.JetStreamPort{Subjects: []string{"agent.>"}, StreamName: "AGENT"},
+		}}
+	}
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+		}
+		facts, err := port.Facts()
+		if err != nil || facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "NewComponent", "input ports must be JetStream ports")
+		}
+		inputs = append(inputs, port)
+	}
 
 	return &Component{
 		name:       "otel-exporter",
 		config:     config,
+		inputs:     inputs,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
 	}, nil
@@ -186,31 +205,22 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 		return err
 	}
 
-	// Collect JetStream ports; fall back to a sensible default when none configured.
-	ports := make([]component.PortDefinition, 0)
-	for _, port := range c.config.Ports.Inputs {
-		if port.Type == "jetstream" {
-			ports = append(ports, port)
-		}
-	}
-	if len(ports) == 0 {
-		ports = []component.PortDefinition{
-			{
-				Name: "agent_events", Config: component.JetStreamPort{Subjects: []string{"agent.>"}, StreamName: "AGENT"},
-			},
-		}
-	}
-
 	baseConsumerName := "otel-exporter"
 	if c.config.ConsumerNameSuffix != "" {
 		baseConsumerName += "-" + c.config.ConsumerNameSuffix
 	}
 
-	for _, port := range ports {
-		streamName := port.StreamName
-		if streamName == "" {
-			streamName = "AGENT"
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
+		stream, ok := facts.Stream()
+		if !ok || len(stream.Subjects()) != 1 {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "subscribeToEvents", "input must declare one JetStream subject")
+		}
+		streamName := stream.Name()
+		subject := stream.Subjects()[0]
 
 		// Verify the stream exists before creating a consumer.
 		if _, err := js.Stream(ctx, streamName); err != nil {
@@ -226,7 +236,7 @@ func (c *Component) subscribeToEvents(ctx context.Context) error {
 		consumer, err := js.CreateOrUpdateConsumer(ctx, streamName, jetstream.ConsumerConfig{
 			Name:          consumerName,
 			Durable:       consumerName,
-			FilterSubject: port.Subject,
+			FilterSubject: subject,
 			AckPolicy:     jetstream.AckExplicitPolicy,
 			DeliverPolicy: jetstream.DeliverNewPolicy,
 		})
@@ -465,37 +475,13 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions.
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Inputs))
-	for i, portDef := range c.config.Ports.Inputs {
-		port := component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionInput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-		}
-		if portDef.Type == "jetstream" {
-			port.Config = component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			}
-		} else {
-			port.Config = component.NATSPort{
-				Subject: portDef.Subject,
-			}
-		}
-		ports[i] = port
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns configured output port definitions.
 func (c *Component) OutputPorts() []component.Port {
 	// OTEL exporter has no NATS output ports (exports to external collector)
-	return []component.Port{}
+	return nil
 }
 
 // ConfigSchema returns the configuration schema.

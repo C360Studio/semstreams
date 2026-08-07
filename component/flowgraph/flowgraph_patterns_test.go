@@ -159,6 +159,37 @@ func TestFlowGraphPatterns(t *testing.T) {
 		}
 	})
 
+	t.Run("exact KV read remains a read dependency", func(t *testing.T) {
+		graph := NewFlowGraph()
+		writer := createPatternTestComponent("writer", nil, []component.Port{{
+			Name: "states", Direction: component.DirectionOutput, Config: component.KVWritePort{Bucket: "ENTITY_STATES"},
+		}})
+		reader := createPatternTestComponent("reader", []component.Port{{
+			Name: "states", Direction: component.DirectionInput, Config: component.KVReadPort{Bucket: "ENTITY_STATES"},
+		}}, nil)
+		require.NoError(t, graph.AddComponentNode("writer", writer))
+		require.NoError(t, graph.AddComponentNode("reader", reader))
+		require.NoError(t, graph.ConnectComponentsByPatterns())
+		edges := graph.GetEdges()
+		require.Len(t, edges, 1)
+		assert.Equal(t, component.PatternRead, edges[0].Pattern)
+		assert.NotEqual(t, component.PatternWatch, edges[0].Pattern)
+		assert.Equal(t, "kv:ENTITY_STATES", edges[0].ConnectionID)
+	})
+
+	t.Run("shared file paths are not exclusive network binds", func(t *testing.T) {
+		graph := NewFlowGraph()
+		first := createPatternTestComponent("first", []component.Port{{
+			Name: "file", Direction: component.DirectionInput, Config: component.FilePort{Path: "/shared/events.jsonl"},
+		}}, nil)
+		second := createPatternTestComponent("second", []component.Port{{
+			Name: "file", Direction: component.DirectionInput, Config: component.FilePort{Path: "/shared/events.jsonl"},
+		}}, nil)
+		require.NoError(t, graph.AddComponentNode("first", first))
+		require.NoError(t, graph.AddComponentNode("second", second))
+		require.NoError(t, graph.ConnectComponentsByPatterns())
+	})
+
 	t.Run("Stream pattern still works", func(t *testing.T) {
 		graph := NewFlowGraph()
 

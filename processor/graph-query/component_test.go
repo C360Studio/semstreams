@@ -129,7 +129,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "query_entity", Type: "nats-request", Subject: "graph.query.entity"},
+						{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -140,9 +140,9 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "query_entity", Type: "nats-request", Subject: "graph.query.entity"},
-						{Name: "query_relationships", Type: "nats-request", Subject: "graph.query.relationships"},
-						{Name: "query_path_search", Type: "nats-request", Subject: "graph.query.pathSearch"},
+						{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
+						{Name: "query_relationships", Config: component.NATSRequestPort{Subject: "graph.query.relationships"}},
+						{Name: "query_path_search", Config: component.NATSRequestPort{Subject: "graph.query.pathSearch"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -200,7 +200,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "query_entity", Type: "nats-request", Subject: "graph.query.entity"}},
+			Inputs:  []component.PortDefinition{{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}}},
 			Outputs: []component.PortDefinition{},
 		},
 	}
@@ -897,11 +897,18 @@ func createTestComponentWithMockClient(t *testing.T, mockClient *mockNATSClient)
 	config.StartupAttempts = 1
 	config.StartupInterval = time.Millisecond
 	config.RecheckInterval = time.Hour // Disable background recheck in tests
+	inputs := make([]component.Port, len(config.Ports.Inputs))
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		require.NoError(t, err)
+		inputs[index] = port
+	}
 
 	// Construct directly, bypassing CreateGraphQuery to inject mock
 	return &Component{
 		natsClient:       mockClient, // Interface field accepts mock
 		config:           config,
+		inputs:           inputs,
 		logger:           slog.Default(),
 		lastMetricsReset: time.Now(),
 	}

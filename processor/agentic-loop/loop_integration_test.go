@@ -101,31 +101,18 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -248,43 +235,24 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.>",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.*",
-					StreamName: "AGENT",
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -429,31 +397,18 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -582,25 +537,15 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 			},
 		},
@@ -682,31 +627,18 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},

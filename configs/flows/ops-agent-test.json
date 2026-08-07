@@ -198,7 +198,8 @@
             {
               "config": {
                 "interface": {
-                  "type": "semstreams.graph.mutation"
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
                 },
                 "kind": "nats-request",
                 "subject": "graph.mutation.>"
@@ -339,7 +340,8 @@
             {
               "config": {
                 "interface": {
-                  "type": "semstreams.graph.mutation"
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
                 },
                 "kind": "nats-request",
                 "subject": "graph.mutation.>"
@@ -373,7 +375,8 @@
             {
               "config": {
                 "interface": {
-                  "type": "semstreams.graph.mutation"
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
                 },
                 "kind": "nats-request",
                 "subject": "graph.mutation.>"

@@ -47,6 +47,10 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 			"buffer_size cannot be negative")
 	}
+	if c.Ports != nil && len(c.Ports.Outputs) != 0 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+			"file output ports are derived from directory, file_prefix, and format; remove ports.outputs")
+	}
 
 	return nil
 }
@@ -60,17 +64,9 @@ func DefaultConfig() Config {
 		},
 	}
 
-	outputDefs := []component.PortDefinition{
-		{
-			Name: "file_output", Config: component.FilePort{Path: "/tmp/streamkit/output.jsonl"}, Required: false,
-			Description: "File path for output",
-		},
-	}
-
 	return Config{
 		Ports: &component.PortConfig{
-			Inputs:  inputDefs,
-			Outputs: outputDefs,
+			Inputs: inputDefs,
 		},
 		Directory:  "/tmp/streamkit",
 		FilePrefix: "output",
@@ -85,16 +81,19 @@ var fileSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
 // Output implements file writing for NATS messages
 type Output struct {
-	name       string
-	subjects   []string
-	directory  string
-	filePrefix string
-	format     string
-	append     bool
-	bufferSize int
-	config     Config // Store full config for port type checking
-	natsClient *natsclient.Client
-	logger     *slog.Logger
+	name        string
+	subjects    []string
+	directory   string
+	filePrefix  string
+	format      string
+	append      bool
+	bufferSize  int
+	config      Config // Store full config for port type checking
+	inputPorts  []component.Port
+	outputPorts []component.Port
+	filePath    string
+	natsClient  *natsclient.Client
+	logger      *slog.Logger
 
 	// File handling
 	file   *os.File
@@ -132,39 +131,64 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 	if config.Ports == nil {
 		config = DefaultConfig()
 	}
+	if err := config.Validate(); err != nil {
+		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "validate config")
+	}
 
-	// Extract subjects from port configuration
+	inputPorts := make([]component.Port, len(config.Ports.Inputs))
 	var inputSubjects []string
-	for _, input := range config.Ports.Inputs {
-		if input.Type == "nats" || input.Type == "jetstream" {
-			inputSubjects = append(inputSubjects, input.Subject)
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
 		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
+		}
+		inputPorts[index] = port
+		inputSubjects = append(inputSubjects, subjects[0])
 	}
 
 	if len(inputSubjects) == 0 {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutput", "no input subjects configured")
 	}
 
-	// Validate directory
-	if config.Directory == "" {
-		config.Directory = "/tmp/streamkit"
+	filePath := filepath.Join(config.Directory, fmt.Sprintf("%s.%s", config.FilePrefix, config.Format))
+	fileOutput, err := (component.PortDefinition{
+		Name:        "file_output",
+		Config:      component.FilePort{Path: filePath},
+		Description: "File path for output",
+	}).Resolve(component.DirectionOutput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve file output port")
 	}
 
 	return &Output{
-		name:       "file-output",
-		subjects:   inputSubjects,
-		directory:  config.Directory,
-		filePrefix: config.FilePrefix,
-		format:     config.Format,
-		append:     config.Append,
-		bufferSize: config.BufferSize,
-		config:     config, // Store full config for port type checking
-		natsClient: deps.NATSClient,
-		logger:     deps.GetLogger(),
-		buffer:     make([][]byte, 0, config.BufferSize),
-		shutdown:   make(chan struct{}),
-		done:       make(chan struct{}),
-		wg:         &sync.WaitGroup{},
+		name:        "file-output",
+		subjects:    inputSubjects,
+		directory:   config.Directory,
+		filePrefix:  config.FilePrefix,
+		format:      config.Format,
+		append:      config.Append,
+		bufferSize:  config.BufferSize,
+		config:      config, // Store full config for port type checking
+		inputPorts:  inputPorts,
+		outputPorts: []component.Port{fileOutput},
+		filePath:    filePath,
+		natsClient:  deps.NATSClient,
+		logger:      deps.GetLogger(),
+		buffer:      make([][]byte, 0, config.BufferSize),
+		shutdown:    make(chan struct{}),
+		done:        make(chan struct{}),
+		wg:          &sync.WaitGroup{},
 	}, nil
 }
 
@@ -212,7 +236,6 @@ func (f *Output) Start(ctx context.Context) error {
 	f.wg = &sync.WaitGroup{}
 
 	// Open output file
-	filename := filepath.Join(f.directory, fmt.Sprintf("%s.%s", f.filePrefix, f.format))
 	var err error
 	flags := os.O_CREATE | os.O_WRONLY
 	if f.append {
@@ -221,7 +244,7 @@ func (f *Output) Start(ctx context.Context) error {
 		flags |= os.O_TRUNC
 	}
 
-	f.file, err = os.OpenFile(filename, flags, 0644)
+	f.file, err = os.OpenFile(f.filePath, flags, 0644)
 	if err != nil {
 		return errs.WrapFatal(err, "Output", "Start", "open output file")
 	}
@@ -243,7 +266,7 @@ func (f *Output) Start(ctx context.Context) error {
 	f.logger.Info("File output started",
 		"component", f.name,
 		"input_subjects", f.subjects,
-		"output_file", filename,
+		"output_file", f.filePath,
 		"format", f.format,
 		"append", f.append,
 		"buffer_size", f.bufferSize)
@@ -253,51 +276,59 @@ func (f *Output) Start(ctx context.Context) error {
 
 // setupSubscriptions creates subscriptions for input ports based on port type
 func (f *Output) setupSubscriptions(ctx context.Context) error {
-	for _, port := range f.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range f.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Output", "Start", "project input port facts")
 		}
+		subject := facts.NATSSubjects()[0]
 
-		switch port.Type {
-		case "jetstream":
+		switch facts.Kind() {
+		case component.PortKindJetStream:
 			if err := f.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.WrapTransient(err, "Output", "Start",
-					fmt.Sprintf("JetStream consumer for %s", port.Subject))
+					fmt.Sprintf("JetStream consumer for %s", subject))
 			}
 
-		case "nats":
-			sub, err := f.natsClient.Subscribe(ctx, port.Subject, func(ctx context.Context, msg *nats.Msg) {
+		case component.PortKindNATS:
+			sub, err := f.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				f.handleMessage(ctx, msg.Data)
 			})
 			if err != nil {
 				f.logger.Error("Failed to subscribe to NATS subject",
 					"component", f.name,
-					"subject", port.Subject,
+					"subject", subject,
 					"error", err)
 				return errs.WrapTransient(err, "Output", "Start",
-					fmt.Sprintf("subscribe to %s", port.Subject))
+					fmt.Sprintf("subscribe to %s", subject))
 			}
 			f.subscriptions = append(f.subscriptions, sub)
 			f.logger.Debug("Subscribed to NATS subject successfully",
 				"component", f.name,
-				"subject", port.Subject)
-
-		default:
-			f.logger.Warn("Unknown port type, skipping", "port", port.Name, "type", port.Type)
+				"subject", subject)
 		}
 	}
 	return nil
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	streamName := port.StreamName
+func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("port %q does not declare JetStream facts", port.Name)
+	}
+	subject := facts.NATSSubjects()[0]
+	streamName := stream.Name()
 	if streamName == "" {
-		streamName = f.deriveStreamName(port.Subject)
+		streamName = f.deriveStreamName(subject)
 	}
 	if streamName == "" {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", port.Subject))
+			fmt.Sprintf("derive stream name for subject %s", subject))
 	}
 
 	if err := f.waitForStream(ctx, streamName); err != nil {
@@ -305,7 +336,7 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 			fmt.Sprintf("wait for stream %s", streamName))
 	}
 
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("file-output-%s", sanitizedSubject)
@@ -313,22 +344,25 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	f.logger.Debug("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "Output", "setupJetStreamConsumer", "resolve consumer config")
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	err := f.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = f.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		f.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			f.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -339,7 +373,7 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 			fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
-	f.logger.Debug("File output subscribed (JetStream)", "subject", port.Subject, "stream", streamName)
+	f.logger.Debug("File output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
 }
 
@@ -593,22 +627,12 @@ func (f *Output) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions
 func (f *Output) InputPorts() []component.Port {
-	ports := make([]component.Port, len(f.subjects))
-	for i, subj := range f.subjects {
-		ports[i] = component.Port{
-			Name:      fmt.Sprintf("input_%d", i),
-			Direction: component.DirectionInput,
-			Required:  true,
-			Config:    component.NATSPort{Subject: subj},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), f.inputPorts...)
 }
 
-// OutputPorts returns configured output port definitions (none for file output)
+// OutputPorts returns the resolved file resource written by this component.
 func (f *Output) OutputPorts() []component.Port {
-	// File output has no NATS output ports
-	return []component.Port{}
+	return append([]component.Port(nil), f.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema

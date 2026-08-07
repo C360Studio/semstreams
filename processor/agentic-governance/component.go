@@ -27,6 +27,8 @@ var agenticGovernanceSchema = component.GenerateConfigSchema(reflect.TypeOf(Conf
 type Component struct {
 	name       string
 	config     Config
+	inputs     []component.Port
+	outputs    []component.Port
 	natsClient *natsclient.Client
 	logger     *slog.Logger
 
@@ -72,6 +74,22 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
+	}
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
+		}
+		outputs = append(outputs, port)
 	}
 
 	logger := deps.GetLogger()
@@ -135,15 +153,17 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	// Create violation handler. Pass the component's output port defs so
 	// the handler can resolve publish subjects via component.ResolveSubject
 	// (honors any per-deployment port overrides on violations/user_errors).
-	var outputs []component.PortDefinition
+	var outputDefs []component.PortDefinition
 	if config.Ports != nil {
-		outputs = config.Ports.Outputs
+		outputDefs = config.Ports.Outputs
 	}
-	violationHandler := NewViolationHandler(config.Violations, deps.NATSClient, logger, metrics, outputs)
+	violationHandler := NewViolationHandler(config.Violations, deps.NATSClient, logger, metrics, outputDefs)
 
 	return &Component{
 		name:       "agentic-governance",
 		config:     config,
+		inputs:     inputs,
+		outputs:    outputs,
 		natsClient: deps.NATSClient,
 		logger:     logger,
 		chain:      chain,
@@ -199,11 +219,7 @@ func (c *Component) Start(ctx context.Context) error {
 
 // setupInputConsumers sets up JetStream consumers for all input ports
 func (c *Component) setupInputConsumers(ctx context.Context) error {
-	for _, port := range c.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
-		}
-
+	for _, port := range c.inputs {
 		var msgType MessageType
 		var outputPortName string
 
@@ -315,7 +331,12 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 		}
 
 		// Build output subject from port config, falling back to portName + "." + msg.ID
-		outputSubject := component.ResolveSubject(c.outputPortDefs(), outputPortName, msg.ID)
+		outputSubject, resolveErr := component.ResolveSubject(c.outputPortDefs(), outputPortName, msg.ID)
+		if resolveErr != nil {
+			c.logger.Error("Failed to resolve validated output subject", "error", resolveErr)
+			atomic.AddInt64(&c.errors, 1)
+			return
+		}
 
 		outputData, err := json.Marshal(outputMsg)
 		if err != nil {
@@ -335,11 +356,17 @@ func (c *Component) handleMessage(ctx context.Context, data []byte, msgType Mess
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
-func (c *Component) setupConsumer(ctx context.Context, port component.PortDefinition, handler func(context.Context, []byte)) error {
-	streamName := c.config.StreamName
-	if streamName == "" {
-		streamName = "AGENT"
+func (c *Component) setupConsumer(ctx context.Context, port component.Port, handler func(context.Context, []byte)) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
+	stream, ok := facts.Stream()
+	if !ok || len(stream.Subjects()) != 1 {
+		return fmt.Errorf("port %s must declare one JetStream subject", port.Name)
+	}
+	streamName := stream.Name()
+	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -347,7 +374,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	}
 
 	// Create durable consumer name
-	consumerName := fmt.Sprintf("agentic-governance-%s", sanitizeSubject(port.Subject))
+	consumerName := fmt.Sprintf("agentic-governance-%s", sanitizeSubject(subject))
 	if c.config.ConsumerNameSuffix != "" {
 		consumerName = consumerName + "-" + c.config.ConsumerNameSuffix
 	}
@@ -355,24 +382,27 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	c.logger.Info("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject,
+		"filter_subject", subject,
 		"port", port.Name)
 
 	// Get consumer config from port definition (allows user configuration)
 	// Defaults to "new" - only process new messages, don't replay old ones
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "Component", "setupConsumer", "resolve consumer config")
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		handler(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -383,7 +413,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	}
 
 	c.logger.Info("Subscribed (JetStream)",
-		"subject", port.Subject,
+		"subject", subject,
 		"stream", streamName,
 		"consumer", consumerName,
 		"port", port.Name)
@@ -455,80 +485,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Inputs))
-	for i, portDef := range c.config.Ports.Inputs {
-		ports[i] = buildInputPort(portDef)
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns configured output port definitions
 func (c *Component) OutputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Outputs))
-	for i, portDef := range c.config.Ports.Outputs {
-		ports[i] = buildOutputPort(portDef)
-	}
-	return ports
-}
-
-// buildInputPort creates a Port from a PortDefinition for input
-func buildInputPort(portDef component.PortDefinition) component.Port {
-	port := component.Port{
-		Name:        portDef.Name,
-		Direction:   component.DirectionInput,
-		Required:    portDef.Required,
-		Description: portDef.Description,
-	}
-
-	switch portDef.Type {
-	case "jetstream":
-		port.Config = component.JetStreamPort{
-			StreamName: portDef.StreamName,
-			Subjects:   []string{portDef.Subject},
-		}
-	case "kv-watch", "kvwatch":
-		port.Config = component.KVWatchPort{
-			Bucket: portDef.Bucket,
-		}
-	default:
-		port.Config = component.NATSPort{
-			Subject: portDef.Subject,
-		}
-	}
-
-	return port
-}
-
-// buildOutputPort creates a Port from a PortDefinition for output
-func buildOutputPort(portDef component.PortDefinition) component.Port {
-	port := component.Port{
-		Name:        portDef.Name,
-		Direction:   component.DirectionOutput,
-		Required:    portDef.Required,
-		Description: portDef.Description,
-	}
-
-	switch portDef.Type {
-	case "jetstream":
-		port.Config = component.JetStreamPort{
-			StreamName: portDef.StreamName,
-			Subjects:   []string{portDef.Subject},
-		}
-	default:
-		port.Config = component.NATSPort{
-			Subject: portDef.Subject,
-		}
-	}
-
-	return port
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema

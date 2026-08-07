@@ -33,6 +33,7 @@ type PortInfo struct {
 	Interface    *component.InterfaceContract
 	Required     bool // Whether this port is required for the component to function
 	kind         component.PortKind
+	exclusive    bool
 	natsSubjects []string
 }
 
@@ -178,6 +179,7 @@ func (g *FlowGraph) extractPortInfo(ports []component.Port) ([]PortInfo, error) 
 			Interface:    interfaceContract,
 			Required:     port.Required,
 			kind:         facts.Kind(),
+			exclusive:    facts.IsExclusive(),
 			natsSubjects: facts.NATSSubjects(),
 		}
 
@@ -204,7 +206,9 @@ func (g *FlowGraph) ConnectComponentsByPatterns() error {
 	// Connect based on interaction patterns
 	g.connectStreamPorts(publishers[component.PatternStream], subscribers[component.PatternStream])
 	g.connectRequestPorts(publishers[component.PatternRequest], subscribers[component.PatternRequest])
-	g.connectWatchPorts(publishers[component.PatternWatch], subscribers[component.PatternWatch], &warnings)
+	g.validateKVWriters(publishers[component.PatternWatch], &warnings)
+	g.connectKVPorts(publishers[component.PatternWatch], subscribers[component.PatternWatch], component.PatternWatch)
+	g.connectKVPorts(publishers[component.PatternWatch], subscribers[component.PatternRead], component.PatternRead)
 	g.connectStorePorts(publishers[component.PatternStore], subscribers[component.PatternStore])
 
 	// Validate network ports for conflicts
@@ -596,25 +600,25 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 }
 
 // connectWatchPorts connects watch pattern ports (KV bucket observation)
-func (g *FlowGraph) connectWatchPorts(publishers, subscribers map[string][]ComponentPortRef, warnings *[]string) {
-	// Watch pattern: writers (output) -> KV bucket <- watchers (input)
-	// Validate single writer per bucket
+func (g *FlowGraph) validateKVWriters(publishers map[string][]ComponentPortRef, warnings *[]string) {
 	for connectionID, pubs := range publishers {
 		if len(pubs) > 1 {
-			// Warning: Multiple writers to same KV bucket
-			if warnings != nil {
-				*warnings = append(*warnings,
-					fmt.Sprintf("multiple writers to KV bucket %s: %v", connectionID, pubs))
-			}
+			*warnings = append(*warnings, fmt.Sprintf("multiple writers to KV bucket %s: %v", connectionID, pubs))
 		}
+	}
+}
+
+// connectKVPorts connects KV writers to either change watchers or exact readers
+// without collapsing their distinct interaction semantics.
+func (g *FlowGraph) connectKVPorts(publishers, subscribers map[string][]ComponentPortRef, pattern component.InteractionPattern) {
+	for connectionID, pubs := range publishers {
 		if subs, exists := subscribers[connectionID]; exists {
-			// Connect writer(s) to all watchers
 			for _, pub := range pubs {
 				for _, sub := range subs {
 					edge := FlowEdge{
 						From:         pub,
 						To:           sub,
-						Pattern:      component.PatternWatch,
+						Pattern:      pattern,
 						ConnectionID: connectionID,
 						Metadata:     EdgeMetadata{},
 					}
@@ -632,16 +636,23 @@ func (g *FlowGraph) validateNetworkPorts(publishers, subscribers map[string][]Co
 	allPorts := make(map[string][]ComponentPortRef)
 
 	// Check publishers for conflicts
-	for connID, ports := range publishers {
+	for connID, candidates := range publishers {
+		ports := g.exclusivePortRefs(candidates, component.DirectionOutput)
 		if len(ports) > 1 {
 			conflicts = append(conflicts,
 				fmt.Sprintf("network port conflict on %s: multiple components binding: %v", connID, ports))
 		}
-		allPorts[connID] = ports
+		if len(ports) != 0 {
+			allPorts[connID] = ports
+		}
 	}
 
 	// Check if subscribers conflict with publishers (both trying to bind same port)
-	for connID, ports := range subscribers {
+	for connID, candidates := range subscribers {
+		ports := g.exclusivePortRefs(candidates, component.DirectionInput)
+		if len(ports) == 0 {
+			continue
+		}
 		if existing, exists := allPorts[connID]; exists {
 			conflicts = append(conflicts,
 				fmt.Sprintf("network port conflict on %s: %v and %v both trying to bind", connID, existing, ports))
@@ -653,6 +664,27 @@ func (g *FlowGraph) validateNetworkPorts(publishers, subscribers map[string][]Co
 
 	// Network ports are external connections - no edges created in the graph
 	return conflicts
+}
+
+func (g *FlowGraph) exclusivePortRefs(candidates []ComponentPortRef, direction component.Direction) []ComponentPortRef {
+	result := make([]ComponentPortRef, 0, len(candidates))
+	for _, candidate := range candidates {
+		node := g.nodes[candidate.ComponentName]
+		if node == nil {
+			continue
+		}
+		ports := node.InputPorts
+		if direction == component.DirectionOutput {
+			ports = node.OutputPorts
+		}
+		for _, port := range ports {
+			if port.Name == candidate.PortName && port.exclusive {
+				result = append(result, candidate)
+				break
+			}
+		}
+	}
+	return result
 }
 
 // AnalyzeConnectivity performs graph connectivity analysis

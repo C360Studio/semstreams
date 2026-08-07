@@ -29,11 +29,11 @@ func inflightTestComponent(ctx context.Context, t *testing.T, natsClient *natscl
 	config := agenticloop.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "agent.task", Type: "jetstream", Subject: taskSubject, StreamName: "AGENT", Required: true},
+				{Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{taskSubject}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "agent.request", Type: "jetstream", Subject: "agent.request.*", StreamName: "AGENT"},
-				{Name: "agent.complete", Type: "jetstream", Subject: "agent.complete.*", StreamName: "AGENT"},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}}},
+				{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}}},
 			},
 		},
 		MaxIterations:      10,

@@ -46,10 +46,10 @@
 //	config := jsonmap.JSONMapConfig{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "sensor.raw", Interface: "core .json.v1"},
+//	            {Name: "input", Config: component.NATSPort{Subject: "sensor.raw", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "sensor.normalized", Interface: "core .json.v1"},
+//	            {Name: "output", Config: component.NATSPort{Subject: "sensor.normalized", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	    },
 //	    Mappings: []jsonmap.FieldMapping{
@@ -201,10 +201,10 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "input", "type": "nats", "subject": "raw.>", "interface": "core .json.v1"}
+//	      {"name":"input","config":{"kind":"nats","subject":"raw.>","interface":{"type":"core.json.v1"}}}
 //	    ],
 //	    "outputs": [
-//	      {"name": "output", "type": "nats", "subject": "mapped.messages", "interface": "core .json.v1"}
+//	      {"name":"output","config":{"kind":"nats","subject":"mapped.messages","interface":{"type":"core.json.v1"}}}
 //	    ]
 //	  },
 //	  "mappings": [

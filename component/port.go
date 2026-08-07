@@ -43,6 +43,7 @@ const (
 	PatternStream     InteractionPattern = "stream"
 	PatternRequest    InteractionPattern = "request"
 	PatternWatch      InteractionPattern = "watch"
+	PatternRead       InteractionPattern = "read"
 	PatternStore      InteractionPattern = "store"
 )
 

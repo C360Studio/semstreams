@@ -799,6 +799,7 @@ func TestGetConsumerConfig(t *testing.T) {
 		wantDeliverPol string
 		wantAckPol     string
 		wantMaxDeliver int
+		wantErr        bool
 	}{
 		{
 			name: "JetStream port with all values",
@@ -806,6 +807,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					Subjects:      []string{"test.>"},
 					DeliverPolicy: "all",
 					AckPolicy:     "none",
 					MaxDeliver:    10,
@@ -821,6 +823,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					Subjects:      []string{"test.>"},
 					DeliverPolicy: "last",
 					// AckPolicy and MaxDeliver not set
 				},
@@ -834,11 +837,11 @@ func TestGetConsumerConfig(t *testing.T) {
 			port: Port{
 				Name:      "test_input",
 				Direction: DirectionInput,
-				Config:    JetStreamPort{},
+				Config:    JetStreamPort{Subjects: []string{"test.>"}},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantDeliverPol: "new",
+			wantAckPol:     "explicit",
+			wantMaxDeliver: 3,
 		},
 		{
 			name: "Non-JetStream port (NATS)",
@@ -847,9 +850,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    NATSPort{Subject: "test.subject"},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 		{
 			name: "Non-JetStream port (KVWatch)",
@@ -858,9 +859,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    KVWatchPort{Bucket: "TEST"},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 		{
 			name: "Port with nil config",
@@ -869,15 +868,22 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    nil,
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := GetConsumerConfig(tt.port)
+			cfg, err := GetConsumerConfig(tt.port)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("GetConsumerConfig accepted a non-JetStream or invalid port")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetConsumerConfig: %v", err)
+			}
 
 			if cfg.DeliverPolicy != tt.wantDeliverPol {
 				t.Errorf("DeliverPolicy = %q, want %q", cfg.DeliverPolicy, tt.wantDeliverPol)
@@ -889,153 +895,6 @@ func TestGetConsumerConfig(t *testing.T) {
 				t.Errorf("MaxDeliver = %d, want %d", cfg.MaxDeliver, tt.wantMaxDeliver)
 			}
 		})
-	}
-}
-
-func TestGetConsumerConfigFromDefinition(t *testing.T) {
-	tests := []struct {
-		name           string
-		portDef        PortDefinition
-		wantDeliverPol string
-		wantAckPol     string
-		wantMaxDeliver int
-	}{
-		{
-			name: "PortDefinition with JetStreamPort config",
-			portDef: PortDefinition{
-				Name: "entity_watch",
-				Config: JetStreamPort{
-					Subjects:      []string{"events.graph.entity.>"},
-					DeliverPolicy: "all",
-					AckPolicy:     "explicit",
-					MaxDeliver:    5,
-				},
-			},
-			wantDeliverPol: "all",
-			wantAckPol:     "explicit",
-			wantMaxDeliver: 5,
-		},
-		{
-			name: "PortDefinition with partial JetStreamPort config",
-			portDef: PortDefinition{
-				Name: "entity_watch",
-				Config: JetStreamPort{
-					Subjects:      []string{"events.graph.entity.>"},
-					DeliverPolicy: "new",
-				},
-			},
-			wantDeliverPol: "new",
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with empty JetStreamPort config",
-			portDef: PortDefinition{
-				Name:   "entity_watch",
-				Config: JetStreamPort{Subjects: []string{"events.graph.entity.>"}},
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with nil config",
-			portDef: PortDefinition{
-				Name:   "entity_watch",
-				Config: nil,
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with non-JetStream config type",
-			portDef: PortDefinition{
-				Name:   "nats_port",
-				Config: NATSPort{Subject: "test.subject"},
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := GetConsumerConfigFromDefinition(tt.portDef)
-
-			if cfg.DeliverPolicy != tt.wantDeliverPol {
-				t.Errorf("DeliverPolicy = %q, want %q", cfg.DeliverPolicy, tt.wantDeliverPol)
-			}
-			if cfg.AckPolicy != tt.wantAckPol {
-				t.Errorf("AckPolicy = %q, want %q", cfg.AckPolicy, tt.wantAckPol)
-			}
-			if cfg.MaxDeliver != tt.wantMaxDeliver {
-				t.Errorf("MaxDeliver = %d, want %d", cfg.MaxDeliver, tt.wantMaxDeliver)
-			}
-		})
-	}
-}
-
-// TestGetConsumerConfigFromDefinitionWithDefault pins the idempotent catch-up
-// contract: a component (graph-ingest, objectstore) can default its consumer to
-// "all" so it recovers messages published before its consumer bound, while an
-// explicit port deliver_policy still wins. Regression guard for the first-
-// message loss where a JSON config omitting deliver_policy silently fell to the
-// framework "new" default and dropped the first document/entity.
-func TestGetConsumerConfigFromDefinitionWithDefault(t *testing.T) {
-	// Port omits deliver_policy → the caller's "all" default applies (the fix).
-	{
-		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
-			Name:   "write",
-			Config: JetStreamPort{Subjects: []string{"document.processed.entity"}}, // no deliver_policy
-		}, "all")
-		if cfg.DeliverPolicy != "all" {
-			t.Errorf("DeliverPolicy = %q, want %q (idempotent default must apply when port omits it)", cfg.DeliverPolicy, "all")
-		}
-	}
-	// Explicit port deliver_policy overrides the caller's default.
-	{
-		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
-			Name: "write",
-			Config: JetStreamPort{
-				Subjects:      []string{"document.processed.entity"},
-				DeliverPolicy: "new",
-			},
-		}, "all")
-		if cfg.DeliverPolicy != "new" {
-			t.Errorf("DeliverPolicy = %q, want %q (explicit port policy must win)", cfg.DeliverPolicy, "new")
-		}
-	}
-	// The plain wrapper still yields the framework "new" default (unchanged).
-	{
-		cfg := GetConsumerConfigFromDefinition(PortDefinition{
-			Name: "in", Config: JetStreamPort{Subjects: []string{"x.>"}},
-		})
-		if cfg.DeliverPolicy != "new" {
-			t.Errorf("DeliverPolicy = %q, want %q (default wrapper unchanged)", cfg.DeliverPolicy, "new")
-		}
-	}
-}
-
-func TestConsumerConfigDefaults(t *testing.T) {
-	// Test that default values are safe for production use
-	emptyPort := Port{Name: "test", Direction: DirectionInput}
-	cfg := GetConsumerConfig(emptyPort)
-
-	// "new" is the safe default - doesn't replay historical messages
-	if cfg.DeliverPolicy != "new" {
-		t.Errorf("Default DeliverPolicy should be 'new' (safe), got %q", cfg.DeliverPolicy)
-	}
-
-	// "explicit" requires ack - prevents message loss
-	if cfg.AckPolicy != "explicit" {
-		t.Errorf("Default AckPolicy should be 'explicit' (safe), got %q", cfg.AckPolicy)
-	}
-
-	// 3 retries is a reasonable default
-	if cfg.MaxDeliver != 3 {
-		t.Errorf("Default MaxDeliver should be 3, got %d", cfg.MaxDeliver)
 	}
 }
 
@@ -1192,7 +1051,7 @@ func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
 }
 
 // TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig closes the
-// loop by going JSON → PortDefinition → ConsumerConfig — the path every
+// loop by going JSON → PortDefinition → Port → ConsumerConfig — the path every
 // agentic-model / agentic-tools consumer uses at runtime. This is the
 // end-to-end test that would have caught the beta.54 ship-to-runtime gap.
 func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
@@ -1212,7 +1071,14 @@ func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	cfg := GetConsumerConfigFromDefinition(pd)
+	port, err := pd.Resolve(DirectionInput)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	cfg, err := GetConsumerConfig(port)
+	if err != nil {
+		t.Fatalf("GetConsumerConfig: %v", err)
+	}
 	if cfg.MaxDeliver != 1 {
 		t.Errorf("MaxDeliver = %d, want 1 (Posture B fail-loud-once value must reach the consumer)", cfg.MaxDeliver)
 	}
@@ -1259,8 +1125,8 @@ func TestResolvePortPreservesAckWaitAndHeartbeat(t *testing.T) {
 
 // TestGetConsumerConfig_AckWaitAndHeartbeat verifies the per-port AckWait
 // and HeartbeatInterval fields parse from string ("90s", "2m") into a
-// time.Duration on ConsumerConfig, and that empty/invalid values produce
-// the zero duration so callers can apply their per-component default.
+// time.Duration on ConsumerConfig. Empty values produce the zero duration so
+// callers can apply their per-component default; invalid values are rejected.
 //
 // This is the load-bearing surface for semspec ADR-? — a single AckWait
 // per consumer/port lets paid-LLM deployments tune ack_wait above their
@@ -1273,6 +1139,7 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 		heartbeatInterval string
 		wantAckWait       time.Duration
 		wantHeartbeat     time.Duration
+		wantErr           bool
 	}{
 		{
 			name:              "both set with valid durations",
@@ -1296,18 +1163,16 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 			wantHeartbeat:     0,
 		},
 		{
-			name:              "invalid AckWait stays zero (caller default)",
+			name:              "invalid AckWait is rejected",
 			ackWait:           "not-a-duration",
 			heartbeatInterval: "60s",
-			wantAckWait:       0,
-			wantHeartbeat:     60 * time.Second,
+			wantErr:           true,
 		},
 		{
-			name:              "invalid HeartbeatInterval stays zero (caller default)",
+			name:              "invalid HeartbeatInterval is rejected",
 			ackWait:           "90s",
 			heartbeatInterval: "garbage",
-			wantAckWait:       90 * time.Second,
-			wantHeartbeat:     0,
+			wantErr:           true,
 		},
 		{
 			name:              "only AckWait set",
@@ -1324,33 +1189,26 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
-					AckWait:           tt.ackWait,
-					HeartbeatInterval: tt.heartbeatInterval,
-				},
-			}
-			cfg := GetConsumerConfig(port)
-			if cfg.AckWait != tt.wantAckWait {
-				t.Errorf("AckWait = %v, want %v", cfg.AckWait, tt.wantAckWait)
-			}
-			if cfg.HeartbeatInterval != tt.wantHeartbeat {
-				t.Errorf("HeartbeatInterval = %v, want %v", cfg.HeartbeatInterval, tt.wantHeartbeat)
-			}
-
-			// Same surface via PortDefinition path
-			portDef := PortDefinition{
-				Name: "test_input",
-				Config: JetStreamPort{
 					Subjects:          []string{"test.>"},
 					AckWait:           tt.ackWait,
 					HeartbeatInterval: tt.heartbeatInterval,
 				},
 			}
-			cfgDef := GetConsumerConfigFromDefinition(portDef)
-			if cfgDef.AckWait != tt.wantAckWait {
-				t.Errorf("FromDefinition AckWait = %v, want %v", cfgDef.AckWait, tt.wantAckWait)
+			cfg, err := GetConsumerConfig(port)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("GetConsumerConfig accepted an invalid duration")
+				}
+				return
 			}
-			if cfgDef.HeartbeatInterval != tt.wantHeartbeat {
-				t.Errorf("FromDefinition HeartbeatInterval = %v, want %v", cfgDef.HeartbeatInterval, tt.wantHeartbeat)
+			if err != nil {
+				t.Fatalf("GetConsumerConfig: %v", err)
+			}
+			if cfg.AckWait != tt.wantAckWait {
+				t.Errorf("AckWait = %v, want %v", cfg.AckWait, tt.wantAckWait)
+			}
+			if cfg.HeartbeatInterval != tt.wantHeartbeat {
+				t.Errorf("HeartbeatInterval = %v, want %v", cfg.HeartbeatInterval, tt.wantHeartbeat)
 			}
 		})
 	}

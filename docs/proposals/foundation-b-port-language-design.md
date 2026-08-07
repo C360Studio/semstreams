@@ -55,7 +55,7 @@ An immutable normalized facts projection is produced by the unexported resolver 
 6. Delete dead `NATSStreamPortConfig` and `NATSRequestPortConfig`.
 7. Network, file, store-read, and store-provide receive strict decode/resolve/runtime round trips. Store-provide remains nonexclusive; StoreRegistry retains duplicate-owner authority.
 8. Preserve every JetStream field, including subjects, storage, retention, size, replicas, consumer settings, `MaxAckPending`, and interface.
-9. Delete all 93 flat `PortDefinition.Type` interpretations. Replace the 16 projection assertions with normalized facts. All 70 hand-rolled renderers delegate grammar work to strict merge/resolve; component-local optional-port selection may remain but cannot classify kinds.
+9. Delete all 93 flat `PortDefinition.Type` interpretations. Replace the 16 projection assertions with normalized facts. All 76 hand-rolled renderers delegate grammar work to strict merge/resolve; component-local optional-port selection may remain but cannot classify kinds.
 10. Two raw-config owner families remain visible:
     - stream provisioning consumes the canonical decoder/facts for explicit JetStream outputs;
     - message-logger temporarily projects canonical NATS/JetStream subjects from raw config until Foundation C.

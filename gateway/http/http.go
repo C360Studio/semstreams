@@ -397,12 +397,12 @@ func (g *Gateway) Meta() component.Metadata {
 
 // InputPorts returns no input ports (gateway is request-driven)
 func (g *Gateway) InputPorts() []component.Port {
-	return []component.Port{}
+	return nil
 }
 
 // OutputPorts returns no output ports (gateway uses request/reply)
 func (g *Gateway) OutputPorts() []component.Port {
-	return []component.Port{}
+	return nil
 }
 
 // ConfigSchema returns the configuration schema

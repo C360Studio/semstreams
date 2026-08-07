@@ -41,7 +41,11 @@ func TestDefaultConfigDeclaresCanonicalMutationOutput(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("DefaultConfig.Validate: %v", err)
 	}
-	componentUnderTest := &Component{config: cfg}
+	output, err := cfg.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		t.Fatalf("resolve default mutation output: %v", err)
+	}
+	componentUnderTest := &Component{config: cfg, outputs: []component.Port{output}}
 	ports := componentUnderTest.OutputPorts()
 	if len(ports) != 1 {
 		t.Fatalf("OutputPorts len = %d, want one canonical mutation port", len(ports))
@@ -61,10 +65,10 @@ func TestConfigRejectsNoncanonicalMutationOutput(t *testing.T) {
 		name string
 		port component.PortDefinition
 	}{
-		{name: "wrong type", port: component.PortDefinition{Name: "graph_mutations", Type: "nats", Subject: graphmutation.SubjectFamily, Interface: graphmutation.InterfaceType, Required: true}},
-		{name: "wrong family", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: "graph.mutation.*", Interface: graphmutation.InterfaceType, Required: true}},
-		{name: "wrong interface", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily, Interface: "other.interface", Required: true}},
-		{name: "optional", port: component.PortDefinition{Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily, Interface: graphmutation.InterfaceType}},
+		{name: "wrong type", port: component.PortDefinition{Name: "graph_mutations", Config: component.NATSPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true}},
+		{name: "wrong family", port: component.PortDefinition{Name: "graph_mutations", Config: component.NATSRequestPort{Subject: "graph.mutation.*", Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true}},
+		{name: "wrong interface", port: component.PortDefinition{Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: "other.interface", Version: graphmutation.InterfaceVersion}}, Required: true}},
+		{name: "optional", port: component.PortDefinition{Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

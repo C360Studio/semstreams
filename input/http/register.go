@@ -35,7 +35,7 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 		NATSClient:      deps.NATSClient,
 		MetricsRegistry: deps.MetricsRegistry,
 		Logger:          deps.Logger,
-	}), nil
+	})
 }
 
 // mergeConfig overlays user-supplied fields onto the defaults.

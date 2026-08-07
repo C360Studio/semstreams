@@ -31,10 +31,10 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+//	      {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
 //	    ],
 //	    "outputs": [
-//	      {"name": "spatial_index", "subject": "SPATIAL_INDEX", "type": "kv"}
+//	      {"name":"spatial_index","config":{"kind":"kv-write","bucket":"SPATIAL_INDEX"}}
 //	    ]
 //	  },
 //	  "geohash_precision": 6,

@@ -38,7 +38,7 @@ func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
 			ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{},
 				Outputs: []component.PortDefinition{
-					{Name: "tool.result", Type: "jetstream", Subject: "tool.result.*"},
+					{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}},
 				},
 			},
 			wantErr:       true,
@@ -48,7 +48,7 @@ func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
 			name: "empty Outputs slice — rejected (silent-publish-drop case)",
 			ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{
-					{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.>"},
+					{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}},
 				},
 				Outputs: []component.PortDefinition{},
 			},
@@ -59,10 +59,10 @@ func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
 			name: "operator-renamed ports with canonical subjects — accepted",
 			ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{
-					{Name: "input", Type: "nats", Subject: "tool.execute.>"},
+					{Name: "input", Config: component.NATSPort{Subject: "tool.execute.>"}},
 				},
 				Outputs: []component.PortDefinition{
-					{Name: "output", Type: "nats", Subject: "tool.result.*"},
+					{Name: "output", Config: component.NATSPort{Subject: "tool.result.*"}},
 				},
 			},
 			wantErr: false,
@@ -71,10 +71,10 @@ func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
 			name: "operator-renamed ports with operator subjects — accepted",
 			ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{
-					{Name: "myinput", Type: "jetstream", Subject: "custom.tool.execute.>"},
+					{Name: "myinput", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.execute.>"}}},
 				},
 				Outputs: []component.PortDefinition{
-					{Name: "myoutput", Type: "jetstream", Subject: "custom.tool.result.*"},
+					{Name: "myoutput", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.result.*"}}},
 				},
 			},
 			wantErr: false,
@@ -83,10 +83,10 @@ func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
 			name: "canonical defaults — accepted",
 			ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{
-					{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.>"},
+					{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}},
 				},
 				Outputs: []component.PortDefinition{
-					{Name: "tool.result", Type: "jetstream", Subject: "tool.result.*"},
+					{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}},
 				},
 			},
 			wantErr: false,

@@ -68,9 +68,7 @@ func TestIntegration_Start_OffCatalogOutputSubjectFailsBoot(t *testing.T) {
 
 	cfg := DefaultConfig()
 	cfg.Ports.Outputs = append(cfg.Ports.Outputs, component.PortDefinition{
-		Name:    "outgoing_index_typo",
-		Type:    "kv-write",
-		Subject: typoSubject, // the operator typo
+		Name: "outgoing_index_typo", Config: component.KVWritePort{Bucket: typoSubject}, // the operator typo
 	})
 
 	cfgJSON, err := json.Marshal(cfg)

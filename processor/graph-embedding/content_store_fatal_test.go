@@ -29,7 +29,7 @@ func TestCreateContentStore_NoStoreReadPort_GracefulNil(t *testing.T) {
 		config: Config{
 			Ports: &component.PortConfig{
 				Inputs: []component.PortDefinition{
-					{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+					{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 				},
 			},
 		},

@@ -47,16 +47,16 @@ func TestIntegration_ApprovalFlow_Approve(t *testing.T) {
 	config := agenticloop.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "agent.task", Type: "jetstream", Subject: "agent.task.*", StreamName: "AGENT", Required: true},
-				{Name: "agent.response", Type: "jetstream", Subject: "agent.response.>", StreamName: "AGENT"},
-				{Name: "tool.result", Type: "jetstream", Subject: "tool.result.>", StreamName: "AGENT"},
-				{Name: "agent.approval_response", Type: "jetstream", Subject: "agent.approval_response.*", StreamName: "AGENT"},
+				{Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}}},
+				{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.>"}}},
+				{Name: "agent.approval_response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.approval_response.*"}}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "agent.request", Type: "jetstream", Subject: "agent.request.*", StreamName: "AGENT"},
-				{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.*", StreamName: "AGENT"},
-				{Name: "agent.approval_pending", Type: "jetstream", Subject: "agent.approval_pending.*", StreamName: "AGENT"},
-				{Name: "agent.complete", Type: "jetstream", Subject: "agent.complete.*", StreamName: "AGENT"},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}}},
+				{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.*"}}},
+				{Name: "agent.approval_pending", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.approval_pending.*"}}},
+				{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}}},
 			},
 		},
 		MaxIterations:      10,
@@ -272,17 +272,17 @@ func TestIntegration_ApprovalTimeoutSweeper_PublishesWireResponse(t *testing.T) 
 	config := agenticloop.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "agent.task", Type: "jetstream", Subject: "agent.task.*", StreamName: "AGENT", Required: true},
-				{Name: "agent.response", Type: "jetstream", Subject: "agent.response.>", StreamName: "AGENT"},
-				{Name: "tool.result", Type: "jetstream", Subject: "tool.result.>", StreamName: "AGENT"},
-				{Name: "agent.approval_response", Type: "jetstream", Subject: "agent.approval_response.*", StreamName: "AGENT"},
+				{Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}}},
+				{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.>"}}},
+				{Name: "agent.approval_response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.approval_response.*"}}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "agent.request", Type: "jetstream", Subject: "agent.request.*", StreamName: "AGENT"},
-				{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.*", StreamName: "AGENT"},
-				{Name: "agent.approval_pending", Type: "jetstream", Subject: "agent.approval_pending.*", StreamName: "AGENT"},
-				{Name: "agent.complete", Type: "jetstream", Subject: "agent.complete.*", StreamName: "AGENT"},
-				{Name: "agent.failed", Type: "jetstream", Subject: "agent.failed.*", StreamName: "AGENT"},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}}},
+				{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.*"}}},
+				{Name: "agent.approval_pending", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.approval_pending.*"}}},
+				{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}}},
+				{Name: "agent.failed", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.failed.*"}}},
 			},
 		},
 		MaxIterations:      10,

@@ -31,25 +31,33 @@ func Register(registry *component.Registry) error {
 }
 
 // buildDefaultInputPorts returns the default input ports
-func buildDefaultInputPorts() []component.Port {
+func buildDefaultInputPorts() ([]component.Port, error) {
 	defaultConfig := DefaultConfig()
 	ports := make([]component.Port, 0, len(defaultConfig.Ports.Inputs))
 
 	for _, def := range defaultConfig.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(def, component.DirectionInput))
+		port, err := def.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, err
+		}
+		ports = append(ports, port)
 	}
 
-	return ports
+	return ports, nil
 }
 
 // buildDefaultOutputPorts returns the default output ports
-func buildDefaultOutputPorts() []component.Port {
+func buildDefaultOutputPorts() ([]component.Port, error) {
 	defaultConfig := DefaultConfig()
 	ports := make([]component.Port, 0, len(defaultConfig.Ports.Outputs))
 
 	for _, def := range defaultConfig.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(def, component.DirectionOutput))
+		port, err := def.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, err
+		}
+		ports = append(ports, port)
 	}
 
-	return ports
+	return ports, nil
 }

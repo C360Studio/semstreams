@@ -19,13 +19,14 @@ func newTestOutput(t *testing.T, passthrough bool) *Output {
 	t.Helper()
 	// A valid port satisfies validateConfig; the server is never Start()ed so
 	// nothing binds it (no net.Listen → no fixed-port lint concern).
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:        "test-passthrough",
-		Port:        8099,
 		Path:        "/ws",
-		Subjects:    []string{"test.subject"},
+		InputPorts:  natsInputDefinitions([]string{"test.subject"}),
+		OutputPorts: websocketOutputDefinitions(8099),
 		Passthrough: passthrough,
 	})
+
 	require.NoError(t, ws.Initialize())
 	ws.mu.Lock()
 	ws.running = true

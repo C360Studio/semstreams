@@ -1194,15 +1194,13 @@ Add your processor to a flow configuration:
           "inputs": [
             {
               "name": "nats_input",
-              "type": "nats",
-              "subject": "raw.sensor.>"
+              "config": {"kind":"nats","subject":"raw.sensor.>"}
             }
           ],
           "outputs": [
             {
               "name": "nats_output",
-              "type": "nats",
-              "subject": "events.graph.entity.sensor"
+              "config": {"kind":"nats","subject":"events.graph.entity.sensor"}
             }
           ]
         }

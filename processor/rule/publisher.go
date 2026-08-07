@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
@@ -63,12 +64,13 @@ func (p *actionPublisher) Publish(ctx context.Context, subject string, data []by
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (rp *Processor) isJetStreamPortBySubject(subject string) bool {
-	if rp.config == nil || rp.config.Ports == nil {
-		return false
-	}
-	for _, port := range rp.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
+	for _, port := range rp.outputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			continue
+		}
+		if subjects := facts.NATSSubjects(); len(subjects) == 1 && subjects[0] == subject {
+			return facts.Kind() == component.PortKindJetStream
 		}
 	}
 	return false
@@ -188,15 +190,24 @@ func (rp *Processor) publishRuleEvent(ctx context.Context, ruleName, eventType s
 		return errs.Wrap(err, "RuleProcessor", "publishRuleEvent", "marshal rule event")
 	}
 
-	// Use configured output port subject, fallback to rule-specific subject
-	subject := "events.rule.triggered" // Default subject
-	if rp.config != nil && rp.config.Ports != nil {
-		for _, port := range rp.config.Ports.Outputs {
-			if port.Name == "rule_events" && port.Subject != "" {
-				subject = port.Subject
-				break
-			}
+	var subject string
+	for _, port := range rp.outputPorts {
+		if port.Name != "rule_events" {
+			continue
 		}
+		facts, factsErr := port.Facts()
+		if factsErr != nil {
+			return factsErr
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return fmt.Errorf("rule_events output must declare one NATS subject")
+		}
+		subject = subjects[0]
+		break
+	}
+	if subject == "" {
+		return fmt.Errorf("rule_events output port is required")
 	}
 
 	// Publish to NATS, respecting port type configuration

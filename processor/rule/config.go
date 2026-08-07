@@ -228,7 +228,7 @@ func defaultConfig() Config {
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 				},
 				{
 					Name: "control_commands", Config: component.NATSPort{Subject: "control.*.commands"}, Required: false,

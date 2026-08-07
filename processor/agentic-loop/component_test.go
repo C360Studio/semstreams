@@ -86,8 +86,8 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	ports := comp.OutputPorts()
 
-	if len(ports) != 9 {
-		t.Fatalf("OutputPorts() count = %d, want 9", len(ports))
+	if len(ports) != 10 {
+		t.Fatalf("OutputPorts() count = %d, want 10", len(ports))
 	}
 
 	// Expected output ports
@@ -105,6 +105,13 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	for _, port := range ports {
 		expectedSubject, ok := expected[port.Name]
+		if port.Name == "loops" {
+			kv, kvOK := port.Config.(component.KVWritePort)
+			if !kvOK || kv.Bucket != "AGENT_LOOPS" || port.Direction != component.DirectionOutput {
+				t.Errorf("loops KV output drift: %#v", port)
+			}
+			continue
+		}
 		if port.Name == "graph_mutations" {
 			request, requestOK := port.Config.(component.NATSRequestPort)
 			if !requestOK || !port.Required || request.Subject != expectedSubject || request.Interface == nil ||
@@ -147,15 +154,13 @@ func TestComponent_KVPorts(t *testing.T) {
 	// This may be implementation-specific, but we can verify via config
 	config := agenticloop.DefaultConfig()
 
-	if len(config.Ports.KVWrite) != 1 {
-		t.Errorf("Config should have 1 KV write port, got %d", len(config.Ports.KVWrite))
-	}
-
 	// Verify KV bucket names
 	expectedBuckets := []string{"AGENT_LOOPS"}
 	foundBuckets := make(map[string]bool)
-	for _, kvPort := range config.Ports.KVWrite {
-		foundBuckets[kvPort.Bucket] = true
+	for _, definition := range config.Ports.Outputs {
+		if kvPort, ok := definition.Config.(component.KVWritePort); ok {
+			foundBuckets[kvPort.Bucket] = true
+		}
 	}
 
 	for _, bucket := range expectedBuckets {

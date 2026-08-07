@@ -343,7 +343,11 @@ func (c *Component) processTaskSubmissionSync(ctx context.Context, msg agentic.U
 		}
 	}
 
-	subject := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	if err != nil {
+		c.logger.Error("Failed to resolve task subject", slog.String("error", err.Error()))
+		return agentic.UserResponse{ResponseID: uuid.New().String(), ChannelType: msg.ChannelType, ChannelID: msg.ChannelID, UserID: msg.UserID, Type: agentic.ResponseTypeError, Content: "Failed to submit task. Please try again.", Timestamp: time.Now()}
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
 		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
 		return agentic.UserResponse{
@@ -858,7 +862,10 @@ func (c *Component) publishApprovalResponse(ctx context.Context, loopID, callID 
 		return "", fmt.Errorf("marshal approval response: %w", err)
 	}
 
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.approval_response", loopID)
+	if err != nil {
+		return "", fmt.Errorf("resolve approval response subject: %w", err)
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		return subject, fmt.Errorf("publish approval response on %s: %w", subject, err)
 	}

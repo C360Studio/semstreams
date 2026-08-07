@@ -199,10 +199,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -215,10 +215,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "60s",
@@ -232,16 +232,17 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 						{
-							Name:      "inferred_edges",
-							Type:      "nats-request",
-							Subject:   graphmutation.SubjectFamily,
-							Interface: graphmutation.InterfaceType,
-							Required:  true,
+							Name: "inferred_edges",
+							Config: component.NATSRequestPort{
+								Subject:   graphmutation.SubjectFamily,
+								Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion},
+							},
+							Required: true,
 						},
 					},
 				},
@@ -281,7 +282,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -293,7 +294,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -306,10 +307,10 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
+						{Name: "other", Config: component.KVWritePort{Bucket: "OTHER_BUCKET"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -358,10 +359,10 @@ func TestConfig_Validate_InvalidInterval(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: tt.intervalStr,
@@ -412,10 +413,10 @@ func TestConfig_Validate_InvalidMinCommunitySize(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -464,10 +465,10 @@ func TestConfig_Validate_InvalidMaxIterations(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -492,10 +493,10 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+				{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 			},
 		},
 	}
@@ -532,7 +533,8 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	// Verify ENTITY_STATES kv-watch input
 	hasEntityWatch := false
 	for _, in := range inputs {
-		if in.Subject == "ENTITY_STATES" && in.Type == "kv-watch" {
+		port, ok := in.Config.(component.KVWatchPort)
+		if ok && port.Bucket == "ENTITY_STATES" {
 			hasEntityWatch = true
 			break
 		}
@@ -546,7 +548,8 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	// Verify COMMUNITY_INDEX output
 	hasCommunityIndex := false
 	for _, out := range outputs {
-		if out.Subject == "COMMUNITY_INDEX" {
+		port, ok := out.Config.(component.KVWritePort)
+		if ok && port.Bucket == "COMMUNITY_INDEX" {
 			hasCommunityIndex = true
 			break
 		}
@@ -906,33 +909,21 @@ func TestCreateGraphClustering_RejectsRetiredStructuralOutput(t *testing.T) {
 	require.NoError(t, err)
 	const guidance = "STRUCTURAL_INDEX output was removed (ADR-090, BREAKING). Delete the output; anomaly detection computes structural prerequisites internally"
 
-	tests := []struct {
-		name       string
-		outputPort string
-	}{
-		{name: "subject form", outputPort: `{"name":"structural","type":"kv-write","subject":"STRUCTURAL_INDEX"}`},
-		{name: "bucket form", outputPort: `{"name":"structural","type":"kv-write","bucket":"STRUCTURAL_INDEX"}`},
-	}
+	raw := json.RawMessage(`{
+		"ports": {
+			"inputs": [{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}],
+			"outputs": [
+				{"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}},
+				{"name":"structural","config":{"kind":"kv-write","bucket":"STRUCTURAL_INDEX"}}
+			]
+		}
+	}`)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			raw := json.RawMessage(fmt.Sprintf(`{
-				"ports": {
-					"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
-					"outputs": [
-						{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"},
-						%s
-					]
-				}
-			}`, tt.outputPort))
+	comp, createErr := CreateGraphClustering(raw, component.Dependencies{NATSClient: natsClient})
 
-			comp, createErr := CreateGraphClustering(raw, component.Dependencies{NATSClient: natsClient})
-
-			require.Error(t, createErr)
-			assert.Nil(t, comp)
-			assert.Contains(t, createErr.Error(), guidance)
-		})
-	}
+	require.Error(t, createErr)
+	assert.Nil(t, comp)
+	assert.Contains(t, createErr.Error(), guidance)
 }
 
 func TestCreateGraphClustering_RejectsPhantomAnomalyKey(t *testing.T) {
@@ -981,10 +972,10 @@ func TestCreateGraphClustering_LLMConfig(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+				{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 			},
 		},
 		DetectionIntervalStr: "60s",
@@ -1157,10 +1148,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -1174,10 +1165,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "30s",
@@ -1192,10 +1183,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "communities", Type: "kv-write", Subject: "COMMUNITY_INDEX"},
+						{Name: "communities", Config: component.KVWritePort{Bucket: "COMMUNITY_INDEX"}},
 					},
 				},
 				DetectionIntervalStr: "", // empty string results in zero duration

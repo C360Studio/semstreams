@@ -95,6 +95,7 @@ type Output struct {
 	retryCount  int
 	contentType string
 	config      Config // Store full config for port type checking
+	inputPorts  []component.Port
 	natsClient  *natsclient.Client
 	logger      *slog.Logger
 	security    security.Config
@@ -129,12 +130,26 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		config = DefaultConfig()
 	}
 
-	// Extract subjects from port configuration
+	inputPorts := make([]component.Port, len(config.Ports.Inputs))
 	var inputSubjects []string
-	for _, input := range config.Ports.Inputs {
-		if input.Type == "nats" || input.Type == "jetstream" {
-			inputSubjects = append(inputSubjects, input.Subject)
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "resolve input port")
 		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutput", "project input port facts")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutput", "validate input port")
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "NewOutput", "validate input port")
+		}
+		inputPorts[index] = port
+		inputSubjects = append(inputSubjects, subjects[0])
 	}
 
 	if len(inputSubjects) == 0 {
@@ -208,6 +223,7 @@ func NewOutput(rawConfig json.RawMessage, deps component.Dependencies) (componen
 		retryCount:  config.RetryCount,
 		contentType: config.ContentType,
 		config:      config, // Store full config for port type checking
+		inputPorts:  inputPorts,
 		natsClient:  deps.NATSClient,
 		logger:      deps.GetLogger(),
 		security:    deps.Security,
@@ -265,54 +281,62 @@ func (h *Output) Start(ctx context.Context) error {
 
 // setupSubscriptions creates subscriptions for input ports based on port type
 func (h *Output) setupSubscriptions(ctx context.Context) error {
-	for _, port := range h.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range h.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Output", "Start", "project input port facts")
 		}
+		subject := facts.NATSSubjects()[0]
 
-		switch port.Type {
-		case "jetstream":
+		switch facts.Kind() {
+		case component.PortKindJetStream:
 			if err := h.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.WrapTransient(err, "Output", "Start",
-					fmt.Sprintf("JetStream consumer for %s", port.Subject))
+					fmt.Sprintf("JetStream consumer for %s", subject))
 			}
 
-		case "nats":
-			sub, err := h.natsClient.Subscribe(ctx, port.Subject, func(ctx context.Context, msg *nats.Msg) {
+		case component.PortKindNATS:
+			sub, err := h.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				h.handleMessage(ctx, msg.Data)
 			})
 			if err != nil {
 				h.logger.Error("Failed to subscribe to NATS subject",
 					"component", h.name,
-					"subject", port.Subject,
+					"subject", subject,
 					"error", err)
 				return errs.WrapTransient(err, "Output", "Start",
-					fmt.Sprintf("subscribe to %s", port.Subject))
+					fmt.Sprintf("subscribe to %s", subject))
 			}
 			h.subscriptions = append(h.subscriptions, sub)
 			h.logger.Debug("Subscribed to NATS subject successfully",
 				"component", h.name,
-				"subject", port.Subject)
-
-		default:
-			h.logger.Warn("Unknown port type, skipping", "port", port.Name, "type", port.Type)
+				"subject", subject)
 		}
 	}
 	return nil
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	streamName := port.StreamName
+func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("port %q does not declare JetStream facts", port.Name)
+	}
+	subject := facts.NATSSubjects()[0]
+	streamName := stream.Name()
 	if streamName == "" {
-		streamName = h.deriveStreamName(port.Subject)
+		streamName = h.deriveStreamName(subject)
 	}
 	if streamName == "" {
 		return errs.WrapInvalid(
 			errs.ErrInvalidConfig,
 			"Output",
 			"setupJetStreamConsumer",
-			fmt.Sprintf("could not derive stream name for subject %s", port.Subject),
+			fmt.Sprintf("could not derive stream name for subject %s", subject),
 		)
 	}
 
@@ -321,7 +345,7 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 			fmt.Sprintf("stream %s not available", streamName))
 	}
 
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("httppost-output-%s", sanitizedSubject)
@@ -329,22 +353,25 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	h.logger.Debug("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "Output", "setupJetStreamConsumer", "resolve consumer config")
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	err := h.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = h.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		h.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			h.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -355,7 +382,7 @@ func (h *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
 
-	h.logger.Debug("HTTP POST output subscribed (JetStream)", "subject", port.Subject, "stream", streamName)
+	h.logger.Debug("HTTP POST output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
 }
 
@@ -548,22 +575,13 @@ func (h *Output) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions
 func (h *Output) InputPorts() []component.Port {
-	ports := make([]component.Port, len(h.subjects))
-	for i, subj := range h.subjects {
-		ports[i] = component.Port{
-			Name:      fmt.Sprintf("input_%d", i),
-			Direction: component.DirectionInput,
-			Required:  true,
-			Config:    component.NATSPort{Subject: subj},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), h.inputPorts...)
 }
 
 // OutputPorts returns configured output port definitions (none for HTTP POST)
 func (h *Output) OutputPorts() []component.Port {
 	// HTTP POST output has no NATS output ports
-	return []component.Port{}
+	return nil
 }
 
 // ConfigSchema returns the configuration schema

@@ -13,7 +13,7 @@ func TestWorkersConfig_JSONRoundTrip(t *testing.T) {
 
 	raw := []byte(`{
 		"ports": {
-			"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}]
+			"inputs": [{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}]
 		},
 		"embedder_type": "bm25",
 		"batch_size": 4,

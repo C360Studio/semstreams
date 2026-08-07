@@ -87,12 +87,36 @@ func (s *fakeLoopStore) PutAssessmentOutput(_ context.Context, _ string, envelop
 }
 
 func newTestComponent(loops LoopStore, assessor Assessor) *Component {
+	config := DefaultConfig()
+	inputs, outputs := mustResolveTestPorts(config.Ports)
 	return &Component{
-		config:   DefaultConfig(),
+		config:   config,
+		inputs:   inputs,
+		outputs:  outputs,
 		assessor: assessor,
 		loops:    loops,
 		logger:   quietLogger(),
 	}
+}
+
+func mustResolveTestPorts(config *component.PortConfig) ([]component.Port, []component.Port) {
+	inputs := make([]component.Port, len(config.Inputs))
+	for index, definition := range config.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			panic(err)
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Outputs))
+	for index, definition := range config.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			panic(err)
+		}
+		outputs[index] = port
+	}
+	return inputs, outputs
 }
 
 func TestComponent_HandleMessage_SufficientHappyPath(t *testing.T) {

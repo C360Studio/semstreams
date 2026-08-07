@@ -7,6 +7,7 @@ package agenticmodel_test
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	agenticmodel "github.com/c360studio/semstreams/processor/agentic-model"
 )
 
@@ -170,12 +171,28 @@ func TestDefaultConfig(t *testing.T) {
 		if len(cfg.Ports.Outputs) != 2 {
 			t.Errorf("DefaultConfig() output ports count = %d, want 2", len(cfg.Ports.Outputs))
 		}
-		if cfg.Ports.Inputs[0].Subject != "agent.request.>" {
-			t.Errorf("DefaultConfig() input subject = %s, want agent.request.>", cfg.Ports.Inputs[0].Subject)
+		input, err := cfg.Ports.Inputs[0].Resolve(component.DirectionInput)
+		if err != nil {
+			t.Fatalf("resolve default input: %v", err)
+		}
+		inputFacts, err := input.Facts()
+		if err != nil {
+			t.Fatalf("project default input facts: %v", err)
+		}
+		if got := inputFacts.NATSSubjects(); len(got) != 1 || got[0] != "agent.request.>" {
+			t.Errorf("DefaultConfig() input subjects = %v, want [agent.request.>]", got)
 		}
 		outs := map[string]string{}
-		for _, p := range cfg.Ports.Outputs {
-			outs[p.Name] = p.Subject
+		for _, definition := range cfg.Ports.Outputs {
+			port, err := definition.Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Fatalf("resolve default output %q: %v", definition.Name, err)
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				t.Fatalf("project default output %q: %v", definition.Name, err)
+			}
+			outs[definition.Name] = facts.NATSSubjects()[0]
 		}
 		if outs["agent.response"] != "agent.response.*" {
 			t.Errorf("agent.response output subject = %q, want agent.response.*", outs["agent.response"])

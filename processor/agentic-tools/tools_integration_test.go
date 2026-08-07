@@ -119,19 +119,12 @@ func TestIntegration_ToolExecution(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -228,19 +221,12 @@ func TestIntegration_ToolAllowedList(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -349,19 +335,12 @@ func TestIntegration_AdvertisedToolsEnforced(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -467,19 +446,12 @@ func TestIntegration_ToolTimeout(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -577,19 +549,12 @@ func TestIntegration_ToolConcurrentExecution(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -717,25 +682,15 @@ func TestIntegration_ToolListRequestReply(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 				{
-					Name:     "tool.list",
-					Type:     "nats",
-					Subject:  toolListSubject,
-					Required: false,
+					Name: "tool.list", Config: component.NATSPort{Subject: toolListSubject}, Required: false,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -831,19 +786,12 @@ func TestIntegration_SharedRegistryTools(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},
@@ -912,19 +860,12 @@ func TestIntegration_SharedRegistryExecution(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.*",
-					StreamName: "AGENT",
+					Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}},
 				},
 			},
 		},

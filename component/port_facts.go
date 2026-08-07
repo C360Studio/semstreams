@@ -10,6 +10,8 @@ type PortFacts struct {
 	connectionIDs     []string
 	natsSubjects      []string
 	stream            *StreamFacts
+	network           *NetworkFacts
+	storeReadBucket   string
 }
 
 // StreamFacts is the immutable JetStream-specific portion of PortFacts.
@@ -28,6 +30,13 @@ type StreamFacts struct {
 	ackWait           string
 	heartbeatInterval string
 	maxAckPending     int
+}
+
+// NetworkFacts is the immutable listener binding portion of PortFacts.
+type NetworkFacts struct {
+	protocol string
+	host     string
+	port     int
 }
 
 // Kind returns the canonical port kind.
@@ -64,6 +73,22 @@ func (f PortFacts) Stream() (StreamFacts, bool) {
 	stream := *f.stream
 	stream.subjects = append([]string(nil), f.stream.subjects...)
 	return stream, true
+}
+
+// Network returns the immutable network binding when the port declares one.
+func (f PortFacts) Network() (NetworkFacts, bool) {
+	if f.network == nil {
+		return NetworkFacts{}, false
+	}
+	return *f.network, true
+}
+
+// StoreReadBucket returns the configured content-store bucket for a store-read port.
+func (f PortFacts) StoreReadBucket() (string, bool) {
+	if f.kind != PortKindStoreRead || f.storeReadBucket == "" {
+		return "", false
+	}
+	return f.storeReadBucket, true
 }
 
 // Name returns the declared stream name.
@@ -108,6 +133,15 @@ func (f StreamFacts) HeartbeatInterval() string { return f.heartbeatInterval }
 // MaxAckPending returns the declared unacknowledged-message ceiling.
 func (f StreamFacts) MaxAckPending() int { return f.maxAckPending }
 
+// Protocol returns the network protocol.
+func (f NetworkFacts) Protocol() string { return f.protocol }
+
+// Host returns the configured bind host.
+func (f NetworkFacts) Host() string { return f.host }
+
+// Port returns the configured bind port.
+func (f NetworkFacts) Port() int { return f.port }
+
 func basePortFacts(config Portable, interaction InteractionPattern, connectionIDs ...string) PortFacts {
 	return PortFacts{
 		kind:          config.Kind(),
@@ -127,7 +161,9 @@ func timerPortFacts(config Portable) PortFacts {
 
 func networkPortFacts(config Portable) PortFacts {
 	port := config.(NetworkPort)
-	return basePortFacts(port, PatternNetwork, port.ResourceID())
+	facts := basePortFacts(port, PatternNetwork, port.ResourceID())
+	facts.network = &NetworkFacts{protocol: port.Protocol, host: port.Host, port: port.Port}
+	return facts
 }
 
 func filePortFacts(config Portable) PortFacts {
@@ -200,7 +236,7 @@ func kvWatchPortFacts(config Portable) PortFacts {
 
 func kvReadPortFacts(config Portable) PortFacts {
 	port := config.(KVReadPort)
-	facts := basePortFacts(port, PatternWatch, port.ResourceID())
+	facts := basePortFacts(port, PatternRead, port.ResourceID())
 	facts.interfaceContract = cloneInterfaceContract(port.Interface)
 	return facts
 }
@@ -216,6 +252,7 @@ func storeReadPortFacts(config Portable) PortFacts {
 	port := config.(StoreReadPort)
 	facts := basePortFacts(port, PatternStore, "store-federation")
 	facts.interfaceContract = cloneInterfaceContract(port.Interface)
+	facts.storeReadBucket = port.Bucket
 	return facts
 }
 

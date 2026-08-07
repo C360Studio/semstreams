@@ -78,7 +78,7 @@ Graph-ingest declares the mutation API as a required input `nats-request` port. 
 contract, not documentation-only metadata:
 
 ```json
-{"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+{"name":"graph_mutations","required":true,"config":{"kind":"nats-request","subject":"graph.mutation.>","interface":{"type":"semstreams.graph.mutation","version":"v1"}}}
 ```
 
 The four operation leaves resolve from this family. No dummy input, hidden subject fallback, or mutation stream is
@@ -138,10 +138,10 @@ Ingests entities and triples from JetStream.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_in", "subject": "entity.>", "type": "jetstream"}
+        {"name":"entity_in","config":{"kind":"jetstream","subjects":["entity.>"]}}
       ],
       "outputs": [
-        {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv"}
+        {"name":"entity_states","config":{"kind":"kv-write","bucket":"ENTITY_STATES"}}
       ]
     },
     "enable_hierarchy": true
@@ -162,13 +162,13 @@ Maintains relationship indexes from entity state changes.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "outgoing_index", "subject": "OUTGOING_INDEX", "type": "kv"},
-        {"name": "incoming_index", "subject": "INCOMING_INDEX", "type": "kv"},
-        {"name": "alias_index", "subject": "ALIAS_INDEX", "type": "kv"},
-        {"name": "predicate_index", "subject": "PREDICATE_INDEX", "type": "kv"}
+        {"name":"outgoing_index","config":{"kind":"kv-write","bucket":"OUTGOING_INDEX"}},
+        {"name":"incoming_index","config":{"kind":"kv-write","bucket":"INCOMING_INDEX"}},
+        {"name":"alias_index","config":{"kind":"kv-write","bucket":"ALIAS_INDEX"}},
+        {"name":"predicate_index","config":{"kind":"kv-write","bucket":"PREDICATE_INDEX"}}
       ]
     },
     "workers": 4,
@@ -190,7 +190,7 @@ Generates vector embeddings for entities.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ]
     },
     "embedder_type": "bm25",
@@ -215,10 +215,10 @@ enabled, the component computes its K-core and pivot prerequisites in memory; th
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "communities", "subject": "COMMUNITY_INDEX", "type": "kv"}
+        {"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}}
       ]
     },
     "detection_interval": "30s",
@@ -277,10 +277,10 @@ Provides geospatial indexing for location-aware queries.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "spatial_index", "subject": "SPATIAL_INDEX", "type": "kv"}
+        {"name":"spatial_index","config":{"kind":"kv-write","bucket":"SPATIAL_INDEX"}}
       ]
     },
     "geohash_precision": 6,
@@ -302,10 +302,10 @@ Provides time-based indexing for temporal queries.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "temporal_index", "subject": "TEMPORAL_INDEX", "type": "kv"}
+        {"name":"temporal_index","config":{"kind":"kv-write","bucket":"TEMPORAL_INDEX"}}
       ]
     },
     "time_resolution": "hour",
@@ -327,10 +327,10 @@ HTTP gateway for GraphQL and MCP access.
   "config": {
     "ports": {
       "inputs": [
-        {"name": "http", "subject": ":8084", "type": "http"}
+        {"name":"http","config":{"kind":"network","protocol":"http","port":8084}}
       ],
       "outputs": [
-        {"name": "mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+        {"name":"mutations","required":true,"config":{"kind":"nats-request","subject":"graph.mutation.>","interface":{"type":"semstreams.graph.mutation","version":"v1"}}}
       ]
     },
     "graphql_path": "/graphql",

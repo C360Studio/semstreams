@@ -194,8 +194,10 @@ var schema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 // Component implements the graph-gateway gateway
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	natsClient    *natsclient.Client
@@ -259,11 +261,29 @@ func CreateGraphGateway(rawConfig json.RawMessage, deps component.Dependencies) 
 	keywordClassifier := query.NewKeywordClassifier()
 	embeddingClassifier := loadEmbeddingClassifier(config, logger)
 	classifier := query.NewClassifierChain(keywordClassifier, embeddingClassifier)
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphGateway", "factory", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphGateway", "factory", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
 
 	// Create component
 	comp := &Component{
 		name:          "graph-gateway",
 		config:        config,
+		inputs:        inputs,
+		outputs:       outputs,
 		natsClient:    natsClient,
 		natsRequester: natsClient, // Assign to interface field for mockability
 		logger:        logger,
@@ -400,15 +420,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions.
@@ -417,15 +429,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema

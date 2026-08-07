@@ -239,8 +239,10 @@ type entityStatesReader interface {
 // Component implements the graph-embedding processor
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	natsClient    *natsclient.Client
@@ -406,16 +408,45 @@ func CreateGraphEmbedding(rawConfig json.RawMessage, deps component.Dependencies
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-embedding")
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
+	var storeRegistry = (*storeregistry.Registry)(nil)
+	for _, input := range inputs {
+		facts, err := input.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphEmbedding", "factory", "project input port")
+		}
+		if _, ok := facts.StoreReadBucket(); ok {
+			storeRegistry = deps.StoreRegistry
+			break
+		}
+	}
 
 	// Create component
 	comp := &Component{
 		name:          "graph-embedding",
 		config:        config,
+		inputs:        inputs,
+		outputs:       outputs,
 		natsClient:    natsClient,
 		logger:        logger,
 		modelRegistry: deps.ModelRegistry,
 		metrics:       getMetrics(deps.MetricsRegistry),
-		storeRegistry: deps.StoreRegistry, // ADR-063 shared resolver (may be nil)
+		storeRegistry: storeRegistry, // ADR-063 resolver is admitted only by a declared store-read input.
 		// Current-failed metrics resolved PER-REGISTRY (register-or-get), not through the
 		// process-global getMetrics singleton (#613).
 		failed:      make(map[string]failureInfo),
@@ -463,32 +494,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	ports := make([]component.Port, 0)
-	hasStoreRead := false
-	if c.config.Ports != nil {
-		for _, portDef := range c.config.Ports.Inputs {
-			p := component.BuildPortFromDefinition(portDef, component.DirectionInput)
-			if _, ok := p.Config.(component.StoreReadPort); ok {
-				hasStoreRead = true
-			}
-			ports = append(ports, p)
-		}
-	}
-
-	// ADR-063: graph-embedding always consumes the shared store registry
-	// (deps.StoreRegistry), resolving offloaded bodies from ANY registered
-	// storage instance. Declare a federation store-read port for flowgraph
-	// visibility when the config doesn't already wire one — advisory only, no
-	// runtime effect (the worker resolves via the injected registry regardless).
-	if !hasStoreRead {
-		ports = append(ports, component.Port{
-			Name:        "store-federation",
-			Direction:   component.DirectionInput,
-			Description: "Reads offloaded entity content from the store federation (ADR-063)",
-			Config:      component.StoreReadPort{},
-		})
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions
@@ -496,14 +502,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema
@@ -1118,12 +1117,13 @@ func (c *Component) failedSnapshot() (count uint64, reasons map[string]uint64, f
 func (c *Component) createContentStore(ctx context.Context) (*objectstore.Store, error) {
 	// Find store-read port bucket name
 	bucket := ""
-	for _, port := range c.config.Ports.Inputs {
-		if port.Type == "store-read" {
-			bucket = port.Bucket
-			if bucket == "" {
-				bucket = port.Subject
-			}
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, fmt.Errorf("project input port %q: %w", port.Name, err)
+		}
+		if storeBucket, ok := facts.StoreReadBucket(); ok {
+			bucket = storeBucket
 			break
 		}
 	}

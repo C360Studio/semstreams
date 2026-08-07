@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -179,9 +180,9 @@ func TestDefaultConfig(t *testing.T) {
 		t.Fatal("DefaultConfig() ports should not be nil")
 	}
 
-	// tool.execute (JetStream) + tool.list (core NATS request/reply).
-	if len(cfg.Ports.Inputs) != 2 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 2", len(cfg.Ports.Inputs))
+	// Two communication inputs plus ENTITY_STATES and AGENT_LOOPS exact reads.
+	if len(cfg.Ports.Inputs) != 4 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 4", len(cfg.Ports.Inputs))
 	}
 	if len(cfg.Ports.Outputs) != 2 {
 		t.Errorf("DefaultConfig() output ports count = %d, want 2", len(cfg.Ports.Outputs))
@@ -189,7 +190,17 @@ func TestDefaultConfig(t *testing.T) {
 
 	ins := map[string]string{}
 	for _, p := range cfg.Ports.Inputs {
-		ins[p.Name] = p.Subject
+		resolved, err := p.Resolve(component.DirectionInput)
+		if err != nil {
+			t.Fatalf("resolve input %s: %v", p.Name, err)
+		}
+		facts, err := resolved.Facts()
+		if err != nil {
+			t.Fatalf("facts input %s: %v", p.Name, err)
+		}
+		if subjects := facts.NATSSubjects(); len(subjects) == 1 {
+			ins[p.Name] = subjects[0]
+		}
 	}
 	if ins["tool.execute"] != "tool.execute.>" {
 		t.Errorf("tool.execute input subject = %q, want tool.execute.>", ins["tool.execute"])
@@ -197,10 +208,29 @@ func TestDefaultConfig(t *testing.T) {
 	if ins["tool.list"] != "tool.list" {
 		t.Errorf("tool.list input subject = %q, want tool.list", ins["tool.list"])
 	}
+	for name, bucket := range map[string]string{"entity_states": "ENTITY_STATES", "agent_loops": "AGENT_LOOPS"} {
+		for _, port := range cfg.Ports.Inputs {
+			if port.Name != name {
+				continue
+			}
+			read, ok := port.Config.(component.KVReadPort)
+			if !ok || read.Bucket != bucket {
+				t.Errorf("%s config = %#v, want KVReadPort bucket %s", name, port.Config, bucket)
+			}
+		}
+	}
 
 	outputs := map[string]string{}
 	for _, port := range cfg.Ports.Outputs {
-		outputs[port.Name] = port.Subject
+		resolved, err := port.Resolve(component.DirectionOutput)
+		if err != nil {
+			t.Fatalf("resolve output %s: %v", port.Name, err)
+		}
+		facts, err := resolved.Facts()
+		if err != nil {
+			t.Fatalf("facts output %s: %v", port.Name, err)
+		}
+		outputs[port.Name] = facts.NATSSubjects()[0]
 	}
 	if outputs["tool.result"] != "tool.result.*" {
 		t.Errorf("tool.result output subject = %q, want tool.result.*", outputs["tool.result"])
@@ -209,8 +239,9 @@ func TestDefaultConfig(t *testing.T) {
 		t.Errorf("graph_mutations output subject = %q, want graph.mutation.>", outputs["graph_mutations"])
 	}
 	for _, port := range cfg.Ports.Outputs {
+		request, ok := port.Config.(component.NATSRequestPort)
 		if port.Name == "graph_mutations" &&
-			(port.Type != "nats-request" || port.Interface != "semstreams.graph.mutation" || !port.Required) {
+			(!ok || request.Interface == nil || request.Interface.Type != "semstreams.graph.mutation" || !port.Required) {
 			t.Errorf("graph_mutations output is not the required typed request port: %#v", port)
 		}
 	}

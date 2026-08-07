@@ -131,13 +131,20 @@ func TestPortCodecRejectsUnknownAndLegacyShapes(t *testing.T) {
 		{"unknown outer field", `{"name":"p","extra":true,"config":{"kind":"nats","subject":"a"}}`},
 		{"unknown config field", `{"name":"p","config":{"kind":"nats","subject":"a","extra":true}}`},
 		{"unknown kind", `{"name":"p","config":{"kind":"future","subject":"a"}}`},
+		// port-grammar:legacy-fixture exercises the strict rejection path.
 		{"legacy top-level type", `{"name":"p","type":"nats","config":{"kind":"nats","subject":"a"}}`},
 		{"legacy runtime wrapper", `{"name":"p","config":{"type":"nats","data":{"subject":"a"}}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias kv", `{"name":"p","config":{"kind":"kv","bucket":"A"}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias kvwatch", `{"name":"p","config":{"kind":"kvwatch","bucket":"A"}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias kvwrite", `{"name":"p","config":{"kind":"kvwrite","bucket":"A"}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias http", `{"name":"p","config":{"kind":"http","protocol":"http","port":80}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias grpc", `{"name":"p","config":{"kind":"grpc","protocol":"grpc","port":80}}`},
+		// port-grammar:legacy-fixture exercises strict alias rejection.
 		{"alias websocket", `{"name":"p","config":{"kind":"websocket-server","protocol":"websocket","port":80}}`},
 	}
 
@@ -148,6 +155,19 @@ func TestPortCodecRejectsUnknownAndLegacyShapes(t *testing.T) {
 				t.Fatal("unmarshal succeeded, want strict rejection")
 			}
 		})
+	}
+}
+
+func TestPortConfigJSONRejectsDuplicateNamesWithinEachLane(t *testing.T) {
+	tests := []string{
+		`{"inputs":[{"name":"same","config":{"kind":"nats","subject":"a"}},{"name":"same","config":{"kind":"nats","subject":"b"}}]}`,
+		`{"outputs":[{"name":"same","config":{"kind":"nats","subject":"a"}},{"name":"same","config":{"kind":"nats","subject":"b"}}]}`,
+	}
+	for _, raw := range tests {
+		var config PortConfig
+		if err := json.Unmarshal([]byte(raw), &config); err == nil {
+			t.Fatalf("PortConfig accepted duplicate name: %s", raw)
+		}
 	}
 }
 

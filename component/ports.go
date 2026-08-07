@@ -120,6 +120,22 @@ func (p *PortConfig) UnmarshalJSON(data []byte) error {
 	if err := decodeStrict(data, &wire); err != nil {
 		return portConfigError("", "", "ports", err)
 	}
+	for _, lane := range []struct {
+		direction   Direction
+		definitions []PortDefinition
+	}{
+		{direction: DirectionInput, definitions: wire.Inputs},
+		{direction: DirectionOutput, definitions: wire.Outputs},
+	} {
+		names := make(map[string]struct{}, len(lane.definitions))
+		for _, definition := range lane.definitions {
+			if _, duplicate := names[definition.Name]; duplicate {
+				return portConfigError(definition.Name, kindOf(definition.Config), "name",
+					fmt.Errorf("duplicate port name %q in %s lane", definition.Name, lane.direction))
+			}
+			names[definition.Name] = struct{}{}
+		}
+	}
 	p.Inputs = wire.Inputs
 	p.Outputs = wire.Outputs
 	return nil

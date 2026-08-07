@@ -78,7 +78,7 @@ func TestPortFactsProjectionResolvesEveryCanonicalFactAndReturnsCopies(t *testin
 	assertStrings(t, againContract.Compatible, []string{"v0"})
 }
 
-func TestPortFactsProjectionUsesCanonicalInteractionForExactKVRead(t *testing.T) {
+func TestPortFactsProjectionDistinguishesExactKVReadFromWatch(t *testing.T) {
 	port, err := (PortDefinition{Name: "entities", Config: KVReadPort{Bucket: "ENTITY_STATES"}}).Resolve(DirectionInput)
 	if err != nil {
 		t.Fatal(err)
@@ -87,16 +87,62 @@ func TestPortFactsProjectionUsesCanonicalInteractionForExactKVRead(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.InteractionPattern() != PatternWatch {
-		t.Fatalf("interaction = %q, want %q", facts.InteractionPattern(), PatternWatch)
+	if facts.InteractionPattern() != PatternRead {
+		t.Fatalf("interaction = %q, want %q", facts.InteractionPattern(), PatternRead)
 	}
 	assertStrings(t, facts.ConnectionIDs(), []string{"kv:ENTITY_STATES"})
+
+	watch, err := (PortDefinition{Name: "entities", Config: KVWatchPort{Bucket: "ENTITY_STATES"}}).Resolve(DirectionInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watchFacts, err := watch.Facts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if watchFacts.InteractionPattern() != PatternWatch {
+		t.Fatalf("watch interaction = %q, want %q", watchFacts.InteractionPattern(), PatternWatch)
+	}
 }
 
 func TestPortFactsProjectionRevalidatesMutableRuntimePort(t *testing.T) {
 	_, err := (Port{Name: "broken", Direction: DirectionInput, Config: NATSPort{}}).Facts()
 	if err == nil {
 		t.Fatal("Facts accepted a runtime port whose mutable config no longer resolves")
+	}
+}
+
+func TestPortFactsProjectionExposesOnlyApplicableNetworkAndStoreReadFacts(t *testing.T) {
+	networkPort, err := (PortDefinition{Name: "listener", Config: NetworkPort{Protocol: "http", Host: "127.0.0.1", Port: 8080}}).Resolve(DirectionOutput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	networkFacts, err := networkPort.Facts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	network, ok := networkFacts.Network()
+	if !ok || network.Protocol() != "http" || network.Host() != "127.0.0.1" || network.Port() != 8080 {
+		t.Fatalf("network facts = %#v, %v", network, ok)
+	}
+	if _, ok := networkFacts.StoreReadBucket(); ok {
+		t.Fatal("network port exposed store-read bucket")
+	}
+
+	storePort, err := (PortDefinition{Name: "content", Config: StoreReadPort{Bucket: "MESSAGES"}}).Resolve(DirectionInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	storeFacts, err := storePort.Facts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	bucket, ok := storeFacts.StoreReadBucket()
+	if !ok || bucket != "MESSAGES" {
+		t.Fatalf("store-read bucket = %q, %v", bucket, ok)
+	}
+	if _, ok := storeFacts.Network(); ok {
+		t.Fatal("store-read port exposed network facts")
 	}
 }
 

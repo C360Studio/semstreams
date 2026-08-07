@@ -24,14 +24,13 @@ import (
 )
 
 // testWebSocketConfig creates a standard test configuration for WebSocket output
-func testWebSocketConfig(port int, path string, subjects []string) Config {
+func testWebSocketConfig(port int, _ string, subjects []string) Config {
 	// Create input ports for each subject
 	inputs := make([]component.PortDefinition, len(subjects))
 	for i, subject := range subjects {
 		inputs[i] = component.PortDefinition{
 			Name:        fmt.Sprintf("nats_input_%d", i),
-			Type:        "nats",
-			Subject:     subject, // Use Subject field directly
+			Config:      component.NATSPort{Subject: subject},
 			Required:    true,
 			Description: fmt.Sprintf("NATS subject subscription for %s", subject),
 		}
@@ -41,8 +40,7 @@ func testWebSocketConfig(port int, path string, subjects []string) Config {
 	outputs := []component.PortDefinition{
 		{
 			Name:        "websocket_server",
-			Type:        "network",
-			Subject:     fmt.Sprintf("http://0.0.0.0:%d%s", port, path), // Encode as URL
+			Config:      component.NetworkPort{Protocol: "http", Host: "0.0.0.0", Port: port},
 			Required:    false,
 			Description: "WebSocket server for real-time data streaming",
 		},
@@ -57,9 +55,9 @@ func testWebSocketConfig(port int, path string, subjects []string) Config {
 }
 
 // TestWebSocketOutput_Interfaces verifies that Output implements required interfaces
-func TestWebSocketOutput_Interfaces(_ *testing.T) {
+func TestWebSocketOutput_Interfaces(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8080, "/ws", []string{"graph.updates.>"}, natsClient)
+	ws := mustNewOutput(t, 8080, "/ws", []string{"graph.updates.>"}, natsClient)
 
 	// Test Discoverable interface
 	var _ component.Discoverable = ws
@@ -71,7 +69,7 @@ func TestWebSocketOutput_Interfaces(_ *testing.T) {
 // TestWebSocketOutput_Meta tests the Meta method
 func TestWebSocketOutput_Meta(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8081, "/test", []string{"test.subject"}, natsClient)
+	ws := mustNewOutput(t, 8081, "/test", []string{"test.subject"}, natsClient)
 
 	meta := ws.Meta()
 
@@ -90,7 +88,7 @@ func TestWebSocketOutput_Meta(t *testing.T) {
 // TestWebSocketOutput_Ports tests InputPorts and OutputPorts methods
 func TestWebSocketOutput_Ports(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8082, "/ws", []string{"graph.updates.>"}, natsClient)
+	ws := mustNewOutput(t, 8082, "/ws", []string{"graph.updates.>"}, natsClient)
 
 	// Test InputPorts
 	inputPorts := ws.InputPorts()
@@ -121,8 +119,8 @@ func TestWebSocketOutput_Ports(t *testing.T) {
 	}
 
 	outputPort := outputPorts[0]
-	if outputPort.Name != "websocket_endpoint" {
-		t.Errorf("OutputPort name = %s, want websocket_endpoint", outputPort.Name)
+	if outputPort.Name != "websocket_server" {
+		t.Errorf("OutputPort name = %s, want websocket_server", outputPort.Name)
 	}
 	if outputPort.Direction != component.DirectionOutput {
 		t.Errorf("OutputPort direction = %s, want %s", outputPort.Direction, component.DirectionOutput)
@@ -132,15 +130,15 @@ func TestWebSocketOutput_Ports(t *testing.T) {
 	networkPort, ok := outputPort.Config.(component.NetworkPort)
 	if !ok {
 		t.Errorf("OutputPort config should be NetworkPort, got %T", outputPort.Config)
-	} else if networkPort.Protocol != "websocket" {
-		t.Errorf("OutputPort protocol = %s, want websocket", networkPort.Protocol)
+	} else if networkPort.Protocol != "http" {
+		t.Errorf("OutputPort protocol = %s, want http", networkPort.Protocol)
 	}
 }
 
 // TestWebSocketOutput_ConfigSchema tests the ConfigSchema method
 func TestWebSocketOutput_ConfigSchema(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8083, "/ws", []string{"graph.updates.>"}, natsClient)
+	ws := mustNewOutput(t, 8083, "/ws", []string{"graph.updates.>"}, natsClient)
 
 	schema := ws.ConfigSchema()
 
@@ -166,7 +164,7 @@ func TestWebSocketOutput_ConfigSchema(t *testing.T) {
 // TestWebSocketOutput_Health tests the Health method
 func TestWebSocketOutput_Health(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8084, "/ws", []string{"graph.updates.>"}, natsClient)
+	ws := mustNewOutput(t, 8084, "/ws", []string{"graph.updates.>"}, natsClient)
 
 	// Test initial health (not running)
 	health := ws.Health()
@@ -181,7 +179,7 @@ func TestWebSocketOutput_Health(t *testing.T) {
 // TestWebSocketOutput_DataFlow tests the DataFlow method
 func TestWebSocketOutput_DataFlow(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8085, "/ws", []string{"graph.updates.>"}, natsClient)
+	ws := mustNewOutput(t, 8085, "/ws", []string{"graph.updates.>"}, natsClient)
 
 	flow := ws.DataFlow()
 
@@ -232,7 +230,7 @@ func TestWebSocketOutput_Initialize(t *testing.T) {
 			subjects:   []string{"test.subject"},
 			natsClient: &natsclient.Client{},
 			wantErr:    true,
-			errMsg:     "invalid port",
+			errMsg:     "must be between 1 and 65535",
 		},
 		{
 			name:       "empty path",
@@ -250,7 +248,7 @@ func TestWebSocketOutput_Initialize(t *testing.T) {
 			subjects:   []string{},
 			natsClient: &natsclient.Client{},
 			wantErr:    true,
-			errMsg:     "NATS subjects cannot be empty",
+			errMsg:     "at least one input",
 		},
 		{
 			name:       "nil NATS client (allowed for testing)",
@@ -265,8 +263,10 @@ func TestWebSocketOutput_Initialize(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			ws := NewOutput(tt.port, tt.path, tt.subjects, tt.natsClient)
-			err := ws.Initialize()
+			ws, err := NewOutput(tt.port, tt.path, tt.subjects, tt.natsClient)
+			if err == nil {
+				err = ws.Initialize()
+			}
 
 			if tt.wantErr {
 				if err == nil {
@@ -286,7 +286,7 @@ func TestWebSocketOutput_Initialize(t *testing.T) {
 // TestWebSocketOutput_RaceConditions tests for race conditions in concurrent scenarios
 func TestWebSocketOutput_RaceConditions(t *testing.T) {
 	// Use nil NATS client for testing (bypasses NATS subscription)
-	ws := NewOutput(8901, "/ws", []string{"test.subject"}, nil)
+	ws := mustNewOutput(t, 8901, "/ws", []string{"test.subject"}, nil)
 
 	if err := ws.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
@@ -363,7 +363,7 @@ func TestWebSocketOutput_RaceConditions(t *testing.T) {
 // TestWebSocketOutput_ConcurrentClients tests 100 concurrent clients for stress testing
 func TestWebSocketOutput_ConcurrentClients(t *testing.T) {
 	// Use nil NATS client for testing (bypasses NATS subscription)
-	ws := NewOutput(8902, "/ws", []string{"test.subject"}, nil)
+	ws := mustNewOutput(t, 8902, "/ws", []string{"test.subject"}, nil)
 
 	if err := ws.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
@@ -460,7 +460,7 @@ func TestWebSocketOutput_ConcurrentClients(t *testing.T) {
 // TestWebSocketOutput_DoubleClose tests that double close operations don't panic
 func TestWebSocketOutput_DoubleClose(t *testing.T) {
 	// Use nil NATS client for testing (bypasses NATS subscription)
-	ws := NewOutput(8903, "/ws", []string{"test.subject"}, nil)
+	ws := mustNewOutput(t, 8903, "/ws", []string{"test.subject"}, nil)
 
 	if err := ws.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
@@ -543,7 +543,7 @@ func TestWebSocketOutput_DoubleClose(t *testing.T) {
 // TestWebSocketOutput_AtomicCleanup tests atomic cleanup behavior
 func TestWebSocketOutput_AtomicCleanup(t *testing.T) {
 	// Use nil NATS client for testing (bypasses NATS subscription)
-	ws := NewOutput(8904, "/ws", []string{"test.subject"}, nil)
+	ws := mustNewOutput(t, 8904, "/ws", []string{"test.subject"}, nil)
 
 	if err := ws.Initialize(); err != nil {
 		t.Fatalf("Initialize() error = %v", err)
@@ -612,7 +612,7 @@ func TestWebSocketOutput_Lifecycle(t *testing.T) {
 
 	// Use a different port for each test to avoid conflicts
 	port := 8091
-	ws := NewOutput(port, "/ws", []string{"test.subject"}, natsClient)
+	ws := mustNewOutput(t, port, "/ws", []string{"test.subject"}, natsClient)
 
 	// Test Initialize
 	err := ws.Initialize()
@@ -645,7 +645,7 @@ func TestWebSocketOutput_Lifecycle(t *testing.T) {
 // TestWebSocketOutput_MessageHandling tests message processing logic
 func TestWebSocketOutput_MessageHandling(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8092, "/ws", []string{"test.subject"}, natsClient)
+	ws := mustNewOutput(t, 8092, "/ws", []string{"test.subject"}, natsClient)
 
 	// Initialize the component
 	err := ws.Initialize()
@@ -704,7 +704,7 @@ func TestWebSocketOutput_MessageHandling(t *testing.T) {
 // TestWebSocketOutput_ClientManagement tests WebSocket client handling
 func TestWebSocketOutput_ClientManagement(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8093, "/ws", []string{"test.subject"}, natsClient)
+	ws := mustNewOutput(t, 8093, "/ws", []string{"test.subject"}, natsClient)
 
 	// Test initial client count
 	ws.clientsMu.RLock()
@@ -730,7 +730,7 @@ func TestWebSocketOutput_ClientManagement(t *testing.T) {
 // TestWebSocketOutput_ThreadSafety tests concurrent access to the component
 func TestWebSocketOutput_ThreadSafety(t *testing.T) {
 	natsClient := &natsclient.Client{}
-	ws := NewOutput(8094, "/ws", []string{"test.subject"}, natsClient)
+	ws := mustNewOutput(t, 8094, "/ws", []string{"test.subject"}, natsClient)
 
 	// Initialize the component
 	err := ws.Initialize()
@@ -811,7 +811,10 @@ func createTestWebSocketOutput() component.LifecycleComponent {
 	// Use nil NATS client for testing to avoid external dependencies
 	// Use unique port to prevent "address already in use" errors in concurrent tests
 	port := getNextTestPort()
-	ws := NewOutput(port, "/test", []string{"test.subject"}, nil)
+	ws, err := NewOutput(port, "/test", []string{"test.subject"}, nil)
+	if err != nil {
+		panic(err)
+	}
 	return ws
 }
 
@@ -832,18 +835,18 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 		{
 			name: "initialize_with_invalid_port",
 			setup: func() (*Output, error) {
-				return NewOutput(99999, "/ws", []string{"test.subject"}, nil), nil
+				return NewOutput(99999, "/ws", []string{"test.subject"}, nil)
 			},
 			operation: func(ws *Output) error {
 				return ws.Initialize()
 			},
 			wantErr: true,
-			errMsg:  "invalid port",
+			errMsg:  "must be between 1 and 65535",
 		},
 		{
 			name: "initialize_with_empty_path",
 			setup: func() (*Output, error) {
-				return NewOutput(18081, "", []string{"test.subject"}, nil), nil
+				return NewOutput(18081, "", []string{"test.subject"}, nil)
 			},
 			operation: func(ws *Output) error {
 				return ws.Initialize()
@@ -854,18 +857,18 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 		{
 			name: "initialize_with_empty_subjects",
 			setup: func() (*Output, error) {
-				return NewOutput(18082, "/ws", []string{}, nil), nil
+				return NewOutput(18082, "/ws", []string{}, nil)
 			},
 			operation: func(ws *Output) error {
 				return ws.Initialize()
 			},
 			wantErr: true,
-			errMsg:  "NATS subjects cannot be empty",
+			errMsg:  "at least one input",
 		},
 		{
 			name: "start_without_nats",
 			setup: func() (*Output, error) {
-				ws := NewOutput(18083, "/ws", []string{"test.subject"}, nil)
+				ws := mustNewOutput(t, 18083, "/ws", []string{"test.subject"}, nil)
 				_ = ws.Initialize()
 				return ws, nil
 			},
@@ -879,7 +882,7 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 		{
 			name: "handle_nil_nats_message",
 			setup: func() (*Output, error) {
-				ws := NewOutput(18084, "/ws", []string{"test.subject"}, nil)
+				ws := mustNewOutput(t, 18084, "/ws", []string{"test.subject"}, nil)
 				_ = ws.Initialize()
 				return ws, nil
 			},
@@ -894,7 +897,7 @@ func TestWebSocketOutput_SpecificErrorCases(t *testing.T) {
 		{
 			name: "concurrent_metadata_access",
 			setup: func() (*Output, error) {
-				ws := NewOutput(18085, "/ws", []string{"test.subject"}, nil)
+				ws := mustNewOutput(t, 18085, "/ws", []string{"test.subject"}, nil)
 				_ = ws.Initialize()
 				return ws, nil
 			},
@@ -1016,7 +1019,7 @@ func TestWebSocketOutput_MemoryStability(t *testing.T) {
 	const iterations = 200
 	for i := 0; i < iterations; i++ {
 		port := 19000 + i // Use different port for each iteration
-		ws := NewOutput(port, "/test", []string{"test.subject"}, nil)
+		ws := mustNewOutput(t, port, "/test", []string{"test.subject"}, nil)
 
 		// Full lifecycle
 		_ = ws.Initialize()
@@ -1079,7 +1082,7 @@ func TestWebSocketOutput_StateTransitions(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			port := 19100 + len(tt.operations) // Use unique port for each test
-			ws := NewOutput(port, "/test", []string{"test.subject"}, nil)
+			ws := mustNewOutput(t, port, "/test", []string{"test.subject"}, nil)
 
 			for i, op := range tt.operations {
 				var err error
@@ -1129,7 +1132,7 @@ func TestWebSocketOutput_BroadcastStress(t *testing.T) {
 		t.Skip("Skipping broadcast stress test in short mode")
 	}
 
-	ws := NewOutput(19200, "/test", []string{"test.subject"}, nil)
+	ws := mustNewOutput(t, 19200, "/test", []string{"test.subject"}, nil)
 	require.NoError(t, ws.Initialize())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1204,11 +1207,11 @@ func TestWebSocketOutput_Creation_MissingNATSClient(t *testing.T) {
 
 // TestWebSocketOutput_MessageEnvelope tests message envelope wrapping
 func TestWebSocketOutput_MessageEnvelope(t *testing.T) {
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:         "test",
-		Port:         19300,
 		Path:         "/test",
-		Subjects:     []string{"test.subject"},
+		InputPorts:   natsInputDefinitions([]string{"test.subject"}),
+		OutputPorts:  websocketOutputDefinitions(19300),
 		NATSClient:   nil,
 		Security:     security.Config{},
 		DeliveryMode: DeliveryAtMostOnce,
@@ -1285,11 +1288,11 @@ func TestWebSocketOutput_DeliveryModes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			port := 19301 + len(tests)
-			ws := NewOutputFromConfig(ConstructorConfig{
+			ws := mustNewOutputFromConfig(t, ConstructorConfig{
 				Name:         "test",
-				Port:         port,
 				Path:         "/test",
-				Subjects:     []string{"test.subject"},
+				InputPorts:   natsInputDefinitions([]string{"test.subject"}),
+				OutputPorts:  websocketOutputDefinitions(port),
 				NATSClient:   nil,
 				Security:     security.Config{},
 				DeliveryMode: tt.deliveryMode,
@@ -1307,11 +1310,11 @@ func TestWebSocketOutput_DeliveryModes(t *testing.T) {
 
 // TestWebSocketOutput_MessageIDGeneration tests unique message ID generation
 func TestWebSocketOutput_MessageIDGeneration(t *testing.T) {
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:         "test",
-		Port:         19312,
 		Path:         "/test",
-		Subjects:     []string{"test.subject"},
+		InputPorts:   natsInputDefinitions([]string{"test.subject"}),
+		OutputPorts:  websocketOutputDefinitions(19312),
 		NATSClient:   nil,
 		Security:     security.Config{},
 		DeliveryMode: DeliveryAtMostOnce,
@@ -1332,11 +1335,11 @@ func TestWebSocketOutput_MessageIDGeneration(t *testing.T) {
 
 // TestWebSocketOutput_PendingBufferCreation tests pending message buffer creation per client
 func TestWebSocketOutput_PendingBufferCreation(t *testing.T) {
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:         "test",
-		Port:         19313,
 		Path:         "/test",
-		Subjects:     []string{"test.subject"},
+		InputPorts:   natsInputDefinitions([]string{"test.subject"}),
+		OutputPorts:  websocketOutputDefinitions(19313),
 		NATSClient:   nil,
 		Security:     security.Config{},
 		DeliveryMode: DeliveryAtLeastOnce,
@@ -1381,19 +1384,17 @@ func TestWebSocketOutput_PendingBufferCreation(t *testing.T) {
 // no error is produced for the "nats" type branch structure.
 func TestSetupSubscriptions_CoreNATS(t *testing.T) {
 	cfg := DefaultConstructorConfig()
-	cfg.Port = 19100
 	cfg.Path = "/ws"
-	cfg.Subjects = []string{"events.>"}
 	cfg.InputPorts = []component.PortDefinition{
 		{
-			Name:    "nats_input_0",
-			Type:    "nats",
-			Subject: "events.>",
+			Name:   "nats_input_0",
+			Config: component.NATSPort{Subject: "events.>"},
 		},
 	}
+	cfg.OutputPorts = websocketOutputDefinitions(19100)
 	cfg.NATSClient = nil // nil client → setupSubscriptions returns nil immediately
 
-	ws := NewOutputFromConfig(cfg)
+	ws := mustNewOutputFromConfig(t, cfg)
 
 	ctx := context.Background()
 	err := ws.setupSubscriptions(ctx)
@@ -1401,38 +1402,35 @@ func TestSetupSubscriptions_CoreNATS(t *testing.T) {
 
 	// Confirm that inputPorts was stored correctly on the struct
 	require.Len(t, ws.inputPorts, 1)
-	assert.Equal(t, "nats", ws.inputPorts[0].Type)
-	assert.Equal(t, "events.>", ws.inputPorts[0].Subject)
+	facts, factsErr := ws.inputPorts[0].Facts()
+	require.NoError(t, factsErr)
+	assert.Equal(t, component.PortKindNATS, facts.Kind())
+	assert.Equal(t, []string{"events.>"}, facts.NATSSubjects())
 }
 
-// TestSetupSubscriptions_DefaultType verifies that a port with an empty type string is treated
-// as core NATS (backward compatibility). The nil client path is used so no real connection is
-// required; this purely validates the type-dispatch logic accepts empty-string type as "default".
-func TestSetupSubscriptions_DefaultType(t *testing.T) {
+// TestSetupSubscriptions_SubjectConstructor verifies constructor subjects become canonical NATS ports.
+func TestSetupSubscriptions_SubjectConstructor(t *testing.T) {
 	cfg := DefaultConstructorConfig()
-	cfg.Port = 19101
 	cfg.Path = "/ws"
-	cfg.Subjects = []string{"metrics.>"}
-	cfg.InputPorts = []component.PortDefinition{
-		{
-			Name:    "legacy_input",
-			Type:    "", // empty type → should default to core NATS path
-			Subject: "metrics.>",
-		},
-	}
+	cfg.InputPorts = natsInputDefinitions([]string{"metrics.>"})
+	cfg.OutputPorts = websocketOutputDefinitions(19101)
 	cfg.NATSClient = nil
 
-	ws := NewOutputFromConfig(cfg)
+	ws := mustNewOutputFromConfig(t, cfg)
 
 	ctx := context.Background()
 	err := ws.setupSubscriptions(ctx)
-	require.NoError(t, err, "empty port type should be treated as core NATS without error")
+	require.NoError(t, err)
+	require.Len(t, ws.InputPorts(), 1)
+	facts, factsErr := ws.InputPorts()[0].Facts()
+	require.NoError(t, factsErr)
+	assert.Equal(t, component.PortKindNATS, facts.Kind())
 }
 
 // TestDeriveStreamName tests the stream name derivation heuristic used when no explicit
 // StreamName is provided in the port definition.
 func TestDeriveStreamName(t *testing.T) {
-	ws := NewOutput(19102, "/ws", []string{"placeholder"}, nil)
+	ws := mustNewOutput(t, 19102, "/ws", []string{"placeholder"}, nil)
 
 	tests := []struct {
 		name    string
@@ -1494,9 +1492,9 @@ func TestWebSocketOutput_MetricsRegistrationIdempotent(t *testing.T) {
 	newCfg := func() ConstructorConfig {
 		return ConstructorConfig{
 			Name:            "ws-restart",
-			Port:            9090,
 			Path:            "/ws",
-			Subjects:        []string{"test.>"},
+			InputPorts:      natsInputDefinitions([]string{"test.>"}),
+			OutputPorts:     websocketOutputDefinitions(9090),
 			NATSClient:      &natsclient.Client{},
 			MetricsRegistry: registry,
 			DeliveryMode:    DeliveryAtMostOnce,
@@ -1505,13 +1503,13 @@ func TestWebSocketOutput_MetricsRegistrationIdempotent(t *testing.T) {
 	}
 
 	// First construction registers the collectors.
-	first := NewOutputFromConfig(newCfg())
+	first := mustNewOutputFromConfig(t, newCfg())
 	require.NotNil(t, first.metrics)
 
 	// Second construction against the same registry mimics restart — must not
 	// panic (would previously fail via MustRegister).
 	require.NotPanics(t, func() {
-		second := NewOutputFromConfig(newCfg())
+		second := mustNewOutputFromConfig(t, newCfg())
 		require.NotNil(t, second.metrics)
 	})
 }

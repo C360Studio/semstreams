@@ -91,7 +91,18 @@ func (c *Config) Validate() error {
 	}
 	var mutationPorts []component.PortDefinition
 	for _, port := range c.Ports.Outputs {
-		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+		resolved, err := port.Resolve(component.DirectionOutput)
+		if err != nil {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", err.Error())
+		}
+		facts, err := resolved.Facts()
+		if err != nil {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", err.Error())
+		}
+		contract, hasContract := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if (len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation.")) ||
+			(hasContract && contract.Type == graphmutation.InterfaceType) {
 			mutationPorts = append(mutationPorts, port)
 		}
 	}
@@ -100,12 +111,19 @@ func (c *Config) Validate() error {
 			fmt.Sprintf("exactly one canonical graph mutation output is required; found %d", len(mutationPorts)))
 	}
 	definition := mutationPorts[0]
-	port := component.BuildPortFromDefinition(definition, component.DirectionOutput)
-	request, ok := port.Config.(component.NATSRequestPort)
-	if !ok || definition.Type != "nats-request" || !port.Required ||
-		request.Subject != graphmutation.SubjectFamily || request.Interface == nil ||
-		request.Interface.Type != graphmutation.InterfaceType ||
-		request.Interface.Version != graphmutation.InterfaceVersion {
+	port, err := definition.Resolve(component.DirectionOutput)
+	if err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", err.Error())
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", err.Error())
+	}
+	contract, hasContract := facts.Interface()
+	subjects := facts.NATSSubjects()
+	if facts.Kind() != component.PortKindNATSRequest || !port.Required ||
+		len(subjects) != 1 || subjects[0] != graphmutation.SubjectFamily || !hasContract ||
+		contract.Type != graphmutation.InterfaceType || contract.Version != graphmutation.InterfaceVersion {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 			fmt.Sprintf("graph mutation output must be required nats-request interface %s %s on %s",
 				graphmutation.InterfaceType, graphmutation.InterfaceVersion, graphmutation.SubjectFamily))
@@ -143,8 +161,19 @@ func (c *Config) ApplyDefaults() {
 		c.Ports = &component.PortConfig{}
 	}
 	hasMutationOutput := false
-	for _, port := range c.Ports.Outputs {
-		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+	for _, definition := range c.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			continue
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			continue
+		}
+		contract, hasContract := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if (len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation.")) ||
+			(hasContract && contract.Type == graphmutation.InterfaceType) {
 			hasMutationOutput = true
 			break
 		}
@@ -156,7 +185,7 @@ func (c *Config) ApplyDefaults() {
 
 func defaultGraphMutationOutput() component.PortDefinition {
 	return component.PortDefinition{
-		Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+		Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 	}
 }
 
@@ -216,6 +245,8 @@ type Component struct {
 	manager LifecycleManager
 	logger  *slog.Logger
 	upgrade websocket.Upgrader
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Lifecycle state (atomic).
 	running atomic.Bool
@@ -259,12 +290,30 @@ func CreateLifecycleGateway(rawConfig json.RawMessage, deps component.Dependenci
 	}
 
 	logger := deps.GetLoggerWithComponent(ComponentName)
+	inputs := make([]component.Port, 0, len(cfg.Ports.Inputs))
+	for _, definition := range cfg.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(cfg.Ports.Outputs))
+	for _, definition := range cfg.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "CreateLifecycleGateway", err.Error())
+		}
+		outputs = append(outputs, port)
+	}
 
 	return &Component{
 		name:    ComponentName,
 		config:  cfg,
 		manager: deps.LifecycleManager,
 		logger:  logger,
+		inputs:  inputs,
+		outputs: outputs,
 		upgrade: websocket.Upgrader{
 			CheckOrigin: makeOriginCheck(cfg.AllowedOrigins),
 		},
@@ -317,27 +366,13 @@ func (c *Component) Meta() component.Metadata {
 // InputPorts returns configured inputs. The default gateway is HTTP-driven and
 // therefore has none.
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return nil
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, definition := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts includes the required canonical graph mutation request port used
 // transitively by the lifecycle Manager's operator mutation lanes.
 func (c *Component) OutputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return nil
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, definition := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema implements component.Discoverable.

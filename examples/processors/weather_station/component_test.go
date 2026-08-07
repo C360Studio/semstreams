@@ -13,10 +13,10 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.weather.>"},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "events.graph.entity.weather"},
+				{Name: "output", Config: component.NATSPort{Subject: "events.graph.entity.weather"}},
 			},
 		},
 	}
@@ -56,8 +56,8 @@ func TestNewComponent_MissingOrgID(t *testing.T) {
 	config := ComponentConfig{
 		Platform: "weather",
 		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "input", Type: "nats", Subject: "raw.>"}},
-			Outputs: []component.PortDefinition{{Name: "output", Type: "nats", Subject: "out.>"}},
+			Inputs:  []component.PortDefinition{{Name: "input", Config: component.NATSPort{Subject: "raw.>"}}},
+			Outputs: []component.PortDefinition{{Name: "output", Config: component.NATSPort{Subject: "out.>"}}},
 		},
 	}
 
@@ -74,8 +74,8 @@ func TestNewComponent_MissingPlatform(t *testing.T) {
 	config := ComponentConfig{
 		OrgID: "acme",
 		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "input", Type: "nats", Subject: "raw.>"}},
-			Outputs: []component.PortDefinition{{Name: "output", Type: "nats", Subject: "out.>"}},
+			Inputs:  []component.PortDefinition{{Name: "input", Config: component.NATSPort{Subject: "raw.>"}}},
+			Outputs: []component.PortDefinition{{Name: "output", Config: component.NATSPort{Subject: "out.>"}}},
 		},
 	}
 
@@ -94,10 +94,10 @@ func TestComponent_InputPorts(t *testing.T) {
 		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.weather.>"},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "events.graph.entity.weather"},
+				{Name: "output", Config: component.NATSPort{Subject: "events.graph.entity.weather"}},
 			},
 		},
 	}
@@ -124,10 +124,10 @@ func TestComponent_OutputPorts(t *testing.T) {
 		Platform: "weather",
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.weather.>"},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.weather.>"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "events.graph.entity.weather"},
+				{Name: "output", Config: component.NATSPort{Subject: "events.graph.entity.weather"}},
 			},
 		},
 	}

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
-	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -112,13 +111,16 @@ func newMetrics(registry *metric.MetricsRegistry, port int, _ string) *Metrics {
 // Input implements a UDP listener that publishes received data to NATS
 // This is specifically designed for receiving MAVLink messages on port 14550
 type Input struct {
-	name       string
-	port       int
-	bind       string
-	subject    string
-	config     InputConfig // Store full config for port type checking
-	natsClient *natsclient.Client
-	logger     *slog.Logger // Structured logger
+	name            string
+	port            int
+	bind            string
+	subject         string
+	config          InputConfig // Store full config for port type checking
+	inputPorts      []component.Port
+	outputPorts     []component.Port
+	jetStreamOutput bool
+	natsClient      *natsclient.Client
+	logger          *slog.Logger // Structured logger
 
 	// Buffer for incoming messages
 	buffer buffer.Buffer[[]byte]
@@ -161,41 +163,40 @@ type InputConfig struct {
 
 // Validate implements component.Validatable interface for secure config validation
 func (c *InputConfig) Validate() error {
-	// Validate port configuration if provided
-	if c.Ports != nil {
-		// Check input ports
-		for _, input := range c.Ports.Inputs {
-			if input.Type == "network" && input.Subject != "" {
-				// Parse network port from subject (udp://host:port format)
-				if len(input.Subject) > 6 && input.Subject[:6] == "udp://" {
-					hostPort := input.Subject[6:] // Remove "udp://" prefix
-					if host, portStr, err := net.SplitHostPort(hostPort); err == nil {
-						if port, err := strconv.Atoi(portStr); err == nil {
-							if err := component.ValidateNetworkConfig(port, host); err != nil {
-								return errs.Wrap(err, "InputConfig", "Validate", "network port validation")
-							}
-						} else {
-							return errs.WrapInvalid(
-								fmt.Errorf("invalid port number: %s", portStr),
-								"InputConfig", "Validate", "port parsing")
-						}
-					} else {
-						return errs.WrapInvalid(
-							fmt.Errorf("invalid UDP address format: %s", input.Subject),
-							"InputConfig", "Validate", "address parsing")
-					}
-				}
-			}
-		}
-
-		// Check output ports
-		for _, output := range c.Ports.Outputs {
-			if (output.Type == "nats" || output.Type == "jetstream") && output.Subject == "" {
-				return errs.WrapInvalid(
-					errs.ErrInvalidConfig,
-					"InputConfig", "Validate", "NATS output subject validation")
-			}
-		}
+	if c.Ports == nil || len(c.Ports.Inputs) != 1 || len(c.Ports.Outputs) != 1 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "InputConfig", "Validate", "exactly one input and one output port are required")
+	}
+	input, err := c.Ports.Inputs[0].Resolve(component.DirectionInput)
+	if err != nil {
+		return errs.WrapInvalid(err, "InputConfig", "Validate", "resolve input port")
+	}
+	inputFacts, err := input.Facts()
+	if err != nil {
+		return errs.WrapInvalid(err, "InputConfig", "Validate", "project input port facts")
+	}
+	if inputFacts.Kind() != component.PortKindNetwork {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "InputConfig", "Validate", "input port must be network")
+	}
+	networkPort, ok := inputFacts.Network()
+	if !ok || networkPort.Protocol() != "udp" {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "InputConfig", "Validate", "input network protocol must be udp")
+	}
+	if err := component.ValidateNetworkConfig(networkPort.Port(), networkPort.Host()); err != nil {
+		return errs.Wrap(err, "InputConfig", "Validate", "network port validation")
+	}
+	output, err := c.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		return errs.WrapInvalid(err, "InputConfig", "Validate", "resolve output port")
+	}
+	outputFacts, err := output.Facts()
+	if err != nil {
+		return errs.WrapInvalid(err, "InputConfig", "Validate", "project output port facts")
+	}
+	if outputFacts.Kind() != component.PortKindNATS && outputFacts.Kind() != component.PortKindJetStream {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "InputConfig", "Validate", "output port must be nats or jetstream")
+	}
+	if len(outputFacts.NATSSubjects()) != 1 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "InputConfig", "Validate", "output port must declare exactly one NATS subject")
 	}
 
 	return nil
@@ -222,62 +223,28 @@ func DefaultConfig() InputConfig {
 }
 
 // getConfiguredPorts extracts port configuration from config
-func (c *InputConfig) getConfiguredPorts() (port int, bind, subject string) {
-	var hasPortsConfig bool
-
-	// Use ports config if available
-	if c.Ports != nil {
-		hasPortsConfig = true
-
-		// Extract UDP network port from input port subject (udp://host:port format)
-		for _, input := range c.Ports.Inputs {
-			if input.Type == "network" && input.Subject != "" {
-				// Parse UDP URL format: udp://host:port
-				if len(input.Subject) > 6 && input.Subject[:6] == "udp://" {
-					hostPort := input.Subject[6:] // Remove "udp://" prefix
-					if host, portStr, err := net.SplitHostPort(hostPort); err == nil {
-						// Parse port as integer (including invalid ones for validation)
-						if parsedPort, err := strconv.Atoi(portStr); err == nil {
-							port = parsedPort
-							bind = host
-						}
-					}
-				}
-				break
-			}
-		}
-		// Extract NATS output subject (including empty ones for validation)
-		for _, output := range c.Ports.Outputs {
-			if output.Type == "nats" || output.Type == "jetstream" {
-				subject = output.Subject
-				break
-			}
-		}
+func (c *InputConfig) getConfiguredPorts() (int, string, string, []component.Port, []component.Port, bool, error) {
+	input, err := c.Ports.Inputs[0].Resolve(component.DirectionInput)
+	if err != nil {
+		return 0, "", "", nil, nil, false, err
 	}
-
-	// Apply defaults only when no port config exists, not when explicit empty values provided
-	if !hasPortsConfig {
-		if port == 0 {
-			port = 14550
-		}
-		if bind == "" {
-			bind = "0.0.0.0"
-		}
-		if subject == "" {
-			subject = "input.udp.mavlink"
-		}
-	} else {
-		// When port config exists, only default port/bind if parsing failed
-		if port == 0 {
-			port = 14550
-		}
-		if bind == "" {
-			bind = "0.0.0.0"
-		}
-		// Keep subject as-is (including empty) for validation
+	inputFacts, err := input.Facts()
+	if err != nil {
+		return 0, "", "", nil, nil, false, err
 	}
-
-	return port, bind, subject
+	networkPort, ok := inputFacts.Network()
+	if !ok {
+		return 0, "", "", nil, nil, false, fmt.Errorf("input port %q is not network", input.Name)
+	}
+	output, err := c.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		return 0, "", "", nil, nil, false, err
+	}
+	facts, err := output.Facts()
+	if err != nil {
+		return 0, "", "", nil, nil, false, err
+	}
+	return networkPort.Port(), networkPort.Host(), facts.NATSSubjects()[0], []component.Port{input}, []component.Port{output}, facts.Kind() == component.PortKindJetStream, nil
 }
 
 // InputDeps holds runtime dependencies for UDP input component
@@ -292,6 +259,12 @@ type InputDeps struct {
 // NewInput creates a new UDP input component using idiomatic Go constructor pattern.
 // Returns an error if buffer creation fails.
 func NewInput(deps InputDeps) (*Input, error) {
+	if deps.Config.Ports == nil {
+		deps.Config = DefaultConfig()
+	}
+	if err := deps.Config.Validate(); err != nil {
+		return nil, err
+	}
 	// Create buffer with high-capacity settings for concurrent message handling using functional options
 	var bufferOpts []buffer.Option[[]byte]
 	bufferOpts = append(bufferOpts, buffer.WithOverflowPolicy[[]byte](buffer.DropOldest))
@@ -302,7 +275,10 @@ func NewInput(deps InputDeps) (*Input, error) {
 	}
 
 	// Extract port values from configuration
-	port, bind, subject := deps.Config.getConfiguredPorts()
+	port, bind, subject, inputPorts, outputPorts, jetStreamOutput, err := deps.Config.getConfiguredPorts()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "udp-input", "NewInput", "resolve configured ports")
+	}
 
 	// Create Prometheus metrics if registry provided
 	var metrics *Metrics
@@ -323,17 +299,20 @@ func NewInput(deps InputDeps) (*Input, error) {
 	}
 
 	u := &Input{
-		name:        deps.Name,
-		port:        port,
-		bind:        bind,
-		subject:     subject,
-		config:      deps.Config, // Store full config for port type checking
-		natsClient:  deps.NATSClient,
-		logger:      logger,
-		buffer:      messageBuffer,
-		retryConfig: retry.DefaultConfig(),
-		startTime:   time.Now(),
-		metrics:     metrics,
+		name:            deps.Name,
+		port:            port,
+		bind:            bind,
+		subject:         subject,
+		config:          deps.Config, // Store full config for port type checking
+		inputPorts:      inputPorts,
+		outputPorts:     outputPorts,
+		jetStreamOutput: jetStreamOutput,
+		natsClient:      deps.NATSClient,
+		logger:          logger,
+		buffer:          messageBuffer,
+		retryConfig:     retry.DefaultConfig(),
+		startTime:       time.Now(),
+		metrics:         metrics,
 	}
 	u.lastActivity.Store(time.Time{})
 	return u, nil
@@ -357,34 +336,12 @@ func (u *Input) Meta() component.Metadata {
 
 // InputPorts returns the input ports for this component
 func (u *Input) InputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "udp_socket",
-			Direction:   component.DirectionInput,
-			Required:    true,
-			Description: fmt.Sprintf("UDP socket listening on %s:%d", u.bind, u.port),
-			Config: component.NetworkPort{
-				Protocol: "udp",
-				Host:     u.bind,
-				Port:     u.port,
-			},
-		},
-	}
+	return append([]component.Port(nil), u.inputPorts...)
 }
 
 // OutputPorts returns the output ports for this component
 func (u *Input) OutputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "nats_output",
-			Direction:   component.DirectionOutput,
-			Required:    true,
-			Description: "NATS subject for publishing received UDP data",
-			Config: component.NATSPort{
-				Subject: u.subject,
-			},
-		},
-	}
+	return append([]component.Port(nil), u.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema for this component
@@ -745,15 +702,7 @@ func (u *Input) processBufferedMessages(ctx context.Context) {
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (u *Input) isJetStreamPortBySubject(subject string) bool {
-	if u.config.Ports == nil {
-		return false
-	}
-	for _, port := range u.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
+	return subject == u.subject && u.jetStreamOutput
 }
 
 // publishToNATS publishes the received data to the configured NATS subject

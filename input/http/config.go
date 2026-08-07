@@ -219,12 +219,24 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Ports == nil || len(c.Ports.Outputs) == 0 {
+	if c.Ports == nil || len(c.Ports.Outputs) != 1 {
 		return errs.WrapInvalid(errs.ErrMissingConfig, "Config", "Validate",
-			"at least one output port is required")
+			"exactly one output port is required")
 	}
 	for _, output := range c.Ports.Outputs {
-		if (output.Type == "nats" || output.Type == "jetstream") && output.Subject == "" {
+		port, err := output.Resolve(component.DirectionOutput)
+		if err != nil {
+			return errs.WrapInvalid(err, "Config", "Validate", "resolve output port")
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Config", "Validate", "project output port")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+				fmt.Sprintf("output port %q must be nats or jetstream", port.Name))
+		}
+		if len(facts.NATSSubjects()) != 1 {
 			return errs.WrapInvalid(errs.ErrMissingConfig, "Config", "Validate",
 				"NATS output subject is required")
 		}
@@ -254,7 +266,7 @@ type resolved struct {
 // resolve produces a runtime view of the config, applying
 // defaults. Assumes Validate has already succeeded; out-of-range
 // values fall back to defaults rather than re-erroring here.
-func (c *Config) resolve() resolved {
+func (c *Config) resolve() (resolved, error) {
 	r := resolved{
 		url:            c.URL,
 		method:         strings.ToUpper(c.Method),
@@ -314,13 +326,21 @@ func (c *Config) resolve() resolved {
 		r.decoderMode = strings.ToLower(c.Decoder.Mode)
 	}
 	if c.Ports != nil {
-		for _, output := range c.Ports.Outputs {
-			if (output.Type == "nats" || output.Type == "jetstream") && output.Subject != "" {
-				r.subject = output.Subject
-				r.useJetStream = output.Type == "jetstream"
+		for _, definition := range c.Ports.Outputs {
+			output, err := definition.Resolve(component.DirectionOutput)
+			if err != nil {
+				return resolved{}, err
+			}
+			facts, err := output.Facts()
+			if err != nil {
+				return resolved{}, err
+			}
+			if subjects := facts.NATSSubjects(); len(subjects) == 1 {
+				r.subject = subjects[0]
+				r.useJetStream = facts.Kind() == component.PortKindJetStream
 				break
 			}
 		}
 	}
-	return r
+	return r, nil
 }

@@ -26,8 +26,7 @@ func testUDPConfig(port int, bind, subject string) InputConfig {
 			Inputs: []component.PortDefinition{
 				{
 					Name:        "udp_socket",
-					Type:        "network",
-					Subject:     fmt.Sprintf("udp://%s:%d", bind, port),
+					Config:      component.NetworkPort{Protocol: "udp", Host: bind, Port: port},
 					Required:    true,
 					Description: "UDP socket for incoming data",
 				},
@@ -35,9 +34,8 @@ func testUDPConfig(port int, bind, subject string) InputConfig {
 			Outputs: []component.PortDefinition{
 				{
 					Name:        "data_output",
-					Type:        "nats",
-					Subject:     subject,
-					Required:    false,
+					Config:      component.NATSPort{Subject: subject},
+					Required:    true,
 					Description: "NATS output for received data",
 				},
 			},
@@ -113,7 +111,7 @@ func TestUDPInput_Ports(t *testing.T) {
 
 	outputPorts := udp.OutputPorts()
 	assert.Len(t, outputPorts, 1)
-	assert.Equal(t, "nats_output", outputPorts[0].Name)
+	assert.Equal(t, "data_output", outputPorts[0].Name)
 	assert.Equal(t, component.DirectionOutput, outputPorts[0].Direction)
 	assert.True(t, outputPorts[0].Required)
 
@@ -201,9 +199,9 @@ func TestUDPInput_Initialize(t *testing.T) {
 				Logger:          nil,
 			}
 			udp, err := NewInput(deps)
-			require.NoError(t, err)
-
-			err = udp.Initialize()
+			if err == nil {
+				err = udp.Initialize()
+			}
 
 			if tt.expectedError {
 				require.Error(t, err)
@@ -805,8 +803,9 @@ func TestUDPInput_ErrorHandling(t *testing.T) {
 		Logger:          nil,
 	}
 	input, err := NewInput(deps)
-	require.NoError(t, err)
-	err = input.Initialize()
+	if err == nil {
+		err = input.Initialize()
+	}
 	require.Error(t, err, "should error on invalid port")
 	assert.True(t, errs.IsInvalid(err), "invalid port should be classified as invalid")
 
@@ -818,8 +817,9 @@ func TestUDPInput_ErrorHandling(t *testing.T) {
 		Logger:          nil,
 	}
 	input, err = NewInput(deps)
-	require.NoError(t, err)
-	err = input.Initialize()
+	if err == nil {
+		err = input.Initialize()
+	}
 	require.Error(t, err, "should error on empty subject")
 	assert.True(t, errs.IsInvalid(err), "empty subject should be classified as invalid")
 

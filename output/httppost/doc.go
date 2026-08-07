@@ -13,7 +13,7 @@
 //	config := httppost.Config{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "webhooks.>", Required: true},
+//	            {Name: "input", Config: component.NATSPort{Subject: "webhooks.>"}, Required: true},
 //	        },
 //	    },
 //	    URL:     "https://api.example.com/events",
@@ -207,7 +207,7 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "input", "type": "nats", "subject": "events.webhook", "required": true}
+//	      {"name":"input","required":true,"config":{"kind":"nats","subject":"events.webhook"}}
 //	    ]
 //	  },
 //	  "url": "https://api.example.com/webhook",

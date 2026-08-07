@@ -156,7 +156,10 @@ func (h *ViolationHandler) Handle(ctx context.Context, violation *Violation) err
 
 	// Publish violation event via output port (defaults to
 	// governance.violation.{filter}.{user} when no port override is set).
-	subject := component.ResolveSubject(h.outputs, "violations", violation.FilterName+"."+violation.UserID)
+	subject, err := component.ResolveSubject(h.outputs, "violations", violation.FilterName+"."+violation.UserID)
+	if err != nil {
+		return errs.WrapInvalid(err, "ViolationHandler", "Handle", "resolve violation subject")
+	}
 	violationJSON, err := json.Marshal(violation)
 	if err != nil {
 		return errs.Wrap(err, "ViolationHandler", "Handle", "marshal violation")
@@ -206,7 +209,10 @@ func (h *ViolationHandler) notifyUser(ctx context.Context, violation *Violation)
 
 	// User-notification subject resolved via output port; defaults to
 	// user.response.{channel}.{user} when no port override is set.
-	subject := component.ResolveSubject(h.outputs, "user_errors", violation.ChannelID+"."+violation.UserID)
+	subject, err := component.ResolveSubject(h.outputs, "user_errors", violation.ChannelID+"."+violation.UserID)
+	if err != nil {
+		return errs.WrapInvalid(err, "ViolationHandler", "notifyUser", "resolve notification subject")
+	}
 	return errs.WrapTransient(h.natsClient.Publish(ctx, subject, notificationJSON), "ViolationHandler", "notifyUser", "publish notification")
 }
 

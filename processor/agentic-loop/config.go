@@ -421,7 +421,10 @@ func DefaultConfig() Config {
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+					Name: "loops", Config: component.KVWritePort{Bucket: "AGENT_LOOPS"}, Description: "Loop state storage",
+				},
+				{
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 				},
 				{
 					Name: "agent.request", Config: component.JetStreamPort{Subjects: []string{"agent.request.*"}, StreamName: "AGENT"}, Description: "Agent model requests (JetStream)",
@@ -446,11 +449,6 @@ func DefaultConfig() Config {
 				},
 				{
 					Name: "agent.toolcall.proposed", Config: component.JetStreamPort{Subjects: []string{"agent.toolcall.proposed.*"}, StreamName: "AGENT"}, Description: "Proposed tool calls awaiting rule-driven governance verdict (ADR-039). Emitted in audit and enforce modes.",
-				},
-			},
-			KVWrite: []component.PortDefinition{
-				{
-					Name: "loops", Config: component.KVWritePort{Bucket: "AGENT_LOOPS"}, Description: "Loop state storage",
 				},
 			},
 		},

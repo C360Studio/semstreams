@@ -53,8 +53,9 @@ func TestIntegration_GraphEmbeddingStart_ContentStoreRetentionGraceful(t *testin
 	// Point the component's store-read port at that seeded bucket.
 	cfg := DefaultConfig()
 	for i := range cfg.Ports.Inputs {
-		if cfg.Ports.Inputs[i].Type == "store-read" {
-			cfg.Ports.Inputs[i].Bucket = bucket
+		if store, ok := cfg.Ports.Inputs[i].Config.(component.StoreReadPort); ok {
+			store.Bucket = bucket
+			cfg.Ports.Inputs[i].Config = store
 		}
 	}
 	cfgJSON, err := json.Marshal(cfg)

@@ -18,20 +18,16 @@ func TestGetConsumerConfig_MaxAckPending(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			port := Port{Config: JetStreamPort{
+			port := Port{Name: "entity", Direction: DirectionInput, Config: JetStreamPort{
 				Subjects:      []string{"entity.>"},
 				MaxAckPending: tt.set,
 			}}
-			if got := GetConsumerConfig(port).MaxAckPending; got != tt.want {
-				t.Errorf("GetConsumerConfig MaxAckPending = %d, want %d", got, tt.want)
+			cfg, err := GetConsumerConfig(port)
+			if err != nil {
+				t.Fatalf("GetConsumerConfig: %v", err)
 			}
-
-			def := PortDefinition{Config: JetStreamPort{
-				Subjects:      []string{"entity.>"},
-				MaxAckPending: tt.set,
-			}}
-			if got := GetConsumerConfigFromDefinition(def).MaxAckPending; got != tt.want {
-				t.Errorf("GetConsumerConfigFromDefinition MaxAckPending = %d, want %d", got, tt.want)
+			if got := cfg.MaxAckPending; got != tt.want {
+				t.Errorf("GetConsumerConfig MaxAckPending = %d, want %d", got, tt.want)
 			}
 		})
 	}

@@ -149,7 +149,7 @@ func DefaultConfig() Config {
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+			Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 		},
 		{
 			Name: "tool.result", Config: component.JetStreamPort{Subjects: []string{"tool.result.*"}, StreamName: "AGENT"}, Required: true,

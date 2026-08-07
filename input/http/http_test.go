@@ -57,6 +57,74 @@ func (s *stubPublisher) all() [][]byte {
 	return out
 }
 
+func TestHTTPInputCanonicalPortsMatchRuntimeConfiguration(t *testing.T) {
+	tests := []struct {
+		name         string
+		interval     string
+		method       string
+		wantInterval string
+		wantMethod   string
+	}{
+		{name: "defaults", wantInterval: "30s", wantMethod: MethodGET},
+		{name: "custom", interval: "2s", method: MethodPOST, wantInterval: "2s", wantMethod: MethodPOST},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			config := DefaultConfig()
+			config.URL = "https://example.test/events"
+			config.Interval = test.interval
+			config.Method = test.method
+			config.Ports = &component.PortConfig{Outputs: []component.PortDefinition{{
+				Name: "events", Config: component.JetStreamPort{StreamName: "EVENTS", Subjects: []string{"events.>"}},
+			}}}
+			input, err := NewInput(InputDeps{Name: "http", Config: config})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ports := input.InputPorts()
+			if len(ports) != 2 || ports[0].Name != "http_schedule" || ports[1].Name != "http_source" {
+				t.Fatalf("input ports = %#v", ports)
+			}
+			scheduleFacts, err := ports[0].Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scheduleFacts.Kind() != component.PortKindTimer || scheduleFacts.ResourceID() != "timer:"+test.wantInterval {
+				t.Fatalf("schedule facts = %#v", scheduleFacts)
+			}
+			sourceFacts, err := ports[1].Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if sourceFacts.Kind() != component.PortKindHTTPClient || sourceFacts.ResourceID() != "http-client:"+test.wantMethod+":https://example.test/events" {
+				t.Fatalf("source facts = %#v", sourceFacts)
+			}
+			wire, err := json.Marshal(ports[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var envelope struct {
+				Config struct {
+					TriggerPort string `json:"trigger_port"`
+				} `json:"config"`
+			}
+			if err := json.Unmarshal(wire, &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if envelope.Config.TriggerPort != "http_schedule" {
+				t.Fatalf("trigger_port = %q", envelope.Config.TriggerPort)
+			}
+			outputFacts, err := input.OutputPorts()[0].Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if outputFacts.Kind() != component.PortKindJetStream {
+				t.Fatalf("output kind = %q", outputFacts.Kind())
+			}
+		})
+	}
+}
+
 // newTestInput constructs an Input wired to the given server URL
 // and stub publisher, skipping Start so tests can drive the
 // request / publish pipeline directly via runCycle.
@@ -64,16 +132,19 @@ func newTestInput(t *testing.T, cfg Config, pub publisher) *Input {
 	t.Helper()
 	cfg.Ports = &component.PortConfig{
 		Outputs: []component.PortDefinition{
-			{Name: "out", Type: "nats", Subject: "test.http.out", Required: true},
+			{Name: "out", Config: component.NATSPort{Subject: "test.http.out"}, Required: true},
 		},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("config validate: %v", err)
 	}
-	in := NewInput(InputDeps{
+	in, err := NewInput(InputDeps{
 		Name:   "http-input-test",
 		Config: cfg,
 	})
+	if err != nil {
+		t.Fatalf("NewInput: %v", err)
+	}
 	in.publisher = pub
 	return in
 }

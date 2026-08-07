@@ -2,7 +2,6 @@ package component
 
 import (
 	"fmt"
-	"log/slog"
 	"time"
 )
 
@@ -11,17 +10,17 @@ type JetStreamPort struct {
 	// Stream configuration (for outputs)
 	StreamName      string   `json:"stream_name"`              // e.g., "ENTITY_EVENTS"
 	Subjects        []string `json:"subjects"`                 // e.g., ["events.graph.entity.>"]
-	Storage         string   `json:"storage,omitempty"`        // "file" or "memory", default "file"
-	RetentionPolicy string   `json:"retention,omitempty"`      // "limits", "interest", "work_queue", default "limits"
-	RetentionDays   int      `json:"retention_days,omitempty"` // Message retention in days, default 7
-	MaxSizeGB       int      `json:"max_size_gb,omitempty"`    // Max stream size in GB, default 10
-	Replicas        int      `json:"replicas,omitempty"`       // Number of replicas, default 1
+	Storage         string   `json:"storage,omitempty"`        // "file" or "memory" when declared
+	RetentionPolicy string   `json:"retention,omitempty"`      // "limits", "interest", or "work_queue" when declared
+	RetentionDays   int      `json:"retention_days,omitempty"` // Declared message retention in days
+	MaxSizeGB       int      `json:"max_size_gb,omitempty"`    // Declared maximum stream size in GiB
+	Replicas        int      `json:"replicas,omitempty"`       // Declared replica count
 
 	// Consumer configuration (for inputs)
 	ConsumerName  string `json:"consumer_name,omitempty"`  // Durable consumer name
-	DeliverPolicy string `json:"deliver_policy,omitempty"` // "all", "last", "new", default "new"
-	AckPolicy     string `json:"ack_policy,omitempty"`     // "explicit", "none", "all", default "explicit"
-	MaxDeliver    int    `json:"max_deliver,omitempty"`    // Max redelivery attempts, default 3
+	DeliverPolicy string `json:"deliver_policy,omitempty"` // Declared delivery policy
+	AckPolicy     string `json:"ack_policy,omitempty"`     // Declared acknowledgement policy
+	MaxDeliver    int    `json:"max_deliver,omitempty"`    // Declared maximum redelivery attempts
 	// AckWait is the duration the JetStream server waits for an ack before
 	// redelivering. Strings are parsed via time.ParseDuration ("90s",
 	// "2m", "5m"). Empty falls through to a per-component default. The
@@ -76,10 +75,8 @@ func (j JetStreamPort) Kind() PortKind {
 // ConsumerConfig holds extracted JetStream consumer configuration.
 //
 // Duration fields (AckWait, HeartbeatInterval) are zero-valued when the
-// port-level string was empty or unparseable; consumers should test
-// against zero and apply their per-component default in that case.
-// Parse errors are logged once at extraction time so a malformed config
-// surfaces loudly without blocking startup.
+// port-level string is empty; consumers may apply their component default.
+// Invalid declarations are rejected before a ConsumerConfig is returned.
 type ConsumerConfig struct {
 	DeliverPolicy     string
 	AckPolicy         string
@@ -89,88 +86,69 @@ type ConsumerConfig struct {
 	MaxAckPending     int // 0 = server default (1000); -1 = unlimited (gh#480)
 }
 
-// GetConsumerConfig extracts JetStream consumer configuration from a port.
-// Returns safe defaults if port doesn't have JetStream config:
+// GetConsumerConfig validates a JetStream port through the canonical facts
+// projection and extracts its consumer configuration. A non-JetStream or
+// invalid port returns an error rather than silently receiving defaults.
+// Unset fields receive these defaults:
 // - DeliverPolicy: "new" (safe default - don't replay historical messages)
 // - AckPolicy: "explicit"
 // - MaxDeliver: 3
 // - AckWait, HeartbeatInterval: zero (caller applies per-component default)
-func GetConsumerConfig(port Port) ConsumerConfig {
-	cfg := ConsumerConfig{
-		DeliverPolicy: "new", // Safe default
-		AckPolicy:     "explicit",
-		MaxDeliver:    3,
+func GetConsumerConfig(port Port) (ConsumerConfig, error) {
+	facts, err := port.Facts()
+	if err != nil {
+		return ConsumerConfig{}, err
 	}
-
-	if jsPort, ok := port.Config.(JetStreamPort); ok {
-		applyJetStreamConsumerConfig(&cfg, jsPort)
-	}
-	return cfg
+	return consumerConfigFromFacts(facts, "new")
 }
 
-// GetConsumerConfigFromDefinition extracts JetStream consumer configuration from a port definition.
-// This is a convenience wrapper for use with PortDefinition instead of Port.
-func GetConsumerConfigFromDefinition(portDef PortDefinition) ConsumerConfig {
-	return GetConsumerConfigFromDefinitionWithDefault(portDef, "new")
-}
-
-// GetConsumerConfigFromDefinitionWithDefault is like GetConsumerConfigFromDefinition
-// but lets the caller choose the DeliverPolicy used when the port does NOT set one.
-// The framework-wide safe default is "new" (don't replay history — correct for
-// non-idempotent consumers). An IDEMPOTENT catch-up consumer (graph-ingest,
-// objectstore) must pass "all" so it recovers messages published before its
-// consumer bound (the first-message startup race): the DefaultConfig-only
-// approach is bypassed whenever an operator supplies an explicit port JSON that
-// omits deliver_policy, silently dropping those messages. An explicit
-// deliver_policy on the port still wins over defaultDeliverPolicy.
-func GetConsumerConfigFromDefinitionWithDefault(portDef PortDefinition, defaultDeliverPolicy string) ConsumerConfig {
+func consumerConfigFromFacts(facts PortFacts, defaultDeliverPolicy string) (ConsumerConfig, error) {
+	stream, ok := facts.Stream()
+	if !ok {
+		return ConsumerConfig{}, fmt.Errorf("port kind %q does not declare JetStream consumer configuration", facts.Kind())
+	}
 	cfg := ConsumerConfig{
 		DeliverPolicy: defaultDeliverPolicy,
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
 	}
-
-	if jsPort, ok := portDef.Config.(JetStreamPort); ok {
-		applyJetStreamConsumerConfig(&cfg, jsPort)
+	if err := applyJetStreamConsumerConfig(&cfg, stream); err != nil {
+		return ConsumerConfig{}, err
 	}
-	return cfg
+	return cfg, nil
 }
 
-// applyJetStreamConsumerConfig copies non-zero JetStreamPort consumer fields
+// applyJetStreamConsumerConfig copies non-zero StreamFacts consumer fields
 // into the supplied ConsumerConfig. Centralised so both extractors stay in
-// lockstep — adding a field only needs editing one place. Duration fields
-// log a warning and stay zero (caller-default) on parse error.
-func applyJetStreamConsumerConfig(cfg *ConsumerConfig, jsPort JetStreamPort) {
-	if jsPort.DeliverPolicy != "" {
-		cfg.DeliverPolicy = jsPort.DeliverPolicy
+// lockstep — adding a field only needs editing one place.
+func applyJetStreamConsumerConfig(cfg *ConsumerConfig, stream StreamFacts) error {
+	if stream.DeliverPolicy() != "" {
+		cfg.DeliverPolicy = stream.DeliverPolicy()
 	}
-	if jsPort.AckPolicy != "" {
-		cfg.AckPolicy = jsPort.AckPolicy
+	if stream.AckPolicy() != "" {
+		cfg.AckPolicy = stream.AckPolicy()
 	}
-	if jsPort.MaxDeliver > 0 {
-		cfg.MaxDeliver = jsPort.MaxDeliver
+	if stream.MaxDeliver() > 0 {
+		cfg.MaxDeliver = stream.MaxDeliver()
 	}
 	// MaxAckPending: a non-zero port value (including -1 = unlimited) overrides
 	// the server default. 0 stays 0 (caller leaves the server default).
-	if jsPort.MaxAckPending != 0 {
-		cfg.MaxAckPending = jsPort.MaxAckPending
+	if stream.MaxAckPending() != 0 {
+		cfg.MaxAckPending = stream.MaxAckPending()
 	}
-	if jsPort.AckWait != "" {
-		if d, err := time.ParseDuration(jsPort.AckWait); err == nil {
-			cfg.AckWait = d
-		} else {
-			slog.Warn("Invalid JetStreamPort.AckWait; falling through to component default",
-				"value", jsPort.AckWait,
-				"error", err)
+	if stream.AckWait() != "" {
+		duration, err := time.ParseDuration(stream.AckWait())
+		if err != nil {
+			return fmt.Errorf("parse ack_wait: %w", err)
 		}
+		cfg.AckWait = duration
 	}
-	if jsPort.HeartbeatInterval != "" {
-		if d, err := time.ParseDuration(jsPort.HeartbeatInterval); err == nil {
-			cfg.HeartbeatInterval = d
-		} else {
-			slog.Warn("Invalid JetStreamPort.HeartbeatInterval; falling through to component default",
-				"value", jsPort.HeartbeatInterval,
-				"error", err)
+	if stream.HeartbeatInterval() != "" {
+		duration, err := time.ParseDuration(stream.HeartbeatInterval())
+		if err != nil {
+			return fmt.Errorf("parse heartbeat_interval: %w", err)
 		}
+		cfg.HeartbeatInterval = duration
 	}
+	return nil
 }

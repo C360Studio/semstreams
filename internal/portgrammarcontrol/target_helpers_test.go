@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/c360studio/semstreams/internal/graphmutation"
 )
 
 type jsonReplacement struct {
@@ -172,7 +174,11 @@ func mechanicalData(row map[string]any, kind string) (map[string]any, error) {
 		data[key] = value
 	}
 	if legacyInterface, ok := data["interface"].(string); ok {
-		data["interface"] = map[string]any{"type": legacyInterface}
+		contract := map[string]any{"type": legacyInterface}
+		if legacyInterface == graphmutation.InterfaceType {
+			contract["version"] = graphmutation.InterfaceVersion
+		}
+		data["interface"] = contract
 	}
 	switch kind {
 	case "jetstream":

@@ -46,10 +46,10 @@ The `agentic-model` component routes agent requests to OpenAI-compatible LLM end
     },
     "ports": {
       "inputs": [
-        {"name": "requests", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT"}
+        {"name":"requests","config":{"kind":"jetstream","subjects":["agent.request.>"],"stream_name":"AGENT"}}
       ],
       "outputs": [
-        {"name": "responses", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT"}
+        {"name":"responses","config":{"kind":"jetstream","subjects":["agent.response.*"],"stream_name":"AGENT"}}
       ]
     }
   }

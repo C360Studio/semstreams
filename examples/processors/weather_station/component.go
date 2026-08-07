@@ -55,6 +55,8 @@ type Component struct {
 	name       string
 	subjects   []string
 	outputSubj string
+	inputs     []component.Port
+	outputs    []component.Port
 	config     ComponentConfig
 	natsClient *natsclient.Client
 	logger     *slog.Logger
@@ -96,19 +98,41 @@ func NewComponent(
 		return nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "Platform is required")
 	}
+	if len(config.Ports.Outputs) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "exactly one output port is required")
+	}
 
 	var inputSubjects []string
 	var outputSubject string
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
 
-	for _, input := range config.Ports.Inputs {
-		if input.Type == "nats" {
-			inputSubjects = append(inputSubjects, input.Subject)
+	for _, definition := range config.Ports.Inputs {
+		input, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve input port")
 		}
+		facts, err := input.Facts()
+		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "input ports must each declare one NATS subject")
+		}
+		inputs = append(inputs, input)
+		inputSubjects = append(inputSubjects, facts.NATSSubjects()[0])
 	}
 
-	if len(config.Ports.Outputs) > 0 {
-		outputSubject = config.Ports.Outputs[0].Subject
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		output, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "WeatherStationComponent", "NewComponent", "resolve output port")
+		}
+		facts, err := output.Facts()
+		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "WeatherStationComponent", "NewComponent", "output ports must each declare one NATS subject")
+		}
+		outputs = append(outputs, output)
 	}
+	facts, _ := outputs[0].Facts()
+	outputSubject = facts.NATSSubjects()[0]
 
 	processor := NewProcessor(Config{
 		OrgID:    config.OrgID,
@@ -119,6 +143,8 @@ func NewComponent(
 		name:       "weather-station-processor",
 		subjects:   inputSubjects,
 		outputSubj: outputSubject,
+		inputs:     inputs,
+		outputs:    outputs,
 		config:     config,
 		natsClient: deps.NATSClient,
 		logger:     deps.GetLogger(),
@@ -267,28 +293,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns the NATS input ports this processor subscribes to.
 func (c *Component) InputPorts() []component.Port {
-	ports := make([]component.Port, len(c.subjects))
-	for i, subj := range c.subjects {
-		ports[i] = component.Port{
-			Name:      fmt.Sprintf("input_%d", i),
-			Direction: component.DirectionInput,
-			Required:  true,
-			Config:    component.NATSPort{Subject: subj},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns the NATS output ports for weather readings.
 func (c *Component) OutputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:      "output",
-			Direction: component.DirectionOutput,
-			Required:  true,
-			Config:    component.NATSPort{Subject: c.outputSubj},
-		},
-	}
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema for this processor.

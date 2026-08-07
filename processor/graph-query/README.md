@@ -101,11 +101,11 @@ Fixed query-type-to-subject mappings for all graph operations:
   "config": {
     "ports": {
       "inputs": [
-        {"name": "query_entity", "type": "nats-request", "subject": "graph.query.entity"},
-        {"name": "query_relationships", "type": "nats-request", "subject": "graph.query.relationships"},
-        {"name": "query_path_search", "type": "nats-request", "subject": "graph.query.pathSearch"},
-        {"name": "local_search", "type": "nats-request", "subject": "graph.query.localSearch"},
-        {"name": "global_search", "type": "nats-request", "subject": "graph.query.globalSearch"}
+        {"name":"query_entity","config":{"kind":"nats-request","subject":"graph.query.entity"}},
+        {"name":"query_relationships","config":{"kind":"nats-request","subject":"graph.query.relationships"}},
+        {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}},
+        {"name":"local_search","config":{"kind":"nats-request","subject":"graph.query.localSearch"}},
+        {"name":"global_search","config":{"kind":"nats-request","subject":"graph.query.globalSearch"}}
       ]
     },
     "query_timeout": "5s",

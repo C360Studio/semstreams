@@ -145,8 +145,7 @@
 //	      "outputs": [
 //	        {
 //	          "name": "ws_data",
-//	          "subject": "federated.data",
-//	          "type": "nats"
+//	          "config": {"kind":"nats","subject":"federated.data"}
 //	        }
 //	      ]
 //	    }
@@ -174,8 +173,7 @@
 //	      "outputs": [
 //	        {
 //	          "name": "ws_data",
-//	          "subject": "federated.data",
-//	          "type": "nats"
+//	          "config": {"kind":"nats","subject":"federated.data"}
 //	        }
 //	      ]
 //	    }

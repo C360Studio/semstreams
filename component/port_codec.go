@@ -311,17 +311,42 @@ func normalizeNATSRequestPort(config Portable) (Portable, error) {
 
 func normalizeJetStreamPort(config Portable) (Portable, error) {
 	port := config.(JetStreamPort)
-	if strings.TrimSpace(port.StreamName) == "" {
-		foundSubject := false
-		for _, subject := range port.Subjects {
-			if strings.TrimSpace(subject) != "" {
-				foundSubject = true
-				break
-			}
+	for index, subject := range port.Subjects {
+		if strings.TrimSpace(subject) == "" {
+			return nil, fmt.Errorf("field \"subjects[%d]\" must not be empty", index)
 		}
-		if !foundSubject {
+	}
+	if strings.TrimSpace(port.StreamName) == "" {
+		if len(port.Subjects) == 0 {
 			return nil, errors.New("field \"stream_name\" or non-empty \"subjects\" is required")
 		}
+	}
+	if err := validateOptionalEnum("storage", port.Storage, "file", "memory"); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalEnum("retention", port.RetentionPolicy, "limits", "interest", "work_queue"); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalEnum("deliver_policy", port.DeliverPolicy, "all", "last", "last_per_subject", "new", "by_start_time"); err != nil {
+		return nil, err
+	}
+	if err := validateOptionalEnum("ack_policy", port.AckPolicy, "explicit", "none", "all"); err != nil {
+		return nil, err
+	}
+	if port.RetentionDays < 0 {
+		return nil, errors.New("field \"retention_days\" must not be negative")
+	}
+	if port.MaxSizeGB < 0 {
+		return nil, errors.New("field \"max_size_gb\" must not be negative")
+	}
+	if port.Replicas < 0 {
+		return nil, errors.New("field \"replicas\" must not be negative")
+	}
+	if port.MaxDeliver < 0 {
+		return nil, errors.New("field \"max_deliver\" must not be negative")
+	}
+	if port.MaxAckPending < -1 {
+		return nil, errors.New("field \"max_ack_pending\" must be -1 or greater")
 	}
 	if port.AckWait != "" {
 		if err := validatePositiveDuration("ack_wait", port.AckWait); err != nil {
@@ -337,6 +362,18 @@ func normalizeJetStreamPort(config Portable) (Portable, error) {
 		return nil, err
 	}
 	return port, nil
+}
+
+func validateOptionalEnum(field, value string, allowed ...string) error {
+	if value == "" {
+		return nil
+	}
+	for _, candidate := range allowed {
+		if value == candidate {
+			return nil
+		}
+	}
+	return fmt.Errorf("field %q has unsupported value %q", field, value)
 }
 
 func normalizeKVWatchPort(config Portable) (Portable, error) {

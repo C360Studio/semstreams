@@ -28,10 +28,8 @@ func createTestComponent() component.LifecycleComponent {
 		Ports: &component.PortConfig{
 			Outputs: []component.PortDefinition{
 				{
-					Name:     "nats_output",
-					Type:     "nats",
-					Subject:  "test.file.input",
-					Required: true,
+					Name: "nats_output", Required: true,
+					Config: component.NATSPort{Subject: "test.file.input"},
 				},
 			},
 		},
@@ -45,7 +43,10 @@ func createTestComponent() component.LifecycleComponent {
 		Logger:          nil,
 	}
 
-	input := NewInput(deps)
+	input, err := NewInput(deps)
+	if err != nil {
+		panic(err)
+	}
 	return input
 }
 

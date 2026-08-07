@@ -30,10 +30,10 @@ Before:
 ```json
 "ports": {
   "inputs": [
-    {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+    {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
   ],
   "outputs": [
-    {"name": "embeddings", "subject": "EMBEDDINGS_CACHE", "type": "kv"}
+    {"name":"embeddings","config":{"kind":"kv-write","bucket":"EMBEDDINGS_CACHE"}}
   ]
 }
 ```
@@ -43,7 +43,7 @@ After:
 ```json
 "ports": {
   "inputs": [
-    {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+    {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
   ]
 }
 ```

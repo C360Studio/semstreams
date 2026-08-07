@@ -13,7 +13,7 @@
 //	config := file.Config{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "data.>", Required: true},
+//	            {Name: "input", Config: component.NATSPort{Subject: "data.>"}, Required: true},
 //	        },
 //	    },
 //	    Path:         "/var/log/streamkit/messages.jsonl",
@@ -187,7 +187,7 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "input", "type": "nats", "subject": "logs.>", "required": true}
+//	      {"name":"input","required":true,"config":{"kind":"nats","subject":"logs.>"}}
 //	    ]
 //	  },
 //	  "path": "/var/log/streamkit/messages.jsonl",

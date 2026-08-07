@@ -142,6 +142,8 @@ type Component struct {
 	inputSubj  string
 	outputSubj string
 	cfg        ComponentConfig
+	inputs     []component.Port
+	outputs    []component.Port
 
 	nats   *natsclient.Client
 	logger *slog.Logger
@@ -173,19 +175,44 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
 		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "config unmarshal")
 	}
-	if cfg.Ports == nil || len(cfg.Ports.Inputs) == 0 || len(cfg.Ports.Outputs) == 0 {
+	if cfg.Ports == nil || len(cfg.Ports.Inputs) != 1 || len(cfg.Ports.Outputs) != 1 {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
-			"ports.inputs and ports.outputs are required")
+			"exactly one input and one output port are required")
 	}
 	if cfg.OrgID == "" || cfg.Platform == "" {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
 			"org_id and platform are required")
 	}
+	input, err := cfg.Ports.Inputs[0].Resolve(component.DirectionInput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve input port")
+	}
+	inputFacts, err := input.Facts()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect input port")
+	}
+	output, err := cfg.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "resolve output port")
+	}
+	outputFacts, err := output.Facts()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "mission.Component", "NewComponent", "inspect output port")
+	}
+	inputSubjects := inputFacts.NATSSubjects()
+	outputSubjects := outputFacts.NATSSubjects()
+	if inputFacts.Kind() != component.PortKindNATS || outputFacts.Kind() != component.PortKindNATS ||
+		len(inputSubjects) != 1 || len(outputSubjects) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "mission.Component", "NewComponent",
+			"mission command ports require core-nats kind with exactly one subject")
+	}
 	return &Component{
 		name:       CommandComponentName,
-		inputSubj:  cfg.Ports.Inputs[0].Subject,
-		outputSubj: cfg.Ports.Outputs[0].Subject,
+		inputSubj:  inputSubjects[0],
+		outputSubj: outputSubjects[0],
 		cfg:        cfg,
+		inputs:     []component.Port{input},
+		outputs:    []component.Port{output},
 		nats:       deps.NATSClient,
 		logger:     deps.GetLoggerWithComponent(CommandComponentName),
 	}, nil
@@ -202,18 +229,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns the configured input ports.
 func (c *Component) InputPorts() []component.Port {
-	return []component.Port{{
-		Name: "command_in", Direction: component.DirectionInput, Required: true,
-		Config: component.NATSPort{Subject: c.inputSubj},
-	}}
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns the configured output ports.
 func (c *Component) OutputPorts() []component.Port {
-	return []component.Port{{
-		Name: "command_out", Direction: component.DirectionOutput, Required: true,
-		Config: component.NATSPort{Subject: c.outputSubj},
-	}}
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema implements component.Discoverable.

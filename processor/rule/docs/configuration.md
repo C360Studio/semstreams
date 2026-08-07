@@ -154,7 +154,7 @@ Define input sources for rule evaluation.
     "inputs": [
       {
         "name": "entity_states",
-        "type": "kv-watch",
+        "config": {"kind":"kv-watch","bucket":"ENTITY_STATES"},
         "required": true,
         "description": "Watch entity state changes"
       }
@@ -173,8 +173,7 @@ Define output destinations for rule actions.
     "outputs": [
       {
         "name": "control_commands",
-        "type": "nats",
-        "subject": "control.*.commands",
+        "config": {"kind":"nats","subject":"control.*.commands"},
         "required": false,
         "description": "Control commands based on rules"
       }
@@ -299,10 +298,10 @@ config := processor.GetRuntimeConfig()
 {
   "ports": {
     "inputs": [
-      {"name": "entity_states", "type": "kv-watch", "required": true}
+      {"name":"entity_states","required":true,"config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
     ],
     "outputs": [
-      {"name": "alerts", "type": "nats", "subject": "alerts.>"}
+      {"name":"alerts","config":{"kind":"nats","subject":"alerts.>"}}
     ]
   },
 

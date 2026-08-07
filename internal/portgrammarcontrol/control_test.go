@@ -35,6 +35,7 @@ func TestFrozenMigrationRecordAndDispositions(t *testing.T) {
 }
 
 func TestTargetRendererPreservesBytesOutsidePortObjects(t *testing.T) {
+	// port-grammar:legacy-fixture exercises migration of the retired shape.
 	source := []byte("{\n  \"before\": {\"keep\": true},\n  \"components\": {\n    \"fixture\": {\n      \"config\": {\n        \"ports\": {\"inputs\": [{\"name\": \"events\", \"type\": \"nats\", \"subject\": \"events.>\"}]}\n      }\n    }\n  },\n  \"after\": [1, 2, 3]\n}\n")
 	document, err := decodeJSON(source)
 	if err != nil {

@@ -27,7 +27,7 @@
 //	    Decoder: &http.DecoderConfig{Mode: "json"},
 //	    Ports: &component.PortConfig{
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "out", Type: "jetstream", Subject: "sensors.telemetry"},
+//	            {Name: "out", Config: component.JetStreamPort{Subjects: []string{"sensors.telemetry"}}},
 //	        },
 //	    },
 //	}

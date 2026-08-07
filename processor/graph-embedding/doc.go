@@ -44,7 +44,7 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+//	      {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
 //	    ]
 //	  },
 //	  "embedder_type": "http",

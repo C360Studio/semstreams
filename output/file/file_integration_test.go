@@ -70,7 +70,7 @@ func TestIntegration_BasicJSONLFileWrite(t *testing.T) {
 	config := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.jsonl", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.jsonl"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -155,7 +155,7 @@ func TestIntegration_JSONFormatPrettyPrint(t *testing.T) {
 	config := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.json", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.json"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -229,7 +229,7 @@ func TestIntegration_RawFormat(t *testing.T) {
 	config := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.raw", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.raw"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -295,7 +295,7 @@ func TestIntegration_AppendMode(t *testing.T) {
 	config1 := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.append1", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.append1"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -347,7 +347,7 @@ func TestIntegration_AppendMode(t *testing.T) {
 	config2 := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.append2", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.append2"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -399,7 +399,7 @@ func TestIntegration_BufferFlushing(t *testing.T) {
 	config := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.file.buffer", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.file.buffer"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,
@@ -462,8 +462,8 @@ func TestIntegration_MultipleSubjects(t *testing.T) {
 	config := file.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input1", Type: "nats", Subject: "test.file.multi.1", Required: true},
-				{Name: "input2", Type: "nats", Subject: "test.file.multi.2", Required: true},
+				{Name: "input1", Config: component.NATSPort{Subject: "test.file.multi.1"}, Required: true},
+				{Name: "input2", Config: component.NATSPort{Subject: "test.file.multi.2"}, Required: true},
 			},
 		},
 		Directory:  tmpDir,

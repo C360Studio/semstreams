@@ -144,28 +144,34 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate config")
 	}
 
-	// Merge ports with defaults
-	var inputPorts []component.Port
-	var outputPorts []component.Port
-
-	if config.Ports != nil && len(config.Ports.Inputs) > 0 {
-		inputPorts = component.MergePortConfigs(
-			buildDefaultInputPorts(),
-			config.Ports.Inputs,
-			component.DirectionInput,
-		)
-	} else {
-		inputPorts = buildDefaultInputPorts()
+	merged := *DefaultConfig().Ports
+	if config.Ports != nil {
+		var err error
+		merged, err = component.MergePortConfig(merged, *config.Ports)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "merge ports")
+		}
 	}
-
-	if config.Ports != nil && len(config.Ports.Outputs) > 0 {
-		outputPorts = component.MergePortConfigs(
-			buildDefaultOutputPorts(),
-			config.Ports.Outputs,
-			component.DirectionOutput,
-		)
-	} else {
-		outputPorts = buildDefaultOutputPorts()
+	config.Ports = &merged
+	inputPorts := make([]component.Port, 0, len(merged.Inputs))
+	for _, definition := range merged.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve input port")
+		}
+		facts, err := port.Facts()
+		if err != nil || facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "agentic-loop", "NewComponent", "input ports must be JetStream ports")
+		}
+		inputPorts = append(inputPorts, port)
+	}
+	outputPorts := make([]component.Port, 0, len(merged.Outputs))
+	for _, definition := range merged.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve output port")
+		}
+		outputPorts = append(outputPorts, port)
 	}
 
 	// Parse timeout for message processing
@@ -577,35 +583,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// buildDefaultInputPorts creates default input ports
-func buildDefaultInputPorts() []component.Port {
-	defaultCfg := DefaultConfig()
-	ports := make([]component.Port, len(defaultCfg.Ports.Inputs))
-	for i, portDef := range defaultCfg.Ports.Inputs {
-		ports[i] = component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionInput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-			Config: component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			},
-		}
-	}
-	return ports
-}
-
-// buildDefaultOutputPorts creates default output ports
-func buildDefaultOutputPorts() []component.Port {
-	defaultCfg := DefaultConfig()
-	ports := make([]component.Port, len(defaultCfg.Ports.Outputs))
-	for i, portDef := range defaultCfg.Ports.Outputs {
-		ports[i] = component.BuildPortFromDefinition(portDef, component.DirectionOutput)
-	}
-	return ports
-}
-
 // initializeKVBuckets initializes the KV buckets for loop and trajectory storage
 func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	js, err := c.natsClient.JetStream()
@@ -698,21 +675,15 @@ func contentStoreInitOutcome(err error) error {
 // setupSubscriptions sets up JetStream consumers for input ports
 func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) error {
 	for _, port := range c.inputPorts {
-		var subject string
-
-		// Handle both JetStreamPort and NATSPort for backward compatibility
-		switch p := port.Config.(type) {
-		case component.JetStreamPort:
-			if len(p.Subjects) > 0 {
-				subject = p.Subjects[0]
-			}
-		case component.NATSPort:
-			subject = p.Subject
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
-
-		if subject == "" {
-			continue
+		stream, ok := facts.Stream()
+		if !ok || len(stream.Subjects()) != 1 {
+			return fmt.Errorf("input port %s must declare one JetStream subject", port.Name)
 		}
+		subject := stream.Subjects()[0]
 
 		var handler inputHandler
 
@@ -750,33 +721,17 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 	return nil
 }
 
-// resolveStreamName picks the JetStream stream a consumer should bind to
-// for the given input port. Extracted as a pure function so the resolution
-// rules can be unit-tested without spinning up NATS.
-//
-// Resolution order:
-//  1. JetStreamPort.StreamName on the port (flow config's per-port override).
-//  2. componentStreamName (component-wide default, typically c.config.StreamName).
-//  3. Hardcoded "AGENT" fallback.
-//
-// Per-port stream_name lets a single component consume from multiple streams
-// — e.g. agentic-loop watching agent.task on AGENT and tool.result on TOOL.
-// Without this the component-wide default wins and the per-port flow-config
-// field is silently ignored.
-func resolveStreamName(port component.Port, componentStreamName string) string {
-	if jsPort, ok := port.Config.(component.JetStreamPort); ok && jsPort.StreamName != "" {
-		return jsPort.StreamName
-	}
-	if componentStreamName != "" {
-		return componentStreamName
-	}
-	return "AGENT"
-}
-
-// setupConsumer sets up a JetStream consumer for an input port. The
-// stream to bind to is resolved by resolveStreamName above.
+// setupConsumer sets up a JetStream consumer for an input port.
 func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port component.Port, subject string, handler inputHandler) error {
-	streamName := resolveStreamName(port, c.config.StreamName)
+	facts, err := port.Facts()
+	if err != nil {
+		return err
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("input port %s is not JetStream", port.Name)
+	}
+	streamName := stream.Name()
 
 	// Wait for stream to be available
 	if err := c.waitForStream(setupCtx, streamName); err != nil {
@@ -797,7 +752,10 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 
 	// Get consumer config from port (allows user configuration)
 	// Defaults to "new" - only process new messages, don't replay old ones
-	consumerCfg := component.GetConsumerConfig(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "agentic-loop", "setupConsumer", "resolve consumer config")
+	}
 
 	// Differentiate consumer config by latency class:
 	// - Long-running ports (task, response, tool.result) need serial processing,
@@ -880,7 +838,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		}
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
+	err = c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
 	if err != nil {
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
@@ -1654,7 +1612,11 @@ func (c *Component) publishContextEvent(ctx context.Context, event agentic.Conte
 		return
 	}
 
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
+	if err != nil {
+		c.logger.Error("Failed to resolve context event subject", "error", err)
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("Failed to publish context event", "error", err, "subject", subject)
 	}
@@ -1972,7 +1934,11 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		return
 	}
 
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
+	if err != nil {
+		c.logger.Error("Failed to resolve completion subject", slog.String("error", err.Error()))
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
 		c.logger.Error("Failed to publish completion",
 			slog.String("error", err.Error()),

@@ -21,8 +21,8 @@ import (
 // basePorts is the minimum valid port shape; every config here needs it to validate.
 func basePorts() *component.PortConfig {
 	return &component.PortConfig{
-		Inputs:  []component.PortDefinition{{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates}},
-		Outputs: []component.PortDefinition{{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex}},
+		Inputs:  []component.PortDefinition{{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}}},
+		Outputs: []component.PortDefinition{{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}}},
 	}
 }
 
@@ -49,8 +49,8 @@ func TestCreateGraphClustering_RejectsRemovedGateKnobs(t *testing.T) {
 	withKnob := func(key, value string) []byte {
 		return []byte(`{
 			"ports": {
-				"inputs":  [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
-				"outputs": [{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"}]
+				"inputs":  [{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}],
+				"outputs": [{"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}}]
 			},
 			"` + key + `": ` + value + `
 		}`)
@@ -95,8 +95,8 @@ func TestCreateGraphClustering_RejectsRemovedGateKnobs(t *testing.T) {
 	// rejects the fields rather than the shape.
 	clean := []byte(`{
 		"ports": {
-			"inputs":  [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],
-			"outputs": [{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"}]
+			"inputs":  [{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}],
+			"outputs": [{"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}}]
 		}
 	}`)
 	_, err := CreateGraphClustering(clean, deps)

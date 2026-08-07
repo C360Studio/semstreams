@@ -66,16 +66,16 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
     },
     "ports": {
       "inputs": [
-        {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT"},
-        {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT"},
-        {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "AGENT"},
-        {"name": "agent.signal", "type": "jetstream", "subject": "agent.signal.*", "stream_name": "AGENT"}
+        {"name":"agent.task","config":{"kind":"jetstream","subjects":["agent.task.*"],"stream_name":"AGENT"}},
+        {"name":"agent.response","config":{"kind":"jetstream","subjects":["agent.response.>"],"stream_name":"AGENT"}},
+        {"name":"tool.result","config":{"kind":"jetstream","subjects":["tool.result.>"],"stream_name":"AGENT"}},
+        {"name":"agent.signal","config":{"kind":"jetstream","subjects":["agent.signal.*"],"stream_name":"AGENT"}}
       ],
       "outputs": [
-        {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
-        {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "AGENT"},
-        {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"},
-        {"name": "agent.context.compaction", "type": "jetstream", "subject": "agent.context.compaction.*", "stream_name": "AGENT"}
+        {"name":"agent.request","config":{"kind":"jetstream","subjects":["agent.request.*"],"stream_name":"AGENT"}},
+        {"name":"tool.execute","config":{"kind":"jetstream","subjects":["tool.execute.*"],"stream_name":"AGENT"}},
+        {"name":"agent.complete","config":{"kind":"jetstream","subjects":["agent.complete.*"],"stream_name":"AGENT"}},
+        {"name":"agent.context.compaction","config":{"kind":"jetstream","subjects":["agent.context.compaction.*"],"stream_name":"AGENT"}}
       ]
     }
   }

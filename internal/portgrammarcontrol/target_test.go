@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/graphmutation"
 )
 
 type targetConfigItem struct {
@@ -153,22 +154,65 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		"processor/agentic-tools/config.go": {
 			"entity_states|KVReadPort", "agent_loops|KVReadPort",
 		},
+		"input/http/http.go": {
+			"http_schedule|TimerPort", "http_source|HTTPClientPort",
+		},
+		"input/file/file.go": {
+			"file_source|FilePort",
+		},
+		"processor/gated-dag/component.go": {
+			"dispatch|JetStreamPort", "graph_mutations|NATSRequestPort",
+		},
+		"storage/objectstore/component.go": {
+			"store-provide|StoreProvidePort",
+		},
 	}
 	for path, additions := range approved {
+		if wantByPath[path] == nil {
+			wantByPath[path] = map[string]int{}
+		}
 		for _, identity := range additions {
 			wantByPath[path][identity]++
 		}
 	}
 
+	gotByPath := map[string]map[string]int{}
 	total := 0
-	for path, want := range wantByPath {
-		fileSet := token.NewFileSet()
-		file, err := parser.ParseFile(fileSet, filepath.Join(root, filepath.FromSlash(path)), nil, parser.ParseComments)
-		if err != nil {
-			t.Fatal(err)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
 		}
-		got := map[string]int{}
+		if entry.IsDir() {
+			switch entry.Name() {
+			case ".git", "node_modules", "vendor":
+				return filepath.SkipDir
+			default:
+				return nil
+			}
+		}
+		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if relative == "component/schema_tags.go" {
+			return nil
+		}
+		fileSet := token.NewFileSet()
+		file, err := parser.ParseFile(fileSet, path, nil, parser.ParseComments)
+		if err != nil {
+			return err
+		}
+		got := gotByPath[relative]
+		if got == nil {
+			got = map[string]int{}
+			gotByPath[relative] = got
+		}
 		var stack []ast.Node
+		configLiteralsByFunction := make(map[*ast.FuncDecl]map[string]*ast.CompositeLit)
 		ast.Inspect(file, func(node ast.Node) bool {
 			if node == nil {
 				stack = stack[:len(stack)-1]
@@ -183,32 +227,65 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 			if !ok || !isPortDefinitionLiteral(literal, parent) {
 				return true
 			}
-			name, configType, retired, ok := canonicalGoPortIdentity(literal)
+			var configIdentifiers map[string]*ast.CompositeLit
+			for index := len(stack) - 1; index >= 0; index-- {
+				function, ok := stack[index].(*ast.FuncDecl)
+				if !ok {
+					continue
+				}
+				configIdentifiers = configLiteralsByFunction[function]
+				if configIdentifiers == nil {
+					configIdentifiers = localCanonicalConfigLiterals(function)
+					configLiteralsByFunction[function] = configIdentifiers
+				}
+				break
+			}
+			name, configType, retired, ok := canonicalGoPortIdentity(literal, configIdentifiers)
 			if !ok {
 				return true
 			}
 			if retired != "" {
-				t.Errorf("%s:%d target PortDefinition retains outer field %s", path, fileSet.Position(literal.Pos()).Line, retired)
+				t.Errorf("%s:%d target PortDefinition retains outer field %s", relative, fileSet.Position(literal.Pos()).Line, retired)
 			}
-			if err := validateStaticGoPortConfig(literal); err != nil {
-				t.Errorf("%s:%d invalid target PortDefinition %q: %v", path, fileSet.Position(literal.Pos()).Line, name, err)
+			if err := validateStaticGoPortConfig(literal, configIdentifiers); err != nil {
+				t.Errorf("%s:%d invalid target PortDefinition %q: %v", relative, fileSet.Position(literal.Pos()).Line, name, err)
 			}
 			got[name+"|"+configType]++
 			total++
 			return true
 		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	paths := map[string]struct{}{}
+	for path := range wantByPath {
+		paths[path] = struct{}{}
+	}
+	for path := range gotByPath {
+		paths[path] = struct{}{}
+	}
+	for path := range paths {
+		want := wantByPath[path]
+		got := gotByPath[path]
 		if difference := multisetDifference(want, got); difference != "" {
 			t.Errorf("%s target Go identities differ: %s", path, difference)
 		}
 	}
-	if total != 129 {
-		t.Fatalf("canonical Go PortDefinition identities=%d, want 129 (124 frozen + 5 approved)", total)
+	if total != 135 {
+		t.Fatalf("canonical Go PortDefinition identities=%d, want 135 (124 frozen + 11 approved)", total)
 	}
 }
 
-func validateStaticGoPortConfig(literal *ast.CompositeLit) error {
+func validateStaticGoPortConfig(literal *ast.CompositeLit, identifiers map[string]*ast.CompositeLit) error {
 	fields := astKeyedFields(literal)
 	config, ok := fields["Config"].(*ast.CompositeLit)
+	if !ok {
+		if identifier, identifierOK := fields["Config"].(*ast.Ident); identifierOK {
+			config, ok = identifiers[identifier.Name]
+		}
+	}
 	if !ok {
 		// The graph-gateway bind-address helper returns a NetworkPort and is
 		// covered through its production resolution tests.
@@ -301,7 +378,7 @@ func isPortDefinitionLiteral(literal *ast.CompositeLit, parent ast.Node) bool {
 	return ok && astTypeName(array.Elt) == "PortDefinition"
 }
 
-func canonicalGoPortIdentity(literal *ast.CompositeLit) (string, string, string, bool) {
+func canonicalGoPortIdentity(literal *ast.CompositeLit, identifiers map[string]*ast.CompositeLit) (string, string, string, bool) {
 	fields := map[string]ast.Expr{}
 	for _, element := range literal.Elts {
 		keyValue, ok := element.(*ast.KeyValueExpr)
@@ -325,6 +402,10 @@ func canonicalGoPortIdentity(literal *ast.CompositeLit) (string, string, string,
 		if identifier, ok := value.Fun.(*ast.Ident); ok && identifier.Name == "networkPortFromBindAddress" {
 			configType = "NetworkPort"
 		}
+	case *ast.Ident:
+		if resolved := identifiers[value.Name]; resolved != nil {
+			configType = astTypeName(resolved.Type)
+		}
 	}
 	if !isCanonicalConfigType(configType) {
 		return "", "", "", false
@@ -341,6 +422,37 @@ func canonicalGoPortIdentity(literal *ast.CompositeLit) (string, string, string,
 		}
 	}
 	return name, configType, "", true
+}
+
+func localCanonicalConfigLiterals(function *ast.FuncDecl) map[string]*ast.CompositeLit {
+	result := map[string]*ast.CompositeLit{}
+	ast.Inspect(function.Body, func(node ast.Node) bool {
+		switch declaration := node.(type) {
+		case *ast.AssignStmt:
+			for index, expression := range declaration.Rhs {
+				if index >= len(declaration.Lhs) {
+					break
+				}
+				name, ok := declaration.Lhs[index].(*ast.Ident)
+				literal, literalOK := expression.(*ast.CompositeLit)
+				if ok && literalOK && isCanonicalConfigType(astTypeName(literal.Type)) {
+					result[name.Name] = literal
+				}
+			}
+		case *ast.ValueSpec:
+			for index, expression := range declaration.Values {
+				if index >= len(declaration.Names) {
+					break
+				}
+				literal, ok := expression.(*ast.CompositeLit)
+				if ok && isCanonicalConfigType(astTypeName(literal.Type)) {
+					result[declaration.Names[index].Name] = literal
+				}
+			}
+		}
+		return true
+	})
+	return result
 }
 
 func astTypeName(expression ast.Expr) string {
@@ -454,6 +566,15 @@ func assertProductionPortResolution(t *testing.T, identity, lane string, row map
 	var port component.Port
 	if err := json.Unmarshal(data, &port); err != nil {
 		t.Errorf("production resolver rejected %s: %v", identity, err)
+		return
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		t.Errorf("production facts rejected %s: %v", identity, err)
+		return
+	}
+	if contract, ok := facts.Interface(); ok && contract.Type == graphmutation.InterfaceType && contract.Version != graphmutation.InterfaceVersion {
+		t.Errorf("graph mutation interface %s version=%q, want %q", identity, contract.Version, graphmutation.InterfaceVersion)
 	}
 }
 

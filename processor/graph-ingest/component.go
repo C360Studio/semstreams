@@ -394,7 +394,7 @@ func DefaultConfig() Config {
 
 				},
 				{
-					Name: "mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+					Name: "mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
@@ -477,8 +477,10 @@ func (a *tripleAdderAdapter) AddTriple(ctx context.Context, triple message.Tripl
 // Component implements the graph-ingest processor
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	decoder    *message.Decoder
@@ -648,11 +650,29 @@ func CreateGraphIngest(rawConfig json.RawMessage, deps component.Dependencies) (
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-ingest")
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphIngest", "factory", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
 
 	// Create component
 	comp := &Component{
 		name:                          "graph-ingest",
 		config:                        config,
+		inputs:                        inputs,
+		outputs:                       outputs,
 		decoder:                       message.NewDecoder(deps.PayloadRegistry),
 		natsClient:                    natsClient,
 		logger:                        logger,
@@ -718,15 +738,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions.
@@ -735,15 +747,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema
@@ -1323,29 +1327,37 @@ func (c *Component) initHierarchyInference() {
 
 // setupSubscriptions sets up JetStream consumers for input ports
 func (c *Component) setupSubscriptions(ctx context.Context) error {
-	for _, port := range c.config.Ports.Inputs {
-		if port.Type != "jetstream" {
-			c.logger.Debug("skipping non-jetstream port", slog.String("port", port.Name), slog.String("type", port.Type))
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
+		}
+		if facts.Kind() != component.PortKindJetStream {
 			continue
 		}
 
 		if err := c.setupJetStreamConsumer(ctx, port); err != nil {
 			return errs.Wrap(err, "Component", "setupSubscriptions",
-				fmt.Sprintf("JetStream consumer for %s", port.Subject))
+				fmt.Sprintf("JetStream consumer for %s", port.Name))
 		}
 	}
 	return nil
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	// Derive stream name from subject
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = c.deriveStreamName(port.Subject)
+func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
+	stream, ok := facts.Stream()
+	if !ok || len(stream.Subjects()) != 1 {
+		return fmt.Errorf("port %s must declare one JetStream subject", port.Name)
+	}
+	subject := stream.Subjects()[0]
+	streamName := stream.Name()
 	if streamName == "" {
-		return fmt.Errorf("could not derive stream name for subject %s", port.Subject)
+		return fmt.Errorf("could not derive stream name for subject %s", subject)
 	}
 
 	// Wait for stream to be available
@@ -1354,7 +1366,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	}
 
 	// Generate unique consumer name
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("graph-ingest-%s", sanitizedSubject)
@@ -1362,7 +1374,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	c.logger.Debug("Setting up JetStream consumer",
 		slog.String("stream", streamName),
 		slog.String("consumer", consumerName),
-		slog.String("filter_subject", port.Subject))
+		slog.String("filter_subject", subject))
 
 	// Get consumer config from port definition (allows user configuration)
 	// graph-ingest is idempotent (ENTITY_STATES merge/CAS overwrites), so it
@@ -1370,12 +1382,18 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	// consumer bound. A JSON config omitting deliver_policy would otherwise fall
 	// to the framework "new" default and silently drop the first entities (the
 	// startup first-message race). An explicit deliver_policy still wins.
-	consumerCfg := component.GetConsumerConfigFromDefinitionWithDefault(port, "all")
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return fmt.Errorf("resolve JetStream consumer config for port %q: %w", port.Name, consumerErr)
+	}
+	if stream.DeliverPolicy() == "" {
+		consumerCfg.DeliverPolicy = "all"
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
@@ -1383,8 +1401,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		AutoCreate:    false,
 	}
 
-	subject := port.Subject // capture for closure
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(_ context.Context, msg jetstream.Msg) {
 		// ADR-072: the consume closure decodes ONCE and submits to the keyed pool;
 		// the redelivery guard, apply, and ack move into processIngest (run on a
 		// pool lane, not this consumer goroutine). Metadata carries the stream name

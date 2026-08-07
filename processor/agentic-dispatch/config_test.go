@@ -3,6 +3,7 @@ package agenticdispatch
 import (
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -109,28 +110,36 @@ func TestPortDefinitions_Subjects(t *testing.T) {
 
 	// Verify input subjects
 	for _, p := range config.Ports.Inputs {
+		stream, ok := p.Config.(component.JetStreamPort)
+		if !ok {
+			continue
+		}
 		switch p.Name {
 		case "user.message":
-			assert.Equal(t, "user.message.>", p.Subject)
-			assert.Equal(t, "USER", p.StreamName)
+			assert.Equal(t, []string{"user.message.>"}, stream.Subjects)
+			assert.Equal(t, "USER", stream.StreamName)
 		case "agent.complete":
-			assert.Equal(t, "agent.complete.*", p.Subject)
-			assert.Equal(t, "AGENT", p.StreamName)
+			assert.Equal(t, []string{"agent.complete.*"}, stream.Subjects)
+			assert.Equal(t, "AGENT", stream.StreamName)
 		}
 	}
 
 	// Verify output subjects
 	for _, p := range config.Ports.Outputs {
+		stream, ok := p.Config.(component.JetStreamPort)
+		if !ok {
+			continue
+		}
 		switch p.Name {
 		case "agent.task":
-			assert.Equal(t, "agent.task.*", p.Subject)
-			assert.Equal(t, "AGENT", p.StreamName)
+			assert.Equal(t, []string{"agent.task.*"}, stream.Subjects)
+			assert.Equal(t, "AGENT", stream.StreamName)
 		case "agent.signal":
-			assert.Equal(t, "agent.signal.*", p.Subject)
-			assert.Equal(t, "AGENT", p.StreamName)
+			assert.Equal(t, []string{"agent.signal.*"}, stream.Subjects)
+			assert.Equal(t, "AGENT", stream.StreamName)
 		case "user.response":
-			assert.Equal(t, "user.response.>", p.Subject)
-			assert.Equal(t, "USER", p.StreamName)
+			assert.Equal(t, []string{"user.response.>"}, stream.Subjects)
+			assert.Equal(t, "USER", stream.StreamName)
 		}
 	}
 }

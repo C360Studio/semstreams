@@ -961,6 +961,14 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	createdSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
 
 	return HandlerResult{
 		LoopID:  loopID,
@@ -968,11 +976,11 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 		Created: true,
 		PublishedMessages: []PublishedMessage{
 			{
-				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+				Subject: requestSubject,
 				Data:    requestData,
 			},
 			{
-				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID),
+				Subject: createdSubject,
 				Data:    createdData,
 			},
 		},
@@ -1553,8 +1561,12 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	if err != nil {
 		return err
 	}
+	toolSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name)
+	if err != nil {
+		return err
+	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name),
+		Subject: toolSubject,
 		Data:    toolData,
 	})
 	return nil
@@ -1716,8 +1728,12 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 	if err != nil {
 		return err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return err
+	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+		Subject: requestSubject,
 		Data:    requestData,
 	})
 
@@ -1913,8 +1929,12 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	if err != nil {
 		return err
 	}
+	completionSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID)
+	if err != nil {
+		return err
+	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID),
+		Subject: completionSubject,
 		Data:    completionData,
 	})
 
@@ -2124,8 +2144,12 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	if err != nil {
 		return nil, fmt.Errorf("marshal approval pending event: %w", err)
 	}
+	subject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID)
+	if err != nil {
+		return nil, err
+	}
 	return &PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID),
+		Subject: subject,
 		Data:    data,
 	}, nil
 }
@@ -2286,9 +2310,13 @@ func (h *MessageHandler) handleToolsComplete(
 	if err != nil {
 		return *result, err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return *result, err
+	}
 
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+		Subject: requestSubject,
 		Data:    requestData,
 	})
 
@@ -2436,9 +2464,13 @@ func (h *MessageHandler) BuildFailureMessages(loopID, reason, errorMsg string) (
 	if err != nil {
 		return nil, nil, err
 	}
+	failureSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	return failure, []PublishedMessage{{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID),
+		Subject: failureSubject,
 		Data:    data,
 	}}, nil
 }

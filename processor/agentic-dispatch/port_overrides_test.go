@@ -41,71 +41,25 @@ func TestConsumerName_MultipleInstancesDistinct(t *testing.T) {
 	}
 }
 
-// TestInputPortSubject_Override confirms a configured input port subject
-// wins over the fallback. The fallback fires only when no port matches.
-func TestInputPortSubject_Override(t *testing.T) {
-	c := &Component{config: Config{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "user.message", Subject: "user.message.ops.>", StreamName: "USER"},
-			},
-		},
-	}}
-	got := c.inputPortSubject("user.message", "user.message.>")
-	if got != "user.message.ops.>" {
-		t.Errorf("inputPortSubject = %q, want port override", got)
+func TestInputPortBindingUsesResolvedPort(t *testing.T) {
+	port, err := (component.PortDefinition{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "OPS_AGENT", Subjects: []string{"agent.complete.*"}}}).Resolve(component.DirectionInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &Component{inputPorts: []component.Port{port}}
+	stream, subject, err := c.inputPortBinding("agent.complete")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stream != "OPS_AGENT" || subject != "agent.complete.*" {
+		t.Fatalf("binding = %q %q", stream, subject)
 	}
 }
 
-// TestInputPortSubject_MissingPort_ReturnsFallback confirms the fallback path
-// for default-config deployments (no ports block).
-func TestInputPortSubject_MissingPort_ReturnsFallback(t *testing.T) {
-	c := &Component{config: Config{}}
-	got := c.inputPortSubject("user.message", "user.message.>")
-	if got != "user.message.>" {
-		t.Errorf("inputPortSubject = %q, want fallback", got)
-	}
-}
-
-// TestInputPortStream_Override confirms a configured stream name on the port
-// is honored (so a downstream product can split agent events onto a custom stream).
-func TestInputPortStream_Override(t *testing.T) {
-	c := &Component{config: Config{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "agent.complete", Subject: "agent.complete.*", StreamName: "OPS_AGENT"},
-			},
-		},
-	}}
-	got := c.inputPortStream("agent.complete", "AGENT")
-	if got != "OPS_AGENT" {
-		t.Errorf("inputPortStream = %q, want port override OPS_AGENT", got)
-	}
-}
-
-// TestInputPortStream_MissingPort_ReturnsFallback covers the default-config case.
-func TestInputPortStream_MissingPort_ReturnsFallback(t *testing.T) {
-	c := &Component{config: Config{}}
-	got := c.inputPortStream("agent.complete", "AGENT")
-	if got != "AGENT" {
-		t.Errorf("inputPortStream = %q, want fallback AGENT", got)
-	}
-}
-
-// TestInputPortStream_PortWithEmptyStream_ReturnsFallback — a port that
-// declares subject but no stream falls back to the caller's default rather
-// than substituting empty-string (which would fail consumer creation).
-func TestInputPortStream_PortWithEmptyStream_ReturnsFallback(t *testing.T) {
-	c := &Component{config: Config{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "agent.complete", Subject: "agent.complete.*"},
-			},
-		},
-	}}
-	got := c.inputPortStream("agent.complete", "AGENT")
-	if got != "AGENT" {
-		t.Errorf("inputPortStream with empty port.StreamName = %q, want fallback AGENT", got)
+func TestInputPortBindingRejectsMissingPort(t *testing.T) {
+	c := &Component{}
+	if _, _, err := c.inputPortBinding("agent.complete"); err == nil {
+		t.Fatal("missing port accepted")
 	}
 }
 
@@ -114,9 +68,12 @@ func TestInputPortStream_PortWithEmptyStream_ReturnsFallback(t *testing.T) {
 // matching today's "user.response.{type}.{id}" shape.
 func TestUserResponseSubject_UsesOutputPortDef(t *testing.T) {
 	outputs := []component.PortDefinition{
-		{Name: "user.response", Subject: "user.response.>", StreamName: "USER"},
+		{Name: "user.response", Config: component.JetStreamPort{Subjects: []string{"user.response.>"}, StreamName: "USER"}},
 	}
-	got := component.ResolveSubject(outputs, "user.response", "cli.channel-123")
+	got, err := component.ResolveSubject(outputs, "user.response", "cli.channel-123")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "user.response.cli.channel-123"
 	if got != want {
 		t.Errorf("ResolveSubject = %q, want %q", got, want)
@@ -128,9 +85,12 @@ func TestUserResponseSubject_UsesOutputPortDef(t *testing.T) {
 // takes effect. This is the semspec/semteams multi-role escape hatch.
 func TestUserResponseSubject_OverriddenPort(t *testing.T) {
 	outputs := []component.PortDefinition{
-		{Name: "user.response", Subject: "user.response.ops.>", StreamName: "USER_OPS"},
+		{Name: "user.response", Config: component.JetStreamPort{Subjects: []string{"user.response.ops.>"}, StreamName: "USER_OPS"}},
 	}
-	got := component.ResolveSubject(outputs, "user.response", "cli.channel-123")
+	got, err := component.ResolveSubject(outputs, "user.response", "cli.channel-123")
+	if err != nil {
+		t.Fatal(err)
+	}
 	want := "user.response.ops.cli.channel-123"
 	if got != want {
 		t.Errorf("ResolveSubject with override = %q, want %q", got, want)

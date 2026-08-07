@@ -50,11 +50,11 @@ When triggered, the component runs through these phases:
   "config": {
     "ports": {
       "inputs": [
-        {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+        {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
       ],
       "outputs": [
-        {"name": "communities", "subject": "COMMUNITY_INDEX", "type": "kv"},
-        {"name": "anomalies", "subject": "ANOMALY_INDEX", "type": "kv"}
+        {"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}},
+        {"name":"anomalies","config":{"kind":"kv-write","bucket":"ANOMALY_INDEX"}}
       ]
     },
     "detection_interval": "30s",

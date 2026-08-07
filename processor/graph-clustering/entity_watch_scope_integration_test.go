@@ -75,10 +75,10 @@ func TestIntegration_ClusteringHoldsNoEntityStatesWatcher(t *testing.T) {
 		AllowUngatedReads: true,
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1h",

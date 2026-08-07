@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -58,8 +59,10 @@ type Input struct {
 	requestMu  sync.RWMutex
 
 	// Output NATS subjects
-	dataSubject    string
-	controlSubject string
+	dataSubject      string
+	controlSubject   string
+	outputPorts      []component.Port
+	jetStreamOutputs map[string]bool
 
 	// Lifecycle management
 	shutdown     chan struct{}
@@ -294,17 +297,41 @@ func NewInput(
 		)
 	}
 
-	// Extract output subjects from port config
-	dataSubject := "federated.data"
-	controlSubject := "federated.control"
-	if config.Ports != nil {
-		for _, port := range config.Ports.Outputs {
-			if port.Name == "ws_data" {
-				dataSubject = port.Subject
-			} else if port.Name == "ws_control" {
-				controlSubject = port.Subject
-			}
+	if config.Ports == nil {
+		return nil, errs.WrapInvalid(errors.New("ports configuration is required"), "websocket_input", "NewInput", "resolve output ports")
+	}
+	outputPorts := make([]component.Port, len(config.Ports.Outputs))
+	jetStreamOutputs := make(map[string]bool, len(config.Ports.Outputs))
+	var dataSubject, controlSubject string
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "websocket_input", "NewInput", "resolve output port")
 		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "websocket_input", "NewInput", "project output port facts")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(fmt.Errorf("output port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "websocket_input", "NewInput", "validate output port")
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return nil, errs.WrapInvalid(fmt.Errorf("output port %q declares %d subjects, want one", port.Name, len(subjects)), "websocket_input", "NewInput", "validate output port")
+		}
+		outputPorts[index] = port
+		jetStreamOutputs[subjects[0]] = facts.Kind() == component.PortKindJetStream
+		switch port.Name {
+		case "ws_data":
+			dataSubject = subjects[0]
+		case "ws_control":
+			controlSubject = subjects[0]
+		default:
+			return nil, errs.WrapInvalid(fmt.Errorf("unknown output port %q", port.Name), "websocket_input", "NewInput", "validate output port")
+		}
+	}
+	if dataSubject == "" || controlSubject == "" {
+		return nil, errs.WrapInvalid(errors.New("ws_data and ws_control output ports are required"), "websocket_input", "NewInput", "validate output ports")
 	}
 
 	// Create message buffer with configured size and overflow policy
@@ -336,19 +363,21 @@ func NewInput(
 	}
 
 	input := &Input{
-		name:           name,
-		config:         config,
-		natsClient:     natsClient,
-		security:       securityCfg,
-		mode:           config.Mode,
-		clients:        make(map[string]*websocket.Conn),
-		messageBuffer:  messageBuffer,
-		requestMap:     make(map[string]chan *MessageEnvelope),
-		dataSubject:    dataSubject,
-		controlSubject: controlSubject,
-		shutdown:       make(chan struct{}),
-		done:           make(chan struct{}),
-		metrics:        newMetrics(metricsRegistry, name),
+		name:             name,
+		config:           config,
+		natsClient:       natsClient,
+		security:         securityCfg,
+		mode:             config.Mode,
+		clients:          make(map[string]*websocket.Conn),
+		messageBuffer:    messageBuffer,
+		requestMap:       make(map[string]chan *MessageEnvelope),
+		dataSubject:      dataSubject,
+		controlSubject:   controlSubject,
+		outputPorts:      outputPorts,
+		jetStreamOutputs: jetStreamOutputs,
+		shutdown:         make(chan struct{}),
+		done:             make(chan struct{}),
+		metrics:          newMetrics(metricsRegistry, name),
 	}
 
 	// Configure WebSocket upgrader for server mode
@@ -399,32 +428,12 @@ func (i *Input) Meta() component.Metadata {
 
 // InputPorts returns the input ports (none for input components)
 func (i *Input) InputPorts() []component.Port {
-	return []component.Port{}
+	return nil
 }
 
 // OutputPorts returns the output ports
 func (i *Input) OutputPorts() []component.Port {
-	ports := []component.Port{
-		{
-			Name:        "ws_data",
-			Direction:   component.DirectionOutput,
-			Required:    true,
-			Description: "Data messages received via WebSocket",
-			Config: component.NATSPort{
-				Subject: i.dataSubject,
-			},
-		},
-		{
-			Name:        "ws_control",
-			Direction:   component.DirectionOutput,
-			Required:    false,
-			Description: "Control messages (requests/replies)",
-			Config: component.NATSPort{
-				Subject: i.controlSubject,
-			},
-		},
-	}
-	return ports
+	return append([]component.Port(nil), i.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema
@@ -1174,15 +1183,7 @@ func (i *Input) drainMessageQueue(ctx context.Context) {
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (i *Input) isJetStreamPortBySubject(subject string) bool {
-	if i.config.Ports == nil {
-		return false
-	}
-	for _, port := range i.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
+	return i.jetStreamOutputs[subject]
 }
 
 // handleMessage processes a single message envelope

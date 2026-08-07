@@ -164,16 +164,30 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	// Build ports
-	inputPorts := buildDefaultInputPorts()
-	outputPorts := buildDefaultOutputPorts()
-
+	merged := *DefaultConfig().Ports
 	if config.Ports != nil {
-		if len(config.Ports.Inputs) > 0 {
-			inputPorts = component.MergePortConfigs(inputPorts, config.Ports.Inputs, component.DirectionInput)
+		var err error
+		merged, err = component.MergePortConfig(merged, *config.Ports)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge ports")
 		}
-		if len(config.Ports.Outputs) > 0 {
-			outputPorts = component.MergePortConfigs(outputPorts, config.Ports.Outputs, component.DirectionOutput)
+	}
+	config.Ports = &merged
+	inputPorts := make([]component.Port, 0, len(merged.Inputs))
+	for _, definition := range merged.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
 		}
+		inputPorts = append(inputPorts, port)
+	}
+	outputPorts := make([]component.Port, 0, len(merged.Outputs))
+	for _, definition := range merged.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
+		}
+		outputPorts = append(outputPorts, port)
 	}
 
 	logger := deps.GetLogger()
@@ -342,9 +356,29 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 // setupSubscriptions sets up JetStream consumers for durable messaging
 func (c *Component) setupSubscriptions(ctx context.Context) error {
+	userStream, userSubject, err := c.inputPortBinding("user.message")
+	if err != nil {
+		return err
+	}
+	completeStream, completeSubject, err := c.inputPortBinding("agent.complete")
+	if err != nil {
+		return err
+	}
+	createdStream, createdSubject, err := c.inputPortBinding("agent.created")
+	if err != nil {
+		return err
+	}
+	failedStream, failedSubject, err := c.inputPortBinding("agent.failed")
+	if err != nil {
+		return err
+	}
+	approvalStream, approvalSubject, err := c.inputPortBinding("agent.approval_pending")
+	if err != nil {
+		return err
+	}
 	// Wait for streams to be available
-	if err := c.waitForStream(ctx, c.config.StreamName); err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", fmt.Sprintf("wait for stream %s", c.config.StreamName))
+	if err := c.waitForStream(ctx, userStream); err != nil {
+		return errs.WrapTransient(err, "Component", "setupSubscriptions", fmt.Sprintf("wait for stream %s", userStream))
 	}
 	if err := c.waitForStream(ctx, "AGENT"); err != nil {
 		return errs.WrapTransient(err, "Component", "setupSubscriptions", "wait for stream AGENT")
@@ -353,15 +387,15 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// Subscribe to user messages via JetStream
 	// Use "last" policy to catch messages sent just before consumer starts
 	userMsgCfg := natsclient.StreamConsumerConfig{
-		StreamName:    c.config.StreamName,
+		StreamName:    userStream,
 		ConsumerName:  c.consumerName("agentic-dispatch-user-message"),
-		FilterSubject: c.inputPortSubject("user.message", "user.message.>"),
+		FilterSubject: userSubject,
 		DeliverPolicy: "last",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
 		AutoCreate:    false,
 	}
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, userMsgCfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleUserMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			c.logger.Error("Failed to ack user message", slog.String("error", ackErr.Error()))
@@ -377,9 +411,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to agent completions via JetStream
 	agentCompleteCfg := natsclient.StreamConsumerConfig{
-		StreamName:    c.inputPortStream("agent.complete", "AGENT"),
+		StreamName:    completeStream,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-complete"),
-		FilterSubject: c.inputPortSubject("agent.complete", "agent.complete.*"),
+		FilterSubject: completeSubject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -401,9 +435,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop created events for workflow context sync
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    c.inputPortStream("agent.created", "AGENT"),
+		StreamName:    createdStream,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
-		FilterSubject: c.inputPortSubject("agent.created", "agent.created.*"),
+		FilterSubject: createdSubject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -425,9 +459,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    c.inputPortStream("agent.failed", "AGENT"),
+		StreamName:    failedStream,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-failed"),
-		FilterSubject: c.inputPortSubject("agent.failed", "agent.failed.*"),
+		FilterSubject: failedSubject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -462,9 +496,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// buffer (drains on the matching agent.created), 10 retries gives
 	// generous slack for race resolution without unbounded redelivery.
 	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
-		StreamName:    c.inputPortStream("agent.approval_pending", "AGENT"),
+		StreamName:    approvalStream,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
-		FilterSubject: c.inputPortSubject("agent.approval_pending", "agent.approval_pending.*"),
+		FilterSubject: approvalSubject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    10,
@@ -730,7 +764,11 @@ func (c *Component) handleTaskSubmission(ctx context.Context, msg agentic.UserMe
 		return
 	}
 
-	subject := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.task", taskID)
+	if err != nil {
+		c.logger.Error("Failed to resolve task subject", slog.String("error", err.Error()))
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, taskData); err != nil {
 		c.logger.Error("Failed to publish task", slog.String("error", err.Error()))
 		c.sendResponse(ctx, agentic.UserResponse{
@@ -1002,7 +1040,11 @@ func (c *Component) sendResponse(ctx context.Context, resp agentic.UserResponse)
 		return
 	}
 
-	subject := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "user.response", resp.ChannelType+"."+resp.ChannelID)
+	if err != nil {
+		c.logger.Error("Failed to resolve response subject", slog.String("error", err.Error()))
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("Failed to publish response", slog.String("error", err.Error()))
 	}
@@ -1087,32 +1129,23 @@ func (c *Component) LoopTracker() *LoopTracker {
 	return c.loopTracker
 }
 
-// inputPortSubject returns the configured subject for the named input port,
-// falling back to the provided default when no matching port is found.
-func (c *Component) inputPortSubject(portName, fallback string) string {
-	if c.config.Ports != nil {
-		for _, p := range c.config.Ports.Inputs {
-			if p.Name == portName {
-				return p.Subject
-			}
+// inputPortBinding returns the configured stream and sole subject for a named JetStream input.
+func (c *Component) inputPortBinding(portName string) (string, string, error) {
+	for _, port := range c.inputPorts {
+		if port.Name != portName {
+			continue
 		}
-	}
-	return fallback
-}
-
-// inputPortStream returns the configured stream name for the named input port,
-// falling back to the provided default when no matching port is found or the
-// port declares no stream. Mirrors inputPortSubject so subscriptions can pull
-// both subject and stream from the same port definition.
-func (c *Component) inputPortStream(portName, fallback string) string {
-	if c.config.Ports != nil {
-		for _, p := range c.config.Ports.Inputs {
-			if p.Name == portName && p.StreamName != "" {
-				return p.StreamName
-			}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", "", err
 		}
+		stream, ok := facts.Stream()
+		if !ok || len(stream.Subjects()) != 1 {
+			return "", "", fmt.Errorf("input port %q must declare one JetStream subject", portName)
+		}
+		return stream.Name(), stream.Subjects()[0], nil
 	}
-	return fallback
+	return "", "", fmt.Errorf("input port %q not found", portName)
 }
 
 // consumerName appends ConsumerNameSuffix to the base name when set, allowing
@@ -1125,8 +1158,7 @@ func (c *Component) consumerName(base string) string {
 	return base + "-" + c.config.ConsumerNameSuffix
 }
 
-// outputPortDefs returns the output port definitions slice, or nil when Ports is unset.
-// This lets ResolveSubject fall back gracefully to portName + "." + suffix.
+// outputPortDefs returns the validated output port definitions.
 func (c *Component) outputPortDefs() []component.PortDefinition {
 	if c.config.Ports == nil {
 		return nil

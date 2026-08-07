@@ -142,7 +142,7 @@ func (c *Component) canonicalMutationRoutes() ([]canonicalMutationRoute, error) 
 	}
 	routes := make([]canonicalMutationRoute, 0, len(operations))
 	for _, operation := range operations {
-		subject, resolveErr := graphmutation.ResolveSubject(provider.Subject, operation.operation)
+		subject, resolveErr := graphmutation.ResolveSubject(provider, operation.operation)
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -155,38 +155,43 @@ func (c *Component) canonicalMutationRoutes() ([]canonicalMutationRoute, error) 
 	return routes, nil
 }
 
-func canonicalMutationProvider(ports *component.PortConfig) (component.NATSRequestPort, error) {
+func canonicalMutationProvider(ports *component.PortConfig) (string, error) {
 	if ports == nil {
-		return component.NATSRequestPort{}, errors.New("graph mutation provider port is required")
+		return "", errors.New("graph mutation provider port is required")
 	}
-	var provider *component.NATSRequestPort
+	var provider *string
 	for _, definition := range ports.Inputs {
-		port := component.BuildPortFromDefinition(definition, component.DirectionInput)
-		request, ok := port.Config.(component.NATSRequestPort)
-		if !ok {
-			continue
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return "", err
 		}
-		candidate := strings.HasPrefix(request.Subject, "graph.mutation.") ||
-			(request.Interface != nil && request.Interface.Type == graphmutation.InterfaceType)
+		facts, err := port.Facts()
+		if err != nil {
+			return "", err
+		}
+		subjects := facts.NATSSubjects()
+		contract, hasContract := facts.Interface()
+		candidate := (len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation.")) ||
+			(hasContract && contract.Type == graphmutation.InterfaceType)
 		if !candidate {
 			continue
 		}
 		if provider != nil {
-			return component.NATSRequestPort{}, errors.New("graph mutation provider port is ambiguous")
+			return "", errors.New("graph mutation provider port is ambiguous")
 		}
-		if !port.Required || request.Subject != graphmutation.SubjectFamily ||
-			request.Interface == nil || request.Interface.Type != graphmutation.InterfaceType ||
-			request.Interface.Version != graphmutation.InterfaceVersion {
-			return component.NATSRequestPort{}, fmt.Errorf(
+		if facts.Kind() != component.PortKindNATSRequest || !port.Required ||
+			len(subjects) != 1 || subjects[0] != graphmutation.SubjectFamily || !hasContract ||
+			contract.Type != graphmutation.InterfaceType || contract.Version != graphmutation.InterfaceVersion {
+			return "", fmt.Errorf(
 				"graph mutation provider must be a required %s %s nats-request input on %s",
 				graphmutation.InterfaceType, graphmutation.InterfaceVersion, graphmutation.SubjectFamily,
 			)
 		}
-		requestCopy := request
-		provider = &requestCopy
+		subject := subjects[0]
+		provider = &subject
 	}
 	if provider == nil {
-		return component.NATSRequestPort{}, errors.New("graph mutation provider port is required")
+		return "", errors.New("graph mutation provider port is required")
 	}
 	return *provider, nil
 }

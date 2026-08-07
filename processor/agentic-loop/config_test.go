@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -214,13 +215,8 @@ func TestDefaultConfig(t *testing.T) {
 	// port config, matching the existing treatment of agent.request etc.
 	// agent.toolcall.proposed added in ADR-039 — published before dispatch
 	// when governance mode is audit or enforce).
-	if len(cfg.Ports.Outputs) != 9 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 9", len(cfg.Ports.Outputs))
-	}
-
-	// Verify KV ports
-	if len(cfg.Ports.KVWrite) != 1 {
-		t.Errorf("DefaultConfig() KV write ports count = %d, want 1", len(cfg.Ports.KVWrite))
+	if len(cfg.Ports.Outputs) != 10 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 10", len(cfg.Ports.Outputs))
 	}
 
 	// Verify specific input subjects
@@ -232,7 +228,15 @@ func TestDefaultConfig(t *testing.T) {
 	for name, subject := range expectedInputs {
 		found := false
 		for _, port := range cfg.Ports.Inputs {
-			if port.Name == name && port.Subject == subject {
+			resolved, err := port.Resolve(component.DirectionInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := resolved.Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if port.Name == name && len(facts.NATSSubjects()) == 1 && facts.NATSSubjects()[0] == subject {
 				found = true
 				break
 			}
@@ -250,15 +254,24 @@ func TestDefaultConfig(t *testing.T) {
 		"agent.complete":  "agent.complete.*",
 	}
 	for _, port := range cfg.Ports.Outputs {
+		request, ok := port.Config.(component.NATSRequestPort)
 		if port.Name == "graph_mutations" &&
-			(port.Type != "nats-request" || port.Interface != "semstreams.graph.mutation" || !port.Required) {
+			(!ok || request.Interface == nil || request.Interface.Type != "semstreams.graph.mutation" || !port.Required) {
 			t.Errorf("graph_mutations output is not the required typed request port: %#v", port)
 		}
 	}
 	for name, subject := range expectedOutputs {
 		found := false
 		for _, port := range cfg.Ports.Outputs {
-			if port.Name == name && port.Subject == subject {
+			resolved, err := port.Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := resolved.Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if port.Name == name && len(facts.NATSSubjects()) == 1 && facts.NATSSubjects()[0] == subject {
 				found = true
 				break
 			}

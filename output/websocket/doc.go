@@ -11,18 +11,15 @@
 //
 // Start a WebSocket server on port 8080:
 //
-//	config := websocket.Config{
-//	    Ports: &component.PortConfig{
-//	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "stream.>", Required: true},
-//	        },
-//	    },
-//	    Port: 8080,
-//	    Path: "/ws",
+//	config := websocket.DefaultConstructorConfig()
+//	config.Path = "/ws"
+//	config.InputPorts = []component.PortDefinition{
+//	    {Name: "input", Config: component.NATSPort{Subject: "stream.>"}, Required: true},
 //	}
-//
-//	rawConfig, _ := json.Marshal(config)
-//	output, err := websocket.NewOutput(rawConfig, deps)
+//	config.OutputPorts = []component.PortDefinition{
+//	    {Name: "websocket_server", Config: component.NetworkPort{Protocol: "http", Port: 8080}},
+//	}
+//	output, err := websocket.NewOutputFromConfig(config)
 //
 // # Configuration
 //
@@ -264,7 +261,7 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "stream", "type": "nats", "subject": "events.>", "required": true}
+//	      {"name":"stream","required":true,"config":{"kind":"nats","subject":"events.>"}}
 //	    ]
 //	  },
 //	  "port": 8080,

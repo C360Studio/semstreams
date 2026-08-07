@@ -87,6 +87,10 @@
 //   - Multiple writers to same bucket generates warning
 //   - Watchers receive change notifications
 //
+// component.PatternRead (KV bucket):
+//   - Unidirectional dependency: writers → exact readers
+//   - Readers perform current-value or list access; they do not watch or replay
+//
 // component.PatternNetwork (external listener):
 //   - External boundary ports (HTTP server, UDP listener, etc.)
 //   - Exclusive binding: multiple binds to same port is an error

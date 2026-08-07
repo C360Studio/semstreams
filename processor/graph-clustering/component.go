@@ -328,16 +328,46 @@ func (c *Config) Validate() error {
 	// Validate COMMUNITY_INDEX output exists
 	hasCommunityIndex := false
 	for _, output := range c.Ports.Outputs {
-		if output.Subject == "STRUCTURAL_INDEX" || output.Bucket == "STRUCTURAL_INDEX" {
+		resolved, err := output.Resolve(component.DirectionOutput)
+		if err != nil {
+			return errs.WrapInvalid(err, "Config", "Validate", "resolve output port")
+		}
+		facts, err := resolved.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Config", "Validate", "project output port")
+		}
+		if facts.ResourceID() == "kv:STRUCTURAL_INDEX" {
 			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 				`STRUCTURAL_INDEX output was removed (ADR-090, BREAKING). Delete the output; anomaly detection computes structural prerequisites internally`)
 		}
-		if output.Subject == graph.BucketCommunityIndex {
+		if facts.ResourceID() == "kv:"+graph.BucketCommunityIndex {
 			hasCommunityIndex = true
 		}
 	}
 	if !hasCommunityIndex {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", fmt.Sprintf("%s output required", graph.BucketCommunityIndex))
+	}
+	if c.EnableAnomalyDetection {
+		anomalyOutputs := 0
+		for _, output := range c.Ports.Outputs {
+			resolved, err := output.Resolve(component.DirectionOutput)
+			if err != nil {
+				return errs.WrapInvalid(err, "Config", "Validate", "resolve anomaly output port")
+			}
+			facts, err := resolved.Facts()
+			if err != nil {
+				return errs.WrapInvalid(err, "Config", "Validate", "project anomaly output port")
+			}
+			if output.Name == "anomaly_index" && facts.ResourceID() != "kv:"+graph.BucketAnomalyIndex {
+				return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "anomaly_index must be a KV write to "+graph.BucketAnomalyIndex)
+			}
+			if facts.ResourceID() == "kv:"+graph.BucketAnomalyIndex {
+				anomalyOutputs++
+			}
+		}
+		if anomalyOutputs != 1 {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", fmt.Sprintf("exactly one %s output required", graph.BucketAnomalyIndex))
+		}
 	}
 
 	// Validate detection interval (parsed duration must be positive)
@@ -430,7 +460,12 @@ func (c *Config) ApplyDefaults() {
 		if c.EnableAnomalyDetection {
 			hasAnomaly := false
 			for _, o := range c.Ports.Outputs {
-				if o.Subject == graph.BucketAnomalyIndex {
+				resolved, err := o.Resolve(component.DirectionOutput)
+				if err != nil {
+					continue
+				}
+				facts, err := resolved.Facts()
+				if err == nil && facts.ResourceID() == "kv:"+graph.BucketAnomalyIndex {
 					hasAnomaly = true
 					break
 				}
@@ -459,7 +494,7 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 				},
 				{
 					Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex},
@@ -483,7 +518,7 @@ func DefaultConfig() Config {
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType}}, Required: true,
+					Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 				},
 				{
 					Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex},
@@ -517,8 +552,10 @@ type incomingBucketReader interface {
 // Component implements the graph-clustering processor
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	natsClient      *natsclient.Client
@@ -682,11 +719,29 @@ func CreateGraphClustering(rawConfig json.RawMessage, deps component.Dependencie
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-clustering")
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "CreateGraphClustering", "factory", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
 
 	// Create component
 	comp := &Component{
 		name:            "graph-clustering",
 		config:          config,
+		inputs:          inputs,
+		outputs:         outputs,
 		natsClient:      natsClient,
 		logger:          logger,
 		modelRegistry:   deps.ModelRegistry,
@@ -744,14 +799,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions
@@ -759,14 +807,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema

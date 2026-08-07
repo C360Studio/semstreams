@@ -10,7 +10,10 @@ import (
 func TestDefaultConfigDeclaresRequiredMutationProvider(t *testing.T) {
 	config := DefaultConfig()
 	for _, definition := range config.Ports.Inputs {
-		port := component.BuildPortFromDefinition(definition, component.DirectionInput)
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			t.Fatalf("resolve mutation provider: %v", err)
+		}
 		request, ok := port.Config.(component.NATSRequestPort)
 		if !ok || request.Interface == nil || request.Interface.Type != graphmutation.InterfaceType {
 			continue

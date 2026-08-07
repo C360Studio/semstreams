@@ -63,10 +63,10 @@ func startCronProcessorForTest(t *testing.T, natsClient *natsclient.Client, rule
 	cfg := mustTestConfig(t, "rule-test-pack")
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
-			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Interface: "core.entity.v1", Required: false},
+			{Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>", Interface: &component.InterfaceContract{Type: "core.entity.v1"}}, Required: false},
 		},
 		Outputs: []component.PortDefinition{
-			{Name: "rule_events", Type: "nats", Subject: "events.rule.triggered", Interface: "core.rule.v1", Required: false},
+			{Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: false},
 		},
 	}
 	cfg.InlineRules = rules

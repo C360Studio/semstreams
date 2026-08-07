@@ -32,10 +32,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -48,10 +48,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath:      "/graphql",
@@ -92,7 +92,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -106,7 +106,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -141,10 +141,10 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath: "", // Empty - invalid
@@ -158,10 +158,10 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath: "/graphql",
@@ -175,16 +175,16 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath:      "/graphql",
 				MCPPath:          "/mcp",
 				StandaloneServer: true,
-				BindAddress:      "", // Empty - invalid when standalone
+				BindAddress:      "",
 			},
 			wantErr: true,
 		},
@@ -193,15 +193,15 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
+						{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+						{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 					},
 				},
 				GraphQLPath: "/graphql",
 				MCPPath:     "/mcp",
-				BindAddress: "", // OK when not standalone
+				BindAddress: "",
 			},
 			wantErr: false,
 		},
@@ -223,10 +223,10 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "http", Type: "http", Subject: "/graphql"},
+				{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
+				{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 			},
 		},
 	}
@@ -715,10 +715,10 @@ func TestCreateGraphGateway_PartialConfig(t *testing.T) {
 	partialJSON := []byte(`{
 		"ports": {
 			"inputs": [
-				{"name": "http", "type": "http", "subject": "/graphql"}
+				{"name": "http", "config": {"kind": "network", "protocol": "http", "host": "localhost", "port": 8080}}
 			],
 			"outputs": [
-				{"name": "audit", "type": "nats", "subject": "audit.events"}
+				{"name": "audit", "config": {"kind": "nats", "subject": "audit.events"}}
 			]
 		},
 		"graphql_path": "/custom-graphql"

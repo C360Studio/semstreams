@@ -210,8 +210,8 @@ type portAttribution struct {
 // applied it before this function existed (operator map first, sorted, then
 // ports) so a config with several offenders always names the same one.
 //
-// Pure and I/O-free. logger may be nil.
-func resolveStreamDeclarations(cfg *Config, logger *slog.Logger) ([]streamDeclaration, error) {
+// Pure and I/O-free.
+func resolveStreamDeclarations(cfg *Config, _ *slog.Logger) ([]streamDeclaration, error) {
 	type resolved struct {
 		cfg      StreamConfig
 		source   string

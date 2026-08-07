@@ -31,10 +31,10 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+//	      {"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}
 //	    ],
 //	    "outputs": [
-//	      {"name": "temporal_index", "subject": "TEMPORAL_INDEX", "type": "kv"}
+//	      {"name":"temporal_index","config":{"kind":"kv-write","bucket":"TEMPORAL_INDEX"}}
 //	    ]
 //	  },
 //	  "time_resolution": "hour",
