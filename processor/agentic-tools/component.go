@@ -75,19 +75,21 @@ type consumerInfo struct {
 
 // NewComponent creates a new agentic-tools processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	var config Config
-	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
-	}
-
-	// Use default config if ports not set
-	if config.Ports == nil {
-		config = DefaultConfig()
-		// Re-unmarshal to get user-provided values
+	defaults := DefaultConfig()
+	config := DefaultConfig()
+	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 	}
+	if config.Ports == nil {
+		config.Ports = defaults.Ports
+	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -758,10 +760,8 @@ func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult
 	return nil
 }
 
-// outputPortDefs returns the configured output port definitions slice, or
-// nil when Ports is unset. Lets ResolveSubject fall back gracefully to
-// portName + "." + suffix for test configs without port wiring. Mirrors
-// the agentic-model helper of the same name.
+// outputPortDefs returns the effective canonical output declarations used by
+// publishResult to resolve the required tool.result subject.
 func (c *Component) outputPortDefs() []component.PortDefinition {
 	if c.config.Ports == nil {
 		return nil

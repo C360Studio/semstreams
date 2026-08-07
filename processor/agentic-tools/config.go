@@ -82,19 +82,10 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("timeout must be positive"), "Config", "Validate", "check timeout value")
 	}
 
-	// When the operator supplied a Ports block, enforce that Inputs and
-	// Outputs are non-empty whenever DefaultConfig declares ports in
-	// those directions. Pre-fix, an operator config that overrode Ports
-	// without any Inputs (or set inputs:[]) started the component
-	// running and healthy with zero JetStream consumers — silent
-	// dispatch death. Symmetric to the publishResult silent-drop bug
-	// closed in beta.57. Audit finding 2026-05-08.
-	//
-	// Validation is by-presence-of-any-port, not by-canonical-name:
-	// operators can rename ports freely, override subjects, etc., as
-	// long as they don't omit the entire direction. Subject coherence
-	// across components is an operator concern; per-component validation
-	// only catches structural emptiness.
+	// NewComponent first applies canonical complete named replacements to
+	// DefaultConfig. Keep this non-empty check as a final effective-config
+	// guard against silent dispatch or publish loss; name, kind, direction,
+	// and duplicate enforcement belongs to MergePortConfig.
 	if c.Ports != nil {
 		if err := c.validatePortsNonEmpty(); err != nil {
 			return err
@@ -107,10 +98,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// validatePortsNonEmpty enforces that when the operator supplied a Ports
-// block, neither Inputs nor Outputs is empty (provided DefaultConfig
-// declares ports in those directions). Catches the silent-broken case
-// where Ports is overridden but a direction is forgotten.
+// validatePortsNonEmpty rejects an incomplete effective port topology.
 func (c *Config) validatePortsNonEmpty() error {
 	defaults := DefaultConfig()
 	if defaults.Ports == nil {

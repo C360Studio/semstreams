@@ -50,7 +50,7 @@ func TestIntegration_WebSocketOutput_Creation_ValidConfig(t *testing.T) {
 	require.Len(t, outputPorts, 1)
 	wsPort := outputPorts[0].Config.(component.NetworkPort)
 	require.Equal(t, 8082, wsPort.Port)
-	require.Equal(t, "websocket", wsPort.Protocol)
+	require.Equal(t, "http", wsPort.Protocol)
 }
 
 // TestWebSocketOutput_Creation_InvalidPort tests component creation with invalid port
@@ -58,20 +58,29 @@ func TestIntegration_WebSocketOutput_Creation_InvalidPort(t *testing.T) {
 	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
 
 	testCases := []struct {
-		name          string
-		port          int
-		expectedError string
+		name string
+		port int
 	}{
-		{"port too low", 500, "port 500 out of range"},
-		{"port too high", 99999, "port 99999 out of range"},
+		{"port too low", 0},
+		{"port too high", 65536},
 	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create WebSocket config with test port using PortConfig format
-			wsConfig := testWebSocketConfig(tc.port, "/ws", []string{"test.>"})
-			configJSON, err := json.Marshal(wsConfig)
-			require.NoError(t, err)
+			// Keep the invalid port on the canonical wire so CreateOutput's
+			// production decoder, rather than typed fixture marshaling, rejects it.
+			configJSON := json.RawMessage(fmt.Sprintf(`{
+				"ports": {
+					"inputs": [{
+						"name": "nats_input_0",
+						"config": {"kind": "nats", "subject": "test.>"}
+					}],
+					"outputs": [{
+						"name": "websocket_server",
+						"config": {"kind": "network", "protocol": "http", "host": "0.0.0.0", "port": %d}
+					}]
+				}
+			}`, tc.port))
 
 			// Create component dependencies
 			deps := component.Dependencies{
@@ -82,9 +91,9 @@ func TestIntegration_WebSocketOutput_Creation_InvalidPort(t *testing.T) {
 				},
 			}
 
-			_, err = CreateOutput(configJSON, deps)
+			_, err := CreateOutput(configJSON, deps)
 			require.Error(t, err)
-			require.Contains(t, err.Error(), tc.expectedError)
+			require.Contains(t, err.Error(), `field "port" must be between 1 and 65535`)
 		})
 	}
 }
@@ -133,7 +142,7 @@ func TestIntegration_WebSocketOutput_Integration_NATSToWebSocket(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Connect WebSocket client
-	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/test", port)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
 	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 	require.NoError(t, err)
 	defer wsConn.Close()
@@ -278,7 +287,7 @@ func TestIntegration_WebSocketOutput_Integration_MultipleClients(t *testing.T) {
 	clients := make([]*websocket.Conn, numClients)
 	receivers := make([]chan map[string]any, numClients)
 
-	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/multi", port)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/ws", port)
 
 	for i := 0; i < numClients; i++ {
 		conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)

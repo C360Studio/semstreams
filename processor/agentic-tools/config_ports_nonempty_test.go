@@ -1,6 +1,7 @@
 package agentictools_test
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -8,103 +9,106 @@ import (
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
-// TestConfig_Validate_PortsNonEmpty closes the silent-broken-input gap
-// from the 2026-05-08 audit (project_audit_findings_2026_05_08.md
-// Finding 3). Pre-fix, an operator config that supplied a Ports block
-// without any Inputs (or set inputs:[]) started the component running
-// and healthy with zero JetStream consumers — silent dispatch death.
-// Symmetric to the publishResult silent-drop bug closed in beta.57;
-// that one was outputs, this catches inputs (and outputs as well, for
-// symmetry with the same shape on the publish side).
-//
-// Validation is by-presence-of-any-port, not by-canonical-name —
-// operators can rename ports freely (`Name: "input"` with the canonical
-// Subject is a working config). What's caught is the structural
-// "operator supplied Ports but forgot a direction entirely."
-func TestConfig_Validate_PortsNonEmpty(t *testing.T) {
+func TestNewComponentMergesCanonicalPortOverridesIntoDefaults(t *testing.T) {
+	rawConfig, err := json.Marshal(agentictools.Config{
+		Ports: &component.PortConfig{Outputs: []component.PortDefinition{{
+			Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.result.*"}},
+		}}},
+		Timeout: "45s",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	created, err := agentictools.NewComponent(rawConfig, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent() error = %v", err)
+	}
+	if got := len(created.InputPorts()); got != 4 {
+		t.Fatalf("InputPorts() count = %d, want 4 preserved defaults", got)
+	}
+	if got := len(created.OutputPorts()); got != 2 {
+		t.Fatalf("OutputPorts() count = %d, want 2 merged defaults", got)
+	}
+	for _, port := range created.OutputPorts() {
+		if port.Name != "tool.result" {
+			continue
+		}
+		facts, factsErr := port.Facts()
+		if factsErr != nil {
+			t.Fatal(factsErr)
+		}
+		if subjects := facts.NATSSubjects(); len(subjects) != 1 || subjects[0] != "custom.tool.result.*" {
+			t.Fatalf("tool.result subjects = %v, want [custom.tool.result.*]", subjects)
+		}
+		if port.Required || port.Description != "" {
+			t.Fatalf("tool.result inherited omitted metadata: %#v", port)
+		}
+		return
+	}
+	t.Fatal("merged outputs omit tool.result")
+}
+
+func TestNewComponentRejectsNoncanonicalPortOverrides(t *testing.T) {
 	tests := []struct {
-		name          string
-		ports         *component.PortConfig
-		wantErr       bool
-		wantErrSubstr string
+		name    string
+		ports   func() *component.PortConfig
+		wantErr string
 	}{
 		{
-			name:    "nil Ports uses DefaultConfig — accepted",
-			ports:   nil,
-			wantErr: false,
+			name: "renamed ports",
+			ports: func() *component.PortConfig {
+				return &component.PortConfig{
+					Inputs:  []component.PortDefinition{{Name: "tool_calls", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}}},
+					Outputs: []component.PortDefinition{{Name: "tool_results", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}}},
+				}
+			},
+			wantErr: "unknown override port name",
 		},
 		{
-			name: "empty Inputs slice — rejected (silent-dispatch-death case)",
-			ports: &component.PortConfig{
-				Inputs: []component.PortDefinition{},
-				Outputs: []component.PortDefinition{
-					{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}},
-				},
+			name: "kind change",
+			ports: func() *component.PortConfig {
+				ports := agentictools.DefaultConfig().Ports
+				ports.Outputs[1].Config = component.NATSPort{Subject: "tool.result.*"}
+				return ports
 			},
-			wantErr:       true,
-			wantErrSubstr: "Ports.Inputs is empty",
+			wantErr: "does not match default kind",
 		},
 		{
-			name: "empty Outputs slice — rejected (silent-publish-drop case)",
-			ports: &component.PortConfig{
-				Inputs: []component.PortDefinition{
-					{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}},
-				},
-				Outputs: []component.PortDefinition{},
+			name: "direction change",
+			ports: func() *component.PortConfig {
+				ports := agentictools.DefaultConfig().Ports
+				ports.Inputs = append(ports.Inputs, ports.Outputs[1])
+				return ports
 			},
-			wantErr:       true,
-			wantErrSubstr: "Ports.Outputs is empty",
+			wantErr: "unknown override port name",
 		},
 		{
-			name: "operator-renamed ports with canonical subjects — accepted",
-			ports: &component.PortConfig{
-				Inputs: []component.PortDefinition{
-					{Name: "input", Config: component.NATSPort{Subject: "tool.execute.>"}},
-				},
-				Outputs: []component.PortDefinition{
-					{Name: "output", Config: component.NATSPort{Subject: "tool.result.*"}},
-				},
+			name: "duplicate name",
+			ports: func() *component.PortConfig {
+				ports := agentictools.DefaultConfig().Ports
+				ports.Outputs = append(ports.Outputs, ports.Outputs[1])
+				return ports
 			},
-			wantErr: false,
-		},
-		{
-			name: "operator-renamed ports with operator subjects — accepted",
-			ports: &component.PortConfig{
-				Inputs: []component.PortDefinition{
-					{Name: "myinput", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.execute.>"}}},
-				},
-				Outputs: []component.PortDefinition{
-					{Name: "myoutput", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.result.*"}}},
-				},
-			},
-			wantErr: false,
-		},
-		{
-			name: "canonical defaults — accepted",
-			ports: &component.PortConfig{
-				Inputs: []component.PortDefinition{
-					{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}},
-				},
-				Outputs: []component.PortDefinition{
-					{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}},
-				},
-			},
-			wantErr: false,
+			wantErr: "duplicate",
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := agentictools.Config{
-				Timeout: "60s",
-				Ports:   tt.ports,
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rawConfig, err := json.Marshal(agentictools.Config{Ports: test.ports(), Timeout: "60s"})
+			if err != nil {
+				t.Fatal(err)
 			}
-			err := cfg.Validate()
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			created, err := agentictools.NewComponent(rawConfig, component.Dependencies{})
+			if err == nil {
+				t.Fatalf("NewComponent() succeeded with ports %#v", test.ports())
 			}
-			if tt.wantErr && tt.wantErrSubstr != "" && !strings.Contains(err.Error(), tt.wantErrSubstr) {
-				t.Errorf("Validate() error = %v, expected to contain %q", err, tt.wantErrSubstr)
+			if created != nil {
+				t.Fatal("NewComponent() returned a component with invalid override")
+			}
+			if !strings.Contains(err.Error(), test.wantErr) {
+				t.Fatalf("NewComponent() error = %v, want substring %q", err, test.wantErr)
 			}
 		})
 	}
