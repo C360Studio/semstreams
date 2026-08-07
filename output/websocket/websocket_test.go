@@ -1427,61 +1427,6 @@ func TestSetupSubscriptions_SubjectConstructor(t *testing.T) {
 	assert.Equal(t, component.PortKindNATS, facts.Kind())
 }
 
-// TestDeriveStreamName tests the stream name derivation heuristic used when no explicit
-// StreamName is provided in the port definition.
-func TestDeriveStreamName(t *testing.T) {
-	ws := mustNewOutput(t, 19102, "/ws", []string{"placeholder"}, nil)
-
-	tests := []struct {
-		name    string
-		subject string
-		want    string
-	}{
-		{
-			name:    "simple subject",
-			subject: "events.entity.created",
-			want:    "EVENTS",
-		},
-		{
-			name:    "wildcard suffix >",
-			subject: "metrics.>",
-			want:    "METRICS",
-		},
-		{
-			name:    "wildcard suffix *",
-			subject: "logs.*",
-			want:    "LOGS",
-		},
-		{
-			name:    "leading wildcard prefix stripped",
-			subject: "*.events",
-			want:    "EVENTS",
-		},
-		{
-			name:    "bare wildcard",
-			subject: ">",
-			want:    "",
-		},
-		{
-			name:    "empty string",
-			subject: "",
-			want:    "",
-		},
-		{
-			name:    "single segment",
-			subject: "telemetry",
-			want:    "TELEMETRY",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ws.deriveStreamName(tt.subject)
-			assert.Equal(t, tt.want, got)
-		})
-	}
-}
-
 // TestWebSocketOutput_MetricsRegistrationIdempotent reproduces gh#490: a runtime
 // component restart re-constructs the output against the SAME MetricsRegistry.
 // The previous raw MustRegister panicked with "duplicate metrics collector

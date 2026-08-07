@@ -141,6 +141,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "ENTITY",
                 "subjects": [
                   "entity.>"
                 ]
@@ -404,7 +405,6 @@
       "name": "agentic-model",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
         "timeout": "30s",
         "endpoints": {
           "mock": {

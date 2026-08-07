@@ -129,6 +129,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "RAW",
                 "subjects": [
                   "raw.udp.messages"
                 ]
@@ -168,6 +169,7 @@
                   "type": "core .json.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "GENERIC",
                 "subjects": [
                   "generic.messages"
                 ]
@@ -200,6 +202,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "FILTERED",
                 "subjects": [
                   "filtered.messages"
                 ]
@@ -235,6 +238,7 @@
                   "type": "core .json.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "MAPPED",
                 "subjects": [
                   "mapped.messages"
                 ]
@@ -262,6 +266,7 @@
                   "type": "core .json.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "MAPPED",
                 "subjects": [
                   "mapped.messages"
                 ]
@@ -285,6 +290,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "RAW",
                 "subjects": [
                   "raw.udp.messages"
                 ]
@@ -311,6 +317,7 @@
                   "type": "core .json.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "MAPPED",
                 "subjects": [
                   "mapped.messages"
                 ]

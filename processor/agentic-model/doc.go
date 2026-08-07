@@ -28,8 +28,7 @@
 // Configure the model registry in the top-level config and start the processor:
 //
 //	config := agenticmodel.Config{
-//	    StreamName: "AGENT",
-//	    Timeout:    "120s",
+//	    Timeout: "120s",
 //	}
 //
 //	// Model endpoints are resolved from deps.ModelRegistry (set in config.model_registry)
@@ -147,7 +146,6 @@
 //
 //	{
 //	    "timeout": "string (default: 120s)",
-//	    "stream_name": "string (default: AGENT)",
 //	    "consumer_name_suffix": "string (optional)",
 //	    "retry": {
 //	        "max_attempts": "int (default: 3)",
@@ -257,7 +255,6 @@
 // For testing, use the ConsumerNameSuffix config option and provide a model registry:
 //
 //	config := agenticmodel.Config{
-//	    StreamName:         "AGENT",
 //	    ConsumerNameSuffix: "test-" + t.Name(),
 //	}
 //

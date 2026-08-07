@@ -390,7 +390,7 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "entity_stream", Config: component.JetStreamPort{Subjects: []string{"entity.>"}, DeliverPolicy: "all"}, // Idempotent: catch up on historical entities
+					Name: "entity_stream", Config: component.JetStreamPort{StreamName: "ENTITY", Subjects: []string{"entity.>"}, DeliverPolicy: "all"}, // Idempotent: catch up on historical entities
 
 				},
 				{
@@ -1356,9 +1356,6 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 	}
 	subject := stream.Subjects()[0]
 	streamName := stream.Name()
-	if streamName == "" {
-		return fmt.Errorf("could not derive stream name for subject %s", subject)
-	}
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -1470,30 +1467,6 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.P
 		slog.String("subject", subject),
 		slog.String("stream", streamName))
 	return nil
-}
-
-// deriveStreamName derives a stream name from a subject pattern
-func (c *Component) deriveStreamName(subject string) string {
-	// Common mappings based on subject prefix
-	prefixToStream := map[string]string{
-		"sensor.":      "SENSOR",
-		"objectstore.": "OBJECTSTORE",
-		"entity.":      "ENTITY",
-		"events.":      "EVENTS",
-	}
-
-	for prefix, stream := range prefixToStream {
-		if strings.HasPrefix(subject, prefix) {
-			return stream
-		}
-	}
-
-	// Default: use first segment uppercased
-	parts := strings.Split(subject, ".")
-	if len(parts) > 0 {
-		return strings.ToUpper(parts[0])
-	}
-	return ""
 }
 
 // waitForStream waits for a JetStream stream to be available

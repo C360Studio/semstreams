@@ -52,9 +52,10 @@ The component accepts NATS or JetStream input ports configured in the `ports.inp
 ports:
   inputs:
     - name: events
-      type: nats
-      subject: system.events.>
       required: true
+      config:
+        kind: nats
+        subject: system.events.>
 ```
 
 **JetStream Input:**
@@ -63,10 +64,12 @@ ports:
 ports:
   inputs:
     - name: durable_events
-      type: jetstream
-      subject: orders.created
-      stream_name: ORDERS          # Optional, derived from subject if omitted
       required: true
+      config:
+        kind: jetstream
+        stream_name: ORDERS        # Required backing stream for this input
+        subjects:
+          - orders.created
 ```
 
 For JetStream inputs, the component automatically creates a durable consumer with explicit acknowledgment and a

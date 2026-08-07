@@ -29,6 +29,10 @@ Unknown kinds, unknown fields, kinds used in a prohibited direction, duplicate o
 durations or network ports, and missing required fields SHALL fail before component initialization. The failure SHALL
 identify the component, port, kind, and invalid field when those values are available.
 
+Every `jetstream` port SHALL declare at least one non-empty subject. Every input `jetstream` port SHALL additionally
+declare a non-empty `stream_name`. An output `jetstream` port MAY omit `stream_name`; that omission is consumed only by
+the canonical generic provisioner and SHALL NOT authorize a consumer-local derivation.
+
 Only network host `0.0.0.0` and request timeout `1s` SHALL receive implicit defaults.
 
 Retired flat port fields, `Config any`, runtime `type`/`data` envelopes, legacy aliases, and top-level KV lanes SHALL
@@ -68,3 +72,33 @@ NOT be accepted.
 - **THEN** its subjects, storage, retention, days, size, replicas, consumer, deliver policy, acknowledgement policy,
   maximum deliveries, acknowledgement wait, heartbeat, maximum pending acknowledgements, and interface metadata are
   unchanged
+
+#### Scenario: Subject-only JetStream input is rejected
+
+- **GIVEN** a canonical input `jetstream` declaration with one or more non-empty subjects and no `stream_name`
+- **WHEN** its containing `PortConfig` is decoded for the input lane
+- **THEN** decoding resolves the declaration for the input direction and fails before component initialization
+- **AND** the typed failure identifies the port, kind `jetstream`, and field `stream_name`
+- **AND** no component-local subject derivation or default supplies the missing backing stream
+- **AND** no partially decoded input or output lane is assigned
+
+#### Scenario: JetStream input without subjects is rejected
+
+- **GIVEN** a canonical input `jetstream` declaration with a non-empty `stream_name` and no non-empty subjects
+- **WHEN** the declaration is resolved
+- **THEN** resolution fails before component initialization
+- **AND** the typed failure identifies field `subjects`
+
+#### Scenario: Subject-only JetStream output remains valid
+
+- **GIVEN** a canonical output `jetstream` declaration with one or more non-empty subjects and no `stream_name`
+- **WHEN** its containing `PortConfig` is decoded for the output lane
+- **THEN** resolution succeeds with the declared subjects and an omitted stream name
+- **AND** only the canonical generic provisioner may derive the physical stream name
+
+#### Scenario: Retired agentic-model stream default is absent
+
+- **GIVEN** an agentic-model component configuration
+- **WHEN** its schema, defaults, documentation, and shipped configurations are inspected
+- **THEN** no top-level `stream_name` field is exposed
+- **AND** each JetStream input carries its explicit backing `stream_name` on the canonical port declaration

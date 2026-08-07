@@ -875,13 +875,6 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	}
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
-	if streamName == "" {
-		streamName = w.deriveStreamName(subject)
-	}
-	if streamName == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", subject))
-	}
 
 	if err := w.waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
@@ -955,20 +948,6 @@ func (w *Output) waitForStream(ctx context.Context, streamName string) error {
 	}
 	return errs.WrapTransient(errs.ErrStorageUnavailable, "WebSocketOutput", "waitForStream",
 		fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
-}
-
-// deriveStreamName extracts a stream name from the subject by taking the first dot-delimited
-// segment and uppercasing it (e.g. "events.>" → "EVENTS").
-func (w *Output) deriveStreamName(subject string) string {
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // unsubscribeFromNATS unsubscribes from all NATS subjects

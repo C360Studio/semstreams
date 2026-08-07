@@ -46,6 +46,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "EVENTS",
                 "subjects": [
                   "events.entity.>"
                 ]

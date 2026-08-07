@@ -68,12 +68,6 @@
         }
       }
     },
-    "stream_name": {
-      "type": "string",
-      "description": "JetStream stream name for agentic messages",
-      "default": "AGENT",
-      "category": "basic"
-    },
     "timeout": {
       "type": "string",
       "description": "Per-request LLM call timeout. Sized 10s below the agentic-model JetStream consumer AckWait (120s) so the LLM context.Done propagates and the call closes cleanly before NATS would otherwise redeliver. Operators raising this past ~115s should also raise the consumer AckWait in lockstep.",

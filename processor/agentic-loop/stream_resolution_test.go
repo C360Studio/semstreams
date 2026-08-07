@@ -1,12 +1,13 @@
 package agenticloop
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
 )
 
-func TestInputPortResolutionAcceptsExplicitSubjectBinding(t *testing.T) {
+func TestInputPortResolutionRequiresExplicitStreamIdentity(t *testing.T) {
 	valid, err := (component.PortDefinition{
 		Name:   "tool.result",
 		Config: component.JetStreamPort{StreamName: "TOOL", Subjects: []string{"tool.result.>"}},
@@ -23,19 +24,16 @@ func TestInputPortResolutionAcceptsExplicitSubjectBinding(t *testing.T) {
 		t.Fatalf("stream facts = %#v, %t", stream, ok)
 	}
 
-	subjectBound, err := (component.PortDefinition{
+	_, err = (component.PortDefinition{
 		Name:   "tool.result",
 		Config: component.JetStreamPort{Subjects: []string{"tool.result.>"}},
 	}).Resolve(component.DirectionInput)
-	if err != nil {
-		t.Fatalf("resolve subject-bound input: %v", err)
+	if err == nil {
+		t.Fatal("subject-only JetStream input resolved without an explicit backing stream")
 	}
-	subjectFacts, err := subjectBound.Facts()
-	if err != nil {
-		t.Fatalf("project subject-bound input: %v", err)
-	}
-	subjectStream, ok := subjectFacts.Stream()
-	if !ok || subjectStream.Name() != "" || len(subjectStream.Subjects()) != 1 || subjectStream.Subjects()[0] != "tool.result.>" {
-		t.Fatalf("subject-bound stream facts = %#v, %t", subjectStream, ok)
+	for _, context := range []string{`port "tool.result"`, `kind "jetstream"`, `field "stream_name"`} {
+		if !strings.Contains(err.Error(), context) {
+			t.Fatalf("subject-only input error %q missing %q", err, context)
+		}
 	}
 }

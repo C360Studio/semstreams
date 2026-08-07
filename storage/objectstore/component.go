@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
@@ -700,14 +699,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("port %s is not JetStream", portName))
 	}
 
-	// Derive stream name from subject or use explicit stream name
 	streamName := stream.Name()
-	if streamName == "" {
-		streamName = config.DeriveStreamName(subject)
-	}
-	if streamName == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("could not derive stream name for subject %s", subject))
-	}
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {

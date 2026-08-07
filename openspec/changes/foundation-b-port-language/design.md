@@ -39,6 +39,16 @@ The only exported kinds are `timer`, `network`, `file`, `http-client`, `nats`, `
 runtime port uses that same envelope. Only network host `0.0.0.0` and request timeout `1s` default. Complete replacement
 is preferred over field merging because callers must not predict precedence between flat and typed values.
 
+Every JetStream declaration carries at least one non-empty subject. JetStream inputs additionally carry an explicit,
+non-empty backing `stream_name`; consumer components never infer it from a subject or a component-local default.
+JetStream outputs may omit `stream_name` because the one canonical generic provisioner owns output stream-name
+derivation. That narrow provisioning behavior does not make a subject-only declaration a valid input.
+
+`PortConfig` decoding resolves every definition using its enclosing lane direction before publishing the decoded
+value. It builds both normalized lanes first and assigns only after every definition succeeds, so wrong-direction or
+missing-field failures cannot leave a partially decoded receiver. The retired top-level agentic-model `stream_name`
+field is deleted; agentic-model stream identity lives only on its canonical JetStream ports.
+
 The rejected alternatives are aliases, default-to-NATS behavior, `Config any`, a second runtime wire, custom-kind
 registration, or a migration decoder. Each would preserve more than one interpretation at the adopter seam.
 
@@ -69,6 +79,9 @@ Ordinary stream planning derives only from normalized JetStream facts and never 
 the sole specialized physical provisioner for its dispatch stream because the generic GiB/day declaration cannot
 express its byte-exact limit, discard-new, max-age, and deduplication policy. That exception does not authorize another
 consumer to infer or provision those settings.
+
+The generic provisioner is also the only owner allowed to derive an omitted output stream name from declared subjects.
+Consumers always receive an explicit input backing name and do not reproduce that derivation.
 
 ### Canonical request ports define mutation topology
 

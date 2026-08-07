@@ -111,6 +111,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "RAW",
                 "subjects": [
                   "raw.mission.command"
                 ]
@@ -162,6 +163,7 @@
                   "type": "mission.command.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "MISSION",
                 "subjects": [
                   "mission.processed.entity"
                 ]

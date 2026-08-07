@@ -253,7 +253,6 @@
       "name": "agentic-model",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
         "timeout": "120s",
         "retry": {
           "max_attempts": 3,

@@ -103,6 +103,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "CLOUD",
                 "subjects": [
                   "cloud.federated.data"
                 ]

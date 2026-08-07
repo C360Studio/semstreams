@@ -90,6 +90,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "EDGE",
                 "subjects": [
                   "edge.raw.data"
                 ]
@@ -123,6 +124,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "EDGE",
                 "subjects": [
                   "edge.filtered.data"
                 ]

@@ -323,13 +323,6 @@ func (f *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	}
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
-	if streamName == "" {
-		streamName = f.deriveStreamName(subject)
-	}
-	if streamName == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", subject))
-	}
 
 	if err := f.waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
@@ -404,19 +397,6 @@ func (f *Output) waitForStream(ctx context.Context, streamName string) error {
 	}
 	return errs.WrapTransient(errs.ErrStorageUnavailable, "Output", "waitForStream",
 		fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
-}
-
-// deriveStreamName extracts stream name from subject convention
-func (f *Output) deriveStreamName(subject string) string {
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // Stop gracefully stops the output

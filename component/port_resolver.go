@@ -1,6 +1,7 @@
 package component
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -35,6 +36,9 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 			fmt.Errorf("kind %q does not allow direction %q", config.Kind(), direction),
 		)
 	}
+	if field, err := validateDirectionRequirements(config, direction, binding); err != nil {
+		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), field, err)
+	}
 	port := Port{
 		Name:        def.Name,
 		Direction:   direction,
@@ -43,6 +47,41 @@ func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortF
 		Config:      config,
 	}
 	return port, binding.facts(config), nil
+}
+
+func validateDirectionRequirements(config Portable, direction Direction, binding portBinding) (string, error) {
+	required := binding.requiredByDirection[direction]
+	if len(required) == 0 {
+		return "", nil
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "config", fmt.Errorf("marshal direction requirements: %w", err)
+	}
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return "config", fmt.Errorf("decode direction requirements: %w", err)
+	}
+	for _, field := range required {
+		value, exists := fields[field]
+		if !exists || directionFieldEmpty(value) {
+			return field, fmt.Errorf("field %q is required for direction %q", field, direction)
+		}
+	}
+	return "", nil
+}
+
+func directionFieldEmpty(value any) bool {
+	switch typed := value.(type) {
+	case string:
+		return strings.TrimSpace(typed) == ""
+	case []any:
+		return len(typed) == 0
+	case nil:
+		return true
+	default:
+		return false
+	}
 }
 
 // Facts revalidates the current Port value and returns its immutable semantic projection.

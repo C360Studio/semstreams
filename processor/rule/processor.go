@@ -1166,21 +1166,6 @@ func (rp *Processor) waitForStream(ctx context.Context, streamName string) error
 	return fmt.Errorf("stream %s not available after %d retries", streamName, maxRetries)
 }
 
-// deriveStreamName extracts stream name from subject convention.
-// Convention: subject "component.action.type" → stream "COMPONENT"
-func deriveStreamName(subject string) string {
-	// Handle wildcard subjects
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
-}
-
 // Message handling functions (handleMessage, handleSemanticMessage, evaluateRulesForMessage,
 // matchesRuleSubject, recordError) are in message_handler.go
 

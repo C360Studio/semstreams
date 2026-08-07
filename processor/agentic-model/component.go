@@ -290,14 +290,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.Port) erro
 		return fmt.Errorf("input port %q does not declare JetStream facts", port.Name)
 	}
 	subject := facts.NATSSubjects()[0]
-	// Determine stream name
 	streamName := stream.Name()
-	if streamName == "" {
-		streamName = c.config.StreamName
-	}
-	if streamName == "" {
-		streamName = "AGENT"
-	}
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {

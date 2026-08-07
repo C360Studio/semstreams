@@ -565,8 +565,17 @@ func TestGeneratePortFieldSchema(t *testing.T) {
 		t.Fatalf("nats kind schema = %#v", kind)
 	}
 	jetstream := configField.Variants[string(PortKindJetStream)]
-	if !sameStringGroups(jetstream.AnyRequired, [][]string{{"stream_name"}, {"subjects"}}) {
-		t.Fatalf("jetstream alternative requirements = %#v", jetstream.AnyRequired)
+	if !sameStrings(jetstream.Required, []string{"kind", "subjects"}) {
+		t.Fatalf("jetstream common requirements = %#v", jetstream.Required)
+	}
+	if got := jetstream.RequiredByDirection[DirectionInput]; !sameStrings(got, []string{"stream_name"}) {
+		t.Fatalf("jetstream input requirements = %#v", jetstream.RequiredByDirection)
+	}
+	if got := jetstream.RequiredByDirection[DirectionOutput]; len(got) != 0 {
+		t.Fatalf("jetstream output requirements = %#v", jetstream.RequiredByDirection)
+	}
+	if len(jetstream.AnyRequired) != 0 {
+		t.Fatalf("jetstream retains alternative requirements = %#v", jetstream.AnyRequired)
 	}
 	if got := configField.Variants[string(PortKindTimer)].Directions; !sameDirections(got, []Direction{DirectionInput}) {
 		t.Fatalf("timer directions = %v", got)
@@ -581,6 +590,16 @@ func TestGeneratePortFieldSchema(t *testing.T) {
 		for _, required := range variant.Required {
 			if _, ok := variant.Properties[required]; !ok {
 				t.Errorf("variant %q requires missing property %q", kind, required)
+			}
+		}
+		for direction, requiredFields := range variant.RequiredByDirection {
+			if direction != DirectionInput && direction != DirectionOutput {
+				t.Errorf("variant %q has unknown required direction %q", kind, direction)
+			}
+			for _, required := range requiredFields {
+				if _, ok := variant.Properties[required]; !ok {
+					t.Errorf("variant %q requires missing %s property %q", kind, direction, required)
+				}
 			}
 		}
 	}

@@ -50,6 +50,14 @@ schema.
 - **WHEN** it is checked against generated schema and decoded at runtime
 - **THEN** both surfaces accept or reject it for the same kind, direction, required fields, and unknown fields
 
+#### Scenario: Direction-specific JetStream requirements remain aligned
+
+- **GIVEN** generated schema and runtime resolution derived from the closed JetStream binding
+- **WHEN** a subject-only JetStream declaration is checked as an input and as an output
+- **THEN** both schema and runtime reject the input because `stream_name` is required for that direction
+- **AND** both accept the output without `stream_name`
+- **AND** both require at least one non-empty subject in either direction
+
 #### Scenario: Unbound kind is rejected
 
 - **GIVEN** a kind that is absent from the closed port binding

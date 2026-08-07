@@ -35,8 +35,8 @@ type mockKVBucket struct {
 	watchAllFactory  func() (jetstream.KeyWatcher, error)
 }
 
-// entity-id-audit:classify intentional-malformed "" line=772 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
-// entity-id-audit:classify intentional-malformed "" line=870 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=775 column=14 surface=go-field:EntityState.ID entity_id_invalid:empty empty state ID rejection fixture
+// entity-id-audit:classify intentional-malformed "" line=873 column=14 surface=go-triple-subject entity_id_invalid:empty empty triple subject rejection fixture
 
 // mockKVData stores value with revision for CAS testing
 type mockKVData struct {
@@ -393,6 +393,9 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.NotEmpty(t, config.Ports.Inputs)
 	assert.NotEmpty(t, config.Ports.Outputs)
 	assert.False(t, config.EnableHierarchy)
+	entityStream, ok := config.Ports.Inputs[0].Config.(component.JetStreamPort)
+	require.True(t, ok)
+	assert.Equal(t, "ENTITY", entityStream.StreamName)
 }
 
 // TestConfig_IngestLanes pins the ADR-072 lane-count knob: unset defaults to 8

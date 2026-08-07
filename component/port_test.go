@@ -807,6 +807,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:    "TEST",
 					Subjects:      []string{"test.>"},
 					DeliverPolicy: "all",
 					AckPolicy:     "none",
@@ -823,6 +824,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:    "TEST",
 					Subjects:      []string{"test.>"},
 					DeliverPolicy: "last",
 					// AckPolicy and MaxDeliver not set
@@ -837,7 +839,7 @@ func TestGetConsumerConfig(t *testing.T) {
 			port: Port{
 				Name:      "test_input",
 				Direction: DirectionInput,
-				Config:    JetStreamPort{Subjects: []string{"test.>"}},
+				Config:    JetStreamPort{StreamName: "TEST", Subjects: []string{"test.>"}},
 			},
 			wantDeliverPol: "new",
 			wantAckPol:     "explicit",
@@ -1007,6 +1009,7 @@ func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
 		"name": "agent.request",
 		"config": {
 			"kind": "jetstream",
+			"stream_name": "AGENT",
 			"subjects": ["agent.request.>"],
 			"deliver_policy": "all",
 			"ack_policy": "explicit",
@@ -1059,6 +1062,7 @@ func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
 		"name": "agent.request",
 		"config": {
 			"kind": "jetstream",
+			"stream_name": "AGENT",
 			"subjects": ["agent.request.>"],
 			"max_deliver": 1,
 			"ack_wait": "5m",
@@ -1094,6 +1098,7 @@ func TestResolvePortPreservesAckWaitAndHeartbeat(t *testing.T) {
 	pd := PortDefinition{
 		Name: "agent.request",
 		Config: JetStreamPort{
+			StreamName:        "AGENT",
 			Subjects:          []string{"agent.request.>"},
 			AckWait:           "300s",
 			HeartbeatInterval: "60s",
@@ -1189,6 +1194,7 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:        "TEST",
 					Subjects:          []string{"test.>"},
 					AckWait:           tt.ackWait,
 					HeartbeatInterval: tt.heartbeatInterval,

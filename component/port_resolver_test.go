@@ -82,17 +82,20 @@ func TestResolvePortRejectsInvalidDeclarations(t *testing.T) {
 		{"wrong direction", PortDefinition{Name: "p", Config: KVWritePort{Bucket: "B"}}, DirectionInput, "direction"},
 		{"timer duration", PortDefinition{Name: "p", Config: TimerPort{Interval: "soon"}}, DirectionInput, "interval"},
 		{"request duration", PortDefinition{Name: "p", Config: NATSRequestPort{Subject: "a", Timeout: "soon"}}, DirectionInput, "timeout"},
-		{"jetstream ack duration", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", AckWait: "soon"}}, DirectionInput, "ack_wait"},
+		{"jetstream ack duration", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, AckWait: "soon"}}, DirectionInput, "ack_wait"},
+		{"jetstream input missing stream name", PortDefinition{Name: "p", Config: JetStreamPort{Subjects: []string{"events.>"}}}, DirectionInput, "stream_name"},
+		{"jetstream input missing subjects", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "EVENTS"}}, DirectionInput, "subjects"},
+		{"jetstream output missing subjects", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "EVENTS"}}, DirectionOutput, "subjects"},
 		{"jetstream empty subject", PortDefinition{Name: "p", Config: JetStreamPort{Subjects: []string{"events", " "}}}, DirectionInput, "subjects[1]"},
-		{"jetstream storage", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Storage: "disk"}}, DirectionInput, "storage"},
-		{"jetstream retention", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", RetentionPolicy: "forever"}}, DirectionInput, "retention"},
-		{"jetstream deliver policy", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", DeliverPolicy: "nwe"}}, DirectionInput, "deliver_policy"},
-		{"jetstream ack policy", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", AckPolicy: "sometimes"}}, DirectionInput, "ack_policy"},
-		{"jetstream retention days", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", RetentionDays: -1}}, DirectionInput, "retention_days"},
-		{"jetstream max size", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", MaxSizeGB: -1}}, DirectionInput, "max_size_gb"},
-		{"jetstream replicas", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Replicas: -1}}, DirectionInput, "replicas"},
-		{"jetstream max deliver", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", MaxDeliver: -1}}, DirectionInput, "max_deliver"},
-		{"jetstream max ack pending", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", MaxAckPending: -2}}, DirectionInput, "max_ack_pending"},
+		{"jetstream storage", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, Storage: "disk"}}, DirectionInput, "storage"},
+		{"jetstream retention", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, RetentionPolicy: "forever"}}, DirectionInput, "retention"},
+		{"jetstream deliver policy", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, DeliverPolicy: "nwe"}}, DirectionInput, "deliver_policy"},
+		{"jetstream ack policy", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, AckPolicy: "sometimes"}}, DirectionInput, "ack_policy"},
+		{"jetstream retention days", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, RetentionDays: -1}}, DirectionInput, "retention_days"},
+		{"jetstream max size", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, MaxSizeGB: -1}}, DirectionInput, "max_size_gb"},
+		{"jetstream replicas", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, Replicas: -1}}, DirectionInput, "replicas"},
+		{"jetstream max deliver", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, MaxDeliver: -1}}, DirectionInput, "max_deliver"},
+		{"jetstream max ack pending", PortDefinition{Name: "p", Config: JetStreamPort{StreamName: "S", Subjects: []string{"events.>"}, MaxAckPending: -2}}, DirectionInput, "max_ack_pending"},
 		{"network port zero", PortDefinition{Name: "p", Config: NetworkPort{Protocol: "udp"}}, DirectionInput, "port"},
 		{"network port too high", PortDefinition{Name: "p", Config: NetworkPort{Protocol: "udp", Port: 65536}}, DirectionInput, "port"},
 		{"missing timer interval", PortDefinition{Name: "p", Config: TimerPort{}}, DirectionInput, "interval"},
@@ -101,7 +104,7 @@ func TestResolvePortRejectsInvalidDeclarations(t *testing.T) {
 		{"missing http url", PortDefinition{Name: "p", Config: HTTPClientPort{Method: "GET"}}, DirectionInput, "url_pattern"},
 		{"missing nats subject", PortDefinition{Name: "p", Config: NATSPort{}}, DirectionInput, "subject"},
 		{"missing request subject", PortDefinition{Name: "p", Config: NATSRequestPort{}}, DirectionInput, "subject"},
-		{"missing jetstream identity", PortDefinition{Name: "p", Config: JetStreamPort{}}, DirectionInput, "stream_name"},
+		{"missing jetstream subjects", PortDefinition{Name: "p", Config: JetStreamPort{}}, DirectionInput, "subjects"},
 		{"missing watch bucket", PortDefinition{Name: "p", Config: KVWatchPort{}}, DirectionInput, "bucket"},
 		{"missing read bucket", PortDefinition{Name: "p", Config: KVReadPort{}}, DirectionInput, "bucket"},
 		{"missing write bucket", PortDefinition{Name: "p", Config: KVWritePort{}}, DirectionOutput, "bucket"},
@@ -119,6 +122,23 @@ func TestResolvePortRejectsInvalidDeclarations(t *testing.T) {
 				t.Fatalf("error = %q, want port context and %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveJetStreamOutputAllowsProvisionerOwnedName(t *testing.T) {
+	port, err := (PortDefinition{
+		Name: "events", Config: JetStreamPort{Subjects: []string{"events.>"}},
+	}).Resolve(DirectionOutput)
+	if err != nil {
+		t.Fatalf("Resolve subject-only output: %v", err)
+	}
+	facts, err := port.Facts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, ok := facts.Stream()
+	if !ok || stream.Name() != "" || !sameStrings(stream.Subjects(), []string{"events.>"}) {
+		t.Fatalf("subject-only output facts = %#v", facts)
 	}
 }
 

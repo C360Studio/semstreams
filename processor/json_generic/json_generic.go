@@ -262,14 +262,6 @@ func (p *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 	}
 	subject := facts.NATSSubjects()[0]
 	streamName := stream.Name()
-	if streamName == "" {
-		streamName = p.deriveStreamName(subject)
-	}
-	if streamName == "" {
-		return errs.WrapInvalid(
-			errs.ErrInvalidConfig, "JSONGenericProcessor", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", subject))
-	}
 
 	if err := p.waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "JSONGenericProcessor", "setupJetStreamConsumer",
@@ -345,19 +337,6 @@ func (p *Processor) waitForStream(ctx context.Context, streamName string) error 
 	return errs.WrapTransient(
 		errs.ErrStorageUnavailable, "JSONGenericProcessor", "waitForStream",
 		fmt.Sprintf("stream %s availability after %d retries", streamName, maxRetries))
-}
-
-// deriveStreamName extracts stream name from subject convention
-func (p *Processor) deriveStreamName(subject string) string {
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // Stop gracefully stops the processor

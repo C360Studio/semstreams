@@ -14,13 +14,14 @@ import (
 )
 
 type portBinding struct {
-	kind        PortKind
-	directions  map[Direction]struct{}
-	newConfig   func() Portable
-	normalize   func(Portable) (Portable, error)
-	facts       func(Portable) PortFacts
-	required    []string
-	anyRequired [][]string
+	kind                PortKind
+	directions          map[Direction]struct{}
+	newConfig           func() Portable
+	normalize           func(Portable) (Portable, error)
+	facts               func(Portable) PortFacts
+	required            []string
+	anyRequired         [][]string
+	requiredByDirection map[Direction][]string
 }
 
 var canonicalPortKinds = []PortKind{
@@ -39,18 +40,37 @@ var canonicalPortKinds = []PortKind{
 }
 
 var portBindingTable = map[PortKind]portBinding{
-	PortKindTimer:        newPortBinding(PortKindTimer, inputOnly(), func() Portable { return &TimerPort{} }, normalizeTimerPort, timerPortFacts, []string{"interval"}, nil),
-	PortKindNetwork:      newPortBinding(PortKindNetwork, inputOutput(), func() Portable { return &NetworkPort{} }, normalizeNetworkPort, networkPortFacts, []string{"protocol", "port"}, nil),
-	PortKindFile:         newPortBinding(PortKindFile, inputOutput(), func() Portable { return &FilePort{} }, normalizeFilePort, filePortFacts, []string{"path"}, nil),
-	PortKindHTTPClient:   newPortBinding(PortKindHTTPClient, inputOnly(), func() Portable { return &HTTPClientPort{} }, normalizeHTTPClientPort, httpClientPortFacts, []string{"method", "url_pattern"}, nil),
-	PortKindNATS:         newPortBinding(PortKindNATS, inputOutput(), func() Portable { return &NATSPort{} }, normalizeNATSPort, natsPortFacts, []string{"subject"}, nil),
-	PortKindNATSRequest:  newPortBinding(PortKindNATSRequest, inputOutput(), func() Portable { return &NATSRequestPort{} }, normalizeNATSRequestPort, natsRequestPortFacts, []string{"subject"}, nil),
-	PortKindJetStream:    newPortBinding(PortKindJetStream, inputOutput(), func() Portable { return &JetStreamPort{} }, normalizeJetStreamPort, jetStreamPortFacts, nil, [][]string{{"stream_name"}, {"subjects"}}),
+	PortKindTimer:       newPortBinding(PortKindTimer, inputOnly(), func() Portable { return &TimerPort{} }, normalizeTimerPort, timerPortFacts, []string{"interval"}, nil),
+	PortKindNetwork:     newPortBinding(PortKindNetwork, inputOutput(), func() Portable { return &NetworkPort{} }, normalizeNetworkPort, networkPortFacts, []string{"protocol", "port"}, nil),
+	PortKindFile:        newPortBinding(PortKindFile, inputOutput(), func() Portable { return &FilePort{} }, normalizeFilePort, filePortFacts, []string{"path"}, nil),
+	PortKindHTTPClient:  newPortBinding(PortKindHTTPClient, inputOnly(), func() Portable { return &HTTPClientPort{} }, normalizeHTTPClientPort, httpClientPortFacts, []string{"method", "url_pattern"}, nil),
+	PortKindNATS:        newPortBinding(PortKindNATS, inputOutput(), func() Portable { return &NATSPort{} }, normalizeNATSPort, natsPortFacts, []string{"subject"}, nil),
+	PortKindNATSRequest: newPortBinding(PortKindNATSRequest, inputOutput(), func() Portable { return &NATSRequestPort{} }, normalizeNATSRequestPort, natsRequestPortFacts, []string{"subject"}, nil),
+	PortKindJetStream: withDirectionRequirements(
+		newPortBinding(PortKindJetStream, inputOutput(), func() Portable { return &JetStreamPort{} }, normalizeJetStreamPort, jetStreamPortFacts, []string{"subjects"}, nil),
+		map[Direction][]string{DirectionInput: {"stream_name"}},
+	),
 	PortKindKVWatch:      newPortBinding(PortKindKVWatch, inputOnly(), func() Portable { return &KVWatchPort{} }, normalizeKVWatchPort, kvWatchPortFacts, []string{"bucket"}, nil),
 	PortKindKVRead:       newPortBinding(PortKindKVRead, inputOnly(), func() Portable { return &KVReadPort{} }, normalizeKVReadPort, kvReadPortFacts, []string{"bucket"}, nil),
 	PortKindKVWrite:      newPortBinding(PortKindKVWrite, outputOnly(), func() Portable { return &KVWritePort{} }, normalizeKVWritePort, kvWritePortFacts, []string{"bucket"}, nil),
 	PortKindStoreRead:    newPortBinding(PortKindStoreRead, inputOnly(), func() Portable { return &StoreReadPort{} }, normalizeStoreReadPort, storeReadPortFacts, []string{"bucket"}, nil),
 	PortKindStoreProvide: newPortBinding(PortKindStoreProvide, outputOnly(), func() Portable { return &StoreProvidePort{} }, normalizeStoreProvidePort, storeProvidePortFacts, []string{"instance"}, nil),
+}
+
+func withDirectionRequirements(binding portBinding, requirements map[Direction][]string) portBinding {
+	binding.requiredByDirection = cloneDirectionRequirements(requirements)
+	return binding
+}
+
+func cloneDirectionRequirements(requirements map[Direction][]string) map[Direction][]string {
+	if len(requirements) == 0 {
+		return nil
+	}
+	cloned := make(map[Direction][]string, len(requirements))
+	for direction, fields := range requirements {
+		cloned[direction] = append([]string(nil), fields...)
+	}
+	return cloned
 }
 
 func newPortBinding(
@@ -311,14 +331,12 @@ func normalizeNATSRequestPort(config Portable) (Portable, error) {
 
 func normalizeJetStreamPort(config Portable) (Portable, error) {
 	port := config.(JetStreamPort)
+	if len(port.Subjects) == 0 {
+		return nil, errors.New("field \"subjects\" requires at least one subject")
+	}
 	for index, subject := range port.Subjects {
 		if strings.TrimSpace(subject) == "" {
 			return nil, fmt.Errorf("field \"subjects[%d]\" must not be empty", index)
-		}
-	}
-	if strings.TrimSpace(port.StreamName) == "" {
-		if len(port.Subjects) == 0 {
-			return nil, errors.New("field \"stream_name\" or non-empty \"subjects\" is required")
 		}
 	}
 	if err := validateOptionalEnum("storage", port.Storage, "file", "memory"); err != nil {

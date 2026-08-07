@@ -171,6 +171,41 @@ func TestPortConfigJSONRejectsDuplicateNamesWithinEachLane(t *testing.T) {
 	}
 }
 
+func TestPortConfigJSONResolvesJetStreamDefinitionsByLane(t *testing.T) {
+	t.Run("subject-only input fails with typed stream identity context", func(t *testing.T) {
+		config := PortConfig{Outputs: []PortDefinition{{Name: "sentinel", Config: NATSPort{Subject: "sentinel"}}}}
+		raw := []byte(`{"inputs":[{"name":"events","config":{"kind":"jetstream","subjects":["events.>"]}}]}`)
+
+		err := json.Unmarshal(raw, &config)
+		if err == nil {
+			t.Fatal("PortConfig accepted a subject-only JetStream input")
+		}
+		for _, context := range []string{`port "events"`, `kind "jetstream"`, `field "stream_name"`} {
+			if !strings.Contains(err.Error(), context) {
+				t.Fatalf("PortConfig error %q missing %q", err, context)
+			}
+		}
+		if len(config.Outputs) != 1 || config.Outputs[0].Name != "sentinel" || len(config.Inputs) != 0 {
+			t.Fatalf("failed decode partially replaced receiver: %#v", config)
+		}
+	})
+
+	t.Run("subject-only output remains valid", func(t *testing.T) {
+		raw := []byte(`{"outputs":[{"name":"events","config":{"kind":"jetstream","subjects":["events.>"]}}]}`)
+		var config PortConfig
+		if err := json.Unmarshal(raw, &config); err != nil {
+			t.Fatalf("PortConfig rejected subject-only JetStream output: %v", err)
+		}
+		if len(config.Outputs) != 1 {
+			t.Fatalf("outputs = %#v", config.Outputs)
+		}
+		stream, ok := config.Outputs[0].Config.(JetStreamPort)
+		if !ok || stream.StreamName != "" || !reflect.DeepEqual(stream.Subjects, []string{"events.>"}) {
+			t.Fatalf("output config = %#v", config.Outputs[0].Config)
+		}
+	})
+}
+
 func completeJetStreamPort(iface *InterfaceContract) JetStreamPort {
 	return JetStreamPort{
 		StreamName:        "EVENTS",

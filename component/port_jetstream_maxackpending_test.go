@@ -19,6 +19,7 @@ func TestGetConsumerConfig_MaxAckPending(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			port := Port{Name: "entity", Direction: DirectionInput, Config: JetStreamPort{
+				StreamName:    "ENTITY",
 				Subjects:      []string{"entity.>"},
 				MaxAckPending: tt.set,
 			}}

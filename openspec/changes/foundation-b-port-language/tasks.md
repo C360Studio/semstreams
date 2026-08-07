@@ -33,6 +33,11 @@
 
 ## 5. Release gate — remaining
 
+- [x] 5.0 Correct JetStream input identity at the closed binding: require subjects in both directions and explicit
+  `stream_name` on inputs, preserve generic provisioner-owned subject-only output derivation, migrate the 61 shipped
+  inputs across 14 configurations, resolve declarations by lane during atomic `PortConfig` decoding, delete
+  consumer-local fallbacks and the dead top-level agentic-model stream-name surface, and add structural shipped-config
+  guards.
 - [ ] 5.1 Run `task lint` and record its exit status.
 - [ ] 5.2 Run `go test -race ./...` and record its exit status.
 - [ ] 5.3 Run `task test:integration` and record its exit status.
@@ -42,7 +47,8 @@
   `task e2e:research-graph`; record each result independently.
 - [ ] 5.7 Obtain an independent SemStreams reviewer pass on the complete implementation and OpenSpec diff.
 - [ ] 5.8 Re-inventory the merged Foundation B tree and hard-stop on any alias, flat discriminator, top-level side lane,
-  dead type, independent shared projection, false KV declaration, or undeclared runtime-policy dependency.
+  dead type, independent shared projection, false KV declaration, JetStream input without explicit stream identity,
+  consumer-local stream-name derivation fallback, or undeclared runtime-policy dependency.
 - [ ] 5.9 Record the actual merged baseline and implementation evidence; do not begin Foundation C before a new accepted
   inventory and owner remap.
 - [ ] 5.10 Archive `foundation-b-port-language` only after tasks 5.1-5.9 are truthful.

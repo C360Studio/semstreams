@@ -259,7 +259,6 @@
       "name": "agentic-model",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
         "timeout": "120s",
         "ports": {
           "inputs": [

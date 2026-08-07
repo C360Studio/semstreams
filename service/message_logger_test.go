@@ -525,7 +525,7 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 			"json_generic": json.RawMessage(`{
 				"ports": {
 					"inputs": [
-						{"name": "generic_in", "config": {"kind": "jetstream", "subjects": ["raw.udp.messages"]}}
+						{"name": "generic_in", "config": {"kind": "jetstream", "stream_name": "RAW", "subjects": ["raw.udp.messages"]}}
 					],
 					"outputs": [
 						{"name": "generic_out", "config": {"kind": "jetstream", "subjects": ["generic.messages"], "interface": {"type": "core.json.v1"}}}

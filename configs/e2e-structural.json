@@ -270,6 +270,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "RAW",
                 "subjects": [
                   "raw.sensor.>"
                 ]
@@ -306,6 +307,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "RAW",
                 "subjects": [
                   "raw.document.corpus"
                 ]
@@ -342,6 +344,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "DOCUMENT",
                 "subjects": [
                   "document.processed.entity"
                 ]
@@ -453,6 +456,7 @@
                   "type": "storage.stored.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "OBJECTSTORE",
                 "subjects": [
                   "objectstore.stored.entity"
                 ]
@@ -465,6 +469,7 @@
                   "type": "iot.sensor.v1"
                 },
                 "kind": "jetstream",
+                "stream_name": "SENSOR",
                 "subjects": [
                   "sensor.processed.entity"
                 ]
@@ -665,6 +670,7 @@
             {
               "config": {
                 "kind": "jetstream",
+                "stream_name": "OBJECTSTORE",
                 "subjects": [
                   "objectstore.stored.entity"
                 ]

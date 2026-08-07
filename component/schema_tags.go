@@ -89,6 +89,7 @@ type PortFieldInfo struct {
 	Enum                 []string                 `json:"enum,omitempty"`
 	Required             []string                 `json:"required,omitempty"`
 	AnyRequired          [][]string               `json:"anyRequired,omitempty"`
+	RequiredByDirection  map[Direction][]string   `json:"requiredByDirection,omitempty"`
 	Directions           []Direction              `json:"directions,omitempty"`
 	Properties           map[string]PortFieldInfo `json:"properties,omitempty"`
 	Variants             map[string]PortFieldInfo `json:"variants,omitempty"`
@@ -736,6 +737,7 @@ func GeneratePortFieldSchema() map[string]PortFieldInfo {
 			Editable:             true,
 			Required:             append([]string{"kind"}, binding.required...),
 			AnyRequired:          cloneStringGroups(binding.anyRequired),
+			RequiredByDirection:  cloneDirectionRequirements(binding.requiredByDirection),
 			Directions:           directions,
 			Properties:           properties,
 			AdditionalProperties: &closed,

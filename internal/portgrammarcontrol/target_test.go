@@ -19,10 +19,11 @@ import (
 )
 
 type targetConfigItem struct {
-	workItem WorkItem
-	lane     string
-	row      map[string]any
-	deleted  bool
+	workItem               WorkItem
+	lane                   string
+	row                    map[string]any
+	deleted                bool
+	inputIdentityCorrected bool
 }
 
 func TestFoundationBTargetCompleteness(t *testing.T) {
@@ -51,7 +52,11 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 	graphGatewayParents := make(map[string]struct{})
 	survivors := 0
 	deletions := 0
+	inputIdentityCorrections := 0
 	for _, target := range targets {
+		if target.inputIdentityCorrected {
+			inputIdentityCorrections++
+		}
 		document, ok := documents[target.workItem.Path]
 		if !ok {
 			data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(target.workItem.Path)))
@@ -113,6 +118,9 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 
 	if survivors != 512 || deletions != 10 {
 		t.Fatalf("target accounting: survivors=%d deletions=%d, want 512 and 10", survivors, deletions)
+	}
+	if inputIdentityCorrections != 61 {
+		t.Fatalf("JetStream input identity corrections=%d, want 61", inputIdentityCorrections)
 	}
 	actualRows := countCanonicalConfigRows(t, documents, portsParents)
 	if actualRows != 528 {
@@ -612,7 +620,11 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 		if err := json.Unmarshal([]byte(disposition.TargetData), &data); err != nil {
 			return targetConfigItem{}, err
 		}
-		return targetConfigItem{workItem: item, lane: disposition.TargetLane, row: canonicalRow(legacy, disposition.TargetKind, data)}, nil
+		return correctJetStreamInputIdentity(targetConfigItem{
+			workItem: item,
+			lane:     disposition.TargetLane,
+			row:      canonicalRow(legacy, disposition.TargetKind, data),
+		})
 	}
 
 	lane := item.Lane
@@ -623,7 +635,52 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return targetConfigItem{workItem: item, lane: lane, row: canonicalRow(legacy, item.CurrentKind, data)}, nil
+	return correctJetStreamInputIdentity(targetConfigItem{
+		workItem: item,
+		lane:     lane,
+		row:      canonicalRow(legacy, item.CurrentKind, data),
+	})
+}
+
+var foundationBInputStreamBySubject = map[string]string{
+	"cloud.federated.data":      "CLOUD",
+	"document.processed.entity": "DOCUMENT",
+	"edge.filtered.data":        "EDGE",
+	"edge.raw.data":             "EDGE",
+	"entity.>":                  "ENTITY",
+	"events.entity.>":           "EVENTS",
+	"filtered.messages":         "FILTERED",
+	"generic.messages":          "GENERIC",
+	"mapped.messages":           "MAPPED",
+	"mission.processed.entity":  "MISSION",
+	"objectstore.stored.entity": "OBJECTSTORE",
+	"raw.document.corpus":       "RAW",
+	"raw.mission.command":       "RAW",
+	"raw.sensor.>":              "RAW",
+	"raw.udp.messages":          "RAW",
+	"sensor.processed.entity":   "SENSOR",
+}
+
+func correctJetStreamInputIdentity(target targetConfigItem) (targetConfigItem, error) {
+	if target.lane != "inputs" || target.row == nil {
+		return target, nil
+	}
+	config, ok := target.row["config"].(map[string]any)
+	if !ok || stringValue(config["kind"]) != "jetstream" || stringValue(config["stream_name"]) != "" {
+		return target, nil
+	}
+	subjects, ok := config["subjects"].([]any)
+	if !ok || len(subjects) == 0 {
+		return targetConfigItem{}, fmt.Errorf("JetStream input %s has no subjects for identity correction", target.workItem.RecordID)
+	}
+	subject := stringValue(subjects[0])
+	streamName, ok := foundationBInputStreamBySubject[subject]
+	if !ok {
+		return targetConfigItem{}, fmt.Errorf("JetStream input %s subject %q has no approved backing stream", target.workItem.RecordID, subject)
+	}
+	config["stream_name"] = streamName
+	target.inputIdentityCorrected = true
+	return target, nil
 }
 
 func namedRows(value any, name string) []map[string]any {
