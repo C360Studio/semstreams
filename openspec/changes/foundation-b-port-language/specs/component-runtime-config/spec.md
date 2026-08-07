@@ -1,3 +1,5 @@
+<!-- markdownlint-disable MD041 -->
+
 ## MODIFIED Requirements
 
 ### Requirement: Request-port interface identity survives effective configuration
@@ -131,3 +133,108 @@ or produce the same nested-field-preserving result. No factory-local compatibili
 - **THEN** `udp_socket` remains unchanged
 - **AND** `nats_output` is completely replaced without inheriting omitted metadata or kind-specific fields
 - **AND** the merged effective configuration is validated before construction
+
+### Requirement: Agentic-loop trajectory ports are canonical and complete
+
+Agentic-loop defaults SHALL declare exactly these trajectory communication ports:
+
+```text
+output trajectories:
+  kind: kv-write
+  bucket: AGENT_TRAJECTORIES
+  required: true
+  interface: agentic.trajectory.fact v1
+
+input trajectory_query:
+  kind: nats-request
+  subject: agentic.query.trajectory
+  required: true
+  interface: agentic.query v1
+```
+
+The query input SHALL be the runtime subscription authority. A hard-coded subscription that bypasses the declared
+input SHALL NOT survive. Any configured override SHALL be complete named-port replacement and SHALL repeat kind,
+required state, interface type/version, and resource/subject fields. Omission SHALL fail validation rather than inherit
+meaning from the default.
+
+#### Scenario: canonical trajectory defaults preserve their interfaces
+
+- **GIVEN** agentic-loop uses its default port configuration
+- **WHEN** ports are decoded, normalized, and installed
+- **THEN** `trajectories` is the required `AGENT_TRAJECTORIES` KV writer with interface
+  `agentic.trajectory.fact` v1
+- **AND** `trajectory_query` is the required exact NATS request input with interface `agentic.query` v1
+
+#### Scenario: incomplete trajectory override fails cleanly
+
+- **GIVEN** a trajectory port override omits required state, interface identity, kind, or resource/subject
+- **WHEN** complete named-port replacement is validated
+- **THEN** startup fails with component and port context
+- **AND** no default field, alias, hard-coded subscription, or compatibility shim repairs it
+
+### Requirement: Trajectory evidence configuration names only the logical Store
+
+Agentic-loop configuration SHALL expose `trajectory_evidence_storage_instance`, defaulting to `objectstore`.
+Physical bucket configuration SHALL exist only on the storage owner. Agentic-loop SHALL expose no `content_bucket`,
+`trajectory_detail`, `trajectory_cache_ttl`, cache authority, or backend-specific ObjectStore configuration.
+
+The shipped provider representation SHALL be:
+
+```json
+"objectstore": {
+  "type": "storage",
+  "name": "objectstore",
+  "enabled": true,
+  "config": {
+    "bucket_name": "AGENT_CONTENT"
+  }
+}
+```
+
+That provider SHALL advertise logical `StorageInstance="objectstore"` through its existing `store-provide` output,
+independent of physical bucket name.
+
+#### Scenario: agentic-loop config carries no physical storage prediction
+
+- **GIVEN** default agentic-loop configuration
+- **WHEN** its schema and effective configuration are inspected
+- **THEN** it names only logical Store instance `objectstore`
+- **AND** no content bucket, detail mode, cache TTL, or ObjectStore backend field exists
+
+#### Scenario: retired trajectory fields are rejected
+
+- **GIVEN** configuration supplies `content_bucket`, `trajectory_detail`, or `trajectory_cache_ttl`
+- **WHEN** strict schema/runtime decoding runs
+- **THEN** startup rejects the unknown retired field
+- **AND** no ignored compatibility value survives
+
+### Requirement: Every shipped agentic assembly owns the evidence provider
+
+Each of these seven assembled configurations SHALL contain the enabled logical `objectstore` storage component backed
+by physical bucket `AGENT_CONTENT`:
+
+- `configs/agentic.json`
+- `configs/flows/ops-agent.json`
+- `configs/flows/ops-agent-test.json`
+- `configs/flows/lesson-example.json`
+- `configs/flows/crud-tools-test.json`
+- `configs/flows/deep-research-test.json`
+- `configs/flows/deep-research.json`
+
+Each assembly SHALL inherit agentic-loop's canonical `trajectories` output rather than carrying a redundant override.
+The complete-replacement override that omitted required/interface facts SHALL be deleted, not repaired with aliases or
+partial merge behavior.
+
+#### Scenario: all seven assemblies provide full evidence storage
+
+- **WHEN** the seven shipped agentic configurations are decoded
+- **THEN** each contains enabled component `objectstore` with bucket `AGENT_CONTENT`
+- **AND** each omits a redundant agentic-loop `trajectories` override
+- **AND** each inherits the canonical required/versioned trajectory ports
+
+#### Scenario: physical bucket remains storage-owner configuration
+
+- **GIVEN** one shipped assembly
+- **WHEN** effective configs are inspected
+- **THEN** `AGENT_CONTENT` appears on the ObjectStore component
+- **AND** agentic-loop refers only to logical Store instance `objectstore`

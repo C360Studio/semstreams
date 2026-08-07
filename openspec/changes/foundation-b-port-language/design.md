@@ -11,15 +11,20 @@ the files as they exist in the working tree on 2026-08-07:
   `f6c1d0c9d2ca1bca5661d424a96dcd9f285b02abbbbd6b1db9080679e1d3c39e`;
 - accepted inventory `docs/proposals/foundation-b-port-language-inventory.md`: 955 lines, 53,247 bytes, SHA-256
   `d957dfd00a2ca9bbf3ee3cf4aa2d0d9005008eb78198c7762403aa2c66ba9000`.
+- accepted trajectory inventory `docs/proposals/agentic-trajectory-contract-inventory.md`: commit `8c6997a6`,
+  426 lines, 34,359 bytes, SHA-256
+  `5a7dcf3591cc643ee93654515763ec69982f36c78c296cf02bb8234b3000dd2a`;
+- accepted trajectory contract `docs/proposals/agentic-trajectory-target-contract.md`: commit `139b8b1c`, 499 lines,
+  28,672 bytes, SHA-256 `53b169fbdf2cd25dfb9d3e4c87d1fb7135713ec5053d1ed1e6d93409b57b537e`.
 
 The immutable worklist and disposition ledgers remain historical migration authority. The amended target accounts for
 512 surviving frozen configuration rows, ten approved deletions, sixteen new graph-gateway output rows, 528 actual
 canonical configuration rows, and 136 production Go declaration identities. See proposal.md for motivation.
 
-The current implementation baseline is `main` at `5ffc1d1f`; branch HEAD `d630c8fd` is 13 commits ahead. Local lint,
-build, tagged vet (`integration` and `live_llm`), race, integration-test, schema-cleanliness, contract, and OpenSpec
-validation evidence is green at that HEAD. Breaking E2E, independent review, and the post-B inventory remain release
-gates.
+The implementation baseline remains `main` at `5ffc1d1f`; accepted-contract HEAD `139b8b1c` is 16 commits ahead.
+Local lint, build, tagged vet, race, integration, schema-cleanliness, contract, and OpenSpec results recorded at
+`d630c8fd` predate the trajectory contract and are historical only. Runtime implementation, all current release
+validation, breaking E2E, independent review, and the post-B inventory remain open.
 
 ## Goals / Non-Goals
 
@@ -30,13 +35,19 @@ gates.
 - Give all shared consumers one immutable normalized facts projection without exporting a second grammar.
 - Record the declaration corrections and strict graph-gateway and graph-mutation composition contracts approved during
   checkpoints 1-4.
+- Replace process-local aggregate trajectory authority with immutable KV observations and full evidence through the
+  registered Store lifecycle.
+- Make audit loss loud in existing observability while preserving the agent work outcome.
+- Make GraphQL the public trajectory read surface, with typed internal NATS routing and observed-only coverage.
 - Keep the breaking release closed until every checkpoint-5 gate is recorded with actual evidence.
 
 **Non-Goals:**
 
-- Foundation C declaration authorship/snapshot lifecycle, graph query behavior, GraphQL or MCP behavior, indexes,
+- Foundation C declaration authorship/snapshot lifecycle, unrelated graph-query/GraphQL/MCP behavior, indexes,
   downstream migration, custom kinds, aliases, or dual decoders.
 - Hierarchy placement, research create-before-append semantics, or any redesign inferred from the research-graph E2E.
+- Trajectory completeness proof, terminal seal, aggregate summary, cache authority, graph projection, repair service,
+  automatic expiry, or redesign of `COMPLETE_` and terminal-event contracts.
 
 ## Decisions
 
@@ -110,13 +121,62 @@ fixture names (`69a723f5`), and routed rule subscriptions by canonical port kind
 Local schema, contract, lint/build/vet, race, and integration evidence is green at `d630c8fd`. E2E, independent review,
 and the mandatory post-B inventory remain open release gates.
 
-### Trajectory disposition remains an owner ruling
+### Append-only attempt observations replace aggregate trajectory authority
 
-The agentic E2E currently fails fast during startup because the shipped configuration declares an agentic-loop
-`trajectories` override that the runtime does not expose. Foundation B's frozen inventory mechanically migrated that
-declaration, but migration history does not decide whether the durable trajectory contract is a KV materialized view or
-graph-native reconstruction. No trajectory configuration or documentation may be deleted, and no runtime port may be
-restored, until that bounded contract question is adjudicated by the owner.
+`AGENT_TRAJECTORIES` is a history-1 KV bucket whose immutable keys are
+`v1.<base32-sha256(loop_id)>.<attempt_id>`. Each fact-recording invocation allocates a bounded framework attempt ID and
+a monotonically observed per-loop ordinal. Store and KV retries within that invocation reuse its exact identity, key,
+and canonical bytes; redelivery is a new attempt and therefore appends another visible fact. Optional source
+correlation links repeated attempts but never becomes identity. Reader order is
+`(iteration, phase_rank, source_ordinal, attempt_ordinal, attempt_id)`.
+
+The fact envelope is finite and internally bounded to 8 KiB. It carries enums, counters, digests, bounded previews,
+and an optional `message.StorageReference`; it never embeds prompts, messages, tool arguments/results, URLs,
+unbounded metadata, or raw error strings. Full canonical `TrajectoryEvidenceV1` is captured before execution
+truncation, hashed, and stored at `trajectory-evidence/v1/sha256/<digest>` through the lazily resolved configured
+`storage.Store`. The shipped logical instance is `objectstore`, backed by physical bucket `AGENT_CONTENT` in all seven
+agentic assemblies. Agentic-loop borrows through `StoreRegistry`; it constructs, caches, closes, or owns no backend
+handle.
+
+Evidence loss still attempts an honest ordinary fact with `evidence_capture="missing"`, a digest/size when available,
+a bounded reason, and no fabricated reference. Any evidence or fact failure emits an ERROR without body content,
+increments `semstreams_agentic_loop_trajectory_audit_failures_total{stage,kind,reason}`, and latches existing Health
+degraded. It never rejects, NAKs, cancels, or fails the agent work. If fact creation also fails, no durable gap marker
+is manufactured; logs, metrics, and Health are the only operational evidence.
+
+All reads prefix-list visible facts, validate and causally sort them, and report only `coverage: observed` plus
+`observed_totals`. An ordinary `loop.terminal` fact means one terminal outcome was observed. Redelivery may append
+another terminal fact; no fact is a seal or completeness proof, and no terminal state is inferred from `COMPLETE_`,
+events, cache, process memory, or graph state. GraphQL is the sole public application surface. Typed internal NATS
+request/reply uses graph-gateway's existing `agentic.query.*` family and agentic-loop's declared exact
+`agentic.query.trajectory` input.
+
+Agentic-loop's defaults declare required `kv-write` output `trajectories` for `AGENT_TRAJECTORIES` with interface
+`agentic.trajectory.fact` v1 and required `nats-request` input `trajectory_query` for `agentic.query.trajectory` with
+interface `agentic.query` v1. Graph-gateway retains exactly three outputs; `agentic_queries` remains the required
+`agentic.query.*` family with interface `agentic.query` v1. The seven redundant `trajectories` overrides are deleted
+because named overrides are complete replacements and would erase required/interface facts. Isolated deployments may
+use explicit complete paired query overrides; there is no platform-derived owner, alias, dual subscription, or shim.
+
+Aggregate/public `Trajectory`, terminal cache, `trajectory_detail`, private `content_bucket` construction,
+timestamp-derived evidence keys, direct trajectory HTTP/OpenAPI, and terminal batch graph writes are deleted cleanly.
+Graph indexing is deferred: any later graph trace is a separate projection consuming the durable fact log.
+
+The `kv-or-stream` decision is KV: these are immutable observed facts whose readers rehydrate by prefix/watch, not
+queued requests requiring acknowledgement. Agent work requests remain on their existing JetStream paths.
+
+### Store providers start and register before subscribing consumers
+
+`ComponentManager` adds one narrow cold-boot phase around the existing `component.StoreProvider` interface. Providers
+start concurrently in a first barrier and each store registers immediately after provider Start. Invalid or duplicate
+instances are provider startup errors that fail the barrier without clobbering the incumbent. Only then do all
+non-provider components start concurrently in the existing consumer barrier.
+
+Agentic-loop validates its configured logical provider after that phase and before installing subscriptions. Absence
+does not fail Start: it logs, increments the bounded provider-resolve metric, latches Health degraded, installs
+subscriptions, and continues work. Each evidence operation still resolves lazily so later provider addition or
+reconfiguration is observed. No sleep, readiness deadline, polling loop, port-derived dependency graph, or general
+topological scheduler is introduced.
 
 ### Hierarchy and research consequences remain deferred inputs
 
@@ -135,8 +195,14 @@ validation gate; a failure there does not widen this change into hierarchy or re
   unrepresentable physical policies and keep all discoverable stream facts canonical.
 - **Green focused guards can hide a cross-stack break** → checkpoint 5 includes all required race, integration,
   contract, and breaking E2E gates before release.
-- **Mechanical migration can obscure an unresolved durable contract** → preserve the trajectory declaration and
-  runtime state until the owner chooses its durable source of truth; do not turn E2E fallout into an implicit design.
+- **Best-effort audit can be mistaken for completeness** → every response says `coverage: observed`, totals are named
+  `observed_totals`, and static tests prohibit seals, manifests, counters, and completeness classifications.
+- **Provider startup can race subscribers** → use one narrow StoreProvider barrier before the existing parallel
+  consumer barrier; do not invent sleeps or a general dependency scheduler.
+- **Audit storage failure can become work failure** → failure assertions cover publish/ACK continuation for every
+  Store/KV stage and latch existing observability instead of changing the work result.
+- **A later graph index can leak back into the write path** → Foundation B deletes trajectory graph writes and treats
+  any later graph trace as a separate post-foundation projection design.
 
 ## Migration Plan
 
@@ -145,10 +211,11 @@ validation gate; a failure there does not widen this change into hierarchy or re
    validation.
 2. Graph-gateway configurations remove every input and replace `queries` with the three required outputs and matching
    subject families. There is no auto-fill or compatibility alias.
-3. Adjudicate the bounded trajectory contract without deleting configuration/documentation or restoring runtime
-   behavior by inference; then run every remaining checkpoint-5 gate in tasks.md and obtain independent SemStreams
-   reviewer approval.
+3. Implement the accepted append-only trajectory contract: immutable attempt facts, registered full-fidelity evidence,
+   non-blocking degradation, provider-first startup, canonical NATS routing, GraphQL observed-only reads, seven
+   assembly corrections, and clean deletion of aggregate/cache/graph/HTTP authority.
 4. Re-inventory the merged tree. Stop if an alias, flat discriminator, top-level side lane, dead type, independent
-   shared projection, false KV declaration, or undeclared runtime-policy dependency remains.
+   shared projection, false KV declaration, undeclared runtime-policy dependency, trajectory cache/aggregate, private
+   ObjectStore handle, direct HTTP route, or completeness machinery remains.
 5. Archive this change only after the release and post-B inventory gates are truthful. Rollback is whole-cutover
    rollback; there is no dual-wire runtime mode.

@@ -1,8 +1,8 @@
 # Tasks — Foundation B port language
 
-> Checkpoints 1-4 and the recorded release-fallout corrections are completed implementation history on the breaking
-> branch. Checkpoint 5 remains the release gate; local gates 5.1-5.5 are green, while breaking E2E, independent review,
-> and inventory remain open.
+> Checkpoints 1-4 and the pre-trajectory release-fallout corrections are completed implementation history. The
+> append-only trajectory contract accepted at `139b8b1c` is not implemented. Every release gate remains unchecked;
+> results recorded at older commits are historical evidence only.
 
 ## 1. Grammar and codec — completed
 
@@ -45,24 +45,43 @@
 Release fallout through branch HEAD `d630c8fd` also migrated canonical engine fixtures (`7ba82c8f`), corrected merged
 input defaults (`02cd51e1`, recorded as 5.0a), enforced agentic-tools contracts (`ffe0f705`), enforced agentic-model and
 agentic-governance roles (`8178a10c`), migrated agentic-loop integration fixture names (`69a723f5`), and routed rule
-subscriptions by canonical port kind (`d630c8fd`). This branch is 13 commits after baseline `5ffc1d1f`.
+subscriptions by canonical port kind (`d630c8fd`). Accepted-contract HEAD `139b8b1c` is 16 commits after baseline
+`5ffc1d1f`. The historical gates at `d630c8fd` predate the accepted trajectory contract.
 
-- [x] 5.1 At `d630c8fd`, `task lint`, `task build`, `go vet -tags=integration ./...`, and
-  `go vet -tags=live_llm ./...` exited successfully.
-- [x] 5.2 At `d630c8fd`, `go test -race ./...` exited successfully.
-- [x] 5.3 At `d630c8fd`, `task test:integration` exited successfully.
-- [x] 5.4 At `d630c8fd`, `task schema:generate` exited successfully and `git diff -- schemas/ specs/` was clean.
-- [x] 5.5 At `d630c8fd`, `go test ./test/contract/...` and `task openspec:validate` exited successfully.
+- [ ] 5.0b Implement deterministic bounded `TrajectoryFactV1` encoding, per-invocation attempt identity and ordering,
+  immutable KV Create/Get verification, distinct redelivery observations, and the internal 8 KiB fact limit.
+- [ ] 5.0c Capture full canonical model/tool/compaction/terminal evidence before operational truncation; store and
+  verify digest-addressed bodies through the configured lazy `StoreRegistry` lookup; remove agentic-loop's private
+  ObjectStore handle and lifecycle.
+- [ ] 5.0d Add bounded audit-failure logging/metrics and sticky Health degradation for provider, evidence, encode, and
+  fact failures; prove every failure path preserves downstream state transition, publication, and ACK.
+- [ ] 5.0e Start/register all StoreProvider components in a provider barrier before the parallel consumer barrier;
+  propagate invalid/duplicate registration as startup failure without clobbering the incumbent; start agentic-loop
+  degraded when its configured provider is absent.
+- [ ] 5.0f Add the canonical agentic-loop `trajectories` and `trajectory_query` ports, route through graph-gateway's
+  existing typed `agentic_queries` family, add `objectstore`/`AGENT_CONTENT` to all seven assemblies, and delete their
+  redundant trajectory overrides.
+- [ ] 5.0g Replace aggregate/cache/manager reads with prefix-listed causal facts; expose GraphQL-only trajectory reads
+  with `coverage: observed`, `observed_totals`, evidence hydration, and ordinary ordered terminal observations; delete
+  direct HTTP/OpenAPI and terminal trajectory graph writes.
+- [ ] 5.0h Add the frozen unit, integration, static, crash-boundary, restart, provider-lifecycle, routing, seven-config,
+  GraphQL, and absence-of-seal/cache/graph/projector tests specified by the accepted contract.
+
+- [ ] 5.1 Run `task lint`, `task build`, `go vet -tags=integration ./...`, and
+  `go vet -tags=live_llm ./...` against the completed accepted-contract implementation; record actual results.
+- [ ] 5.2 Run `go test -race ./...` against the completed implementation; record the actual result.
+- [ ] 5.3 Run `task test:integration` against the completed implementation; record the actual result.
+- [ ] 5.4 Run `task schema:generate`, verify `git diff -- schemas/ specs/` is clean, and record the actual result.
+- [ ] 5.5 Run `go test ./test/contract/...` and `task openspec:validate`; record the actual results.
 - [ ] 5.6 Run the breaking E2E gates `task e2e:agentic`, `task e2e:semantic`, `task e2e:all`, and
-  `task e2e:research-graph`; record each result independently. Current evidence: `task e2e:agentic` failed fast during
-  startup. Summarized cause: agentic-loop rejected the configured `trajectories` output as an unknown override. The
-  semantic, all-tier, and research-graph gates have not run. The durable trajectory disposition is an unresolved owner
-  ruling: adjudicate the bounded choice between a declared KV materialized view and graph-native durable
-  reconstruction before deleting any trajectory configuration/documentation or restoring a runtime port.
+  `task e2e:research-graph`; record each result independently. Historical evidence: the pre-contract agentic E2E at
+  `d630c8fd` failed fast because a redundant complete-replacement `trajectories` override did not match runtime
+  defaults. That cause now has an accepted disposition, but no E2E has run against its implementation.
 - [ ] 5.7 Obtain an independent SemStreams reviewer pass on the complete implementation and OpenSpec diff.
 - [ ] 5.8 Re-inventory the merged Foundation B tree and hard-stop on any alias, flat discriminator, top-level side lane,
   dead type, independent shared projection, false KV declaration, JetStream input without explicit stream identity,
-  consumer-local stream-name derivation fallback, or undeclared runtime-policy dependency.
+  consumer-local stream-name derivation fallback, undeclared runtime-policy dependency, trajectory aggregate/cache,
+  private ObjectStore handle, direct trajectory HTTP/OpenAPI, trajectory graph write, or completeness machinery.
 - [ ] 5.9 Record the actual merged baseline and implementation evidence; do not begin Foundation C before a new accepted
   inventory and owner remap.
 - [ ] 5.10 Archive `foundation-b-port-language` only after tasks 5.1-5.9 are truthful.
