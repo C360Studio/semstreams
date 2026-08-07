@@ -53,11 +53,41 @@ no invented grouping is used to reach 45.
 
 ## Cutover status
 
-The cutover retains the two TSV files as the immutable historical migration record. The target test accounts for all
-646 ledger identities, requires production decoding and resolution for all 520 surviving configuration rows, accounts
-explicitly for the two approved graph-query deletions, and verifies the 124 frozen Go constructions plus eleven approved
-checkpoint additions. The full-repository AST census, rather than the frozen path list, proves that no additional
-production `PortDefinition` construction is hidden outside this population.
+The cutover retains the two TSV files as the immutable historical migration record. The owner-approved graph-gateway
+amendment does not rewrite either TSV. The target test accounts for all 646 frozen ledger identities, requires
+production decoding and resolution for 512 surviving frozen configuration rows, and records ten approved deletions:
+the two graph-query rows already retired plus the eight graph-gateway listener inputs retired by the amendment. Sixteen
+new graph-gateway output rows bring the actual canonical configuration population to 528.
+
+The production AST census now requires 136 `PortDefinition` identities. The amendment replaces the five frozen
+graph-gateway Go identities with six canonical constructions: one contract and one default declaration for each of the
+three required query families. Together with the eleven earlier checkpoint additions below, the accounting is
+`124 - 5 + 6 + 11 = 136`. The full-repository AST census, rather than the frozen path list, proves that no additional
+production construction is hidden outside this population.
+
+### Owner-approved graph-gateway amendment
+
+Graph-gateway owns no composition input in shared-mux mode. Its input declaration set is empty, and startup rejects
+any configured input. `bind_address` remains only the standalone development/test server setting; it is not a
+`NetworkPort` composition claim.
+
+The output contract is exactly three required `nats-request` ports:
+
+| Name | Subject family |
+|---|---|
+| `graph_queries` | `graph.query.*` |
+| `graph_index_queries` | `graph.index.query.*` |
+| `agentic_queries` | `agentic.query.*` |
+
+Startup rejects the legacy `queries` name and every missing, duplicate, extra, optional, wrong-kind, or malformed
+family declaration. There is no auto-fill, alias, or compatibility shim. Valid configured family overrides remain the
+runtime routing authority after canonical port resolution.
+
+The eight amended shipped configurations are `configs/e2e-structural.json`, `configs/hello-world.json`,
+`configs/protocol-flow.json`, `configs/semantic-8b.json`, `configs/semantic-frontier.json`, `configs/semantic.json`,
+`configs/statistical.json`, and `configs/structural.json`. External configurations that retain an input, use `queries`,
+or omit any required output fail startup until migrated. Full release validation, including the relevant breaking-change
+E2E tier, remains checkpoint 5 and is not discharged by the Foundation B target guard.
 
 The eleven additions are deliberately recorded here rather than added to the immutable baseline:
 
@@ -104,11 +134,8 @@ The mandatory post-B component-authorship inventory must revisit pre-existing ex
 `output/httppost` having no outbound HTTP declaration. It is recorded here so renderer closure is not misread as proof
 that every older component already has a complete authorship contract.
 
-That inventory must also revisit `gateway/graph-gateway`. In its normal shipped mode the gateway registers routes on
-ServiceManager's shared HTTP mux, but its current input declaration advertises an exclusive `NetworkPort` listener
-derived from `bind_address`; its single `queries` output also does not enumerate every NATS request family the gateway
-emits. Correcting either surface is an intentional adopter-visible break and is deferred pending an explicit owner
-ruling. Checkpoint 4 does not treat those existing declarations as accurate component-authorship precedent.
+The post-B component-authorship inventory no longer carries a graph-gateway deferral. The owner-approved amendment
+above is the binding disposition for that surface; checkpoint 5 still owns full release and E2E evidence.
 
 The one-shot live census, production rewriter, and CLI were retired after that target gate passed. They are not an
 ongoing framework subsystem. Test-local helpers retain the ledger-to-target accounting and the proof that mechanical

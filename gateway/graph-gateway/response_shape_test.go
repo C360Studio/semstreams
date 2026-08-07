@@ -241,12 +241,12 @@ var subjectsWithNoProducer = map[string]string{
 // methodological: it was enumerated from graph-query's registration table and
 // the static router, NOT from the gateway's own reachable set.
 //
-// This scrapes the subject literals out of mapGraphQLQueryToNATSSubject — the
-// single authority on what this gateway can produce — and fails if any of them
-// lacks a classified shape case. Adding a route without adding a case turns it
-// RED, so the claim "every routed shape is covered" stays true instead of
-// decaying into a comment. Source-scraping follows the precedent in
-// processor/agentic-loop/inflight_test.go:135.
+// This scrapes the resolved-family selectors and operation suffixes out of
+// mapGraphQLQueryToNATSSubject — the single authority on what this gateway can
+// produce — and fails if any route lacks a classified shape case. Adding a
+// route without adding a case turns it RED, so the claim "every routed shape
+// is covered" stays true instead of decaying into a comment. Source-scraping
+// follows the precedent in processor/agentic-loop/inflight_test.go:135.
 func TestGateway_EveryRoutedSubjectHasAShapeCase(t *testing.T) {
 	t.Parallel()
 
@@ -262,14 +262,16 @@ func TestGateway_EveryRoutedSubjectHasAShapeCase(t *testing.T) {
 	}
 
 	routed := map[string]bool{}
-	// Subjects are both `graph.query.X` and `graph.index.query.X`, so the
-	// segment count before `.query.` VARIES. An earlier version of this regex
-	// required exactly two leading segments and therefore matched only the
-	// graph.index.query.* family — 4 subjects — while still passing a
-	// non-empty check. A partial scrape that looks like a scrape is worse than
-	// none, so the count is asserted against a floor below.
-	for _, m := range regexp.MustCompile(`return "([a-z][a-z.]*\.query\.[a-zA-Z]+)"`).FindAllStringSubmatch(body, -1) {
-		routed[m[1]] = true
+	// Routes now derive their family from resolved port Facts. Scrape the
+	// family selector plus operation suffix, then materialize the default
+	// contract used by the shape inventory.
+	defaultFamilies := map[string]string{
+		"graph":   "graph.query.*",
+		"index":   "graph.index.query.*",
+		"agentic": "agentic.query.*",
+	}
+	for _, match := range regexp.MustCompile(`querySubject\(c\.queries\.(graph|index|agentic), "([a-zA-Z]+)"\)`).FindAllStringSubmatch(body, -1) {
+		routed[querySubject(defaultFamilies[match[1]], match[2])] = true
 	}
 	require.GreaterOrEqual(t, len(routed), 15,
 		"scraped only %d subjects from mapGraphQLQueryToNATSSubject — the regex has drifted "+

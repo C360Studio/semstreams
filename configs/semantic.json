@@ -875,29 +875,34 @@
       "name": "graph-gateway",
       "enabled": true,
       "config": {
-        "ports": {
-          "inputs": [
-            {
-              "config": {
-                "host": "0.0.0.0",
-                "kind": "network",
-                "port": 8084,
-                "protocol": "http"
-              },
-              "description": "HTTP server for GraphQL and MCP",
-              "name": "http"
-            }
-          ],
-          "outputs": [
-            {
-              "config": {
-                "kind": "nats-request",
-                "subject": "graph.query.*"
-              },
-              "name": "queries"
-            }
-          ]
-        },
+      "ports": {
+        "outputs": [
+          {
+            "config": {
+              "kind": "nats-request",
+              "subject": "graph.query.*"
+            },
+            "name": "graph_queries",
+            "required": true
+          },
+          {
+            "config": {
+              "kind": "nats-request",
+              "subject": "graph.index.query.*"
+            },
+            "name": "graph_index_queries",
+            "required": true
+          },
+          {
+            "config": {
+              "kind": "nats-request",
+              "subject": "agentic.query.*"
+            },
+            "name": "agentic_queries",
+            "required": true
+          }
+        ]
+      },
         "graphql_path": "/graphql",
         "mcp_path": "/mcp",
         "enable_playground": true,

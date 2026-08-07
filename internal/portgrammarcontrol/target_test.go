@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,7 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 
 	documents := make(map[string]any, plan.ConfigDocumentCount())
 	portsParents := make(map[string]struct{})
+	graphGatewayParents := make(map[string]struct{})
 	survivors := 0
 	deletions := 0
 	for _, target := range targets {
@@ -66,6 +68,9 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		segments := splitPointer(target.workItem.Pointer)
 		portsPath := segments[:len(segments)-2]
 		portsParents[target.workItem.Path+"#"+jsonPointer(portsPath)] = struct{}{}
+		if target.workItem.Enclosing == "graph-gateway" {
+			graphGatewayParents[target.workItem.Path+"#"+jsonPointer(portsPath)] = struct{}{}
+		}
 		portsValue, err := getPointer(document, portsPath)
 		if err != nil {
 			t.Fatalf("ports for %s: %v", target.workItem.RecordID, err)
@@ -86,7 +91,8 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		}
 
 		survivors++
-		matches := namedRows(ports[target.lane], target.workItem.Name)
+		targetName := stringValue(target.row["name"])
+		matches := namedRows(ports[target.lane], targetName)
 		if len(matches) != 1 {
 			t.Errorf("target identity %s has %d rows in %s, want 1", target.workItem.RecordID, len(matches), target.lane)
 			continue
@@ -105,11 +111,24 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		assertProductionPortResolution(t, target.workItem.RecordID, target.lane, matches[0])
 	}
 
-	if survivors != 520 || deletions != 2 {
-		t.Fatalf("target accounting: survivors=%d deletions=%d, want 520 and 2", survivors, deletions)
+	if survivors != 512 || deletions != 10 {
+		t.Fatalf("target accounting: survivors=%d deletions=%d, want 512 and 10", survivors, deletions)
 	}
+	actualRows := countCanonicalConfigRows(t, documents, portsParents)
+	if actualRows != 528 {
+		t.Fatalf("canonical config rows=%d, want 528", actualRows)
+	}
+	assertGraphGatewayConfigAmendment(t, documents, graphGatewayParents)
+	if len(plan.GoItems()) != 124 {
+		t.Fatalf("frozen Go identities=%d, want 124", len(plan.GoItems()))
+	}
+	assertGoTargetCompleteness(t, root, plan)
+}
+
+func countCanonicalConfigRows(t *testing.T, documents map[string]any, parents map[string]struct{}) int {
+	t.Helper()
 	actualRows := 0
-	for identity := range portsParents {
+	for identity := range parents {
 		path, pointer, ok := splitTargetParentIdentity(identity)
 		if !ok {
 			t.Fatalf("invalid target parent identity %q", identity)
@@ -129,25 +148,83 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		}
 		actualRows += len(config.Inputs) + len(config.Outputs)
 	}
-	if actualRows != 520 {
-		t.Fatalf("canonical config rows=%d, want 520", actualRows)
+	return actualRows
+}
+
+func assertGraphGatewayConfigAmendment(t *testing.T, documents map[string]any, parents map[string]struct{}) {
+	t.Helper()
+	if len(parents) != 8 {
+		t.Fatalf("graph-gateway config blocks=%d, want 8", len(parents))
 	}
-	if len(plan.GoItems()) != 124 {
-		t.Fatalf("frozen Go identities=%d, want 124", len(plan.GoItems()))
+	want := map[string]string{
+		"graph_queries":       "graph.query.*",
+		"graph_index_queries": "graph.index.query.*",
+		"agentic_queries":     "agentic.query.*",
 	}
-	assertGoTargetCompleteness(t, root, plan)
+	for identity := range parents {
+		path, pointer, ok := splitTargetParentIdentity(identity)
+		if !ok {
+			t.Fatalf("invalid graph-gateway parent identity %q", identity)
+		}
+		value, err := getPointer(documents[path], splitPointer(pointer))
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ports component.PortConfig
+		if err := json.Unmarshal(data, &ports); err != nil {
+			t.Fatalf("decode graph-gateway ports %s: %v", identity, err)
+		}
+		if len(ports.Inputs) != 0 || len(ports.Outputs) != 3 {
+			t.Errorf("%s inputs=%d outputs=%d, want 0 and 3", identity, len(ports.Inputs), len(ports.Outputs))
+			continue
+		}
+		for _, definition := range ports.Outputs {
+			subject, exists := want[definition.Name]
+			if !exists {
+				t.Errorf("%s has unexpected graph-gateway output %q", identity, definition.Name)
+				continue
+			}
+			if !definition.Required {
+				t.Errorf("%s output %q is not required", identity, definition.Name)
+			}
+			port, err := definition.Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Errorf("%s output %q does not resolve: %v", identity, definition.Name, err)
+				continue
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				t.Errorf("%s output %q facts: %v", identity, definition.Name, err)
+				continue
+			}
+			if facts.Kind() != component.PortKindNATSRequest || !slices.Equal(facts.NATSSubjects(), []string{subject}) {
+				t.Errorf("%s output %q facts kind=%q subjects=%v", identity, definition.Name, facts.Kind(), facts.NATSSubjects())
+			}
+		}
+	}
 }
 
 func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 	t.Helper()
 	wantByPath := map[string]map[string]int{}
 	for _, item := range plan.GoItems() {
+		if item.Path == "gateway/graph-gateway/component.go" {
+			continue
+		}
 		if wantByPath[item.Path] == nil {
 			wantByPath[item.Path] = map[string]int{}
 		}
 		wantByPath[item.Path][item.Name+"|"+targetConfigType(item.CurrentKind)]++
 	}
 	approved := map[string][]string{
+		"gateway/graph-gateway/component.go": {
+			"graph_queries|NATSRequestPort", "graph_index_queries|NATSRequestPort", "agentic_queries|NATSRequestPort",
+			"graph_queries|NATSRequestPort", "graph_index_queries|NATSRequestPort", "agentic_queries|NATSRequestPort",
+		},
 		"processor/graph-clustering/component.go": {
 			"entity_states|KVReadPort", "outgoing_index|KVReadPort", "incoming_index|KVReadPort",
 		},
@@ -273,8 +350,8 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 			t.Errorf("%s target Go identities differ: %s", path, difference)
 		}
 	}
-	if total != 135 {
-		t.Fatalf("canonical Go PortDefinition identities=%d, want 135 (124 frozen + 11 approved)", total)
+	if total != 136 {
+		t.Fatalf("canonical Go PortDefinition identities=%d, want 136", total)
 	}
 }
 
@@ -287,8 +364,7 @@ func validateStaticGoPortConfig(literal *ast.CompositeLit, identifiers map[strin
 		}
 	}
 	if !ok {
-		// The graph-gateway bind-address helper returns a NetworkPort and is
-		// covered through its production resolution tests.
+		// Dynamic config expressions are covered through production resolution tests.
 		return nil
 	}
 	configType := astTypeName(config.Type)
@@ -512,6 +588,20 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	var legacy map[string]any
 	if err := json.Unmarshal([]byte(item.CurrentData), &legacy); err != nil {
 		return targetConfigItem{}, err
+	}
+	if item.Enclosing == "graph-gateway" {
+		if item.Lane == "inputs" {
+			return targetConfigItem{workItem: item, deleted: true}, nil
+		}
+		legacy["name"] = "graph_queries"
+		legacy["required"] = true
+		return targetConfigItem{
+			workItem: item,
+			lane:     "outputs",
+			row: canonicalRow(legacy, "nats-request", map[string]any{
+				"subject": "graph.query.*",
+			}),
+		}, nil
 	}
 	if item.Classification == "adjudicated" {
 		disposition := dispositions[item.RecordID]

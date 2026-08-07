@@ -24,7 +24,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -81,16 +80,28 @@ type Config struct {
 	ReadinessPath             string                `json:"readiness_path,omitempty" schema:"type:string,description:Path for the read-only readiness surface,category:basic"`
 }
 
+const (
+	graphQueriesPortName      = "graph_queries"
+	graphIndexQueriesPortName = "graph_index_queries"
+	agenticQueriesPortName    = "agentic_queries"
+)
+
+type gatewayQueryFamilies struct {
+	graph   string
+	index   string
+	agentic string
+}
+
 // Validate implements component.Validatable interface
 func (c *Config) Validate() error {
 	if c.Ports == nil {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "ports configuration required")
 	}
-	if len(c.Ports.Inputs) == 0 {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one input port required")
+	if len(c.Ports.Inputs) != 0 {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "graph-gateway does not accept input ports")
 	}
-	if len(c.Ports.Outputs) == 0 {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "at least one output port required")
+	if err := validateGatewayQueryOutputs(c.Ports.Outputs); err != nil {
+		return errs.WrapInvalid(err, "Config", "Validate", "invalid query output ports")
 	}
 	if c.GraphQLPath == "" {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "graphql_path cannot be empty")
@@ -118,54 +129,16 @@ func (c *Config) ApplyDefaults() {
 	if c.QueryTimeout == 0 {
 		c.QueryTimeout = 60 * time.Second
 	}
-	if c.Ports == nil {
-		defaultConf := DefaultConfig()
-		c.Ports = defaultConf.Ports
-		c.Ports.Inputs[0].Config = networkPortFromBindAddress(c.BindAddress)
-	} else {
-		// If ports exist but are empty, populate with defaults
-		if len(c.Ports.Inputs) == 0 {
-			c.Ports.Inputs = []component.PortDefinition{
-				{Name: "http", Config: networkPortFromBindAddress(c.BindAddress)},
-			}
-		}
-		if len(c.Ports.Outputs) == 0 {
-			c.Ports.Outputs = []component.PortDefinition{
-				{
-					Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"},
-				},
-			}
-		} else {
-			// Ensure the queries port is always present — graph-gateway
-			// always makes NATS requests to graph.query.* subjects regardless
-			// of what the user configures for mutations/other outputs.
-			hasQueries := false
-			for _, p := range c.Ports.Outputs {
-				if p.Name == "queries" {
-					hasQueries = true
-					break
-				}
-			}
-			if !hasQueries {
-				c.Ports.Outputs = append([]component.PortDefinition{
-					{
-						Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"},
-					},
-				}, c.Ports.Outputs...)
-			}
-		}
-	}
 }
 
 // DefaultConfig returns a valid default configuration
 func DefaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "http", Config: networkPortFromBindAddress("localhost:8080")},
-			},
 			Outputs: []component.PortDefinition{
-				{Name: "queries", Config: component.NATSRequestPort{Subject: "graph.query.*"}},
+				{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
+				{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
+				{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*"}},
 			},
 		},
 		GraphQLPath:      "/graphql",
@@ -176,16 +149,81 @@ func DefaultConfig() Config {
 	}
 }
 
-func networkPortFromBindAddress(bindAddress string) component.NetworkPort {
-	host, portText, err := net.SplitHostPort(bindAddress)
-	if err != nil {
-		return component.NetworkPort{Protocol: "http"}
+func gatewayQueryOutputContract() []component.PortDefinition {
+	return []component.PortDefinition{
+		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
+		{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
+		{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*"}},
 	}
-	port, err := strconv.Atoi(portText)
-	if err != nil {
-		return component.NetworkPort{Protocol: "http", Host: host}
+}
+
+func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
+	if len(outputs) != 3 {
+		return fmt.Errorf("exactly three query output ports required, got %d", len(outputs))
 	}
-	return component.NetworkPort{Protocol: "http", Host: host, Port: port}
+	expected := make(map[string]component.PortKind, 3)
+	for _, definition := range gatewayQueryOutputContract() {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return fmt.Errorf("resolve canonical query output port %q: %w", definition.Name, err)
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return fmt.Errorf("inspect canonical query output port %q: %w", definition.Name, err)
+		}
+		expected[definition.Name] = facts.Kind()
+	}
+	seen := make(map[string]struct{}, len(outputs))
+	seenSubjects := make(map[string]string, len(outputs))
+	for _, definition := range outputs {
+		expectedKind, ok := expected[definition.Name]
+		if !ok {
+			return fmt.Errorf("unexpected query output port %q", definition.Name)
+		}
+		if _, duplicate := seen[definition.Name]; duplicate {
+			return fmt.Errorf("duplicate query output port %q", definition.Name)
+		}
+		seen[definition.Name] = struct{}{}
+		if !definition.Required {
+			return fmt.Errorf("query output port %q must be required", definition.Name)
+		}
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return fmt.Errorf("resolve query output port %q: %w", definition.Name, err)
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return fmt.Errorf("inspect query output port %q: %w", definition.Name, err)
+		}
+		if facts.Kind() != expectedKind {
+			return fmt.Errorf("query output port %q must use %s, got %q", definition.Name, expectedKind, facts.Kind())
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 || !isQueryFamilyPattern(subjects[0]) {
+			return fmt.Errorf("query output port %q must declare one trailing-wildcard subject family", definition.Name)
+		}
+		if previous, duplicate := seenSubjects[subjects[0]]; duplicate {
+			return fmt.Errorf("query output ports %q and %q duplicate subject family %q", previous, definition.Name, subjects[0])
+		}
+		seenSubjects[subjects[0]] = definition.Name
+	}
+	return nil
+}
+
+func isQueryFamilyPattern(subject string) bool {
+	if subject == "" || strings.IndexAny(subject, " \t\r\n") >= 0 {
+		return false
+	}
+	tokens := strings.Split(subject, ".")
+	if len(tokens) < 2 || (tokens[len(tokens)-1] != "*" && tokens[len(tokens)-1] != ">") {
+		return false
+	}
+	for _, token := range tokens[:len(tokens)-1] {
+		if token == "" || token == "*" || token == ">" {
+			return false
+		}
+	}
+	return true
 }
 
 // schema defines the configuration schema for graph-gateway component
@@ -198,6 +236,7 @@ type Component struct {
 	config  Config
 	inputs  []component.Port
 	outputs []component.Port
+	queries gatewayQueryFamilies
 
 	// Dependencies
 	natsClient    *natsclient.Client
@@ -277,6 +316,10 @@ func CreateGraphGateway(rawConfig json.RawMessage, deps component.Dependencies) 
 		}
 		outputs = append(outputs, port)
 	}
+	queryFamilies, err := queryFamiliesFromPorts(outputs)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "CreateGraphGateway", "factory", "resolve query families")
+	}
 
 	// Create component
 	comp := &Component{
@@ -284,6 +327,7 @@ func CreateGraphGateway(rawConfig json.RawMessage, deps component.Dependencies) 
 		config:        config,
 		inputs:        inputs,
 		outputs:       outputs,
+		queries:       queryFamilies,
 		natsClient:    natsClient,
 		natsRequester: natsClient, // Assign to interface field for mockability
 		logger:        logger,
@@ -294,6 +338,46 @@ func CreateGraphGateway(rawConfig json.RawMessage, deps component.Dependencies) 
 	comp.lastActivity.Store(time.Now())
 
 	return comp, nil
+}
+
+func queryFamiliesFromPorts(outputs []component.Port) (gatewayQueryFamilies, error) {
+	var families gatewayQueryFamilies
+	for _, port := range outputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return gatewayQueryFamilies{}, fmt.Errorf("inspect output port %q: %w", port.Name, err)
+		}
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return gatewayQueryFamilies{}, fmt.Errorf("output port %q resolved %d NATS subjects", port.Name, len(subjects))
+		}
+		switch port.Name {
+		case graphQueriesPortName:
+			families.graph = subjects[0]
+		case graphIndexQueriesPortName:
+			families.index = subjects[0]
+		case agenticQueriesPortName:
+			families.agentic = subjects[0]
+		default:
+			return gatewayQueryFamilies{}, fmt.Errorf("unexpected output port %q", port.Name)
+		}
+	}
+	if families.graph == "" || families.index == "" || families.agentic == "" {
+		return gatewayQueryFamilies{}, errors.New("all query subject families must resolve")
+	}
+	return families, nil
+}
+
+func querySubject(family, operation string) string {
+	return strings.TrimSuffix(strings.TrimSuffix(family, "*"), ">") + operation
+}
+
+func queryOperation(subject string) string {
+	index := strings.LastIndexByte(subject, '.')
+	if index < 0 || index == len(subject)-1 {
+		return ""
+	}
+	return subject[index+1:]
 }
 
 // Register registers the graph-gateway factory with the component registry
@@ -812,30 +896,30 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 
 	// Agentic query patterns
 	if strings.Contains(query, "trajectory") {
-		return "agentic.query.trajectory"
+		return querySubject(c.queries.agentic, "trajectory")
 	}
 
 	// Most specific patterns first
 	if strings.Contains(query, "entityidhierarchy") {
-		return "graph.query.hierarchyStats"
+		return querySubject(c.queries.graph, "hierarchyStats")
 	}
 	if strings.Contains(query, "entitybyalias") {
-		return "graph.query.entityByAlias"
+		return querySubject(c.queries.graph, "entityByAlias")
 	}
 	if strings.Contains(query, "entitiesbyprefix") {
-		return "graph.query.prefix"
+		return querySubject(c.queries.graph, "prefix")
 	}
 	if strings.Contains(query, "spatialsearch") {
-		return "graph.query.spatial"
+		return querySubject(c.queries.graph, "spatial")
 	}
 	if strings.Contains(query, "temporalsearch") {
-		return "graph.query.temporal"
+		return querySubject(c.queries.graph, "temporal")
 	}
 	if strings.Contains(query, "semanticsearch") || strings.Contains(query, "textsearch") || strings.Contains(query, "similaritysearch") {
-		return "graph.query.semantic"
+		return querySubject(c.queries.graph, "semantic")
 	}
 	if strings.Contains(query, "findsimilar") || strings.Contains(query, "similarentities") {
-		return "graph.query.similar"
+		return querySubject(c.queries.graph, "similar")
 	}
 
 	// Composite resolvers — match BEFORE the single-resolver substring
@@ -871,16 +955,16 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	// substring scan (see gh#206 "Suggested Fix"). Short-term, the
 	// order below is the structural fix.
 	if strings.Contains(query, "graphsummary") {
-		return "graph.query.summary"
+		return querySubject(c.queries.graph, "summary")
 	}
 	if strings.Contains(query, "searchgraph") {
-		return "graph.query.searchGraph"
+		return querySubject(c.queries.graph, "searchGraph")
 	}
 	if strings.Contains(query, "localsearch") {
-		return "graph.query.localSearch"
+		return querySubject(c.queries.graph, "localSearch")
 	}
 	if strings.Contains(query, "globalsearch") {
-		return "graph.query.globalSearch"
+		return querySubject(c.queries.graph, "globalSearch")
 	}
 	// pathSearch returns PathSearchResult (composite shape) AND takes
 	// `predicates: [String]` as an arg — a pathSearch query lowercases
@@ -890,83 +974,83 @@ func (c *Component) mapGraphQLQueryToNATSSubject(query string) string {
 	// per gh#206 review I1 — its accidental safety in the prior
 	// position would have broken on the next reshuffle.
 	if strings.Contains(query, "pathsearch") {
-		return "graph.query.pathSearch"
+		return querySubject(c.queries.graph, "pathSearch")
 	}
 
 	// Single-resolver substring checks — must come AFTER the composite
 	// resolvers above so a composite query's nested result fields don't
 	// hijack routing. gh#206.
 	if strings.Contains(query, "relationships") {
-		return "graph.query.relationships"
+		return querySubject(c.queries.graph, "relationships")
 	}
 	if strings.Contains(query, "capabilities") {
-		return "graph.query.capabilities"
+		return querySubject(c.queries.graph, "capabilities")
 	}
 
 	// Predicate queries - must come before generic "entity" check
 	if strings.Contains(query, "compoundpredicatequery") || strings.Contains(query, "compoundpredicate") {
-		return "graph.index.query.predicateCompound"
+		return querySubject(c.queries.index, "predicateCompound")
 	}
 	if strings.Contains(query, "predicatestats") {
-		return "graph.index.query.predicateStats"
+		return querySubject(c.queries.index, "predicateStats")
 	}
 	if strings.Contains(query, "predicates") && !strings.Contains(query, "entitiesbypredicate") {
-		return "graph.index.query.predicateList"
+		return querySubject(c.queries.index, "predicateList")
 	}
 	if strings.Contains(query, "entitiesbypredicate") {
-		return "graph.index.query.predicate"
+		return querySubject(c.queries.index, "predicate")
 	}
 
 	// Generic "entity" check MUST come last
 	if strings.Contains(query, "entity") {
-		return "graph.query.entity"
+		return querySubject(c.queries.graph, "entity")
 	}
 
-	return "graph.query.unknown"
+	return querySubject(c.queries.graph, "unknown")
 }
 
 // subjectToGraphQLField maps a NATS subject to the GraphQL response field name
 func (c *Component) subjectToGraphQLField(subject string) string {
-	switch subject {
-	case "graph.query.pathSearch":
+	switch queryOperation(subject) {
+	case "pathSearch":
 		return "pathSearch"
-	case "graph.query.entity":
+	case "entity":
 		return "entity"
-	case "graph.query.entityByAlias":
+	case "entityByAlias":
 		return "entityByAlias"
-	case "graph.query.relationships":
+	case "relationships":
 		return "relationships"
-	case "graph.query.capabilities":
+	case "capabilities":
 		return "capabilities"
-	case "graph.query.hierarchyStats":
+	case "hierarchyStats":
 		return "entityIdHierarchy"
-	case "graph.query.prefix":
+	case "prefix":
 		return "entitiesByPrefix"
-	case "graph.query.spatial":
+	case "spatial":
 		return "spatialSearch"
-	case "graph.query.temporal":
+	case "temporal":
 		return "temporalSearch"
-	case "graph.query.semantic":
+	case "semantic":
 		return "similaritySearch"
-	case "graph.query.similar":
+	case "similar":
 		return "findSimilar"
-	case "graph.query.localSearch":
+	case "localSearch":
 		return "localSearch"
-	case "graph.query.globalSearch":
+	case "globalSearch":
 		return "globalSearch"
-	case "graph.query.summary":
+	case "summary":
 		return "graphSummary"
-	case "graph.query.searchGraph":
+	case "searchGraph":
 		return "searchGraph"
-	case "graph.index.query.predicate":
+	case "predicate":
 		return "entitiesByPredicate"
-	case "graph.index.query.predicateList":
+	case "predicateList":
 		return "predicates"
-	case "graph.index.query.predicateStats":
+	case "predicateStats":
 		return "predicateStats"
-	case "graph.index.query.predicateCompound":
+	case "predicateCompound":
 		return "compoundPredicateQuery"
-	case "agentic.query.trajectory":
+	case "trajectory":
 		return "trajectory"
 	default:
 		return ""
@@ -979,16 +1063,16 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 		return map[string]interface{}{}
 	}
 
-	switch subject {
-	case "graph.query.pathSearch":
+	switch queryOperation(subject) {
+	case "pathSearch":
 		return c.transformPathSearchVars(variables)
-	case "graph.query.entity":
+	case "entity":
 		return extractVars(variables, "id")
-	case "graph.query.relationships":
+	case "relationships":
 		return c.transformRelationshipVars(variables)
-	case "graph.query.hierarchyStats":
+	case "hierarchyStats":
 		return extractVars(variables, "prefix", "limit")
-	case "graph.query.prefix":
+	case "prefix":
 		// gh#172: cap the default at 100 to keep replies under NATS's
 		// default 1MB max_payload for entities with substantial triple
 		// sets. graph-ingest's internal default stays at 1000 for non-
@@ -1000,34 +1084,34 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 			payload["limit"] = 100
 		}
 		return payload
-	case "graph.query.spatial":
+	case "spatial":
 		return extractVars(variables, "north", "south", "east", "west", "limit")
-	case "graph.query.temporal":
+	case "temporal":
 		return extractVars(variables, "startTime", "endTime", "limit")
-	case "graph.query.semantic":
+	case "semantic":
 		return extractVars(variables, "query", "limit")
-	case "graph.query.similar":
+	case "similar":
 		return c.transformSimilarVars(variables)
-	case "graph.query.localSearch":
+	case "localSearch":
 		return c.transformLocalSearchVars(variables)
-	case "graph.query.globalSearch":
+	case "globalSearch":
 		return c.transformGlobalSearchVars(variables)
-	case "graph.query.summary":
+	case "summary":
 		return extractVars(variables, "include_predicates", "entity_sample_limit", "examples_per_type")
-	case "graph.query.searchGraph":
+	case "searchGraph":
 		// Same arg shape as globalSearch — searchGraph is a server-side
 		// composite over it. Reuse the existing transformer to keep the
 		// arg surface in sync without code duplication.
 		return c.transformGlobalSearchVars(variables)
-	case "graph.index.query.predicate":
+	case "predicate":
 		return extractVars(variables, "predicate", "value", "limit")
-	case "graph.index.query.predicateList":
+	case "predicateList":
 		return map[string]interface{}{}
-	case "graph.index.query.predicateStats":
+	case "predicateStats":
 		return c.transformPredicateStatsVars(variables)
-	case "graph.index.query.predicateCompound":
+	case "predicateCompound":
 		return c.transformCompoundPredicateVars(variables)
-	case "agentic.query.trajectory":
+	case "trajectory":
 		return extractVars(variables, "loopId", "limit")
 	default:
 		return variables
@@ -1726,7 +1810,7 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 
 	// Unwrap entities envelope for collection responses (e.g. graph.query.prefix)
 	// Internal NATS APIs return {"entities": [...]} for consistency; GraphQL expects raw arrays
-	if subject == "graph.query.prefix" {
+	if queryOperation(subject) == "prefix" {
 		unwrapped, err := validateAndUnwrapPrefixResponse(resp)
 		if err != nil {
 			atomic.AddInt64(&c.errors, 1)
@@ -1797,7 +1881,7 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	subject := c.mapGraphQLQueryToNATSSubject(gqlReq.Query)
 
 	// Reject unrecognized queries immediately instead of dispatching to NATS
-	if subject == "graph.query.unknown" {
+	if queryOperation(subject) == "unknown" {
 		atomic.AddInt64(&c.errors, 1)
 		c.writeGraphQLError(w, http.StatusBadRequest, "unrecognized query")
 		return
@@ -1818,7 +1902,8 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// When classification succeeds, capture the result for inclusion in the GraphQL
 	// extensions field so clients can observe which tier and intent was resolved.
 	var extensions map[string]interface{}
-	if c.classifier != nil && (subject == "graph.query.globalSearch" || subject == "graph.query.semantic") {
+	operation := queryOperation(subject)
+	if c.classifier != nil && (operation == "globalSearch" || operation == "semantic") {
 		if queryText, ok := payload["query"].(string); ok && queryText != "" {
 			result := c.classifier.ClassifyQuery(ctx, queryText)
 			if result != nil {
@@ -1869,7 +1954,8 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateGatewayPrefixPayload(subject string, payload map[string]interface{}) error {
-	if subject != "graph.query.prefix" && subject != "graph.query.hierarchyStats" {
+	operation := queryOperation(subject)
+	if operation != "prefix" && operation != "hierarchyStats" {
 		return nil
 	}
 	prefix, ok := payload["prefix"].(string)

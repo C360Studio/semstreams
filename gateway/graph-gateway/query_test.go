@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
@@ -1879,6 +1880,14 @@ func createTestGatewayWithMock(t *testing.T, mock *mockNATSRequester) *Component
 	t.Helper()
 
 	config := DefaultConfig()
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		require.NoError(t, err)
+		outputs = append(outputs, port)
+	}
+	families, err := queryFamiliesFromPorts(outputs)
+	require.NoError(t, err)
 
 	// Create component with injected mock
 	// Note: Builder must implement a way to inject mock for testing
@@ -1886,6 +1895,8 @@ func createTestGatewayWithMock(t *testing.T, mock *mockNATSRequester) *Component
 	comp := &Component{
 		name:          "graph-gateway",
 		config:        config,
+		outputs:       outputs,
+		queries:       families,
 		natsRequester: mock, // Builder will add this field for NATS request/reply
 		logger:        createTestLogger(),
 	}
