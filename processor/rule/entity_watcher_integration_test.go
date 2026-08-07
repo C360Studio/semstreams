@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/component"
 	gtypes "github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/semantictest"
 	"github.com/c360studio/semstreams/message"
@@ -99,6 +100,9 @@ func TestEntityWatcher_RuleTriggerDebouncing(t *testing.T) {
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"test.debounce.*.*.*.*"}}
 	config.DebounceDelayMs = 100 * time.Millisecond
 	config.InlineRules = []rule.Definition{ruleDef}
+	config.Ports.Outputs = append(config.Ports.Outputs, component.PortDefinition{
+		Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
+	})
 
 	processor, err := rule.NewProcessorWithMetrics(natsClient, &config, nil)
 	require.NoError(t, err)

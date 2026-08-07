@@ -1037,20 +1037,19 @@ func (rp *Processor) setupSubscriptions(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		subjects := facts.NATSSubjects()
-		if len(subjects) != 1 {
-			return fmt.Errorf("input port %q must declare one NATS subject", port.Name)
-		}
-		subject := subjects[0]
-
-		// Skip entity.events subjects since we use KV watch for entity states
-		if strings.HasPrefix(subject, "events.graph.entity") {
-			rp.logger.Debug("Skipping subscription - using KV watch for entity states", "subject", subject)
-			continue
-		}
 
 		switch facts.Kind() {
+		case component.PortKindKVWatch:
+			// Entity state watches are owned by the dedicated watcher lifecycle.
+			rp.logger.Debug("Skipping input subscription - using dedicated KV watcher", "port", port.Name)
+			continue
+
 		case component.PortKindJetStream:
+			subjects := facts.NATSSubjects()
+			if len(subjects) != 1 {
+				return fmt.Errorf("input port %q must declare one JetStream subject", port.Name)
+			}
+			subject := subjects[0]
 			// JetStream subscription - use durable consumer
 			if err := rp.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.Wrap(err, "RuleProcessor", "setupSubscriptions",
@@ -1058,6 +1057,11 @@ func (rp *Processor) setupSubscriptions(ctx context.Context) error {
 			}
 
 		case component.PortKindNATS:
+			subjects := facts.NATSSubjects()
+			if len(subjects) != 1 {
+				return fmt.Errorf("input port %q must declare one NATS subject", port.Name)
+			}
+			subject := subjects[0]
 			// Core NATS subscription
 			sub, err := rp.natsClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
 				rp.handleMessage(msgCtx, msg.Subject, msg.Data)
