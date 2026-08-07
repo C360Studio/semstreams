@@ -92,11 +92,12 @@
       compatibility path, or MCP surface was added.
 - [x] 8.7 Run the communicate-only wire census across the ten named sister repositories and publish the migration note;
       edit no downstream code and treat no finding as design authority.
-- [ ] 8.8 Obtain final SemStreams reviewer approval, mark the draft PR ready, and merge the single coordinated breaking
-      cutover only when all required gates are green.
+- [x] 8.8 Close the final review/ready/merge outcome: PR #898 is non-draft and merged at `d1570ef8`, and the merged
+      baseline has an independent retrospective SemStreams implementation-review pass.
 
-> Closure audit (2026-08-06): local `main` contains the cutover merge as `d1570ef8` (PR #898), but this record contains
-> no durable final implementation-review verdict or evidence of the PR-ready transition. Because 8.8 is conjunctive,
-> merge history alone does not make it complete; it remains unchecked and this change remains unarchived. The accepted
-> GS-01 design and implementation evidence are history, not a successor implementation baton. Later corrections belong
-> to their own reviewed records; see `successor-dispositions/r1b-lifecycle-guard.md`.
+> Closure audit (2026-08-07): GitHub reports PR #898 merged on 2026-08-06 with `isDraft=false`, but retains no reviews,
+> review decision, comments, or ready-transition event. The independent `IMPLEMENTATION REVIEW PASS` in
+> `retrospective-implementation-review.md` was performed against merged baseline `d1570ef8`; it is retrospective
+> closure evidence and MUST NOT be described as pre-merge approval. The runtime, required gates, non-draft state,
+> merge, and independent conformance outcome are all now durable, so 8.8 is complete with its historical sequencing
+> limitation stated rather than reconstructed.

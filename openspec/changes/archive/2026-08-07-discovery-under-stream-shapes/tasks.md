@@ -1,9 +1,8 @@
 # Tasks — discovery-under-stream-shapes (gh#810, gh#822)
 
-> **SUSPENDED AND FROZEN.** Every task state below is historical and
-> non-executable until the
-> [ADR-090 program](../../../docs/proposals/graph-state-read-write-program.md)
-> explicitly releases this change. Do not implement, archive, or promote it.
+> **WITHDRAWN AND SUPERSEDED on 2026-08-07.** Every task state below is historical and non-executable. Foundation B's
+> canonical port language supersedes the proposal's declaration and discovery premises; its rejected `RequestReply`
+> and subject-prediction deltas are archived with `--skip-specs` and MUST NOT be promoted.
 
 > ## ⚠ REWORK REQUIRED — read before writing any code (Fable shape gate, 2026-08-01)
 >

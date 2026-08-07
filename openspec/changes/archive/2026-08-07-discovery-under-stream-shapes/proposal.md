@@ -1,9 +1,9 @@
 ## Why
 
-> **Status: SUSPENDED AND FROZEN by the ADR-090 graph-state program.**
-> This change preserves historical design truth but is non-executable until the
-> [canonical program](../../../docs/proposals/graph-state-read-write-program.md)
-> explicitly releases it. Do not implement, archive, or promote it.
+> **Status: WITHDRAWN AND SUPERSEDED on 2026-08-07.**
+> Foundation B's canonical port language supersedes this proposal's declaration and discovery premises. The proposed
+> `RequestReply` flag and subject-prediction/export deltas were rejected and are not current framework truth. Preserve
+> this record as history and archive it with `--skip-specs`; do not implement or promote its deltas.
 
 A deployment whose JetStream config covers `tool.>` — **the shipped `TOOL` stream shape** —
 silently loses tool discovery. A request to `tool.list` is answered by JetStream with a publish
