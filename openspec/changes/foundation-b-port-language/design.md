@@ -1,3 +1,5 @@
+# Design — Foundation B port language
+
 ## Context
 
 This artifact is the durable OpenSpec handoff for the approved Foundation B implementation. Its controlling inputs are
@@ -14,6 +16,11 @@ The immutable worklist and disposition ledgers remain historical migration autho
 512 surviving frozen configuration rows, ten approved deletions, sixteen new graph-gateway output rows, 528 actual
 canonical configuration rows, and 136 production Go declaration identities. See proposal.md for motivation.
 
+The current implementation baseline is `main` at `5ffc1d1f`; branch HEAD `d630c8fd` is 13 commits ahead. Local lint,
+build, tagged vet (`integration` and `live_llm`), race, integration-test, schema-cleanliness, contract, and OpenSpec
+validation evidence is green at that HEAD. Breaking E2E, independent review, and the post-B inventory remain release
+gates.
+
 ## Goals / Non-Goals
 
 **Goals:**
@@ -29,6 +36,7 @@ canonical configuration rows, and 136 production Go declaration identities. See 
 
 - Foundation C declaration authorship/snapshot lifecycle, graph query behavior, GraphQL or MCP behavior, indexes,
   downstream migration, custom kinds, aliases, or dual decoders.
+- Hierarchy placement, research create-before-append semantics, or any redesign inferred from the research-graph E2E.
 
 ## Decisions
 
@@ -90,12 +98,32 @@ Graph-ingest declares exactly one required input with canonical kind `nats-reque
 composition validates exactly one provider from normalized facts; it does not predict account-wide process cardinality
 or introduce a stream, election, or lease.
 
-### Checkpoints 1-4 are implementation history; checkpoint 5 controls release
+### Release fallout remains implementation history
 
 Commits `b7de684a`, `19ce5f7c`, `bb43c5e6`, `6877a461`, and `26417f25` implement the grammar/codec, owned migration,
 shared consumers, renderer/runtime sweep, and approved graph-gateway amendment. They are not independently releasable.
-Schema, contract, race/integration, E2E, independent review, and the mandatory post-B inventory remain open release
-gates.
+Commit `fe4e5018` corrects JetStream input identity. Release fallout then migrated canonical engine fixtures
+(`7ba82c8f`), corrected input factory default/override behavior (`02cd51e1`), enforced agentic-tools contracts
+(`ffe0f705`), enforced agentic-model and agentic-governance roles (`8178a10c`), migrated agentic-loop integration
+fixture names (`69a723f5`), and routed rule subscriptions by canonical port kind (`d630c8fd`).
+
+Local schema, contract, lint/build/vet, race, and integration evidence is green at `d630c8fd`. E2E, independent review,
+and the mandatory post-B inventory remain open release gates.
+
+### Trajectory disposition remains an owner ruling
+
+The agentic E2E currently fails fast during startup because the shipped configuration declares an agentic-loop
+`trajectories` override that the runtime does not expose. Foundation B's frozen inventory mechanically migrated that
+declaration, but migration history does not decide whether the durable trajectory contract is a KV materialized view or
+graph-native reconstruction. No trajectory configuration or documentation may be deleted, and no runtime port may be
+restored, until that bounded contract question is adjudicated by the owner.
+
+### Hierarchy and research consequences remain deferred inputs
+
+Whether hierarchy belongs on the graph write path or in a derived index, including the performance and complexity
+trade-offs, belongs to the post-Foundation graph index program. Research create-before-append and hierarchy
+consequences are inputs to that program. Foundation B retains `task e2e:research-graph` solely as an existing cutover
+validation gate; a failure there does not widen this change into hierarchy or research redesign.
 
 ## Risks / Trade-offs
 
@@ -107,6 +135,8 @@ gates.
   unrepresentable physical policies and keep all discoverable stream facts canonical.
 - **Green focused guards can hide a cross-stack break** → checkpoint 5 includes all required race, integration,
   contract, and breaking E2E gates before release.
+- **Mechanical migration can obscure an unresolved durable contract** → preserve the trajectory declaration and
+  runtime state until the owner chooses its durable source of truth; do not turn E2E fallout into an implicit design.
 
 ## Migration Plan
 
@@ -115,7 +145,9 @@ gates.
    validation.
 2. Graph-gateway configurations remove every input and replace `queries` with the three required outputs and matching
    subject families. There is no auto-fill or compatibility alias.
-3. Run every checkpoint-5 gate in tasks.md and obtain independent SemStreams reviewer approval.
+3. Adjudicate the bounded trajectory contract without deleting configuration/documentation or restoring runtime
+   behavior by inference; then run every remaining checkpoint-5 gate in tasks.md and obtain independent SemStreams
+   reviewer approval.
 4. Re-inventory the merged tree. Stop if an alias, flat discriminator, top-level side lane, dead type, independent
    shared projection, false KV declaration, or undeclared runtime-policy dependency remains.
 5. Archive this change only after the release and post-B inventory gates are truthful. Rollback is whole-cutover

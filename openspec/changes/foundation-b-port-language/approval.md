@@ -37,6 +37,13 @@ The second turn is explicit risk acceptance for the graph-gateway amendment; it 
 
 ## Release boundary
 
-This approval authorized implementation checkpoints 1-4. It does not mark schema, race/integration, contract, E2E,
-independent implementation review, post-B inventory, PR-ready, merge, or archive gates complete. Those remain the
-checkpoint-5 tasks below and require actual evidence.
+This approval authorized implementation checkpoints 1-4. At branch HEAD `d630c8fd`, local checkpoint tasks 5.1-5.5
+have green lint/build/vet, race, integration, schema-cleanliness, contract, and OpenSpec evidence. This does not approve
+release: breaking E2E, independent implementation review, post-B inventory, PR-ready, merge, and archive remain open.
+
+The agentic E2E currently fails fast on the configured agentic-loop `trajectories` override. Its durable disposition is
+not an accepted ruling. No trajectory configuration or documentation may be deleted, and no runtime port may be
+restored, until the owner adjudicates the bounded KV-materialized-view versus graph-native-reconstruction contract.
+
+Hierarchy placement and the research create-before-append/hierarchy consequences remain deferred inputs to the
+post-Foundation graph index program. The existing research-graph E2E is a Foundation B cutover gate only.
