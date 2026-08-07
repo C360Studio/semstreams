@@ -45,12 +45,12 @@ func TestIntegration_AgenticLoopStart_ContentStoreRetentionGraceful(t *testing.T
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "tasks", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
+					Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
