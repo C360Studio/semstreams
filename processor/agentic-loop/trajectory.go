@@ -1,7 +1,6 @@
 package agenticloop
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -82,11 +81,4 @@ func (m *TrajectoryManager) DeleteTrajectory(loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.trajectories, loopID)
-}
-
-// SaveTrajectory saves a trajectory to KV storage
-func (m *TrajectoryManager) SaveTrajectory(_ context.Context, _ agentic.Trajectory) error {
-	// In unit tests with mock KV, this is a no-op
-	// Integration tests will implement actual KV persistence
-	return nil
 }

@@ -181,6 +181,8 @@ func (c *Component) handleApprovalResponseMessage(ctx context.Context, data []by
 		return
 	}
 
-	c.publishResults(ctx, result)
-	c.persistLoopState(ctx, response.LoopID)
+	// Approval responses use the same persistence boundary as every other
+	// handler result. This keeps a rejection that reaches the iteration cap from
+	// bypassing the ordinary-observations-then-terminal audit ordering.
+	c.persistHandlerResult(ctx, result)
 }

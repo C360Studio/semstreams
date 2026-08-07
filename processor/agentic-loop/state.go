@@ -30,6 +30,7 @@ type LoopManager struct {
 	toolCallToLoop       map[string]string                   // callID -> loopID
 	callIDToName         map[string]string                   // callID -> function name (for Gemini tool result name field)
 	callIDToArguments    map[string]map[string]any           // callID -> tool arguments (for trajectory audit)
+	callIDToOrdinal      map[string]uint32                   // callID -> model response order (for trajectory audit)
 	requestStartTimes    map[string]time.Time                // requestID -> start time (for duration measurement)
 	toolStartTimes       map[string]time.Time                // callID -> start time (for duration measurement)
 	// truncationRetryAttempts counts consecutive within-iteration retries
@@ -81,6 +82,7 @@ func NewLoopManager(opts ...LoopManagerOption) *LoopManager {
 		toolCallToLoop:          make(map[string]string),
 		callIDToName:            make(map[string]string),
 		callIDToArguments:       make(map[string]map[string]any),
+		callIDToOrdinal:         make(map[string]uint32),
 		requestStartTimes:       make(map[string]time.Time),
 		toolStartTimes:          make(map[string]time.Time),
 		truncationRetryAttempts: make(map[string]int),
@@ -110,6 +112,7 @@ func NewLoopManagerWithConfig(contextConfig ContextConfig, opts ...LoopManagerOp
 		toolCallToLoop:          make(map[string]string),
 		callIDToName:            make(map[string]string),
 		callIDToArguments:       make(map[string]map[string]any),
+		callIDToOrdinal:         make(map[string]uint32),
 		requestStartTimes:       make(map[string]time.Time),
 		toolStartTimes:          make(map[string]time.Time),
 		truncationRetryAttempts: make(map[string]int),
@@ -348,6 +351,7 @@ func (m *LoopManager) DeleteLoop(loopID string) error {
 			delete(m.toolCallToLoop, k)
 			delete(m.callIDToName, k)
 			delete(m.callIDToArguments, k)
+			delete(m.callIDToOrdinal, k)
 			delete(m.toolStartTimes, k)
 		}
 	}
@@ -650,6 +654,20 @@ func (m *LoopManager) GetToolArguments(callID string) map[string]any {
 	return cp
 }
 
+// TrackToolOrdinal records the tool call's order in the model response.
+func (m *LoopManager) TrackToolOrdinal(callID string, ordinal uint32) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.callIDToOrdinal[callID] = ordinal
+}
+
+// GetToolOrdinal returns the tool call's order in the model response.
+func (m *LoopManager) GetToolOrdinal(callID string) uint32 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.callIDToOrdinal[callID]
+}
+
 // TrackRequestStart records when a model request was sent.
 func (m *LoopManager) TrackRequestStart(requestID string) {
 	m.mu.Lock()
@@ -717,7 +735,8 @@ func (m *LoopManager) StoreToolResult(loopID string, result agentic.ToolResult) 
 // If structured CallIDs ever become the dispatch default, this needs an
 // evicted-set check inside the recovery path or it silently regresses.
 //
-// Metadata maps (callIDToName, callIDToArguments, toolStartTimes) are
+// Metadata maps (callIDToName, callIDToArguments, callIDToOrdinal,
+// toolStartTimes) are
 // preserved — buildToolMessages's empty-name fallback and the trajectory step
 // builder still read them. They grow O(total-tool-calls-in-loop) and are
 // cleaned up at DeleteLoop along with the rest of the loop's bookkeeping.

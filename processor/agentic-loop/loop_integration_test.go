@@ -5,11 +5,13 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +27,85 @@ var (
 	sharedTestClient *natsclient.TestClient
 	sharedNATSClient *natsclient.Client
 )
+
+func TestTrajectoryFactBucketIsImmutableHistoryWithoutTTL(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	raw, err := json.Marshal(map[string]any{
+		"consumer_name_suffix":    "trajectory-fact-bucket-contract",
+		"delete_consumer_on_stop": true,
+	})
+	require.NoError(t, err)
+	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	lifecycle := discoverable.(component.LifecycleComponent)
+	require.NoError(t, lifecycle.Start(context.Background()))
+	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	bucket, err := js.KeyValue(context.Background(), agentic.TrajectoryBucketName)
+	require.NoError(t, err)
+	status, err := bucket.Status(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), status.History())
+	assert.Zero(t, status.TTL())
+}
+
+func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *testing.T) {
+	testClient, err := natsclient.NewSharedTestClient(
+		natsclient.WithJetStream(),
+		natsclient.WithKV(),
+		natsclient.WithKVBuckets("AGENT_LOOPS"),
+		natsclient.WithStreams(natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}}),
+		natsclient.WithTestTimeout(5*time.Second),
+		natsclient.WithStartTimeout(30*time.Second),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = testClient.Terminate() })
+	natsClient := testClient.Client
+	ctx := context.Background()
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	bucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: agentic.TrajectoryBucketName, History: 2,
+	})
+	require.NoError(t, err)
+
+	raw, err := json.Marshal(map[string]any{
+		"consumer_name_suffix":    "trajectory-incompatible-contract",
+		"delete_consumer_on_stop": true,
+	})
+	require.NoError(t, err)
+	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	lifecycle := discoverable.(component.LifecycleComponent)
+	require.NoError(t, lifecycle.Start(ctx))
+	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+
+	health := lifecycle.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "degraded", health.Status)
+	require.Contains(t, strings.ToLower(health.LastError), "wipe")
+	const loopID = "loop_incompatible_trajectory_bucket"
+	publishTaskMessage(t, natsClient, "agent.task.test", &agentic.TaskMessage{
+		LoopID: loopID, TaskID: "task_incompatible_trajectory_bucket",
+		Role: "general", Model: "test-model", Prompt: "continue useful work",
+	})
+	loops, err := js.KeyValue(ctx, "AGENT_LOOPS")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, getErr := loops.Get(ctx, loopID)
+		return getErr == nil
+	}, 5*time.Second, 25*time.Millisecond, "useful task state should persist despite incompatible audit bucket")
+	status, err := bucket.Status(ctx)
+	require.NoError(t, err)
+	require.Zero(t, status.Values(), "incompatible bucket must receive no audit writes")
+}
 
 // TestMain sets up shared NATS container for all loop integration tests
 func TestMain(m *testing.M) {

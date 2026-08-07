@@ -46,20 +46,19 @@ const DefaultToolCallGovernanceTimeout = "1s"
 
 // Config represents the configuration for the agentic-loop processor
 type Config struct {
-	MaxIterations        int                      `json:"max_iterations" schema:"type:int,description:Maximum number of iterations before loop terminates,default:20,min:1,max:1000,category:basic,required"`
-	Timeout              string                   `json:"timeout" schema:"type:string,description:Timeout duration for loop execution (e.g. 120s or 5m),default:120s,category:basic,required"`
-	StreamName           string                   `json:"stream_name" schema:"type:string,description:JetStream stream name,default:AGENT,category:advanced"`
-	ConsumerNameSuffix   string                   `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
-	DeleteConsumerOnStop bool                     `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
-	LoopsBucket          string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
-	ToolResultMaxBytes   int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
-	TrajectoryDetail     string                   `json:"trajectory_detail,omitempty" schema:"type:string,description:Trajectory detail level: summary (default) or full,default:summary,category:advanced"`
-	ContentBucket        string                   `json:"content_bucket,omitempty" schema:"type:string,description:NATS ObjectStore bucket for trajectory step content (tool results and model responses),default:AGENT_CONTENT,category:advanced"`
-	TrajectoryCacheTTL   string                   `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
-	ApprovalTimeoutStr   string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
-	Consumer             ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
-	Context              ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
-	ToolCallGovernance   ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"`
+	MaxIterations                     int                      `json:"max_iterations" schema:"type:int,description:Maximum number of iterations before loop terminates,default:20,min:1,max:1000,category:basic,required"`
+	Timeout                           string                   `json:"timeout" schema:"type:string,description:Timeout duration for loop execution (e.g. 120s or 5m),default:120s,category:basic,required"`
+	StreamName                        string                   `json:"stream_name" schema:"type:string,description:JetStream stream name,default:AGENT,category:advanced"`
+	ConsumerNameSuffix                string                   `json:"consumer_name_suffix" schema:"type:string,description:Suffix for consumer names,category:advanced"`
+	DeleteConsumerOnStop              bool                     `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
+	LoopsBucket                       string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
+	ToolResultMaxBytes                int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
+	TrajectoryEvidenceStorageInstance string                   `json:"trajectory_evidence_storage_instance,omitempty" schema:"type:string,description:Logical registered storage instance for full trajectory evidence,default:objectstore,category:advanced"`
+	TrajectoryCacheTTL                string                   `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
+	ApprovalTimeoutStr                string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
+	Consumer                          ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
+	Context                           ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
+	ToolCallGovernance                ToolCallGovernanceConfig `json:"tool_call_governance,omitempty" schema:"type:object,description:Subject-mode tool-call governance (ADR-039). Default mode=disabled is no-op (no governance gate),category:advanced"`
 	// SynthesizeTerminalOnCompletion enables the framework to synthesize a
 	// decide(needs_clarification) when a loop completes without a terminal
 	// tool call (#133). Cheap-model substrate recovery: when a small model
@@ -212,10 +211,8 @@ func (c Config) Validate() error {
 	if strings.TrimSpace(c.LoopsBucket) == "" {
 		return errs.WrapInvalid(fmt.Errorf("loops_bucket is required"), "Config", "Validate", "check loops_bucket")
 	}
-
-	// Validate trajectory_detail if set
-	if c.TrajectoryDetail != "" && c.TrajectoryDetail != "summary" && c.TrajectoryDetail != "full" {
-		return errs.WrapInvalid(fmt.Errorf("trajectory_detail must be 'summary' or 'full'"), "Config", "Validate", "check trajectory_detail")
+	if strings.TrimSpace(c.TrajectoryEvidenceStorageInstance) == "" {
+		return errs.WrapInvalid(fmt.Errorf("trajectory_evidence_storage_instance is required"), "Config", "Validate", "check trajectory evidence storage instance")
 	}
 
 	// Validate approval timeout (empty is allowed — means wait forever)
@@ -378,16 +375,15 @@ func DefaultToolCallGovernanceConfig() ToolCallGovernanceConfig {
 // DefaultConfig returns the default configuration
 func DefaultConfig() Config {
 	return Config{
-		MaxIterations:      20,
-		Timeout:            "120s",
-		StreamName:         "AGENT",
-		LoopsBucket:        "AGENT_LOOPS",
-		ContentBucket:      "AGENT_CONTENT",
-		ToolResultMaxBytes: 32768,
-		TrajectoryDetail:   "summary",
-		Consumer:           DefaultConsumerConfig(),
-		Context:            DefaultContextConfig(),
-		ToolCallGovernance: DefaultToolCallGovernanceConfig(),
+		MaxIterations:                     20,
+		Timeout:                           "120s",
+		StreamName:                        "AGENT",
+		LoopsBucket:                       "AGENT_LOOPS",
+		ToolResultMaxBytes:                32768,
+		TrajectoryEvidenceStorageInstance: "objectstore",
+		Consumer:                          DefaultConsumerConfig(),
+		Context:                           DefaultContextConfig(),
+		ToolCallGovernance:                DefaultToolCallGovernanceConfig(),
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{

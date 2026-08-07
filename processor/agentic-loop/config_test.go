@@ -377,29 +377,14 @@ func TestConfig_BucketNames(t *testing.T) {
 	}
 }
 
-func TestConfig_TrajectoryDetail(t *testing.T) {
-	tests := []struct {
-		name      string
-		detail    string
-		wantValid bool
-	}{
-		{"summary", "summary", true},
-		{"full", "full", true},
-		{"empty (uses default)", "", true},
-		{"invalid", "verbose", false},
+func TestConfig_TrajectoryEvidenceStorageInstance(t *testing.T) {
+	config := agenticloop.DefaultConfig()
+	if config.TrajectoryEvidenceStorageInstance != "objectstore" {
+		t.Fatalf("default trajectory evidence storage instance = %q, want objectstore", config.TrajectoryEvidenceStorageInstance)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := validBaseConfig()
-			config.TrajectoryDetail = tt.detail
-
-			err := config.Validate()
-			isValid := err == nil
-			if isValid != tt.wantValid {
-				t.Errorf("Validate() with trajectory_detail=%q: valid=%v, want %v (err: %v)", tt.detail, isValid, tt.wantValid, err)
-			}
-		})
+	config.TrajectoryEvidenceStorageInstance = " "
+	if err := config.Validate(); err == nil {
+		t.Fatal("Validate() accepted an empty trajectory evidence storage instance")
 	}
 }
 
@@ -407,10 +392,11 @@ func TestConfig_TrajectoryDetail(t *testing.T) {
 // Tests override specific fields to test validation of those fields.
 func validBaseConfig() agenticloop.Config {
 	return agenticloop.Config{
-		MaxIterations: 20,
-		Timeout:       "120s",
-		LoopsBucket:   "AGENT_LOOPS",
-		Context:       agenticloop.DefaultContextConfig(),
+		TrajectoryEvidenceStorageInstance: "objectstore",
+		MaxIterations:                     20,
+		Timeout:                           "120s",
+		LoopsBucket:                       "AGENT_LOOPS",
+		Context:                           agenticloop.DefaultContextConfig(),
 	}
 }
 

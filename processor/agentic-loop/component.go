@@ -23,7 +23,6 @@ import (
 	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
-	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -53,9 +52,12 @@ type Component struct {
 	startTime time.Time
 
 	// KV buckets
-	loopsBucket jetstream.KeyValue
+	loopsBucket           jetstream.KeyValue
+	trajectoryBucket      jetstream.KeyValue
+	trajectoryRecorder    *trajectoryRecorder
+	trajectoryAuditHealth trajectoryAuditHealth
 
-	// Trajectory cache (replaces KV bucket — durable content in ObjectStore + graph)
+	// Legacy active-query cache retained until the read/API cutover slice.
 	trajectoryCache cache.Cache[*agentic.Trajectory]
 
 	// Ports (merged from config)
@@ -323,12 +325,22 @@ func (c *Component) Health() component.HealthStatus {
 	if healthy {
 		status = "running"
 	}
+	errorCount, lastError := c.trajectoryAuditHealth.snapshot()
+	if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
+		healthy = false
+		status = "degraded"
+		if !c.trajectoryProviderAvailable() && lastError == "" {
+			lastError = boundedTrajectoryDiagnostic(fmt.Sprintf("trajectory evidence provider %q unavailable", c.config.TrajectoryEvidenceStorageInstance))
+		}
+	}
 
 	return component.HealthStatus{
-		Healthy:   healthy,
-		LastCheck: time.Now(),
-		Uptime:    uptime,
-		Status:    status,
+		Healthy:    healthy,
+		LastCheck:  time.Now(),
+		ErrorCount: errorCount,
+		LastError:  lastError,
+		Uptime:     uptime,
+		Status:     status,
 	}
 }
 
@@ -605,7 +617,7 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	}
 	c.loopsBucket = loopsBucket
 
-	// Initialize trajectory cache. Durable content is in ObjectStore + graph entities.
+	// Initialize the legacy read cache; the separate read/API cutover removes it.
 	trajCacheTTL := 4 * time.Hour // default
 	if c.config.TrajectoryCacheTTL != "" {
 		if parsed, parseErr := time.ParseDuration(c.config.TrajectoryCacheTTL); parseErr == nil {
@@ -622,52 +634,68 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	}
 	c.trajectoryCache = trajectoryCache
 
-	// Initialize content store for trajectory step content (tool results, model responses)
-	contentBucket := c.config.ContentBucket
-	if contentBucket == "" {
-		contentBucket = "AGENT_CONTENT"
+	// Immutable trajectory facts are best-effort audit state. A missing bucket
+	// degrades observability but must not prevent the work consumers from starting.
+	trajectoryBucket, trajectoryErr := js.KeyValue(ctx, agentic.TrajectoryBucketName)
+	if errors.Is(trajectoryErr, jetstream.ErrBucketNotFound) {
+		trajectoryBucket, trajectoryErr = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  agentic.TrajectoryBucketName,
+			History: 1,
+		})
 	}
-	contentStore, err := objectstore.NewStoreWithConfig(ctx, c.natsClient, objectstore.Config{
-		BucketName: contentBucket,
-	})
-	if fatal := contentStoreInitOutcome(err); fatal != nil {
-		// Fail Start CLOSED on a fatal D2 retention violation (#600/#616). Close the
-		// trajectory cache created above first: the flow service retries Start
-		// (retry.Quick, up to 10 attempts) with the SAME parent context, which it does
-		// NOT cancel between attempts (service/component_manager.go), so each attempt
-		// would otherwise strand the cache's cleanup goroutine until component Stop.
-		// ttlCache.Close deterministically joins that goroutine.
-		if c.trajectoryCache != nil {
-			if cerr := c.trajectoryCache.Close(); cerr != nil {
-				c.logger.Debug("trajectory cache close on fatal boot", "error", cerr)
-			}
-			c.trajectoryCache = nil
-		}
-		return fatal
+	if trajectoryErr == nil {
+		trajectoryErr = validateTrajectoryFactBucket(ctx, trajectoryBucket)
 	}
-	switch {
-	case err != nil:
-		// Genuine unavailability (unconfigured / unreachable): disable content storage
-		// and continue. Non-fatal only — the content store is OPTIONAL.
-		c.logger.Warn("Failed to create content store for trajectory steps, content storage disabled",
-			"bucket", contentBucket, "error", err)
-	case c.graphWriter != nil:
-		c.graphWriter.contentStore = contentStore
+	if trajectoryErr != nil {
+		// Clean beta policy: an incompatible retained bucket is never written,
+		// reconciled, or shimmed. The operator wipes it and restarts.
+		trajectoryBucket = nil
+	}
+	c.trajectoryBucket = trajectoryBucket
+	if trajectoryBucket != nil {
+		c.trajectoryRecorder = newTrajectoryRecorder(
+			trajectoryBucket,
+			c.deps.StoreRegistry,
+			c.config.TrajectoryEvidenceStorageInstance,
+			c.reportTrajectoryAuditFailure,
+		)
+	} else {
+		c.trajectoryRecorder = nil
+	}
+	if trajectoryErr != nil {
+		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
+			Stage:  trajectoryStageFactVerify,
+			Kind:   agentic.TrajectoryKindLoopStarted,
+			Reason: trajectoryReasonBackend,
+			Err:    fmt.Errorf("acquire trajectory fact bucket: %w", trajectoryErr),
+		})
+	}
+	if !c.trajectoryProviderAvailable() {
+		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
+			Stage:  trajectoryStageProviderResolve,
+			Kind:   agentic.TrajectoryKindLoopStarted,
+			Reason: trajectoryReasonProviderUnavailable,
+			Err:    fmt.Errorf("storage instance %q unavailable", c.config.TrajectoryEvidenceStorageInstance),
+		})
 	}
 
 	return nil
 }
 
-// contentStoreInitOutcome classifies the trajectory content-store constructor error
-// for initializeKVBuckets. The content store is legitimately OPTIONAL, so a non-fatal
-// error (or none) returns nil and the caller disables content storage gracefully; a
-// FATAL D2 retention violation (#600/#616) returns the wrapped fatal so Start fails
-// CLOSED and subscriptions/workers never start. The IsFatal branch is load-bearing —
-// routing a fatal into the graceful path re-introduces the #632 swallowed-fatal
-// defect. Extracted so the fail-closed decision is directly testable.
-func contentStoreInitOutcome(err error) error {
-	if errs.IsFatal(err) {
-		return errs.WrapFatal(err, "agentic-loop", "initializeKVBuckets", "create content store")
+func validateTrajectoryFactBucket(ctx context.Context, bucket jetstream.KeyValue) error {
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read AGENT_TRAJECTORIES status: %w", err)
+	}
+	return validateTrajectoryFactBucketContract(status.History(), status.TTL())
+}
+
+func validateTrajectoryFactBucketContract(history int64, ttl time.Duration) error {
+	if history != 1 || ttl != 0 {
+		return fmt.Errorf(
+			"AGENT_TRAJECTORIES has incompatible retained state (history=%d TTL/MaxAge=%s); clean break required: stop this component, wipe AGENT_TRAJECTORIES, and restart",
+			history, ttl,
+		)
 	}
 	return nil
 }
@@ -978,6 +1006,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	c.logger.Debug("Loop created",
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
+	c.recordTrajectoryObservations(ctx, result)
 
 	// Birth the loop-execution entity via entity.create. This gives the entity a
 	// typed MessageType envelope and a proper origin contract.
@@ -1159,6 +1188,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
+		c.recordTrajectoryObservations(ctx, result)
 		c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
 		return
 	}
@@ -1225,6 +1255,10 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 		duration := time.Since(entity.StartedAt).Seconds()
 		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
 	}
+	latest, _ := c.handler.GetLoop(loopID)
+	failure, _, _ := c.handler.BuildFailureMessages(loopID, reason, err.Error())
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
+		trajectoryTerminalEvidence{Loop: latest, Failure: failure})
 
 	c.publishFailureEvents(ctx, loopID, reason, err.Error())
 }
@@ -1367,6 +1401,7 @@ const graphWritePublishBudget = 2 * time.Second
 // agent.complete.* event downstream rules wait on. On budget timeout,
 // publish proceeds with a loud log and Prom counter increment.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
+	c.recordHandlerResultTrajectory(ctx, result)
 	c.persistLoopState(ctx, result.LoopID)
 
 	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
@@ -1377,7 +1412,6 @@ func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResu
 		} else if result.FailureState != nil {
 			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
 		}
-		c.writeTrajectoryToGraph(ctx, result.LoopID)
 		// Terminal-tool-less synthesis (#133). Detected in
 		// handleCompleteResponse; emitted here on the graph path so the
 		// triples ride the same publish budget as the loop completion
@@ -1549,6 +1583,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// Handle the tool result using the message handler
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
+		c.recordHandlerResultTrajectory(ctx, result)
 		c.logger.Error("Failed to handle tool result", "error", err, "loop_id", loopID)
 		return
 	}
@@ -1571,7 +1606,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 
 	// Publish results, persist state, and handle terminal states (StopLoop).
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
-	// plus finalizeTrajectory, persistCompletionState, and writeTrajectoryToGraph
+	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
 	c.persistHandlerResult(ctx, result)
 }
@@ -1745,21 +1780,6 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) {
 	}
 }
 
-// writeTrajectoryToGraph reads the trajectory from the in-memory TrajectoryManager,
-// stores step content in ObjectStore, and emits graph triples for each step.
-func (c *Component) writeTrajectoryToGraph(ctx context.Context, loopID string) {
-	if c.graphWriter == nil {
-		return
-	}
-	traj, err := c.handler.trajectoryManager.GetTrajectory(loopID)
-	if err != nil {
-		c.logger.Debug("graph_writer: trajectory not found for graph emission",
-			"loop_id", loopID, "error", err)
-		return
-	}
-	c.graphWriter.WriteTrajectorySteps(ctx, loopID, &traj)
-}
-
 // finalizeTrajectory reads the trajectory from the in-memory TrajectoryManager,
 // marks it complete, and caches it for post-completion queries.
 func (c *Component) finalizeTrajectory(_ context.Context, loopID string, state agentic.LoopState) {
@@ -1924,6 +1944,8 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		RunID:        entity.RunID,
 		RunEntityID:  c.handler.resolveRunEntityID(entity.RunID),
 	}
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusCancelled, "",
+		trajectoryTerminalEvidence{Loop: entity, Cancelled: &completion})
 
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
@@ -1953,9 +1975,7 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 
 	// Persist cancellation to KV so watchers detect it
 	c.persistCancellationState(ctx, loopID, &completion)
-
 	c.finalizeTrajectory(ctx, loopID, agentic.LoopStateCancelled)
-	c.writeTrajectoryToGraph(ctx, loopID)
 
 	c.logger.Info("Loop cancelled",
 		slog.String("loop_id", loopID),
