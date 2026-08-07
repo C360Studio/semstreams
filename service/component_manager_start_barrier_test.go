@@ -17,6 +17,8 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/natsclient"
+	"github.com/c360studio/semstreams/storage"
+	"github.com/c360studio/semstreams/storage/storeregistry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -71,9 +73,11 @@ var _ component.LifecycleComponent = (*barrierTestComponent)(nil)
 func newBarrierTestManager(t *testing.T, comps ...*barrierTestComponent) *ComponentManager {
 	t.Helper()
 	cm := &ComponentManager{
-		BaseService: NewBaseServiceWithOptions("component-manager", nil),
-		components:  make(map[string]*component.ManagedComponent),
-		registry:    component.NewRegistry(),
+		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
+		components:    make(map[string]*component.ManagedComponent),
+		registry:      component.NewRegistry(),
+		storeRegistry: storeregistry.New(),
+		storeProvided: make(map[string][]string),
 	}
 	for _, c := range comps {
 		cm.components[c.name] = &component.ManagedComponent{
@@ -83,6 +87,195 @@ func newBarrierTestManager(t *testing.T, comps ...*barrierTestComponent) *Compon
 	}
 	cm.initialized.Store(true)
 	return cm
+}
+
+type barrierStoreProvider struct {
+	*barrierTestComponent
+	provided map[string]storage.StreamableStore
+}
+
+func (p *barrierStoreProvider) ProvidedStores() map[string]storage.StreamableStore {
+	return p.provided
+}
+
+var _ component.StoreProvider = (*barrierStoreProvider)(nil)
+
+func newProviderBarrierTestManager(comps map[string]component.Discoverable) *ComponentManager {
+	cm := &ComponentManager{
+		BaseService:   NewBaseServiceWithOptions("component-manager", nil),
+		components:    make(map[string]*component.ManagedComponent, len(comps)),
+		registry:      component.NewRegistry(),
+		storeRegistry: storeregistry.New(),
+		storeProvided: make(map[string][]string),
+	}
+	for name, comp := range comps {
+		cm.components[name] = &component.ManagedComponent{
+			Component: comp,
+			State:     component.StateInitialized,
+		}
+	}
+	cm.initialized.Store(true)
+	return cm
+}
+
+func TestComponentManagerStart_ProvidersRegisterBeforeConcurrentConsumers(t *testing.T) {
+	providerRelease := make(chan struct{})
+	providerA := newBarrierTestComponent("provider-a")
+	providerA.entered = make(chan struct{})
+	providerA.release = providerRelease
+	providerB := newBarrierTestComponent("provider-b")
+	providerB.entered = make(chan struct{})
+	providerB.release = providerRelease
+
+	consumerRelease := make(chan struct{})
+	consumerA := newBarrierTestComponent("consumer-a")
+	consumerA.entered = make(chan struct{})
+	consumerA.release = consumerRelease
+	consumerB := newBarrierTestComponent("consumer-b")
+	consumerB.entered = make(chan struct{})
+	consumerB.release = consumerRelease
+
+	cm := newProviderBarrierTestManager(map[string]component.Discoverable{
+		"provider-a": &barrierStoreProvider{
+			barrierTestComponent: providerA,
+			provided:             map[string]storage.StreamableStore{"store-a": &fakeStreamable{id: "a"}},
+		},
+		"provider-b": &barrierStoreProvider{
+			barrierTestComponent: providerB,
+			provided:             map[string]storage.StreamableStore{"store-b": &fakeStreamable{id: "b"}},
+		},
+		"consumer-a": consumerA,
+		"consumer-b": consumerB,
+	})
+	defer func() { _ = cm.Stop(2 * time.Second) }()
+
+	done := make(chan error, 1)
+	go func() { done <- cm.Start(context.Background()) }()
+
+	for name, entered := range map[string]<-chan struct{}{
+		"provider-a": providerA.entered,
+		"provider-b": providerB.entered,
+	} {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s did not start concurrently in the provider phase", name)
+		}
+	}
+	for name, entered := range map[string]<-chan struct{}{
+		"consumer-a": consumerA.entered,
+		"consumer-b": consumerB.entered,
+	} {
+		select {
+		case <-entered:
+			t.Fatalf("%s started before the provider barrier completed", name)
+		default:
+		}
+	}
+
+	close(providerRelease)
+
+	for name, entered := range map[string]<-chan struct{}{
+		"consumer-a": consumerA.entered,
+		"consumer-b": consumerB.entered,
+	} {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s did not start concurrently in the consumer phase", name)
+		}
+	}
+	if _, ok := cm.storeRegistry.Streamable("store-a"); !ok {
+		t.Fatal("provider A store was not registered before consumers started")
+	}
+	if _, ok := cm.storeRegistry.Streamable("store-b"); !ok {
+		t.Fatal("provider B store was not registered before consumers started")
+	}
+
+	close(consumerRelease)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ComponentManager.Start did not return after both phases completed")
+	}
+}
+
+func TestComponentManagerStart_ProviderFailurePreventsConsumerPhase(t *testing.T) {
+	providerComp := newBarrierTestComponent("provider")
+	providerComp.startErr = errors.New("provider unavailable")
+	consumer := newBarrierTestComponent("consumer")
+	consumer.entered = make(chan struct{})
+	consumer.release = make(chan struct{})
+
+	cm := newProviderBarrierTestManager(map[string]component.Discoverable{
+		"provider": &barrierStoreProvider{
+			barrierTestComponent: providerComp,
+			provided:             map[string]storage.StreamableStore{"store": &fakeStreamable{id: "store"}},
+		},
+		"consumer": consumer,
+	})
+	defer func() { _ = cm.Stop(2 * time.Second) }()
+
+	err := cm.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "provider")
+	select {
+	case <-consumer.entered:
+		t.Fatal("consumer started after the provider phase failed")
+	default:
+	}
+	status := cm.GetComponentStatus()
+	assert.Equal(t, component.StateInitialized, status["consumer"].State)
+}
+
+func TestComponentManagerStart_DuplicateProviderFailsWithoutStartingConsumers(t *testing.T) {
+	providerA := newBarrierTestComponent("provider-a")
+	providerB := newBarrierTestComponent("provider-b")
+	storeA := &fakeStreamable{id: "a"}
+	storeB := &fakeStreamable{id: "b"}
+	consumer := newBarrierTestComponent("consumer")
+	consumer.entered = make(chan struct{})
+	consumer.release = make(chan struct{})
+
+	cm := newProviderBarrierTestManager(map[string]component.Discoverable{
+		"provider-a": &barrierStoreProvider{
+			barrierTestComponent: providerA,
+			provided:             map[string]storage.StreamableStore{"shared": storeA},
+		},
+		"provider-b": &barrierStoreProvider{
+			barrierTestComponent: providerB,
+			provided:             map[string]storage.StreamableStore{"shared": storeB},
+		},
+		"consumer": consumer,
+	})
+	defer func() { _ = cm.Stop(2 * time.Second) }()
+
+	err := cm.Start(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate ownership")
+	got, ok := cm.storeRegistry.Streamable("shared")
+	require.True(t, ok)
+	assert.True(t, got == storeA || got == storeB, "incumbent store was replaced by an unknown handle")
+	select {
+	case <-consumer.entered:
+		t.Fatal("consumer started after duplicate provider registration failed")
+	default:
+	}
+
+	status := cm.GetComponentStatus()
+	failed := 0
+	started := 0
+	for _, name := range []string{"provider-a", "provider-b"} {
+		switch status[name].State {
+		case component.StateFailed:
+			failed++
+		case component.StateStarted:
+			started++
+		}
+	}
+	assert.Equal(t, 1, failed)
+	assert.Equal(t, 1, started)
 }
 
 // TestComponentManagerStart_FailsClosedOnComponentStartError locks the
