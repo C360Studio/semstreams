@@ -209,9 +209,6 @@ type Component struct {
 	// Query classification (T0: keywords, T1/T2: embedding similarity)
 	classifier *query.ClassifierChain
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// HTTP server for GraphQL endpoint
 	httpServer *http.Server
 	httpMux    *http.ServeMux
@@ -565,13 +562,6 @@ func (c *Component) Start(ctx context.Context) error {
 	c.ctx = ctx
 	c.cancel = cancel
 
-	// Initialize lifecycle reporter (throttled for high-throughput serving)
-	if c.natsClient == nil {
-		c.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	} else {
-		c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-gateway", c.logger)
-	}
-
 	// Readiness watchers for the read-only operator surface. A failure here is
 	// NON-FATAL: this gateway's job is serving queries, and losing an observability
 	// surface must not take the query path down with it. The route reports the keys
@@ -620,13 +610,6 @@ func (c *Component) Start(ctx context.Context) error {
 		slog.Bool("standalone_server", c.config.StandaloneServer),
 		slog.String("bind_address", c.config.BindAddress),
 		slog.Time("start_time", c.startTime))
-
-	// Report initial idle state
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	return nil
 }
@@ -1780,8 +1763,6 @@ func validateAndUnwrapPrefixResponse(data []byte) ([]byte, error) {
 func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-	c.reportServing(r.Context())
-
 	if r.Method != http.MethodPost {
 		c.writeGraphQLError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
@@ -1903,13 +1884,10 @@ func validateGatewayPrefixPayload(subject string, payload map[string]interface{}
 }
 
 // handleMCP handles MCP requests
-func (c *Component) handleMCP(w http.ResponseWriter, r *http.Request) {
+func (c *Component) handleMCP(w http.ResponseWriter, _ *http.Request) {
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
-	// Report serving stage (throttled)
-	c.reportServing(r.Context())
 
 	// For now, return a simple response
 	// In real implementation, this would handle MCP protocol
@@ -1925,13 +1903,10 @@ func (c *Component) handleMCP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handlePlayground handles GraphQL playground requests
-func (c *Component) handlePlayground(w http.ResponseWriter, r *http.Request) {
+func (c *Component) handlePlayground(w http.ResponseWriter, _ *http.Request) {
 	// Update metrics
 	atomic.AddInt64(&c.messagesProcessed, 1)
 	c.lastActivity.Store(time.Now())
-
-	// Report serving stage (throttled)
-	c.reportServing(r.Context())
 
 	// Return simple HTML playground
 	w.Header().Set("Content-Type", "text/html")
@@ -1949,14 +1924,5 @@ func (c *Component) handlePlayground(w http.ResponseWriter, r *http.Request) {
 	if _, err := w.Write([]byte(html)); err != nil {
 		atomic.AddInt64(&c.errors, 1)
 		c.logger.Error("failed to write playground response", slog.Any("error", err))
-	}
-}
-
-// reportServing reports the serving stage (throttled to avoid KV spam)
-func (c *Component) reportServing(ctx context.Context) {
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "serving"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "serving"), slog.Any("error", err))
-		}
 	}
 }

@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/pkg/revlag"
@@ -20,8 +19,7 @@ func TestPredicatePoisonLatchesEmbeddingResetAndBlocksQueries(t *testing.T) {
 	t.Parallel()
 
 	c := &Component{
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
+		logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":"old"}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	c.queueEntityForEmbedding(context.Background(), "acme.ops.robotics.gcs.drone.001", 7, poisoned)
@@ -221,10 +219,9 @@ func (e *bootstrapEntry) Bucket() string { return graph.BucketEntityStates }
 
 func newBootstrapTestComponent() *Component {
 	return &Component{
-		config:            DefaultConfig(),
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
-		watermark:         revlag.New(),
+		config:    DefaultConfig(),
+		logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
+		watermark: revlag.New(),
 	}
 }
 

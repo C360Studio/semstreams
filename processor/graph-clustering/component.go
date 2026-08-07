@@ -614,13 +614,12 @@ type Component struct {
 	lastSemanticApplied *bool
 
 	// Lifecycle state
-	mu                sync.RWMutex
-	running           bool
-	initialized       bool
-	startTime         time.Time
-	wg                sync.WaitGroup
-	cancel            context.CancelFunc
-	lifecycleReporter component.LifecycleReporter
+	mu          sync.RWMutex
+	running     bool
+	initialized bool
+	startTime   time.Time
+	wg          sync.WaitGroup
+	cancel      context.CancelFunc
 
 	// Metrics (atomic)
 	messagesProcessed int64
@@ -963,9 +962,6 @@ func (c *Component) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Component", "Start", "readiness status watcher")
 	}
 
-	// Initialize lifecycle reporter and wait for dependencies
-	c.initLifecycleReporter(ctx)
-
 	if err := c.waitForDependencies(ctx); err != nil {
 		cancel()
 		return err
@@ -1129,11 +1125,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	}
 }
 
-// initLifecycleReporter initializes the lifecycle reporter for component status tracking.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-clustering", c.logger)
-}
-
 // waitForDependencies waits for all required KV buckets and stores references.
 func (c *Component) waitForDependencies(ctx context.Context) error {
 	watcherCfg := resource.DefaultConfig()
@@ -1176,10 +1167,6 @@ func (c *Component) waitForDependencies(ctx context.Context) error {
 
 // waitForBucket waits for a catalog KV bucket to become available.
 func (c *Component) waitForBucket(ctx context.Context, bucketName string, cfg resource.Config) error {
-	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+bucketName); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+bucketName), slog.Any("error", err))
-	}
-
 	watcher := resource.NewWatcher(
 		bucketName,
 		func(checkCtx context.Context) error {
@@ -1300,27 +1287,12 @@ func (c *Component) newEntityStateQuerier() *kvEntityQuerier {
 	return querier
 }
 
-// reportStage safely reports a lifecycle stage change.
-// Errors are logged but do not interrupt processing.
-func (c *Component) reportStage(ctx context.Context, stage string) {
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, stage); err != nil {
-			c.logger.Debug("failed to report lifecycle stage",
-				slog.String("stage", stage),
-				slog.Any("error", err))
-		}
-	}
-}
-
 // runDetectionLoop runs community detection on a timer
 func (c *Component) runDetectionLoop(ctx context.Context) {
 	defer c.wg.Done()
 
 	ticker := time.NewTicker(c.config.DetectionInterval())
 	defer ticker.Stop()
-
-	// Report initial idle state
-	c.reportStage(ctx, "idle")
 
 	c.logger.Info("detection loop started",
 		slog.Duration("interval", c.config.DetectionInterval()))
@@ -1695,7 +1667,7 @@ func (c *Component) noteSemanticApplied(active bool) {
 }
 
 // handleDetectionError handles errors during detection, returning true if the error was handled as shutdown.
-func (c *Component) handleDetectionError(ctx context.Context, err error, operation string) bool {
+func (c *Component) handleDetectionError(err error, operation string) bool {
 	if errors.Is(err, context.Canceled) {
 		c.logger.Debug(operation + " interrupted by shutdown")
 		return true
@@ -1703,11 +1675,6 @@ func (c *Component) handleDetectionError(ctx context.Context, err error, operati
 	c.latchGraphStatePoison(err)
 	c.logger.Error(operation+" failed", slog.Any("error", err))
 	atomic.AddInt64(&c.errors, 1)
-	if c.lifecycleReporter != nil {
-		if repErr := c.lifecycleReporter.ReportCycleError(ctx, err); repErr != nil {
-			c.logger.Debug("failed to report cycle error", slog.Any("error", repErr))
-		}
-	}
 	return false
 }
 
@@ -1749,10 +1716,9 @@ func (c *Component) runStructuralAndAnomalyDetection(ctx context.Context) bool {
 		return false
 	}
 
-	c.reportStage(ctx, "structural_computation")
 	kcoreIndex, pivotIndex, err := c.runStructuralComputation(ctx)
 	if err != nil {
-		c.handleDetectionError(ctx, err, "structural computation")
+		c.handleDetectionError(err, "structural computation")
 		return false
 	}
 
@@ -1761,9 +1727,8 @@ func (c *Component) runStructuralAndAnomalyDetection(ctx context.Context) bool {
 			c.logger.Debug("skipping anomaly detection - shutdown in progress")
 			return false
 		}
-		c.reportStage(ctx, "anomaly_detection")
 		if err := c.runAnomalyDetection(ctx, kcoreIndex, pivotIndex); err != nil {
-			c.handleDetectionError(ctx, err, "anomaly detection")
+			c.handleDetectionError(err, "anomaly detection")
 			return false
 		}
 	}
@@ -1782,19 +1747,12 @@ func (c *Component) runCommunityDetection(ctx context.Context) {
 		return
 	}
 
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportCycleStart(ctx); err != nil {
-			c.logger.Debug("failed to report cycle start", slog.Any("error", err))
-		}
-	}
-
 	c.logger.Debug("running community detection")
 	start := time.Now()
-	c.reportStage(ctx, "community_detection")
 
 	communities, err := c.detector.DetectCommunities(ctx)
 	if err != nil {
-		c.handleDetectionError(ctx, err, "detection")
+		c.handleDetectionError(err, "detection")
 		return
 	}
 
@@ -1819,11 +1777,6 @@ func (c *Component) runCommunityDetection(ctx context.Context) {
 		return
 	}
 
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportCycleComplete(ctx); err != nil {
-			c.logger.Debug("failed to report cycle complete", slog.Any("error", err))
-		}
-	}
 }
 
 // ============================================================================

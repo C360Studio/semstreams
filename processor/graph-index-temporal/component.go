@@ -201,9 +201,6 @@ type Component struct {
 	bootstrapStarted  atomic.Bool
 	bootstrapComplete atomic.Bool
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
 }
@@ -417,11 +414,6 @@ func (c *Component) Initialize() error {
 
 // waitForEntityBucket waits for the ENTITY_STATES bucket to be available and returns it
 func (c *Component) waitForEntityBucket(ctx context.Context) (entityStatesWatcher, error) {
-	// Report waiting stage
-	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
-	}
-
 	// Configure resource watcher for bounded startup attempts
 	watcherCfg := resource.DefaultConfig()
 	watcherCfg.StartupAttempts = c.config.StartupAttempts
@@ -502,9 +494,6 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 	c.reverseBucket = reverseBucket
 
-	// Initialize lifecycle reporter early for dependency waiting visibility
-	c.initLifecycleReporter(ctx)
-
 	// Queries must fail closed from the moment they are exposed until the
 	// WatchAll bootstrap has been validated and fully projected.
 	c.watchUnavailable.Store(false)
@@ -531,11 +520,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Mark as running
 	c.running = true
 	c.startTime = time.Now()
-
-	// Report initial idle state
-	if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-	}
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-index-temporal"),
@@ -588,11 +572,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 		c.logger.Warn("component stop timed out", slog.String("component", "graph-index-temporal"))
 		return errs.WrapTransient(fmt.Errorf("timeout after %v", timeout), "Component", "Stop", "graceful shutdown timeout")
 	}
-}
-
-// initLifecycleReporter initializes the lifecycle reporter for component status tracking.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-index-temporal", c.logger)
 }
 
 // ============================================================================
@@ -698,11 +677,6 @@ func (c *Component) latchGraphStateReset(reason graph.StateResetReason) {
 
 // processEntityUpdate indexes an entity's temporal data if it has timestamps
 func (c *Component) processEntityUpdate(ctx context.Context, entry jetstream.KeyValueEntry) {
-	// Report indexing stage (throttled to avoid KV spam)
-	if err := c.lifecycleReporter.ReportStage(ctx, "indexing"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "indexing"), slog.Any("error", err))
-	}
-
 	var state graph.EntityState
 	if err := graph.UnmarshalEntityState(entry.Value(), &state); err != nil {
 		var stateErr *graph.StateContractError

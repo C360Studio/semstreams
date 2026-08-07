@@ -1,7 +1,7 @@
 // kvspec.go is the MECHANISM half of the framework KV bucket catalog
 // (framework-bucket-catalog): a name-free descriptor type (BucketSpec) plus the
 // two-function acquisition seam every framework bucket goes through. The
-// POPULATION half — the one literal catalog of 23 descriptors — lives in
+// POPULATION half — the one literal descriptor catalog — lives in
 // graph/kvcatalog.go, which is deliberately NOT here: product bucket names do
 // not belong in the transport layer.
 //
@@ -34,10 +34,11 @@ const (
 	ClassAuthoritative BucketClass = "authoritative"
 	// ClassDerived is state rebuilt from authoritative state (the indexes).
 	ClassDerived BucketClass = "derived"
-	// ClassOperational is framework-internal correctness state (redelivery
-	// stamps, readiness envelopes, ownership epochs).
+	// ClassOperational is framework-internal operational state, including
+	// redelivery stamps, readiness envelopes, and storage reports.
 	ClassOperational BucketClass = "operational"
-	// ClassDiagnostic is observability-only state nothing in production reads.
+	// ClassDiagnostic classifies diagnostic state rather than graph correctness
+	// state. No current graph catalog descriptor uses this class.
 	ClassDiagnostic BucketClass = "diagnostic"
 )
 
@@ -51,7 +52,8 @@ const (
 	// WriteOwnerOnly means only the declared owner writes; a generic KV writer
 	// (rule update_kv) is rejected at load and at runtime.
 	WriteOwnerOnly WritePolicy = "owner-only"
-	// WriteOpen means any component may write (e.g. COMPONENT_STATUS).
+	// WriteOpen means writes are not restricted to one declared owner. No current
+	// graph catalog descriptor uses this policy.
 	WriteOpen WritePolicy = "open"
 )
 
@@ -75,9 +77,10 @@ const (
 // policy, never a silent no-op.
 type RetentionKind string
 
-// Retention kinds. All three are populated by shipped catalog rows; adding a
-// future kind (e.g. bounded-storage's DiscardNew ceiling) is a new constant +
-// params on RetentionPolicy + a reconcile arm — no shape change.
+// Retention kinds. Current graph catalog rows use no-lifecycle; bounded-ttl and
+// unmanaged remain validated grammar arms outside that population. Adding a
+// future kind (e.g. bounded-storage's DiscardNew ceiling) requires a new
+// constant, RetentionPolicy parameters, and a reconcile arm.
 const (
 	// RetentionNoLifecycle: no NATS TTL (MaxAge) or binding MaxBytes, ever —
 	// correctness-critical no-eviction state (ADR-068). Acquisition strips a
@@ -86,9 +89,8 @@ const (
 	// RetentionBoundedTTL: the declared TTL IS the contract. Acquisition
 	// converges MaxAge TO the declared TTL — preserved, never stripped.
 	RetentionBoundedTTL RetentionKind = "bounded-ttl"
-	// RetentionUnmanaged: the framework guarantees no retention posture — an
-	// explicit catalog fact (COMPONENT_STATUS), not an omission. Acquisition
-	// does not reconcile retention.
+	// RetentionUnmanaged means acquisition does not reconcile retention. No
+	// current graph catalog descriptor uses this kind.
 	RetentionUnmanaged RetentionKind = "unmanaged"
 )
 
@@ -271,8 +273,8 @@ func EnsureFrameworkBucket(ctx context.Context, c *Client, spec BucketSpec) (jet
 			return nil, rerr
 		}
 	case RetentionUnmanaged:
-		// Declared no-posture: the framework guarantees nothing about this
-		// bucket's retention, so acquisition does not touch it.
+		// An unmanaged descriptor makes no retention guarantee, so acquisition
+		// does not touch its retention configuration.
 	default:
 		// FAIL CLOSED (unreachable after Validate, kept so a future refactor
 		// that drops the Validate call cannot turn an unknown kind into a

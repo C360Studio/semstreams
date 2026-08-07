@@ -99,9 +99,6 @@ type Processor struct {
 
 	// Prometheus metrics
 	metrics *filterMetrics
-
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
 }
 
 // NewProcessor creates a new JSON filter processor from configuration
@@ -198,20 +195,10 @@ func (f *Processor) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize lifecycle reporter for observability
-	f.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, f.natsClient, f.name, f.logger)
-
 	f.mu.Lock()
 	f.running = true
 	f.startTime = time.Now()
 	f.mu.Unlock()
-
-	// Report idle state after startup
-	if f.lifecycleReporter != nil {
-		if err := f.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			f.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	f.logger.Info("JSON filter processor started",
 		"component", f.name,
@@ -439,20 +426,8 @@ func (f *Processor) isJetStreamPortBySubject(subject string) bool {
 	return false
 }
 
-// reportFiltering reports the filtering stage (throttled to avoid KV spam)
-func (f *Processor) reportFiltering(ctx context.Context) {
-	if f.lifecycleReporter != nil {
-		if err := f.lifecycleReporter.ReportStage(ctx, "filtering"); err != nil {
-			f.logger.Debug("failed to report lifecycle stage", slog.String("stage", "filtering"), slog.Any("error", err))
-		}
-	}
-}
-
 // handleMessage processes incoming GenericJSON messages
 func (f *Processor) handleMessage(ctx context.Context, msgData []byte) {
-	// Report filtering stage for lifecycle observability
-	f.reportFiltering(ctx)
-
 	atomic.AddInt64(&f.messagesProcessed, 1)
 	f.mu.Lock()
 	f.lastActivity = time.Now()

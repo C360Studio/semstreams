@@ -106,32 +106,3 @@ func AsLifecycleComponent(comp Discoverable) (LifecycleComponent, bool) {
 	lc, ok := comp.(LifecycleComponent)
 	return lc, ok
 }
-
-// Status represents the current processing state of a component.
-// This is used by ADR-003 lifecycle status pattern for async component observability.
-type Status struct {
-	Component       string    `json:"component"`
-	Stage           string    `json:"stage"`
-	CycleID         string    `json:"cycle_id,omitempty"`
-	CycleStartedAt  time.Time `json:"cycle_started_at,omitempty"`
-	StageStartedAt  time.Time `json:"stage_started_at"`
-	LastCompletedAt time.Time `json:"last_completed_at,omitempty"`
-	LastResult      string    `json:"last_result,omitempty"` // "success" or "error"
-	LastError       string    `json:"last_error,omitempty"`
-}
-
-// LifecycleReporter allows components to report their current processing stage.
-// This enables observability for long-running async components (ADR-003).
-type LifecycleReporter interface {
-	// ReportStage updates the component's current processing stage
-	ReportStage(ctx context.Context, stage string) error
-
-	// ReportCycleStart marks the beginning of a new processing cycle
-	ReportCycleStart(ctx context.Context) error
-
-	// ReportCycleComplete marks successful cycle completion
-	ReportCycleComplete(ctx context.Context) error
-
-	// ReportCycleError marks cycle failure with error details
-	ReportCycleError(ctx context.Context, err error) error
-}

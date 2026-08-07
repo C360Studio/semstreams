@@ -83,9 +83,6 @@ type Processor struct {
 	messagesWrapped   int64
 	errors            int64
 	lastActivity      time.Time
-
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
 }
 
 // NewProcessor creates a new JSON generic processor from configuration
@@ -168,20 +165,10 @@ func (p *Processor) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize lifecycle reporter for observability
-	p.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, p.natsClient, p.name, p.logger)
-
 	p.mu.Lock()
 	p.running = true
 	p.startTime = time.Now()
 	p.mu.Unlock()
-
-	// Report idle state after startup
-	if p.lifecycleReporter != nil {
-		if err := p.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			p.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	p.logger.Info("JSON generic processor started",
 		"component", p.name,
@@ -392,20 +379,8 @@ func (p *Processor) isJetStreamPortBySubject(subject string) bool {
 	return false
 }
 
-// reportWrapping reports the wrapping stage (throttled to avoid KV spam)
-func (p *Processor) reportWrapping(ctx context.Context) {
-	if p.lifecycleReporter != nil {
-		if err := p.lifecycleReporter.ReportStage(ctx, "wrapping"); err != nil {
-			p.logger.Debug("failed to report lifecycle stage", slog.String("stage", "wrapping"), slog.Any("error", err))
-		}
-	}
-}
-
 // handleMessage processes incoming plain JSON messages and wraps them
 func (p *Processor) handleMessage(ctx context.Context, msgData []byte) {
-	// Report wrapping stage for lifecycle observability
-	p.reportWrapping(ctx)
-
 	atomic.AddInt64(&p.messagesProcessed, 1)
 	p.mu.Lock()
 	p.lastActivity = time.Now()

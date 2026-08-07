@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/nats-io/nats.go/jetstream"
@@ -24,13 +23,12 @@ func newEventTimeTestComponent() (*Component, *mockKVBucket, *mockKVBucket) {
 	tb := newMockKVBucket()
 	rb := newMockKVBucket()
 	c := &Component{
-		name:              "graph-index-temporal",
-		config:            Config{TimeResolution: "hour"},
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		temporalBucket:    tb,
-		reverseBucket:     rb,
-		metrics:           getMetrics(nil),
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
+		name:           "graph-index-temporal",
+		config:         Config{TimeResolution: "hour"},
+		logger:         slog.New(slog.NewTextHandler(io.Discard, nil)),
+		temporalBucket: tb,
+		reverseBucket:  rb,
+		metrics:        getMetrics(nil),
 	}
 	c.lastActivity.Store(time.Now())
 	return c, tb, rb

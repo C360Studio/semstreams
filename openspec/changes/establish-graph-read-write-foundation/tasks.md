@@ -94,3 +94,9 @@
       edit no downstream code and treat no finding as design authority.
 - [ ] 8.8 Obtain final SemStreams reviewer approval, mark the draft PR ready, and merge the single coordinated breaking
       cutover only when all required gates are green.
+
+> Closure audit (2026-08-06): local `main` contains the cutover merge as `d1570ef8` (PR #898), but this record contains
+> no durable final implementation-review verdict or evidence of the PR-ready transition. Because 8.8 is conjunctive,
+> merge history alone does not make it complete; it remains unchecked and this change remains unarchived. The accepted
+> GS-01 design and implementation evidence are history, not a successor implementation baton. Later corrections belong
+> to their own reviewed records; see `successor-dispositions/r1b-lifecycle-guard.md`.

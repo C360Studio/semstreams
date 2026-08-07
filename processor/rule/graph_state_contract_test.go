@@ -24,7 +24,7 @@ func TestGraphStateContractFailureLatchesRuleEvaluationOff(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected shared graph-state decoder to reject noncanonical predicate")
 	}
-	if !processor.markGraphStateResetRequired(context.Background(), poisonedID, err) {
+	if !processor.markGraphStateResetRequired(poisonedID, err) {
 		t.Fatal("expected graph-state contract failure to be recognized")
 	}
 	if !processor.graphStateResetRequired.Load() {

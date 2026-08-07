@@ -118,7 +118,7 @@ func (ml *MessageLogger) handleKVWatch(w http.ResponseWriter, r *http.Request) {
 	// Setup SSE connection
 	ml.setupKVWatchSSEHeaders(w)
 
-	// Get or create KV bucket
+	// Open the existing KV bucket; watching never creates persistent state.
 	kv, err := ml.getKVBucketForWatch(ctx, bucket)
 	if err != nil {
 		ml.sendKVWatchError(w, "Failed to access KV bucket", err)

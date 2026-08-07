@@ -5,8 +5,8 @@
 ### Requirement: The live graph carries no lifecycle retention
 
 Live graph KV buckets MUST NOT use NATS TTL or binding `MaxBytes` as a lifecycle mechanism. This includes current
-authority, every derived index, `GRAPH_INGEST_APPLIED_SEQ`, and `GRAPH_STATUS`. `COMPONENT_STATUS` remains explicitly
-unmanaged. The descriptor catalog MUST NOT contain `OWNER_CLAIMS`, `OWNER_PRESENCE`, or `PENDING_EDGES`. Acquisition
+authority, every derived index, `GRAPH_INGEST_APPLIED_SEQ`, and `GRAPH_STATUS`. The descriptor catalog MUST NOT contain
+`OWNER_CLAIMS`, `OWNER_PRESENCE`, or `PENDING_EDGES`. Acquisition
 MUST reconcile and verify each declared retention policy without changing unrelated stream configuration; the
 owner-absent legacy-drift backstop remains limited to cataloged buckets that exist.
 

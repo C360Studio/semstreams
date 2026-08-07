@@ -628,9 +628,6 @@ type Component struct {
 	ingestGuardMem    []*laneGuard
 	ingestGuardBucket *natsclient.KVStore
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// Query and mutation subscriptions (for cleanup)
 	subscriptions []*natsclient.Subscription
 }
@@ -935,9 +932,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// can repair state through canonical writes before restart.
 	c.startEntityStateGuard(ctx, c.entityBucket)
 
-	// Initialize lifecycle reporter (throttled for high-throughput ingestion)
-	c.initLifecycleReporter(ctx)
-
 	// Initialize hierarchy inference if enabled (synchronous - no Start/Stop)
 	c.initHierarchyInference()
 
@@ -990,11 +984,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Mark as running
 	c.running = true
 	c.startTime = time.Now()
-
-	// Report initial idle state
-	if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-	}
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-ingest"),
@@ -1310,11 +1299,6 @@ func (c *Component) markEntityWatchLost() {
 	c.entityWatchLost.Store(true)
 }
 
-// initLifecycleReporter initializes the lifecycle reporter for component status tracking.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-ingest", c.logger)
-}
-
 // initHierarchyInference initializes hierarchy inference if enabled.
 func (c *Component) initHierarchyInference() {
 	if !c.config.EnableHierarchy {
@@ -1545,11 +1529,6 @@ func (c *Component) waitForStream(ctx context.Context, streamName string) error 
 
 // handleMessage processes an incoming message and creates/updates entity state
 func (c *Component) handleMessage(ctx context.Context, subject string, data []byte) {
-	// Report processing stage (throttled to avoid KV spam)
-	if err := c.lifecycleReporter.ReportStage(ctx, "processing"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "processing"), slog.Any("error", err))
-	}
-
 	c.logger.Debug("Received message",
 		slog.String("subject", subject),
 		slog.Int("size", len(data)))

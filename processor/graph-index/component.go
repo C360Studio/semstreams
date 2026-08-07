@@ -298,9 +298,6 @@ type Component struct {
 	// Prometheus metrics
 	metrics *indexMetrics
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// Re-index no-op instrumentation (D6, design.md / gh#474).
 	// lastProjections maps entityID → canonical projection string for change detection.
 	// sync.Map provides safe concurrent access from worker-pool goroutines.
@@ -642,9 +639,6 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize lifecycle reporter (throttled for high-throughput indexing)
-	c.initLifecycleReporter(ctx)
-
 	// Initialize the optional revision-aware coalescer before the watcher can
 	// observe it. The callback submits a reconciliation key into the same ordered
 	// dispatcher used by ordinary updates, deletes, and repair.
@@ -671,11 +665,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Mark as running
 	c.running = true
 	c.startTime = time.Now()
-
-	// Report initial idle state
-	if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-	}
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-index"),
@@ -838,11 +827,6 @@ func (c *Component) assignBucket(subject string, bucket jetstream.KeyValue) {
 	}
 }
 
-// initLifecycleReporter initializes the lifecycle reporter for component status tracking.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-index", c.logger)
-}
-
 // ============================================================================
 // Entity State Watcher
 // ============================================================================
@@ -946,10 +930,6 @@ func (c *Component) watchEntityStates(ctx context.Context, bucket entityStatesRe
 // waitAndWatchEntityStates waits for the ENTITY_STATES bucket with bounded retries,
 // then starts the watcher goroutine that feeds entity updates to the worker pool.
 func (c *Component) waitAndWatchEntityStates(ctx context.Context) error {
-	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
-	}
-
 	watcherCfg := resource.DefaultConfig()
 	watcherCfg.StartupAttempts = c.config.StartupAttempts
 	watcherCfg.StartupInterval = time.Duration(c.config.StartupInterval) * time.Millisecond
@@ -1430,10 +1410,6 @@ func (c *Component) processEntityUpdateFromData(ctx context.Context, entityID st
 	plan, err := c.buildEntityIndexPlan(state, resolvedID)
 	if err != nil {
 		return err
-	}
-
-	if err := c.lifecycleReporter.ReportStage(ctx, "indexing"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "indexing"), slog.Any("error", err))
 	}
 
 	// Re-index no-op instrumentation (D6, design.md / gh#474): compute the index-input

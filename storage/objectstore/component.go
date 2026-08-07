@@ -53,9 +53,6 @@ type Component struct {
 	config          Config
 	logger          *slog.Logger
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// NATS subscriptions
 	apiSub   *nats.Subscription
 	writeSub *nats.Subscription
@@ -229,9 +226,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 	c.logger.Debug("ObjectStore created successfully", "name", c.instanceName, "bucket", c.config.BucketName)
 
-	// Initialize lifecycle reporter (throttled for high-throughput storing)
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "objectstore", c.logger)
-
 	// Get raw NATS connection for subscriptions
 	nc := c.natsClient.GetConnection()
 
@@ -290,13 +284,6 @@ func (c *Component) Start(ctx context.Context) error {
 	c.started = true
 	c.lastActivity.Store(time.Now())
 	c.logger.Debug("ObjectStore component fully started", "name", c.instanceName)
-
-	// Report initial idle state
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	return nil
 }
@@ -377,9 +364,6 @@ func (c *Component) handleAPIRequest(msg *nats.Msg) {
 			c.respondWithError(msg, errs.WrapInvalid(err, "Component", "handleAPIRequest", "unmarshal data"))
 			return
 		}
-
-		// Report storing stage (throttled)
-		c.reportStoring(ctx)
 
 		key, err := c.store.Store(ctx, msgData)
 		if err != nil {
@@ -899,9 +883,6 @@ func (c *Component) settleJetStreamWrite(ctx context.Context, msg jetstream.Msg,
 // JetStream handler's ack decision, the core NATS handler's log-and-drop.
 // Errors are returned, not logged here (return-vs-log convention).
 func (c *Component) processWriteMessage(ctx context.Context, data []byte) error {
-	// Report storing stage (throttled)
-	c.reportStoring(ctx)
-
 	// Try to parse as BaseMessage to check for ContentStorable payload
 	baseMsg, decodeErr := c.decoder.Decode(data)
 	if decodeErr == nil {
@@ -1089,14 +1070,5 @@ func (c *Component) DataFlow() component.FlowMetrics {
 		BytesPerSecond:    0, // Would need byte tracking
 		ErrorRate:         0, // Would need error tracking
 		LastActivity:      lastAct,
-	}
-}
-
-// reportStoring reports the storing stage (throttled to avoid KV spam)
-func (c *Component) reportStoring(ctx context.Context) {
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "storing"); err != nil {
-			c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "storing"), slog.Any("error", err))
-		}
 	}
 }

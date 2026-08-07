@@ -76,9 +76,6 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // time.Time
 
-	// Lifecycle reporter (COMPONENT_STATUS KV; same convention as
-	// json_map).
-	lifecycleReporter component.LifecycleReporter
 }
 
 // Ensure interface compliance.
@@ -158,18 +155,10 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	c.startLifecycleReporter(ctx)
-
 	c.mu.Lock()
 	c.started = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
-
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			c.logger.Debug("failed to report idle stage", slog.Any("error", err))
-		}
-	}
 
 	c.logger.Info("nl_classify component started",
 		slog.String("loops_bucket", c.config.LoopsBucket),
@@ -180,7 +169,6 @@ func (c *Component) Start(ctx context.Context) error {
 
 // openLoopsBucket opens (or idempotently creates) the AGENT_LOOPS KV
 // bucket and constructs the LoopStore adapter. Mirrors json_map's
-// COMPONENT_STATUS open pattern.
 func (c *Component) openLoopsBucket(ctx context.Context) error {
 	bucket, err := c.deps.NATSClient.CreateKeyValueBucket(ctx, jetstream.KeyValueConfig{
 		Bucket:      c.config.LoopsBucket,
@@ -268,13 +256,6 @@ func (c *Component) subscribeInputs(ctx context.Context) error {
 			slog.String("subject", port.Subject))
 	}
 	return nil
-}
-
-// startLifecycleReporter wires the COMPONENT_STATUS KV reporter if
-// available; degrades to a no-op reporter on failure (same pattern as
-// json_map).
-func (c *Component) startLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.deps.NATSClient, ComponentName, c.logger)
 }
 
 // Stop drains subscriptions, closes the LLM client, and reports

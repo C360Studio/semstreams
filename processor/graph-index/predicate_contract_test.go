@@ -6,7 +6,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -15,7 +14,7 @@ import (
 func TestInvalidReplayedPredicatePoisonsReadiness(t *testing.T) {
 	t.Parallel()
 
-	indexComponent := &Component{lifecycleReporter: component.NewNoOpLifecycleReporter()}
+	indexComponent := &Component{}
 	state := graph.EntityState{
 		ID: "acme.ops.test.system.widget.001",
 		Triples: []message.Triple{{
@@ -49,7 +48,7 @@ func TestInvalidReplayedPredicatePoisonsReadiness(t *testing.T) {
 func TestUnreadableReplayedEntityPoisonsReadiness(t *testing.T) {
 	t.Parallel()
 
-	indexComponent := &Component{lifecycleReporter: component.NewNoOpLifecycleReporter()}
+	indexComponent := &Component{}
 	if err := indexComponent.processEntityUpdateFromData(context.Background(), "broken", []byte("{")); err == nil {
 		t.Fatal("processEntityUpdateFromData() error = nil, want reset-required poison")
 	}

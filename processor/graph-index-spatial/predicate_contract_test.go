@@ -9,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -37,9 +36,8 @@ func TestPredicatePoisonProducesNoSpatialOutputAndBlocksQueries(t *testing.T) {
 
 	bucket := newMockKVBucket()
 	c := &Component{
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		spatialBucket:     bucket,
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		spatialBucket: bucket,
 	}
 	poisoned := []byte(`{"id":"acme.ops.robotics.gcs.drone.001","triples":[{"subject":"acme.ops.robotics.gcs.drone.001","predicate":"legacy.predicate","object":1}]}`) // predicate-audit:invalid {"kind":"stored-predicate","value":"legacy.predicate","reason":"arity"}
 	c.processEntityUpdate(context.Background(), &mockKVEntry{data: poisoned})
@@ -248,10 +246,9 @@ func (e *bootstrapEntry) Bucket() string { return graph.BucketEntityStates }
 
 func newBootstrapTestComponent(output jetstream.KeyValue) *Component {
 	return &Component{
-		config:            DefaultConfig(),
-		logger:            slog.New(slog.NewTextHandler(io.Discard, nil)),
-		spatialBucket:     output,
-		lifecycleReporter: component.NewNoOpLifecycleReporter(),
+		config:        DefaultConfig(),
+		logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		spatialBucket: output,
 	}
 }
 

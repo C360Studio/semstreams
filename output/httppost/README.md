@@ -308,13 +308,6 @@ metrics := component.DataFlow()
 // LastActivity: Timestamp of last message processed
 ```
 
-### Lifecycle Reporting
-
-The component reports lifecycle stages to NATS KV bucket `COMPONENT_STATUS`:
-
-- `idle`: Waiting for messages
-- `posting`: Actively sending HTTP requests (throttled updates)
-
 ## Security Considerations
 
 - **HTTPS Required**: Always use HTTPS for sensitive data (authentication tokens, PII)

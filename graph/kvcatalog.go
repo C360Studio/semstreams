@@ -66,7 +66,7 @@ func KVCatalog() []natsclient.BucketSpec {
 	// both values.
 	entityStates.History = 1
 
-	graphStatus := owned(BucketGraphStatus, "graph-index/graph-embedding (readiness producers)",
+	graphStatus := owned(BucketGraphStatus, "graph-index/graph-embedding/graph-ingest/rule (readiness producers)",
 		"ADR-083 readiness envelopes, one key per producer (operational component status, not graph data)",
 		natsclient.ClassOperational)
 	// Readiness replay depth: enough replay for a late-binding consumer to see
@@ -99,23 +99,6 @@ func KVCatalog() []natsclient.BucketSpec {
 	// becoming the growth problem it exists to detect — ten small rows per
 	// account resource, and no retention needed to hold that line.
 	storageReport.History = 10
-
-	componentStatus := natsclient.BucketSpec{
-		Name:        BucketComponentStatus,
-		Owner:       "every lifecycle-reporting component (shared diagnostic)",
-		Description: "Component lifecycle status tracking",
-		// #717 answered by evidence: 24 production writers, ZERO production
-		// readers (only the e2e harness consumes it) — write-protecting it
-		// would guard state nothing reads, and the framework guarantees no
-		// retention posture for it. Both are explicit catalog facts, not
-		// omissions; a future ops TTL is a one-line edit of this row.
-		Class:     natsclient.ClassDiagnostic,
-		Retention: natsclient.RetentionPolicy{Kind: natsclient.RetentionUnmanaged},
-		Write:     natsclient.WriteOpen,
-		Posture:   natsclient.PostureOwnerCreates,
-		History:   1,
-		Replicas:  1,
-	}
 
 	return []natsclient.BucketSpec{
 		// Authoritative domain state + graph-ingest's operational tiers.
@@ -152,9 +135,6 @@ func KVCatalog() []natsclient.BucketSpec {
 		// Framework operational plane.
 		graphStatus,
 		storageReport,
-
-		// Diagnostic plane.
-		componentStatus,
 	}
 }
 

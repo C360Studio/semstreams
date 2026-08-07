@@ -82,9 +82,6 @@ Migration state has five allowed values:
 The following assignments make local and configurable boundaries explicit. They use the same seven fields and
 allowed values as the boundary inventory.
 
-- `component/lifecycle_reporter.go:KVLifecycleReporter.writeStatus`: raw `componentName`; component lifecycle status;
-  component-name bound and literal/opaque choice; possible COMPONENT_STATUS rebuild; component identity contract;
-  unassessed; pending.
 - `component/config_validator.go:ValidateAndPersistComponentConfig`: caller-produced component config key through the
   persister interface; component configuration; component key bound; possible config migration; config key contract;
   unassessed; pending.
@@ -164,13 +161,6 @@ allowed values as the boundary inventory.
   unassessed; pending.
 - `service/graph_triples_http.go`: ENTITY_STATES Keys and raw key Get; graph diagnostics; entity-ID bound; follows
   ENTITY_STATES migration; entity-ID contract; unassessed; pending.
-- input/output/processor/gateway status initializers plus `KVLifecycleReporter`: raw component-name status keys in
-  COMPONENT_STATUS; component lifecycle status; component-name bound and literal/opaque choice; possible status
-  rebuild; component identity contract; unassessed; pending.
-- `storage/objectstore/component.go`: KV status bucket uses the component lifecycle status boundary; ObjectStore
-  object names/content remain outside this KV capability; storage status; component-name bound only; possible status
-  rebuild; component identity contract; unassessed; pending.
-
 ## Production source coverage
 
 The baseline audit searched non-test Go sources for `jetstream.KeyValue`, `*natsclient.KVStore`,

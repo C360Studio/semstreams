@@ -105,7 +105,6 @@
 //
 //   - If COMMUNITY_INDEX bucket unavailable at startup, PathRAG works but GraphRAG is disabled
 //   - When bucket becomes available later, GraphRAG is enabled automatically
-//   - Lifecycle reporting tracks degraded states for observability
 //
 // # Configuration
 //

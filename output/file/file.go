@@ -126,9 +126,6 @@ type Output struct {
 	bytesWritten    int64
 	errors          int64
 	lastActivity    time.Time
-
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
 }
 
 // NewOutput creates a new file output from configuration
@@ -240,9 +237,6 @@ func (f *Output) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize lifecycle reporter for observability
-	f.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, f.natsClient, f.name, f.logger)
-
 	// Start flush goroutine
 	f.wg.Add(1)
 	go f.flushLoop()
@@ -251,13 +245,6 @@ func (f *Output) Start(ctx context.Context) error {
 	f.running = true
 	f.startTime = time.Now()
 	f.mu.Unlock()
-
-	// Report idle state after startup
-	if f.lifecycleReporter != nil {
-		if err := f.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			f.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	f.logger.Info("File output started",
 		"component", f.name,
@@ -464,20 +451,8 @@ func (f *Output) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// reportWriting reports the writing stage (throttled to avoid KV spam)
-func (f *Output) reportWriting(ctx context.Context) {
-	if f.lifecycleReporter != nil {
-		if err := f.lifecycleReporter.ReportStage(ctx, "writing"); err != nil {
-			f.logger.Debug("failed to report lifecycle stage", slog.String("stage", "writing"), slog.Any("error", err))
-		}
-	}
-}
-
 // handleMessage processes incoming messages
 func (f *Output) handleMessage(ctx context.Context, msgData []byte) {
-	// Report writing stage for lifecycle observability
-	f.reportWriting(ctx)
-
 	f.logger.Debug("Received message",
 		"component", f.name,
 		"size_bytes", len(msgData))

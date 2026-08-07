@@ -325,9 +325,6 @@ type Component struct {
 	failedGauge prometheus.Gauge
 	failuresVec *prometheus.CounterVec
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// Query subscriptions (for cleanup)
 	querySubscriptions []*natsclient.Subscription
 
@@ -680,9 +677,6 @@ func (c *Component) Start(ctx context.Context) error {
 		return err
 	}
 
-	// Initialize lifecycle reporter
-	c.initLifecycleReporter(ctx)
-
 	// Readiness watermark (ADR-066 §3): must exist before the worker (whose
 	// onTerminal completes it) and the watcher (which observes into it).
 	c.watermark = revlag.New()
@@ -725,11 +719,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Mark as running
 	c.running = true
 	c.startTime = time.Now()
-
-	// Report initial idle state
-	if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-	}
 
 	c.logger.Info("component started",
 		slog.String("component", "graph-embedding"),
@@ -915,11 +904,6 @@ func (c *Component) createStatusBucket(ctx context.Context) error {
 	}
 	c.statusPublisher = readiness.NewPublisher(bucket, readiness.KeyGraphEmbedding)
 	return nil
-}
-
-// initLifecycleReporter initializes the lifecycle reporter for component status tracking.
-func (c *Component) initLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.natsClient, "graph-embedding", c.logger)
 }
 
 // initStorageAndWorker initializes storage and starts the embedding worker.
@@ -1196,10 +1180,6 @@ func contentStoreOutcome(store *objectstore.Store, err error, bucket string) (*o
 
 // waitForDependenciesAndStartWatcher waits for ENTITY_STATES bucket and starts the entity watcher.
 func (c *Component) waitForDependenciesAndStartWatcher(ctx context.Context) error {
-	if err := c.lifecycleReporter.ReportStage(ctx, "waiting_for_"+graph.BucketEntityStates); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "waiting_for_"+graph.BucketEntityStates), slog.Any("error", err))
-	}
-
 	watcherCfg := resource.DefaultConfig()
 	watcherCfg.StartupAttempts = c.config.StartupAttempts
 	watcherCfg.StartupInterval = time.Duration(c.config.StartupInterval) * time.Millisecond
@@ -1798,11 +1778,6 @@ func (c *Component) indexingEligible(es *graph.EntityState) bool {
 // rolling-upgrade contract by construction — no other path can shape a pending
 // record.
 func (c *Component) queueEntityForEmbedding(ctx context.Context, entityID string, sourceRevision uint64, data []byte) {
-	// Report embedding stage (throttled to avoid KV spam)
-	if err := c.lifecycleReporter.ReportStage(ctx, "embedding"); err != nil {
-		c.logger.Debug("failed to report lifecycle stage", slog.String("stage", "embedding"), slog.Any("error", err))
-	}
-
 	// Parse entity state
 	var entityState graph.EntityState
 	if err := graph.UnmarshalEntityState(data, &entityState); err != nil {

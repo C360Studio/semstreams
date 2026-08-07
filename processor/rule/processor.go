@@ -224,9 +224,6 @@ type Processor struct {
 	// Logger
 	logger *slog.Logger
 
-	// Lifecycle reporting
-	lifecycleReporter component.LifecycleReporter
-
 	// kvConfigManager is the component-internal hot-reload manager. It owns a
 	// KV watcher on semstreams_config:rules.* and calls ApplyConfigUpdate when
 	// the watcher fires. Constructed in Start; nil when NATS is unavailable.
@@ -922,10 +919,6 @@ func (rp *Processor) Start(ctx context.Context) error {
 	// Note: entityCoalescer is initialized in run() before spawning watchers
 	// to avoid race between Start() setting it and watcher goroutines reading it
 
-	// Initialize lifecycle reporter for observability (nil-client-safe: the
-	// catalog helper degrades to the no-op reporter).
-	rp.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, rp.natsClient, rp.metadata.Name, rp.logger)
-
 	// Create shutdown, done, and ready channels for coordination
 	rp.shutdown = make(chan struct{})
 	rp.done = make(chan struct{})
@@ -980,13 +973,6 @@ func (rp *Processor) Start(ctx context.Context) error {
 	for _, port := range rp.config.Ports.Inputs {
 		if (port.Type == "nats" || port.Type == "jetstream") && port.Subject != "" {
 			subjectCount++
-		}
-	}
-
-	// Report idle state after startup
-	if rp.lifecycleReporter != nil {
-		if err := rp.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			rp.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
 		}
 	}
 

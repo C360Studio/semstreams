@@ -57,7 +57,6 @@ type Component struct {
 	errors            int64
 	lastActivity      atomic.Value // time.Time
 
-	lifecycleReporter component.LifecycleReporter
 }
 
 var (
@@ -120,18 +119,11 @@ func (c *Component) Start(ctx context.Context) error {
 	if err := c.subscribeInputs(ctx); err != nil {
 		return err
 	}
-	c.startLifecycleReporter(ctx)
-
 	c.mu.Lock()
 	c.started = true
 	c.startTime = time.Now()
 	c.mu.Unlock()
 
-	if c.lifecycleReporter != nil {
-		if err := c.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			c.logger.Debug("failed to report idle stage", slog.Any("error", err))
-		}
-	}
 	c.logger.Info("execute_subqueries component started",
 		slog.String("loops_bucket", c.config.LoopsBucket),
 		slog.Duration("execute_timeout", c.config.ExecuteTimeout),
@@ -185,10 +177,6 @@ func (c *Component) subscribeInputs(ctx context.Context) error {
 			slog.String("subject", port.Subject))
 	}
 	return nil
-}
-
-func (c *Component) startLifecycleReporter(ctx context.Context) {
-	c.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, c.deps.NATSClient, ComponentName, c.logger)
 }
 
 // Stop drains subscriptions and flips started under c.mu.

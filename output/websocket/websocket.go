@@ -166,9 +166,8 @@ type Output struct {
 	// Prometheus metrics
 	metrics *Metrics
 
-	// Logging and lifecycle
-	logger            *slog.Logger
-	lifecycleReporter component.LifecycleReporter
+	// Logging
+	logger *slog.Logger
 }
 
 // MessageEnvelope wraps all WebSocket messages with type discrimination
@@ -565,24 +564,10 @@ func (w *Output) Start(ctx context.Context) error {
 		return errs.Wrap(err, "Output", "Start", fmt.Sprintf("subscribe to NATS subjects %v", w.subjects))
 	}
 
-	// Initialize lifecycle reporter for observability
-	if w.natsClient != nil {
-		w.lifecycleReporter = component.NewCatalogLifecycleReporter(ctx, w.natsClient, w.Meta().Name, w.logger)
-	} else {
-		w.lifecycleReporter = component.NewNoOpLifecycleReporter()
-	}
-
 	// Mark as running and start background goroutines
 	w.running = true
 	w.startTime = time.Now()
 	w.startBackgroundGoroutines(ctx)
-
-	// Report idle state after startup
-	if w.lifecycleReporter != nil {
-		if err := w.lifecycleReporter.ReportStage(ctx, "idle"); err != nil {
-			w.logger.Debug("failed to report lifecycle stage", slog.String("stage", "idle"), slog.Any("error", err))
-		}
-	}
 
 	return nil
 }
@@ -971,15 +956,6 @@ func (w *Output) closeAllClients() {
 	w.clientsMu.Unlock()
 }
 
-// reportSending reports the sending stage (throttled to avoid KV spam)
-func (w *Output) reportSending(ctx context.Context) {
-	if w.lifecycleReporter != nil {
-		if err := w.lifecycleReporter.ReportStage(ctx, "sending"); err != nil {
-			w.logger.Debug("failed to report lifecycle stage", slog.String("stage", "sending"), slog.Any("error", err))
-		}
-	}
-}
-
 // handleNATSMessageData processes incoming message data from NATS and broadcasts to WebSocket clients
 func (w *Output) handleNATSMessageData(ctx context.Context, data []byte, subject string) {
 	// Check for context cancellation or shutdown signal
@@ -997,9 +973,6 @@ func (w *Output) handleNATSMessageData(ctx context.Context, data []byte, subject
 		return
 	}
 	w.mu.RUnlock()
-
-	// Report sending stage for lifecycle observability
-	w.reportSending(ctx)
 
 	// Update activity timestamp atomically
 	w.lastActivity.Store(time.Now().UnixNano())
