@@ -55,21 +55,19 @@ type Component struct {
 
 // NewComponent creates a new agentic-governance processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	var config Config
+	defaults := DefaultConfig()
+	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 	}
-
-	// Use default config if ports not set
 	if config.Ports == nil {
-		defaultCfg := DefaultConfig()
-		config.Ports = defaultCfg.Ports
-
-		// Also set filter chain defaults if not specified
-		if len(config.FilterChain.Filters) == 0 {
-			config.FilterChain = defaultCfg.FilterChain
-		}
+		config.Ports = defaults.Ports
 	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {

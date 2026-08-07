@@ -137,10 +137,10 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 	config := agenticmodel.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Config: component.NATSPort{Subject: "agent.response.*"}, Required: true},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}}, Required: true},
 			},
 		},
 		Timeout: "120s",

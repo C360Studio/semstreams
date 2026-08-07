@@ -95,19 +95,19 @@ type consumerInfo struct {
 
 // NewComponent creates a new agentic-model processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	var config Config
+	defaults := DefaultConfig()
+	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 	}
-
-	// Use default config if ports not set
 	if config.Ports == nil {
-		config = DefaultConfig()
-		// Re-unmarshal to get user-provided values
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
-		}
+		config.Ports = defaults.Ports
 	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -141,16 +141,19 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 // in-process RollingWindowBreaker for circuit breaking. Tests and
 // callers wanting a custom HealthPolicy use this directly.
 func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependencies, opts ...Option) (component.Discoverable, error) {
-	var config Config
+	defaults := DefaultConfig()
+	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
 	}
 	if config.Ports == nil {
-		config = DefaultConfig()
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
-		}
+		config.Ports = defaults.Ports
 	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 	if err := config.Validate(); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "validate config")
 	}

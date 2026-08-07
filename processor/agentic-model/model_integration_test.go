@@ -109,12 +109,12 @@ func TestIntegration_ModelCompleteResponse(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
@@ -252,12 +252,12 @@ func TestIntegration_ModelToolCallResponse(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
@@ -426,12 +426,12 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
@@ -574,10 +574,10 @@ func TestIntegration_InlineThinkExtraction(t *testing.T) {
 	config := agenticmodel.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "requests", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "responses", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}}},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}}},
 			},
 		},
 		ConsumerNameSuffix:   "test-" + t.Name(),
