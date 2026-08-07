@@ -642,10 +642,12 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 	cfg := DefaultConfig()
 
 	if len(rawConfig) > 0 {
-		var userConfig Config
-		if err := component.SafeUnmarshal(rawConfig, &userConfig); err != nil {
+		type configOverride Config
+		var override configOverride
+		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
 			return nil, errs.Wrap(err, "file-input-factory", "create", "secure config parsing")
 		}
+		userConfig := Config(override)
 
 		// Apply user overrides
 		if userConfig.Ports != nil {

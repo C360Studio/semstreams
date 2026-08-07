@@ -136,10 +136,20 @@ func TestIntegration_UDPInput_Creation_InvalidPort(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create UDP config with test port
-			udpConfig := testUDPConfig(tc.port.(int), "127.0.0.1", "test.udp")
-			configJSON, err := json.Marshal(udpConfig)
-			require.NoError(t, err)
+			// Keep the invalid value on the wire so the production decoder,
+			// rather than typed fixture marshaling, owns its rejection.
+			configJSON := json.RawMessage(fmt.Sprintf(`{
+				"ports": {
+					"inputs": [{
+						"name": "udp_socket",
+						"config": {"kind": "network", "protocol": "udp", "host": "127.0.0.1", "port": %d}
+					}],
+					"outputs": [{
+						"name": "nats_output",
+						"config": {"kind": "nats", "subject": "test.udp"}
+					}]
+				}
+			}`, tc.port))
 
 			// Create component dependencies
 			deps := component.Dependencies{
@@ -150,14 +160,13 @@ func TestIntegration_UDPInput_Creation_InvalidPort(t *testing.T) {
 				},
 			}
 
-			// With SafeUnmarshal validation, invalid ports are now caught at creation time
+			// The merged effective configuration rejects invalid ports at creation time.
 			udpComponent, err := CreateInput(configJSON, deps)
 			require.Error(t, err) // Creation should fail with invalid port
 			require.Nil(t, udpComponent)
 
 			// Verify error mentions port validation
 			require.Contains(t, err.Error(), "port")
-			require.Contains(t, err.Error(), "validation")
 		})
 	}
 }

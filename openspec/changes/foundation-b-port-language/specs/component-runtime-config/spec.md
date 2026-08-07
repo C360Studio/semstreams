@@ -102,3 +102,32 @@ NOT be accepted.
 - **WHEN** its schema, defaults, documentation, and shipped configurations are inspected
 - **THEN** no top-level `stream_name` field is exposed
 - **AND** each JetStream input carries its explicit backing `stream_name` on the canonical port declaration
+
+### Requirement: Input factories validate the effective configuration
+
+The UDP, file, HTTP, and WebSocket input factories SHALL begin with their component defaults, security-check and
+decode a supplied partial override without treating its zero-value decode target as a complete configuration, merge
+the override using that component's established semantics, and validate the resulting effective configuration exactly
+once during construction.
+
+UDP port overrides SHALL use canonical complete named-port replacement through `MergePortConfig`, preserving default
+ports that were not named by the override. WebSocket overrides SHALL decode into the already-defaulted configuration
+or produce the same nested-field-preserving result. No factory-local compatibility field, fallback grammar, or global
+`SafeUnmarshal` behavior change SHALL be introduced.
+
+#### Scenario: Partial scalar override retains component defaults
+
+- **GIVEN** a file, HTTP, or WebSocket input factory receives a secure partial configuration override
+- **WHEN** the factory constructs the effective configuration
+- **THEN** omitted defaulted fields retain their component defaults
+- **AND** validation is applied to the effective configuration rather than the zero-valued partial decode target
+- **AND** construction receives only that validated effective configuration
+
+#### Scenario: UDP partial port override preserves the complete default topology
+
+- **GIVEN** the UDP input defaults declare `udp_socket` and `nats_output`
+- **AND** a secure partial override names only `nats_output`
+- **WHEN** the factory merges the override
+- **THEN** `udp_socket` remains unchanged
+- **AND** `nats_output` is completely replaced without inheriting omitted metadata or kind-specific fields
+- **AND** the merged effective configuration is validated before construction

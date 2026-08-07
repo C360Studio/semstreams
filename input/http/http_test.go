@@ -27,7 +27,10 @@ import (
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/message"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadbuiltins"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // stubPublisher captures publishes for assertion. Goroutine-safe.
@@ -123,6 +126,32 @@ func TestHTTPInputCanonicalPortsMatchRuntimeConfiguration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateInputAppliesDefaultsAfterPartialDecode(t *testing.T) {
+	rawConfig := json.RawMessage(`{
+		"url": "https://example.test/events",
+		"ports": {
+			"outputs": [{
+				"name": "events",
+				"config": {"kind": "nats", "subject": "test.http"}
+			}]
+		}
+	}`)
+
+	discoverable, err := CreateInput(rawConfig, component.Dependencies{NATSClient: &natsclient.Client{}})
+	require.NoError(t, err)
+	input := discoverable.(*Input)
+
+	assert.Equal(t, MethodGET, input.config.Method)
+	assert.Equal(t, "30s", input.config.Interval)
+	assert.Equal(t, "10s", input.config.Timeout)
+	require.NotNil(t, input.config.Auth)
+	assert.Equal(t, AuthNone, input.config.Auth.Type)
+	require.NotNil(t, input.config.Retry)
+	assert.Equal(t, 3, input.config.Retry.MaxAttempts)
+	require.NotNil(t, input.config.Decoder)
+	assert.Equal(t, DecoderJSON, input.config.Decoder.Mode)
 }
 
 // newTestInput constructs an Input wired to the given server URL

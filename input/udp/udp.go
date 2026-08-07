@@ -756,17 +756,24 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 	// Start with defaults
 	cfg := DefaultConfig()
 
-	// SECURITY: Use SafeUnmarshal to validate and parse config
-	// This prevents injection attacks and validates all input
+	// Validate the raw document before decoding its partial override. The
+	// effective configuration is validated after the override is merged.
 	if len(rawConfig) > 0 {
-		var userConfig InputConfig
-		if err := component.SafeUnmarshal(rawConfig, &userConfig); err != nil {
+		type configOverride InputConfig
+		var override configOverride
+		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
 			return nil, errs.Wrap(err, "udp-input-factory", "create", "secure config parsing")
 		}
+		userConfig := InputConfig(override)
 
-		// Apply user overrides (already validated by SafeUnmarshal)
+		// Apply complete named port replacements to the defaults before the
+		// effective configuration is validated by NewInput.
 		if userConfig.Ports != nil {
-			cfg.Ports = userConfig.Ports
+			merged, err := component.MergePortConfig(*cfg.Ports, *userConfig.Ports)
+			if err != nil {
+				return nil, errs.WrapInvalid(err, "udp-input-factory", "create", "merge port overrides")
+			}
+			cfg.Ports = &merged
 		}
 	}
 

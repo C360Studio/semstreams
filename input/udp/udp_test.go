@@ -33,7 +33,7 @@ func testUDPConfig(port int, bind, subject string) InputConfig {
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:        "data_output",
+					Name:        "nats_output",
 					Config:      component.NATSPort{Subject: subject},
 					Required:    true,
 					Description: "NATS output for received data",
@@ -111,7 +111,7 @@ func TestUDPInput_Ports(t *testing.T) {
 
 	outputPorts := udp.OutputPorts()
 	assert.Len(t, outputPorts, 1)
-	assert.Equal(t, "data_output", outputPorts[0].Name)
+	assert.Equal(t, "nats_output", outputPorts[0].Name)
 	assert.Equal(t, component.DirectionOutput, outputPorts[0].Direction)
 	assert.True(t, outputPorts[0].Required)
 
@@ -367,8 +367,9 @@ func TestUDPInput_BufferIntegration(t *testing.T) {
 }
 
 func TestUDPInput_Creation_MissingNATS(t *testing.T) {
-	// Create UDP config
-	udpConfig := testUDPConfig(14550, "127.0.0.1", "test.udp")
+	// Use the canonical default declaration names so dependency validation is
+	// the only failure under test.
+	udpConfig := DefaultConfig()
 	configJSON, err := json.Marshal(udpConfig)
 	require.NoError(t, err)
 
@@ -385,6 +386,37 @@ func TestUDPInput_Creation_MissingNATS(t *testing.T) {
 	require.Error(t, err)
 	require.True(t, errs.IsInvalid(err), "Missing NATS client should be classified as invalid")
 	require.Contains(t, err.Error(), "NATS client")
+}
+
+func TestCreateInputMergesPartialPortOverrideIntoDefaults(t *testing.T) {
+	rawConfig := json.RawMessage(`{
+		"ports": {
+			"outputs": [{
+				"name": "nats_output",
+				"config": {"kind": "nats", "subject": "test.override"}
+			}]
+		}
+	}`)
+
+	discoverable, err := CreateInput(rawConfig, component.Dependencies{NATSClient: &natsclient.Client{}})
+	require.NoError(t, err)
+	input := discoverable.(*Input)
+
+	inputs := input.InputPorts()
+	require.Len(t, inputs, 1)
+	assert.Equal(t, "udp_socket", inputs[0].Name)
+	network, ok := inputs[0].Config.(component.NetworkPort)
+	require.True(t, ok)
+	assert.Equal(t, component.NetworkPort{Protocol: "udp", Host: "0.0.0.0", Port: 14550}, network)
+
+	outputs := input.OutputPorts()
+	require.Len(t, outputs, 1)
+	assert.Equal(t, "nats_output", outputs[0].Name)
+	assert.False(t, outputs[0].Required, "named override is a complete replacement")
+	assert.Empty(t, outputs[0].Description, "named override must not inherit omitted metadata")
+	nats, ok := outputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	assert.Equal(t, "test.override", nats.Subject)
 }
 
 func TestUDPInput_Interfaces(t *testing.T) {

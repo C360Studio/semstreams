@@ -38,6 +38,8 @@
   inputs across 14 configurations, resolve declarations by lane during atomic `PortConfig` decoding, delete
   consumer-local fallbacks and the dead top-level agentic-model stream-name surface, and add structural shipped-config
   guards.
+- [x] 5.0a Correct UDP, file, HTTP, and WebSocket input factory default/override sequencing, preserve UDP complete
+  named-port replacement, and add focused factory-level regression tests.
 - [ ] 5.1 Run `task lint` and record its exit status.
 - [ ] 5.2 Run `go test -race ./...` and record its exit status.
 - [ ] 5.3 Run `task test:integration` and record its exit status.
