@@ -146,7 +146,7 @@ func mergePortDirection(defaults, overrides []PortDefinition, direction Directio
 		if _, duplicate := defaultIndexes[definition.Name]; duplicate {
 			return nil, portConfigError(definition.Name, kindOf(definition.Config), "name", fmt.Errorf("duplicate default port name %q", definition.Name))
 		}
-		port, err := resolvePort(definition, direction)
+		port, err := definition.Resolve(direction)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +164,7 @@ func mergePortDirection(defaults, overrides []PortDefinition, direction Directio
 		if !found {
 			return nil, portConfigError(override.Name, kindOf(override.Config), "name", fmt.Errorf("unknown override port name %q for %s ports", override.Name, direction))
 		}
-		port, err := resolvePort(override, direction)
+		port, err := override.Resolve(direction)
 		if err != nil {
 			return nil, err
 		}

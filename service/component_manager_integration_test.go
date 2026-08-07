@@ -156,10 +156,12 @@ func TestComponentManagerWithRealNATS(t *testing.T) {
 	assert.NotNil(t, components)
 
 	// Test FlowGraph (should work even with no components)
-	flowGraph := cm.GetFlowGraph()
+	flowGraph, err := cm.GetFlowGraph()
+	assert.NoError(t, err)
 	assert.NotNil(t, flowGraph)
 
-	validation := cm.ValidateFlowConnectivity()
+	validation, err := cm.ValidateFlowConnectivity()
+	assert.NoError(t, err)
 	assert.NotNil(t, validation)
 
 	// Stop should work
@@ -206,7 +208,8 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 
 	// Test FlowGraph functionality
 	t.Run("GetFlowGraph", func(t *testing.T) {
-		graph := cm.GetFlowGraph()
+		graph, err := cm.GetFlowGraph()
+		require.NoError(t, err)
 		assert.NotNil(t, graph, "FlowGraph should be created even with no components")
 
 		nodes := graph.GetNodes()
@@ -217,7 +220,8 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 	})
 
 	t.Run("ValidateFlowConnectivity", func(t *testing.T) {
-		result := cm.ValidateFlowConnectivity()
+		result, err := cm.ValidateFlowConnectivity()
+		require.NoError(t, err)
 		assert.NotNil(t, result, "Validation result should not be nil")
 		assert.NotNil(t, result.ConnectedComponents, "ConnectedComponents should be initialized")
 		assert.NotNil(t, result.DisconnectedNodes, "DisconnectedNodes should be initialized")
@@ -230,7 +234,8 @@ func TestComponentManagerFlowGraphValidation(t *testing.T) {
 	})
 
 	t.Run("GetFlowPaths", func(t *testing.T) {
-		paths := cm.GetFlowPaths()
+		paths, err := cm.GetFlowPaths()
+		require.NoError(t, err)
 		assert.NotNil(t, paths, "Flow paths should not be nil")
 		// With no components, paths should be empty
 		if len(cm.ListComponents()) == 0 {

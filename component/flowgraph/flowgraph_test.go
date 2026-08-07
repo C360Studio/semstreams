@@ -49,6 +49,28 @@ func TestFlowGraphConstruction(t *testing.T) {
 	})
 }
 
+func TestGetNodesReturnsIndependentInterfaceContracts(t *testing.T) {
+	graph := NewFlowGraph()
+	instance := createMockComponentWithPorts("reader", "processor", []component.Port{{
+		Name:      "events",
+		Direction: component.DirectionInput,
+		Config: component.NATSPort{
+			Subject:   "events.>",
+			Interface: &component.InterfaceContract{Type: "example.events", Compatible: []string{"v1"}},
+		},
+	}}, nil)
+	require.NoError(t, graph.AddComponentNode("reader", instance))
+
+	first := graph.GetNodes()
+	first["reader"].InputPorts[0].Interface.Type = "corrupt"
+	first["reader"].InputPorts[0].Interface.Compatible[0] = "corrupt"
+
+	again := graph.GetNodes()["reader"].InputPorts[0].Interface
+	require.NotNil(t, again)
+	assert.Equal(t, "example.events", again.Type)
+	assert.Equal(t, []string{"v1"}, again.Compatible)
+}
+
 // TestStreamPatternConnections tests stream pattern edge detection and connection
 func TestStreamPatternConnections(t *testing.T) {
 	t.Run("connect stream pattern components", func(t *testing.T) {
@@ -93,7 +115,7 @@ func TestStreamPatternConnections(t *testing.T) {
 		assert.Equal(t, "output", edge.From.PortName)
 		assert.Equal(t, "subscriber", edge.To.ComponentName)
 		assert.Equal(t, "input", edge.To.PortName)
-		assert.Equal(t, PatternStream, edge.Pattern)
+		assert.Equal(t, component.PatternStream, edge.Pattern)
 		assert.Equal(t, "test.data", edge.ConnectionID)
 	})
 
@@ -180,7 +202,7 @@ func TestStreamPatternConnections(t *testing.T) {
 		for _, edge := range edges {
 			assert.Equal(t, "publisher", edge.From.ComponentName)
 			assert.Equal(t, "output", edge.From.PortName)
-			assert.Equal(t, PatternStream, edge.Pattern)
+			assert.Equal(t, component.PatternStream, edge.Pattern)
 			assert.Equal(t, "fanout.data", edge.ConnectionID)
 			assert.True(t, edge.To.ComponentName == "subscriber1" || edge.To.ComponentName == "subscriber2")
 		}
@@ -300,32 +322,29 @@ func TestFlowGraphAnalysis(t *testing.T) {
 
 // TestHTTPClientPortFlowGraph verifies the three flowgraph behaviours required
 // by the HTTPClientPort contract:
-//  1. classifyInteractionPattern returns PatternHTTPClient.
-//  2. extractConnectionID returns the URL (or the missing-URL sentinel).
+//  1. canonical facts classify the port as component.PatternHTTPClient.
+//  2. canonical facts surface the URL and reject a missing URL.
 //  3. findOrphanedPorts does NOT flag an HTTPClientPort input as orphaned —
 //     outbound client connections have no internal publisher by design.
 func TestHTTPClientPortFlowGraph(t *testing.T) {
 	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
 
-	t.Run("classifyInteractionPattern returns PatternHTTPClient", func(t *testing.T) {
-		port := component.HTTPClientPort{
-			Method:     "GET",
-			URLPattern: "https://api.weather.gov/alerts/active",
-		}
-		got := g.classifyInteractionPattern(port)
-		assert.Equal(t, PatternHTTPClient, got, "HTTPClientPort must classify as PatternHTTPClient")
+	t.Run("canonical facts classify and identify HTTP client", func(t *testing.T) {
+		infos, err := g.extractPortInfo([]component.Port{{
+			Name: "http", Direction: component.DirectionInput,
+			Config: component.HTTPClientPort{Method: "GET", URLPattern: "https://api.weather.gov/alerts/active"},
+		}})
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		assert.Equal(t, component.PatternHTTPClient, infos[0].Pattern)
+		assert.Equal(t, "https://api.weather.gov/alerts/active", infos[0].ConnectionID)
 	})
 
-	t.Run("extractConnectionID returns URL", func(t *testing.T) {
-		port := component.HTTPClientPort{URLPattern: "https://api.weather.gov/alerts/active"}
-		got := g.extractConnectionID(port)
-		assert.Equal(t, "https://api.weather.gov/alerts/active", got)
-	})
-
-	t.Run("extractConnectionID returns sentinel on empty URL", func(t *testing.T) {
-		port := component.HTTPClientPort{}
-		got := g.extractConnectionID(port)
-		assert.Equal(t, "http_client_missing_url", got, "missing URL must return the sentinel (mirrors nats_missing_subject)")
+	t.Run("missing URL is rejected", func(t *testing.T) {
+		_, err := g.extractPortInfo([]component.Port{{
+			Name: "http", Direction: component.DirectionInput, Config: component.HTTPClientPort{Method: "GET"},
+		}})
+		require.Error(t, err)
 	})
 
 	t.Run("HTTPClientPort input is NOT reported as orphaned", func(t *testing.T) {
@@ -366,8 +385,7 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 
 // TestTimerPortFlowGraph verifies the flowgraph behaviours required by the
 // TimerPort cadence-boundary contract (gh#312):
-//  1. classifyInteractionPattern returns PatternTimer (NOT the PatternStream
-//     safe-default, which would make the timer look stream-shaped).
+//  1. canonical facts classify the timer as component.PatternTimer.
 //  2. findOrphanedPorts does NOT flag an unconnected TimerPort input as orphaned —
 //     a cadence/scheduler boundary has no internal publisher by design.
 //  3. extractPortInfo surfaces the polling cadence as the port's ConnectionID
@@ -376,10 +394,13 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 func TestTimerPortFlowGraph(t *testing.T) {
 	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
 
-	t.Run("classifyInteractionPattern returns PatternTimer", func(t *testing.T) {
-		port := component.TimerPort{Interval: "30s"}
-		got := g.classifyInteractionPattern(port)
-		assert.Equal(t, PatternTimer, got, "TimerPort must classify as PatternTimer, not the PatternStream default")
+	t.Run("canonical facts classify component.PatternTimer", func(t *testing.T) {
+		infos, err := g.extractPortInfo([]component.Port{{
+			Name: "timer", Direction: component.DirectionInput, Config: component.TimerPort{Interval: "30s"},
+		}})
+		require.NoError(t, err)
+		require.Len(t, infos, 1)
+		assert.Equal(t, component.PatternTimer, infos[0].Pattern)
 	})
 
 	t.Run("TimerPort input is NOT reported as orphaned", func(t *testing.T) {

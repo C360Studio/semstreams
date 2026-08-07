@@ -72,44 +72,44 @@
 //
 // # Interaction Patterns
 //
-// PatternStream (NATS, JetStream):
+// component.PatternStream (NATS, JetStream):
 //   - Unidirectional: publishers → subscribers
 //   - Supports NATS wildcard matching (* and >)
 //   - Multiple publishers/subscribers per subject allowed
 //
-// PatternRequest (NATS request/reply):
+// component.PatternRequest (NATS request/reply):
 //   - Bidirectional: any port can initiate requests
 //   - All ports with same subject are connected
 //   - Used for synchronous RPC-style communication
 //
-// PatternWatch (KV bucket):
+// component.PatternWatch (KV bucket):
 //   - Unidirectional: writers → watchers
 //   - Multiple writers to same bucket generates warning
 //   - Watchers receive change notifications
 //
-// PatternNetwork (external listener):
+// component.PatternNetwork (external listener):
 //   - External boundary ports (HTTP server, UDP listener, etc.)
 //   - Exclusive binding: multiple binds to same port is an error
 //   - Not connected in graph (external endpoints)
 //
-// PatternHTTPClient (outbound HTTP-client/polling):
+// component.PatternHTTPClient (outbound HTTP-client/polling):
 //   - Component initiates connections to an external HTTP resource
 //   - Non-exclusive: multiple components may poll the same URL
-//   - Not connected in graph; treated like PatternNetwork for orphan detection
+//   - Not connected in graph; treated like component.PatternNetwork for orphan detection
 //   - Declared via HTTPClientPort; cadence is owned by a sibling TimerPort
 //
-// PatternStore (ADR-063 store federation):
+// component.PatternStore (ADR-063 store federation):
 //   - StoreProvidePort (a storage component owning a StorageInstance) and
 //     StoreReadPort (a content-fetch consumer)
 //   - Rendered as fan-in edges: every provider → every consumer (advisory
 //     "can read from"; the exact instance is producer-chosen per-fetch)
-//   - Non-exclusive; skipped by orphan detection like PatternNetwork (a store
+//   - Non-exclusive; skipped by orphan detection like component.PatternNetwork (a store
 //     with no reader, or a federation store-read, is not an orphan)
 //
-// PatternTimer (cadence/scheduler boundary):
+// component.PatternTimer (cadence/scheduler boundary):
 //   - TimerPort drives a component on an interval (e.g. an HTTPClientPort
 //     poller via HTTPClientPort.TriggerPort), not a NATS stream
-//   - Not connected in graph; skipped by orphan detection like PatternNetwork
+//   - Not connected in graph; skipped by orphan detection like component.PatternNetwork
 //     (a legitimately unconnected timer input is a scheduler boundary, not an orphan)
 //
 // # Connection Matching

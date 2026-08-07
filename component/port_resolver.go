@@ -6,28 +6,29 @@ import (
 	"strings"
 )
 
-func resolvePort(def PortDefinition, direction Direction) (Port, error) {
-	port, _, err := resolvePortWithFacts(def, direction)
+// Resolve validates and resolves a configuration declaration for one direction.
+func (d PortDefinition) Resolve(direction Direction) (Port, error) {
+	port, _, err := resolveAndProjectPort(d, direction)
 	return port, err
 }
 
-func resolvePortWithFacts(def PortDefinition, direction Direction) (Port, portFacts, error) {
+func resolveAndProjectPort(def PortDefinition, direction Direction) (Port, PortFacts, error) {
 	if strings.TrimSpace(def.Name) == "" {
-		return Port{}, portFacts{}, portConfigError(def.Name, kindOf(def.Config), "name", errors.New("field \"name\" is required"))
+		return Port{}, PortFacts{}, portConfigError(def.Name, kindOf(def.Config), "name", errors.New("field \"name\" is required"))
 	}
 	if direction != DirectionInput && direction != DirectionOutput {
-		return Port{}, portFacts{}, portConfigError(def.Name, kindOf(def.Config), "direction", fmt.Errorf("unknown direction %q", direction))
+		return Port{}, PortFacts{}, portConfigError(def.Name, kindOf(def.Config), "direction", fmt.Errorf("unknown direction %q", direction))
 	}
 	config, err := canonicalizePortable(def.Config)
 	if err != nil {
-		return Port{}, portFacts{}, portConfigError(def.Name, kindOf(def.Config), "config", err)
+		return Port{}, PortFacts{}, portConfigError(def.Name, kindOf(def.Config), "config", err)
 	}
 	binding, err := bindingFor(config.Kind())
 	if err != nil {
-		return Port{}, portFacts{}, portConfigError(def.Name, config.Kind(), "kind", err)
+		return Port{}, PortFacts{}, portConfigError(def.Name, config.Kind(), "kind", err)
 	}
 	if _, ok := binding.directions[direction]; !ok {
-		return Port{}, portFacts{}, portConfigError(
+		return Port{}, PortFacts{}, portConfigError(
 			def.Name,
 			config.Kind(),
 			"direction",
@@ -44,12 +45,13 @@ func resolvePortWithFacts(def PortDefinition, direction Direction) (Port, portFa
 	return port, binding.facts(config), nil
 }
 
-func factsForPort(port Port) (portFacts, error) {
-	_, facts, err := resolvePortWithFacts(PortDefinition{
-		Name:        port.Name,
-		Required:    port.Required,
-		Description: port.Description,
-		Config:      port.Config,
-	}, port.Direction)
+// Facts revalidates the current Port value and returns its immutable semantic projection.
+func (p Port) Facts() (PortFacts, error) {
+	_, facts, err := resolveAndProjectPort(PortDefinition{
+		Name:        p.Name,
+		Required:    p.Required,
+		Description: p.Description,
+		Config:      p.Config,
+	}, p.Direction)
 	return facts, err
 }

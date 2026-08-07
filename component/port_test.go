@@ -1235,9 +1235,9 @@ func TestResolvePortPreservesAckWaitAndHeartbeat(t *testing.T) {
 			DeliverPolicy:     "all",
 		},
 	}
-	port, err := resolvePort(pd, DirectionInput)
+	port, err := pd.Resolve(DirectionInput)
 	if err != nil {
-		t.Fatalf("resolvePort: %v", err)
+		t.Fatalf("Resolve: %v", err)
 	}
 	js, ok := port.Config.(JetStreamPort)
 	if !ok {

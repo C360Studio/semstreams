@@ -34,15 +34,15 @@ func TestResolvePortCoversEveryKindAndDirection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			port, err := resolvePort(PortDefinition{Name: "p", Config: tt.config}, tt.direction)
+			port, err := (PortDefinition{Name: "p", Config: tt.config}).Resolve(tt.direction)
 			if err != nil {
-				t.Fatalf("resolvePort: %v", err)
+				t.Fatalf("Resolve: %v", err)
 			}
-			facts, err := factsForPort(port)
+			facts, err := port.Facts()
 			if err != nil {
-				t.Fatalf("factsForPort: %v", err)
+				t.Fatalf("Facts: %v", err)
 			}
-			if facts.kind != tt.config.Kind() || facts.resourceID != tt.resourceID || facts.exclusive != tt.exclusive {
+			if facts.Kind() != tt.config.Kind() || facts.ResourceID() != tt.resourceID || facts.IsExclusive() != tt.exclusive {
 				t.Fatalf("facts = %#v", facts)
 			}
 			if port.Direction != tt.direction || port.Config.Kind() != tt.config.Kind() {
@@ -53,7 +53,7 @@ func TestResolvePortCoversEveryKindAndDirection(t *testing.T) {
 }
 
 func TestResolvePortNormalizesOnlyApprovedDefaults(t *testing.T) {
-	network, err := resolvePort(PortDefinition{Name: "network", Config: NetworkPort{Protocol: "udp", Port: 14550}}, DirectionInput)
+	network, err := (PortDefinition{Name: "network", Config: NetworkPort{Protocol: "udp", Port: 14550}}).Resolve(DirectionInput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestResolvePortNormalizesOnlyApprovedDefaults(t *testing.T) {
 		t.Fatalf("network host = %q", got)
 	}
 
-	request, err := resolvePort(PortDefinition{Name: "request", Config: NATSRequestPort{Subject: "request"}}, DirectionOutput)
+	request, err := (PortDefinition{Name: "request", Config: NATSRequestPort{Subject: "request"}}).Resolve(DirectionOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,9 +101,9 @@ func TestResolvePortRejectsInvalidDeclarations(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := resolvePort(tt.def, tt.direction)
+			_, err := tt.def.Resolve(tt.direction)
 			if err == nil {
-				t.Fatal("resolvePort succeeded")
+				t.Fatal("Resolve succeeded")
 			}
 			if !strings.Contains(err.Error(), tt.want) || !strings.Contains(err.Error(), `port "`) {
 				t.Fatalf("error = %q, want port context and %q", err, tt.want)
@@ -114,24 +114,23 @@ func TestResolvePortRejectsInvalidDeclarations(t *testing.T) {
 
 func TestFactsForPortPreservesStreamAndInterfaceFacts(t *testing.T) {
 	iface := &InterfaceContract{Type: "example", Version: "v1"}
-	port, err := resolvePort(PortDefinition{Name: "stream", Config: completeJetStreamPort(iface)}, DirectionOutput)
+	port, err := (PortDefinition{Name: "stream", Config: completeJetStreamPort(iface)}).Resolve(DirectionOutput)
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := factsForPort(port)
+	facts, err := port.Facts()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts.interfaceContract == iface {
-		t.Fatal("facts retained caller-owned interface pointer")
+	contract, ok := facts.Interface()
+	if !ok || contract.Type != "example" {
+		t.Fatalf("interface facts = %#v, %v", contract, ok)
 	}
-	if facts.interfaceContract == nil || facts.interfaceContract.Type != "example" {
-		t.Fatalf("interface facts = %#v", facts.interfaceContract)
-	}
-	if len(facts.natsSubjects) != 2 || len(facts.connectionIDs) != 3 || facts.stream == nil {
+	stream, ok := facts.Stream()
+	if len(facts.NATSSubjects()) != 2 || len(facts.ConnectionIDs()) != 3 || !ok {
 		t.Fatalf("stream facts incomplete: %#v", facts)
 	}
-	if facts.stream.maxAckPending != 4321 || facts.stream.ackWait != "2m" || facts.stream.replicas != 3 {
-		t.Fatalf("stream fields lost: %#v", facts.stream)
+	if stream.MaxAckPending() != 4321 || stream.AckWait() != "2m" || stream.Replicas() != 3 {
+		t.Fatalf("stream fields lost: %#v", stream)
 	}
 }

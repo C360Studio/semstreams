@@ -27,7 +27,7 @@ func TestResolvePort_StoreRead(t *testing.T) {
 		Config: StoreReadPort{Bucket: "MESSAGES"},
 	}
 
-	port, err := resolvePort(def, DirectionInput)
+	port, err := def.Resolve(DirectionInput)
 	assert.NoError(t, err)
 
 	assert.Equal(t, "content_store", port.Name)

@@ -21,13 +21,13 @@ type DisconnectedNode struct {
 
 // OrphanedPort represents a port with no connections
 type OrphanedPort struct {
-	ComponentName string              `json:"component_name"`
-	PortName      string              `json:"port_name"`
-	Direction     component.Direction `json:"direction"`
-	ConnectionID  string              `json:"connection_id"`
-	Pattern       InteractionPattern  `json:"pattern"`
-	Issue         string              `json:"issue"`
-	Required      bool                `json:"required"`
+	ComponentName string                       `json:"component_name"`
+	PortName      string                       `json:"port_name"`
+	Direction     component.Direction          `json:"direction"`
+	ConnectionID  string                       `json:"connection_id"`
+	Pattern       component.InteractionPattern `json:"pattern"`
+	Issue         string                       `json:"issue"`
+	Required      bool                         `json:"required"`
 }
 
 // StreamRequirementWarning represents a mismatch between JetStream subscriber and NATS publisher

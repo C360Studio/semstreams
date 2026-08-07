@@ -14,11 +14,13 @@ import (
 )
 
 type portBinding struct {
-	kind       PortKind
-	directions map[Direction]struct{}
-	newConfig  func() Portable
-	normalize  func(Portable) (Portable, error)
-	facts      func(Portable) portFacts
+	kind        PortKind
+	directions  map[Direction]struct{}
+	newConfig   func() Portable
+	normalize   func(Portable) (Portable, error)
+	facts       func(Portable) PortFacts
+	required    []string
+	anyRequired [][]string
 }
 
 var canonicalPortKinds = []PortKind{
@@ -37,18 +39,18 @@ var canonicalPortKinds = []PortKind{
 }
 
 var portBindingTable = map[PortKind]portBinding{
-	PortKindTimer:        newPortBinding(PortKindTimer, inputOnly(), func() Portable { return &TimerPort{} }, normalizeTimerPort, timerPortFacts),
-	PortKindNetwork:      newPortBinding(PortKindNetwork, inputOutput(), func() Portable { return &NetworkPort{} }, normalizeNetworkPort, networkPortFacts),
-	PortKindFile:         newPortBinding(PortKindFile, inputOutput(), func() Portable { return &FilePort{} }, normalizeFilePort, filePortFacts),
-	PortKindHTTPClient:   newPortBinding(PortKindHTTPClient, inputOnly(), func() Portable { return &HTTPClientPort{} }, normalizeHTTPClientPort, httpClientPortFacts),
-	PortKindNATS:         newPortBinding(PortKindNATS, inputOutput(), func() Portable { return &NATSPort{} }, normalizeNATSPort, natsPortFacts),
-	PortKindNATSRequest:  newPortBinding(PortKindNATSRequest, inputOutput(), func() Portable { return &NATSRequestPort{} }, normalizeNATSRequestPort, natsRequestPortFacts),
-	PortKindJetStream:    newPortBinding(PortKindJetStream, inputOutput(), func() Portable { return &JetStreamPort{} }, normalizeJetStreamPort, jetStreamPortFacts),
-	PortKindKVWatch:      newPortBinding(PortKindKVWatch, inputOnly(), func() Portable { return &KVWatchPort{} }, normalizeKVWatchPort, kvWatchPortFacts),
-	PortKindKVRead:       newPortBinding(PortKindKVRead, inputOnly(), func() Portable { return &KVReadPort{} }, normalizeKVReadPort, kvReadPortFacts),
-	PortKindKVWrite:      newPortBinding(PortKindKVWrite, outputOnly(), func() Portable { return &KVWritePort{} }, normalizeKVWritePort, kvWritePortFacts),
-	PortKindStoreRead:    newPortBinding(PortKindStoreRead, inputOnly(), func() Portable { return &StoreReadPort{} }, normalizeStoreReadPort, storeReadPortFacts),
-	PortKindStoreProvide: newPortBinding(PortKindStoreProvide, outputOnly(), func() Portable { return &StoreProvidePort{} }, normalizeStoreProvidePort, storeProvidePortFacts),
+	PortKindTimer:        newPortBinding(PortKindTimer, inputOnly(), func() Portable { return &TimerPort{} }, normalizeTimerPort, timerPortFacts, []string{"interval"}, nil),
+	PortKindNetwork:      newPortBinding(PortKindNetwork, inputOutput(), func() Portable { return &NetworkPort{} }, normalizeNetworkPort, networkPortFacts, []string{"protocol", "port"}, nil),
+	PortKindFile:         newPortBinding(PortKindFile, inputOutput(), func() Portable { return &FilePort{} }, normalizeFilePort, filePortFacts, []string{"path"}, nil),
+	PortKindHTTPClient:   newPortBinding(PortKindHTTPClient, inputOnly(), func() Portable { return &HTTPClientPort{} }, normalizeHTTPClientPort, httpClientPortFacts, []string{"method", "url_pattern"}, nil),
+	PortKindNATS:         newPortBinding(PortKindNATS, inputOutput(), func() Portable { return &NATSPort{} }, normalizeNATSPort, natsPortFacts, []string{"subject"}, nil),
+	PortKindNATSRequest:  newPortBinding(PortKindNATSRequest, inputOutput(), func() Portable { return &NATSRequestPort{} }, normalizeNATSRequestPort, natsRequestPortFacts, []string{"subject"}, nil),
+	PortKindJetStream:    newPortBinding(PortKindJetStream, inputOutput(), func() Portable { return &JetStreamPort{} }, normalizeJetStreamPort, jetStreamPortFacts, nil, [][]string{{"stream_name"}, {"subjects"}}),
+	PortKindKVWatch:      newPortBinding(PortKindKVWatch, inputOnly(), func() Portable { return &KVWatchPort{} }, normalizeKVWatchPort, kvWatchPortFacts, []string{"bucket"}, nil),
+	PortKindKVRead:       newPortBinding(PortKindKVRead, inputOnly(), func() Portable { return &KVReadPort{} }, normalizeKVReadPort, kvReadPortFacts, []string{"bucket"}, nil),
+	PortKindKVWrite:      newPortBinding(PortKindKVWrite, outputOnly(), func() Portable { return &KVWritePort{} }, normalizeKVWritePort, kvWritePortFacts, []string{"bucket"}, nil),
+	PortKindStoreRead:    newPortBinding(PortKindStoreRead, inputOnly(), func() Portable { return &StoreReadPort{} }, normalizeStoreReadPort, storeReadPortFacts, []string{"bucket"}, nil),
+	PortKindStoreProvide: newPortBinding(PortKindStoreProvide, outputOnly(), func() Portable { return &StoreProvidePort{} }, normalizeStoreProvidePort, storeProvidePortFacts, []string{"instance"}, nil),
 }
 
 func newPortBinding(
@@ -56,9 +58,22 @@ func newPortBinding(
 	directions map[Direction]struct{},
 	newConfig func() Portable,
 	normalize func(Portable) (Portable, error),
-	facts func(Portable) portFacts,
+	facts func(Portable) PortFacts,
+	required []string,
+	anyRequired [][]string,
 ) portBinding {
-	return portBinding{kind: kind, directions: directions, newConfig: newConfig, normalize: normalize, facts: facts}
+	return portBinding{
+		kind: kind, directions: directions, newConfig: newConfig, normalize: normalize, facts: facts,
+		required: append([]string(nil), required...), anyRequired: cloneStringGroups(anyRequired),
+	}
+}
+
+func cloneStringGroups(groups [][]string) [][]string {
+	cloned := make([][]string, len(groups))
+	for index := range groups {
+		cloned[index] = append([]string(nil), groups[index]...)
+	}
+	return cloned
 }
 
 func inputOnly() map[Direction]struct{} {

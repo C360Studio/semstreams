@@ -956,7 +956,10 @@ func (cm *ComponentManager) CreateComponent(
 	}
 
 	// Register resource usage
-	cm.registerPorts(instanceName, comp)
+	if err := cm.registerPorts(instanceName, comp); err != nil {
+		cm.registry.UnregisterInstance(instanceName)
+		return fmt.Errorf("resolve ports for component '%s': %w", instanceName, err)
+	}
 
 	// Track as managed component. Retain the effective config so a later
 	// per-component config update can be compared and skipped when unchanged
@@ -973,7 +976,7 @@ func (cm *ComponentManager) CreateComponent(
 			// Release the port ownership registered just above (the component
 			// never makes it into cm.components, so unregisterPorts-by-name
 			// can't find it) and remove from registry on init failure (gh#417).
-			cm.unregisterPortsForComp(instanceName, comp)
+			cm.unregisterPortsForComp(instanceName)
 			cm.registry.UnregisterInstance(instanceName)
 			return fmt.Errorf("failed to initialize component '%s': %w", instanceName, err)
 		}
@@ -1079,14 +1082,18 @@ func (cm *ComponentManager) GetManagedComponents() map[string]*component.Managed
 
 // checkPortConflicts checks for conflicts with existing port registrations
 func (cm *ComponentManager) checkPortConflicts(comp component.Discoverable) error {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
+	allPorts := append([]component.Port(nil), comp.InputPorts()...)
+	allPorts = append(allPorts, comp.OutputPorts()...)
 
 	for _, port := range allPorts {
-		if port.Config != nil && port.Config.IsExclusive() {
-			resourceID := port.Config.ResourceID()
-			if owners, exists := cm.resources[resourceID]; exists && len(owners) > 0 {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
+		}
+		if facts.IsExclusive() {
+			if owners, exists := cm.resources[facts.ResourceID()]; exists && len(owners) > 0 {
 				return fmt.Errorf("exclusive resource %s already used by %v",
-					resourceID, owners)
+					facts.ResourceID(), owners)
 			}
 		}
 	}
@@ -1094,16 +1101,21 @@ func (cm *ComponentManager) checkPortConflicts(comp component.Discoverable) erro
 }
 
 // registerPorts registers all ports from a component to track resource usage
-func (cm *ComponentManager) registerPorts(name string, comp component.Discoverable) {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
-
+func (cm *ComponentManager) registerPorts(name string, comp component.Discoverable) error {
+	allPorts := append([]component.Port(nil), comp.InputPorts()...)
+	allPorts = append(allPorts, comp.OutputPorts()...)
+	resourceIDs := make([]string, 0, len(allPorts))
 	for _, port := range allPorts {
-		if port.Config == nil {
-			continue
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
-		resourceID := port.Config.ResourceID()
+		resourceIDs = append(resourceIDs, facts.ResourceID())
+	}
+	for _, resourceID := range resourceIDs {
 		cm.resources[resourceID] = append(cm.resources[resourceID], name)
 	}
+	return nil
 }
 
 // unregisterPorts removes all port registrations for a component still tracked
@@ -1113,21 +1125,14 @@ func (cm *ComponentManager) unregisterPorts(name string) {
 	if !exists || mc.Component == nil {
 		return
 	}
-	cm.unregisterPortsForComp(name, mc.Component)
+	cm.unregisterPortsForComp(name)
 }
 
-// unregisterPortsForComp releases cm.resources ownership entries for comp's
-// ports. It takes the component directly (rather than looking it up in
-// cm.components) so it can also clean up a component that registerPorts already
-// recorded but that was never committed to cm.components — e.g. a
-// CreateComponent that fails at Initialize. Caller must hold cm.mu.
-func (cm *ComponentManager) unregisterPortsForComp(name string, comp component.Discoverable) {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
-	for _, port := range allPorts {
-		if port.Config == nil {
-			continue
-		}
-		resourceID := port.Config.ResourceID()
+// unregisterPortsForComp releases every cm.resources ownership entry recorded
+// for name. Scanning the tracker avoids reinterpreting component ports that may
+// have changed since registration. Caller must hold cm.mu.
+func (cm *ComponentManager) unregisterPortsForComp(name string) {
+	for resourceID := range cm.resources {
 		cm.removeFromSlice(resourceID, name)
 	}
 }
@@ -2289,7 +2294,7 @@ type FlowGap struct {
 }
 
 // extractComponentPortInfo extracts port information from a component for flow validation
-func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable) *ComponentPortInfo {
+func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable) (*ComponentPortInfo, error) {
 	metadata := comp.Meta()
 
 	portInfo := &ComponentPortInfo{
@@ -2300,50 +2305,44 @@ func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable
 
 	// Extract input ports
 	for _, port := range comp.InputPorts() {
-		detail := cm.extractPortDetail(port)
-		if detail != nil {
-			portInfo.InputPorts = append(portInfo.InputPorts, *detail)
+		detail, err := cm.extractPortDetail(port)
+		if err != nil {
+			return nil, err
 		}
+		portInfo.InputPorts = append(portInfo.InputPorts, detail)
 	}
 
 	// Extract output ports
 	for _, port := range comp.OutputPorts() {
-		detail := cm.extractPortDetail(port)
-		if detail != nil {
-			portInfo.OutputPorts = append(portInfo.OutputPorts, *detail)
+		detail, err := cm.extractPortDetail(port)
+		if err != nil {
+			return nil, err
 		}
+		portInfo.OutputPorts = append(portInfo.OutputPorts, detail)
 	}
 
-	return portInfo
+	return portInfo, nil
 }
 
 // extractPortDetail extracts subject and type information from a port
-func (cm *ComponentManager) extractPortDetail(port component.Port) *ComponentPortDetail {
+func (cm *ComponentManager) extractPortDetail(port component.Port) (ComponentPortDetail, error) {
+	facts, err := port.Facts()
+	if err != nil {
+		return ComponentPortDetail{}, err
+	}
 	detail := &ComponentPortDetail{
 		Name:      port.Name,
 		Direction: port.Direction,
-		Subject:   "",
-		PortType:  "",
+		PortType:  string(facts.Kind()),
 	}
-
-	// Extract subject based on port type
-	switch portCfg := port.Config.(type) {
-	case component.NATSPort:
-		detail.Subject = portCfg.Subject
-		detail.PortType = "nats"
-	case component.NATSRequestPort:
-		detail.Subject = portCfg.Subject
-		detail.PortType = "nats-request"
-	default:
-		// For now, only handle NATS ports (simple implementation)
-		return nil
+	if subjects := facts.NATSSubjects(); len(subjects) > 0 {
+		detail.Subject = subjects[0]
 	}
-
-	return detail
+	return *detail, nil
 }
 
 // analyzeFlowConnections identifies connections between components based on subject matching
-func (cm *ComponentManager) analyzeFlowConnections(components []component.Discoverable) []FlowConnection {
+func (cm *ComponentManager) analyzeFlowConnections(components []component.Discoverable) ([]FlowConnection, error) {
 	var connections []FlowConnection
 
 	// Build lists of publishers and subscribers
@@ -2351,7 +2350,10 @@ func (cm *ComponentManager) analyzeFlowConnections(components []component.Discov
 	var subscribers []subscriberInfo
 
 	for _, comp := range components {
-		portInfo := cm.extractComponentPortInfo(comp)
+		portInfo, err := cm.extractComponentPortInfo(comp)
+		if err != nil {
+			return nil, err
+		}
 
 		// Collect publishers (output ports)
 		for _, outPort := range portInfo.OutputPorts {
@@ -2391,7 +2393,7 @@ func (cm *ComponentManager) analyzeFlowConnections(components []component.Discov
 		}
 	}
 
-	return connections
+	return connections, nil
 }
 
 // Helper types for flow analysis
@@ -2420,14 +2422,14 @@ type flowGraphCache struct {
 	lastUpdate   time.Time
 }
 
-// GetFlowGraph returns the current FlowGraph, using cache if valid
-func (cm *ComponentManager) GetFlowGraph() *flowgraph.FlowGraph {
+// GetFlowGraph returns the current FlowGraph, using cache if valid.
+func (cm *ComponentManager) GetFlowGraph() (*flowgraph.FlowGraph, error) {
 	// Check cache validity under read lock
 	cm.graphCache.mu.RLock()
 	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
 		graph := cm.graphCache.currentGraph
 		cm.graphCache.mu.RUnlock()
-		return graph
+		return graph, nil
 	}
 	cm.graphCache.mu.RUnlock()
 
@@ -2437,22 +2439,25 @@ func (cm *ComponentManager) GetFlowGraph() *flowgraph.FlowGraph {
 
 	// Double-check after acquiring write lock
 	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
-		return cm.graphCache.currentGraph
+		return cm.graphCache.currentGraph, nil
 	}
 
 	// Build new graph
-	graph := cm.buildFlowGraph()
+	graph, err := cm.buildFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	// Update cache
 	cm.graphCache.currentGraph = graph
 	cm.graphCache.cacheValid = true
 	cm.graphCache.lastUpdate = time.Now()
 
-	return graph
+	return graph, nil
 }
 
 // buildFlowGraph creates a new FlowGraph from current components
-func (cm *ComponentManager) buildFlowGraph() *flowgraph.FlowGraph {
+func (cm *ComponentManager) buildFlowGraph() (*flowgraph.FlowGraph, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
@@ -2461,22 +2466,18 @@ func (cm *ComponentManager) buildFlowGraph() *flowgraph.FlowGraph {
 	// Phase 1: Add all components as nodes
 	for name, mc := range cm.components {
 		if mc.Component != nil {
-			err := graph.AddComponentNode(name, mc.Component)
-			if err != nil {
-				cm.logger.Warn("Failed to add component to FlowGraph",
-					"component", name, "error", err)
-				continue
+			if err := graph.AddComponentNode(name, mc.Component); err != nil {
+				return nil, fmt.Errorf("add component %q to flow graph: %w", name, err)
 			}
 		}
 	}
 
 	// Phase 2: Build edges by matching connection patterns
-	err := graph.ConnectComponentsByPatterns()
-	if err != nil {
-		cm.logger.Error("Failed to connect components in FlowGraph", "error", err)
+	if err := graph.ConnectComponentsByPatterns(); err != nil {
+		return nil, fmt.Errorf("connect component flow graph: %w", err)
 	}
 
-	return graph
+	return graph, nil
 }
 
 // invalidateFlowGraph marks the cached FlowGraph as invalid
@@ -2489,19 +2490,22 @@ func (cm *ComponentManager) invalidateFlowGraph() {
 	cm.graphCache.lastAnalysis = nil
 }
 
-// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching
-func (cm *ComponentManager) ValidateFlowConnectivity() *flowgraph.FlowAnalysisResult {
+// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching.
+func (cm *ComponentManager) ValidateFlowConnectivity() (*flowgraph.FlowAnalysisResult, error) {
 	// Check if we have a cached analysis
 	cm.graphCache.mu.RLock()
 	if cm.graphCache.cacheValid && cm.graphCache.lastAnalysis != nil {
 		analysis := cm.graphCache.lastAnalysis
 		cm.graphCache.mu.RUnlock()
-		return analysis
+		return analysis, nil
 	}
 	cm.graphCache.mu.RUnlock()
 
 	// Get graph (may trigger rebuild)
-	graph := cm.GetFlowGraph()
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	// Perform analysis
 	analysis := graph.AnalyzeConnectivity()
@@ -2511,12 +2515,15 @@ func (cm *ComponentManager) ValidateFlowConnectivity() *flowgraph.FlowAnalysisRe
 	cm.graphCache.lastAnalysis = analysis
 	cm.graphCache.mu.Unlock()
 
-	return analysis
+	return analysis, nil
 }
 
 // GetFlowPaths returns data paths from input components to all reachable components
-func (cm *ComponentManager) GetFlowPaths() map[string][]string {
-	graph := cm.GetFlowGraph()
+func (cm *ComponentManager) GetFlowPaths() (map[string][]string, error) {
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	paths := make(map[string][]string)
 
@@ -2529,12 +2536,15 @@ func (cm *ComponentManager) GetFlowPaths() map[string][]string {
 		paths[inputComponent] = reachable
 	}
 
-	return paths
+	return paths, nil
 }
 
 // DetectObjectStoreGaps identifies disconnected storage components
-func (cm *ComponentManager) DetectObjectStoreGaps() []ComponentGap {
-	graph := cm.GetFlowGraph()
+func (cm *ComponentManager) DetectObjectStoreGaps() ([]ComponentGap, error) {
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 	var gaps []ComponentGap
 
 	nodes := graph.GetNodes()
@@ -2558,7 +2568,7 @@ func (cm *ComponentManager) DetectObjectStoreGaps() []ComponentGap {
 		}
 	}
 
-	return gaps
+	return gaps, nil
 }
 
 // Helper methods for FlowGraph analysis
@@ -2594,7 +2604,7 @@ func (cm *ComponentManager) isInputComponent(componentName string, node *flowgra
 	// the internal graph: PatternNetwork binds a local listener, PatternHTTPClient
 	// initiates an outbound poll. Either makes the component an input origin.
 	for _, port := range node.InputPorts {
-		if port.Pattern == flowgraph.PatternNetwork || port.Pattern == flowgraph.PatternHTTPClient {
+		if port.Pattern == component.PatternNetwork || port.Pattern == component.PatternHTTPClient {
 			return true
 		}
 	}

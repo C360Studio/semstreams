@@ -16,6 +16,9 @@ const (
 // PortKind is the closed vocabulary of semantic component port kinds.
 type PortKind string
 
+// InteractionPattern is the canonical communication behavior of a resolved port.
+type InteractionPattern string
+
 // Canonical port kinds. Alternate spellings and custom kinds are not accepted.
 const (
 	PortKindTimer        PortKind = "timer"
@@ -30,6 +33,17 @@ const (
 	PortKindKVWrite      PortKind = "kv-write"
 	PortKindStoreRead    PortKind = "store-read"
 	PortKindStoreProvide PortKind = "store-provide"
+)
+
+// Canonical interaction patterns projected from resolved ports.
+const (
+	PatternTimer      InteractionPattern = "timer"
+	PatternNetwork    InteractionPattern = "network"
+	PatternHTTPClient InteractionPattern = "http-client"
+	PatternStream     InteractionPattern = "stream"
+	PatternRequest    InteractionPattern = "request"
+	PatternWatch      InteractionPattern = "watch"
+	PatternStore      InteractionPattern = "store"
 )
 
 // Port is a resolved component I/O declaration.
@@ -93,12 +107,12 @@ func (p *Port) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return portConfigError(wire.Name, rawPortableKind(wire.Config), "config", err)
 	}
-	resolved, err := resolvePort(PortDefinition{
+	resolved, err := (PortDefinition{
 		Name:        wire.Name,
 		Required:    wire.Required,
 		Description: wire.Description,
 		Config:      config,
-	}, wire.Direction)
+	}).Resolve(wire.Direction)
 	if err != nil {
 		return err
 	}

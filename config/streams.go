@@ -408,32 +408,16 @@ func (sm *StreamsManager) EnsureStreams(ctx context.Context, cfg *Config) error 
 	return nil
 }
 
-// PortsConfig and PortDefinition are aliases for the canonical
-// component-package types. They previously existed as a parallel shadow
-// inside this file because config could not import component (transitive
-// cycle through agentic/message). The cycle was broken in 2026-05-08 by
-// promoting PlatformConfig to its own pkg/platform leaf package; the
-// shadow types are now unnecessary and were a recurring source of
-// silent field-strip bugs (StreamName 2026-05-08, and any future field
-// added to component.PortDefinition before this fix landed).
-//
-// Keeping the alias names (PortsConfig, PortDefinition) preserves the
-// existing call sites inside this package without churn while making
-// the canonical type the single source of truth.
-type (
-	// PortsConfig is the canonical component port configuration.
-	PortsConfig = component.PortConfig
-	// PortDefinition is the canonical component port definition.
-	PortDefinition = component.PortDefinition
-)
-
 // extractPortsFromConfig parses port definitions from raw component config.
 // A free function rather than a method because stream declaration resolution is
 // pure and I/O-free — it runs at config validation, where no StreamsManager (and
 // no NATS connection) exists.
-func extractPortsFromConfig(rawConfig json.RawMessage) (*PortsConfig, error) {
+func extractPortsFromConfig(rawConfig json.RawMessage) (*component.PortConfig, error) {
+	if strings.TrimSpace(string(rawConfig)) == "" {
+		return &component.PortConfig{}, nil
+	}
 	var cfg struct {
-		Ports PortsConfig `json:"ports"`
+		Ports component.PortConfig `json:"ports"`
 	}
 	if err := json.Unmarshal(rawConfig, &cfg); err != nil {
 		return nil, err

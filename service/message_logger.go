@@ -295,41 +295,15 @@ func discoverSubjectsFromComponents(components map[string]json.RawMessage) ([]st
 	for compName, rawConfig := range components {
 		// Parse the component's config to extract ports
 		var compConfig struct {
-			Ports struct {
-				Inputs  []component.PortDefinition `json:"inputs"`
-				Outputs []component.PortDefinition `json:"outputs"`
-			} `json:"ports"`
+			Ports component.PortConfig `json:"ports"`
 		}
 
 		if err := json.Unmarshal(rawConfig, &compConfig); err != nil {
 			continue // Skip components we can't parse
 		}
 
-		// Process input ports
-		for _, port := range compConfig.Ports.Inputs {
-			if port.Subject != "" {
-				subjects[port.Subject] = true
-				metadata[port.Subject] = portMetadata{
-					Component: compName,
-					PortName:  port.Name,
-					PortType:  port.Type,
-					Interface: port.Interface,
-				}
-			}
-		}
-
-		// Process output ports
-		for _, port := range compConfig.Ports.Outputs {
-			if port.Subject != "" {
-				subjects[port.Subject] = true
-				metadata[port.Subject] = portMetadata{
-					Component: compName,
-					PortName:  port.Name,
-					PortType:  port.Type,
-					Interface: port.Interface,
-				}
-			}
-		}
+		collectSubjectsFromDefinitions(compName, component.DirectionInput, compConfig.Ports.Inputs, subjects, metadata)
+		collectSubjectsFromDefinitions(compName, component.DirectionOutput, compConfig.Ports.Outputs, subjects, metadata)
 	}
 
 	result := make([]string, 0, len(subjects))
@@ -337,6 +311,38 @@ func discoverSubjectsFromComponents(components map[string]json.RawMessage) ([]st
 		result = append(result, subj)
 	}
 	return result, metadata
+}
+
+func collectSubjectsFromDefinitions(
+	componentName string,
+	direction component.Direction,
+	definitions []component.PortDefinition,
+	subjects map[string]bool,
+	metadata map[string]portMetadata,
+) {
+	for _, definition := range definitions {
+		port, err := definition.Resolve(direction)
+		if err != nil {
+			continue
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			continue
+		}
+		interfaceType := ""
+		if contract, ok := facts.Interface(); ok {
+			interfaceType = contract.Type
+		}
+		for _, subject := range facts.NATSSubjects() {
+			subjects[subject] = true
+			metadata[subject] = portMetadata{
+				Component: componentName,
+				PortName:  definition.Name,
+				PortType:  string(facts.Kind()),
+				Interface: interfaceType,
+			}
+		}
+	}
 }
 
 // SetDecoder installs the payload Decoder used for typed BaseMessage

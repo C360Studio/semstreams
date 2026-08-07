@@ -84,8 +84,16 @@ type SchemaDirectives struct {
 
 // PortFieldInfo describes metadata for PortDefinition fields
 type PortFieldInfo struct {
-	Type     string `json:"type"`
-	Editable bool   `json:"editable"`
+	Type                 string                   `json:"type"`
+	Editable             bool                     `json:"editable"`
+	Enum                 []string                 `json:"enum,omitempty"`
+	Required             []string                 `json:"required,omitempty"`
+	AnyRequired          [][]string               `json:"anyRequired,omitempty"`
+	Directions           []Direction              `json:"directions,omitempty"`
+	Properties           map[string]PortFieldInfo `json:"properties,omitempty"`
+	Variants             map[string]PortFieldInfo `json:"variants,omitempty"`
+	Items                *PortFieldInfo           `json:"items,omitempty"`
+	AdditionalProperties *bool                    `json:"additionalProperties,omitempty"`
 }
 
 // CacheFieldInfo describes metadata for cache.Config fields
@@ -684,17 +692,9 @@ func convertDefault(value any, fieldType string) any {
 	}
 }
 
-// GeneratePortFieldSchema generates metadata for PortDefinition fields.
-// This describes which fields in PortDefinition are editable vs read-only,
-// enabling the UI to render appropriate controls for port configuration.
-//
-// The function examines PortDefinition struct tags to determine:
-//   - Field types (for appropriate UI controls)
-//   - Editability (whether users can modify the field)
-//
-// Fields marked with "editable" tag are user-modifiable (e.g., Subject, Timeout).
-// Fields marked with "readonly" tag are display-only (e.g., Name, Type).
-// Fields without schema tags default to read-only string type.
+// GeneratePortFieldSchema returns the canonical common-envelope metadata.
+// Kind-specific data remains inside config and is validated by the closed port
+// binding table; schema generation does not reflect retired flat fields.
 //
 // This metadata is included in ConfigSchema for fields with type "ports",
 // allowing the frontend to correctly render port configuration forms.
@@ -702,47 +702,91 @@ func convertDefault(value any, fieldType string) any {
 // Returns:
 //   - Map of field names to PortFieldInfo with type and editability metadata
 func GeneratePortFieldSchema() map[string]PortFieldInfo {
-	portType := reflect.TypeOf(PortDefinition{})
-	fields := make(map[string]PortFieldInfo)
-
-	for i := 0; i < portType.NumField(); i++ {
-		field := portType.Field(i)
-
-		// Get json tag for field name
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "" || jsonTag == "-" {
-			continue
+	variants := make(map[string]PortFieldInfo, len(portBindingTable))
+	for _, kind := range portKinds() {
+		binding, ok := portBindingTable[kind]
+		if !ok {
+			panic(fmt.Sprintf("canonical port kind %q has no binding", kind))
 		}
-
-		fieldName := strings.Split(jsonTag, ",")[0]
-		if fieldName == "" {
-			continue
+		configType := reflect.TypeOf(binding.newConfig())
+		for configType.Kind() == reflect.Pointer {
+			configType = configType.Elem()
 		}
-
-		// Parse schema tag
-		schemaTag := field.Tag.Get("schema")
-		if schemaTag == "" {
-			// No schema tag - default to read-only string
-			fields[fieldName] = PortFieldInfo{
-				Type:     "string",
-				Editable: false,
+		properties := map[string]PortFieldInfo{
+			"kind": {Type: "enum", Enum: []string{string(kind)}},
+		}
+		for index := 0; index < configType.NumField(); index++ {
+			field := configType.Field(index)
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			if name == "" || name == "-" {
+				continue
 			}
-			continue
+			properties[name] = portConfigSchemaForType(field.Type)
 		}
 
-		directives, err := ParseSchemaTag(schemaTag)
-		if err != nil {
-			// Skip fields with invalid tags
-			continue
+		directions := make([]Direction, 0, len(binding.directions))
+		for _, direction := range []Direction{DirectionInput, DirectionOutput} {
+			if _, ok := binding.directions[direction]; ok {
+				directions = append(directions, direction)
+			}
 		}
-
-		fields[fieldName] = PortFieldInfo{
-			Type:     directives.Type,
-			Editable: directives.Editable,
+		closed := false
+		variants[string(kind)] = PortFieldInfo{
+			Type:                 "object",
+			Editable:             true,
+			Required:             append([]string{"kind"}, binding.required...),
+			AnyRequired:          cloneStringGroups(binding.anyRequired),
+			Directions:           directions,
+			Properties:           properties,
+			AdditionalProperties: &closed,
 		}
 	}
 
-	return fields
+	return map[string]PortFieldInfo{
+		"name":        {Type: "string", Editable: false},
+		"required":    {Type: "bool", Editable: false},
+		"description": {Type: "string", Editable: false},
+		"config":      {Type: "object", Editable: true, Variants: variants},
+	}
+}
+
+func portConfigSchemaForType(fieldType reflect.Type) PortFieldInfo {
+	for fieldType.Kind() == reflect.Pointer {
+		fieldType = fieldType.Elem()
+	}
+	switch fieldType.Kind() {
+	case reflect.String:
+		return PortFieldInfo{Type: "string", Editable: true}
+	case reflect.Bool:
+		return PortFieldInfo{Type: "bool", Editable: true}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return PortFieldInfo{Type: "int", Editable: true}
+	case reflect.Slice, reflect.Array:
+		item := portConfigSchemaForType(fieldType.Elem())
+		return PortFieldInfo{Type: "array", Editable: true, Items: &item}
+	case reflect.Struct:
+		properties := make(map[string]PortFieldInfo, fieldType.NumField())
+		for index := 0; index < fieldType.NumField(); index++ {
+			field := fieldType.Field(index)
+			name := strings.Split(field.Tag.Get("json"), ",")[0]
+			if name == "" || name == "-" {
+				continue
+			}
+			properties[name] = portConfigSchemaForType(field.Type)
+		}
+		closed := false
+		required := []string(nil)
+		if fieldType == reflect.TypeOf(InterfaceContract{}) {
+			required = []string{"type"}
+		}
+		return PortFieldInfo{
+			Type: "object", Editable: true, Required: required,
+			Properties: properties, AdditionalProperties: &closed,
+		}
+	default:
+		return PortFieldInfo{Type: "object", Editable: true}
+	}
 }
 
 // GenerateCacheFieldSchema generates metadata for cache.Config fields.

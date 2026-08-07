@@ -518,17 +518,17 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 				"ports": {
 					"inputs": [],
 					"outputs": [
-						{"name": "udp_out", "subject": "raw.udp.messages", "type": "jetstream"}
+						{"name": "udp_out", "config": {"kind": "jetstream", "subjects": ["raw.udp.messages"]}}
 					]
 				}
 			}`),
 			"json_generic": json.RawMessage(`{
 				"ports": {
 					"inputs": [
-						{"name": "generic_in", "subject": "raw.udp.messages", "type": "jetstream"}
+						{"name": "generic_in", "config": {"kind": "jetstream", "subjects": ["raw.udp.messages"]}}
 					],
 					"outputs": [
-						{"name": "generic_out", "subject": "generic.messages", "type": "jetstream", "interface": "core.json.v1"}
+						{"name": "generic_out", "config": {"kind": "jetstream", "subjects": ["generic.messages"], "interface": {"type": "core.json.v1"}}}
 					]
 				}
 			}`),
@@ -559,7 +559,7 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 			"invalid": json.RawMessage(`{not valid json`),
 			"valid": json.RawMessage(`{
 				"ports": {
-					"outputs": [{"name": "out", "subject": "valid.subject", "type": "nats"}]
+					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "valid.subject"}}]
 				}
 			}`),
 		}
@@ -572,12 +572,12 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 		assert.Len(t, metadata, 1)
 	})
 
-	t.Run("skips_empty_subjects", func(t *testing.T) {
+	t.Run("skips_ports_without_NATS_subjects", func(t *testing.T) {
 		components := map[string]json.RawMessage{
 			"test": json.RawMessage(`{
 				"ports": {
-					"inputs": [{"name": "in", "subject": "", "type": "nats"}],
-					"outputs": [{"name": "out", "subject": "real.subject", "type": "nats"}]
+					"inputs": [{"name": "in", "config": {"kind": "network", "protocol": "udp", "port": 14550}}],
+					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "real.subject"}}]
 				}
 			}`),
 		}

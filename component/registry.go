@@ -269,8 +269,12 @@ func (r *Registry) RegisterInstance(name string, component Discoverable) error {
 		return errs.WrapInvalid(msg, "Registry", "RegisterInstance", "duplicate instance check")
 	}
 
-	// Check for resource conflicts before registering
-	if err := r.checkResourceConflicts(name, component); err != nil {
+	resources, err := exclusivePortResources(component)
+	if err != nil {
+		return errs.Wrap(err, "Registry", "RegisterInstance", "resolve port facts")
+	}
+	// Check for resource conflicts before registering.
+	if err := r.checkResourceConflicts(resources); err != nil {
 		return errs.Wrap(err, "Registry", "RegisterInstance", "resource conflict check")
 	}
 
@@ -278,7 +282,9 @@ func (r *Registry) RegisterInstance(name string, component Discoverable) error {
 	r.instances[name] = component
 
 	// Track component resources
-	r.trackComponentResources(name, component)
+	for _, resourceID := range resources {
+		r.resourceTracker[resourceID] = name
+	}
 
 	// Publish capabilities to NATS if initialized
 	if r.natsClient != nil {
@@ -305,9 +311,12 @@ func (r *Registry) UnregisterInstance(name string) {
 	defer r.mu.Unlock()
 
 	// Get component before removing to clean up resources
-	if component, exists := r.instances[name]; exists {
-		// Clean up resource tracking
-		r.untrackComponentResources(name, component)
+	if _, exists := r.instances[name]; exists {
+		for resourceID, owner := range r.resourceTracker {
+			if owner == name {
+				delete(r.resourceTracker, resourceID)
+			}
+		}
 	}
 
 	delete(r.instances, name)
@@ -572,59 +581,30 @@ func ValidatePortNumber(port int) error {
 }
 
 // checkResourceConflicts checks if any of the component's ports conflict with existing resources
-func (r *Registry) checkResourceConflicts(_ string, component Discoverable) error {
-	// Get all input and output ports for conflict checking
-	allPorts := append(component.InputPorts(), component.OutputPorts()...)
-
-	for _, port := range allPorts {
-		if port.Config != nil && port.Config.IsExclusive() {
-			resourceID := port.Config.ResourceID()
-
-			// Special validation for network ports
-			if networkPort, ok := port.Config.(NetworkPort); ok {
-				if err := ValidatePortNumber(networkPort.Port); err != nil {
-					return errs.Wrap(err, "Registry", "checkResourceConflicts", "network port validation")
-				}
-			}
-
-			// Check if this exclusive resource is already in use
-			if existingInstance, exists := r.resourceTracker[resourceID]; exists {
-				msg := fmt.Errorf("resource conflict: %s already used by component '%s'",
-					resourceID, existingInstance)
-				return errs.WrapInvalid(msg, "Registry", "checkResourceConflicts",
-					"exclusive resource check")
-			}
+func (r *Registry) checkResourceConflicts(resources []string) error {
+	for _, resourceID := range resources {
+		if existingInstance, exists := r.resourceTracker[resourceID]; exists {
+			msg := fmt.Errorf("resource conflict: %s already used by component '%s'", resourceID, existingInstance)
+			return errs.WrapInvalid(msg, "Registry", "checkResourceConflicts", "exclusive resource check")
 		}
 	}
-
 	return nil
 }
 
-// trackComponentResources adds component resources to the tracker
-func (r *Registry) trackComponentResources(instanceName string, component Discoverable) {
-	allPorts := append(component.InputPorts(), component.OutputPorts()...)
-
+func exclusivePortResources(discoverable Discoverable) ([]string, error) {
+	allPorts := append([]Port(nil), discoverable.InputPorts()...)
+	allPorts = append(allPorts, discoverable.OutputPorts()...)
+	resources := make([]string, 0, len(allPorts))
 	for _, port := range allPorts {
-		if port.Config != nil && port.Config.IsExclusive() {
-			resourceID := port.Config.ResourceID()
-			r.resourceTracker[resourceID] = instanceName
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, err
+		}
+		if facts.IsExclusive() {
+			resources = append(resources, facts.ResourceID())
 		}
 	}
-}
-
-// untrackComponentResources removes component resources from the tracker
-func (r *Registry) untrackComponentResources(instanceName string, component Discoverable) {
-	allPorts := append(component.InputPorts(), component.OutputPorts()...)
-
-	for _, port := range allPorts {
-		if port.Config != nil && port.Config.IsExclusive() {
-			resourceID := port.Config.ResourceID()
-			// Only remove if it belongs to this instance
-			if trackedInstance, exists := r.resourceTracker[resourceID]; exists && trackedInstance == instanceName {
-				delete(r.resourceTracker, resourceID)
-			}
-		}
-	}
+	return resources, nil
 }
 
 // Config helper functions for components
@@ -1017,20 +997,21 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 func (r *Registry) portsToCapabilities(ports []Port) ([]PortCapability, error) {
 	capabilities := make([]PortCapability, 0, len(ports))
 	for _, port := range ports {
-		facts, err := factsForPort(port)
+		facts, err := port.Facts()
 		if err != nil {
 			return nil, err
 		}
 		capability := PortCapability{
 			Name:        port.Name,
 			Description: port.Description,
-			Type:        facts.interaction,
+			Type:        string(facts.InteractionPattern()),
 		}
-		if len(facts.natsSubjects) > 0 {
-			capability.Subject = facts.natsSubjects[0]
+		subjects := facts.NATSSubjects()
+		if len(subjects) > 0 {
+			capability.Subject = subjects[0]
 		}
-		if facts.interfaceContract != nil {
-			capability.Interface = facts.interfaceContract.Type
+		if contract, ok := facts.Interface(); ok {
+			capability.Interface = contract.Type
 		}
 
 		capabilities = append(capabilities, capability)

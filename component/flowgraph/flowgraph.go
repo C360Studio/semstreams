@@ -29,19 +29,20 @@ type PortInfo struct {
 	Name         string
 	Direction    component.Direction
 	ConnectionID string // Subject, bucket, or network address
-	Pattern      InteractionPattern
+	Pattern      component.InteractionPattern
 	Interface    *component.InterfaceContract
-	Required     bool               // Whether this port is required for the component to function
-	PortConfig   component.Portable // Original port configuration for type checking
+	Required     bool // Whether this port is required for the component to function
+	kind         component.PortKind
+	natsSubjects []string
 }
 
 // FlowEdge represents a connection between two component ports
 type FlowEdge struct {
-	From         ComponentPortRef   `json:"from"`
-	To           ComponentPortRef   `json:"to"`
-	Pattern      InteractionPattern `json:"pattern"`
-	ConnectionID string             `json:"connection_id"` // Subject, bucket, or network addr
-	Metadata     EdgeMetadata       `json:"metadata"`      // Pattern-specific validation data
+	From         ComponentPortRef             `json:"from"`
+	To           ComponentPortRef             `json:"to"`
+	Pattern      component.InteractionPattern `json:"pattern"`
+	ConnectionID string                       `json:"connection_id"` // Subject, bucket, or network addr
+	Metadata     EdgeMetadata                 `json:"metadata"`      // Pattern-specific validation data
 }
 
 // ComponentPortRef references a specific port on a component
@@ -49,40 +50,6 @@ type ComponentPortRef struct {
 	ComponentName string `json:"component_name"`
 	PortName      string `json:"port_name"`
 }
-
-// InteractionPattern defines the type of interaction between components
-type InteractionPattern string
-
-const (
-	// PatternStream represents NATSPort and JetStreamPort interactions
-	PatternStream InteractionPattern = "stream"
-	// PatternRequest represents NATSRequestPort (bidirectional) interactions
-	PatternRequest InteractionPattern = "request"
-	// PatternWatch represents KVWatchPort (observation) interactions
-	PatternWatch InteractionPattern = "watch"
-	// PatternNetwork represents NetworkPort (external listener) interactions
-	PatternNetwork InteractionPattern = "network"
-	// PatternHTTPClient represents HTTPClientPort (outbound HTTP-client/polling) interactions.
-	// Like PatternNetwork, an HTTPClientPort is an external boundary port: the component
-	// initiates the connection outward, so there is no internal publisher to match against.
-	// findOrphanedPorts skips PatternHTTPClient inputs for the same reason it skips
-	// PatternNetwork inputs — a legitimately unconnected external input is not orphaned.
-	PatternHTTPClient InteractionPattern = "http-client"
-	// PatternStore represents the ADR-063 store federation: StoreProvidePort (a
-	// storage component owning a StorageInstance) and StoreReadPort (a content-fetch
-	// consumer). Advisory/visibility only — the exact instance a consumer resolves
-	// is producer-chosen at runtime, so a store-provide with no consumer, or a
-	// store-read federation port, is not "orphaned"; findOrphanedPorts skips
-	// PatternStore for the same reason it skips PatternHTTPClient.
-	PatternStore InteractionPattern = "store"
-	// PatternTimer represents TimerPort (cadence/scheduler boundary) interactions.
-	// A TimerPort is an external scheduling boundary — it drives a component on an
-	// interval (e.g. an HTTPClientPort.TriggerPort poller), not a NATS stream, so it
-	// must not be classified as PatternStream (the safe default) and matched as a
-	// data edge. Like PatternNetwork/PatternHTTPClient, a legitimately unconnected
-	// timer input is not orphaned: findOrphanedPorts skips PatternTimer.
-	PatternTimer InteractionPattern = "timer"
-)
 
 // Issue type constants for orphaned port classification
 const (
@@ -125,6 +92,22 @@ func (g *FlowGraph) GetNodes() map[string]*ComponentNode {
 		// Copy port info
 		copy(nodeCopy.InputPorts, v.InputPorts)
 		copy(nodeCopy.OutputPorts, v.OutputPorts)
+		for index := range nodeCopy.InputPorts {
+			nodeCopy.InputPorts[index].natsSubjects = append([]string(nil), v.InputPorts[index].natsSubjects...)
+			if contract := v.InputPorts[index].Interface; contract != nil {
+				copyOfContract := *contract
+				copyOfContract.Compatible = append([]string(nil), contract.Compatible...)
+				nodeCopy.InputPorts[index].Interface = &copyOfContract
+			}
+		}
+		for index := range nodeCopy.OutputPorts {
+			nodeCopy.OutputPorts[index].natsSubjects = append([]string(nil), v.OutputPorts[index].natsSubjects...)
+			if contract := v.OutputPorts[index].Interface; contract != nil {
+				copyOfContract := *contract
+				copyOfContract.Compatible = append([]string(nil), contract.Compatible...)
+				nodeCopy.OutputPorts[index].Interface = &copyOfContract
+			}
+		}
 
 		result[k] = nodeCopy
 	}
@@ -151,11 +134,19 @@ func (g *FlowGraph) AddComponentNode(name string, comp component.Discoverable) e
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", fmt.Sprintf("component %s already exists", name))
 	}
 
+	inputPorts, err := g.extractPortInfo(comp.InputPorts())
+	if err != nil {
+		return fmt.Errorf("component %q input ports: %w", name, err)
+	}
+	outputPorts, err := g.extractPortInfo(comp.OutputPorts())
+	if err != nil {
+		return fmt.Errorf("component %q output ports: %w", name, err)
+	}
 	node := &ComponentNode{
 		ComponentName: name,
 		Component:     comp,
-		InputPorts:    g.extractPortInfo(comp.InputPorts()),
-		OutputPorts:   g.extractPortInfo(comp.OutputPorts()),
+		InputPorts:    inputPorts,
+		OutputPorts:   outputPorts,
 	}
 
 	g.nodes[name] = node
@@ -163,160 +154,37 @@ func (g *FlowGraph) AddComponentNode(name string, comp component.Discoverable) e
 }
 
 // extractPortInfo converts component ports to PortInfo for graph analysis
-func (g *FlowGraph) extractPortInfo(ports []component.Port) []PortInfo {
+func (g *FlowGraph) extractPortInfo(ports []component.Port) ([]PortInfo, error) {
 	result := make([]PortInfo, 0, len(ports))
 
 	for _, port := range ports {
-		portInfo := PortInfo{
-			Name:       port.Name,
-			Direction:  port.Direction,
-			Pattern:    g.classifyInteractionPattern(port.Config),
-			Interface:  g.extractInterfaceContract(port.Config),
-			Required:   port.Required,
-			PortConfig: port.Config, // Store original config for type checking
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, err
 		}
-
-		// Extract connection ID based on port type
-		portInfo.ConnectionID = g.extractConnectionID(port.Config)
+		connections := facts.ConnectionIDs()
+		if len(connections) == 0 {
+			return nil, fmt.Errorf("port %q has no connection identity", port.Name)
+		}
+		var interfaceContract *component.InterfaceContract
+		if contract, ok := facts.Interface(); ok {
+			interfaceContract = &contract
+		}
+		portInfo := PortInfo{
+			Name:         port.Name,
+			Direction:    port.Direction,
+			ConnectionID: connections[0],
+			Pattern:      facts.InteractionPattern(),
+			Interface:    interfaceContract,
+			Required:     port.Required,
+			kind:         facts.Kind(),
+			natsSubjects: facts.NATSSubjects(),
+		}
 
 		result = append(result, portInfo)
 	}
 
-	return result
-}
-
-// extractInterfaceContract extracts the interface contract from port configurations
-func (g *FlowGraph) extractInterfaceContract(portConfig component.Portable) *component.InterfaceContract {
-	switch config := portConfig.(type) {
-	case component.NATSPort:
-		return config.Interface
-	case component.NATSRequestPort:
-		return config.Interface
-	case component.JetStreamPort:
-		return config.Interface
-	case component.KVWatchPort:
-		return config.Interface
-	case component.KVWritePort:
-		return config.Interface
-	case component.NetworkPort:
-		// NetworkPort has no interface contract
-		return nil
-	case component.FilePort:
-		// FilePort has no interface contract
-		return nil
-	case component.HTTPClientPort:
-		return config.Interface
-	case component.TimerPort:
-		return config.Interface
-	default:
-		return nil
-	}
-}
-
-// classifyInteractionPattern determines the interaction pattern using type switches
-func (g *FlowGraph) classifyInteractionPattern(portConfig component.Portable) InteractionPattern {
-	switch portConfig.(type) {
-	case component.NATSPort:
-		return PatternStream
-	case component.NATSRequestPort:
-		return PatternRequest
-	case component.JetStreamPort:
-		return PatternStream // JetStream is async stream pattern
-	case component.KVWatchPort:
-		return PatternWatch
-	case component.KVWritePort:
-		return PatternWatch
-	case component.NetworkPort:
-		return PatternNetwork
-	case component.FilePort:
-		return PatternNetwork // File I/O is external like network
-	case component.HTTPClientPort:
-		return PatternHTTPClient
-	case component.StoreProvidePort:
-		return PatternStore
-	case component.StoreReadPort:
-		return PatternStore
-	case component.TimerPort:
-		return PatternTimer
-	default:
-		return PatternStream // Safe default
-	}
-}
-
-// extractConnectionID gets the connection identifier from port config
-func (g *FlowGraph) extractConnectionID(portConfig component.Portable) string {
-	if portConfig == nil {
-		return "nil_port_config"
-	}
-
-	switch config := portConfig.(type) {
-	case component.NATSPort:
-		if config.Subject == "" {
-			// Check if this was actually meant to be a different type
-			// For graph processor output ports that should be KVWritePort
-			return "nats_missing_subject"
-		}
-		return config.Subject
-	case component.NATSRequestPort:
-		if config.Subject == "" {
-			return "nats_request_missing_subject"
-		}
-		return config.Subject
-	case component.JetStreamPort:
-		// Use stream name as primary identifier, or first subject if available
-		if config.StreamName != "" {
-			return config.StreamName
-		}
-		if len(config.Subjects) > 0 {
-			return config.Subjects[0]
-		}
-		return "jetstream_unknown"
-	case component.KVWatchPort:
-		if config.Bucket == "" {
-			return "kv_missing_bucket"
-		}
-		return config.Bucket
-	case component.KVWritePort:
-		if config.Bucket == "" {
-			return "kv_missing_bucket"
-		}
-		return config.Bucket
-	case component.NetworkPort:
-		if config.Host == "" || config.Port == 0 {
-			return fmt.Sprintf("network_incomplete_%s_%d", config.Host, config.Port)
-		}
-		return fmt.Sprintf("%s:%s:%d", config.Protocol, config.Host, config.Port)
-	case component.FilePort:
-		// Use path as connection identifier
-		if config.Path != "" {
-			return config.Path
-		}
-		return "file_unknown"
-	case component.HTTPClientPort:
-		if config.URLPattern == "" {
-			return "http_client_missing_url"
-		}
-		return config.URLPattern
-	case component.TimerPort:
-		// Surface the polling cadence so operators can inspect it from the
-		// flowgraph (gh#312). Matches TimerPort.ResourceID()'s "timer:<interval>".
-		if config.Interval == "" {
-			return "timer_missing_interval"
-		}
-		return "timer:" + config.Interval
-	case component.StoreProvidePort:
-		// A provider is identified by the StorageInstance it owns.
-		if config.Instance == "" {
-			return "store_missing_instance"
-		}
-		return "store:" + config.Instance
-	case component.StoreReadPort:
-		// Advisory federation consumer: reads whatever instance a ref names at
-		// runtime, so it declares the federation, not a specific instance.
-		return "store-federation"
-	default:
-		return fmt.Sprintf("unknown_type_%T", config)
-	}
+	return result, nil
 }
 
 // ConnectComponentsByPatterns builds edges by matching connection patterns
@@ -334,13 +202,13 @@ func (g *FlowGraph) ConnectComponentsByPatterns() error {
 	var warnings []string
 
 	// Connect based on interaction patterns
-	g.connectStreamPorts(publishers[PatternStream], subscribers[PatternStream])
-	g.connectRequestPorts(publishers[PatternRequest], subscribers[PatternRequest])
-	g.connectWatchPorts(publishers[PatternWatch], subscribers[PatternWatch], &warnings)
-	g.connectStorePorts(publishers[PatternStore], subscribers[PatternStore])
+	g.connectStreamPorts(publishers[component.PatternStream], subscribers[component.PatternStream])
+	g.connectRequestPorts(publishers[component.PatternRequest], subscribers[component.PatternRequest])
+	g.connectWatchPorts(publishers[component.PatternWatch], subscribers[component.PatternWatch], &warnings)
+	g.connectStorePorts(publishers[component.PatternStore], subscribers[component.PatternStore])
 
 	// Validate network ports for conflicts
-	conflicts := g.validateNetworkPorts(publishers[PatternNetwork], subscribers[PatternNetwork])
+	conflicts := g.validateNetworkPorts(publishers[component.PatternNetwork], subscribers[component.PatternNetwork])
 	warnings = append(warnings, conflicts...)
 
 	// Return error if there are critical warnings
@@ -359,13 +227,13 @@ func (g *FlowGraph) validateGraphMutationProviders() error {
 	providers := 0
 	for componentName, node := range g.nodes {
 		for _, port := range append(append([]PortInfo(nil), node.InputPorts...), node.OutputPorts...) {
-			isMutation := (port.Pattern == PatternRequest && strings.HasPrefix(port.ConnectionID, "graph.mutation.")) ||
+			isMutation := (port.Pattern == component.PatternRequest && strings.HasPrefix(port.ConnectionID, "graph.mutation.")) ||
 				(port.Interface != nil && port.Interface.Type == graphmutation.InterfaceType)
 			if !isMutation {
 				continue
 			}
 			candidates++
-			if port.Pattern != PatternRequest || port.ConnectionID != graphmutation.SubjectFamily ||
+			if port.Pattern != component.PatternRequest || port.ConnectionID != graphmutation.SubjectFamily ||
 				port.Interface == nil || port.Interface.Type != graphmutation.InterfaceType ||
 				port.Interface.Version != graphmutation.InterfaceVersion || !port.Required {
 				return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "validateGraphMutationProviders",
@@ -392,8 +260,8 @@ func (g *FlowGraph) validateGraphMutationProviders() error {
 // For JetStream ports that have a StreamName connection ID, extra entries are
 // added for each Subject in the Subjects list so that NATS subject pattern
 // matching in connectStreamPorts can find them.
-func (g *FlowGraph) buildPublisherMap() map[InteractionPattern]map[string][]ComponentPortRef {
-	publishers := make(map[InteractionPattern]map[string][]ComponentPortRef)
+func (g *FlowGraph) buildPublisherMap() map[component.InteractionPattern]map[string][]ComponentPortRef {
+	publishers := make(map[component.InteractionPattern]map[string][]ComponentPortRef)
 
 	for componentName, node := range g.nodes {
 		for _, port := range node.OutputPorts {
@@ -413,9 +281,9 @@ func (g *FlowGraph) buildPublisherMap() map[InteractionPattern]map[string][]Comp
 
 			// For JetStream ports keyed by StreamName, also add entries for each
 			// subject so connectStreamPorts can match them via NATS pattern matching.
-			if jsPort, ok := port.PortConfig.(component.JetStreamPort); ok {
-				if jsPort.StreamName != "" {
-					for _, subject := range jsPort.Subjects {
+			if port.kind == component.PortKindJetStream {
+				if port.ConnectionID != "" {
+					for _, subject := range port.natsSubjects {
 						if subject != "" && subject != port.ConnectionID {
 							publishers[port.Pattern][subject] = append(
 								publishers[port.Pattern][subject],
@@ -435,8 +303,8 @@ func (g *FlowGraph) buildPublisherMap() map[InteractionPattern]map[string][]Comp
 // For JetStream ports that have a StreamName connection ID, extra entries are
 // added for each Subject in the Subjects list so that NATS subject pattern
 // matching in connectStreamPorts can find them.
-func (g *FlowGraph) buildSubscriberMap() map[InteractionPattern]map[string][]ComponentPortRef {
-	subscribers := make(map[InteractionPattern]map[string][]ComponentPortRef)
+func (g *FlowGraph) buildSubscriberMap() map[component.InteractionPattern]map[string][]ComponentPortRef {
+	subscribers := make(map[component.InteractionPattern]map[string][]ComponentPortRef)
 
 	for componentName, node := range g.nodes {
 		for _, port := range node.InputPorts {
@@ -456,9 +324,9 @@ func (g *FlowGraph) buildSubscriberMap() map[InteractionPattern]map[string][]Com
 
 			// For JetStream ports keyed by StreamName, also add entries for each
 			// subject so connectStreamPorts can match them via NATS pattern matching.
-			if jsPort, ok := port.PortConfig.(component.JetStreamPort); ok {
-				if jsPort.StreamName != "" {
-					for _, subject := range jsPort.Subjects {
+			if port.kind == component.PortKindJetStream {
+				if port.ConnectionID != "" {
+					for _, subject := range port.natsSubjects {
 						if subject != "" && subject != port.ConnectionID {
 							subscribers[port.Pattern][subject] = append(
 								subscribers[port.Pattern][subject],
@@ -583,7 +451,7 @@ func (g *FlowGraph) connectStreamPorts(publishers, subscribers map[string][]Comp
 						g.edges = append(g.edges, FlowEdge{
 							From:         pub,
 							To:           sub,
-							Pattern:      PatternStream,
+							Pattern:      component.PatternStream,
 							ConnectionID: connID,
 							Metadata:     EdgeMetadata{},
 						})
@@ -620,7 +488,7 @@ func (g *FlowGraph) connectStorePorts(publishers, subscribers map[string][]Compo
 					g.edges = append(g.edges, FlowEdge{
 						From:         pub,
 						To:           sub,
-						Pattern:      PatternStore,
+						Pattern:      component.PatternStore,
 						ConnectionID: pubConnID,
 						Metadata:     EdgeMetadata{},
 					})
@@ -661,7 +529,7 @@ func (g *FlowGraph) connectRequestPorts(publishers, subscribers map[string][]Com
 		g.edges = append(g.edges, FlowEdge{
 			From:         p1,
 			To:           p2,
-			Pattern:      PatternRequest,
+			Pattern:      component.PatternRequest,
 			ConnectionID: connID,
 			Metadata:     EdgeMetadata{},
 		})
@@ -746,7 +614,7 @@ func (g *FlowGraph) connectWatchPorts(publishers, subscribers map[string][]Compo
 					edge := FlowEdge{
 						From:         pub,
 						To:           sub,
-						Pattern:      PatternWatch,
+						Pattern:      component.PatternWatch,
 						ConnectionID: connectionID,
 						Metadata:     EdgeMetadata{},
 					}
@@ -834,7 +702,7 @@ func (g *FlowGraph) AnalyzeConnectivity() *FlowAnalysisResult {
 		if port.Issue == IssueNoPublishers || port.Issue == IssueNoSubscribers {
 			// Only required stream connections are critical
 			// Optional ports without connections are acceptable
-			if port.Pattern == PatternStream && port.Required {
+			if port.Pattern == component.PatternStream && port.Required {
 				hasCriticalIssues = true
 				break
 			}
@@ -916,20 +784,20 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 		for _, port := range node.InputPorts {
 			if connectedPorts[componentName] == nil || !connectedPorts[componentName][port.Name] {
 				// Skip external boundary inputs — they ARE the external source.
-				// PatternNetwork binds a local listener; PatternHTTPClient initiates
+				// component.PatternNetwork binds a local listener; component.PatternHTTPClient initiates
 				// an outbound connection. Both are legitimately unmatched in the
 				// internal graph because their "publisher" is outside the system.
-				// PatternStore (ADR-063) is a federation-capability declaration whose
+				// component.PatternStore (ADR-063) is a federation-capability declaration whose
 				// pairing is producer-chosen at runtime — an unmatched store-read is
-				// not orphaned. PatternTimer is a cadence/scheduler boundary that
+				// not orphaned. component.PatternTimer is a cadence/scheduler boundary that
 				// drives the component on an interval, not a data edge.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore || port.Pattern == PatternTimer {
+				if port.Pattern == component.PatternNetwork || port.Pattern == component.PatternHTTPClient || port.Pattern == component.PatternStore || port.Pattern == component.PatternTimer {
 					continue // Not orphaned, it's an external/federation/cadence input
 				}
 
 				// Determine issue type based on pattern
 				issue := IssueNoPublishers
-				if port.Pattern == PatternRequest {
+				if port.Pattern == component.PatternRequest {
 					issue = IssueOptionalAPIUnused // Request APIs are optional
 				} else if g.isInterfaceAlternativePort(port) {
 					// Interface-specific alternatives are optional specialized paths
@@ -952,21 +820,21 @@ func (g *FlowGraph) findOrphanedPorts() []OrphanedPort {
 		for _, port := range node.OutputPorts {
 			if connectedPorts[componentName] == nil || !connectedPorts[componentName][port.Name] {
 				// Skip external boundary outputs — they ARE the external sink.
-				// PatternHTTPClient is also skipped: the component owns the
+				// component.PatternHTTPClient is also skipped: the component owns the
 				// outbound connection so no internal subscriber is expected.
-				// PatternStore (ADR-063): a store-provide with no consumer is a
-				// legitimately-unread store, not an orphan. PatternTimer is a
+				// component.PatternStore (ADR-063): a store-provide with no consumer is a
+				// legitimately-unread store, not an orphan. component.PatternTimer is a
 				// cadence boundary, symmetric with the input side.
-				if port.Pattern == PatternNetwork || port.Pattern == PatternHTTPClient || port.Pattern == PatternStore || port.Pattern == PatternTimer {
+				if port.Pattern == component.PatternNetwork || port.Pattern == component.PatternHTTPClient || port.Pattern == component.PatternStore || port.Pattern == component.PatternTimer {
 					continue // Not orphaned, it's an external/federation output
 				}
 
 				// Determine issue type based on pattern
 				issue := IssueNoSubscribers
-				if port.Pattern == PatternRequest {
+				if port.Pattern == component.PatternRequest {
 					issue = IssueOptionalAPIUnused // Request APIs are optional
 				}
-				if port.Pattern == PatternWatch {
+				if port.Pattern == component.PatternWatch {
 					issue = IssueOptionalIndexUnwatched // KV indexes may be intentionally unwatched
 				}
 
@@ -1034,7 +902,7 @@ func (g *FlowGraph) ValidateStreamRequirements() []StreamRequirementWarning {
 
 	// For each edge, check if the subscriber is JetStream and publisher is NATS
 	for _, edge := range g.edges {
-		if edge.Pattern != PatternStream {
+		if edge.Pattern != component.PatternStream {
 			continue
 		}
 
@@ -1056,8 +924,7 @@ func (g *FlowGraph) ValidateStreamRequirements() []StreamRequirementWarning {
 		}
 
 		// Check if subscriber is JetStream
-		jsPort, isJetStream := subscriberPort.PortConfig.(component.JetStreamPort)
-		if !isJetStream {
+		if subscriberPort.kind != component.PortKindJetStream {
 			continue // Subscriber is not JetStream, no stream requirement
 		}
 
@@ -1079,8 +946,7 @@ func (g *FlowGraph) ValidateStreamRequirements() []StreamRequirementWarning {
 		}
 
 		// Check if publisher is NOT JetStream (i.e., won't create stream)
-		_, pubIsJetStream := publisherPort.PortConfig.(component.JetStreamPort)
-		if pubIsJetStream {
+		if publisherPort.kind == component.PortKindJetStream {
 			continue // Publisher is JetStream, will create stream - OK
 		}
 
@@ -1089,11 +955,11 @@ func (g *FlowGraph) ValidateStreamRequirements() []StreamRequirementWarning {
 			Severity:       "critical",
 			SubscriberComp: edge.To.ComponentName,
 			SubscriberPort: edge.To.PortName,
-			Subjects:       jsPort.Subjects,
+			Subjects:       append([]string(nil), subscriberPort.natsSubjects...),
 			PublisherComps: []string{edge.From.ComponentName},
 			Issue: fmt.Sprintf(
 				"JetStream subscriber expects stream for subjects %v but publisher '%s' uses NATS (no stream will be created)",
-				jsPort.Subjects, edge.From.ComponentName,
+				subscriberPort.natsSubjects, edge.From.ComponentName,
 			),
 		})
 	}
