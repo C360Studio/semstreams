@@ -92,7 +92,7 @@
                   "raw.mission.command"
                 ]
               },
-              "name": "udp_out"
+              "name": "nats_output"
             }
           ]
         },

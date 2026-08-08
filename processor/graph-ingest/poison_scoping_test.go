@@ -269,7 +269,7 @@ func TestAggregateReadNamesEveryPoisonedEntity(t *testing.T) {
 		c := setup(t)
 		req, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme.ops.test.system.widget"})
 		require.NoError(t, err)
-		data, qerr := c.handleQueryPrefixNATS(context.Background(), req)
+		data, qerr := c.handleQueryPrefixWithMaxPayload(context.Background(), req, 1<<20)
 		assertAggregate(t, c, data, qerr)
 	})
 }

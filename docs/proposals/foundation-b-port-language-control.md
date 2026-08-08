@@ -54,16 +54,18 @@ no invented grouping is used to reach 45.
 ## Cutover status
 
 The cutover retains the two TSV files as the immutable historical migration record. The owner-approved graph-gateway
-amendment does not rewrite either TSV. The target test accounts for all 646 frozen ledger identities, requires
-production decoding and resolution for 512 surviving frozen configuration rows, and records ten approved deletions:
-the two graph-query rows already retired plus the eight graph-gateway listener inputs retired by the amendment. Sixteen
-new graph-gateway output rows bring the actual canonical configuration population to 528.
+amendments do not rewrite either TSV. The target test accounts for all 646 frozen ledger identities, requires
+production decoding and resolution for 505 surviving frozen configuration rows, and records 17 approved deletions:
+the two graph-query rows already retired, the eight graph-gateway listener inputs, and the seven redundant agentic-loop
+trajectory overrides retired below. Sixteen new graph-gateway output rows bring the actual canonical configuration
+population to 521 (`512 - 7` survivors, `10 + 7` deletions, and `528 - 7` actual rows).
 
-The production AST census now requires 136 `PortDefinition` identities. The amendment replaces the five frozen
+The production AST census now requires 137 `PortDefinition` identities. The graph-gateway amendment replaces the five frozen
 graph-gateway Go identities with six canonical constructions: one contract and one default declaration for each of the
-three required query families. Together with the eleven earlier checkpoint additions below, the accounting is
-`124 - 5 + 6 + 11 = 136`. The full-repository AST census, rather than the frozen path list, proves that no additional
-production construction is hidden outside this population.
+three required query families. The request/reply response-bound amendment deletes the frozen ObjectStore `api`
+`NATSRequestPort`. Together with the eleven earlier checkpoint additions and the two trajectory contract declarations
+below, the accounting is `124 - 5 - 1 + 6 + 11 + 2 = 137` (`136 + 2 - 1`). The full-repository AST census, rather than
+the frozen path list, proves that no additional production construction is hidden outside this population.
 
 ### Owner-approved graph-gateway amendment
 
@@ -89,7 +91,38 @@ The eight amended shipped configurations are `configs/e2e-structural.json`, `con
 or omit any required output fail startup until migrated. Full release validation, including the relevant breaking-change
 E2E tier, remains checkpoint 5 and is not discharged by the Foundation B target guard.
 
-The eleven additions are deliberately recorded here rather than added to the immutable baseline:
+### Owner-approved trajectory override retirement amendment
+
+Agentic-loop's default contract now owns the required `trajectories` `kv-write` port, including interface
+`agentic.trajectory.fact` version `v1`. A named configured port is a complete replacement, so retaining the seven
+frozen bucket-only overrides would erase required/interface facts. The target guard therefore requires these exact
+frozen record identities to be absent; path and JSON pointer are shown separately to keep the amendment auditable:
+
+- `config:configs/agentic.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/agentic.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/crud-tools-test.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/crud-tools-test.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/deep-research-test.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/deep-research-test.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/deep-research.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/deep-research.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/lesson-example.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/lesson-example.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/ops-agent-test.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/ops-agent-test.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+- `config:configs/flows/ops-agent.json#/components/agentic-loop/config/ports/kv_write/1`
+  - path: `configs/flows/ops-agent.json`
+  - pointer: `/components/agentic-loop/config/ports/kv_write/1`
+
+The immutable worklist and dispositions remain unchanged; this amendment changes target interpretation only.
+
+The thirteen additions are deliberately recorded here rather than added to the immutable baseline:
 
 | File | Name | Kind | Direction | Resource | Reason |
 |---|---|---|---|---|---|
@@ -98,6 +131,8 @@ The eleven additions are deliberately recorded here rather than added to the imm
 | `processor/graph-clustering/component.go` | `incoming_index` | `KVReadPort` | input | `INCOMING_INDEX` | truthful existing read |
 | `processor/agentic-tools/config.go` | `entity_states` | `KVReadPort` | input | `ENTITY_STATES` | truthful existing read |
 | `processor/agentic-tools/config.go` | `agent_loops` | `KVReadPort` | input | `AGENT_LOOPS` | truthful existing read |
+| `processor/agentic-loop/config.go` | `trajectories` | `KVWritePort` | output | `AGENT_TRAJECTORIES` | fact log |
+| `processor/agentic-loop/config.go` | `trajectory_query` | `NATSRequestPort` | input | `agentic.query.trajectory` | query |
 | `input/http/http.go` | `http_schedule` | `TimerPort` | input | configured polling interval | cadence sibling required by `HTTPClientPort` |
 | `input/http/http.go` | `http_source` | `HTTPClientPort` | input | configured method and URL | constructor-owned external source |
 | `processor/gated-dag/component.go` | `dispatch` | `JetStreamPort` | output | configured stream and subject | truthful durable dispatch path |

@@ -92,7 +92,7 @@
                   "raw.sensor.udp"
                 ]
               },
-              "name": "udp_out"
+              "name": "nats_output"
             }
           ]
         },
@@ -279,6 +279,10 @@
           },
           {
             "config": {
+              "interface": {
+                "type": "agentic.query",
+                "version": "v1"
+              },
               "kind": "nats-request",
               "subject": "agentic.query.*"
             },

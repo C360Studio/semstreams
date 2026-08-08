@@ -46,7 +46,9 @@ type trajectoryTestBucket struct {
 	createErrBefore bool
 	createErrAfter  bool
 	listErr         error
+	listLister      jetstream.KeyLister
 	listCalls       int
+	getCalls        int
 	getErrKeys      map[string]error
 	blockListPrefix string
 	listEntered     chan struct{}
@@ -72,6 +74,7 @@ func (b *trajectoryTestBucket) Create(_ context.Context, key string, value []byt
 func (b *trajectoryTestBucket) Get(_ context.Context, key string) (jetstream.KeyValueEntry, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.getCalls++
 	if err := b.getErrKeys[key]; err != nil {
 		return nil, err
 	}
@@ -86,6 +89,7 @@ func (b *trajectoryTestBucket) ListKeysFiltered(ctx context.Context, filters ...
 	b.mu.Lock()
 	b.listCalls++
 	listErr := b.listErr
+	listLister := b.listLister
 	block := b.blockListPrefix != "" && filters[0] == b.blockListPrefix
 	entered := b.listEntered
 	values := make(map[string][]byte, len(b.values))
@@ -95,6 +99,9 @@ func (b *trajectoryTestBucket) ListKeysFiltered(ctx context.Context, filters ...
 	b.mu.Unlock()
 	if listErr != nil {
 		return nil, listErr
+	}
+	if listLister != nil {
+		return listLister, nil
 	}
 	if block {
 		if entered != nil {
@@ -723,5 +730,64 @@ func TestApprovalRejectionAtIterationCapRecordsTerminalBeforeAdjacentSurfaces(t 
 	}
 	if kinds[len(kinds)-1] != agentic.TrajectoryKindLoopTerminal {
 		t.Fatalf("approval fact order = %v, terminal must be last before persistence/publication", kinds)
+	}
+}
+
+func TestBoundedTrajectoryAuditStageUsesAcceptedClosedVocabulary(t *testing.T) {
+	t.Parallel()
+
+	accepted := []trajectoryAuditStage{
+		trajectoryStageProviderResolve,
+		trajectoryStageEvidenceGet,
+		trajectoryStageEvidencePut,
+		trajectoryStageEvidenceVerify,
+		trajectoryStageFactEncode,
+		trajectoryStageFactCreate,
+		trajectoryStageFactVerify,
+	}
+	for _, stage := range accepted {
+		if got := boundedTrajectoryAuditStage(stage); got != stage {
+			t.Errorf("boundedTrajectoryAuditStage(%q) = %q, want unchanged", stage, got)
+		}
+	}
+	if got := boundedTrajectoryAuditStage("batch_budget"); got != trajectoryStageFactEncode {
+		t.Fatalf("retired batch_budget stage mapped to %q, want bounded fallback %q", got, trajectoryStageFactEncode)
+	}
+}
+
+func TestTrajectoryBatchTimeoutReportsBoundedStageAndAttemptIdentity(t *testing.T) {
+	t.Parallel()
+
+	recorder := newTrajectoryRecorder(&trajectoryTestBucket{}, nil, "objectstore", nil)
+	recorder.newAttemptID = func() string { return "timeoutattempt" }
+	release, acquired := recorder.acquireLoopBatch(context.Background(), "loop-timeout")
+	if !acquired {
+		t.Fatal("precondition: acquire loop batch token")
+	}
+	defer release()
+
+	var logs bytes.Buffer
+	component := &Component{
+		trajectoryRecorder: recorder,
+		logger:             slog.New(slog.NewTextHandler(&logs, nil)),
+	}
+	component.recordTrajectoryBatchWithin(context.Background(), []trajectoryObservation{{
+		LoopID: "loop-timeout", Kind: agentic.TrajectoryKindModelCompleted,
+	}}, 10*time.Millisecond)
+
+	logged := logs.String()
+	for _, want := range []string{
+		"loop_id=loop-timeout",
+		"attempt_id=timeoutattempt",
+		"stage=fact_create",
+		"reason=timeout",
+	} {
+		if !strings.Contains(logged, want) {
+			t.Errorf("timeout log %q does not contain %q", logged, want)
+		}
+	}
+	count, _ := component.trajectoryAuditHealth.snapshot()
+	if count != 1 {
+		t.Fatalf("audit health failure count = %d, want 1", count)
 	}
 }

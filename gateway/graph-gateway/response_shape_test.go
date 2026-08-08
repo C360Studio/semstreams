@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -213,8 +214,8 @@ func routedSubjectShapes() []routedSubjectShape {
 			[]byte(`{"answer":"","sources":[],"count":0}`), false},
 		{"graph.query.searchGraph", "processor/graph-query/query.go handleSearchGraph, wraps globalSearch",
 			[]byte(`{"answer":"","sources":[],"count":0}`), false},
-		{"agentic.query.trajectory", "processor/agentic-loop/component.go:1873 json.Marshal(traj)",
-			[]byte(`{"loop_id":"loop-1","steps":[],"status":"complete"}`), false},
+		{"agentic.query.trajectory", "processor/agentic-loop canonical immutable-fact reader",
+			[]byte(`{"schema_version":"v1","loop_id":"loop-1","coverage":"observed","observed_totals":{"facts":0},"terminal_observed":false,"facts":[]}`), false},
 
 		// --- Routed with NO producer --------------------------------------
 		// graph.query.capabilities is routed by the gateway but no component
@@ -305,6 +306,102 @@ func TestGateway_EveryRoutedSubjectHasAShapeCase(t *testing.T) {
 	}
 }
 
+func TestTrajectoryIsGraphQLOnlyAndOpenAPIHasNoDirectRoute(t *testing.T) {
+	openAPI, err := os.ReadFile(filepath.Join("..", "..", "specs", "openapi.v3.yaml"))
+	require.NoError(t, err)
+	require.NotContains(t, string(openAPI), "/trajectories")
+	_, err = os.Stat(filepath.Join("..", "..", "processor", "agentic-loop", "http.go"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestTrajectoryIntrospectionDeclaresObservedFactProjection(t *testing.T) {
+	schema := buildIntrospectionSchema()
+	typeValue := findTypeByName(buildIntrospectionSchema(), `__type(name: "Trajectory")`)
+	typeMap, ok := typeValue.(map[string]interface{})
+	require.True(t, ok)
+	fields, ok := typeMap["fields"].([]map[string]interface{})
+	require.True(t, ok)
+	names := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		name, _ := field["name"].(string)
+		names[name] = true
+	}
+	for _, required := range []string{"schema_version", "loop_id", "coverage", "observed_totals", "terminal_observed", "facts", "next_cursor"} {
+		require.True(t, names[required], "trajectory schema missing %s", required)
+	}
+	for _, retired := range []string{"steps", "outcome", "totalTokensIn", "complete", "partial", "seal", "manifest"} {
+		require.False(t, names[retired], "trajectory schema retained %s", retired)
+	}
+
+	queryType := findTypeByName(schema, `__type(name: "Query")`).(map[string]interface{})
+	queryFields := queryType["fields"].([]map[string]interface{})
+	var trajectoryField map[string]interface{}
+	for _, field := range queryFields {
+		if field["name"] == "trajectory" {
+			trajectoryField = field
+			break
+		}
+	}
+	require.NotNil(t, trajectoryField)
+	args := trajectoryField["args"].([]map[string]interface{})
+	argNames := make(map[string]bool, len(args))
+	for _, arg := range args {
+		argNames[arg["name"].(string)] = true
+	}
+	for _, required := range []string{"loopId", "limit", "cursor"} {
+		require.True(t, argNames[required], "trajectory schema missing argument %s", required)
+	}
+	require.False(t, argNames["hydrateEvidence"])
+
+	factType := findTypeByName(schema, `__type(name: "TrajectoryFact")`).(map[string]interface{})
+	factFields := factType["fields"].([]map[string]interface{})
+	for _, field := range factFields {
+		require.NotEqual(t, "evidence_body", field["name"])
+		require.NotEqual(t, "evidence_status", field["name"])
+	}
+	require.Nil(t, findTypeByName(schema, `__type(name: "TrajectoryEvidence")`))
+}
+
+func TestValidateTrajectoryResponseRejectsEvidenceBody(t *testing.T) {
+	valid := []byte(`{"schema_version":"v1","loop_id":"loop-1","coverage":"observed","observed_totals":{"facts":0},"terminal_observed":false,"facts":[]}`)
+	require.NoError(t, validateTrajectoryResponse(valid))
+
+	withBody := []byte(`{"schema_version":"v1","loop_id":"loop-1","coverage":"observed","observed_totals":{"facts":1},"terminal_observed":false,"facts":[{"evidence_capture":"stored","evidence_body":{"body":{}}}]}`)
+	require.Error(t, validateTrajectoryResponse(withBody))
+}
+
+func TestPrefixIntrospectionDeclaresEntityPageAndCursor(t *testing.T) {
+	schema := buildIntrospectionSchema()
+	queryType := findTypeByName(schema, `__type(name: "Query")`).(map[string]interface{})
+	fields := queryType["fields"].([]map[string]interface{})
+	var prefixField map[string]interface{}
+	for _, field := range fields {
+		if field["name"] == "entitiesByPrefix" {
+			prefixField = field
+			break
+		}
+	}
+	require.NotNil(t, prefixField)
+	require.Equal(t, "EntityPage", prefixField["type"].(map[string]interface{})["name"])
+	args := prefixField["args"].([]map[string]interface{})
+	argNames := make(map[string]bool, len(args))
+	for _, arg := range args {
+		argNames[arg["name"].(string)] = true
+	}
+	for _, name := range []string{"prefix", "limit", "cursor"} {
+		require.True(t, argNames[name], "entitiesByPrefix introspection missing %s", name)
+	}
+
+	pageType := findTypeByName(schema, `__type(name: "EntityPage")`).(map[string]interface{})
+	pageFields := pageType["fields"].([]map[string]interface{})
+	pageNames := make(map[string]bool, len(pageFields))
+	for _, field := range pageFields {
+		pageNames[field["name"].(string)] = true
+	}
+	require.True(t, pageNames["entities"])
+	require.True(t, pageNames["next_cursor"])
+}
+
 // TestGateway_RoutedShapesClassifyCorrectly runs every reachable subject's real
 // reply through the production projection path and asserts the outcome.
 //
@@ -328,11 +425,6 @@ func TestGateway_RoutedShapesClassifyCorrectly(t *testing.T) {
 				return
 			}
 			// A non-envelope reply must survive the projection path intact.
-			// graph.query.prefix is the one exception: it has its own unwrap,
-			// asserted separately in TestGateway_PrefixKeepsItsOwnUnwrapPath.
-			if tc.subject == "graph.query.prefix" {
-				return
-			}
 			var fields map[string]json.RawMessage
 			if err := json.Unmarshal(projected, &fields); err == nil && len(fields) == 1 {
 				for _, inner := range fields {
@@ -387,48 +479,28 @@ func TestGateway_NonEnvelopeRepliesAreUntouched(t *testing.T) {
 	}
 }
 
-// TestGateway_PrefixUnwrapOrderIsLoadBearing pins design decision D4 and task
-// 4.3 — the ORDER of envelope detection and the graph.query.prefix unwrap.
-//
-// TestGateway_PrefixKeepsItsOwnUnwrapPath below does NOT pin the order, despite
-// an earlier comment claiming it did (found by review, proven by mutation:
-// swapping the two blocks in component.go left the whole package green). With
-// an unwrapped PrefixQueryResponse the orders are indistinguishable — the
-// prefix unwrap yields a bare array, which detection then declines because it
-// is not an object.
-//
-// The order only becomes load-bearing on an ENVELOPED prefix reply, which is
-// the scenario the design's "future field addition" caveat is about. Under the
-// wrong order, validateAndUnwrapPrefixResponse decodes {"data":…,"timestamp":…}
-// as an empty PrefixQueryResponse, hits its len(Entities)==0 branch, returns
-// the envelope unchanged, and the caller receives an OBJECT where the contract
-// promises an array. This test feeds exactly that reply.
-func TestGateway_PrefixUnwrapOrderIsLoadBearing(t *testing.T) {
+func TestGateway_EnvelopedPrefixStillProjectsTypedPage(t *testing.T) {
 	t.Parallel()
 
 	reply, err := json.Marshal(graph.NewQueryResponse(graph.PrefixQueryResponse{
-		Entities: []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}},
+		Entities:   []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}},
+		NextCursor: "next-page",
 	}))
 	require.NoError(t, err)
 
 	_, projected := projectField(t, "graph.query.prefix", reply)
-
-	var entities []json.RawMessage
-	require.NoError(t, json.Unmarshal(projected, &entities),
-		"an enveloped prefix reply must still project a bare array — detection has to run "+
-			"BEFORE the prefix unwrap, or the envelope reaches validateAndUnwrapPrefixResponse, "+
-			"decodes as zero entities, and is returned as an object: %s", projected)
-	require.Len(t, entities, 1)
+	var page graph.PrefixQueryResponse
+	require.NoError(t, json.Unmarshal(projected, &page))
+	require.Len(t, page.Entities, 1)
+	require.Equal(t, "next-page", page.NextCursor)
 }
 
-// TestGateway_PrefixKeepsItsOwnUnwrapPath asserts the narrower fact its name
-// promises: detection does not claim PrefixQueryResponse, and the prefix path
-// still yields an array. The ORDER is pinned by the test above, not this one.
-func TestGateway_PrefixKeepsItsOwnUnwrapPath(t *testing.T) {
+func TestGateway_PrefixPreservesTypedPage(t *testing.T) {
 	t.Parallel()
 
 	reply, err := json.Marshal(graph.PrefixQueryResponse{
-		Entities: []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}},
+		Entities:   []graph.EntityState{{ID: "acme.ops.test.system.widget.001"}},
+		NextCursor: "next-page",
 	})
 	require.NoError(t, err)
 
@@ -440,11 +512,10 @@ func TestGateway_PrefixKeepsItsOwnUnwrapPath(t *testing.T) {
 	field, projected := projectField(t, "graph.query.prefix", reply)
 	require.Equal(t, "entitiesByPrefix", field)
 
-	// Its own unwrap still ran: the projection is the bare entities array.
-	var entities []json.RawMessage
-	require.NoError(t, json.Unmarshal(projected, &entities),
-		"graph.query.prefix must still project a bare array: %s", projected)
-	require.Len(t, entities, 1)
+	var page graph.PrefixQueryResponse
+	require.NoError(t, json.Unmarshal(projected, &page))
+	require.Len(t, page.Entities, 1)
+	require.Equal(t, "next-page", page.NextCursor)
 }
 
 // TestGateway_EnvelopeWithRequestIDProjectsUnwrapped covers the optional third

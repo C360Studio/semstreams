@@ -88,38 +88,6 @@ func TryLoopExecutionEntityID(org, platform, loopID string) (string, error) {
 	return id, nil
 }
 
-// TrajectoryStepEntityID constructs a 6-part entity ID for a trajectory step.
-// Format: {org}.{platform}.agent.agentic-loop.step.{loopID}-{stepIndex}
-//
-// Example: TrajectoryStepEntityID("c360", "ops", "abc123", 0)
-// Returns: "c360.ops.agent.agentic-loop.step.abc123-0"
-//
-// Panics if any input part is empty or contains a dot, as these represent
-// programming errors — the caller is responsible for supplying well-formed identifiers.
-func TrajectoryStepEntityID(org, platform, loopID string, stepIndex int) string {
-	if err := validatePart("org", org); err != nil {
-		panic(fmt.Sprintf("TrajectoryStepEntityID: %s", err))
-	}
-	if err := validatePart("platform", platform); err != nil {
-		panic(fmt.Sprintf("TrajectoryStepEntityID: %s", err))
-	}
-	if err := validatePart("loopID", loopID); err != nil {
-		panic(fmt.Sprintf("TrajectoryStepEntityID: %s", err))
-	}
-	if stepIndex < 0 {
-		panic(fmt.Sprintf("TrajectoryStepEntityID: stepIndex must be non-negative, got %d", stepIndex))
-	}
-
-	instance := fmt.Sprintf("%s-%d", loopID, stepIndex)
-	id := fmt.Sprintf("%s.%s.agent.agentic-loop.step.%s", org, platform, instance)
-
-	if !message.IsValidEntityID(id) {
-		panic(fmt.Sprintf("TrajectoryStepEntityID: constructed id %q failed IsValidEntityID — check input values", id))
-	}
-
-	return id
-}
-
 // ChainExecutionEntityID constructs a 6-part entity ID for a cross-arc agent chain.
 // Format: {org}.{platform}.agent.chain.execution.{chainID}
 //

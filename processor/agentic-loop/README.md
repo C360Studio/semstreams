@@ -4,7 +4,8 @@ Loop orchestrator component for the agentic processing system.
 
 ## Overview
 
-The `agentic-loop` component orchestrates autonomous agent execution by managing the lifecycle of agentic loops. It coordinates communication between the model processor (LLM calls) and tools processor (tool execution), tracks state through a 10-state machine, supports signal handling for user control, manages context memory with automatic compaction, and captures complete execution trajectories for observability.
+The `agentic-loop` component orchestrates autonomous agent execution, coordinates model and tool work, persists loop
+state, and records append-only observed trajectory facts with separately stored full evidence.
 
 ## Architecture
 
@@ -34,7 +35,7 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
 - **Signal Handling**: Cancel, pause, resume, and approval signals
 - **Context Management**: Automatic compaction and GC for long-running loops
 - **Tool Coordination**: Tracks pending tool calls, aggregates results
-- **Trajectory Capture**: Records complete execution paths for debugging
+- **Trajectory Observations**: Appends bounded attempt facts and content-addressed full evidence
 - **Iteration Guards**: Configurable max iterations to prevent runaway loops
 - **Architect/Editor Split**: Automatic spawning of editor from architect
 - **Rules Integration**: Enriched completion events for rules-based orchestration
@@ -51,7 +52,7 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
     "timeout": "120s",
     "stream_name": "AGENT",
     "loops_bucket": "AGENT_LOOPS",
-    "trajectories_bucket": "AGENT_TRAJECTORIES",
+    "trajectory_evidence_storage_instance": "objectstore",
     "context": {
       "enabled": true,
       "compact_threshold": 0.60,
@@ -66,12 +67,30 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
     },
     "ports": {
       "inputs": [
+        {
+          "name":"trajectory_query",
+          "required":true,
+          "config":{
+            "kind":"nats-request",
+            "subject":"agentic.query.trajectory",
+            "interface":{"type":"agentic.query","version":"v1"}
+          }
+        },
         {"name":"agent.task","config":{"kind":"jetstream","subjects":["agent.task.*"],"stream_name":"AGENT"}},
         {"name":"agent.response","config":{"kind":"jetstream","subjects":["agent.response.>"],"stream_name":"AGENT"}},
         {"name":"tool.result","config":{"kind":"jetstream","subjects":["tool.result.>"],"stream_name":"AGENT"}},
         {"name":"agent.signal","config":{"kind":"jetstream","subjects":["agent.signal.*"],"stream_name":"AGENT"}}
       ],
       "outputs": [
+        {
+          "name":"trajectories",
+          "required":true,
+          "config":{
+            "kind":"kv-write",
+            "bucket":"AGENT_TRAJECTORIES",
+            "interface":{"type":"agentic.trajectory.fact","version":"v1"}
+          }
+        },
         {"name":"agent.request","config":{"kind":"jetstream","subjects":["agent.request.*"],"stream_name":"AGENT"}},
         {"name":"tool.execute","config":{"kind":"jetstream","subjects":["tool.execute.*"],"stream_name":"AGENT"}},
         {"name":"agent.complete","config":{"kind":"jetstream","subjects":["agent.complete.*"],"stream_name":"AGENT"}},
@@ -91,7 +110,7 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
 | `stream_name` | string | "AGENT" | JetStream stream name |
 | `consumer_name_suffix` | string | "" | Suffix for consumer names (for testing) |
 | `loops_bucket` | string | "AGENT_LOOPS" | KV bucket for loop state |
-| `trajectories_bucket` | string | "AGENT_TRAJECTORIES" | KV bucket for trajectories |
+| `trajectory_evidence_storage_instance` | string | "objectstore" | Registered Store instance for full evidence |
 | `context` | object | (defaults) | Context management configuration |
 | `ports` | object | (defaults) | Port configuration |
 
@@ -114,6 +133,7 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
 | agent.response | jetstream | agent.response.> | Model responses from agentic-model |
 | tool.result | jetstream | tool.result.> | Tool results from agentic-tools |
 | agent.signal | jetstream | agent.signal.* | Control signals (cancel, pause, resume) |
+| trajectory_query | nats-request | agentic.query.trajectory | Observed fact query (`agentic.query` v1) |
 
 ### Outputs
 
@@ -130,7 +150,7 @@ The `agentic-loop` component orchestrates autonomous agent execution by managing
 |------|--------|-------------|-------------|
 | loops | AGENT_LOOPS | `{loop_id}` | Loop entity state |
 | loops | AGENT_LOOPS | `COMPLETE_{loop_id}` | Completion state for rules engine |
-| trajectories | AGENT_TRAJECTORIES | `{loop_id}` | Execution trajectories |
+| trajectories | AGENT_TRAJECTORIES | `v1.<loop-digest>.<attempt-id>` | Immutable observed facts |
 
 ## State Machine
 
@@ -275,20 +295,37 @@ Written when a loop completes, for rules engine consumption:
 
 ### AGENT_TRAJECTORIES
 
-Stores `Trajectory` as JSON:
+Stores one immutable `TrajectoryFactV1` observation per attempt. The bucket uses history 1 and no TTL; append-only
+keys preserve every visible attempt without claiming that the set is complete:
 
 ```json
 {
-  "loop_id": "loop_123",
-  "start_time": "2024-01-15T10:30:00Z",
-  "end_time": "2024-01-15T10:31:45Z",
-  "steps": [...],
-  "outcome": "complete",
-  "total_tokens_in": 1500,
-  "total_tokens_out": 800,
-  "duration": 105000
+  "schema_version": "v1",
+  "loop_digest": "<sha256>",
+  "attempt_id": "01J...",
+  "attempt_ordinal": 3,
+  "kind": "tool.completed",
+  "causal_iteration": 2,
+  "causal_phase": "tool_result",
+  "observed_at": "2026-08-07T14:00:00Z",
+  "evidence_digest": "<sha256>",
+  "evidence_size": 2048,
+  "evidence_capture": "stored",
+  "evidence": {
+    "storage_instance": "objectstore",
+    "key": "trajectory-evidence/v1/sha256/<sha256>",
+    "content_type": "application/vnd.semstreams.agentic-trajectory-evidence.v1+json",
+    "size": 2048
+  }
 }
 ```
+
+Full prompts, messages, tool arguments/results, URLs, and raw errors live only in `TrajectoryEvidenceV1` through the
+registered Store. GraphQL returns cursor-paged fact metadata and durable evidence references only, always with
+`coverage: observed`; it never hydrates evidence bodies. Treat `next_cursor` as opaque and pass it unchanged as the
+next request's `cursor`. Page totals and `terminal_observed` describe only that page. An authorized reader separately
+resolves `evidence.storage_instance` through its injected StoreRegistry and reads `evidence.key` from the registered
+Store.
 
 ## Message Formats
 
@@ -359,7 +396,7 @@ for observability. The OTel span collector (`output/otel`) consumes them via its
 
 - Increase `max_iterations` for complex tasks
 - Check if agent is stuck in tool call loop
-- Review trajectory for repeated patterns
+- Review observed facts and, when authorized, separately retrieve referenced full evidence for repeated patterns
 
 ### Missing tool results
 

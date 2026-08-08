@@ -15,7 +15,6 @@ import (
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
-	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/types"
 	agvocab "github.com/c360studio/semstreams/vocabulary/agentic"
 )
@@ -85,7 +84,6 @@ type graphWriter struct {
 	modelRegistry model.RegistryReader
 	platform      types.PlatformMeta
 	logger        *slog.Logger
-	contentStore  *objectstore.Store
 }
 
 // writeTriple appends one triple through the canonical mutation port.
@@ -311,83 +309,6 @@ func (w *graphWriter) WriteLoopFailure(ctx context.Context, event *agentic.LoopF
 	}
 }
 
-// WriteTrajectorySteps stores step content in ObjectStore and emits graph triples
-// for each trajectory step, linking them to the parent loop entity via LoopHasStep
-// relationships.
-func (w *graphWriter) WriteTrajectorySteps(ctx context.Context, loopID string, trajectory *agentic.Trajectory) {
-	if w.natsClient == nil {
-		return
-	}
-	if w.platform.Org == "" || w.platform.Platform == "" {
-		w.logger.Warn("graph_writer: cannot write trajectory steps, platform identity missing",
-			"loop_id", loopID, "org", w.platform.Org, "platform", w.platform.Platform)
-		return
-	}
-
-	// Store content in ObjectStore for each step.
-	if w.contentStore != nil && trajectory != nil {
-		for i, step := range trajectory.Steps {
-			entity := &agentic.TrajectoryStepEntity{
-				Step:      step,
-				Org:       w.platform.Org,
-				Platform:  w.platform.Platform,
-				LoopID:    loopID,
-				StepIndex: i,
-			}
-			ref, err := w.contentStore.StoreContent(ctx, entity)
-			if err != nil {
-				w.logger.Warn("graph_writer: failed to store trajectory step content",
-					"loop_id", loopID, "step_index", i, "step_type", step.StepType, "error", err)
-				continue
-			}
-			entity.SetStorageRef(ref)
-		}
-	}
-
-	loopEntityID := agentic.LoopExecutionEntityID(w.platform.Org, w.platform.Platform, loopID)
-	triples := buildTrajectoryStepTriples(loopEntityID, w.platform.Org, w.platform.Platform, loopID, trajectory)
-
-	// gh#390: the flat triple list mixes two subject kinds per step — the step
-	// ENTITY's metadata triples (Subject = step entity ID, which must be
-	// CREATED) and the LoopHasStep link (Subject = loop entity ID, which
-	// already exists via WriteSpawnIdentity). graph-ingest enforces must-exist
-	// on append, so the step-entity triples must be born via entity.create
-	// (an append to an absent entity returns entity_not_found). Group by subject and
-	// route: the loop-entity subject is an APPEND (writeTriple); every other
-	// subject is a step entity BIRTH (entity.create + typed-origin
-	// envelope). Insertion order is preserved so emission stays deterministic.
-	bySubject := make(map[string][]message.Triple)
-	order := make([]string, 0, len(triples))
-	for _, t := range triples {
-		if _, seen := bySubject[t.Subject]; !seen {
-			order = append(order, t.Subject)
-		}
-		bySubject[t.Subject] = append(bySubject[t.Subject], t)
-	}
-	for _, subject := range order {
-		group := bySubject[subject]
-		if subject == loopEntityID {
-			// LoopHasStep links — append onto the already-born loop entity.
-			for _, t := range group {
-				if err := w.writeTriple(ctx, t); err != nil {
-					w.logger.Warn("graph_writer: failed to write trajectory link triple",
-						"loop_id", loopID, "predicate", t.Predicate, "error", err)
-				}
-			}
-			continue
-		}
-		// Step entity — birth it with a trajectory-step typed-origin envelope.
-		stepEntity := &gtypes.EntityState{
-			ID:          subject,
-			MessageType: agentic.TrajectoryStepMessageType(),
-		}
-		if err := w.createEntityWithTriples(ctx, stepEntity, group); err != nil {
-			w.logger.Warn("graph_writer: failed to create trajectory step entity",
-				"loop_id", loopID, "step_entity_id", subject, "error", err)
-		}
-	}
-}
-
 // WriteLineageTriples emits cross-arc lineage triples on a spawned
 // loop's entity from the RelatedLoops map threaded by the producer
 // rule (rule.Action.RelatedLoops → TaskMessage.Metadata under
@@ -517,8 +438,8 @@ func (w *graphWriter) WriteSpawnIdentity(ctx context.Context, loopID string, tas
 	// Platform identity missing = there is no valid 6-part entity ID to build,
 	// so there is NOTHING to birth — a graceful skip, NOT a birth failure. This
 	// matches every sibling graph-write method (WriteSyntheticDecide /
-	// WriteModelEndpoints / WriteLoopCompletion / WriteLoopFailure /
-	// WriteTrajectory all Warn+return here) and the nil-client / nil-task /
+	// WriteModelEndpoints / WriteLoopCompletion / WriteLoopFailure all
+	// Warn+return here) and the nil-client / nil-task /
 	// empty-triples guards above. An ERROR from this method is reserved for a
 	// genuine birth FAILURE (the entity.create round-trip below); only
 	// that halts the loop at the caller.
@@ -738,45 +659,6 @@ func buildLoopCancellationTriples(loopEntityID string, event *agentic.LoopCancel
 		triple(agvocab.LoopOutcome, event.Outcome),
 		triple(agvocab.LoopEndedAt, event.CancelledAt.Format(time.RFC3339)),
 	}
-}
-
-// buildTrajectoryStepTriples constructs triples for all trajectory steps.
-// Returns triples for both the step entities and LoopHasStep relationship triples
-// on the loop entity. This is a pure function with no side effects.
-func buildTrajectoryStepTriples(
-	loopEntityID, org, platform, loopID string,
-	trajectory *agentic.Trajectory,
-) []message.Triple {
-	if trajectory == nil || len(trajectory.Steps) == 0 {
-		return nil
-	}
-
-	var allTriples []message.Triple
-
-	for i, step := range trajectory.Steps {
-		entity := &agentic.TrajectoryStepEntity{
-			Step:      step,
-			Org:       org,
-			Platform:  platform,
-			LoopID:    loopID,
-			StepIndex: i,
-		}
-
-		// Add the step's metadata triples.
-		allTriples = append(allTriples, entity.Triples()...)
-
-		// Add LoopHasStep relationship triple on the loop entity.
-		allTriples = append(allTriples, message.Triple{
-			Subject:    loopEntityID,
-			Predicate:  agvocab.LoopHasStep,
-			Object:     entity.EntityID(),
-			Source:     graphWriterSource,
-			Timestamp:  step.Timestamp,
-			Confidence: 1.0,
-		})
-	}
-
-	return allTriples
 }
 
 // resolveModelAccounting maps modelName — a CAPABILITY for spawned loops

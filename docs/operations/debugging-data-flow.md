@@ -144,8 +144,12 @@ curl -s "http://localhost:8080/message-logger/kv/ENTITY_STATES?limit=10" | jq '.
 # Search by prefix
 curl -s 'http://localhost:8084/graphql' \
   -H "Content-Type: application/json" \
-  -d '{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entityIds } }"}' | jq .
+  -d '{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entities { id } next_cursor } }"}' | jq .
 ```
+
+Inspect `data.entitiesByPrefix.entities`. When `next_cursor` is present, pass
+that opaque value back as `cursor` to continue the same prefix scan; an absent
+or empty value means the scan is complete.
 
 **Common Causes**:
 1. **Wrong entity ID format**: Check the processor's EntityID() implementation

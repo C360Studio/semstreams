@@ -78,10 +78,6 @@ func DefaultConfig() Config {
 			Name: "write", Config: component.NATSPort{Subject: "storage.objectstore.write"}, Required: false,
 			Description: "NATS subject for write operations (accepts any message)",
 		},
-		{
-			Name: "api", Config: component.NATSRequestPort{Subject: "storage.objectstore.api"}, Required: false,
-			Description: "Request/Response API for synchronous operations",
-		},
 	}
 
 	outputDefs := []component.PortDefinition{

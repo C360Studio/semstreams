@@ -7,24 +7,32 @@ the files as they exist in the working tree on 2026-08-07:
 
 - `docs/proposals/foundation-b-port-language-design.md`: 112 lines, 8,895 bytes, SHA-256
   `9ef118a5e2837cb0adfdcca3c9962fa4e23dd4dac99d1562de45225d4940c48d`;
-- `docs/proposals/foundation-b-port-language-control.md`: 142 lines, 9,795 bytes, SHA-256
-  `f6c1d0c9d2ca1bca5661d424a96dcd9f285b02abbbbd6b1db9080679e1d3c39e`;
+- `docs/proposals/foundation-b-port-language-control.md`: 177 lines, 12,353 bytes, SHA-256
+  `af63b6b85a8347b5fcd5badc684918f7b23fb8166c9f4e58c9a2b82e63969593`;
 - accepted inventory `docs/proposals/foundation-b-port-language-inventory.md`: 955 lines, 53,247 bytes, SHA-256
   `d957dfd00a2ca9bbf3ee3cf4aa2d0d9005008eb78198c7762403aa2c66ba9000`.
 - accepted trajectory inventory `docs/proposals/agentic-trajectory-contract-inventory.md`: commit `8c6997a6`,
   426 lines, 34,359 bytes, SHA-256
   `5a7dcf3591cc643ee93654515763ec69982f36c78c296cf02bb8234b3000dd2a`;
-- accepted trajectory contract `docs/proposals/agentic-trajectory-target-contract.md`: commit `139b8b1c`, 499 lines,
-  28,672 bytes, SHA-256 `53b169fbdf2cd25dfb9d3e4c87d1fb7135713ec5053d1ed1e6d93409b57b537e`.
+- accepted trajectory contract `docs/proposals/agentic-trajectory-target-contract.md`: 514 lines, 30,140 bytes,
+  SHA-256 `4d32d7229e9c976a981d547765de94d57f23aca2a022d5d69b1345e88dcc0c93`.
+- accepted request/reply inventory `docs/proposals/request-reply-response-bounds-inventory.md`: 344 lines,
+  22,788 bytes, SHA-256 `26ea5b020e1f292ee646dfd45115bf753e0ac392493a6d672e5743c2336e182e`;
+- accepted request/reply design `docs/proposals/request-reply-response-bounds-design.md`: 425 lines, 21,033 bytes,
+  SHA-256 `e71bd4f2e0e8ef24440c2632721bb939a2d24ad9344e6c95aea50887d93c1015`.
 
 The immutable worklist and disposition ledgers remain historical migration authority. The amended target accounts for
-512 surviving frozen configuration rows, ten approved deletions, sixteen new graph-gateway output rows, 528 actual
-canonical configuration rows, and 136 production Go declaration identities. See proposal.md for motivation.
+505 surviving frozen configuration rows, 17 approved deletions, sixteen new graph-gateway output rows, 521 actual
+canonical configuration rows, and 137 production Go declaration identities (`136 + 2 - 1`). The two additional Go
+identities are agentic-loop's contract-mandated `trajectories` `KVWritePort` and `trajectory_query` `NATSRequestPort`.
+The subtracted identity is ObjectStore's owner-approved deleted `api` `NATSRequestPort`.
+The seven additional deletions are the
+exact frozen agentic-loop trajectory override records enumerated in the control document; the target guard requires
+their absence without rewriting either immutable ledger. See proposal.md for motivation.
 
-The implementation baseline remains `main` at `5ffc1d1f`; accepted-contract HEAD `139b8b1c` is 16 commits ahead.
-Local lint, build, tagged vet, race, integration, schema-cleanliness, contract, and OpenSpec results recorded at
-`d630c8fd` predate the trajectory contract and are historical only. Runtime implementation, all current release
-validation, breaking E2E, independent review, and the post-B inventory remain open.
+The implementation working tree is based on `4d3ea2ff`; the eventual merged identity remains task 5.9. Completed-tree
+validation and breaking E2E evidence are recorded in `docs/proposals/foundation-b-release-evidence.md`. Independent
+review, the post-merge inventory/baseline record, and archive remain open.
 
 ## Goals / Non-Goals
 
@@ -38,7 +46,10 @@ validation, breaking E2E, independent review, and the post-B inventory remain op
 - Replace process-local aggregate trajectory authority with immutable KV observations and full evidence through the
   registered Store lifecycle.
 - Make audit loss loud in existing observability while preserving the agent work outcome.
-- Make GraphQL the public trajectory read surface, with typed internal NATS routing and observed-only coverage.
+- Make GraphQL the public trajectory read surface, with typed internal NATS routing, observed-only coverage, strict
+  operation-owned paging, and references instead of hydrated evidence bodies.
+- Make oversized request/reply results fail explicitly from the observed publish outcome, preserve graph-prefix
+  continuation end-to-end, and delete the redundant ObjectStore RPC surface.
 - Keep the breaking release closed until every checkpoint-5 gate is recorded with actual evidence.
 
 **Non-Goals:**
@@ -118,8 +129,9 @@ Commit `fe4e5018` corrects JetStream input identity. Release fallout then migrat
 (`ffe0f705`), enforced agentic-model and agentic-governance roles (`8178a10c`), migrated agentic-loop integration
 fixture names (`69a723f5`), and routed rule subscriptions by canonical port kind (`d630c8fd`).
 
-Local schema, contract, lint/build/vet, race, and integration evidence is green at `d630c8fd`. E2E, independent review,
-and the mandatory post-B inventory remain open release gates.
+The evidence at `d630c8fd` is historical. Completed-tree validation, including breaking E2E, is recorded in
+`docs/proposals/foundation-b-release-evidence.md`; independent review and the mandatory post-merge inventory remain
+open release gates.
 
 ### Append-only attempt observations replace aggregate trajectory authority
 
@@ -144,11 +156,15 @@ increments `semstreams_agentic_loop_trajectory_audit_failures_total{stage,kind,r
 degraded. It never rejects, NAKs, cancels, or fails the agent work. If fact creation also fails, no durable gap marker
 is manufactured; logs, metrics, and Health are the only operational evidence.
 
-All reads prefix-list visible facts, validate and causally sort them, and report only `coverage: observed` plus
-`observed_totals`. An ordinary `loop.terminal` fact means one terminal outcome was observed. Redelivery may append
-another terminal fact; no fact is a seal or completeness proof, and no terminal state is inferred from `COMPLETE_`,
-events, cache, process memory, or graph state. GraphQL is the sole public application surface. Typed internal NATS
-request/reply uses graph-gateway's existing `agentic.query.*` family and agentic-loop's declared exact
+All reads prefix-list, Get, validate, and causally sort every visible fact before applying a result-page limit. The
+strict v1 cursor binds the loop and the final causal tuple; omitted/zero limit defaults to 64, limits 1-256 are
+accepted, and all other limits or malformed cursors are rejected rather than clamped. Page fitting encodes the exact
+typed response against the connected server's observed maximum. Responses contain fact metadata and evidence
+references only, report only page-local `coverage: observed`, `observed_totals`, and `terminal_observed`, and never
+borrow a Store or hydrate a body. An ordinary `loop.terminal` fact means one terminal outcome was observed. Redelivery
+may append another terminal fact; no fact is a seal or completeness proof, and no terminal state is inferred from
+`COMPLETE_`, events, cache, process memory, or graph state. GraphQL is the sole public application surface. Typed
+internal NATS request/reply uses graph-gateway's existing `agentic.query.*` family and agentic-loop's declared exact
 `agentic.query.trajectory` input.
 
 Agentic-loop's defaults declare required `kv-write` output `trajectories` for `AGENT_TRAJECTORIES` with interface
@@ -164,6 +180,36 @@ Graph indexing is deferred: any later graph trace is a separate projection consu
 
 The `kv-or-stream` decision is KV: these are immutable observed facts whose readers rehydrate by prefix/watch, not
 queued requests requiring acknowledgement. Agent work requests remain on their existing JetStream paths.
+
+### Observe response bounds and give continuation to each operation
+
+Core NATS request/reply remains the query carrier. `SubscribeForRequests` always attempts the encoded success response
+first. Only when that publish returns `nats.ErrMaxPayload` does it attempt the canonical small
+`invalid/response_too_large` response with observed response/max detail; every other publish error remains logged.
+`natsclient.Client.MaxPayload()` narrowly exposes the active connected server limit for exact page fitting and
+diagnostics. It is not a caller knob, preflight fence, or correctness prediction because a later server INFO update
+may change the limit; the actual publish result is authoritative.
+
+Graph prefix retains its typed `PrefixQueryResponse`, fits the exact encoded entity page, and carries `next_cursor`
+through graph-gateway to the breaking GraphQL `EntityPage { entities, next_cursor }` shape. A first indivisible entity
+that cannot fit produces `response_too_large`; the static 800 KiB budget and list-only projection are deleted.
+Trajectory uses its strict loop-bound causal cursor and metadata/reference-only pages described above. No generic
+continuation wrapper, response stream, or overflow bucket is introduced.
+
+### Registered Store access replaces the ObjectStore request API
+
+The ObjectStore component remains a lifecycle-owned `StoreProvider`; `Store`, optional `StreamableStore.Open`, and
+`StoreRegistry` are the internal access contract. Its optional `api` subscription, get/store/list RPC DTOs and
+handlers, direct responder, default port, schema/docs/tests, and the unused `graph/llm.NATSContentFetcher` are deleted.
+Construction rejects every input named `api` and every `nats-request` input so an old explicit configuration fails
+startup rather than producing an inert port. Ordinary `nats`/`jetstream` write inputs remain. There is no compatibility
+shim; SemSource and other downstreams migrate at the release break.
+
+This deletion does not remove `graph/llm.ContentFetcher` or its injection option, which remain separately owned by
+#829. A future direct fetcher must resolve `StorageReference.StorageInstance` lazily through `StoreRegistry`, prefer
+`StreamableStore.Open`, distinguish provider/missing/backend failures, and degrade enrichment explicitly. Foundation B
+adds no public body-fetch operation because no current public consumer justifies that authorization and lifecycle
+surface.
 
 ### Store providers start and register before subscribing consumers
 
@@ -201,6 +247,12 @@ validation gate; a failure there does not widen this change into hierarchy or re
   consumer barrier; do not invent sleeps or a general dependency scheduler.
 - **Audit storage failure can become work failure** → failure assertions cover publish/ACK continuation for every
   Store/KV stage and latch existing observability instead of changing the work result.
+- **A large success can become an opaque timeout** → attempt the actual publish and classify only its observed
+  `ErrMaxPayload`; fit known unbounded operations exactly and retain the publish as the final guard.
+- **A shared paging abstraction can erase operation semantics** → prefix and trajectory own typed cursors and page
+  truth; no generic continuation protocol is introduced.
+- **Removing ObjectStore RPC can strand old configs** → reject them at construction and migrate downstreams at the
+  explicit breaking release; do not preserve an inert or deprecated path.
 - **A later graph index can leak back into the write path** → Foundation B deletes trajectory graph writes and treats
   any later graph trace as a separate post-foundation projection design.
 
@@ -212,10 +264,12 @@ validation gate; a failure there does not widen this change into hierarchy or re
 2. Graph-gateway configurations remove every input and replace `queries` with the three required outputs and matching
    subject families. There is no auto-fill or compatibility alias.
 3. Implement the accepted append-only trajectory contract: immutable attempt facts, registered full-fidelity evidence,
-   non-blocking degradation, provider-first startup, canonical NATS routing, GraphQL observed-only reads, seven
-   assembly corrections, and clean deletion of aggregate/cache/graph/HTTP authority.
-4. Re-inventory the merged tree. Stop if an alias, flat discriminator, top-level side lane, dead type, independent
+   non-blocking degradation, provider-first startup, canonical NATS routing, strict reference-only GraphQL pages,
+   seven assembly corrections, and clean deletion of aggregate/cache/graph/HTTP authority.
+4. Implement the accepted response-boundary slices: observed carrier refusal, exact graph-prefix pages and GraphQL
+   continuation, strict trajectory cursors, and clean ObjectStore RPC/NATS fetcher deletion.
+5. Re-inventory the merged tree. Stop if an alias, flat discriminator, top-level side lane, dead type, independent
    shared projection, false KV declaration, undeclared runtime-policy dependency, trajectory cache/aggregate, private
    ObjectStore handle, direct HTTP route, or completeness machinery remains.
-5. Archive this change only after the release and post-B inventory gates are truthful. Rollback is whole-cutover
+6. Archive this change only after the release and post-B inventory gates are truthful. Rollback is whole-cutover
    rollback; there is no dual-wire runtime mode.

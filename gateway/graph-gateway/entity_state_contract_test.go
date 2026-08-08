@@ -32,7 +32,7 @@ func TestGateway_PrefixRejectsCompleteCandidatePoisonBeforeEmission(t *testing.T
 		t.Run(fmt.Sprintf("poison-%d", index), func(t *testing.T) {
 			response, err := json.Marshal(graph.PrefixQueryResponse{Entities: []graph.EntityState{{ID: validID}, poison}})
 			require.NoError(t, err)
-			_, validationErr := validateAndUnwrapPrefixResponse(response)
+			validationErr := validatePrefixResponse(response)
 			require.Error(t, validationErr)
 			assert.True(t, graph.IsStateContractError(validationErr))
 			var classified *errs.ClassifiedError

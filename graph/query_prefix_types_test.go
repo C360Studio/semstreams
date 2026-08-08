@@ -44,20 +44,18 @@ func TestDecodeCursorInvalid(t *testing.T) {
 	require.Error(t, err, "malformed cursor must return error")
 }
 
-// TestPrefixQueryResponseWireSuperset verifies that the old wire shape
-// {"entities":[]} decodes cleanly into PrefixQueryResponse with an empty
-// Entities slice and no NextCursor — old consumers are unaffected.
-func TestPrefixQueryResponseWireSuperset(t *testing.T) {
-	oldWire := []byte(`{"entities":[]}`)
+// TestPrefixQueryResponseWithoutContinuation verifies that an exhausted page
+// decodes with an empty continuation token.
+func TestPrefixQueryResponseWithoutContinuation(t *testing.T) {
+	wire := []byte(`{"entities":[]}`)
 	var resp PrefixQueryResponse
-	require.NoError(t, json.Unmarshal(oldWire, &resp))
+	require.NoError(t, json.Unmarshal(wire, &resp))
 	assert.Empty(t, resp.Entities)
-	assert.Empty(t, resp.NextCursor, "old wire shape must leave NextCursor empty")
+	assert.Empty(t, resp.NextCursor, "exhausted page must leave NextCursor empty")
 }
 
 // TestPrefixQueryResponseOmitsNextCursorWhenEmpty verifies that marshalling a
-// PrefixQueryResponse with an empty NextCursor does NOT include the field —
-// preserving wire-compatibility with consumers that expect {"entities":[…]}.
+// PrefixQueryResponse with an empty NextCursor does not include the field.
 func TestPrefixQueryResponseOmitsNextCursorWhenEmpty(t *testing.T) {
 	resp := PrefixQueryResponse{
 		Entities: []EntityState{},
@@ -71,20 +69,18 @@ func TestPrefixQueryResponseOmitsNextCursorWhenEmpty(t *testing.T) {
 	assert.False(t, hasNextCursor, "next_cursor must be absent when empty (omitempty)")
 }
 
-// TestPrefixQueryRequestOldShapeUnmarshal verifies that the old wire shape
-// {"prefix":"foo","limit":10} unmarshals cleanly into PrefixQueryRequest.
-func TestPrefixQueryRequestOldShapeUnmarshal(t *testing.T) {
-	oldWire := []byte(`{"prefix":"foo","limit":10}`)
+// TestPrefixQueryRequestWithoutCursor verifies first-page request decoding.
+func TestPrefixQueryRequestWithoutCursor(t *testing.T) {
+	wire := []byte(`{"prefix":"foo","limit":10}`)
 	var req PrefixQueryRequest
-	require.NoError(t, json.Unmarshal(oldWire, &req))
+	require.NoError(t, json.Unmarshal(wire, &req))
 	assert.Equal(t, "foo", req.Prefix)
 	assert.Equal(t, 10, req.Limit)
-	assert.Empty(t, req.Cursor, "old wire shape must leave Cursor empty")
+	assert.Empty(t, req.Cursor, "first-page request must leave Cursor empty")
 }
 
 // TestPrefixQueryRequestMarshalOmitsCursorWhenEmpty verifies that a
-// PrefixQueryRequest with no Cursor omits the "cursor" key from JSON
-// output — keeping the wire shape identical to old consumers' expectations.
+// PrefixQueryRequest with no Cursor omits the "cursor" key from JSON output.
 func TestPrefixQueryRequestMarshalOmitsCursorWhenEmpty(t *testing.T) {
 	req := PrefixQueryRequest{Prefix: "acme", Limit: 5}
 	b, err := json.Marshal(req)

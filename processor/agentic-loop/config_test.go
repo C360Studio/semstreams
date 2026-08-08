@@ -206,8 +206,8 @@ func TestDefaultConfig(t *testing.T) {
 	// in-the-loop flow, and the ADR-039 verdict ports
 	// agent.toolcall.approved/rejected for subject-mode tool-call
 	// governance).
-	if len(cfg.Ports.Inputs) != 7 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 7", len(cfg.Ports.Inputs))
+	if len(cfg.Ports.Inputs) != 8 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 8", len(cfg.Ports.Inputs))
 	}
 
 	// Verify output ports (agent.created + agent.failed declared as explicit
@@ -215,8 +215,8 @@ func TestDefaultConfig(t *testing.T) {
 	// port config, matching the existing treatment of agent.request etc.
 	// agent.toolcall.proposed added in ADR-039 — published before dispatch
 	// when governance mode is audit or enforce).
-	if len(cfg.Ports.Outputs) != 10 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 10", len(cfg.Ports.Outputs))
+	if len(cfg.Ports.Outputs) != 11 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 11", len(cfg.Ports.Outputs))
 	}
 
 	// Verify specific input subjects

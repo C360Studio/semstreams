@@ -208,6 +208,18 @@ func (m *Client) GetConnection() *nats.Conn {
 	return m.conn
 }
 
+// MaxPayload observes the maximum payload reported by the active NATS
+// connection. The value is diagnostic and may change after it is returned;
+// callers must treat the result of an actual publish as authoritative.
+func (m *Client) MaxPayload() (int64, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.conn == nil || !m.conn.IsConnected() {
+		return 0, ErrNotConnected
+	}
+	return m.conn.MaxPayload(), nil
+}
+
 // SetConnection sets the NATS connection (for testing)
 func (m *Client) SetConnection(conn *nats.Conn) {
 	m.mu.Lock()

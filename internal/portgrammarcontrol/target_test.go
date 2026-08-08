@@ -24,6 +24,8 @@ type targetConfigItem struct {
 	row                    map[string]any
 	deleted                bool
 	inputIdentityCorrected bool
+	portNameCorrected      bool
+	primitiveCorrected     bool
 }
 
 func TestFoundationBTargetCompleteness(t *testing.T) {
@@ -53,9 +55,17 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 	survivors := 0
 	deletions := 0
 	inputIdentityCorrections := 0
+	portNameCorrections := 0
+	primitiveCorrections := 0
 	for _, target := range targets {
 		if target.inputIdentityCorrected {
 			inputIdentityCorrections++
+		}
+		if target.portNameCorrected {
+			portNameCorrections++
+		}
+		if target.primitiveCorrected {
+			primitiveCorrections++
 		}
 		document, ok := documents[target.workItem.Path]
 		if !ok {
@@ -116,21 +126,80 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		assertProductionPortResolution(t, target.workItem.RecordID, target.lane, matches[0])
 	}
 
-	if survivors != 512 || deletions != 10 {
-		t.Fatalf("target accounting: survivors=%d deletions=%d, want 512 and 10", survivors, deletions)
+	assertFoundationBTargetAccounting(t, targetAccounting{
+		survivors: survivors, deletions: deletions,
+		inputIdentityCorrections: inputIdentityCorrections,
+		portNameCorrections:      portNameCorrections,
+		primitiveCorrections:     primitiveCorrections,
+	}, root, plan, documents, portsParents, graphGatewayParents)
+}
+
+type targetAccounting struct {
+	survivors                int
+	deletions                int
+	inputIdentityCorrections int
+	portNameCorrections      int
+	primitiveCorrections     int
+}
+
+func assertFoundationBTargetAccounting(
+	t *testing.T,
+	accounting targetAccounting,
+	root string,
+	plan *Plan,
+	documents map[string]any,
+	portsParents map[string]struct{},
+	graphGatewayParents map[string]struct{},
+) {
+	t.Helper()
+	if accounting.survivors != 505 || accounting.deletions != 17 {
+		t.Fatalf("target accounting: survivors=%d deletions=%d, want 505 and 17",
+			accounting.survivors, accounting.deletions)
 	}
-	if inputIdentityCorrections != 61 {
-		t.Fatalf("JetStream input identity corrections=%d, want 61", inputIdentityCorrections)
+	if accounting.inputIdentityCorrections != 61 {
+		t.Fatalf("JetStream input identity corrections=%d, want 61", accounting.inputIdentityCorrections)
+	}
+	if accounting.portNameCorrections != 11 {
+		t.Fatalf("component-default port name corrections=%d, want 11", accounting.portNameCorrections)
+	}
+	if accounting.primitiveCorrections != 8 {
+		t.Fatalf("component-default primitive corrections=%d, want 8", accounting.primitiveCorrections)
 	}
 	actualRows := countCanonicalConfigRows(t, documents, portsParents)
-	if actualRows != 528 {
-		t.Fatalf("canonical config rows=%d, want 528", actualRows)
+	if actualRows != 522 {
+		t.Fatalf("canonical config rows=%d, want 522", actualRows)
 	}
+	assertProtocolFlowWebSocketOutput(t, documents)
 	assertGraphGatewayConfigAmendment(t, documents, graphGatewayParents)
 	if len(plan.GoItems()) != 124 {
 		t.Fatalf("frozen Go identities=%d, want 124", len(plan.GoItems()))
 	}
 	assertGoTargetCompleteness(t, root, plan)
+}
+
+// assertProtocolFlowWebSocketOutput records the owner-approved correction to
+// the frozen worklist: protocol-flow used retired http_port/path fields and an
+// empty output lane. The network endpoint remains runtime-configurable, but it
+// must now be expressed in the canonical port grammar.
+func assertProtocolFlowWebSocketOutput(t *testing.T, documents map[string]any) {
+	t.Helper()
+	document := documents["configs/protocol-flow.json"]
+	value, err := getPointer(document, splitPointer("/components/websocket/config/ports/outputs"))
+	if err != nil {
+		t.Fatalf("protocol-flow websocket outputs: %v", err)
+	}
+	rows, ok := value.([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("protocol-flow websocket outputs=%T/%d, want one row", value, len(rows))
+	}
+	row, ok := rows[0].(map[string]any)
+	if !ok {
+		t.Fatalf("protocol-flow websocket output is %T, want object", rows[0])
+	}
+	if stringValue(row["name"]) != "websocket_server" {
+		t.Fatalf("protocol-flow websocket output name=%q, want websocket_server", stringValue(row["name"]))
+	}
+	assertProductionPortResolution(t, "config:configs/protocol-flow.json#/components/websocket/config/ports/outputs/0", "outputs", row)
 }
 
 func countCanonicalConfigRows(t *testing.T, documents map[string]any, parents map[string]struct{}) int {
@@ -223,10 +292,23 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		if item.Path == "gateway/graph-gateway/component.go" {
 			continue
 		}
+		if item.Path == "storage/objectstore/config.go" && item.Name == "api" &&
+			item.CurrentKind == "nats-request" {
+			// Owner-approved request/reply clean break: registered Store access
+			// replaces the optional ObjectStore API declaration.
+			continue
+		}
+		targetType := targetConfigType(item.CurrentKind)
+		if item.Path == "input/udp/udp.go" && item.Name == "nats_output" {
+			// Every shipped UDP flow is an acknowledged JetStream ingest path.
+			// Strict named replacement therefore requires the factory default to
+			// expose the same primitive instead of silently downgrading configs.
+			targetType = "JetStreamPort"
+		}
 		if wantByPath[item.Path] == nil {
 			wantByPath[item.Path] = map[string]int{}
 		}
-		wantByPath[item.Path][item.Name+"|"+targetConfigType(item.CurrentKind)]++
+		wantByPath[item.Path][item.Name+"|"+targetType]++
 	}
 	approved := map[string][]string{
 		"gateway/graph-gateway/component.go": {
@@ -238,6 +320,9 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 		},
 		"processor/agentic-tools/config.go": {
 			"entity_states|KVReadPort", "agent_loops|KVReadPort",
+		},
+		"processor/agentic-loop/config.go": {
+			"trajectories|KVWritePort", "trajectory_query|NATSRequestPort",
 		},
 		"input/http/http.go": {
 			"http_schedule|TimerPort", "http_source|HTTPClientPort",
@@ -358,8 +443,8 @@ func assertGoTargetCompleteness(t *testing.T, root string, plan *Plan) {
 			t.Errorf("%s target Go identities differ: %s", path, difference)
 		}
 	}
-	if total != 136 {
-		t.Fatalf("canonical Go PortDefinition identities=%d, want 136", total)
+	if total != 137 {
+		t.Fatalf("canonical Go PortDefinition identities=%d, want 137", total)
 	}
 }
 
@@ -592,10 +677,26 @@ func multisetDifference(want, got map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
+// foundationBTrajectoryOverrideRetirements is the narrow owner-approved
+// amendment to the immutable worklist. These complete named overrides would
+// erase required/interface facts now owned by agentic-loop's default contract.
+var foundationBTrajectoryOverrideRetirements = map[string]struct{}{
+	"config:configs/agentic.json#/components/agentic-loop/config/ports/kv_write/1":                  {},
+	"config:configs/flows/crud-tools-test.json#/components/agentic-loop/config/ports/kv_write/1":    {},
+	"config:configs/flows/deep-research-test.json#/components/agentic-loop/config/ports/kv_write/1": {},
+	"config:configs/flows/deep-research.json#/components/agentic-loop/config/ports/kv_write/1":      {},
+	"config:configs/flows/lesson-example.json#/components/agentic-loop/config/ports/kv_write/1":     {},
+	"config:configs/flows/ops-agent-test.json#/components/agentic-loop/config/ports/kv_write/1":     {},
+	"config:configs/flows/ops-agent.json#/components/agentic-loop/config/ports/kv_write/1":          {},
+}
+
 func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (targetConfigItem, error) {
 	var legacy map[string]any
 	if err := json.Unmarshal([]byte(item.CurrentData), &legacy); err != nil {
 		return targetConfigItem{}, err
+	}
+	if _, retired := foundationBTrajectoryOverrideRetirements[item.RecordID]; retired {
+		return targetConfigItem{workItem: item, deleted: true}, nil
 	}
 	if item.Enclosing == "graph-gateway" {
 		if item.Lane == "inputs" {
@@ -635,11 +736,35 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return correctJetStreamInputIdentity(targetConfigItem{
+	return correctComponentPortName(correctJetStreamInputIdentity(targetConfigItem{
 		workItem: item,
 		lane:     lane,
 		row:      canonicalRow(legacy, item.CurrentKind, data),
-	})
+	}))
+}
+
+func correctComponentPortName(target targetConfigItem, err error) (targetConfigItem, error) {
+	if err != nil {
+		return targetConfigItem{}, err
+	}
+	if target.workItem.Enclosing == "udp" && target.lane == "outputs" &&
+		stringValue(target.row["name"]) == "udp_out" {
+		target.row["name"] = "nats_output"
+		target.portNameCorrected = true
+	}
+	if target.workItem.Enclosing == "agentic-dispatch" && target.lane == "outputs" &&
+		stringValue(target.row["name"]) == "user.response" {
+		config, ok := target.row["config"].(map[string]any)
+		if !ok || stringValue(config["kind"]) != "nats" || stringValue(config["subject"]) == "" {
+			return targetConfigItem{}, fmt.Errorf("agentic-dispatch user.response %s has no core NATS subject", target.workItem.RecordID)
+		}
+		target.row = canonicalRow(target.row, "jetstream", map[string]any{
+			"stream_name": "USER",
+			"subjects":    []any{stringValue(config["subject"])},
+		})
+		target.primitiveCorrected = true
+	}
+	return target, nil
 }
 
 var foundationBInputStreamBySubject = map[string]string{

@@ -34,9 +34,9 @@ func testUDPConfig(port int, bind, subject string) InputConfig {
 			Outputs: []component.PortDefinition{
 				{
 					Name:        "nats_output",
-					Config:      component.NATSPort{Subject: subject},
+					Config:      component.JetStreamPort{Subjects: []string{subject}},
 					Required:    true,
-					Description: "NATS output for received data",
+					Description: "JetStream output for received data",
 				},
 			},
 		},
@@ -62,6 +62,19 @@ func TestNewUDPInput(t *testing.T) {
 	assert.Equal(t, "test.subject", udp.subject)
 	assert.Equal(t, mockClient, udp.natsClient)
 	assert.NotNil(t, udp.buffer, "should have buffer initialized")
+}
+
+func TestDefaultConfigUsesJetStreamOutput(t *testing.T) {
+	cfg := DefaultConfig()
+	require.NotNil(t, cfg.Ports)
+	require.Len(t, cfg.Ports.Outputs, 1)
+	assert.Equal(t, "nats_output", cfg.Ports.Outputs[0].Name)
+	port, err := cfg.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	require.NoError(t, err)
+	facts, err := port.Facts()
+	require.NoError(t, err)
+	assert.Equal(t, component.PortKindJetStream, facts.Kind())
+	assert.Equal(t, []string{"input.udp.mavlink"}, facts.NATSSubjects())
 }
 
 func TestUDPInput_Meta(t *testing.T) {
@@ -115,10 +128,10 @@ func TestUDPInput_Ports(t *testing.T) {
 	assert.Equal(t, component.DirectionOutput, outputPorts[0].Direction)
 	assert.True(t, outputPorts[0].Required)
 
-	// Check NATSPort config
-	natsConfig, ok := outputPorts[0].Config.(component.NATSPort)
-	assert.True(t, ok, "Output port config should be NATSPort")
-	assert.Equal(t, "test.subject", natsConfig.Subject)
+	// Check JetStreamPort config
+	streamConfig, ok := outputPorts[0].Config.(component.JetStreamPort)
+	assert.True(t, ok, "Output port config should be JetStreamPort")
+	assert.Equal(t, []string{"test.subject"}, streamConfig.Subjects)
 }
 
 func TestUDPInput_ConfigSchema(t *testing.T) {
@@ -393,7 +406,7 @@ func TestCreateInputMergesPartialPortOverrideIntoDefaults(t *testing.T) {
 		"ports": {
 			"outputs": [{
 				"name": "nats_output",
-				"config": {"kind": "nats", "subject": "test.override"}
+				"config": {"kind": "jetstream", "subjects": ["test.override"]}
 			}]
 		}
 	}`)
@@ -414,9 +427,9 @@ func TestCreateInputMergesPartialPortOverrideIntoDefaults(t *testing.T) {
 	assert.Equal(t, "nats_output", outputs[0].Name)
 	assert.False(t, outputs[0].Required, "named override is a complete replacement")
 	assert.Empty(t, outputs[0].Description, "named override must not inherit omitted metadata")
-	nats, ok := outputs[0].Config.(component.NATSPort)
+	nats, ok := outputs[0].Config.(component.JetStreamPort)
 	require.True(t, ok)
-	assert.Equal(t, "test.override", nats.Subject)
+	assert.Equal(t, []string{"test.override"}, nats.Subjects)
 }
 
 func TestUDPInput_Interfaces(t *testing.T) {

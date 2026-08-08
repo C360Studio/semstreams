@@ -10,10 +10,14 @@ import (
 	"time"
 
 	"github.com/nats-io/nats.go"
+
+	"github.com/c360studio/semstreams/pkg/errs"
 )
 
 // DefaultRequestTimeout is the default timeout for request/reply operations.
 const DefaultRequestTimeout = 5 * time.Second
+
+const errorCodeResponseTooLarge = "response_too_large"
 
 // DefaultRequestHandlerTimeout bounds a single inbound request-handler
 // invocation (SubscribeForRequests). It caps how long a handler may run
@@ -350,8 +354,9 @@ func (c *Client) SubscribeForRequests(
 	if c.conn == nil || !c.conn.IsConnected() {
 		return nil, ErrNotConnected
 	}
+	conn := c.conn
 
-	sub, err := c.conn.Subscribe(subject, func(msg *nats.Msg) {
+	sub, err := conn.Subscribe(subject, func(msg *nats.Msg) {
 		// Extract trace from incoming request
 		msgCtx := ctx
 		if tc := ExtractTrace(msg); tc != nil {
@@ -389,6 +394,26 @@ func (c *Client) SubscribeForRequests(
 		// Send successful response
 		if msg.Reply != "" {
 			if respErr := msg.Respond(response); respErr != nil {
+				if errors.Is(respErr, nats.ErrMaxPayload) {
+					refusal := errs.ClassifiedCodeDetail(
+						errs.ErrorInvalid,
+						errorCodeResponseTooLarge,
+						map[string]any{
+							"response_bytes": int64(len(response)),
+							// This is the same connection whose publish rejected
+							// the response. MaxPayload has no connected-state gate,
+							// so the diagnostic remains available while reconnecting.
+							"max_payload": conn.MaxPayload(),
+						},
+						errors.New("response exceeds active NATS maximum payload"),
+					)
+					if publishErr := RespondError(msg, refusal); publishErr != nil {
+						c.logger.Error("natsclient: failed to publish response-too-large reply",
+							"subject", subject,
+							"publish_err", publishErr.Error())
+					}
+					return
+				}
 				c.logger.Error("natsclient: failed to publish handler success reply",
 					"subject", subject,
 					"err", respErr.Error())

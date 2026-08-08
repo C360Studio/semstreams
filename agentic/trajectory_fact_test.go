@@ -85,3 +85,61 @@ func TestTrajectoryFactKeyHashesExternalLoopIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestTrajectoryFactV1StoredEvidenceMetadataIsCoherent(t *testing.T) {
+	digest := strings.Repeat("c", 64)
+	valid := TrajectoryFactV1{
+		SchemaVersion:   TrajectorySchemaV1,
+		LoopDigest:      TrajectoryLoopDigest("loop-evidence-validation"),
+		AttemptID:       "attempt1",
+		AttemptOrdinal:  1,
+		Kind:            TrajectoryKindToolCompleted,
+		CausalPhase:     TrajectoryPhaseToolResult,
+		ObservedAt:      time.Date(2026, 8, 7, 1, 2, 3, 0, time.UTC),
+		EvidenceDigest:  digest,
+		EvidenceSize:    128,
+		EvidenceCapture: TrajectoryEvidenceStored,
+		Evidence: &message.StorageReference{
+			StorageInstance: "objectstore",
+			Key:             TrajectoryEvidenceKeyPrefix + digest,
+			ContentType:     TrajectoryEvidenceContentType,
+			Size:            128,
+		},
+	}
+	if _, err := valid.CanonicalBytes(); err != nil {
+		t.Fatalf("valid stored evidence rejected: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*TrajectoryFactV1)
+	}{
+		{name: "uppercase digest", mutate: func(fact *TrajectoryFactV1) {
+			fact.EvidenceDigest = strings.ToUpper(fact.EvidenceDigest)
+			fact.Evidence.Key = TrajectoryEvidenceKeyPrefix + fact.EvidenceDigest
+		}},
+		{name: "wrong key", mutate: func(fact *TrajectoryFactV1) {
+			fact.Evidence.Key = TrajectoryEvidenceKeyPrefix + strings.Repeat("0", 64)
+		}},
+		{name: "wrong content type", mutate: func(fact *TrajectoryFactV1) {
+			fact.Evidence.ContentType = "application/json"
+		}},
+		{name: "reference size mismatch", mutate: func(fact *TrajectoryFactV1) {
+			fact.Evidence.Size++
+		}},
+		{name: "empty storage instance", mutate: func(fact *TrajectoryFactV1) {
+			fact.Evidence.StorageInstance = " "
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fact := valid
+			reference := *valid.Evidence
+			fact.Evidence = &reference
+			test.mutate(&fact)
+			if _, err := fact.CanonicalBytes(); err == nil {
+				t.Fatal("CanonicalBytes() accepted incoherent stored evidence")
+			}
+		})
+	}
+}

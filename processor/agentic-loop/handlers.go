@@ -102,7 +102,7 @@ type SyntheticDecideRequest struct {
 type MessageHandler struct {
 	config            Config
 	loopManager       *LoopManager
-	trajectoryManager *TrajectoryManager
+	trajectoryManager *trajectoryManager
 	compactor         *Compactor
 	// governanceDispatcher implements subject-mode tool-call governance
 	// (ADR-039). Set via SetGovernanceDispatcher at component boot. Nil
@@ -166,7 +166,7 @@ func NewMessageHandler(config Config, loopManagerOpts ...LoopManagerOption) *Mes
 	return &MessageHandler{
 		config:            config,
 		loopManager:       loopManager,
-		trajectoryManager: NewTrajectoryManager(),
+		trajectoryManager: newTrajectoryManager(),
 		compactor:         NewCompactor(config.Context),
 		logger:            slog.Default(),
 	}
@@ -384,7 +384,7 @@ func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, l
 			Result: compactResult,
 		},
 	})
-	if _, addErr := h.trajectoryManager.AddStep(loopID, compactionStep); addErr != nil {
+	if _, addErr := h.trajectoryManager.addStep(loopID, compactionStep); addErr != nil {
 		h.logger.Warn("failed to add compaction trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -846,7 +846,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	h.configureLoopMetadata(loopID, task)
 
 	// Start trajectory
-	_, err = h.trajectoryManager.StartTrajectory(loopID)
+	_, err = h.trajectoryManager.startTrajectory(loopID)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -966,7 +966,7 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	// Keep the summary step in the active execution manager for token and
 	// terminal-tool mechanics. The append-only recorder separately owns the
 	// full request body; TrajectorySteps is not a persistence surface.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add task trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -1120,7 +1120,7 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 
 	// Eagerly add step to trajectory manager so token totals are available
 	// when handleCompleteResponse queries the trajectory for cost tracking.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -1749,7 +1749,7 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 			Result: compactResult,
 		},
 	})
-	if _, addErr := h.trajectoryManager.AddStep(loopID, retryStep); addErr != nil {
+	if _, addErr := h.trajectoryManager.addStep(loopID, retryStep); addErr != nil {
 		h.logger.Warn("failed to add compaction-retry trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -1979,10 +1979,10 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	// Pull token totals from trajectory for cost tracking. Also doubles as
 	// the source-of-truth for the #133 terminal-tool-less check below —
 	// scanning the same trajectory snapshot here avoids a second
-	// trajectoryManager.GetTrajectory round-trip and keeps the cost +
+	// trajectoryManager.getTrajectory round-trip and keeps the cost +
 	// synthesis decisions consistent on the same step set.
 	var trajectorySteps []agentic.TrajectoryStep
-	if traj, trajErr := h.trajectoryManager.GetTrajectory(loopID); trajErr == nil {
+	if traj, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {
 		completion.TokensIn = traj.TotalTokensIn
 		completion.TokensOut = traj.TotalTokensOut
 		trajectorySteps = traj.Steps
@@ -2128,9 +2128,9 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	step := h.buildToolTrajectoryStep(toolResult, entity)
 	result.TrajectorySteps = append(result.TrajectorySteps, step)
 
-	// Eagerly add step to trajectory manager so the tool_call is available
-	// when finalizeTrajectory snapshots the trajectory for the TTL cache.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	// Eagerly add the step so active-loop completion mechanics can inspect
+	// tool calls and calculate token totals from one in-process snapshot.
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add tool_call trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -2563,7 +2563,7 @@ func (h *MessageHandler) buildFailureEvent(loopID, reason, errorMsg string) (*ag
 	}
 
 	// Pull token totals from trajectory for cost tracking
-	if traj, trajErr := h.trajectoryManager.GetTrajectory(loopID); trajErr == nil {
+	if traj, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {
 		failure.TokensIn = traj.TotalTokensIn
 		failure.TokensOut = traj.TotalTokensOut
 	} else {
@@ -2617,11 +2617,6 @@ func (h *MessageHandler) UpdateLoop(entity agentic.LoopEntity) error {
 // CancelLoop atomically cancels a loop and populates completion data.
 func (h *MessageHandler) CancelLoop(loopID, cancelledBy string) (agentic.LoopEntity, error) {
 	return h.loopManager.CancelLoop(loopID, cancelledBy)
-}
-
-// GetTrajectory retrieves a trajectory snapshot for a given loop ID.
-func (h *MessageHandler) GetTrajectory(loopID string) (agentic.Trajectory, error) {
-	return h.trajectoryManager.GetTrajectory(loopID)
 }
 
 // GetContextManager returns the ContextManager for a given loop ID.

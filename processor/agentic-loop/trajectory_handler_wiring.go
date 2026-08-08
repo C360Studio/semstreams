@@ -112,10 +112,18 @@ func newTerminalObservation(
 }
 
 func (c *Component) recordTrajectoryBatch(parent context.Context, observations []trajectoryObservation) {
+	c.recordTrajectoryBatchWithin(parent, observations, trajectoryAuditBatchBudget)
+}
+
+func (c *Component) recordTrajectoryBatchWithin(
+	parent context.Context,
+	observations []trajectoryObservation,
+	budget time.Duration,
+) {
 	if c.trajectoryRecorder == nil || len(observations) == 0 {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), trajectoryAuditBatchBudget)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), budget)
 	defer cancel()
 	done := make(chan struct{})
 	go func() {
@@ -142,9 +150,12 @@ func (c *Component) recordTrajectoryBatch(parent context.Context, observations [
 	}
 	first := observations[0]
 	c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
-		Stage: trajectoryStageBatchBudget, Kind: first.Kind, Reason: trajectoryReasonTimeout,
-		LoopID: first.LoopID,
-		Err:    fmt.Errorf("trajectory audit batch exceeded framework budget %s", trajectoryAuditBatchBudget),
+		// The batch deadline means the immutable observation was not created
+		// within the framework budget. Keep the accepted audit-stage vocabulary
+		// closed by classifying the visible loss at the fact-create boundary.
+		Stage: trajectoryStageFactCreate, Kind: first.Kind, Reason: trajectoryReasonTimeout,
+		LoopID: first.LoopID, AttemptID: c.trajectoryRecorder.newAttemptID(),
+		Err: fmt.Errorf("trajectory audit batch exceeded framework budget %s", budget),
 	})
 }
 

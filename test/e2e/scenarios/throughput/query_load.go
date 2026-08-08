@@ -93,7 +93,7 @@ func buildQueryPool() []querySpec {
 		pool = append(pool, querySpec{
 			Name: "prefix",
 			Query: fmt.Sprintf(
-				`{"query":"{ entitiesByPrefix(prefix: \"%s\", limit: 50) { id triples { subject predicate object } } }"}`,
+				`{"query":"{ entitiesByPrefix(prefix: \"%s\", limit: 50) { entities { id triples { subject predicate object } } next_cursor } }"}`,
 				pfx),
 		})
 	}

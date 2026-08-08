@@ -117,7 +117,7 @@ a transaction, general CAS service, repair worker, or automatic evidence expiry.
 - **GIVEN** a tool result larger than `tool_result_max_bytes`
 - **WHEN** the result enters the agentic loop
 - **THEN** canonical evidence contains the original full result before execution/context truncation
-- **AND** a query that hydrates its reference retrieves the full result
+- **AND** an authorized registered-Store reader can retrieve the full result through its reference
 
 #### Scenario: full model and tool inputs remain retrievable
 
@@ -225,15 +225,26 @@ correctness SHALL remain separate and out of scope.
 
 ### Requirement: Trajectory reads expose observed facts without completeness claims
 
-A trajectory reader SHALL hash the requested loop ID, prefix-list only `v1.<loop_hash>.>`, Get and validate each
-returned fact, sort by causal/attempt order, derive totals only from returned visible facts, and hydrate evidence only
-when requested. It SHALL honestly report missing/unverifiable bodies.
+A trajectory reader SHALL accept only `{loopId,limit,cursor}`, hash the loop ID, validate any cursor's loop binding
+before KV listing, prefix-list only `v1.<loop_hash>.>`, Get and validate every visible fact, sort by
+`(iteration,phase_rank,source_ordinal,attempt_ordinal,attempt_id)`, and apply the result limit only after that complete
+visible set is sorted. It SHALL return fact metadata and evidence references only; it SHALL NOT resolve a Store,
+hydrate evidence, or carry an evidence body.
+
+An omitted or zero limit SHALL default to 64. Limits 1 through 256 SHALL be accepted. Negative limits and limits above
+256 SHALL be rejected, not clamped. A cursor SHALL be unpadded base64url over strict canonical JSON containing version
+`v1`, the requested loop digest, and the complete last-emitted causal tuple. Unknown/missing fields, unsupported
+versions, invalid tuples, and cross-loop cursors SHALL return canonical `invalid/invalid_cursor`.
+
+The reader SHALL fit the exact encoded typed page against the connected server's observed maximum payload. The result
+cap is not a storage-work cap: every page still lists, Gets, validates, and sorts all visible facts because the KV key
+is attempt identity rather than causal order.
 
 Every internal and public response SHALL contain:
 
 ```text
 coverage: observed
-observed_totals: <totals derived only from returned visible facts>
+observed_totals: <page-local totals derived only from returned visible facts>
 ```
 
 No response SHALL return or imply complete, partial, unknown-completeness, fully captured, gap free, or an equivalent
@@ -252,13 +263,28 @@ for active execution mechanics.
 - **THEN** the response is reconstructed from current immutable facts
 - **AND** no cache or graph reconstruction is required
 
-#### Scenario: every response is explicitly observed-only
+#### Scenario: every page is explicitly observed-only
 
-- **GIVEN** any successful trajectory query, including one with visible missing-evidence observations
+- **GIVEN** any successful trajectory page, including one with missing-evidence references
 - **WHEN** the response is returned
 - **THEN** `coverage` equals `observed`
 - **AND** totals appear only as `observed_totals` derived from returned facts
 - **AND** the response makes no completeness guarantee
+
+#### Scenario: a cursor is strict and loop-bound
+
+- **GIVEN** a cursor with an unknown field, missing tuple member, unsupported version, invalid tuple, or another loop's
+  digest
+- **WHEN** the trajectory reader validates the request
+- **THEN** it returns `invalid/invalid_cursor` before listing KV
+- **AND** it does not repair, ignore, or reinterpret the cursor
+
+#### Scenario: trajectory reads never hydrate evidence
+
+- **GIVEN** visible facts with valid, missing, or unverifiable evidence references
+- **WHEN** a trajectory page is requested
+- **THEN** the response contains metadata and references but no evidence body
+- **AND** agentic-loop does not borrow or resolve a Store while serving the page
 
 #### Scenario: terminal visibility is not completion proof
 

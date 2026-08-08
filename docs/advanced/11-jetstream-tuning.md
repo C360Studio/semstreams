@@ -311,13 +311,12 @@ js.PublishMsg(&nats.Msg{
 
 ## KV Bucket Tuning
 
-KV buckets used for loop and trajectory state don't need the same treatment as streams, but a few settings
-matter.
+KV buckets used for loop state and immutable trajectory observations don't need the same treatment as streams, but
+their policies are intentionally different.
 
 ### History
 
-The default KV history is 1 (only the latest value). For audit trails and debugging agentic state
-transitions, increase history:
+Loop entities reuse one key, so deployments may retain more than one revision when they need state-transition history:
 
 ```go
 js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
@@ -326,6 +325,10 @@ js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
     TTL:     24 * time.Hour,  // auto-expire completed loops
 })
 ```
+
+`AGENT_TRAJECTORIES` is different: each observed attempt has its own immutable key. Keep history at `1`; increasing
+per-key history adds no audit information. Foundation B also applies no fact TTL because evidence retention and
+reference-aware garbage collection require a separate operator policy.
 
 ### Watchers vs Polling
 

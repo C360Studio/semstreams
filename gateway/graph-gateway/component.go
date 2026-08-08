@@ -19,10 +19,12 @@
 package graphgateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -34,6 +36,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/gateway"
 	"github.com/c360studio/semstreams/graph"
@@ -138,7 +141,7 @@ func DefaultConfig() Config {
 			Outputs: []component.PortDefinition{
 				{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 				{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
-				{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*"}},
+				{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*", Interface: agenticQueryInterface()}},
 			},
 		},
 		GraphQLPath:      "/graphql",
@@ -153,8 +156,12 @@ func gatewayQueryOutputContract() []component.PortDefinition {
 	return []component.PortDefinition{
 		{Name: "graph_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.query.*"}},
 		{Name: "graph_index_queries", Required: true, Config: component.NATSRequestPort{Subject: "graph.index.query.*"}},
-		{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*"}},
+		{Name: "agentic_queries", Required: true, Config: component.NATSRequestPort{Subject: "agentic.query.*", Interface: agenticQueryInterface()}},
 	}
+}
+
+func agenticQueryInterface() *component.InterfaceContract {
+	return &component.InterfaceContract{Type: "agentic.query", Version: "v1"}
 }
 
 func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
@@ -197,6 +204,12 @@ func validateGatewayQueryOutputs(outputs []component.PortDefinition) error {
 		}
 		if facts.Kind() != expectedKind {
 			return fmt.Errorf("query output port %q must use %s, got %q", definition.Name, expectedKind, facts.Kind())
+		}
+		if definition.Name == agenticQueriesPortName {
+			contract, hasContract := facts.Interface()
+			if !hasContract || contract.Type != "agentic.query" || contract.Version != "v1" {
+				return fmt.Errorf("query output port %q must declare interface agentic.query v1", definition.Name)
+			}
 		}
 		subjects := facts.NATSSubjects()
 		if len(subjects) != 1 || !isQueryFamilyPattern(subjects[0]) {
@@ -1073,17 +1086,7 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 	case "hierarchyStats":
 		return extractVars(variables, "prefix", "limit")
 	case "prefix":
-		// gh#172: cap the default at 100 to keep replies under NATS's
-		// default 1MB max_payload for entities with substantial triple
-		// sets. graph-ingest's internal default stays at 1000 for non-
-		// gateway callers (handleQueryHierarchyStats passes 10000 and
-		// other in-tree callers set Limit explicitly). The gateway is
-		// the user-facing surface where the safety floor matters.
-		payload := extractVars(variables, "prefix", "limit")
-		if _, ok := payload["limit"]; !ok {
-			payload["limit"] = 100
-		}
-		return payload
+		return extractVars(variables, "prefix", "limit", "cursor")
 	case "spatial":
 		return extractVars(variables, "north", "south", "east", "west", "limit")
 	case "temporal":
@@ -1112,7 +1115,7 @@ func (c *Component) transformVariablesToNATSPayload(variables map[string]interfa
 	case "predicateCompound":
 		return c.transformCompoundPredicateVars(variables)
 	case "trajectory":
-		return extractVars(variables, "loopId", "limit")
+		return extractVars(variables, "loopId", "limit", "cursor")
 	default:
 		return variables
 	}
@@ -1639,7 +1642,7 @@ func buildIntrospectionSchema() map[string]interface{} {
 				"name": "Query",
 				"fields": []map[string]interface{}{
 					fieldDef("entity", "ExactEntity", argDef("id", "String!")),
-					fieldDef("entitiesByPrefix", "[Entity]", argDef("prefix", "String!"), argDef("limit", "Int")),
+					fieldDef("entitiesByPrefix", "EntityPage", argDef("prefix", "String!"), argDef("limit", "Int"), argDef("cursor", "String")),
 					fieldDef("entityByAlias", "ExactEntity", argDef("alias", "String!")),
 					fieldDef("relationships", "[Relationship]", argDef("entityId", "String!"), argDef("direction", "String")),
 					fieldDef("entityIdHierarchy", "HierarchyResult", argDef("prefix", "String!"), argDef("limit", "Int")),
@@ -1654,7 +1657,7 @@ func buildIntrospectionSchema() map[string]interface{} {
 					fieldDef("globalSearch", "GlobalSearchResult", argDef("query", "String!"), argDef("level", "Int"), argDef("maxCommunities", "Int"), argDef("summarizeThreshold", "Int"), argDef("includeSummaries", "Boolean"), argDef("includeRelationships", "Boolean"), argDef("includeSources", "Boolean")),
 					fieldDef("capabilities", "Capabilities"),
 					// Agentic queries
-					fieldDef("trajectory", "Trajectory", argDef("loopId", "String!"), argDef("limit", "Int")),
+					fieldDef("trajectory", "Trajectory", argDef("loopId", "String!"), argDef("limit", "Int"), argDef("cursor", "String")),
 					// Predicate queries
 					fieldDef("entitiesByPredicate", "[String]", argDef("predicate", "String!"), argDef("value", "String"), argDef("limit", "Int")),
 					fieldDef("predicates", "PredicateListResult"),
@@ -1667,6 +1670,7 @@ func buildIntrospectionSchema() map[string]interface{} {
 				},
 			},
 			objectTypeDef("ExactEntity", fieldDef("entity", "Entity"), fieldDef("kvRevision", "Uint64")),
+			objectTypeDef("EntityPage", fieldDef("entities", "[Entity]"), fieldDef("next_cursor", "String")),
 			typeDef("OBJECT", "Entity", "id", "triples"),
 			typeDef("OBJECT", "Triple", "subject", "predicate", "object"),
 			typeDef("OBJECT", "Relationship", "from", "to", "predicate"),
@@ -1687,9 +1691,13 @@ func buildIntrospectionSchema() map[string]interface{} {
 			// Graph summary types
 			typeDef("OBJECT", "GraphSummaryResult", "total_entities", "entity_sample_truncated", "entity_types", "predicates", "predicate_total"),
 			typeDef("OBJECT", "EntityTypeSummary", "type", "count", "examples"),
-			// Agentic types
-			typeDef("OBJECT", "Trajectory", "loopId", "startTime", "endTime", "steps", "outcome", "totalTokensIn", "totalTokensOut", "duration"),
-			typeDef("OBJECT", "TrajectoryStep", "timestamp", "stepType", "requestId", "prompt", "response", "tokensIn", "tokensOut", "toolName", "toolResult", "duration"),
+			// Agentic trajectory observations are reconstructed from visible
+			// immutable facts. These names intentionally match the internal JSON
+			// projection: coverage is never promoted beyond "observed".
+			trajectoryTypeDef(),
+			trajectoryTotalsTypeDef(),
+			trajectoryFactTypeDef(),
+			objectTypeDef("StorageReference", fieldDef("storage_instance", "String"), fieldDef("key", "String"), fieldDef("content_type", "String"), fieldDef("size", "Int")),
 			typeDef("SCALAR", "String"),
 			typeDef("SCALAR", "Int"),
 			typeDef("SCALAR", "Float"),
@@ -1697,6 +1705,52 @@ func buildIntrospectionSchema() map[string]interface{} {
 			typeDef("SCALAR", "Uint64"),
 		},
 	}
+}
+
+func trajectoryTypeDef() map[string]interface{} {
+	return objectTypeDef("Trajectory",
+		fieldDef("schema_version", "String"),
+		fieldDef("loop_id", "String"),
+		fieldDef("coverage", "String"),
+		fieldDef("observed_totals", "TrajectoryObservedTotals"),
+		fieldDef("terminal_observed", "Boolean"),
+		fieldDef("facts", "[TrajectoryFact]"),
+		fieldDef("next_cursor", "String"),
+	)
+}
+
+func trajectoryTotalsTypeDef() map[string]interface{} {
+	fields := []string{
+		"facts", "tokens_in", "tokens_out", "elapsed_ms", "message_count", "tool_count", "url_count",
+		"model_requests", "model_completions", "tool_requests", "tool_completions", "context_compactions",
+		"terminal_observations", "requested_observations", "completed_observations", "failed_observations",
+		"cancelled_observations",
+	}
+	definitions := make([]map[string]interface{}, 0, len(fields))
+	for _, field := range fields {
+		typeName := "Uint64"
+		if field == "elapsed_ms" {
+			typeName = "Int"
+		}
+		definitions = append(definitions, fieldDef(field, typeName))
+	}
+	return objectTypeDef("TrajectoryObservedTotals", definitions...)
+}
+
+func trajectoryFactTypeDef() map[string]interface{} {
+	return objectTypeDef("TrajectoryFact",
+		fieldDef("schema_version", "String"), fieldDef("loop_digest", "String"),
+		fieldDef("attempt_id", "String"), fieldDef("attempt_ordinal", "Uint64"),
+		fieldDef("kind", "String"), fieldDef("source_kind", "String"), fieldDef("source_correlation", "String"),
+		fieldDef("causal_iteration", "Int"), fieldDef("causal_phase", "String"), fieldDef("causal_ordinal", "Int"),
+		fieldDef("observed_at", "String"), fieldDef("elapsed_ms", "Int"), fieldDef("status", "String"),
+		fieldDef("tokens_in", "Uint64"), fieldDef("tokens_out", "Uint64"),
+		fieldDef("message_count", "Int"), fieldDef("tool_count", "Int"), fieldDef("url_count", "Int"),
+		fieldDef("model_preview", "String"), fieldDef("provider_preview", "String"), fieldDef("tool_preview", "String"),
+		fieldDef("capability_preview", "String"), fieldDef("error_category", "String"),
+		fieldDef("evidence_digest", "String"), fieldDef("evidence_size", "Uint64"), fieldDef("evidence", "StorageReference"),
+		fieldDef("evidence_capture", "String"), fieldDef("evidence_failure", "String"),
+	)
 }
 
 func objectTypeDef(name string, fields ...map[string]interface{}) map[string]interface{} {
@@ -1808,40 +1862,65 @@ func (c *Component) handleNATSResponseWithExtensions(w http.ResponseWriter, subj
 	// so it never fired.
 	resp, _ = graph.UnwrapQueryResponse(resp)
 
-	// Unwrap entities envelope for collection responses (e.g. graph.query.prefix)
-	// Internal NATS APIs return {"entities": [...]} for consistency; GraphQL expects raw arrays
+	// Prefix owns a typed page envelope. Validate the complete entity set and
+	// preserve the response byte-for-byte so next_cursor reaches GraphQL.
 	if queryOperation(subject) == "prefix" {
-		unwrapped, err := validateAndUnwrapPrefixResponse(resp)
-		if err != nil {
+		if err := validatePrefixResponse(resp); err != nil {
 			atomic.AddInt64(&c.errors, 1)
 			c.writeGraphQLError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		resp = unwrapped
+	}
+	if queryOperation(subject) == "trajectory" {
+		if err := validateTrajectoryResponse(resp); err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			c.writeGraphQLError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 
 	c.writeGraphQLSuccessWithExtensions(w, subject, resp, extensions)
 }
 
-func validateAndUnwrapPrefixResponse(data []byte) ([]byte, error) {
+func validatePrefixResponse(data []byte) error {
 	var response graph.PrefixQueryResponse
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, fmt.Errorf("decode graph.query.prefix response: %w", err)
+		return fmt.Errorf("decode graph.query.prefix response: %w", err)
 	}
 	if err := graph.ValidateDecodedEntityStates(response.Entities); err != nil {
-		return nil, fmt.Errorf("validate graph.query.prefix response: %w", err)
+		return fmt.Errorf("validate graph.query.prefix response: %w", err)
 	}
+	return nil
+}
 
-	var envelope struct {
-		Entities json.RawMessage `json:"entities"`
+func validateTrajectoryResponse(data []byte) error {
+	var page agentic.TrajectoryPage
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&page); err != nil {
+		return fmt.Errorf("decode agentic.query.trajectory response: %w", err)
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		return nil, fmt.Errorf("unwrap graph.query.prefix response: %w", err)
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		if err == nil {
+			err = errors.New("multiple JSON values are not admitted")
+		}
+		return fmt.Errorf("decode agentic.query.trajectory response trailer: %w", err)
 	}
-	if len(envelope.Entities) == 0 {
-		return data, nil
+	if page.SchemaVersion != agentic.TrajectorySchemaV1 || page.LoopID == "" || page.Coverage != "observed" {
+		return errors.New("agentic.query.trajectory response has invalid page metadata")
 	}
-	return envelope.Entities, nil
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return fmt.Errorf("inspect agentic.query.trajectory response: %w", err)
+	}
+	for _, required := range []string{
+		"schema_version", "loop_id", "coverage", "observed_totals", "terminal_observed", "facts",
+	} {
+		if _, ok := fields[required]; !ok {
+			return fmt.Errorf("agentic.query.trajectory response missing %q", required)
+		}
+	}
+	return nil
 }
 
 // handleGraphQL handles GraphQL requests
@@ -1890,6 +1969,11 @@ func (c *Component) handleGraphQL(w http.ResponseWriter, r *http.Request) {
 	// Extract inline arguments from query string and merge with explicit variables
 	inlineArgs := extractInlineArguments(gqlReq.Query)
 	mergedVars := mergeVariables(inlineArgs, gqlReq.Variables)
+	if err := validateGatewayTrajectoryPayload(subject, mergedVars); err != nil {
+		atomic.AddInt64(&c.errors, 1)
+		c.writeGraphQLError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	payload := c.transformVariablesToNATSPayload(mergedVars, subject)
 	if err := validateGatewayPrefixPayload(subject, payload); err != nil {
@@ -1968,6 +2052,20 @@ func validateGatewayPrefixPayload(subject string, payload map[string]interface{}
 		return nil
 	}
 	return semtypes.ValidateEntityIDPrefix(prefix)
+}
+
+func validateGatewayTrajectoryPayload(subject string, variables map[string]interface{}) error {
+	if queryOperation(subject) != "trajectory" {
+		return nil
+	}
+	for key := range variables {
+		switch key {
+		case "loopId", "limit", "cursor":
+		default:
+			return fmt.Errorf("trajectory argument %q is not admitted", key)
+		}
+	}
+	return nil
 }
 
 // handleMCP handles MCP requests

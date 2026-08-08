@@ -58,30 +58,12 @@ type Component struct {
 	portSubjects    map[string]string
 
 	// NATS subscriptions
-	apiSub   *nats.Subscription
 	writeSub *nats.Subscription
 
 	// Metrics tracking
 	messagesReceived uint64
 	messagesStored   uint64
 	lastActivity     atomic.Value // stores time.Time
-}
-
-// Request represents a request to the ObjectStore API
-type Request struct {
-	Action string          `json:"action"` // "get", "store", "list"
-	Key    string          `json:"key,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
-	Prefix string          `json:"prefix,omitempty"` // For list operation
-}
-
-// Response represents a response from the ObjectStore API
-type Response struct {
-	Success bool            `json:"success"`
-	Key     string          `json:"key,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Keys    []string        `json:"keys,omitempty"` // For list operation
-	Error   string          `json:"error,omitempty"`
 }
 
 // Event represents a simple storage event published by ObjectStore
@@ -182,6 +164,9 @@ func resolveObjectStorePorts(cfg Config, instanceName string) ([]component.Port,
 	resolve := func(definitions []component.PortDefinition, direction component.Direction, allowed map[component.PortKind]bool) ([]component.Port, error) {
 		ports := make([]component.Port, len(definitions))
 		for index, definition := range definitions {
+			if direction == component.DirectionInput && definition.Name == "api" {
+				return nil, errors.New("ObjectStore input \"api\" was removed; use the registered Store")
+			}
 			port, err := definition.Resolve(direction)
 			if err != nil {
 				return nil, err
@@ -208,7 +193,7 @@ func resolveObjectStorePorts(cfg Config, instanceName string) ([]component.Port,
 		return ports, nil
 	}
 	inputs, err := resolve(cfg.Ports.Inputs, component.DirectionInput, map[component.PortKind]bool{
-		component.PortKindNATS: true, component.PortKindNATSRequest: true, component.PortKindJetStream: true,
+		component.PortKindNATS: true, component.PortKindJetStream: true,
 	})
 	if err != nil {
 		return nil, nil, nil, nil, nil, err
@@ -300,25 +285,6 @@ func (c *Component) Start(ctx context.Context) error {
 	// Get raw NATS connection for subscriptions
 	nc := c.natsClient.GetConnection()
 
-	// Subscribe to API requests (Request/Response pattern)
-	if c.hasPort("api") {
-		apiSubject := c.getPortSubject("api")
-		c.logger.Debug("Subscribing to API subject", "name", c.instanceName, "subject", apiSubject)
-		c.apiSub, err = nc.Subscribe(apiSubject, c.handleAPIRequest)
-		if err != nil {
-			c.logger.Error(
-				"Failed to subscribe to API subject",
-				"name",
-				c.instanceName,
-				"subject",
-				apiSubject,
-				"error",
-				err,
-			)
-			return errs.WrapTransient(err, "Component", "Start", fmt.Sprintf("subscribe to API subject %s", apiSubject))
-		}
-	}
-
 	// Subscribe to write requests (async fire-and-forget)
 	// Check port type to determine subscription method (JetStream vs core NATS)
 	if c.hasPort("write") {
@@ -376,12 +342,6 @@ func (c *Component) Stop(_ time.Duration) error {
 	}
 
 	// Then unsubscribe from NATS
-	if c.apiSub != nil {
-		if err := c.apiSub.Unsubscribe(); err != nil {
-			return errs.WrapTransient(err, "Component", "Stop", "unsubscribe from API")
-		}
-	}
-
 	if c.writeSub != nil {
 		if err := c.writeSub.Unsubscribe(); err != nil {
 			return errs.WrapTransient(err, "Component", "Stop", "unsubscribe from write")
@@ -397,81 +357,6 @@ func (c *Component) IsStarted() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.started
-}
-
-// handleAPIRequest handles synchronous Request/Response operations
-func (c *Component) handleAPIRequest(msg *nats.Msg) {
-	atomic.AddUint64(&c.messagesReceived, 1)
-	c.lastActivity.Store(time.Now())
-
-	var req Request
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
-		c.respondWithError(msg, errs.WrapInvalid(err, "Component", "handleAPIRequest", "unmarshal request"))
-		return
-	}
-
-	// Use proper timeout context for API requests
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	switch req.Action {
-	case "get":
-		data, err := c.store.Get(ctx, req.Key)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		resp := Response{
-			Success: true,
-			Key:     req.Key,
-			Data:    data,
-		}
-		c.respond(msg, resp)
-
-	case "store":
-		var msgData any
-		if err := json.Unmarshal(req.Data, &msgData); err != nil {
-			c.respondWithError(msg, errs.WrapInvalid(err, "Component", "handleAPIRequest", "unmarshal data"))
-			return
-		}
-
-		key, err := c.store.Store(ctx, msgData)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		atomic.AddUint64(&c.messagesStored, 1)
-		resp := Response{
-			Success: true,
-			Key:     key,
-		}
-		c.respond(msg, resp)
-
-		// Publish stored event
-		c.publishEvent(Event{
-			Type:      "stored",
-			Key:       key,
-			Timestamp: time.Now(),
-		})
-
-	case "list":
-		keys, err := c.store.List(ctx, req.Prefix)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		resp := Response{
-			Success: true,
-			Keys:    keys,
-		}
-		c.respond(msg, resp)
-
-	default:
-		c.respondWithError(msg, errs.WrapInvalid(errs.ErrInvalidData, "Component", "handleAPIRequest", fmt.Sprintf("unknown action: %s", req.Action)))
-	}
 }
 
 // handleWriteRequest handles async write operations via core NATS
@@ -639,33 +524,6 @@ func (c *Component) publishEvent(event Event) {
 			slog.String("error", err.Error()))
 		return
 	}
-}
-
-// respond sends a response for Request/Response pattern
-func (c *Component) respond(msg *nats.Msg, resp Response) {
-	data, err := json.Marshal(resp)
-	if err != nil {
-		c.logger.Error("Failed to marshal response",
-			"error", err,
-			"subject", msg.Subject)
-		return
-	}
-
-	if err := msg.Respond(data); err != nil {
-		c.logger.Error("Failed to send response",
-			"error", err,
-			"subject", msg.Subject)
-		return
-	}
-}
-
-// respondWithError sends an error response
-func (c *Component) respondWithError(msg *nats.Msg, err error) {
-	resp := Response{
-		Success: false,
-		Error:   err.Error(),
-	}
-	c.respond(msg, resp)
 }
 
 // hasPort checks if a port with the given name is configured

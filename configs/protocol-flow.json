@@ -110,7 +110,7 @@
                   "raw.udp.messages"
                 ]
               },
-              "name": "udp_out"
+              "name": "nats_output"
             }
           ]
         },
@@ -298,10 +298,19 @@
               "name": "ws_in"
             }
           ],
-          "outputs": []
-        },
-        "http_port": 8082,
-        "path": "/ws"
+        "outputs": [
+          {
+            "config": {
+              "host": "0.0.0.0",
+              "kind": "network",
+              "port": 8082,
+              "protocol": "http"
+            },
+            "description": "WebSocket server endpoint",
+            "name": "websocket_server"
+          }
+        ]
+      }
       }
     },
     "objectstore": {
@@ -472,6 +481,10 @@
           },
           {
             "config": {
+              "interface": {
+                "type": "agentic.query",
+                "version": "v1"
+              },
               "kind": "nats-request",
               "subject": "agentic.query.*"
             },

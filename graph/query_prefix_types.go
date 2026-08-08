@@ -10,12 +10,10 @@ import "encoding/base64"
 const DefaultPrefixQueryLimit = 1000
 
 // MaxPrefixQueryLimit is the maximum number of entities returned per page.
-// The NATS max_payload ceiling (~1 MB) is the binding constraint: a typical
-// EntityState with a handful of triples serialises to a few KB; at 1000
-// entities that is already several MB. We therefore cap count at
-// DefaultPrefixQueryLimit and rely on the byte-budget guard
-// (maxPrefixResponseBytes in graph-ingest) as the hard ceiling. Callers
-// requesting more than this value are silently clamped.
+// The active NATS max_payload ceiling is the binding byte constraint. Graph
+// ingest exactly fits the complete encoded response, including continuation,
+// against the observed connection limit. Callers requesting more than this
+// count are silently clamped.
 const MaxPrefixQueryLimit = DefaultPrefixQueryLimit
 
 // PrefixQueryRequest is the typed request envelope for graph.query.prefix.
@@ -31,7 +29,7 @@ const MaxPrefixQueryLimit = DefaultPrefixQueryLimit
 //   - <=0 → server applies DefaultPrefixQueryLimit.
 //   - Values above MaxPrefixQueryLimit are clamped to MaxPrefixQueryLimit.
 //   - Even within the limit, the server may return fewer entities when the
-//     accumulated response size would approach the NATS max_payload ceiling.
+//     complete encoded response reaches the active NATS max_payload ceiling.
 //     In that case NextCursor is set so the caller can fetch the remainder.
 //
 // V1 pagination caveat (keyset semantics):
@@ -66,15 +64,13 @@ type PrefixQueryRequest struct {
 // consumers do not need additional N+1 fetches.
 //
 // NextCursor is the opaque token to pass as PrefixQueryRequest.Cursor on the
-// next call. An empty NextCursor means the result set is exhausted. The field
-// is omitted from the JSON output when empty, preserving wire-compatibility
-// with old consumers that expect {"entities":[…]}.
+// next call. An empty NextCursor means the result set is exhausted, and the
+// field is omitted from the JSON output.
 type PrefixQueryResponse struct {
 	// Entities is the full EntityState slice for this page.
 	Entities []EntityState `json:"entities"`
 
 	// NextCursor is the opaque continuation token; empty = exhausted.
-	// Old consumers that do not know about pagination safely ignore this field.
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 

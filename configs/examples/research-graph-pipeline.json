@@ -96,9 +96,26 @@
       "max_age": "24h",
       "max_bytes": 268435456,
       "discard": "old"
+    },
+    "USER": {
+      "subjects": [
+        "user.>"
+      ],
+      "storage": "file",
+      "max_age": "1h",
+      "max_bytes": 16777216,
+      "discard": "old"
     }
   },
   "components": {
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "bucket_name": "AGENT_CONTENT"
+      }
+    },
     "agentic-dispatch": {
       "type": "processor",
       "name": "agentic-dispatch",
@@ -146,8 +163,11 @@
             },
             {
               "config": {
-                "kind": "nats",
-                "subject": "user.response.*"
+                "kind": "jetstream",
+                "stream_name": "USER",
+                "subjects": [
+                  "user.response.*"
+                ]
               },
               "name": "user.response"
             }

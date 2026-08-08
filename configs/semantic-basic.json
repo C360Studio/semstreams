@@ -89,7 +89,7 @@
                   "raw.udp.messages"
                 ]
               },
-              "name": "udp_out"
+              "name": "nats_output"
             }
           ]
         },

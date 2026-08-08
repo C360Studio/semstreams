@@ -7,6 +7,11 @@ at commit `8c6997a6`, whose accepted inventory SHA-256 is
 The owner has bound two governing rulings: full-fidelity evidence uses an ObjectStore-capable registered
 `storage.Store`, and audit failures degrade loudly but never fail loop work.
 
+The owner-approved response-bounds design at
+`e71bd4f2e0e8ef24440c2632721bb939a2d24ad9344e6c95aea50887d93c1015` supersedes only this advisory's trajectory-read
+hydration clauses. Trajectory queries are strict cursor-paged metadata/reference reads and never carry evidence
+bodies. Full evidence remains stored and retrievable by an authorized registered-Store reader.
+
 ## Surface inventory
 
 - Current trajectory authority is process-local: terminal reads use TTL cache then `TrajectoryManager`, and the NATS
@@ -335,15 +340,22 @@ The canonical reader:
 2. lists `v1.<loop_hash>.>`;
 3. gets and validates every returned fact;
 4. sorts by causal order;
-5. derives observed token totals, step durations, counts, and outcomes only from returned facts;
-6. hydrates evidence references only when requested;
-7. reports visible capture gaps and missing/unverifiable bodies honestly.
+5. validates a strict loop-bound v1 cursor, when supplied, against the last emitted causal tuple;
+6. applies the requested result limit only after the complete visible set is validated and sorted;
+7. fits the exact encoded typed response against the connected server's observed maximum payload; and
+8. returns fact metadata and evidence references without resolving a Store or hydrating a body.
 
-Every public and internal trajectory response reports:
+The request is `{loopId,limit,cursor}`. An omitted or zero limit defaults to 64; values 1 through 256 are accepted;
+negative values and values above 256 are rejected rather than clamped. The cursor is unpadded base64url over strict
+canonical JSON containing version `v1`, a loop digest, and the full final causal tuple: iteration, phase rank, source
+ordinal, attempt ordinal, and attempt ID. Unknown/missing fields, unsupported versions, invalid tuples, and a cursor
+bound to another loop return canonical `invalid/invalid_cursor` before KV listing.
+
+Every public and internal trajectory page reports:
 
 ```text
 coverage: observed
-observed_totals: <totals derived only from returned visible facts>
+observed_totals: <page-local totals derived only from returned visible facts>
 ```
 
 Never return or imply `complete`, `fully captured`, `gap free`, or an equivalent guarantee. After restart, readers
@@ -359,7 +371,8 @@ state.
 GraphQL through graph-gateway is the sole public application surface. Delete direct agentic-loop trajectory HTTP
 handlers and their OpenAPI paths. NATS remains typed internal request/reply. Cache is deleted, not retained as
 authority or acceleration in Foundation B. `TrajectoryManager` may remain only for active execution mechanics and
-never serves reads.
+never serves reads. GraphQL exposes the reference-preserving page; it does not expose a hydration argument or public
+evidence-body operation. Authorized evidence consumers use the registered Store named by `StorageReference`.
 
 Graph trajectory entities/projection are outside Foundation B correctness. Delete the terminal batch trajectory
 graph-write path from this migration. Any later graph trace is a separate post-foundation index/projection design
@@ -477,10 +490,12 @@ Do not redesign hierarchy, research, index, `COMPLETE_`, or terminal-event contr
 - No schema, type, config, or test introduces a terminal seal, audit counters, `counts_known`, manifest, membership
   proof, watermark, checkpoint, or completeness classification.
 - Restart query works with empty process memory; watch initial replay returns current facts.
-- Prefix reader sorting, observed derived totals, terminal-observation behavior, and missing-body reporting.
+- Strict cursor validation and loop binding; limit default/range/refusal; causal page boundaries; exact encoded page
+  fitting; page-local observed totals and terminal-observation behavior; no Store access or evidence body on reads.
 - Graph-gateway retains exactly three outputs; canonical `agentic.query.*` resolves `.trajectory`; interface or paired
   override mismatch fails validation.
-- GraphQL production-path body hydration; direct HTTP/OpenAPI trajectory surface absent.
+- GraphQL production-path metadata/reference paging; no hydration field or body; direct HTTP/OpenAPI trajectory
+  surface absent.
 - Crash E2E at body-before-fact and fact-before-publish boundaries preserves distinct-attempt observations.
 
 ## Remaining owner ruling

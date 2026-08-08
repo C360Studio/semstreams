@@ -29,7 +29,11 @@ const (
 	requiredPortObservationBudget    = 10 * time.Second
 	requiredPortObservationInterval  = 50 * time.Millisecond
 	defaultTestContainerStartTimeout = 30 * time.Second
-	testInfrastructureCleanupTimeout = 5 * time.Second
+	// Docker container deletion can exceed five seconds when the integration
+	// runner tears down many packages concurrently. This is a failure ceiling,
+	// not a delay on the healthy path: Terminate returns as soon as Docker has
+	// removed the container.
+	testInfrastructureCleanupTimeout = 15 * time.Second
 	testContainerHostLookupTimeout   = 5 * time.Second
 )
 
@@ -370,6 +374,7 @@ type testConfig struct {
 	bucketPrefix string // Prefix for KV bucket names to enable test isolation
 	fileStorage  bool   // Use file-backed JetStream storage instead of memory-only
 	monitoring   bool   // Expose the NATS monitoring endpoint when explicitly requested
+	maxPayload   int64  // Override the broker limit for response-bound integration tests
 }
 
 // natsReadyWaitStrategy observes readiness in container logs. LogStrategy still
@@ -387,6 +392,16 @@ func newTestContainerRequest(cfg *testConfig) testcontainers.GenericContainerReq
 	args := []string{
 		"--port", "4222",
 	}
+	var files []testcontainers.ContainerFile
+	if cfg.maxPayload > 0 {
+		const configPath = "/etc/nats/semstreams-test.conf"
+		args = append(args, "--config", configPath)
+		files = append(files, testcontainers.ContainerFile{
+			Reader:            strings.NewReader(fmt.Sprintf("max_payload: %d\n", cfg.maxPayload)),
+			ContainerFilePath: configPath,
+			FileMode:          0o644,
+		})
+	}
 	if cfg.monitoring {
 		args = append(args, "--http_port", "8222")
 	}
@@ -402,6 +417,7 @@ func newTestContainerRequest(cfg *testConfig) testcontainers.GenericContainerReq
 			Image:        "nats:" + cfg.natsVersion,
 			ExposedPorts: append([]string(nil), requiredPortsForConfig(cfg)...),
 			Cmd:          args,
+			Files:        files,
 			// LogStrategy still checks container state through Inspect, but it
 			// does not call MappedPort and can accept this exact readiness log
 			// without waiting for a successful state inspect (gh#736).

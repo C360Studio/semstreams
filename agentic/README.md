@@ -60,8 +60,10 @@ These components communicate over NATS JetStream using the types defined here.
 
 | Type | Description |
 |------|-------------|
-| `Trajectory` | Complete execution path of a loop |
-| `TrajectoryStep` | Single step (model_call or tool_call) |
+| `TrajectoryFactV1` | Bounded immutable observation of one loop attempt |
+| `TrajectoryEvidenceV1` | Full evidence body stored by digest through a registered Store |
+| `TrajectoryPage` | Cursor-paged, observed-only fact metadata and evidence references |
+| `Trajectory` / `TrajectoryStep` | Transient active-loop execution helpers; never durable read authority |
 
 ### User Interaction Types
 
@@ -123,36 +125,12 @@ if entity.State.IsTerminal() {
 }
 ```
 
-### Recording Trajectory
+### Reading trajectory observations
 
-```go
-trajectory := agentic.NewTrajectory("loop_123")
-
-// Record a model call
-trajectory.AddStep(agentic.TrajectoryStep{
-    Timestamp: time.Now(),
-    StepType:  "model_call",
-    RequestID: "req_001",
-    Prompt:    "Analyze this code...",
-    Response:  "I found 3 issues...",
-    TokensIn:  150,
-    TokensOut: 200,
-    Duration:  1250,
-})
-
-// Record a tool call
-trajectory.AddStep(agentic.TrajectoryStep{
-    Timestamp:     time.Now(),
-    StepType:      "tool_call",
-    ToolName:      "read_file",
-    ToolArguments: map[string]any{"path": "main.go"},
-    ToolResult:    "package main...",
-    Duration:      50,
-})
-
-// Complete
-trajectory.Complete("complete")
-```
+Agentic-loop records facts automatically. Public callers query the GraphQL trajectory field and receive strict,
+cursor-paged metadata plus `StorageReference` values with `coverage: observed`. The read never hydrates evidence or
+claims completeness. Authorized internal consumers retrieve a referenced body through the registered Store named by
+that reference; they do not read an aggregate trajectory from KV or process memory.
 
 ### Validating Tool Calls Against Allowlist
 
@@ -213,14 +191,15 @@ Control signals for user interaction:
 
 ## Thread Safety
 
-Types in this package are not inherently thread-safe. The agentic-loop component provides thread-safe managers (LoopManager, TrajectoryManager) that wrap these types.
+Types in this package are not inherently thread-safe. Agentic-loop owns synchronization for loop/context state and its
+private active-loop mechanics.
 
 ## Limitations
 
 - No streaming support (responses are complete documents)
 - Tool parameters use `map[string]any` (no strong typing)
-- Trajectory steps are append-only (no editing)
-- Maximum trajectory size limited by NATS KV (1MB default)
+- Trajectory facts are immutable, observed-only, and internally bounded below 8 KiB
+- Full evidence requires a configured registered Store and is returned by reference only
 
 ## Related Components
 

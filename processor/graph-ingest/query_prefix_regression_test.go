@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"sort"
 	"testing"
-	"time"
 
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/pkg/cache"
+	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,14 +64,6 @@ func idIDs(entities []graph.EntityState) []string {
 	return out
 }
 
-func entityMarshalLen(t *testing.T, comp *Component, id string) int {
-	t.Helper()
-	storePrefixEntity(t, comp, id)
-	entry, err := comp.entityBucket.Get(context.Background(), id)
-	require.NoError(t, err)
-	return len(entry.Value)
-}
-
 // TestRegression_ByteTrimCursor_ScrambledFetchOrder is the handler-level
 // regression for the fetch-order sort fix (orchestrator fix #1 — the
 // sort.Slice(entities, byID) added right after fetchEntitiesConcurrent).
@@ -107,20 +99,16 @@ func TestRegression_ByteTrimCursor_ScrambledFetchOrder(t *testing.T) {
 		prewarmCacheEntity(t, comp, id)
 	}
 
-	// Budget that fits ~2 entities, then trims (each entity marshals to ~515B;
-	// see TestRegression_FixtureMarshalSizes for the arithmetic guard).
-	comp.maxPrefixResponseBytesOverride = 1500
-
 	var collected []graph.EntityState
 	seen := map[string]bool{}
 	cursor := ""
 	sawTrim := false
 	for page := 0; page < n+2; page++ {
-		resp := callPrefixHandler(t, comp, graph.PrefixQueryRequest{
+		resp := callPrefixHandlerWithMaxPayload(t, comp, graph.PrefixQueryRequest{
 			Prefix: "acme",
 			Limit:  n, // count cap is NOT the binding constraint; byte budget is
 			Cursor: cursor,
-		})
+		}, 1500)
 
 		// INVARIANT 1: every page is sorted by ID.
 		assert.True(t, idsSorted(resp.Entities),
@@ -164,113 +152,20 @@ func TestRegression_ByteTrimCursor_ScrambledFetchOrder(t *testing.T) {
 	assert.True(t, idsSorted(collected), "global page sequence must be sorted; got %v", idIDs(collected))
 }
 
-// TestRegression_FirstEntityOversized_NoSkip is the handler-level regression
-// for the first-entity-oversized fix (orchestrator fix #2 — applyPrefixByteLimit
-// returning (entities[:1], true) instead of (entities[:1], false) when the
-// first entity alone exceeds the budget).
-//
-// Setup: 3 entities. The byte budget is set SO small that even the first entity
-// alone exceeds it.
-//
-//   - WITHOUT the fix ((entities[:1], false)): byteLimited=false, so the
-//     handler falls to the COUNT branch. With limit>=3 the count branch sets NO
-//     cursor (len(keys)==len(pageKeys)), so the response is [e1] with an EMPTY
-//     cursor -> e2,e3 SILENTLY SKIPPED and pagination terminates after page 0.
-//   - WITH the fix ((entities[:1], true)): byteLimited=true, cursor set on e1.
-//     Page 1 resumes strictly after e1 -> [e2] -> page 2 -> [e3] -> a final
-//     empty trailing page (cursor was set on e3). Full coverage, exactly one
-//     entity per non-trailing page, monotonic advance (no infinite loop).
-//
-// Verified to FAIL when the (entities[:1], true) line is reverted to
-// (entities[:1], false): coverage drops to {aaa} (bbb,ccc skipped) and the loop
-// terminates after a single page.
-func TestRegression_FirstEntityOversized_NoSkip(t *testing.T) {
+// TestRegression_FirstEntityOversizedIsRefused pins the result-owner rule: an
+// indivisible entity is never emitted past the observed carrier limit and is
+// never skipped behind a fabricated continuation.
+func TestRegression_FirstEntityOversizedIsRefused(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
+	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.aaa")
+	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme", Limit: 1})
+	require.NoError(t, err)
 
-	ids := []string{
-		"acme.ops.dom.sys.type.aaa",
-		"acme.ops.dom.sys.type.bbb",
-		"acme.ops.dom.sys.type.ccc",
-	}
-	for _, id := range ids {
-		storePrefixEntity(t, comp, id)
-	}
-
-	// Budget below even a single ~515B entity (300 - 256 envelope = 44 byte
-	// content budget) -> first-entity-oversized fires on every page.
-	comp.maxPrefixResponseBytesOverride = 300
-
-	var collected []graph.EntityState
-	seen := map[string]bool{}
-	cursor := ""
-	const maxPages = 16 // generous bound; an infinite loop trips this
-	pages := 0
-	var lastReturned string
-	for ; pages < maxPages; pages++ {
-		resp := callPrefixHandler(t, comp, graph.PrefixQueryRequest{
-			Prefix: "acme",
-			Limit:  len(ids), // count is NOT the binding constraint
-			Cursor: cursor,
-		})
-
-		// Non-trailing pages return exactly one entity (first-oversized). The
-		// final page may be empty (the cursor was set on the last entity), which
-		// is correct termination — assert <=1, and that any returned entity is
-		// new (no infinite loop) and strictly advances.
-		require.LessOrEqual(t, len(resp.Entities), 1,
-			"first-entity-oversized must return at most one entity per page")
-
-		for _, e := range resp.Entities {
-			assert.False(t, seen[e.ID], "entity repeated across pages (infinite loop): %s", e.ID)
-			assert.Greater(t, e.ID, lastReturned, "entities must strictly advance")
-			lastReturned = e.ID
-			seen[e.ID] = true
-			collected = append(collected, e)
-
-			// The cursor must point at the entity just returned so the next
-			// page resumes strictly after it.
-			require.NotEmpty(t, resp.NextCursor, "a returned-but-oversized entity must carry a resume cursor")
-			decoded, err := graph.DecodeCursor(resp.NextCursor)
-			require.NoError(t, err)
-			assert.Equal(t, e.ID, decoded, "cursor must be the just-returned entity's ID")
-		}
-
-		cursor = resp.NextCursor
-		if cursor == "" {
-			break
-		}
-	}
-
-	require.Less(t, pages, maxPages, "pagination must terminate (no infinite loop)")
-	require.Len(t, seen, len(ids), "every entity must be returned (no skip); got %v", idIDs(collected))
-	for _, id := range ids {
-		assert.True(t, seen[id], "entity %s was skipped", id)
-	}
-	assert.True(t, idsSorted(collected), "single-entity pages must arrive sorted; got %v", idIDs(collected))
-}
-
-// TestRegression_FixtureMarshalSizes documents the byte arithmetic the two
-// regression tests rely on. A future change to EntityState's JSON shape (or to
-// CreateEntity's stamped triples) that invalidates the budgets fails HERE with
-// a clear message rather than as a confusing coverage regression elsewhere.
-func TestRegression_FixtureMarshalSizes(t *testing.T) {
-	comp := createTestComponentWithMockKV(t)
-	size := entityMarshalLen(t, comp, "acme.ops.dom.sys.type.k01")
-
-	// Scrambled-order test: budget 1500, envelope overhead 256 -> 1244 content
-	// budget. Two entities must fit, three must not, so the trim fires at 2.
-	const envelopeOverhead = 256
-	scrambledBudget := 1500 - envelopeOverhead
-	assert.Greater(t, scrambledBudget, 2*size,
-		"two entities must fit the scrambled-order content budget (trim at page boundary)")
-	assert.Less(t, scrambledBudget, 3*size,
-		"three entities must exceed the scrambled-order content budget so a trim occurs")
-
-	// First-entity-oversized test: budget 300 -> 44 content budget, below one
-	// entity, so the first entity alone trips the over-budget branch.
-	firstOversizedBudget := 300 - envelopeOverhead
-	assert.Less(t, firstOversizedBudget, size,
-		"a single entity must exceed the first-entity-oversized content budget")
-
-	_ = time.Now
+	response, err := comp.handleQueryPrefixWithMaxPayload(context.Background(), request, 300)
+	require.Error(t, err)
+	assert.Nil(t, response)
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, err, &classified)
+	assert.Equal(t, errs.ErrorInvalid, classified.Class)
+	assert.Equal(t, "response_too_large", classified.Code)
 }

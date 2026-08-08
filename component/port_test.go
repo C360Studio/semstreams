@@ -153,8 +153,8 @@ func TestNATSRequestPort(t *testing.T) {
 	}{
 		{
 			name:        "Request/Response with timeout",
-			port:        NATSRequestPort{Subject: "storage.api", Timeout: "1s"},
-			resourceID:  "nats-request:storage.api",
+			port:        NATSRequestPort{Subject: "example.request", Timeout: "1s"},
+			resourceID:  "nats-request:example.request",
 			isExclusive: false,
 			portType:    "nats-request",
 		},
@@ -356,7 +356,7 @@ func testNATSRequestSerialization(t *testing.T) {
 		Direction:   DirectionInput,
 		Required:    false,
 		Description: "Storage API request/response",
-		Config:      NATSRequestPort{Subject: "storage.api", Timeout: "1s", Retries: 3},
+		Config:      NATSRequestPort{Subject: "example.request", Timeout: "1s", Retries: 3},
 	}
 
 	data, err := json.Marshal(port)
@@ -1303,15 +1303,15 @@ func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 				Direction:   DirectionInput,
 				Required:    false,
 				Description: "Storage API request/response",
-				Config:      NATSRequestPort{Subject: "storage.api", Timeout: "1s", Retries: 3},
+				Config:      NATSRequestPort{Subject: "example.request", Timeout: "1s", Retries: 3},
 			},
 			assert: func(t *testing.T, decoded Port) {
 				nr, ok := decoded.Config.(NATSRequestPort)
 				if !ok {
 					t.Fatalf("Config = %T, want NATSRequestPort", decoded.Config)
 				}
-				if nr.Subject != "storage.api" {
-					t.Errorf("Subject = %q, want %q", nr.Subject, "storage.api")
+				if nr.Subject != "example.request" {
+					t.Errorf("Subject = %q, want %q", nr.Subject, "example.request")
 				}
 				if nr.Retries != 3 {
 					t.Errorf("Retries = %d, want 3", nr.Retries)

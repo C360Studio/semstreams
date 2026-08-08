@@ -214,7 +214,7 @@ func DefaultConfig() InputConfig {
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name: "nats_output", Config: component.NATSPort{Subject: "input.udp.mavlink"}, Required: true,
+					Name: "nats_output", Config: component.JetStreamPort{Subjects: []string{"input.udp.mavlink"}}, Required: true,
 					Description: "NATS subject for publishing received UDP data",
 				},
 			},

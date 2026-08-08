@@ -25,8 +25,8 @@ tasks:
       - echo "[SEMANTIC-8B] Standing up the semantic tier on qwen3-8b (answer_synthesis + community_summary)."
       - echo "[SEMANTIC-8B] This is the on-demand HEAVY measurement — two 8B instances load ~5GiB weights each; --wait blocks several minutes. The default 'task e2e:semantic' stays on qwen3-1.7b as the fast CI gate."
       - defer: docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.8b.yml --profile semantic down -v --timeout 15
-      # Both overlays; --build rebuilds semstreams from source so the raised NATS
-      # request-handler timeout (SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT) is compiled in.
+      # Both overlays; --build rebuilds semstreams from source. The overlay raises
+      # the semantic profile's 120s request-handler budget to 300s for 8B inference.
       # --wait-timeout 600 bounds the slow 8B model load instead of hanging forever.
       - docker compose -f docker/compose/tiered.yml -f docker/compose/tiered.8b.yml --profile semantic up -d --wait --wait-timeout 600 --build
       - echo "[OK] 8B ML services healthy (semembed + seminstruct-fast/0.6b + two seminstruct-mid/8b)"

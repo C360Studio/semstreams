@@ -6,8 +6,8 @@
 // the lifecycle of agentic loops. It coordinates communication between the model
 // processor (LLM calls) and tools processor (tool execution), tracks state through
 // a 10-state machine, supports signal handling for user control, manages context
-// memory with automatic compaction, and captures complete execution trajectories
-// for observability.
+// memory with automatic compaction, and appends observed trajectory facts with
+// separately stored full evidence.
 //
 // This is the central component of the agentic system - it receives task requests,
 // routes messages between model and tools, handles iteration limits, processes
@@ -158,23 +158,10 @@
 //	// Context management
 //	cm := manager.GetContextManager(loopID)
 //
-// **TrajectoryManager** - Captures execution traces:
-//
-//	trajManager := NewTrajectoryManager()
-//
-//	// Start trajectory for a loop
-//	trajectory, err := trajManager.StartTrajectory(loopID)
-//
-//	// Add steps (model calls, tool calls)
-//	trajManager.AddStep(loopID, agentic.TrajectoryStep{
-//	    Timestamp: time.Now(),
-//	    StepType:  "model_call",
-//	    TokensIn:  150,
-//	    TokensOut: 200,
-//	})
-//
-//	// Complete trajectory
-//	trajectory, err = trajManager.CompleteTrajectory(loopID, "complete")
+// **Trajectory observations** - The component keeps transient execution detail
+// internally while a loop is active. It exposes no aggregate manager or read API.
+// Durable reads come from bounded TrajectoryFactV1 observations; full
+// TrajectoryEvidenceV1 bodies live in the configured registered Store.
 //
 // **MessageHandler** - Routes and processes messages:
 //
@@ -203,7 +190,7 @@
 //	    "timeout": "120s",
 //	    "stream_name": "AGENT",
 //	    "loops_bucket": "AGENT_LOOPS",
-//	    "trajectories_bucket": "AGENT_TRAJECTORIES",
+//	    "trajectory_evidence_storage_instance": "objectstore",
 //	    "context": {
 //	        "enabled": true,
 //	        "compact_threshold": 0.60,
@@ -221,7 +208,7 @@
 //   - timeout: Loop execution timeout as duration string (default: "120s")
 //   - stream_name: JetStream stream name for agentic messages (default: "AGENT")
 //   - loops_bucket: NATS KV bucket for loop state (default: "AGENT_LOOPS")
-//   - trajectories_bucket: NATS KV bucket for trajectories (default: "AGENT_TRAJECTORIES")
+//   - trajectory_evidence_storage_instance: Registered Store instance for full evidence (default: "objectstore")
 //   - consumer_name_suffix: Optional suffix for JetStream consumer names (for testing)
 //   - context: Context management configuration (see ContextConfig)
 //   - ports: Port configuration for inputs and outputs
@@ -234,6 +221,7 @@
 //   - agent.response: Model responses from agentic-model (subject: agent.response.>)
 //   - tool.result: Tool results from agentic-tools (subject: tool.result.>)
 //   - agent.signal: Control signals for loops (subject: agent.signal.*)
+//   - trajectory_query: Observed fact queries (subject: agentic.query.trajectory)
 //
 // Output ports (JetStream publishers):
 //
@@ -245,11 +233,11 @@
 // KV write ports:
 //
 //   - loops: Loop entity state (bucket: AGENT_LOOPS)
-//   - trajectories: Trajectory data (bucket: AGENT_TRAJECTORIES)
+//   - trajectories: Immutable TrajectoryFactV1 observations (bucket: AGENT_TRAJECTORIES)
 //
 // # KV Storage
 //
-// Loop state and trajectories are persisted to NATS KV for durability and queryability:
+// Loop state and observed trajectory facts are persisted to NATS KV:
 //
 // **AGENT_LOOPS bucket**: Stores LoopEntity as JSON, keyed by loop ID
 //
@@ -281,20 +269,25 @@
 //	    "parent_loop": ""
 //	}
 //
-// **AGENT_TRAJECTORIES bucket**: Stores Trajectory as JSON, keyed by loop ID
+// **AGENT_TRAJECTORIES bucket**: Stores immutable TrajectoryFactV1 JSON at
+// v1.<base32-sha256(loop-id)>.<attempt-id>. It uses history 1 and no TTL. Readers
+// prefix-list visible facts, validate them, causally sort them, and report only
+// coverage="observed" plus observed totals.
 //
 //	{
-//	    "loop_id": "loop_123",
-//	    "start_time": "2024-01-15T10:30:00Z",
-//	    "end_time": "2024-01-15T10:31:45Z",
-//	    "steps": [...],
-//	    "outcome": "complete",
-//	    "total_tokens_in": 1500,
-//	    "total_tokens_out": 800,
-//	    "duration": 105000
+//	    "schema_version": "v1",
+//	    "loop_digest": "<sha256>",
+//	    "attempt_id": "01J...",
+//	    "attempt_ordinal": 3,
+//	    "kind": "model.completed",
+//	    "causal_iteration": 2,
+//	    "causal_phase": "model_result",
+//	    "evidence_capture": "stored",
+//	    "evidence": {"storage_instance":"objectstore", "key":"trajectory-evidence/v1/sha256/<sha256>"}
 //	}
 //
-// KV buckets are created automatically if they don't exist during component startup.
+// Full prompts, messages, tool arguments/results, URLs, and raw errors live in
+// content-addressed TrajectoryEvidenceV1 bodies borrowed through StoreRegistry.
 //
 // # Rules/Workflow Integration
 //
@@ -346,7 +339,7 @@
 //
 // # Thread Safety
 //
-// The LoopManager, TrajectoryManager, and ContextManager are thread-safe, using
+// The LoopManager, internal active-loop detail, and ContextManager are thread-safe, using
 // RWMutex for concurrent access. Multiple goroutines can safely:
 //
 //   - Create and manage different loops concurrently
@@ -371,7 +364,7 @@
 // The component provides observability through:
 //
 //   - Structured logging (slog) for all significant events
-//   - Trajectory capture for complete execution audit trails
+//   - Append-only observed facts with full evidence stored by digest and returned by reference only
 //   - Context events for memory management visibility
 //   - Health status via Health() method
 //   - Flow metrics via DataFlow() method
@@ -394,7 +387,7 @@
 // Current limitations:
 //
 //   - No streaming support for partial responses
-//   - Trajectory size limited by NATS KV (1MB default)
+//   - Trajectory facts are internally bounded below 8 KiB; full evidence requires a registered Store
 //   - No built-in retry for failed tool executions
 //   - Context summarization requires LLM call (cost consideration)
 //

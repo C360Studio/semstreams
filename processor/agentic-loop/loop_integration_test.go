@@ -696,7 +696,7 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	assert.Equal(t, "test-model", entity.Model)
 }
 
-// TestIntegration_LoopTrajectoryCapture tests that trajectory is saved on completion.
+// TestIntegration_LoopTrajectoryCapture tests that durable observations are readable on completion.
 // Uses its own NATS client to avoid query handler conflicts with other test components.
 func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup(), natsclient.WithJetStream(),
@@ -809,19 +809,33 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	// Verify trajectory via NATS query handler (served from TTLCache)
+	// Verify trajectory via the declared NATS query handler. The response is
+	// reconstructed from immutable KV facts, not process memory.
 	trajReq, err := json.Marshal(map[string]string{"loopId": loopID})
 	require.NoError(t, err)
 
 	trajResp, err := natsClient.Request(ctx, "agentic.query.trajectory", trajReq, 5*time.Second)
 	require.NoError(t, err, "Trajectory should be available via query handler")
 
-	var trajectory agentic.Trajectory
+	var trajectory struct {
+		LoopID           string `json:"loop_id"`
+		Coverage         string `json:"coverage"`
+		TerminalObserved bool   `json:"terminal_observed"`
+		ObservedTotals   struct {
+			Facts                uint64 `json:"facts"`
+			TokensIn             uint64 `json:"tokens_in"`
+			TokensOut            uint64 `json:"tokens_out"`
+			TerminalObservations uint64 `json:"terminal_observations"`
+		} `json:"observed_totals"`
+		Facts []agentic.TrajectoryFactV1 `json:"facts"`
+	}
 	err = json.Unmarshal(trajResp, &trajectory)
 	require.NoError(t, err)
 
 	assert.Equal(t, loopID, trajectory.LoopID)
-	assert.NotNil(t, trajectory.EndTime, "Trajectory should be completed")
-	assert.Equal(t, "complete", trajectory.Outcome)
-	assert.Greater(t, len(trajectory.Steps), 0, "Trajectory should have steps")
+	assert.Equal(t, "observed", trajectory.Coverage)
+	assert.True(t, trajectory.TerminalObserved)
+	assert.Greater(t, trajectory.ObservedTotals.Facts, uint64(0))
+	assert.Equal(t, uint64(1), trajectory.ObservedTotals.TerminalObservations)
+	assert.Greater(t, len(trajectory.Facts), 0, "trajectory should expose visible facts")
 }

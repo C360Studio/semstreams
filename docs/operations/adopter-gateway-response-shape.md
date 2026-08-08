@@ -44,15 +44,14 @@ byte-identical before and after.
 | `entitiesByPredicate` | `graph.index.query.predicate` |
 | `compoundPredicateQuery` | `graph.index.query.predicateCompound` |
 
-## 3. Fields UNCHANGED BY DESIGN — do not "fix" these
+## 3. Fields with independent typed shapes
 
-**This column exists because it is the one instinct omits.** These fields never carried the
-envelope, so they never had a `.data` hop to remove. If you find yourself adding one to a read path
-here, or stripping a level, you are introducing a bug rather than adopting a change.
+These fields never carry the generic `QueryResponse` envelope. Consume their declared GraphQL
+shape directly.
 
-| GraphQL field | Shape | Why it is not affected |
+| GraphQL field | Shape | Contract |
 |---|---|---|
-| `entitiesByPrefix` | bare `[Entity]` array | `PrefixQueryResponse` (`{entities, next_cursor}`) is its own type, not `QueryResponse[T]`, and keeps its own separate unwrap |
+| `entitiesByPrefix` | `EntityPage { entities, next_cursor }` | `entities` contains the current page; pass an opaque `next_cursor` back as the `cursor` argument until it is empty |
 | `entity`, `entityByAlias` | entity object | served from graph-ingest, never enveloped |
 | `relationships` | relationship object | raw marshal |
 | `pathSearch` | `PathSearchResult` | composite, raw marshal |
@@ -71,7 +70,8 @@ grep -rn 'graphSummary\.data\|\bdata\.data\b' <your-repo>
 ```
 
 Anything that matches is in table 1 and needs the extra hop removed. Anything that does not match is
-in table 2 or 3 and needs nothing.
+in table 2 or 3 and follows the field's declared shape. Prefix clients should also select
+`entities { ... }` and `next_cursor` from `entitiesByPrefix`; a bare entity selection is not valid.
 
 ## Why this was breaking rather than additive
 

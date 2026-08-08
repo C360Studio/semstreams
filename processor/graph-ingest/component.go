@@ -493,14 +493,6 @@ type Component struct {
 	suffixBucket *natsclient.KVStore            // KV suffix index: suffix → fullID
 	suffixCache  cache.Cache[string]            // TTL cache for suffix resolution
 
-	// maxPrefixResponseBytesOverride, when > 0, replaces the package-level
-	// maxPrefixResponseBytes byte budget in handleQueryPrefixNATS. It exists
-	// solely so unit tests can exercise the byte-trim cursor path without
-	// constructing 800KB of fixtures. Production never sets it (stays 0 →
-	// the const default applies). Set once before the handler runs in tests;
-	// the handler only reads it, so no synchronisation is required.
-	maxPrefixResponseBytesOverride int
-
 	// Inference components
 	hierarchyInference *inference.HierarchyInference
 

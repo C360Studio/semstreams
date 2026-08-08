@@ -82,10 +82,12 @@ task dev:send
 ```bash
 curl -s http://localhost:8084/graphql \
   -H "Content-Type: application/json" \
-  -d '{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entityIds } }"}' | jq
+  -d '{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entities { id } next_cursor } }"}' | jq
 ```
 
-You should see your sensor entity ID in the response.
+You should see your sensor entity ID under `data.entitiesByPrefix.entities`. If
+`next_cursor` is present, pass it back as the query's `cursor` argument to read
+the next page.
 
 ### 5. Debug (If Data Doesn't Appear)
 

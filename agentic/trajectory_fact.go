@@ -28,24 +28,37 @@ const (
 type TrajectoryKind string
 
 const (
-	TrajectoryKindLoopStarted      TrajectoryKind = "loop.started"
-	TrajectoryKindModelRequested   TrajectoryKind = "model.requested"
-	TrajectoryKindModelCompleted   TrajectoryKind = "model.completed"
-	TrajectoryKindToolRequested    TrajectoryKind = "tool.requested"
-	TrajectoryKindToolCompleted    TrajectoryKind = "tool.completed"
+	// TrajectoryKindLoopStarted and its siblings enumerate v1 observation kinds.
+	TrajectoryKindLoopStarted TrajectoryKind = "loop.started"
+	// TrajectoryKindModelRequested observes a model request.
+	TrajectoryKindModelRequested TrajectoryKind = "model.requested"
+	// TrajectoryKindModelCompleted observes a model completion.
+	TrajectoryKindModelCompleted TrajectoryKind = "model.completed"
+	// TrajectoryKindToolRequested observes a tool request.
+	TrajectoryKindToolRequested TrajectoryKind = "tool.requested"
+	// TrajectoryKindToolCompleted observes a tool completion.
+	TrajectoryKindToolCompleted TrajectoryKind = "tool.completed"
+	// TrajectoryKindContextCompacted observes context compaction.
 	TrajectoryKindContextCompacted TrajectoryKind = "context.compacted"
-	TrajectoryKindLoopTerminal     TrajectoryKind = "loop.terminal"
+	// TrajectoryKindLoopTerminal observes a terminal loop outcome.
+	TrajectoryKindLoopTerminal TrajectoryKind = "loop.terminal"
 )
 
 // TrajectorySourceKind classifies optional correlation without making it identity.
 type TrajectorySourceKind string
 
 const (
-	TrajectorySourceTask       TrajectorySourceKind = "task"
-	TrajectorySourceRequest    TrajectorySourceKind = "request"
-	TrajectorySourceToolCall   TrajectorySourceKind = "tool_call"
-	TrajectorySourceSignal     TrajectorySourceKind = "signal"
-	TrajectorySourceMessage    TrajectorySourceKind = "message"
+	// TrajectorySourceTask and its siblings classify optional source correlation.
+	TrajectorySourceTask TrajectorySourceKind = "task"
+	// TrajectorySourceRequest identifies request correlation.
+	TrajectorySourceRequest TrajectorySourceKind = "request"
+	// TrajectorySourceToolCall identifies tool-call correlation.
+	TrajectorySourceToolCall TrajectorySourceKind = "tool_call"
+	// TrajectorySourceSignal identifies signal correlation.
+	TrajectorySourceSignal TrajectorySourceKind = "signal"
+	// TrajectorySourceMessage identifies message correlation.
+	TrajectorySourceMessage TrajectorySourceKind = "message"
+	// TrajectorySourceCompaction identifies compaction correlation.
 	TrajectorySourceCompaction TrajectorySourceKind = "compaction"
 )
 
@@ -53,22 +66,33 @@ const (
 type TrajectoryPhase string
 
 const (
-	TrajectoryPhaseLoopStart    TrajectoryPhase = "loop_start"
+	// TrajectoryPhaseLoopStart and its siblings define stable causal phases.
+	TrajectoryPhaseLoopStart TrajectoryPhase = "loop_start"
+	// TrajectoryPhaseModelRequest orders model requests.
 	TrajectoryPhaseModelRequest TrajectoryPhase = "model_request"
-	TrajectoryPhaseModelResult  TrajectoryPhase = "model_result"
-	TrajectoryPhaseToolRequest  TrajectoryPhase = "tool_request"
-	TrajectoryPhaseToolResult   TrajectoryPhase = "tool_result"
-	TrajectoryPhaseCompaction   TrajectoryPhase = "compaction"
-	TrajectoryPhaseTerminal     TrajectoryPhase = "terminal"
+	// TrajectoryPhaseModelResult orders model results.
+	TrajectoryPhaseModelResult TrajectoryPhase = "model_result"
+	// TrajectoryPhaseToolRequest orders tool requests.
+	TrajectoryPhaseToolRequest TrajectoryPhase = "tool_request"
+	// TrajectoryPhaseToolResult orders tool results.
+	TrajectoryPhaseToolResult TrajectoryPhase = "tool_result"
+	// TrajectoryPhaseCompaction orders context compaction.
+	TrajectoryPhaseCompaction TrajectoryPhase = "compaction"
+	// TrajectoryPhaseTerminal orders terminal observations.
+	TrajectoryPhaseTerminal TrajectoryPhase = "terminal"
 )
 
 // TrajectoryStatus is bounded display metadata, not loop authority.
 type TrajectoryStatus string
 
 const (
+	// TrajectoryStatusRequested and its siblings enumerate observation outcomes.
 	TrajectoryStatusRequested TrajectoryStatus = "requested"
+	// TrajectoryStatusCompleted reports successful completion.
 	TrajectoryStatusCompleted TrajectoryStatus = "completed"
-	TrajectoryStatusFailed    TrajectoryStatus = "failed"
+	// TrajectoryStatusFailed reports failure.
+	TrajectoryStatusFailed TrajectoryStatus = "failed"
+	// TrajectoryStatusCancelled reports cancellation.
 	TrajectoryStatusCancelled TrajectoryStatus = "cancelled"
 )
 
@@ -76,11 +100,17 @@ const (
 type TrajectoryErrorCategory string
 
 const (
-	TrajectoryErrorUnknown    TrajectoryErrorCategory = "unknown"
-	TrajectoryErrorModel      TrajectoryErrorCategory = "model"
-	TrajectoryErrorTool       TrajectoryErrorCategory = "tool"
-	TrajectoryErrorTimeout    TrajectoryErrorCategory = "timeout"
+	// TrajectoryErrorUnknown and its siblings enumerate bounded error categories.
+	TrajectoryErrorUnknown TrajectoryErrorCategory = "unknown"
+	// TrajectoryErrorModel classifies model errors.
+	TrajectoryErrorModel TrajectoryErrorCategory = "model"
+	// TrajectoryErrorTool classifies tool errors.
+	TrajectoryErrorTool TrajectoryErrorCategory = "tool"
+	// TrajectoryErrorTimeout classifies timeouts.
+	TrajectoryErrorTimeout TrajectoryErrorCategory = "timeout"
+	// TrajectoryErrorPermission classifies permission failures.
 	TrajectoryErrorPermission TrajectoryErrorCategory = "permission"
+	// TrajectoryErrorValidation classifies validation failures.
 	TrajectoryErrorValidation TrajectoryErrorCategory = "validation"
 )
 
@@ -88,8 +118,11 @@ const (
 type TrajectoryEvidenceCapture string
 
 const (
-	TrajectoryEvidenceNone    TrajectoryEvidenceCapture = "none"
-	TrajectoryEvidenceStored  TrajectoryEvidenceCapture = "stored"
+	// TrajectoryEvidenceNone and its siblings report durable evidence capture.
+	TrajectoryEvidenceNone TrajectoryEvidenceCapture = "none"
+	// TrajectoryEvidenceStored reports verified durable evidence.
+	TrajectoryEvidenceStored TrajectoryEvidenceCapture = "stored"
+	// TrajectoryEvidenceMissing reports absent durable evidence.
 	TrajectoryEvidenceMissing TrajectoryEvidenceCapture = "missing"
 )
 
@@ -97,10 +130,14 @@ const (
 type TrajectoryEvidenceFailure string
 
 const (
+	// TrajectoryEvidenceFailureProviderUnavailable and its siblings explain missing evidence.
 	TrajectoryEvidenceFailureProviderUnavailable TrajectoryEvidenceFailure = "provider_unavailable"
-	TrajectoryEvidenceFailureRead                TrajectoryEvidenceFailure = "read_failed"
-	TrajectoryEvidenceFailureWrite               TrajectoryEvidenceFailure = "write_failed"
-	TrajectoryEvidenceFailureIntegrity           TrajectoryEvidenceFailure = "integrity_conflict"
+	// TrajectoryEvidenceFailureRead reports an evidence read failure.
+	TrajectoryEvidenceFailureRead TrajectoryEvidenceFailure = "read_failed"
+	// TrajectoryEvidenceFailureWrite reports an evidence write failure.
+	TrajectoryEvidenceFailureWrite TrajectoryEvidenceFailure = "write_failed"
+	// TrajectoryEvidenceFailureIntegrity reports an evidence integrity conflict.
+	TrajectoryEvidenceFailureIntegrity TrajectoryEvidenceFailure = "integrity_conflict"
 )
 
 // TrajectoryFactV1 is one immutable, finite observation. Bodies and arbitrary
@@ -216,12 +253,30 @@ func (f TrajectoryFactV1) validate() error {
 		if len(f.EvidenceDigest) != sha256.Size*2 {
 			return fmt.Errorf("evidence_digest must be sha256")
 		}
-		if _, err := hex.DecodeString(f.EvidenceDigest); err != nil {
+		decoded, err := hex.DecodeString(f.EvidenceDigest)
+		if err != nil {
 			return fmt.Errorf("evidence_digest must be sha256: %w", err)
 		}
+		if hex.EncodeToString(decoded) != f.EvidenceDigest {
+			return fmt.Errorf("evidence_digest must be lowercase canonical sha256")
+		}
 	}
-	if f.EvidenceCapture == TrajectoryEvidenceStored && (f.Evidence == nil || f.EvidenceDigest == "" || f.EvidenceSize == 0) {
-		return fmt.Errorf("stored evidence requires digest, size, and reference")
+	if f.EvidenceCapture == TrajectoryEvidenceStored {
+		if f.Evidence == nil || f.EvidenceDigest == "" || f.EvidenceSize == 0 {
+			return fmt.Errorf("stored evidence requires digest, size, and reference")
+		}
+		if strings.TrimSpace(f.Evidence.StorageInstance) == "" {
+			return fmt.Errorf("stored evidence requires storage instance")
+		}
+		if f.Evidence.Key != TrajectoryEvidenceKeyPrefix+f.EvidenceDigest {
+			return fmt.Errorf("stored evidence key must match digest")
+		}
+		if f.Evidence.ContentType != TrajectoryEvidenceContentType {
+			return fmt.Errorf("stored evidence content type must be %q", TrajectoryEvidenceContentType)
+		}
+		if f.Evidence.Size <= 0 || uint64(f.Evidence.Size) != f.EvidenceSize {
+			return fmt.Errorf("stored evidence reference size must match evidence_size")
+		}
 	}
 	if f.EvidenceCapture == TrajectoryEvidenceMissing && f.Evidence != nil {
 		return fmt.Errorf("missing evidence cannot carry a reference")

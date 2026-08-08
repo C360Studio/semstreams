@@ -110,7 +110,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 				Name:      "api",
 				Direction: component.DirectionInput,
 				Config: component.NATSRequestPort{
-					Subject: "storage.api",
+					Subject: "example.request",
 					Timeout: "2s",
 				},
 			},
@@ -757,7 +757,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "req",
 					Direction: component.DirectionOutput,
-					Config:    component.NATSRequestPort{Subject: "storage.api"},
+					Config:    component.NATSRequestPort{Subject: "example.request"},
 				},
 			},
 		)
@@ -767,7 +767,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "handler",
 					Direction: component.DirectionInput,
-					Config:    component.NATSRequestPort{Subject: "storage.api"},
+					Config:    component.NATSRequestPort{Subject: "example.request"},
 				},
 			},
 			nil,
@@ -781,6 +781,6 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 
 		edges := graph.GetEdges()
 		assert.Len(t, edges, 1, "exact-match request ports should still produce one edge")
-		assert.Equal(t, "storage.api", edges[0].ConnectionID)
+		assert.Equal(t, "example.request", edges[0].ConnectionID)
 	})
 }

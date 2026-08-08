@@ -6,16 +6,22 @@
 
 - execution design: `docs/proposals/foundation-b-port-language-design.md`, 112 lines, 8,895 bytes, SHA-256
   `9ef118a5e2837cb0adfdcca3c9962fa4e23dd4dac99d1562de45225d4940c48d`;
-- control record: `docs/proposals/foundation-b-port-language-control.md`, 142 lines, 9,795 bytes, SHA-256
-  `f6c1d0c9d2ca1bca5661d424a96dcd9f285b02abbbbd6b1db9080679e1d3c39e`;
+- control record: `docs/proposals/foundation-b-port-language-control.md`, 177 lines, 12,353 bytes, SHA-256
+  `af63b6b85a8347b5fcd5badc684918f7b23fb8166c9f4e58c9a2b82e63969593`;
 - immutable inventory identity: SHA-256
   `d957dfd00a2ca9bbf3ee3cf4aa2d0d9005008eb78198c7762403aa2c66ba9000`.
 - accepted trajectory inventory: commit `8c6997a6`, 426 lines, 34,359 bytes, SHA-256
   `5a7dcf3591cc643ee93654515763ec69982f36c78c296cf02bb8234b3000dd2a`;
-- accepted append-only trajectory contract: commit `139b8b1c`, 499 lines, 28,672 bytes, SHA-256
-  `53b169fbdf2cd25dfb9d3e4c87d1fb7135713ec5053d1ed1e6d93409b57b537e`.
+- accepted append-only trajectory contract: 514 lines, 30,140 bytes, SHA-256
+  `4d32d7229e9c976a981d547765de94d57f23aca2a022d5d69b1345e88dcc0c93`.
+- accepted request/reply response-bounds inventory: 344 lines, 22,788 bytes, SHA-256
+  `26ea5b020e1f292ee646dfd45115bf753e0ac392493a6d672e5743c2336e182e`;
+- accepted request/reply response-bounds design: 425 lines, 21,033 bytes, SHA-256
+  `e71bd4f2e0e8ef24440c2632721bb939a2d24ad9344e6c95aea50887d93c1015`.
 
 These hashes were computed from the actual files on 2026-08-07. They supersede any stale copied identity.
+The immutable response-bounds design retains the pre-approval status prose it had when presented; owner turn 4 below
+and this approval record supersede that historical label without changing the accepted artifact's bytes.
 
 ## Owner turns
 
@@ -27,6 +33,9 @@ These hashes were computed from the actual files on 2026-08-07. They supersede a
 3. On 2026-08-07, the owner accepted the append-only trajectory audit contract at `139b8b1c`. The contract binds
    full-fidelity evidence through a registered Store, best-effort immutable KV observations, loud non-blocking audit
    degradation, the provider-first startup phase, the canonical query route, and GraphQL-only public reads.
+4. On 2026-08-07, after independent review returned `DESIGN REVIEW PASS`, the owner answered `approved` for the
+   response-bounds design identified above. The owner separately confirmed that SemSource compatibility need not be
+   preserved when removing the ObjectStore request/reply API; downstream projects will migrate at the release break.
 
 The second turn is explicit risk acceptance for the graph-gateway amendment; it is not inferred from the first turn.
 
@@ -52,18 +61,29 @@ The second turn is explicit risk acceptance for the graph-gateway amendment; it 
   loudly without clobbering the incumbent.
 - Keep graph-gateway's three outputs and route its existing `agentic.query.*` family to agentic-loop's declared exact
   `agentic.query.trajectory` input. GraphQL is public; typed NATS request/reply is internal.
+- Keep query answers on Core NATS request/reply. Attempt the real success response first; only an observed
+  `nats.ErrMaxPayload` may be translated to the canonical `invalid/response_too_large` refusal.
+- Expose the connected server's current maximum payload through a narrow `natsclient.Client.MaxPayload` observation
+  for exact page fitting and diagnostics, never as adopter configuration or preflight correctness authority.
+- Make graph prefix results explicitly paged end-to-end, including GraphQL `EntityPage{entities,next_cursor}`; remove
+  the list-only GraphQL shape and the static 800 KiB prediction without an alias.
+- Make trajectory reads strict, cursor-paged, and metadata/reference-only. They never hydrate evidence bodies; full
+  evidence remains retrievable by an authorized reader through the registered Store named by the reference.
+- Delete the ObjectStore request/reply API and dormant `graph/llm.NATSContentFetcher` cleanly. An ObjectStore `api`
+  input or any `nats-request` input fails component construction; no inert port, deprecated code, or shim remains.
+- Supersede generic bulk-response streaming with operation-owned continuation. No response stream, overflow bucket,
+  generic continuation envelope, or public evidence-body endpoint is added by Foundation B.
 
 ## Release boundary
 
-This approval authorized implementation checkpoints 1-4 and the accepted trajectory cutover. At `d630c8fd`, the
-pre-trajectory implementation had green local lint/build/vet, race, integration, schema-cleanliness, contract, and
-OpenSpec evidence. Those results are historical and MUST be rerun after the accepted trajectory contract is
-implemented. No current release gate is checked by this OpenSpec slice. Breaking E2E, independent implementation
-review, post-B inventory, PR-ready, merge, and archive remain open.
+This approval authorized implementation checkpoints 1-4, the accepted trajectory cutover, and the response-bounds
+clean break. The completed-tree static, race, integration, generated-artifact, contract, OpenSpec, and breaking E2E
+results are recorded in `docs/proposals/foundation-b-release-evidence.md`. Independent implementation review,
+post-merge inventory/baseline recording, merge, and archive remain open.
 
-The prior agentic E2E startup failure on the redundant `trajectories` override now has an accepted disposition. The
-clean cutover adds the canonical required port, removes the seven redundant complete-replacement overrides, and binds
-the durable append-only fact contract. Runtime implementation and E2E proof remain pending.
+The prior agentic E2E startup failure on the redundant `trajectories` override is superseded by the completed-tree
+agentic and aggregate E2E passes. The clean cutover adds the canonical required port, removes the seven redundant
+complete-replacement overrides, and binds the durable append-only fact contract.
 
 Hierarchy placement and the research create-before-append/hierarchy consequences remain deferred inputs to the
 post-Foundation graph index program. The existing research-graph E2E is a Foundation B cutover gate only.

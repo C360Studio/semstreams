@@ -55,11 +55,11 @@ func TestIntegration_UDPInput_Creation_ValidConfig(t *testing.T) {
 	require.Equal(t, 14550, networkPort.Port)
 	require.Equal(t, "127.0.0.1", networkPort.Host)
 
-	// Verify NATS output configuration
+	// Verify JetStream output configuration
 	outputPorts := udpInput.OutputPorts()
 	require.Len(t, outputPorts, 1)
-	natsPort := outputPorts[0].Config.(component.NATSPort)
-	require.Equal(t, "test.udp.mavlink", natsPort.Subject)
+	streamPort := outputPorts[0].Config.(component.JetStreamPort)
+	require.Equal(t, []string{"test.udp.mavlink"}, streamPort.Subjects)
 }
 
 func TestIntegration_UDPInput_Creation_DefaultConfig(t *testing.T) {
@@ -146,7 +146,7 @@ func TestIntegration_UDPInput_Creation_InvalidPort(t *testing.T) {
 					}],
 					"outputs": [{
 						"name": "nats_output",
-						"config": {"kind": "nats", "subject": "test.udp"}
+						"config": {"kind": "jetstream", "subjects": ["test.udp"]}
 					}]
 				}
 			}`, tc.port))
@@ -226,7 +226,9 @@ func TestIntegration_UDPInput_Integration_RealUDPAndNATS(t *testing.T) {
 	}
 
 	// Create real NATS client with JetStream for message verification
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	testClient := natsclient.NewTestClient(t, natsclient.WithStreams(natsclient.TestStreamConfig{
+		Name: "INTEGRATION", Subjects: []string{"integration.udp.>"},
+	}))
 
 	// Find available port for UDP
 	port := findAvailablePort(t)
@@ -306,7 +308,9 @@ func TestIntegration_UDPInput_Integration_MultipleMessages(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	testClient := natsclient.NewTestClient(t, natsclient.WithStreams(natsclient.TestStreamConfig{
+		Name: "INTEGRATION", Subjects: []string{"integration.udp.>"},
+	}))
 	port := findAvailablePort(t)
 	subject := "integration.udp.multi"
 

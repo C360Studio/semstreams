@@ -119,6 +119,14 @@
     }
   },
   "components": {
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "bucket_name": "AGENT_CONTENT"
+      }
+    },
     "graph-ingest": {
       "type": "processor",
       "name": "graph-ingest",
@@ -387,14 +395,6 @@
               },
               "description": "Loop state storage",
               "name": "loops"
-            },
-            {
-              "config": {
-                "bucket": "AGENT_TRAJECTORIES",
-                "kind": "kv-write"
-              },
-              "description": "Trajectory storage",
-              "name": "trajectories"
             }
           ]
         }

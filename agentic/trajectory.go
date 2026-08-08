@@ -83,31 +83,6 @@ func (t *Trajectory) Complete(outcome string) {
 	t.Duration = now.Sub(t.StartTime).Milliseconds()
 }
 
-// TrajectoryListItem is a summary of a trajectory for list responses.
-// Contains loop metadata and aggregate metrics but no individual steps.
-type TrajectoryListItem struct {
-	LoopID         string         `json:"loop_id"`
-	TaskID         string         `json:"task_id"`
-	Outcome        string         `json:"outcome,omitempty"`
-	Role           string         `json:"role"`
-	Model          string         `json:"model"`
-	WorkflowSlug   string         `json:"workflow_slug,omitempty"`
-	WorkflowStep   string         `json:"workflow_step,omitempty"`
-	Iterations     int            `json:"iterations"`
-	TotalTokensIn  int            `json:"total_tokens_in"`
-	TotalTokensOut int            `json:"total_tokens_out"`
-	Duration       int64          `json:"duration"`
-	StartTime      time.Time      `json:"start_time"`
-	EndTime        *time.Time     `json:"end_time,omitempty"`
-	Metadata       map[string]any `json:"metadata,omitempty"`
-}
-
-// TrajectoryListResponse is the response format for trajectory list queries.
-type TrajectoryListResponse struct {
-	Trajectories []TrajectoryListItem `json:"trajectories"`
-	Total        int                  `json:"total"`
-}
-
 // NewTrajectory creates a new Trajectory with initialized values
 func NewTrajectory(loopID string) Trajectory {
 	return Trajectory{

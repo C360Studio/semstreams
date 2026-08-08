@@ -60,6 +60,14 @@ func (s *EngineIntegrationSuite) SetupTest() {
 			Environment: "test",
 		},
 		Components: make(config.ComponentConfigs),
+		Streams: config.StreamConfigs{
+			"INPUT": {
+				Subjects: []string{"input.>"},
+				MaxAge:   "1h",
+				MaxBytes: 64 << 20,
+				Discard:  config.StreamDiscardOld,
+			},
+		},
 	}
 
 	// Create config manager

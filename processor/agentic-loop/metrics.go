@@ -386,7 +386,7 @@ func boundedTrajectoryAuditStage(stage trajectoryAuditStage) trajectoryAuditStag
 	switch stage {
 	case trajectoryStageProviderResolve, trajectoryStageEvidenceGet, trajectoryStageEvidencePut,
 		trajectoryStageEvidenceVerify, trajectoryStageFactEncode, trajectoryStageFactCreate,
-		trajectoryStageFactVerify, trajectoryStageBatchBudget:
+		trajectoryStageFactVerify:
 		return stage
 	default:
 		return trajectoryStageFactEncode

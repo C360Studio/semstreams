@@ -26,7 +26,6 @@ const (
 	trajectoryStageFactEncode      trajectoryAuditStage = "fact_encode"
 	trajectoryStageFactCreate      trajectoryAuditStage = "fact_create"
 	trajectoryStageFactVerify      trajectoryAuditStage = "fact_verify"
-	trajectoryStageBatchBudget     trajectoryAuditStage = "batch_budget"
 )
 
 type trajectoryAuditReason string
@@ -197,31 +196,31 @@ func (r *trajectoryRecorder) record(ctx context.Context, observation trajectoryO
 	if ctx.Err() != nil {
 		return result
 	}
-	if _, err := r.bucket.Create(ctx, key, encoded); err == nil {
+	_, createErr := r.bucket.Create(ctx, key, encoded)
+	if createErr == nil {
 		result.FactStored = true
 		return result
-	} else {
-		if ctx.Err() != nil {
-			return result
-		}
-		entry, getErr := r.bucket.Get(ctx, key)
-		if getErr == nil && bytes.Equal(entry.Value(), encoded) {
-			result.FactStored = true
-			return result
-		}
-		if getErr == nil {
-			r.fail(observation, attempt.ID, trajectoryStageFactVerify, trajectoryReasonIntegrity,
-				fmt.Errorf("immutable fact key contains different canonical bytes"))
-			return result
-		}
-		stage := trajectoryStageFactCreate
-		if errors.Is(err, jetstream.ErrKeyExists) {
-			stage = trajectoryStageFactVerify
-		}
-		r.fail(observation, attempt.ID, stage, trajectoryReasonBackend,
-			fmt.Errorf("create failed: %v; verification failed: %w", err, getErr))
+	}
+	if ctx.Err() != nil {
 		return result
 	}
+	entry, getErr := r.bucket.Get(ctx, key)
+	if getErr == nil && bytes.Equal(entry.Value(), encoded) {
+		result.FactStored = true
+		return result
+	}
+	if getErr == nil {
+		r.fail(observation, attempt.ID, trajectoryStageFactVerify, trajectoryReasonIntegrity,
+			fmt.Errorf("immutable fact key contains different canonical bytes"))
+		return result
+	}
+	stage := trajectoryStageFactCreate
+	if errors.Is(createErr, jetstream.ErrKeyExists) {
+		stage = trajectoryStageFactVerify
+	}
+	r.fail(observation, attempt.ID, stage, trajectoryReasonBackend,
+		fmt.Errorf("create failed: %v; verification failed: %w", createErr, getErr))
+	return result
 }
 
 func (r *trajectoryRecorder) allocateAttempt(ctx context.Context, loopID string, kind agentic.TrajectoryKind) (trajectoryAttempt, error) {

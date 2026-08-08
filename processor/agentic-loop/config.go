@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -54,7 +55,6 @@ type Config struct {
 	LoopsBucket                       string                   `json:"loops_bucket" schema:"type:string,description:NATS KV bucket name for storing loop state,default:AGENT_LOOPS,category:advanced,required"`
 	ToolResultMaxBytes                int                      `json:"tool_result_max_bytes,omitempty" schema:"type:int,description:Maximum bytes for tool result content before truncation. 0 means no limit,default:32768,category:advanced"`
 	TrajectoryEvidenceStorageInstance string                   `json:"trajectory_evidence_storage_instance,omitempty" schema:"type:string,description:Logical registered storage instance for full trajectory evidence,default:objectstore,category:advanced"`
-	TrajectoryCacheTTL                string                   `json:"trajectory_cache_ttl,omitempty" schema:"type:string,description:TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries,default:4h,category:advanced"`
 	ApprovalTimeoutStr                string                   `json:"approval_timeout,omitempty" schema:"type:string,description:Auto-reject pending approvals after this duration (e.g. 5m or 1h). Empty means wait indefinitely,category:advanced"`
 	Consumer                          ConsumerConfig           `json:"consumer" schema:"type:object,description:JetStream consumer tuning for long-running ports (agent.task/agent.response/tool.result),category:advanced"`
 	Context                           ContextConfig            `json:"context" schema:"type:object,description:Context window management. Model limits are resolved from the model registry,category:advanced"`
@@ -387,6 +387,13 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
+					Name: "trajectory_query", Config: component.NATSRequestPort{
+						Subject:   "agentic.query.trajectory",
+						Interface: &component.InterfaceContract{Type: "agentic.query", Version: "v1"},
+					}, Required: true,
+					Description: "Observed trajectory fact queries",
+				},
+				{
 					Name: "agent.task", Config: component.JetStreamPort{Subjects: []string{"agent.task.*"}, StreamName: "AGENT"}, Required: true,
 					Description: "Agent task requests (JetStream)",
 				},
@@ -416,6 +423,13 @@ func DefaultConfig() Config {
 				},
 			},
 			Outputs: []component.PortDefinition{
+				{
+					Name: "trajectories", Config: component.KVWritePort{
+						Bucket:    agentic.TrajectoryBucketName,
+						Interface: &component.InterfaceContract{Type: "agentic.trajectory.fact", Version: "v1"},
+					}, Required: true,
+					Description: "Immutable trajectory observations",
+				},
 				{
 					Name: "loops", Config: component.KVWritePort{Bucket: "AGENT_LOOPS"}, Description: "Loop state storage",
 				},

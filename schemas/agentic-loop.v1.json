@@ -42,12 +42,6 @@
       "description": "Suffix for consumer names",
       "category": "advanced"
     },
-    "content_bucket": {
-      "type": "string",
-      "description": "NATS ObjectStore bucket for trajectory step content (tool results and model responses)",
-      "default": "AGENT_CONTENT",
-      "category": "advanced"
-    },
     "context": {
       "type": "object",
       "description": "Context window management. Model limits are resolved from the model registry",
@@ -158,16 +152,10 @@
       "default": 32768,
       "category": "advanced"
     },
-    "trajectory_cache_ttl": {
+    "trajectory_evidence_storage_instance": {
       "type": "string",
-      "description": "TTL for trajectory cache (e.g. 4h or 30m). Trajectories older than this are only available via graph queries",
-      "default": "4h",
-      "category": "advanced"
-    },
-    "trajectory_detail": {
-      "type": "string",
-      "description": "Trajectory detail level: summary (default) or full",
-      "default": "summary",
+      "description": "Logical registered storage instance for full trajectory evidence",
+      "default": "objectstore",
       "category": "advanced"
     }
   },

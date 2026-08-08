@@ -71,7 +71,7 @@
                 ]
               },
               "description": "Raw UDP data from edge devices",
-              "name": "udp_out"
+              "name": "nats_output"
             }
           ]
         },

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -73,7 +74,7 @@ func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Ser
 				finalSubjects = append(finalSubjects, subj)
 			}
 		}
-		cfg.MonitorSubjects = finalSubjects
+		cfg.MonitorSubjects = uniqueStrings(finalSubjects)
 	}
 
 	// Validate configuration
@@ -119,6 +120,19 @@ func containsWildcard(subjects []string) bool {
 		}
 	}
 	return false
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 // MessageLoggerConfig holds configuration for the MessageLogger service
@@ -207,9 +221,8 @@ type MessageLogger struct {
 	natsSubsRefs  []*natsclient.Subscription // Subscription references for cleanup
 
 	// Message storage (circular buffer)
-	entries      []MessageLogEntry
-	entriesIndex int
-	entriesMu    sync.RWMutex
+	entries   []MessageLogEntry
+	entriesMu sync.RWMutex
 
 	// Trace indexing
 	nextSequence atomic.Uint64
@@ -576,8 +589,14 @@ func (ml *MessageLogger) storeEntry(entry MessageLogEntry) {
 	ml.entriesMu.Lock()
 	defer ml.entriesMu.Unlock()
 
-	ml.entries[ml.entriesIndex] = entry
-	ml.entriesIndex = (ml.entriesIndex + 1) % len(ml.entries)
+	// Sequence owns the slot. Callback goroutines may reach this lock long after
+	// newer callbacks have wrapped onto the same slot, so an older sequence must
+	// never replace a newer observation already present there.
+	index := int((entry.Sequence - 1) % uint64(len(ml.entries)))
+	if ml.entries[index].Sequence >= entry.Sequence {
+		return
+	}
+	ml.entries[index] = entry
 }
 
 // indexTrace adds a sequence number to the trace index
@@ -600,13 +619,7 @@ func (ml *MessageLogger) GetEntriesByTrace(traceID string) []MessageLogEntry {
 		return nil
 	}
 
-	// Calculate minimum valid sequence (entries that haven't been overwritten)
-	currentSeq := ml.nextSequence.Load()
 	bufferSize := uint64(len(ml.entries))
-	var minValidSeq uint64
-	if currentSeq > bufferSize {
-		minValidSeq = currentSeq - bufferSize
-	}
 
 	// Collect valid entries
 	ml.entriesMu.RLock()
@@ -614,9 +627,6 @@ func (ml *MessageLogger) GetEntriesByTrace(traceID string) []MessageLogEntry {
 
 	var results []MessageLogEntry
 	for _, seq := range sequences {
-		if seq < minValidSeq {
-			continue // Entry has been overwritten
-		}
 		// Sequence starts at 1, index starts at 0, so subtract 1
 		idx := int((seq - 1) % bufferSize)
 		entry := ml.entries[idx]
@@ -624,6 +634,9 @@ func (ml *MessageLogger) GetEntriesByTrace(traceID string) []MessageLogEntry {
 			results = append(results, entry)
 		}
 	}
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Sequence < results[j].Sequence
+	})
 
 	return results
 }
@@ -650,22 +663,22 @@ func (ml *MessageLogger) GetLogEntries(limit int) []MessageLogEntry {
 		limit = len(ml.entries)
 	}
 
-	result := make([]MessageLogEntry, 0, limit)
+	return newestEntries(ml.entries, limit)
+}
 
-	// Start from most recent and work backwards
-	start := ml.entriesIndex - 1
-	if start < 0 {
-		start = len(ml.entries) - 1
-	}
-
-	for i := 0; i < limit; i++ {
-		idx := (start - i + len(ml.entries)) % len(ml.entries)
-		entry := ml.entries[idx]
-		if !entry.Timestamp.IsZero() {
+func newestEntries(entries []MessageLogEntry, limit int) []MessageLogEntry {
+	result := make([]MessageLogEntry, 0, min(limit, len(entries)))
+	for _, entry := range entries {
+		if entry.Sequence != 0 {
 			result = append(result, entry)
 		}
 	}
-
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Sequence > result[j].Sequence
+	})
+	if len(result) > limit {
+		result = result[:limit]
+	}
 	return result
 }
 
@@ -887,24 +900,10 @@ func (ml *MessageLogger) updateMaxEntries(maxEntries int) error {
 	// Create new buffer with new size
 	newEntries := make([]MessageLogEntry, maxEntries)
 
-	// Copy existing entries if possible (without calling GetLogEntries to avoid deadlock)
+	// Copy existing entries without calling GetLogEntries while holding entriesMu.
+	// Preserve the newest sequence for every slot when shrinking causes collisions.
 	if len(ml.entries) > 0 {
-		// Collect current entries in order (most recent first)
-		var currentEntries []MessageLogEntry
-
-		// Start from most recent and work backwards
-		start := ml.entriesIndex - 1
-		if start < 0 {
-			start = len(ml.entries) - 1
-		}
-
-		for i := 0; i < len(ml.entries); i++ {
-			idx := (start - i + len(ml.entries)) % len(ml.entries)
-			entry := ml.entries[idx]
-			if !entry.Timestamp.IsZero() {
-				currentEntries = append(currentEntries, entry)
-			}
-		}
+		currentEntries := newestEntries(ml.entries, len(ml.entries))
 
 		// Copy as many as we can fit, starting with most recent
 		copyCount := len(currentEntries)
@@ -913,13 +912,16 @@ func (ml *MessageLogger) updateMaxEntries(maxEntries int) error {
 		}
 
 		for i := 0; i < copyCount; i++ {
-			newEntries[i] = currentEntries[i]
+			entry := currentEntries[i]
+			index := int((entry.Sequence - 1) % uint64(maxEntries))
+			if newEntries[index].Sequence < entry.Sequence {
+				newEntries[index] = entry
+			}
 		}
 	}
 
 	// Replace the buffer
 	ml.entries = newEntries
-	ml.entriesIndex = 0
 
 	return nil
 }

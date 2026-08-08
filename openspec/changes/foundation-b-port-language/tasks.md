@@ -1,8 +1,8 @@
 # Tasks — Foundation B port language
 
-> Checkpoints 1-4 and the pre-trajectory release-fallout corrections are completed implementation history. The
-> append-only trajectory contract accepted at `139b8b1c` is not implemented. Every release gate remains unchecked;
-> results recorded at older commits are historical evidence only.
+> Checkpoints 1-4, the append-only trajectory cutover, response-bound work, and clean ObjectStore API retirement are
+> implemented in the Foundation B working tree. Release evidence below records the completed-tree results; independent
+> review, post-merge inventory, merged-baseline recording, and archive remain open.
 
 ## 1. Grammar and codec — completed
 
@@ -48,36 +48,58 @@ agentic-governance roles (`8178a10c`), migrated agentic-loop integration fixture
 subscriptions by canonical port kind (`d630c8fd`). Accepted-contract HEAD `139b8b1c` is 16 commits after baseline
 `5ffc1d1f`. The historical gates at `d630c8fd` predate the accepted trajectory contract.
 
-- [ ] 5.0b Implement deterministic bounded `TrajectoryFactV1` encoding, per-invocation attempt identity and ordering,
+- [x] 5.0b Implement deterministic bounded `TrajectoryFactV1` encoding, per-invocation attempt identity and ordering,
   immutable KV Create/Get verification, distinct redelivery observations, and the internal 8 KiB fact limit.
-- [ ] 5.0c Capture full canonical model/tool/compaction/terminal evidence before operational truncation; store and
+- [x] 5.0c Capture full canonical model/tool/compaction/terminal evidence before operational truncation; store and
   verify digest-addressed bodies through the configured lazy `StoreRegistry` lookup; remove agentic-loop's private
   ObjectStore handle and lifecycle.
-- [ ] 5.0d Add bounded audit-failure logging/metrics and sticky Health degradation for provider, evidence, encode, and
+- [x] 5.0d Add bounded audit-failure logging/metrics and sticky Health degradation for provider, evidence, encode, and
   fact failures; prove every failure path preserves downstream state transition, publication, and ACK.
-- [ ] 5.0e Start/register all StoreProvider components in a provider barrier before the parallel consumer barrier;
+- [x] 5.0e Start/register all StoreProvider components in a provider barrier before the parallel consumer barrier;
   propagate invalid/duplicate registration as startup failure without clobbering the incumbent; start agentic-loop
   degraded when its configured provider is absent.
-- [ ] 5.0f Add the canonical agentic-loop `trajectories` and `trajectory_query` ports, route through graph-gateway's
+- [x] 5.0f Add the canonical agentic-loop `trajectories` and `trajectory_query` ports, route through graph-gateway's
   existing typed `agentic_queries` family, add `objectstore`/`AGENT_CONTENT` to all seven assemblies, and delete their
   redundant trajectory overrides.
-- [ ] 5.0g Replace aggregate/cache/manager reads with prefix-listed causal facts; expose GraphQL-only trajectory reads
-  with `coverage: observed`, `observed_totals`, evidence hydration, and ordinary ordered terminal observations; delete
-  direct HTTP/OpenAPI and terminal trajectory graph writes.
-- [ ] 5.0h Add the frozen unit, integration, static, crash-boundary, restart, provider-lifecycle, routing, seven-config,
+- [x] 5.0g Replace aggregate/cache/manager reads with prefix-listed causal facts; expose GraphQL-only trajectory reads
+  as strict cursor-paged metadata/references with `coverage: observed`, page-local `observed_totals`, and ordinary
+  ordered terminal observations; delete evidence hydration, direct HTTP/OpenAPI, and terminal trajectory graph writes.
+- [x] 5.0h Add the frozen unit, integration, static, crash-boundary, restart, provider-lifecycle, routing, seven-config,
   GraphQL, and absence-of-seal/cache/graph/projector tests specified by the accepted contract.
+- [x] 5.0i Add narrow connected-server `MaxPayload` observation and make the shared request responder translate only
+  an observed success-publish `nats.ErrMaxPayload` to canonical `invalid/response_too_large`.
+- [x] 5.0j Replace the static graph-prefix budget and list-only GraphQL projection with exactly fitted typed pages and
+  end-to-end `next_cursor`; reject an indivisible first entity that cannot fit.
+- [x] 5.0k Delete the ObjectStore request/reply API, default `api` input, DTOs/handlers/docs/tests, and dormant NATS
+  content fetcher; reject old `api`/`nats-request` inputs at construction and retain registered Store access only.
 
-- [ ] 5.1 Run `task lint`, `task build`, `go vet -tags=integration ./...`, and
+- [x] 5.1 Run `task lint`, `task build`, `go vet -tags=integration ./...`, and
   `go vet -tags=live_llm ./...` against the completed accepted-contract implementation; record actual results.
-- [ ] 5.2 Run `go test -race ./...` against the completed implementation; record the actual result.
-- [ ] 5.3 Run `task test:integration` against the completed implementation; record the actual result.
-- [ ] 5.4 Run `task schema:generate`, verify `git diff -- schemas/ specs/` is clean, and record the actual result.
-- [ ] 5.5 Run `go test ./test/contract/...` and `task openspec:validate`; record the actual results.
-- [ ] 5.6 Run the breaking E2E gates `task e2e:agentic`, `task e2e:semantic`, `task e2e:all`, and
+- [x] 5.2 Run `go test -race ./...` against the completed implementation; record the actual result.
+- [x] 5.3 Run `task test:integration` against the completed implementation; record the actual result.
+- [x] 5.4 Run `task schema:generate`, verify regeneration introduces no additional `schemas/` or `specs/` diff, and
+  record the actual result.
+- [x] 5.5 Run `go test ./test/contract/...` and `task openspec:validate`; record the actual results.
+- [x] 5.6 Run the breaking E2E gates `task e2e:agentic`, `task e2e:semantic`, `task e2e:all`, and
   `task e2e:research-graph`; record each result independently. Historical evidence: the pre-contract agentic E2E at
   `d630c8fd` failed fast because a redundant complete-replacement `trajectories` override did not match runtime
-  defaults. That cause now has an accepted disposition, but no E2E has run against its implementation.
-- [ ] 5.7 Obtain an independent SemStreams reviewer pass on the complete implementation and OpenSpec diff.
+  defaults. The completed-tree executions below supersede that historical failure.
+
+Completed-tree evidence on 2026-08-07 is retained in
+`docs/proposals/foundation-b-release-evidence.md` and summarized here:
+
+- `task lint`, `task build`, `go vet -tags=integration ./...`, and `go vet -tags=live_llm ./...`: pass.
+- `go test -race ./...`: pass.
+- `task test:integration`: pass with the integration tag, race detector, and uncapped package parallelism.
+- `task schema:generate`: pass; the two intentionally changed generated artifacts were byte-identical before and after
+  regeneration (`agentic-loop.v1.json` SHA-256 `870a2833...d13bc`, `openapi.v3.yaml` SHA-256
+  `11fd3e43...7879`). No additional generated drift appeared.
+- `go test ./test/contract/...`: pass; `task openspec:validate`: 35 passed, 0 failed.
+- `task e2e:all`: pass, including its core, structural, statistical, semantic, and agentic executions;
+  `task e2e:research-graph`: pass. The semantic execution completed all 48 stages and the agentic execution observed
+  ten strict trajectory facts plus terminal completion.
+- [x] 5.7 Obtain an independent SemStreams reviewer pass on the complete implementation and OpenSpec diff. Final
+  verdict: `REVIEW PASS — APPROVE`; no blocking or high findings remained.
 - [ ] 5.8 Re-inventory the merged Foundation B tree and hard-stop on any alias, flat discriminator, top-level side lane,
   dead type, independent shared projection, false KV declaration, JetStream input without explicit stream identity,
   consumer-local stream-name derivation fallback, undeclared runtime-policy dependency, trajectory aggregate/cache,

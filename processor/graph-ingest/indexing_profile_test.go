@@ -218,7 +218,7 @@ func TestIndexingProfile_StructuralGraphNeverGated_TraceEntityStaysQueryable(t *
 	// A 'trace' entity is excluded from EMBEDDING (Phase 3) but must remain
 	// fully queryable/traversable: the query path must not filter on profile.
 	queryReq, _ := json.Marshal(map[string]any{"prefix": "c360", "limit": 10})
-	respData, err := comp.handleQueryPrefixNATS(ctx, queryReq)
+	respData, err := comp.handleQueryPrefixWithMaxPayload(ctx, queryReq, 1<<20)
 	require.NoError(t, err)
 	var resp struct {
 		Entities []graph.EntityState `json:"entities"`
