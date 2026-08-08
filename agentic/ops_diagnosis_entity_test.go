@@ -116,7 +116,6 @@ func TestOpsDiagnosisMessageType_Distinct(t *testing.T) {
 	others := []string{
 		agentic.CategoryLoopExecution,
 		agentic.CategoryModelEndpoint,
-		agentic.CategoryTrajectoryStep,
 		agentic.CategoryLoopCreated,
 		agentic.CategoryLoopCompleted,
 		agentic.CategoryLoopFailed,

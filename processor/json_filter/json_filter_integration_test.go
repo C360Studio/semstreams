@@ -83,20 +83,12 @@ func TestIntegration_JSONFilterProcessing(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonfilter.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonfilter.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -208,20 +200,12 @@ func TestIntegration_MultipleRules(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.multi.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonfilter.multi.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.multi.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonfilter.multi.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -316,20 +300,12 @@ func TestIntegration_ContainsOperator(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.contains.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonfilter.contains.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.contains.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonfilter.contains.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -421,20 +397,12 @@ func TestIntegration_RejectsInvalidJSON(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.reject.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonfilter.reject.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonfilter.reject.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonfilter.reject.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},

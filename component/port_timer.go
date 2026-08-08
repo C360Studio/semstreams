@@ -18,7 +18,7 @@ func (t TimerPort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (t TimerPort) Type() string {
-	return "timer"
+// Kind returns the canonical port kind.
+func (t TimerPort) Kind() PortKind {
+	return PortKindTimer
 }

@@ -31,7 +31,6 @@ func TestModelEndpointMessageType_Distinct(t *testing.T) {
 	mt := agentic.ModelEndpointMessageType()
 	others := []string{
 		agentic.CategoryLoopExecution,
-		agentic.CategoryTrajectoryStep,
 		agentic.CategoryLoopCreated,
 		agentic.CategoryLoopCompleted,
 		agentic.CategoryLoopFailed,

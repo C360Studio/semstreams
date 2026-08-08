@@ -13,10 +13,10 @@ func TestJSONGenericProcessor_Creation(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.input"}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "wrapped.output", Interface: "core .json.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "wrapped.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 		},
 	}
@@ -46,10 +46,14 @@ func TestJSONGenericProcessor_DefaultConfig(t *testing.T) {
 	assert.NotNil(t, config.Ports)
 	assert.Len(t, config.Ports.Inputs, 1)
 	assert.Len(t, config.Ports.Outputs, 1)
-	assert.Equal(t, "raw.>", config.Ports.Inputs[0].Subject)
-	assert.Equal(t, "nats", config.Ports.Inputs[0].Type)
-	assert.Equal(t, "generic.messages", config.Ports.Outputs[0].Subject)
-	assert.Equal(t, "core .json.v1", config.Ports.Outputs[0].Interface)
+	input, ok := config.Ports.Inputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	output, ok := config.Ports.Outputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	assert.Equal(t, "raw.>", input.Subject)
+	assert.Equal(t, "generic.messages", output.Subject)
+	require.NotNil(t, output.Interface)
+	assert.Equal(t, "core .json.v1", output.Interface.Type)
 }
 
 func TestJSONGenericProcessor_InvalidConfig(t *testing.T) {
@@ -86,11 +90,11 @@ func TestJSONGenericProcessor_InputPorts(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input1", Type: "nats", Subject: "raw.input1", Required: true},
-				{Name: "input2", Type: "nats", Subject: "raw.input2", Required: false},
+				{Name: "input1", Config: component.NATSPort{Subject: "raw.input1"}, Required: true},
+				{Name: "input2", Config: component.NATSPort{Subject: "raw.input2"}, Required: false},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "wrapped.output", Interface: "core .json.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "wrapped.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 		},
 	}
@@ -123,10 +127,10 @@ func TestJSONGenericProcessor_OutputPorts(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.input"}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "wrapped.output", Interface: "core .json.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "wrapped.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 		},
 	}

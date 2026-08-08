@@ -26,7 +26,7 @@ func TestHandleQueryPrefix_InvalidPrefixHasNoBucketIO(t *testing.T) {
 	}
 	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme.*"})
 	require.NoError(t, err)
-	_, err = comp.handleQueryPrefixNATS(context.Background(), request)
+	_, err = comp.handleQueryPrefixWithMaxPayload(context.Background(), request, 1<<20)
 	require.Error(t, err)
 	assert.True(t, errs.IsInvalid(err))
 	var classified *errs.ClassifiedError
@@ -60,11 +60,20 @@ func storePrefixEntity(t *testing.T, comp *Component, id string) {
 // callPrefixHandler is a helper that marshals the request and calls
 // handleQueryPrefixNATS, returning a decoded PrefixQueryResponse.
 func callPrefixHandler(t *testing.T, comp *Component, req graph.PrefixQueryRequest) graph.PrefixQueryResponse {
+	return callPrefixHandlerWithMaxPayload(t, comp, req, 1<<20)
+}
+
+func callPrefixHandlerWithMaxPayload(
+	t *testing.T,
+	comp *Component,
+	req graph.PrefixQueryRequest,
+	maxPayload int64,
+) graph.PrefixQueryResponse {
 	t.Helper()
 	reqData, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respData, err := comp.handleQueryPrefixNATS(context.Background(), reqData)
+	respData, err := comp.handleQueryPrefixWithMaxPayload(context.Background(), reqData, maxPayload)
 	require.NoError(t, err)
 
 	var resp graph.PrefixQueryResponse
@@ -181,23 +190,47 @@ func TestHandleQueryPrefix_LimitClampAboveMax(t *testing.T) {
 	assert.Empty(t, resp.NextCursor, "no cursor when all entities fit in one page")
 }
 
-// TestHandleQueryPrefix_ByteBudgetSetsNextCursor verifies that when the
-// applyPrefixByteLimit helper trims the entity slice, a NextCursor is set.
-// We drive this by calling the helper directly with a tiny budget.
-func TestHandleQueryPrefix_ByteBudgetSetsNextCursor(t *testing.T) {
+// TestMarshalFittingPrefixPageIncludesCursorInExactCandidate verifies that the
+// encoded page, including its continuation token, is the value fitted against
+// the observed carrier limit.
+func TestMarshalFittingPrefixPageIncludesCursorInExactCandidate(t *testing.T) {
 	entities := []graph.EntityState{
 		{ID: "a.b.c.d.e.one"},
 		{ID: "a.b.c.d.e.two"},
 		{ID: "a.b.c.d.e.three"},
 	}
 
-	// Use a budget that fits only the first entity (~50 bytes per marshal +
-	// 256 envelope overhead = we need budget < 2 entity budgets to trigger trim).
-	// Marshal size of first entity is ≈ 80 bytes; set budget to 400 to fit 1.
-	trimmed, limited := applyPrefixByteLimit(entities, 400)
-	assert.True(t, limited, "byte budget must have triggered trimming")
-	assert.Less(t, len(trimmed), len(entities), "trimmed slice must be smaller")
-	require.NotEmpty(t, trimmed, "at least one entity must survive trimming")
+	want := graph.PrefixQueryResponse{
+		Entities:   entities[:1],
+		NextCursor: graph.EncodeCursor(entities[0].ID),
+	}
+	wantBytes, err := json.Marshal(want)
+	require.NoError(t, err)
+
+	encoded, err := marshalFittingPrefixPage(entities, "", int64(len(wantBytes)))
+	require.NoError(t, err)
+	assert.JSONEq(t, string(wantBytes), string(encoded))
+	assert.Len(t, encoded, len(wantBytes), "fitting must use the exact complete page encoding")
+}
+
+func TestMarshalFittingPrefixPageRejectsFirstIndivisibleEntity(t *testing.T) {
+	entities := []graph.EntityState{{ID: "a.b.c.d.e.one"}, {ID: "a.b.c.d.e.two"}}
+	firstCandidate, err := json.Marshal(graph.PrefixQueryResponse{
+		Entities:   entities[:1],
+		NextCursor: graph.EncodeCursor(entities[0].ID),
+	})
+	require.NoError(t, err)
+	maxPayload := int64(len(firstCandidate) - 1)
+
+	encoded, fitErr := marshalFittingPrefixPage(entities, "", maxPayload)
+	require.Error(t, fitErr)
+	assert.Nil(t, encoded)
+	assert.True(t, errs.IsInvalid(fitErr))
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, fitErr, &classified)
+	assert.Equal(t, "response_too_large", classified.Code)
+	assert.Equal(t, int64(len(firstCandidate)), classified.Detail["response_bytes"])
+	assert.Equal(t, maxPayload, classified.Detail["max_payload"])
 }
 
 // TestHandleQueryPrefix_InvalidCursor verifies that a malformed cursor returns
@@ -213,12 +246,12 @@ func TestHandleQueryPrefix_InvalidCursor(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	_, err = comp.handleQueryPrefixNATS(context.Background(), reqData)
+	_, err = comp.handleQueryPrefixWithMaxPayload(context.Background(), reqData, 1<<20)
 	require.Error(t, err, "invalid cursor must return an error")
 }
 
-// TestHandleQueryPrefix_SinglePageNoNextCursor verifies the wire-compatibility
-// guarantee: when all entities fit in one page, no NextCursor field appears.
+// TestHandleQueryPrefix_SinglePageNoNextCursor verifies that an exhausted page
+// omits NextCursor.
 func TestHandleQueryPrefix_SinglePageNoNextCursor(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	storePrefixEntity(t, comp, "acme.ops.dom.sys.type.entity-001")
@@ -227,7 +260,7 @@ func TestHandleQueryPrefix_SinglePageNoNextCursor(t *testing.T) {
 	reqData, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "acme", Limit: 100})
 	require.NoError(t, err)
 
-	respData, err := comp.handleQueryPrefixNATS(context.Background(), reqData)
+	respData, err := comp.handleQueryPrefixWithMaxPayload(context.Background(), reqData, 1<<20)
 	require.NoError(t, err)
 
 	// Decode as raw map to check field absence.
@@ -241,19 +274,17 @@ func TestHandleQueryPrefix_SinglePageNoNextCursor(t *testing.T) {
 	assert.True(t, hasEntities, "entities key must always be present")
 }
 
-// TestHandleQueryPrefix_OldRequestShape verifies backward compatibility:
-// old-style {"prefix":"…","limit":N} requests (no "cursor" key) are handled
-// correctly, proving the typed PrefixQueryRequest is a superset.
-func TestHandleQueryPrefix_OldRequestShape(t *testing.T) {
+// TestHandleQueryPrefix_FirstPageRequest verifies that omitting cursor requests
+// the first page.
+func TestHandleQueryPrefix_FirstPageRequest(t *testing.T) {
 	comp := createTestComponentWithMockKV(t)
 	storePrefixEntity(t, comp, "c360.platform.robotics.mav1.drone.001")
 
-	// Old-style request as anonymous map (no "cursor" field).
-	oldReq := map[string]any{"prefix": "c360", "limit": 10}
-	reqData, err := json.Marshal(oldReq)
+	req := map[string]any{"prefix": "c360", "limit": 10}
+	reqData, err := json.Marshal(req)
 	require.NoError(t, err)
 
-	respData, err := comp.handleQueryPrefixNATS(context.Background(), reqData)
+	respData, err := comp.handleQueryPrefixWithMaxPayload(context.Background(), reqData, 1<<20)
 	require.NoError(t, err)
 
 	// Must decode into PrefixQueryResponse successfully.

@@ -71,7 +71,7 @@ tasks:
         echo '    task dev:send'
         echo ""
         echo "  Query the graph:"
-        echo '    curl -s http://localhost:8084/graphql -H "Content-Type: application/json" -d '"'"'{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entityIds } }"}'"'"' | jq'
+        echo '    curl -s http://localhost:8084/graphql -H "Content-Type: application/json" -d '"'"'{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entities { id } next_cursor } }"}'"'"' | jq'
         echo ""
         echo "  Debug commands:"
         echo '    task dev:messages   # View recent messages'
@@ -122,7 +122,7 @@ tasks:
       - |
         echo '{"device_id":"sensor-001","type":"temperature","reading":23.5,"unit":"celsius","location":"warehouse-7","zone_type":"cold-storage"}' | nc -u localhost 14550
         echo "[OK] Sent test sensor reading"
-        echo '     Query with: curl -s http://localhost:8084/graphql -H "Content-Type: application/json" -d '"'"'{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entityIds } }"}'"'"''
+        echo '     Query with: curl -s http://localhost:8084/graphql -H "Content-Type: application/json" -d '"'"'{"query":"{ entitiesByPrefix(prefix: \"demo\", limit: 10) { entities { id } next_cursor } }"}'"'"''
 
   # Debugging Tools
   messages:

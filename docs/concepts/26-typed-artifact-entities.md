@@ -95,9 +95,10 @@ Three steps on the producing side:
    facts the parent owns.
 
 On the consuming side: resolve the relationship triple → fetch the
-artifact entity → read the artifact's `StorageRef` → fetch content via
-the NATS ObjectStore API. Same API the framework already exposes for
-every other storage-ref-bearing entity.
+artifact entity → read the artifact's `StorageRef` → resolve its
+`StorageInstance` through StoreRegistry → read or stream the key from
+that registered Store. The graph carries the durable reference, never
+the content body.
 
 ## Cross-references
 

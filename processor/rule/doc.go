@@ -116,9 +116,8 @@
 //	config.Ports = &component.PortConfig{
 //	    Inputs: []component.PortDefinition{
 //	        {
-//	            Name:    "semantic_messages",
-//	            Type:    "nats",
-//	            Subject: "process.>",
+//	            Name:   "semantic_messages",
+//	            Config: component.NATSPort{Subject: "process.>"},
 //	        },
 //	    },
 //	}

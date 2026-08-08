@@ -77,7 +77,12 @@ func assertMutationPortContract(
 		assertCanonicalMutationPort(t, path, instance, ports.Inputs)
 	case "graph-gateway":
 		for _, port := range ports.Outputs {
-			require.False(t, strings.HasPrefix(port.Subject, "graph.mutation."),
+			resolved, err := port.Resolve(component.DirectionOutput)
+			require.NoError(t, err)
+			facts, err := resolved.Facts()
+			require.NoError(t, err)
+			subjects := facts.NATSSubjects()
+			require.False(t, len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation."),
 				"%s component %q exposes a mutation output but graph-gateway is read-only", path, instance)
 		}
 	default:
@@ -92,29 +97,46 @@ func assertCanonicalMutationPort(t *testing.T, path, instance string, ports []co
 
 	var matches []component.PortDefinition
 	for _, port := range ports {
-		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+		resolved, err := port.Resolve(component.DirectionOutput)
+		require.NoError(t, err)
+		facts, err := resolved.Facts()
+		require.NoError(t, err)
+		contract, hasContract := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if (len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation.")) || (hasContract && contract.Type == graphmutation.InterfaceType) {
 			matches = append(matches, port)
 		}
 	}
 	require.Len(t, matches, 1, "%s component %q must declare exactly one graph mutation port", path, instance)
 
 	port := matches[0]
-	require.Equal(t, "nats-request", port.Type, "%s component %q mutation port type", path, instance)
-	require.Equal(t, graphmutation.SubjectFamily, port.Subject, "%s component %q mutation family", path, instance)
-	require.Equal(t, graphmutation.InterfaceType, port.Interface, "%s component %q mutation interface", path, instance)
 	require.True(t, port.Required, "%s component %q mutation port must be required", path, instance)
 
-	effective := component.BuildPortFromDefinition(port, component.DirectionOutput)
-	requestPort, ok := effective.Config.(component.NATSRequestPort)
-	require.True(t, ok, "%s component %q mutation port must build as NATSRequestPort", path, instance)
-	require.NotNil(t, requestPort.Interface, "%s component %q mutation interface was discarded", path, instance)
-	require.Equal(t, graphmutation.InterfaceType, requestPort.Interface.Type)
-	require.Equal(t, graphmutation.InterfaceVersion, requestPort.Interface.Version)
+	effective, err := port.Resolve(component.DirectionOutput)
+	require.NoError(t, err)
+	facts, err := effective.Facts()
+	require.NoError(t, err)
+	require.Equal(t, component.PortKindNATSRequest, facts.Kind(), "%s component %q mutation port must resolve as nats-request", path, instance)
+	require.Equal(t, []string{graphmutation.SubjectFamily}, facts.NATSSubjects(), "%s component %q mutation subject family drifted", path, instance)
+	contract, ok := facts.Interface()
+	require.True(t, ok, "%s component %q mutation interface was discarded", path, instance)
+	require.Equal(t, graphmutation.InterfaceType, contract.Type)
+	require.Equal(t, graphmutation.InterfaceVersion, contract.Version)
 }
 
 func hasMutationPort(ports []component.PortDefinition) bool {
 	for _, port := range ports {
-		if strings.HasPrefix(port.Subject, "graph.mutation.") || port.Interface == graphmutation.InterfaceType {
+		resolved, err := port.Resolve(component.DirectionOutput)
+		if err != nil {
+			continue
+		}
+		facts, err := resolved.Facts()
+		if err != nil {
+			continue
+		}
+		contract, hasContract := facts.Interface()
+		subjects := facts.NATSSubjects()
+		if (len(subjects) == 1 && strings.HasPrefix(subjects[0], "graph.mutation.")) || (hasContract && contract.Type == graphmutation.InterfaceType) {
 			return true
 		}
 	}

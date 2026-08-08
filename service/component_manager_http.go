@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/health"
 )
 
@@ -795,7 +794,12 @@ func (cm *ComponentManager) handleFlowGraph(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	graph := cm.GetFlowGraph()
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		cm.logger.Error("Failed to build FlowGraph", "error", err)
+		http.Error(w, "Failed to build flow graph", http.StatusInternalServerError)
+		return
+	}
 
 	response := map[string]any{
 		"nodes": graph.GetNodes(),
@@ -829,8 +833,18 @@ func (cm *ComponentManager) handleFlowValidation(w http.ResponseWriter, r *http.
 		return
 	}
 
-	graph := cm.GetFlowGraph()
-	analysis := cm.ValidateFlowConnectivity()
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		cm.logger.Error("Failed to build FlowGraph for validation", "error", err)
+		http.Error(w, "Failed to build flow graph", http.StatusInternalServerError)
+		return
+	}
+	analysis, err := cm.ValidateFlowConnectivity()
+	if err != nil {
+		cm.logger.Error("Failed to validate FlowGraph", "error", err)
+		http.Error(w, "Failed to validate flow graph", http.StatusInternalServerError)
+		return
+	}
 
 	// Check for stream requirement issues (JetStream subscribers connected to NATS publishers)
 	streamWarnings := graph.ValidateStreamRequirements()
@@ -892,8 +906,18 @@ func (cm *ComponentManager) handleFlowGaps(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	analysis := cm.ValidateFlowConnectivity()
-	objectStoreGaps := cm.DetectObjectStoreGaps()
+	analysis, err := cm.ValidateFlowConnectivity()
+	if err != nil {
+		cm.logger.Error("Failed to validate FlowGraph gaps", "error", err)
+		http.Error(w, "Failed to validate flow graph", http.StatusInternalServerError)
+		return
+	}
+	objectStoreGaps, err := cm.DetectObjectStoreGaps()
+	if err != nil {
+		cm.logger.Error("Failed to inspect object-store flow gaps", "error", err)
+		http.Error(w, "Failed to inspect flow gaps", http.StatusInternalServerError)
+		return
+	}
 
 	// Categorize orphaned ports by severity
 	criticalPorts := 0
@@ -902,7 +926,7 @@ func (cm *ComponentManager) handleFlowGaps(w http.ResponseWriter, r *http.Reques
 		switch port.Issue {
 		case "no_publishers", "no_subscribers":
 			// Stream connections are critical only if required
-			if port.Pattern == flowgraph.PatternStream && port.Required {
+			if port.Pattern == component.PatternStream && port.Required {
 				criticalPorts++
 			} else {
 				optionalPorts++
@@ -955,7 +979,12 @@ func (cm *ComponentManager) handleFlowPaths(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	paths := cm.GetFlowPaths()
+	paths, err := cm.GetFlowPaths()
+	if err != nil {
+		cm.logger.Error("Failed to build FlowGraph paths", "error", err)
+		http.Error(w, "Failed to build flow paths", http.StatusInternalServerError)
+		return
+	}
 
 	// Calculate path statistics
 	totalPaths := len(paths)

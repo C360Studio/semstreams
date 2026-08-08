@@ -16,36 +16,22 @@ func TestStoreReadPort_IsExclusive(t *testing.T) {
 	assert.False(t, port.IsExclusive(), "multiple readers should be allowed")
 }
 
-func TestStoreReadPort_Type(t *testing.T) {
+func TestStoreReadPort_Kind(t *testing.T) {
 	port := StoreReadPort{Bucket: "MESSAGES"}
-	assert.Equal(t, "store-read", port.Type())
+	assert.Equal(t, PortKindStoreRead, port.Kind())
 }
 
-func TestBuildPortFromDefinition_StoreRead(t *testing.T) {
+func TestResolvePort_StoreRead(t *testing.T) {
 	def := PortDefinition{
 		Name:   "content_store",
-		Type:   "store-read",
-		Bucket: "MESSAGES",
+		Config: StoreReadPort{Bucket: "MESSAGES"},
 	}
 
-	port := BuildPortFromDefinition(def, DirectionInput)
+	port, err := def.Resolve(DirectionInput)
+	assert.NoError(t, err)
 
 	assert.Equal(t, "content_store", port.Name)
 	storePort, ok := port.Config.(StoreReadPort)
 	assert.True(t, ok, "config should be StoreReadPort")
 	assert.Equal(t, "MESSAGES", storePort.Bucket)
-}
-
-func TestBuildPortFromDefinition_StoreRead_FallbackToSubject(t *testing.T) {
-	def := PortDefinition{
-		Name:    "content_store",
-		Type:    "store-read",
-		Subject: "ARCHIVE",
-	}
-
-	port := BuildPortFromDefinition(def, DirectionInput)
-
-	storePort, ok := port.Config.(StoreReadPort)
-	assert.True(t, ok)
-	assert.Equal(t, "ARCHIVE", storePort.Bucket, "should fall back to Subject when Bucket is empty")
 }

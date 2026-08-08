@@ -41,9 +41,9 @@
 //	    "config": {
 //	        "ports": {
 //	            "inputs": [
-//	                {"name": "query_entity", "type": "nats-request", "subject": "graph.query.entity"},
-//	                {"name": "query_relationships", "type": "nats-request", "subject": "graph.query.relationships"},
-//	                {"name": "query_path_search", "type": "nats-request", "subject": "graph.query.pathSearch"}
+//	                {"name":"query_entity","config":{"kind":"nats-request","subject":"graph.query.entity"}},
+//	                {"name":"query_relationships","config":{"kind":"nats-request","subject":"graph.query.relationships"}},
+//	                {"name":"query_path_search","config":{"kind":"nats-request","subject":"graph.query.pathSearch"}}
 //	            ]
 //	        },
 //	        "query_timeout": "5s",

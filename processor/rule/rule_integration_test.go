@@ -111,20 +111,12 @@ func TestIntegration_KVEntityStateWatch(t *testing.T) {
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "entity_events",
-				Type:      "nats",
-				Subject:   "events.graph.entity.>",
-				Interface: "core.entity.v1",
-				Required:  true,
+				Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>", Interface: &component.InterfaceContract{Type: "core.entity.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.triggered",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}
@@ -220,20 +212,12 @@ func TestIntegration_DynamicRuleCRUD(t *testing.T) {
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "semantic_input",
-				Type:      "nats",
-				Subject:   "process.test.crud",
-				Interface: "core.semantic.v1",
-				Required:  true,
+				Name: "semantic_input", Config: component.NATSPort{Subject: "process.test.crud", Interface: &component.InterfaceContract{Type: "core.semantic.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.crud",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.crud", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}
@@ -364,20 +348,12 @@ func TestIntegration_JSONDSLRuleLoading(t *testing.T) {
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "semantic_input",
-				Type:      "nats",
-				Subject:   "process.test.json",
-				Interface: "core.semantic.v1",
-				Required:  true,
+				Name: "semantic_input", Config: component.NATSPort{Subject: "process.test.json", Interface: &component.InterfaceContract{Type: "core.semantic.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.json",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.json", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}
@@ -410,20 +386,12 @@ func TestIntegration_PrometheusMetrics(t *testing.T) {
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "semantic_input",
-				Type:      "nats",
-				Subject:   "process.test.metrics",
-				Interface: "core.semantic.v1",
-				Required:  true,
+				Name: "semantic_input", Config: component.NATSPort{Subject: "process.test.metrics", Interface: &component.InterfaceContract{Type: "core.semantic.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.metrics",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.metrics", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}
@@ -512,10 +480,10 @@ func TestIntegration_DynamicWatchPatterns(t *testing.T) {
 	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
-			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Required: true},
+			{Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>"}, Required: true},
 		},
 		Outputs: []component.PortDefinition{
-			{Name: "rule_events", Type: "nats", Subject: "events.rule.triggered", Required: true},
+			{Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered"}, Required: true},
 		},
 	}
 	config.EntityWatchBuckets = map[string][]string{gtypes.BucketEntityStates: {"c360.platform1.test.*.*.*"}}
@@ -641,27 +609,15 @@ func TestIntegration_GraphIntegration(t *testing.T) {
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "semantic_input",
-				Type:      "nats",
-				Subject:   "process.test.graph",
-				Interface: "core.semantic.v1",
-				Required:  true,
+				Name: "semantic_input", Config: component.NATSPort{Subject: "process.test.graph", Interface: &component.InterfaceContract{Type: "core.semantic.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.graph",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.graph", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 			{
-				Name:      "graph_mutations",
-				Type:      "nats",
-				Subject:   "graph.mutations",
-				Interface: "core.graph.v1",
-				Required:  false,
+				Name: "graph_mutations", Config: component.NATSPort{Subject: "graph.mutations", Interface: &component.InterfaceContract{Type: "core.graph.v1"}}, Required: false,
 			},
 		},
 	}
@@ -821,10 +777,10 @@ func TestIntegration_TransitionOperator_UpdateKV(t *testing.T) {
 	require.NoError(t, configErr)
 	config.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
-			{Name: "entity_events", Type: "nats", Subject: "events.graph.entity.>", Interface: "core.entity.v1", Required: true},
+			{Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>", Interface: &component.InterfaceContract{Type: "core.entity.v1"}}, Required: true},
 		},
 		Outputs: []component.PortDefinition{
-			{Name: "rule_events", Type: "nats", Subject: "events.rule.triggered", Interface: "core.rule.v1", Required: true},
+			{Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true},
 		},
 	}
 	config.InlineRules = []rule.Definition{ruleDef}

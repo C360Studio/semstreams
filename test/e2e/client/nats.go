@@ -257,27 +257,53 @@ func (c *NATSValidationClient) GetEntity(ctx context.Context, entityID string) (
 	return &entity, nil
 }
 
-// GetTrajectory retrieves a trajectory via the agentic.query.trajectory NATS request/reply handler.
-// The trajectory is served from the agentic-loop's in-memory cache.
-func (c *NATSValidationClient) GetTrajectory(ctx context.Context, loopID string) (*agentic.Trajectory, error) {
-	req, err := json.Marshal(map[string]string{"loopId": loopID})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal trajectory request: %w", err)
+// GetTrajectoryPages retrieves every currently visible reference-only fact page
+// through the agentic.query.trajectory request/reply handler.
+func (c *NATSValidationClient) GetTrajectoryPages(
+	ctx context.Context,
+	loopID string,
+) ([]agentic.TrajectoryPage, error) {
+	const maxPages = 1024
+
+	pages := make([]agentic.TrajectoryPage, 0, 1)
+	cursor := ""
+	seenCursors := make(map[string]struct{})
+	for len(pages) < maxPages {
+		req, err := json.Marshal(agentic.TrajectoryQueryRequest{
+			LoopID: loopID,
+			Limit:  256,
+			Cursor: cursor,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal trajectory request: %w", err)
+		}
+
+		// ADR-060: RequestClassified surfaces handler errors via err instead
+		// of a body that could silently decode as an empty page.
+		resp, err := c.client.RequestClassified(ctx, "agentic.query.trajectory", req, 5*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("trajectory query failed for loop %s: %w", loopID, err)
+		}
+
+		var page agentic.TrajectoryPage
+		if err := json.Unmarshal(resp, &page); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal trajectory page: %w", err)
+		}
+		if page.SchemaVersion != agentic.TrajectorySchemaV1 || page.LoopID != loopID || page.Coverage != "observed" {
+			return nil, fmt.Errorf("trajectory query returned invalid page metadata for loop %s", loopID)
+		}
+		pages = append(pages, page)
+		if page.NextCursor == "" {
+			return pages, nil
+		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate {
+			return nil, fmt.Errorf("trajectory query repeated cursor for loop %s", loopID)
+		}
+		seenCursors[page.NextCursor] = struct{}{}
+		cursor = page.NextCursor
 	}
 
-	// ADR-060: RequestClassified surfaces handler errors via err instead of an
-	// "error: <msg>" body that would mis-decode as an empty Trajectory.
-	resp, err := c.client.RequestClassified(ctx, "agentic.query.trajectory", req, 5*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("trajectory query failed for loop %s: %w", loopID, err)
-	}
-
-	var traj agentic.Trajectory
-	if err := json.Unmarshal(resp, &traj); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal trajectory: %w", err)
-	}
-
-	return &traj, nil
+	return nil, fmt.Errorf("trajectory query exceeded %d pages for loop %s", maxPages, loopID)
 }
 
 // ValidateIndexPopulated checks if an index bucket has entries

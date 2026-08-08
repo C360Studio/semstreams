@@ -110,7 +110,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 				Name:      "api",
 				Direction: component.DirectionInput,
 				Config: component.NATSRequestPort{
-					Subject: "storage.api",
+					Subject: "example.request",
 					Timeout: "2s",
 				},
 			},
@@ -312,7 +312,7 @@ func TestOrphanedPortSeverity(t *testing.T) {
 		{
 			name: "stream input without publisher is critical",
 			port: OrphanedPort{
-				Pattern: PatternStream,
+				Pattern: component.PatternStream,
 				Issue:   "no_publishers",
 			},
 			expected: "critical",
@@ -320,7 +320,7 @@ func TestOrphanedPortSeverity(t *testing.T) {
 		{
 			name: "stream output without subscriber is critical",
 			port: OrphanedPort{
-				Pattern: PatternStream,
+				Pattern: component.PatternStream,
 				Issue:   "no_subscribers",
 			},
 			expected: "critical",
@@ -328,7 +328,7 @@ func TestOrphanedPortSeverity(t *testing.T) {
 		{
 			name: "request API without clients is optional",
 			port: OrphanedPort{
-				Pattern: PatternRequest,
+				Pattern: component.PatternRequest,
 				Issue:   "optional_api_unused",
 			},
 			expected: "warning",
@@ -336,7 +336,7 @@ func TestOrphanedPortSeverity(t *testing.T) {
 		{
 			name: "KV index without watchers is optional",
 			port: OrphanedPort{
-				Pattern: PatternWatch,
+				Pattern: component.PatternWatch,
 				Issue:   "optional_index_unwatched",
 			},
 			expected: "warning",
@@ -356,7 +356,7 @@ func getOrphanedPortSeverity(port OrphanedPort) string {
 	switch port.Issue {
 	case "no_publishers", "no_subscribers":
 		// Stream connections are critical for data flow
-		if port.Pattern == PatternStream {
+		if port.Pattern == component.PatternStream {
 			return "critical"
 		}
 		return "warning"
@@ -532,7 +532,7 @@ func TestJetStreamSubjectMatching(t *testing.T) {
 		require.Len(t, edges, 1, "JetStream publisher and NATSPort subscriber on same subject should be connected")
 
 		edge := edges[0]
-		assert.Equal(t, PatternStream, edge.Pattern)
+		assert.Equal(t, component.PatternStream, edge.Pattern)
 		assert.Equal(t, "graph-ingestor", edge.From.ComponentName)
 		assert.Equal(t, "entity_out", edge.From.PortName)
 		assert.Equal(t, "graph-processor", edge.To.ComponentName)
@@ -579,7 +579,7 @@ func TestJetStreamSubjectMatching(t *testing.T) {
 		require.Len(t, edges, 1, "JetStream wildcard subject should match NATSPort concrete subject")
 
 		edge := edges[0]
-		assert.Equal(t, PatternStream, edge.Pattern)
+		assert.Equal(t, component.PatternStream, edge.Pattern)
 		assert.Equal(t, "event-source", edge.From.ComponentName)
 		assert.Equal(t, "entity-handler", edge.To.ComponentName)
 	})
@@ -665,7 +665,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 		require.Len(t, edges, 1, "wildcard request port should match concrete request subject")
 
 		edge := edges[0]
-		assert.Equal(t, PatternRequest, edge.Pattern)
+		assert.Equal(t, component.PatternRequest, edge.Pattern)
 		// Connection ID should be the concrete (non-wildcard) subject
 		assert.Equal(t, "graph.query.search", edge.ConnectionID)
 		// The edge must connect the two components (either direction is valid)
@@ -711,7 +711,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 		require.Len(t, edges, 1, "gt-wildcard request port should match concrete request subject")
 
 		edge := edges[0]
-		assert.Equal(t, PatternRequest, edge.Pattern)
+		assert.Equal(t, component.PatternRequest, edge.Pattern)
 		assert.Equal(t, "example.mutation.upsert", edge.ConnectionID)
 	})
 
@@ -757,7 +757,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "req",
 					Direction: component.DirectionOutput,
-					Config:    component.NATSRequestPort{Subject: "storage.api"},
+					Config:    component.NATSRequestPort{Subject: "example.request"},
 				},
 			},
 		)
@@ -767,7 +767,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 				{
 					Name:      "handler",
 					Direction: component.DirectionInput,
-					Config:    component.NATSRequestPort{Subject: "storage.api"},
+					Config:    component.NATSRequestPort{Subject: "example.request"},
 				},
 			},
 			nil,
@@ -781,6 +781,6 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 
 		edges := graph.GetEdges()
 		assert.Len(t, edges, 1, "exact-match request ports should still produce one edge")
-		assert.Equal(t, "storage.api", edges[0].ConnectionID)
+		assert.Equal(t, "example.request", edges[0].ConnectionID)
 	})
 }

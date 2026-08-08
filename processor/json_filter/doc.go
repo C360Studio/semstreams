@@ -49,10 +49,10 @@
 //	config := jsonfilter.JSONFilterConfig{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "sensor.data", Interface: "core .json.v1"},
+//	            {Name: "input", Config: component.NATSPort{Subject: "sensor.data", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "sensor.high_altitude", Interface: "core .json.v1"},
+//	            {Name: "output", Config: component.NATSPort{Subject: "sensor.high_altitude", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	    },
 //	    Rules: []jsonfilter.FilterRule{
@@ -135,10 +135,10 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "input", "type": "nats", "subject": "raw.>", "interface": "core .json.v1"}
+//	      {"name":"input","config":{"kind":"nats","subject":"raw.>","interface":{"type":"core.json.v1"}}}
 //	    ],
 //	    "outputs": [
-//	      {"name": "output", "type": "nats", "subject": "filtered.messages", "interface": "core .json.v1"}
+//	      {"name":"output","config":{"kind":"nats","subject":"filtered.messages","interface":{"type":"core.json.v1"}}}
 //	    ]
 //	  },
 //	  "rules": [
@@ -190,10 +190,10 @@
 //	config := jsonfilter.JSONFilterConfig{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "sensors.raw", Interface: "core .json.v1"},
+//	            {Name: "input", Config: component.NATSPort{Subject: "sensors.raw", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "sensors.high_temp", Interface: "core .json.v1"},
+//	            {Name: "output", Config: component.NATSPort{Subject: "sensors.high_temp", Interface: &component.InterfaceContract{Type: "core.json.v1"}}},
 //	        },
 //	    },
 //	    Rules: []jsonfilter.FilterRule{

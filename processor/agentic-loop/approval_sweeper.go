@@ -135,7 +135,11 @@ func (c *Component) publishApprovalResponseToWire(ctx context.Context, response 
 	if c.config.Ports != nil {
 		inputs = c.config.Ports.Inputs
 	}
-	subject := component.ResolveSubject(inputs, "agent.approval_response", response.LoopID)
+	subject, err := component.ResolveSubject(inputs, "agent.approval_response", response.LoopID)
+	if err != nil {
+		c.logger.Error("failed to resolve approval response subject", slog.String("loop_id", response.LoopID), slog.String("error", err.Error()))
+		return
+	}
 
 	if c.testPublishHook != nil {
 		c.testPublishHook(subject, data)

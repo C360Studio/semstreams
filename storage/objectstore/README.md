@@ -6,8 +6,8 @@ NATS JetStream ObjectStore-based storage component for immutable message storage
 
 ObjectStore provides persistent, versioned storage for messages and binary data using NATS JetStream's ObjectStore
 feature. It implements the storage.Store interface with optional LRU/TTL/Hybrid caching for high-performance reads,
-time-bucketed key organization for efficient temporal queries, and component integration via NATS ports for
-request/response API access and event streaming.
+time-bucketed key organization for efficient temporal queries, ordinary NATS/JetStream write inputs, and registered
+Store access for authorized readers.
 
 ## Configuration
 
@@ -21,10 +21,6 @@ components:
             type: nats
             subject: storage.objectstore.write
             description: Fire-and-forget async writes
-          - name: api
-            type: nats-request
-            subject: storage.objectstore.api
-            description: Request/Response API (get, store, list)
         outputs:
           - name: events
             type: nats
@@ -91,14 +87,6 @@ Choose caching strategy based on workload characteristics:
 - Behavior: Stores message and publishes storage event
 - Auto-detects `ContentStorable` payloads for enhanced storage
 
-**api** (NATS Request/Response)
-
-- Pattern: Synchronous request/response
-- Subject: `storage.objectstore.api`
-- Payload: JSON Request with action (`get`, `store`, `list`)
-- Response: JSON Response with data or keys
-- Timeout: 2 seconds
-
 ### Output Ports
 
 **events** (NATS)
@@ -122,20 +110,8 @@ Choose caching strategy based on workload characteristics:
 
 Stores data as immutable versioned object:
 
-```json
-{
-  "action": "store",
-  "data": {"key": "value"}
-}
-```
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "key": "events/2024/10/08/14/abc123-def456"
-}
+```go
+err := store.Put(ctx, "events/2024/10/08/14/abc123-def456", data)
 ```
 
 **Performance:**
@@ -148,21 +124,8 @@ Stores data as immutable versioned object:
 
 Retrieves latest version with optional caching:
 
-```json
-{
-  "action": "get",
-  "key": "events/2024/10/08/14/abc123-def456"
-}
-```
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "key": "events/2024/10/08/14/abc123-def456",
-  "data": {"key": "value"}
-}
+```go
+data, err := store.Get(ctx, "events/2024/10/08/14/abc123-def456")
 ```
 
 **Performance:**
@@ -175,23 +138,8 @@ Retrieves latest version with optional caching:
 
 Returns all keys matching prefix:
 
-```json
-{
-  "action": "list",
-  "prefix": "events/2024/10/08/"
-}
-```
-
-**Response:**
-
-```json
-{
-  "success": true,
-  "keys": [
-    "events/2024/10/08/14/abc123-def456",
-    "events/2024/10/08/14/def789-ghi012"
-  ]
-}
+```go
+keys, err := store.List(ctx, "events/2024/10/08/")
 ```
 
 **Performance:**
@@ -283,7 +231,7 @@ components:
 
 1. Ingest sensor readings via `write` port
 2. Store with entity-based keys (sensor ID + timestamp)
-3. Query recent readings via `api` port with List operation
+3. Authorized readers resolve the store through StoreRegistry and list recent readings
 4. Expire old cache entries after 5 minutes
 
 ### Event Sourcing
@@ -305,7 +253,7 @@ components:
 
 1. Append events via `write` port (fire-and-forget)
 2. Automatic versioning preserves complete history
-3. Replay events using List operation by time bucket
+3. Authorized readers replay events using the registered Store's List operation
 4. Recent events cached for fast access
 
 ### Content-Addressable Storage
@@ -359,17 +307,11 @@ List operation fetches all objects from NATS, then filters by prefix client-side
 
 **Rationale:** NATS ObjectStore doesn't support server-side prefix filtering (current version).
 
-### Request/Response API Pattern
+### Registered Store Access
 
-Component exposes storage operations via NATS Request/Response:
-
-**Benefits:**
-
-- Remote access without direct Go API
-- Supports web clients and non-Go systems
-- Enables service-to-service storage queries
-
-**Trade-off:** 2-second timeout per request.
+The component implements `component.StoreProvider`. ComponentManager registers its live `StreamableStore` under the
+logical instance stamped into each `StorageReference`. Authorized internal consumers resolve that instance through
+StoreRegistry and use `Get`, `List`, or `Open`; large bodies do not cross a Core NATS request/reply message.
 
 ## Thread Safety
 
@@ -414,11 +356,8 @@ Store operations return errors for:
 - Invalid input: Empty keys, nil data
 - Resource limits: Bucket quota exceeded
 
-Component operations:
-
-- Invalid requests: Malformed JSON, unknown actions
-- Store errors: Wrapped with operation context
-- Timeout errors: Operation exceeded deadline
+Write-input failures are classified by the component's ordinary Core NATS or JetStream delivery contract. Direct
+registered-Store operations return errors to their caller.
 
 ## Testing
 

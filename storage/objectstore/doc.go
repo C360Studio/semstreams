@@ -23,10 +23,11 @@
 //
 // Component:
 //
-// The Component wrapper exposes Store via NATS ports:
-//   - "api" port: Request/Response for Get/Put/List operations
+// The Component wrapper owns and registers Store and exposes ordinary flow ports:
 //   - "write" port: Fire-and-forget async writes
 //   - "events" port: Publishes storage events (stored, retrieved, deleted)
+//   - "stored" port: Publishes bounded metadata plus StorageReference
+//   - "store-provide" port: Registers the live StreamableStore
 //
 // # Architecture Decisions
 //
@@ -84,15 +85,13 @@
 // Rejected because: Adds complexity, consistency challenges, NATS may add
 // native filtering in future.
 //
-// Request/Response API Port:
+// Registered Store Access:
 //
-// The Component exposes a Request/Response API via NATS:
-//   - Client sends Request JSON to "api" subject
-//   - Component processes and replies with Response JSON
-//   - Enables remote storage access without direct Go API
-//
-// This enables web clients, other services, or non-Go systems to use storage
-// without linking against the Go library.
+// ComponentManager registers the component's live StreamableStore under the
+// logical StorageInstance stamped into its references. Authorized internal
+// consumers resolve that instance through StoreRegistry and use Store methods
+// directly. Large content can be streamed with StreamableStore.Open without
+// crossing a Core NATS request/reply message.
 //
 // # Usage Examples
 //
@@ -148,8 +147,7 @@
 //	err = comp.Start(ctx)
 //	defer comp.Stop(5 * time.Second)
 //
-//	// Clients can now use NATS Request/Response:
-//	// nats.Request("storage.api", `{"action":"get","key":"video/..."}`)
+//	// ComponentManager registers the live store for authorized consumers.
 //
 // Custom Key Generation:
 //
@@ -248,14 +246,7 @@
 //
 // # Component Port Configuration
 //
-// The Component exposes three NATS ports:
-//
-// API Port (Request/Response):
-//   - Subject: "{namespace}.{instance}.api" (default: "storage.{instance}.api")
-//   - Pattern: Request/Response
-//   - Payload: JSON Request → JSON Response
-//   - Operations: Get, Put, List
-//   - Timeout: 2 seconds
+// The Component exposes ordinary flow ports plus its StoreProvider declaration:
 //
 // Write Port (Fire-and-Forget):
 //   - Subject: "{namespace}.{instance}.write" (default: "storage.{instance}.write")
@@ -303,9 +294,8 @@
 //   - Resource limits: Bucket quota exceeded
 //
 // Component operations:
-//   - Invalid requests: Malformed JSON, unknown actions
-//   - Store errors: Wrapped with operation context
-//   - Timeout errors: Operation exceeded deadline
+//   - Invalid write inputs: Classified under the ordinary delivery contract
+//   - Store errors: Returned to the direct caller or write handler
 //
 // # Testing
 //

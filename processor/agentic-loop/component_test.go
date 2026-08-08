@@ -11,6 +11,51 @@ import (
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
+func TestComponentRejectsRetiredTrajectoryConfiguration(t *testing.T) {
+	for _, field := range []string{
+		"content_bucket", "trajectory_detail", "trajectory_cache_ttl",
+		"trajectories_bucket", "trajectory_ttl", "trajectory_history",
+	} {
+		t.Run(field, func(t *testing.T) {
+			raw := json.RawMessage(`{"` + field + `":"legacy"}`)
+			_, err := agenticloop.NewComponent(raw, component.Dependencies{})
+			if err == nil {
+				t.Fatalf("NewComponent accepted retired field %q", field)
+			}
+		})
+	}
+}
+
+func TestComponentRejectsIncompleteTrajectoryPortOverrides(t *testing.T) {
+	tests := []json.RawMessage{
+		json.RawMessage(`{"ports":{"inputs":[{"name":"trajectory_query","required":true,"config":{"kind":"nats-request","subject":"tenant.agentic.query.trajectory"}}]}}`),
+		json.RawMessage(`{"ports":{"outputs":[{"name":"trajectories","required":true,"config":{"kind":"kv-write","bucket":"AGENT_TRAJECTORIES"}}]}}`),
+	}
+	for index, raw := range tests {
+		if _, err := agenticloop.NewComponent(raw, component.Dependencies{}); err == nil {
+			t.Fatalf("NewComponent accepted incomplete trajectory override %d", index)
+		}
+	}
+}
+
+func TestComponentAcceptsCompleteIsolatedTrajectoryQueryOverride(t *testing.T) {
+	raw := json.RawMessage(`{"ports":{"inputs":[{"name":"trajectory_query","required":true,"config":{"kind":"nats-request","subject":"tenant.agentic.query.trajectory","interface":{"type":"agentic.query","version":"v1"}}}]}}`)
+	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{})
+	if err != nil {
+		t.Fatalf("NewComponent rejected complete isolated override: %v", err)
+	}
+	for _, port := range discoverable.InputPorts() {
+		if port.Name == "trajectory_query" {
+			request := port.Config.(component.NATSRequestPort)
+			if request.Subject != "tenant.agentic.query.trajectory" {
+				t.Fatalf("trajectory query subject = %q", request.Subject)
+			}
+			return
+		}
+	}
+	t.Fatal("trajectory_query missing")
+}
+
 func TestComponent_Meta(t *testing.T) {
 	comp := createComponentForTest(t)
 
@@ -35,8 +80,8 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	ports := comp.InputPorts()
 
-	if len(ports) != 7 {
-		t.Fatalf("InputPorts() count = %d, want 7", len(ports))
+	if len(ports) != 8 {
+		t.Fatalf("InputPorts() count = %d, want 8", len(ports))
 	}
 
 	// Expected input ports with required flag
@@ -45,6 +90,7 @@ func TestComponent_InputPorts(t *testing.T) {
 		required bool
 	}
 	expected := map[string]portExpectation{
+		"trajectory_query":        {"agentic.query.trajectory", true},
 		"agent.task":              {"agent.task.*", true},
 		"agent.response":          {"agent.response.>", true},
 		"tool.result":             {"tool.result.>", true},
@@ -69,6 +115,15 @@ func TestComponent_InputPorts(t *testing.T) {
 			t.Errorf("Port %s required = %v, want %v", port.Name, port.Required, expectation.required)
 		}
 
+		if port.Name == "trajectory_query" {
+			request, requestOK := port.Config.(component.NATSRequestPort)
+			if !requestOK || request.Subject != expectation.subject || request.Interface == nil ||
+				request.Interface.Type != "agentic.query" || request.Interface.Version != "v1" {
+				t.Errorf("trajectory_query contract drift: %#v", port)
+			}
+			continue
+		}
+
 		// Verify JetStream config
 		jsConfig, ok := port.Config.(component.JetStreamPort)
 		if !ok {
@@ -86,8 +141,8 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	ports := comp.OutputPorts()
 
-	if len(ports) != 9 {
-		t.Fatalf("OutputPorts() count = %d, want 9", len(ports))
+	if len(ports) != 11 {
+		t.Fatalf("OutputPorts() count = %d, want 11", len(ports))
 	}
 
 	// Expected output ports
@@ -105,6 +160,21 @@ func TestComponent_OutputPorts(t *testing.T) {
 
 	for _, port := range ports {
 		expectedSubject, ok := expected[port.Name]
+		if port.Name == "trajectories" {
+			kv, kvOK := port.Config.(component.KVWritePort)
+			if !kvOK || kv.Bucket != "AGENT_TRAJECTORIES" || !port.Required || kv.Interface == nil ||
+				kv.Interface.Type != "agentic.trajectory.fact" || kv.Interface.Version != "v1" {
+				t.Errorf("trajectories KV output drift: %#v", port)
+			}
+			continue
+		}
+		if port.Name == "loops" {
+			kv, kvOK := port.Config.(component.KVWritePort)
+			if !kvOK || kv.Bucket != "AGENT_LOOPS" || port.Direction != component.DirectionOutput {
+				t.Errorf("loops KV output drift: %#v", port)
+			}
+			continue
+		}
 		if port.Name == "graph_mutations" {
 			request, requestOK := port.Config.(component.NATSRequestPort)
 			if !requestOK || !port.Required || request.Subject != expectedSubject || request.Interface == nil ||
@@ -147,15 +217,13 @@ func TestComponent_KVPorts(t *testing.T) {
 	// This may be implementation-specific, but we can verify via config
 	config := agenticloop.DefaultConfig()
 
-	if len(config.Ports.KVWrite) != 1 {
-		t.Errorf("Config should have 1 KV write port, got %d", len(config.Ports.KVWrite))
-	}
-
 	// Verify KV bucket names
 	expectedBuckets := []string{"AGENT_LOOPS"}
 	foundBuckets := make(map[string]bool)
-	for _, kvPort := range config.Ports.KVWrite {
-		foundBuckets[kvPort.Bucket] = true
+	for _, definition := range config.Ports.Outputs {
+		if kvPort, ok := definition.Config.(component.KVWritePort); ok {
+			foundBuckets[kvPort.Bucket] = true
+		}
 	}
 
 	for _, bucket := range expectedBuckets {
@@ -182,6 +250,14 @@ func TestComponent_ConfigSchema(t *testing.T) {
 	for _, propName := range expectedProps {
 		if _, ok := schema.Properties[propName]; !ok {
 			t.Errorf("ConfigSchema() should have %q property", propName)
+		}
+	}
+	for _, retired := range []string{
+		"content_bucket", "trajectory_detail", "trajectory_cache_ttl",
+		"trajectories_bucket", "trajectory_ttl", "trajectory_history",
+	} {
+		if _, ok := schema.Properties[retired]; ok {
+			t.Errorf("ConfigSchema() retained retired property %q", retired)
 		}
 	}
 

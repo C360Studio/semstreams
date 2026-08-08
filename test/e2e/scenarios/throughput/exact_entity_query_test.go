@@ -28,6 +28,25 @@ func TestBuildQueryPoolEntityQueriesSelectExactEntity(t *testing.T) {
 	}
 }
 
+func TestBuildQueryPoolPrefixQueriesSelectEntityPage(t *testing.T) {
+	t.Parallel()
+
+	found := 0
+	for _, query := range buildQueryPool() {
+		if query.Name != "prefix" {
+			continue
+		}
+		found++
+		if !strings.Contains(query.Query, "entities { id triples") ||
+			!strings.Contains(query.Query, "next_cursor") {
+			t.Fatalf("prefix load query does not select EntityPage fields: %s", query.Query)
+		}
+	}
+	if found != 20 {
+		t.Fatalf("prefix query count = %d, want 20", found)
+	}
+}
+
 func TestProbeEntitiesSelectsExactEntity(t *testing.T) {
 	t.Parallel()
 

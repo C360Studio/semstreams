@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,10 +55,9 @@ type Config struct {
 // ConstructorConfig holds all configuration needed to construct an Output instance
 type ConstructorConfig struct {
 	Name            string                     // Component name (empty = auto-generate)
-	Port            int                        // WebSocket server port
 	Path            string                     // WebSocket endpoint path
-	Subjects        []string                   // NATS subjects to subscribe to
-	InputPorts      []component.PortDefinition // Full port definitions (type, stream, consumer config)
+	InputPorts      []component.PortDefinition // NATS input declarations
+	OutputPorts     []component.PortDefinition // Network output declarations
 	NATSClient      *natsclient.Client         // NATS client for messaging
 	MetricsRegistry *metric.MetricsRegistry    // Optional Prometheus metrics registry
 	Logger          *slog.Logger               // Optional logger (nil = use default)
@@ -68,11 +69,12 @@ type ConstructorConfig struct {
 
 // DefaultConstructorConfig returns sensible defaults for Output construction
 func DefaultConstructorConfig() ConstructorConfig {
+	ports := DefaultConfig().Ports
 	return ConstructorConfig{
 		Name:         "",
-		Port:         8081,
 		Path:         "/ws",
-		Subjects:     []string{"semantic.>"},
+		InputPorts:   append([]component.PortDefinition(nil), ports.Inputs...),
+		OutputPorts:  append([]component.PortDefinition(nil), ports.Outputs...),
 		Security:     security.Config{},
 		DeliveryMode: DeliveryAtMostOnce,
 		AckTimeout:   5 * time.Second,
@@ -83,28 +85,16 @@ func DefaultConstructorConfig() ConstructorConfig {
 func DefaultConfig() Config {
 	// WebSocket output typically has:
 	// - Input: NATS subjects to listen to
-	// - Output: WebSocket server network port (encoded in Subject field)
+	// - Output: WebSocket server network binding
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "semantic.>", // Default to semantic events
+			Name: "nats_input", Config: component.NATSPort{Subject: "semantic.>"}, // Default to semantic events
 			Required:    true,
 			Description: "NATS subjects to listen to",
 		},
 	}
 
-	// For network ports, we encode the URL in Subject field for now
-	// This matches how the factory extracts config
-	outputDefs := []component.PortDefinition{
-		{
-			Name:        "websocket_server",
-			Type:        "network",
-			Subject:     "http://0.0.0.0:8081/ws", // Encoded as URL
-			Required:    false,
-			Description: "WebSocket server endpoint",
-		},
-	}
+	outputDefs := websocketOutputDefinitions(8081)
 
 	return Config{
 		Ports: &component.PortConfig{
@@ -122,10 +112,12 @@ var websocketSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 // This is designed for real-time visualization of graph updates and entity state changes
 type Output struct {
 	name         string
+	host         string
 	port         int
 	path         string
 	subjects     []string
-	inputPorts   []component.PortDefinition // Full port definitions for type-aware subscriptions
+	inputPorts   []component.Port
+	outputPorts  []component.Port
 	natsClient   *natsclient.Client
 	security     security.Config
 	deliveryMode DeliveryMode
@@ -329,18 +321,61 @@ func newMetrics(registry *metric.MetricsRegistry, componentName string) *Metrics
 
 // NewOutput creates a new WebSocket output component with minimal configuration.
 // For more control over configuration, use NewOutputFromConfig().
-func NewOutput(port int, path string, subjects []string, natsClient *natsclient.Client) *Output {
+func NewOutput(port int, path string, subjects []string, natsClient *natsclient.Client) (*Output, error) {
 	cfg := DefaultConstructorConfig()
-	cfg.Port = port
 	cfg.Path = path
-	cfg.Subjects = subjects
+	cfg.InputPorts = natsInputDefinitions(subjects)
+	cfg.OutputPorts = websocketOutputDefinitions(port)
 	cfg.NATSClient = natsClient
 	return NewOutputFromConfig(cfg)
 }
 
 // NewOutputFromConfig creates a new WebSocket output component from ConstructorConfig.
 // This is the recommended way to create Output instances with full configuration control.
-func NewOutputFromConfig(cfg ConstructorConfig) *Output {
+func NewOutputFromConfig(cfg ConstructorConfig) (*Output, error) {
+	if len(cfg.InputPorts) == 0 || len(cfg.OutputPorts) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "NewOutputFromConfig", "at least one input and exactly one output port are required")
+	}
+	inputs := make([]component.Port, len(cfg.InputPorts))
+	subjects := make([]string, 0, len(cfg.InputPorts))
+	for index, definition := range cfg.InputPorts {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve input port")
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "project input port")
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "NewOutputFromConfig", "validate input port")
+		}
+		portSubjects := facts.NATSSubjects()
+		if len(portSubjects) != 1 {
+			return nil, errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(portSubjects)), "Output", "NewOutputFromConfig", "validate input port")
+		}
+		inputs[index] = port
+		subjects = append(subjects, portSubjects[0])
+	}
+	outputs := make([]component.Port, len(cfg.OutputPorts))
+	for index, definition := range cfg.OutputPorts {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "resolve output port")
+		}
+		outputs[index] = port
+	}
+	outputFacts, err := outputs[0].Facts()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Output", "NewOutputFromConfig", "project output port")
+	}
+	network, ok := outputFacts.Network()
+	if !ok {
+		return nil, errs.WrapInvalid(fmt.Errorf("output port %q kind %q is not network", outputs[0].Name, outputFacts.Kind()), "Output", "NewOutputFromConfig", "validate output port")
+	}
+	if network.Protocol() != "http" {
+		return nil, errs.WrapInvalid(fmt.Errorf("output port %q protocol %q is not http", outputs[0].Name, network.Protocol()), "Output", "NewOutputFromConfig", "validate output port")
+	}
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(_ *http.Request) bool {
 			// Allow connections from any origin for development
@@ -359,10 +394,12 @@ func NewOutputFromConfig(cfg ConstructorConfig) *Output {
 
 	return &Output{
 		name:         cfg.Name,
-		port:         cfg.Port,
+		host:         network.Host(),
+		port:         network.Port(),
 		path:         cfg.Path,
-		subjects:     cfg.Subjects,
-		inputPorts:   cfg.InputPorts,
+		subjects:     subjects,
+		inputPorts:   inputs,
+		outputPorts:  outputs,
 		natsClient:   cfg.NATSClient,
 		security:     cfg.Security,
 		deliveryMode: cfg.DeliveryMode,
@@ -373,7 +410,26 @@ func NewOutputFromConfig(cfg ConstructorConfig) *Output {
 		startTime:    time.Now(),
 		metrics:      newMetrics(cfg.MetricsRegistry, cfg.Name),
 		logger:       logger,
+	}, nil
+}
+
+func natsInputDefinitions(subjects []string) []component.PortDefinition {
+	definitions := make([]component.PortDefinition, len(subjects))
+	for index, subject := range subjects {
+		definitions[index] = component.PortDefinition{
+			Name:   fmt.Sprintf("nats_input_%d", index),
+			Config: component.NATSPort{Subject: subject},
+		}
 	}
+	return definitions
+}
+
+func websocketOutputDefinitions(port int) []component.PortDefinition {
+	return []component.PortDefinition{{
+		Name:        "websocket_server",
+		Config:      component.NetworkPort{Protocol: "http", Host: "0.0.0.0", Port: port},
+		Description: "WebSocket server endpoint",
+	}}
 }
 
 // generateMessageID generates a unique message ID for correlation
@@ -402,36 +458,12 @@ func (w *Output) Meta() component.Metadata {
 
 // InputPorts returns the input ports for this component
 func (w *Output) InputPorts() []component.Port {
-	ports := make([]component.Port, len(w.subjects))
-	for i, subject := range w.subjects {
-		ports[i] = component.Port{
-			Name:        fmt.Sprintf("nats_input_%d", i),
-			Direction:   component.DirectionInput,
-			Required:    false, // Optional - not all subjects will have publishers
-			Description: fmt.Sprintf("NATS subject subscription for %s", subject),
-			Config: component.NATSPort{
-				Subject: subject,
-			},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), w.inputPorts...)
 }
 
 // OutputPorts returns the output ports for this component
 func (w *Output) OutputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "websocket_endpoint",
-			Direction:   component.DirectionOutput,
-			Required:    false,
-			Description: fmt.Sprintf("WebSocket endpoint at ws://localhost:%d%s", w.port, w.path),
-			Config: component.NetworkPort{
-				Protocol: "websocket",
-				Host:     "localhost",
-				Port:     w.port,
-			},
-		},
-	}
+	return append([]component.Port(nil), w.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema for this component
@@ -617,7 +649,7 @@ func (w *Output) setupHTTPServer() error {
 	mux.HandleFunc(w.path, w.handleWebSocket)
 
 	w.server = &http.Server{
-		Addr:    fmt.Sprintf(":%d", w.port),
+		Addr:    net.JoinHostPort(w.host, strconv.Itoa(w.port)),
 		Handler: mux,
 	}
 
@@ -789,49 +821,41 @@ func (w *Output) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// setupSubscriptions creates subscriptions for all input ports, dispatching on port type.
-// When inputPorts is populated it uses the full port definition (enabling JetStream consumers).
-// When only subjects is available (legacy construction via NewOutput), it synthesises core-NATS
-// port definitions for backward compatibility.
+// setupSubscriptions creates subscriptions for all resolved input ports.
 func (w *Output) setupSubscriptions(ctx context.Context) error {
 	if w.natsClient == nil {
 		return nil
 	}
 
-	// Build the effective port list: prefer explicit port definitions, fall back to subjects.
-	ports := w.inputPorts
-	if len(ports) == 0 && len(w.subjects) > 0 {
-		ports = make([]component.PortDefinition, len(w.subjects))
-		for i, subj := range w.subjects {
-			ports[i] = component.PortDefinition{
-				Name:    fmt.Sprintf("nats_input_%d", i),
-				Type:    "nats",
-				Subject: subj,
-			}
+	for _, port := range w.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Output", "setupSubscriptions", "project input port facts")
 		}
-	}
-
-	for _, port := range ports {
-		if port.Subject == "" {
-			continue
+		subjects := facts.NATSSubjects()
+		if len(subjects) != 1 {
+			return errs.WrapInvalid(fmt.Errorf("input port %q declares %d subjects, want one", port.Name, len(subjects)), "Output", "setupSubscriptions", "validate input port")
 		}
+		subject := subjects[0]
 
-		switch port.Type {
-		case "jetstream":
+		switch facts.Kind() {
+		case component.PortKindJetStream:
 			if err := w.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.WrapTransient(err, "Output", "setupSubscriptions",
-					fmt.Sprintf("JetStream consumer for %s", port.Subject))
+					fmt.Sprintf("JetStream consumer for %s", subject))
 			}
 
-		default: // "nats" or empty — backward compatible core NATS subscribe
-			sub, err := w.natsClient.Subscribe(ctx, port.Subject, func(msgCtx context.Context, msg *natspkg.Msg) {
+		case component.PortKindNATS:
+			sub, err := w.natsClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *natspkg.Msg) {
 				w.handleNATSMessageData(msgCtx, msg.Data, msg.Subject)
 			})
 			if err != nil {
 				return errs.Wrap(err, "Output", "setupSubscriptions",
-					fmt.Sprintf("subscribe to NATS subject %s", port.Subject))
+					fmt.Sprintf("subscribe to NATS subject %s", subject))
 			}
 			w.subscriptions = append(w.subscriptions, sub)
+		default:
+			return errs.WrapInvalid(fmt.Errorf("input port %q kind %q is not nats or jetstream", port.Name, facts.Kind()), "Output", "setupSubscriptions", "validate input port")
 		}
 	}
 
@@ -840,22 +864,24 @@ func (w *Output) setupSubscriptions(ctx context.Context) error {
 
 // setupJetStreamConsumer creates a durable JetStream consumer for an input port.
 // The consumer provides replay-on-reconnect and proper ack-based backpressure.
-func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = w.deriveStreamName(port.Subject)
+func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-	if streamName == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Output", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", port.Subject))
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("port %q does not declare JetStream facts", port.Name)
 	}
+	subject := facts.NATSSubjects()[0]
+	streamName := stream.Name()
 
 	if err := w.waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "Output", "setupJetStreamConsumer",
 			fmt.Sprintf("wait for stream %s", streamName))
 	}
 
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("ws-output-%s", sanitizedSubject)
@@ -863,21 +889,24 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 	w.logger.Debug("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "Output", "setupJetStreamConsumer", "resolve consumer config")
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	err := w.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = w.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		w.handleNATSMessageData(msgCtx, msg.Data(), msg.Subject())
 		if ackErr := msg.Ack(); ackErr != nil {
 			w.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -888,7 +917,7 @@ func (w *Output) setupJetStreamConsumer(ctx context.Context, port component.Port
 			fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
 
-	w.logger.Debug("WebSocket output subscribed (JetStream)", "subject", port.Subject, "stream", streamName)
+	w.logger.Debug("WebSocket output subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
 }
 
@@ -919,20 +948,6 @@ func (w *Output) waitForStream(ctx context.Context, streamName string) error {
 	}
 	return errs.WrapTransient(errs.ErrStorageUnavailable, "WebSocketOutput", "waitForStream",
 		fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
-}
-
-// deriveStreamName extracts a stream name from the subject by taking the first dot-delimited
-// segment and uppercasing it (e.g. "events.>" → "EVENTS").
-func (w *Output) deriveStreamName(subject string) string {
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // unsubscribeFromNATS unsubscribes from all NATS subjects
@@ -1615,46 +1630,12 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 	}
 
-	// Extract configuration from Ports (single source of truth)
-	var port int
-	var path string
-	var subjects []string
-
-	if cfg.Ports != nil {
-		// Extract port and path from output URL if available
-		if len(cfg.Ports.Outputs) > 0 && cfg.Ports.Outputs[0].Subject != "" {
-			// Parse URL-encoded port from Subject field (e.g., "http://0.0.0.0:8082/ws")
-			url := cfg.Ports.Outputs[0].Subject
-			var parsedPort int
-			var parsedPath string
-			if _, err := fmt.Sscanf(url, "http://0.0.0.0:%d%s", &parsedPort, &parsedPath); err == nil {
-				port = parsedPort
-				path = parsedPath
-			}
-		}
-
-		// Extract subjects from inputs
-		if len(cfg.Ports.Inputs) > 0 {
-			for _, input := range cfg.Ports.Inputs {
-				if input.Subject != "" {
-					subjects = append(subjects, input.Subject)
-				}
-			}
-		}
+	if cfg.Ports == nil || len(cfg.Ports.Inputs) == 0 || len(cfg.Ports.Outputs) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "websocket-output-factory", "create", "at least one input and exactly one output port are required")
 	}
+	path := "/ws"
 
-	// Apply defaults if not configured
-	if port == 0 {
-		port = 8081
-	}
-	if path == "" {
-		path = "/ws"
-	}
-	if len(subjects) == 0 {
-		subjects = []string{"semantic.>"}
-	}
-
-	// Parse delivery mode (default: at-most-once for backward compatibility)
+	// Parse delivery mode (default: at-most-once).
 	deliveryMode := DeliveryAtMostOnce
 	if cfg.DeliveryMode != "" {
 		deliveryMode = cfg.DeliveryMode
@@ -1670,32 +1651,18 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		ackTimeout = parsed
 	}
 
-	// Validate port range (allow 0 for random port in tests)
-	// Ports below 1024 are reserved system ports
-	if port != 0 && (port < 1024 || port > 65535) {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig,
-			"websocket-output-factory", "create", fmt.Sprintf("port %d out of range (1024-65535)", port))
-	}
-
 	// Validate required dependencies
 	if deps.NATSClient == nil {
 		return nil, errs.WrapInvalid(errs.ErrInvalidConfig,
 			"websocket-output-factory", "create", "NATS client is required")
 	}
 
-	// Collect full input port definitions for type-aware subscription dispatch
-	var inputPorts []component.PortDefinition
-	if cfg.Ports != nil {
-		inputPorts = cfg.Ports.Inputs
-	}
-
 	// Create constructor config
 	ctorCfg := ConstructorConfig{
 		Name:            "websocket-output",
-		Port:            port,
 		Path:            path,
-		Subjects:        subjects,
-		InputPorts:      inputPorts,
+		InputPorts:      cfg.Ports.Inputs,
+		OutputPorts:     cfg.Ports.Outputs,
 		NATSClient:      deps.NATSClient,
 		MetricsRegistry: deps.MetricsRegistry,
 		Security:        deps.Security,
@@ -1704,5 +1671,5 @@ func CreateOutput(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		Passthrough:     cfg.Passthrough,
 	}
 
-	return NewOutputFromConfig(ctorCfg), nil
+	return NewOutputFromConfig(ctorCfg)
 }

@@ -54,8 +54,16 @@ func (c *Config) Validate() error {
 
 	// Validate SPATIAL_INDEX output exists
 	hasSpatialIndex := false
-	for _, output := range c.Ports.Outputs {
-		if output.Subject == graph.BucketSpatialIndex {
+	for _, definition := range c.Ports.Outputs {
+		output, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return errs.Wrap(err, "Config", "Validate", "resolve output port")
+		}
+		facts, err := output.Facts()
+		if err != nil {
+			return errs.Wrap(err, "Config", "Validate", "project output port facts")
+		}
+		if facts.Kind() == component.PortKindKVWrite && facts.ResourceID() == "kv:"+graph.BucketSpatialIndex {
 			hasSpatialIndex = true
 			break
 		}
@@ -111,18 +119,14 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Inputs) == 0 {
 			c.Ports.Inputs = []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			}
 		}
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name:    "spatial_index",
-					Type:    "kv-write",
-					Subject: graph.BucketSpatialIndex,
+					Name: "spatial_index", Config: component.KVWritePort{Bucket: graph.BucketSpatialIndex},
 				},
 			}
 		}
@@ -135,16 +139,12 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "spatial_index",
-					Type:    "kv-write",
-					Subject: graph.BucketSpatialIndex,
+					Name: "spatial_index", Config: component.KVWritePort{Bucket: graph.BucketSpatialIndex},
 				},
 			},
 		},
@@ -164,8 +164,10 @@ type entityStatesWatcher interface {
 // Component implements the graph-index-spatial processor
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	natsClient *natsclient.Client
@@ -219,6 +221,22 @@ func CreateGraphIndexSpatial(rawConfig json.RawMessage, deps component.Dependenc
 	if err := config.Validate(); err != nil {
 		return nil, errs.Wrap(err, "CreateGraphIndexSpatial", "factory", "config validation")
 	}
+	inputs := make([]component.Port, len(config.Ports.Inputs))
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.Wrap(err, "CreateGraphIndexSpatial", "factory", "resolve input port")
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Ports.Outputs))
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.Wrap(err, "CreateGraphIndexSpatial", "factory", "resolve output port")
+		}
+		outputs[index] = port
+	}
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-index-spatial")
@@ -227,6 +245,8 @@ func CreateGraphIndexSpatial(rawConfig json.RawMessage, deps component.Dependenc
 	comp := &Component{
 		name:       "graph-index-spatial",
 		config:     config,
+		inputs:     inputs,
+		outputs:    outputs,
 		natsClient: natsClient,
 		logger:     logger,
 	}
@@ -270,14 +290,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions
@@ -285,14 +298,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema

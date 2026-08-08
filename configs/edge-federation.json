@@ -64,10 +64,14 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "edge.raw.data",
-              "type": "jetstream",
-              "description": "Raw UDP data from edge devices"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "edge.raw.data"
+                ]
+              },
+              "description": "Raw UDP data from edge devices",
+              "name": "nats_output"
             }
           ]
         },
@@ -84,17 +88,26 @@
         "ports": {
           "inputs": [
             {
-              "name": "filter_in",
-              "subject": "edge.raw.data",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "EDGE",
+                "subjects": [
+                  "edge.raw.data"
+                ]
+              },
+              "name": "filter_in"
             }
           ],
           "outputs": [
             {
-              "name": "filter_out",
-              "subject": "edge.filtered.data",
-              "type": "jetstream",
-              "description": "Filtered data ready for federation"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "edge.filtered.data"
+                ]
+              },
+              "description": "Filtered data ready for federation",
+              "name": "filter_out"
             }
           ]
         },
@@ -109,17 +122,26 @@
         "ports": {
           "inputs": [
             {
-              "name": "ws_in",
-              "subject": "edge.filtered.data",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "EDGE",
+                "subjects": [
+                  "edge.filtered.data"
+                ]
+              },
+              "name": "ws_in"
             }
           ],
           "outputs": [
             {
-              "name": "websocket_server",
-              "type": "network",
-              "subject": "http://0.0.0.0:8082/stream",
-              "description": "WebSocket server endpoint for federation"
+              "config": {
+                "host": "0.0.0.0",
+                "kind": "network",
+                "port": 8082,
+                "protocol": "http"
+              },
+              "description": "WebSocket server endpoint for federation",
+              "name": "websocket_server"
             }
           ]
         },

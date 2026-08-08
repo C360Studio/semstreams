@@ -13,7 +13,7 @@
 //	config := udp.InputConfig{
 //	    Ports: &component.PortConfig{
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "udp.messages", Required: true},
+//	            {Name: "output", Config: component.NATSPort{Subject: "udp.messages"}, Required: true},
 //	        },
 //	    },
 //	    Address:            "0.0.0.0:5000",
@@ -181,7 +181,7 @@
 //	{
 //	  "ports": {
 //	    "outputs": [
-//	      {"name": "output", "type": "nats", "subject": "sensors.udp", "required": true}
+//	      {"name":"output","required":true,"config":{"kind":"nats","subject":"sensors.udp"}}
 //	    ]
 //	  },
 //	  "address": "0.0.0.0:5000",

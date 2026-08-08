@@ -86,43 +86,58 @@ When enabled, serves an interactive request UI for:
 
 ## Prefix Scoping Best Practices
 
-`entitiesByPrefix(prefix: String!, limit: Int)` returns up to `limit` entities whose IDs start with the given prefix. There is **no cursor or offset** — if matches exceed the limit, the excess is silently dropped. Design queries around this constraint.
+`entitiesByPrefix(prefix: String!, limit: Int, cursor: String)` returns an
+`EntityPage`. The page's `entities` field contains full entities whose IDs start
+with the prefix. When `next_cursor` is present, pass that opaque value back as
+`cursor` to continue; an absent or empty cursor means the scan is complete.
 
 ### Avoid empty-prefix queries in production UIs
 
 ```graphql
-# Don't do this — enumerates every entity in the graph, then truncates to limit
-{ entitiesByPrefix(prefix: "", limit: 1000) { id } }
+# Don't do this for a routine UI paint — each page scans every graph key
+{ entitiesByPrefix(prefix: "", limit: 1000) { entities { id } next_cursor } }
 ```
 
 Empty prefix forces a full KV scan (`KeysByPrefix("")` walks every key in `ENTITY_STATES`) before applying the limit. At ~10K entities this is fine; at 100K it becomes the dominant cost of the request. UIs that paint a tree should start at a narrower prefix matching a known level of the 6-part entity ID and drill down on user interaction:
 
 ```graphql
 # First paint — scoped to a known platform/domain root
-{ entitiesByPrefix(prefix: "acme.ops.robotics", limit: 200) { id } }
+{ entitiesByPrefix(prefix: "acme.ops.robotics", limit: 200) { entities { id } next_cursor } }
 
 # User expands a node — scope tightens further
-{ entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone", limit: 200) { id } }
+{ entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone", limit: 200) { entities { id } next_cursor } }
 ```
 
 ### Choose `limit` deliberately
 
-Default is **100** when `limit` is 0 or omitted. The gateway caps the default to keep replies under NATS's default 1MB `max_payload` ceiling for entities with substantial triple sets (gh#172). For larger result sets, set `limit` explicitly up to the internal cap. Keep it at the smallest value your UI actually needs to render — a 5K-entity response wastes bandwidth and JSON decode time for no gain if the user sees 200 rows.
+Default and maximum page counts are **1000**. Graph ingest may return fewer
+entities when the complete encoded page reaches the active NATS payload limit;
+that page carries `next_cursor`, so callers continue without predicting a safe
+byte size. Keep `limit` at the smallest count the UI needs to render.
 
-### Exhaustive enumeration has no API
+### Follow continuation to enumerate exhaustively
 
-If you need every entity under a prefix, there is no "next page" token today. The options are:
+Request the first page without `cursor`. For each response, append `entities`
+and send `next_cursor` verbatim as the next request's `cursor`. Stop only when
+the token is absent or empty:
 
-1. Query a narrower prefix that fits under the limit.
-2. Query multiple narrower prefixes (e.g., enumerate level-5 types under a level-4 system and query each).
-3. Raise the limit to cover your expected maximum — acceptable for admin tooling, not for user-facing UI.
+```graphql
+query PrefixPage($prefix: String!, $limit: Int, $cursor: String) {
+  entitiesByPrefix(prefix: $prefix, limit: $limit, cursor: $cursor) {
+    entities { id }
+    next_cursor
+  }
+}
+```
 
-Cursor-based pagination is a tracked follow-up. It is not planned for the beta line; request it explicitly if your use case pushes past these workarounds.
+Treat the cursor as opaque: do not parse, construct, or modify it. Each page
+performs a fresh prefix-key scan, so narrower prefixes remain preferable for
+large graphs.
 
 ### Prefix matching rules
 
 - The backend appends a trailing `.` to non-empty prefixes (so `acme.ops` matches `acme.ops.robotics.*` but not `acme.ops-extended.*`).
-- Exact full-ID queries (all six parts) fall back to a direct `Get` when the prefix scan returns empty — so `entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone.001", limit: 1)` works for single-entity lookup even though the trailing-dot rule would otherwise miss.
+- Exact full-ID queries (all six parts) fall back to a direct `Get` when the prefix scan returns empty — so `entitiesByPrefix(prefix: "acme.ops.robotics.gcs.drone.001", limit: 1) { entities { id } next_cursor }` works for single-entity lookup even though the trailing-dot rule would otherwise miss.
 - Empty-string prefix is the only case where no trailing `.` is added — which is exactly why it walks the whole bucket.
 
 ## Security Considerations

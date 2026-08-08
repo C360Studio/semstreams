@@ -413,10 +413,20 @@ func TestComponentManagerGetFlowGraph(t *testing.T) {
 			Type: "processor",
 		},
 		inputPorts: []component.Port{
-			{Name: "input", Description: "Input port"},
+			{
+				Name:        "input",
+				Direction:   component.DirectionInput,
+				Description: "Input port",
+				Config:      component.NATSPort{Subject: "flow.input"},
+			},
 		},
 		outputPorts: []component.Port{
-			{Name: "output", Description: "Output port"},
+			{
+				Name:        "output",
+				Direction:   component.DirectionOutput,
+				Description: "Output port",
+				Config:      component.NATSPort{Subject: "flow.output"},
+			},
 		},
 	}
 
@@ -425,7 +435,8 @@ func TestComponentManagerGetFlowGraph(t *testing.T) {
 	}
 
 	// Get FlowGraph
-	graph := cm.GetFlowGraph()
+	graph, err := cm.GetFlowGraph()
+	require.NoError(t, err)
 	assert.NotNil(t, graph)
 
 	// Verify component is in graph
@@ -438,7 +449,8 @@ func TestComponentManagerValidateFlowConnectivity(t *testing.T) {
 	cm := createTestComponentManager(t)
 
 	// Empty flow should be healthy
-	result := cm.ValidateFlowConnectivity()
+	result, err := cm.ValidateFlowConnectivity()
+	require.NoError(t, err)
 	assert.NotNil(t, result)
 	assert.Equal(t, "healthy", result.ValidationStatus)
 	assert.Empty(t, result.DisconnectedNodes)
@@ -450,7 +462,8 @@ func TestComponentManagerGetFlowPaths(t *testing.T) {
 	cm := createTestComponentManager(t)
 
 	// Empty should return empty paths
-	paths := cm.GetFlowPaths()
+	paths, err := cm.GetFlowPaths()
+	require.NoError(t, err)
 	assert.NotNil(t, paths)
 	assert.Empty(t, paths)
 }

@@ -109,23 +109,15 @@ func TestIntegration_ModelCompleteResponse(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.*",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
-		StreamName:           "AGENT",
 		ConsumerNameSuffix:   "test-" + t.Name(),
 		DeleteConsumerOnStop: true,
 		Timeout:              "5s",
@@ -260,23 +252,15 @@ func TestIntegration_ModelToolCallResponse(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.*",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
-		StreamName:           "AGENT",
 		ConsumerNameSuffix:   "test-" + t.Name(),
 		DeleteConsumerOnStop: true,
 		Timeout:              "5s",
@@ -442,23 +426,15 @@ func TestIntegration_ModelEndpointResolution(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.>",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.*",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}},
 				},
 			},
 		},
-		StreamName:           "AGENT",
 		ConsumerNameSuffix:   "test-" + t.Name(),
 		DeleteConsumerOnStop: true,
 		Timeout:              "5s",
@@ -598,13 +574,12 @@ func TestIntegration_InlineThinkExtraction(t *testing.T) {
 	config := agenticmodel.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "requests", Type: "jetstream", Subject: "agent.request.>", StreamName: "AGENT", Required: true},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.>"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "responses", Type: "jetstream", Subject: "agent.response.*", StreamName: "AGENT"},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.*"}}},
 			},
 		},
-		StreamName:           "AGENT",
 		ConsumerNameSuffix:   "test-" + t.Name(),
 		DeleteConsumerOnStop: true,
 		Timeout:              "5s",

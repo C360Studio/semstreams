@@ -16,13 +16,9 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 
 	// Parse user configuration
 	if len(rawConfig) > 0 {
-		var userConfig Config
-		if err := component.SafeUnmarshal(rawConfig, &userConfig); err != nil {
+		if err := component.SafeUnmarshal(rawConfig, &cfg); err != nil {
 			return nil, errs.Wrap(err, "websocket-input-factory", "create", "secure config parsing")
 		}
-
-		// Apply user overrides (already validated by SafeUnmarshal)
-		cfg = userConfig
 	}
 
 	// Validate required dependencies

@@ -120,8 +120,12 @@ func quietLogger() *slog.Logger {
 }
 
 func newTestComponent(loops LoopStore, classifier Classifier, retriever CandidateRetriever) *Component {
+	config := DefaultConfig()
+	inputs, outputs := mustResolveTestPorts(config.Ports)
 	return &Component{
-		config:     DefaultConfig(),
+		config:     config,
+		inputs:     inputs,
+		outputs:    outputs,
 		classifier: classifier,
 		retriever:  retriever,
 		loops:      loops,
@@ -131,6 +135,26 @@ func newTestComponent(loops LoopStore, classifier Classifier, retriever Candidat
 			Platform: types.PlatformMeta{Org: "acme", Platform: "ops"},
 		},
 	}
+}
+
+func mustResolveTestPorts(config *component.PortConfig) ([]component.Port, []component.Port) {
+	inputs := make([]component.Port, len(config.Inputs))
+	for index, definition := range config.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			panic(err)
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Outputs))
+	for index, definition := range config.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			panic(err)
+		}
+		outputs[index] = port
+	}
+	return inputs, outputs
 }
 
 func TestComponent_HandleMessage_HappyPath(t *testing.T) {
@@ -449,9 +473,9 @@ func TestConfig_ValidateRejectsMissingPorts(t *testing.T) {
 	}{
 		{"no ports", Config{}, true},
 		{"empty inputs", Config{Ports: &component.PortConfig{}}, true},
-		{"ok", Config{Ports: &component.PortConfig{Inputs: []component.PortDefinition{{Name: "in", Subject: "x"}}}}, false},
+		{"ok", Config{Ports: &component.PortConfig{Inputs: []component.PortDefinition{{Name: "in", Config: component.NATSPort{Subject: "x"}}}}}, false},
 		{"negative max", Config{
-			Ports:         &component.PortConfig{Inputs: []component.PortDefinition{{Name: "in", Subject: "x"}}},
+			Ports:         &component.PortConfig{Inputs: []component.PortDefinition{{Name: "in", Config: component.NATSPort{Subject: "x"}}}},
 			MaxCandidates: -1,
 		}, true},
 	}

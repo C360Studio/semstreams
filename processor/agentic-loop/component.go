@@ -20,10 +20,8 @@ import (
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/persona"
-	"github.com/c360studio/semstreams/pkg/cache"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/processor/agentic-loop/prompt"
-	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/nats-io/nats.go/jetstream"
 )
 
@@ -53,10 +51,11 @@ type Component struct {
 	startTime time.Time
 
 	// KV buckets
-	loopsBucket jetstream.KeyValue
-
-	// Trajectory cache (replaces KV bucket — durable content in ObjectStore + graph)
-	trajectoryCache cache.Cache[*agentic.Trajectory]
+	loopsBucket           jetstream.KeyValue
+	trajectoryBucket      jetstream.KeyValue
+	trajectoryRecorder    *trajectoryRecorder
+	trajectoryReader      *trajectoryReader
+	trajectoryAuditHealth trajectoryAuditHealth
 
 	// Ports (merged from config)
 	inputPorts  []component.Port
@@ -101,6 +100,60 @@ type Component struct {
 
 type inputHandler func(context.Context, []byte) error
 
+func rejectRetiredTrajectoryConfig(rawConfig json.RawMessage) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(rawConfig, &fields); err != nil {
+		return err
+	}
+	for _, retired := range []string{
+		"content_bucket", "trajectory_detail", "trajectory_cache_ttl",
+		"trajectories_bucket", "trajectory_ttl", "trajectory_history",
+	} {
+		if _, exists := fields[retired]; exists {
+			return fmt.Errorf("retired field %q is not supported", retired)
+		}
+	}
+	return nil
+}
+
+func validateTrajectoryQueryInput(port component.Port, facts component.PortFacts) error {
+	contract, ok := facts.Interface()
+	subjects := facts.NATSSubjects()
+	if port.Name != "trajectory_query" || !port.Required || facts.Kind() != component.PortKindNATSRequest ||
+		len(subjects) != 1 || subjects[0] == "" || strings.ContainsAny(subjects[0], "*>") ||
+		!ok || contract.Type != "agentic.query" || contract.Version != "v1" {
+		return fmt.Errorf("trajectory_query must be a required exact nats-request input with interface agentic.query v1")
+	}
+	return nil
+}
+
+func validateTrajectoriesOutput(port component.Port, facts component.PortFacts) error {
+	contract, ok := facts.Interface()
+	if port.Name != "trajectories" || !port.Required || facts.Kind() != component.PortKindKVWrite ||
+		facts.ResourceID() != "kv:"+agentic.TrajectoryBucketName || !ok ||
+		contract.Type != "agentic.trajectory.fact" || contract.Version != "v1" {
+		return fmt.Errorf("trajectories must be a required AGENT_TRAJECTORIES kv-write output with interface agentic.trajectory.fact v1")
+	}
+	return nil
+}
+
+func (c *Component) trajectoryQuerySubject() (string, error) {
+	for _, port := range c.inputPorts {
+		if port.Name != "trajectory_query" {
+			continue
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return "", err
+		}
+		if err := validateTrajectoryQueryInput(port, facts); err != nil {
+			return "", err
+		}
+		return facts.NATSSubjects()[0], nil
+	}
+	return "", errors.New("trajectory_query input required")
+}
+
 func adaptVoidInputHandler(handler func(context.Context, []byte)) inputHandler {
 	return func(ctx context.Context, data []byte) error {
 		handler(ctx, data)
@@ -132,6 +185,9 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	// compact_threshold (0.0) and headroom_tokens (0) cause compaction
 	// to trigger on every iteration regardless of context utilization.
 	config := DefaultConfig()
+	if err := rejectRetiredTrajectoryConfig(rawConfig); err != nil {
+		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "reject retired trajectory config")
+	}
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "parse config")
 	}
@@ -144,28 +200,50 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate config")
 	}
 
-	// Merge ports with defaults
-	var inputPorts []component.Port
-	var outputPorts []component.Port
-
-	if config.Ports != nil && len(config.Ports.Inputs) > 0 {
-		inputPorts = component.MergePortConfigs(
-			buildDefaultInputPorts(),
-			config.Ports.Inputs,
-			component.DirectionInput,
-		)
-	} else {
-		inputPorts = buildDefaultInputPorts()
+	merged := *DefaultConfig().Ports
+	if config.Ports != nil {
+		var err error
+		merged, err = component.MergePortConfig(merged, *config.Ports)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "merge ports")
+		}
 	}
-
-	if config.Ports != nil && len(config.Ports.Outputs) > 0 {
-		outputPorts = component.MergePortConfigs(
-			buildDefaultOutputPorts(),
-			config.Ports.Outputs,
-			component.DirectionOutput,
-		)
-	} else {
-		outputPorts = buildDefaultOutputPorts()
+	config.Ports = &merged
+	inputPorts := make([]component.Port, 0, len(merged.Inputs))
+	for _, definition := range merged.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve input port")
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "inspect input port")
+		}
+		if definition.Name == "trajectory_query" {
+			if err := validateTrajectoryQueryInput(port, facts); err != nil {
+				return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectory query input")
+			}
+		} else if facts.Kind() != component.PortKindJetStream {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "agentic-loop", "NewComponent", "work input ports must be JetStream ports")
+		}
+		inputPorts = append(inputPorts, port)
+	}
+	outputPorts := make([]component.Port, 0, len(merged.Outputs))
+	for _, definition := range merged.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "resolve output port")
+		}
+		if definition.Name == "trajectories" {
+			facts, factsErr := port.Facts()
+			if factsErr != nil {
+				return nil, errs.WrapInvalid(factsErr, "agentic-loop", "NewComponent", "inspect trajectories output")
+			}
+			if err := validateTrajectoriesOutput(port, facts); err != nil {
+				return nil, errs.WrapInvalid(err, "agentic-loop", "NewComponent", "validate trajectories output")
+			}
+		}
+		outputPorts = append(outputPorts, port)
 	}
 
 	// Parse timeout for message processing
@@ -317,12 +395,22 @@ func (c *Component) Health() component.HealthStatus {
 	if healthy {
 		status = "running"
 	}
+	errorCount, lastError := c.trajectoryAuditHealth.snapshot()
+	if healthy && (!c.trajectoryProviderAvailable() || errorCount > 0) {
+		healthy = false
+		status = "degraded"
+		if !c.trajectoryProviderAvailable() && lastError == "" {
+			lastError = boundedTrajectoryDiagnostic(fmt.Sprintf("trajectory evidence provider %q unavailable", c.config.TrajectoryEvidenceStorageInstance))
+		}
+	}
 
 	return component.HealthStatus{
-		Healthy:   healthy,
-		LastCheck: time.Now(),
-		Uptime:    uptime,
-		Status:    status,
+		Healthy:    healthy,
+		LastCheck:  time.Now(),
+		ErrorCount: errorCount,
+		LastError:  lastError,
+		Uptime:     uptime,
+		Status:     status,
 	}
 }
 
@@ -377,8 +465,13 @@ func (c *Component) Start(ctx context.Context) error {
 			return errs.Wrap(err, "agentic-loop", "Start", "setup subscriptions")
 		}
 
-		// Set up trajectory query handler
-		sub, err := c.natsClient.SubscribeForRequests(ctx, "agentic.query.trajectory", c.handleTrajectoryQuery)
+		// Set up trajectory query handler from the declared exact request input.
+		querySubject, err := c.trajectoryQuerySubject()
+		if err != nil {
+			c.cleanupConsumersAfterStartFailure()
+			return errs.Wrap(err, "agentic-loop", "Start", "resolve trajectory query input")
+		}
+		sub, err := c.natsClient.SubscribeForRequests(ctx, querySubject, c.handleTrajectoryQuery)
 		if err != nil {
 			c.cleanupConsumersAfterStartFailure()
 			return errs.Wrap(err, "agentic-loop", "Start", "subscribe to trajectory query")
@@ -577,35 +670,6 @@ func (c *Component) Stop(timeout time.Duration) error {
 	return nil
 }
 
-// buildDefaultInputPorts creates default input ports
-func buildDefaultInputPorts() []component.Port {
-	defaultCfg := DefaultConfig()
-	ports := make([]component.Port, len(defaultCfg.Ports.Inputs))
-	for i, portDef := range defaultCfg.Ports.Inputs {
-		ports[i] = component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionInput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-			Config: component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			},
-		}
-	}
-	return ports
-}
-
-// buildDefaultOutputPorts creates default output ports
-func buildDefaultOutputPorts() []component.Port {
-	defaultCfg := DefaultConfig()
-	ports := make([]component.Port, len(defaultCfg.Ports.Outputs))
-	for i, portDef := range defaultCfg.Ports.Outputs {
-		ports[i] = component.BuildPortFromDefinition(portDef, component.DirectionOutput)
-	}
-	return ports
-}
-
 // initializeKVBuckets initializes the KV buckets for loop and trajectory storage
 func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	js, err := c.natsClient.JetStream()
@@ -628,69 +692,70 @@ func (c *Component) initializeKVBuckets(ctx context.Context) error {
 	}
 	c.loopsBucket = loopsBucket
 
-	// Initialize trajectory cache. Durable content is in ObjectStore + graph entities.
-	trajCacheTTL := 4 * time.Hour // default
-	if c.config.TrajectoryCacheTTL != "" {
-		if parsed, parseErr := time.ParseDuration(c.config.TrajectoryCacheTTL); parseErr == nil {
-			trajCacheTTL = parsed
-		}
+	// Immutable trajectory facts are best-effort audit state. A missing bucket
+	// degrades observability but must not prevent the work consumers from starting.
+	trajectoryBucket, trajectoryErr := js.KeyValue(ctx, agentic.TrajectoryBucketName)
+	if errors.Is(trajectoryErr, jetstream.ErrBucketNotFound) {
+		trajectoryBucket, trajectoryErr = js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+			Bucket:  agentic.TrajectoryBucketName,
+			History: 1,
+		})
 	}
-	cleanupInterval := trajCacheTTL / 4
-	if cleanupInterval < time.Minute {
-		cleanupInterval = time.Minute
+	if trajectoryErr == nil {
+		trajectoryErr = validateTrajectoryFactBucket(ctx, trajectoryBucket)
 	}
-	trajectoryCache, err := cache.NewTTL[*agentic.Trajectory](ctx, trajCacheTTL, cleanupInterval)
-	if err != nil {
-		return errs.Wrap(err, "agentic-loop", "initializeKVBuckets", "create trajectory cache")
+	if trajectoryErr != nil {
+		// Clean beta policy: an incompatible retained bucket is never written,
+		// reconciled, or shimmed. The operator wipes it and restarts.
+		trajectoryBucket = nil
 	}
-	c.trajectoryCache = trajectoryCache
-
-	// Initialize content store for trajectory step content (tool results, model responses)
-	contentBucket := c.config.ContentBucket
-	if contentBucket == "" {
-		contentBucket = "AGENT_CONTENT"
+	c.trajectoryBucket = trajectoryBucket
+	if trajectoryBucket != nil {
+		c.trajectoryRecorder = newTrajectoryRecorder(
+			trajectoryBucket,
+			c.deps.StoreRegistry,
+			c.config.TrajectoryEvidenceStorageInstance,
+			c.reportTrajectoryAuditFailure,
+		)
+		c.trajectoryReader = newTrajectoryReader(trajectoryBucket)
+	} else {
+		c.trajectoryRecorder = nil
+		c.trajectoryReader = nil
 	}
-	contentStore, err := objectstore.NewStoreWithConfig(ctx, c.natsClient, objectstore.Config{
-		BucketName: contentBucket,
-	})
-	if fatal := contentStoreInitOutcome(err); fatal != nil {
-		// Fail Start CLOSED on a fatal D2 retention violation (#600/#616). Close the
-		// trajectory cache created above first: the flow service retries Start
-		// (retry.Quick, up to 10 attempts) with the SAME parent context, which it does
-		// NOT cancel between attempts (service/component_manager.go), so each attempt
-		// would otherwise strand the cache's cleanup goroutine until component Stop.
-		// ttlCache.Close deterministically joins that goroutine.
-		if c.trajectoryCache != nil {
-			if cerr := c.trajectoryCache.Close(); cerr != nil {
-				c.logger.Debug("trajectory cache close on fatal boot", "error", cerr)
-			}
-			c.trajectoryCache = nil
-		}
-		return fatal
+	if trajectoryErr != nil {
+		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
+			Stage:  trajectoryStageFactVerify,
+			Kind:   agentic.TrajectoryKindLoopStarted,
+			Reason: trajectoryReasonBackend,
+			Err:    fmt.Errorf("acquire trajectory fact bucket: %w", trajectoryErr),
+		})
 	}
-	switch {
-	case err != nil:
-		// Genuine unavailability (unconfigured / unreachable): disable content storage
-		// and continue. Non-fatal only — the content store is OPTIONAL.
-		c.logger.Warn("Failed to create content store for trajectory steps, content storage disabled",
-			"bucket", contentBucket, "error", err)
-	case c.graphWriter != nil:
-		c.graphWriter.contentStore = contentStore
+	if !c.trajectoryProviderAvailable() {
+		c.reportTrajectoryAuditFailure(trajectoryAuditFailure{
+			Stage:  trajectoryStageProviderResolve,
+			Kind:   agentic.TrajectoryKindLoopStarted,
+			Reason: trajectoryReasonProviderUnavailable,
+			Err:    fmt.Errorf("storage instance %q unavailable", c.config.TrajectoryEvidenceStorageInstance),
+		})
 	}
 
 	return nil
 }
 
-// contentStoreInitOutcome classifies the trajectory content-store constructor error
-// for initializeKVBuckets. The content store is legitimately OPTIONAL, so a non-fatal
-// error (or none) returns nil and the caller disables content storage gracefully; a
-// FATAL D2 retention violation (#600/#616) returns the wrapped fatal so Start fails
-// CLOSED and subscriptions/workers never start. The IsFatal branch is load-bearing —
-// routing a fatal into the graceful path re-introduces the #632 swallowed-fatal
-// defect. Extracted so the fail-closed decision is directly testable.
-func contentStoreInitOutcome(err error) error {
-	if errs.IsFatal(err) {
-		return errs.WrapFatal(err, "agentic-loop", "initializeKVBuckets", "create content store")
+func validateTrajectoryFactBucket(ctx context.Context, bucket jetstream.KeyValue) error {
+	status, err := bucket.Status(ctx)
+	if err != nil {
+		return fmt.Errorf("read AGENT_TRAJECTORIES status: %w", err)
+	}
+	return validateTrajectoryFactBucketContract(status.History(), status.TTL())
+}
+
+func validateTrajectoryFactBucketContract(history int64, ttl time.Duration) error {
+	if history != 1 || ttl != 0 {
+		return fmt.Errorf(
+			"AGENT_TRAJECTORIES has incompatible retained state (history=%d TTL/MaxAge=%s); clean break required: stop this component, wipe AGENT_TRAJECTORIES, and restart",
+			history, ttl,
+		)
 	}
 	return nil
 }
@@ -698,21 +763,20 @@ func contentStoreInitOutcome(err error) error {
 // setupSubscriptions sets up JetStream consumers for input ports
 func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) error {
 	for _, port := range c.inputPorts {
-		var subject string
-
-		// Handle both JetStreamPort and NATSPort for backward compatibility
-		switch p := port.Config.(type) {
-		case component.JetStreamPort:
-			if len(p.Subjects) > 0 {
-				subject = p.Subjects[0]
-			}
-		case component.NATSPort:
-			subject = p.Subject
-		}
-
-		if subject == "" {
+		// Exact request/reply inputs own their own subscription lifecycle below;
+		// they are not JetStream work consumers.
+		if port.Name == "trajectory_query" {
 			continue
 		}
+		facts, err := port.Facts()
+		if err != nil {
+			return err
+		}
+		stream, ok := facts.Stream()
+		if !ok || len(stream.Subjects()) != 1 {
+			return fmt.Errorf("input port %s must declare one JetStream subject", port.Name)
+		}
+		subject := stream.Subjects()[0]
 
 		var handler inputHandler
 
@@ -750,33 +814,17 @@ func (c *Component) setupSubscriptions(setupCtx, consumerCtx context.Context) er
 	return nil
 }
 
-// resolveStreamName picks the JetStream stream a consumer should bind to
-// for the given input port. Extracted as a pure function so the resolution
-// rules can be unit-tested without spinning up NATS.
-//
-// Resolution order:
-//  1. JetStreamPort.StreamName on the port (flow config's per-port override).
-//  2. componentStreamName (component-wide default, typically c.config.StreamName).
-//  3. Hardcoded "AGENT" fallback.
-//
-// Per-port stream_name lets a single component consume from multiple streams
-// — e.g. agentic-loop watching agent.task on AGENT and tool.result on TOOL.
-// Without this the component-wide default wins and the per-port flow-config
-// field is silently ignored.
-func resolveStreamName(port component.Port, componentStreamName string) string {
-	if jsPort, ok := port.Config.(component.JetStreamPort); ok && jsPort.StreamName != "" {
-		return jsPort.StreamName
-	}
-	if componentStreamName != "" {
-		return componentStreamName
-	}
-	return "AGENT"
-}
-
-// setupConsumer sets up a JetStream consumer for an input port. The
-// stream to bind to is resolved by resolveStreamName above.
+// setupConsumer sets up a JetStream consumer for an input port.
 func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port component.Port, subject string, handler inputHandler) error {
-	streamName := resolveStreamName(port, c.config.StreamName)
+	facts, err := port.Facts()
+	if err != nil {
+		return err
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("input port %s is not JetStream", port.Name)
+	}
+	streamName := stream.Name()
 
 	// Wait for stream to be available
 	if err := c.waitForStream(setupCtx, streamName); err != nil {
@@ -797,7 +845,10 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 
 	// Get consumer config from port (allows user configuration)
 	// Defaults to "new" - only process new messages, don't replay old ones
-	consumerCfg := component.GetConsumerConfig(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "agentic-loop", "setupConsumer", "resolve consumer config")
+	}
 
 	// Differentiate consumer config by latency class:
 	// - Long-running ports (task, response, tool.result) need serial processing,
@@ -880,7 +931,7 @@ func (c *Component) setupConsumer(setupCtx, consumerCtx context.Context, port co
 		}
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
+	err = c.natsClient.ConsumeStreamWithConfigContexts(setupCtx, consumerCtx, cfg, handlerFn)
 	if err != nil {
 		return errs.Wrap(err, "agentic-loop", "setupConsumer", fmt.Sprintf("setup consumer for stream %s", streamName))
 	}
@@ -1020,6 +1071,7 @@ func (c *Component) handleTaskMessage(ctx context.Context, data []byte) error {
 	c.logger.Debug("Loop created",
 		slog.String("loop_id", result.LoopID),
 		slog.String("task_id", task.TaskID))
+	c.recordTrajectoryObservations(ctx, result)
 
 	// Birth the loop-execution entity via entity.create. This gives the entity a
 	// typed MessageType envelope and a proper origin contract.
@@ -1201,6 +1253,7 @@ func (c *Component) handleResponseMessage(ctx context.Context, data []byte) {
 
 	result, err := c.handler.HandleModelResponse(ctx, loopID, *response)
 	if err != nil {
+		c.recordTrajectoryObservations(ctx, result)
 		c.handleLoopFailure(ctx, loopID, entity, failureReasonForHandlerError(err), err)
 		return
 	}
@@ -1267,6 +1320,10 @@ func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity
 		duration := time.Since(entity.StartedAt).Seconds()
 		c.metrics.recordLoopFailed(reason, entity.Iterations, duration)
 	}
+	latest, _ := c.handler.GetLoop(loopID)
+	failure, _, _ := c.handler.BuildFailureMessages(loopID, reason, err.Error())
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusFailed, agentic.TrajectoryErrorUnknown,
+		trajectoryTerminalEvidence{Loop: latest, Failure: failure})
 
 	c.publishFailureEvents(ctx, loopID, reason, err.Error())
 }
@@ -1409,17 +1466,16 @@ const graphWritePublishBudget = 2 * time.Second
 // agent.complete.* event downstream rules wait on. On budget timeout,
 // publish proceeds with a loud log and Prom counter increment.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
+	c.recordHandlerResultTrajectory(ctx, result)
 	c.persistLoopState(ctx, result.LoopID)
 
 	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
-		c.finalizeTrajectory(ctx, result.LoopID, result.State)
 		if result.CompletionState != nil {
 			c.persistCompletionState(ctx, result.LoopID, result.CompletionState)
 			c.stampLoopCompletionWithBudget(ctx, result.LoopID, result.CompletionState)
 		} else if result.FailureState != nil {
 			c.stampLoopFailureWithBudget(ctx, result.LoopID, result.FailureState)
 		}
-		c.writeTrajectoryToGraph(ctx, result.LoopID)
 		// Terminal-tool-less synthesis (#133). Detected in
 		// handleCompleteResponse; emitted here on the graph path so the
 		// triples ride the same publish budget as the loop completion
@@ -1591,6 +1647,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	// Handle the tool result using the message handler
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
+		c.recordHandlerResultTrajectory(ctx, result)
 		c.logger.Error("Failed to handle tool result", "error", err, "loop_id", loopID)
 		return
 	}
@@ -1613,7 +1670,7 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 
 	// Publish results, persist state, and handle terminal states (StopLoop).
 	// persistHandlerResult covers publishResults + persistLoopState for all states,
-	// plus finalizeTrajectory, persistCompletionState, and writeTrajectoryToGraph
+	// plus finalization and completion-state persistence
 	// when the loop reaches a terminal state.
 	c.persistHandlerResult(ctx, result)
 }
@@ -1654,7 +1711,11 @@ func (c *Component) publishContextEvent(ctx context.Context, event agentic.Conte
 		return
 	}
 
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.context.compaction", event.LoopID)
+	if err != nil {
+		c.logger.Error("Failed to resolve context event subject", "error", err)
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		c.logger.Error("Failed to publish context event", "error", err, "subject", subject)
 	}
@@ -1783,83 +1844,42 @@ func (c *Component) persistLoopState(ctx context.Context, loopID string) {
 	}
 }
 
-// writeTrajectoryToGraph reads the trajectory from the in-memory TrajectoryManager,
-// stores step content in ObjectStore, and emits graph triples for each step.
-func (c *Component) writeTrajectoryToGraph(ctx context.Context, loopID string) {
-	if c.graphWriter == nil {
-		return
-	}
-	traj, err := c.handler.trajectoryManager.GetTrajectory(loopID)
-	if err != nil {
-		c.logger.Debug("graph_writer: trajectory not found for graph emission",
-			"loop_id", loopID, "error", err)
-		return
-	}
-	c.graphWriter.WriteTrajectorySteps(ctx, loopID, &traj)
-}
-
-// finalizeTrajectory reads the trajectory from the in-memory TrajectoryManager,
-// marks it complete, and caches it for post-completion queries.
-func (c *Component) finalizeTrajectory(_ context.Context, loopID string, state agentic.LoopState) {
-	traj, err := c.handler.trajectoryManager.GetTrajectory(loopID)
-	if err != nil {
-		c.logger.Debug("finalizeTrajectory: trajectory not found", "loop_id", loopID)
-		return
-	}
-	if state == agentic.LoopStateComplete {
-		traj.Complete("complete")
-	} else {
-		traj.Complete("failed")
-	}
-	if c.trajectoryCache != nil {
-		if _, setErr := c.trajectoryCache.Set(loopID, &traj); setErr != nil {
-			c.logger.Warn("Failed to cache finalized trajectory", "loop_id", loopID, "error", setErr)
-		}
-	}
-}
-
 // handleTrajectoryQuery handles NATS request/reply for trajectory queries.
-// Serves from TTL cache for recently completed loops, or from the in-memory
-// TrajectoryManager for active loops.
-func (c *Component) handleTrajectoryQuery(_ context.Context, data []byte) ([]byte, error) {
-	var req struct {
-		LoopID string `json:"loopId"`
-		Limit  int    `json:"limit,omitempty"`
+// The immutable KV fact log is the only authority; process memory and graph
+// state are never consulted.
+func (c *Component) handleTrajectoryQuery(ctx context.Context, data []byte) ([]byte, error) {
+	maxPayload, err := c.natsClient.MaxPayload()
+	if err != nil {
+		return nil, errs.Classified(errs.ErrorTransient, fmt.Errorf("observe NATS max payload: %w", err))
 	}
-	// Split unmarshal vs missing-loopId per Phase 3 reviewer R3 — both
-	// classify Invalid but log lines should distinguish them. errs.Classified
-	// preserves the historic "loopId required" / "trajectory not found: ..."
-	// wire body shape for downstream sniffers per gh#93 dual-encoding.
-	if err := json.Unmarshal(data, &req); err != nil {
-		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("loopId required: %w", err))
-	}
-	if req.LoopID == "" {
-		return nil, errs.Classified(errs.ErrorInvalid, errors.New("loopId required"))
+	return c.handleTrajectoryQueryWithMaxPayload(ctx, data, maxPayload)
+}
+
+func (c *Component) handleTrajectoryQueryWithMaxPayload(
+	ctx context.Context,
+	data []byte,
+	maxPayload int64,
+) ([]byte, error) {
+	req, err := decodeTrajectoryQueryRequest(data)
+	if err != nil {
+		return nil, err
 	}
 
-	// Try cache first (finalized trajectories).
-	var traj *agentic.Trajectory
-	if c.trajectoryCache != nil {
-		traj, _ = c.trajectoryCache.Get(req.LoopID)
+	if c.trajectoryReader == nil {
+		return nil, errs.Classified(errs.ErrorTransient, errors.New("trajectory fact storage unavailable"))
 	}
-
-	// Fall back to in-memory TrajectoryManager (active loops).
-	if traj == nil {
-		t, err := c.handler.trajectoryManager.GetTrajectory(req.LoopID)
-		if err != nil {
-			// "Not found" classifies as Invalid at the wire boundary
-			// per gh#93 — HTTP semantics (404) belong at the gateway.
-			return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("trajectory not found: %w", err))
+	response, err := c.trajectoryReader.read(ctx, req, maxPayload)
+	if errors.Is(err, errTrajectoryNotFound) {
+		return nil, errs.Classified(errs.ErrorInvalid, fmt.Errorf("trajectory not found: %w", err))
+	}
+	if err != nil {
+		var classified *errs.ClassifiedError
+		if errors.As(err, &classified) {
+			return nil, err
 		}
-		traj = &t
+		return nil, errs.Classified(errs.ErrorTransient, err)
 	}
-
-	if req.Limit > 0 && len(traj.Steps) > req.Limit {
-		limited := *traj
-		limited.Steps = limited.Steps[:req.Limit]
-		return json.Marshal(&limited)
-	}
-	return json.Marshal(traj)
+	return json.Marshal(response)
 }
 
 // findLoopIDForRequest finds the loop ID associated with a request ID,
@@ -1962,6 +1982,8 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		RunID:        entity.RunID,
 		RunEntityID:  c.handler.resolveRunEntityID(entity.RunID),
 	}
+	c.recordTerminalObservation(ctx, loopID, agentic.TrajectoryStatusCancelled, "",
+		trajectoryTerminalEvidence{Loop: entity, Cancelled: &completion})
 
 	completionMsg := message.NewBaseMessage(completion.Schema(), &completion, "agentic-loop")
 	completionData, err := json.Marshal(completionMsg)
@@ -1972,7 +1994,11 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 		return
 	}
 
-	subject := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
+	subject, err := component.ResolveSubject(c.config.Ports.Outputs, "agent.complete", loopID)
+	if err != nil {
+		c.logger.Error("Failed to resolve completion subject", slog.String("error", err.Error()))
+		return
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, completionData); err != nil {
 		c.logger.Error("Failed to publish completion",
 			slog.String("error", err.Error()),
@@ -1987,10 +2013,6 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 
 	// Persist cancellation to KV so watchers detect it
 	c.persistCancellationState(ctx, loopID, &completion)
-
-	c.finalizeTrajectory(ctx, loopID, agentic.LoopStateCancelled)
-	c.writeTrajectoryToGraph(ctx, loopID)
-
 	c.logger.Info("Loop cancelled",
 		slog.String("loop_id", loopID),
 		slog.String("cancelled_by", signal.UserID))

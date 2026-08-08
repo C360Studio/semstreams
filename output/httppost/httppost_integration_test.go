@@ -89,7 +89,7 @@ func TestIntegration_BasicHTTPPost(t *testing.T) {
 	config := httppost.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.httppost.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.httppost.input"}, Required: true},
 			},
 		},
 		URL:         server.URL,
@@ -183,7 +183,7 @@ func TestIntegration_CustomHeaders(t *testing.T) {
 	config := httppost.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.httppost.headers", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.httppost.headers"}, Required: true},
 			},
 		},
 		URL: server.URL,
@@ -266,7 +266,7 @@ func TestIntegration_RetryOnFailure(t *testing.T) {
 	config := httppost.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.httppost.retry", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.httppost.retry"}, Required: true},
 			},
 		},
 		URL:         server.URL,
@@ -351,7 +351,7 @@ func TestIntegration_StatusCodeValidation(t *testing.T) {
 			config := httppost.Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "input", Type: "nats", Subject: tt.subject, Required: true},
+						{Name: "input", Config: component.NATSPort{Subject: tt.subject}, Required: true},
 					},
 				},
 				URL:         server.URL,
@@ -438,8 +438,8 @@ func TestIntegration_MultipleSubjects(t *testing.T) {
 	config := httppost.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input1", Type: "nats", Subject: "test.httppost.multi.1", Required: true},
-				{Name: "input2", Type: "nats", Subject: "test.httppost.multi.2", Required: true},
+				{Name: "input1", Config: component.NATSPort{Subject: "test.httppost.multi.1"}, Required: true},
+				{Name: "input2", Config: component.NATSPort{Subject: "test.httppost.multi.2"}, Required: true},
 			},
 		},
 		URL:         server.URL,

@@ -44,15 +44,15 @@ func TestIntegration_CancelMidExecution_NoOrphanToolCalls(t *testing.T) {
 	config := agenticloop.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "agent.task", Type: "jetstream", Subject: "agent.task.*", StreamName: "AGENT", Required: true},
-				{Name: "agent.response", Type: "jetstream", Subject: "agent.response.>", StreamName: "AGENT"},
-				{Name: "tool.result", Type: "jetstream", Subject: "tool.result.>", StreamName: "AGENT"},
-				{Name: "agent.signal", Type: "jetstream", Subject: "agent.signal.>", StreamName: "AGENT"},
+				{Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true},
+				{Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}}},
+				{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.>"}}},
+				{Name: "agent.signal", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.signal.>"}}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "agent.request", Type: "jetstream", Subject: "agent.request.*", StreamName: "AGENT"},
-				{Name: "tool.execute", Type: "jetstream", Subject: "tool.execute.*", StreamName: "AGENT"},
-				{Name: "agent.complete", Type: "jetstream", Subject: "agent.complete.*", StreamName: "AGENT"},
+				{Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}}},
+				{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.*"}}},
+				{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}}},
 			},
 		},
 		MaxIterations:        10,

@@ -77,8 +77,7 @@ same subject. Source identity is carried by the entity IDs, not the transport la
       "ports": {
         "outputs": [{
           "name": "federated_entities",
-          "type": "jetstream",
-          "subject": "entity.federated"
+          "config": {"kind":"jetstream","subjects":["entity.federated"]}
         }]
       }
     }
@@ -89,8 +88,7 @@ same subject. Source identity is carried by the entity IDs, not the transport la
       "ports": {
         "inputs": [{
           "name": "entity_stream",
-          "type": "jetstream",
-          "subject": "entity.>"
+          "config": {"kind":"jetstream","subjects":["entity.>"]}
         }]
       }
     }
@@ -117,8 +115,7 @@ Each external source gets its own WebSocket input on a separate port and subject
       "ports": {
         "outputs": [{
           "name": "alpha_entities",
-          "type": "jetstream",
-          "subject": "entity.federated.alpha"
+          "config": {"kind":"jetstream","subjects":["entity.federated.alpha"]}
         }]
       }
     }
@@ -132,8 +129,7 @@ Each external source gets its own WebSocket input on a separate port and subject
       "ports": {
         "outputs": [{
           "name": "beta_entities",
-          "type": "jetstream",
-          "subject": "entity.federated.beta"
+          "config": {"kind":"jetstream","subjects":["entity.federated.beta"]}
         }]
       }
     }

@@ -1,7 +1,6 @@
 package agenticloop
 
 import (
-	"context"
 	"fmt"
 	"sync"
 
@@ -9,21 +8,20 @@ import (
 	"github.com/c360studio/semstreams/pkg/errs"
 )
 
-// TrajectoryManager manages trajectory capture and persistence
-type TrajectoryManager struct {
+// trajectoryManager holds transient detail for active-loop execution mechanics.
+// It is not durable state or a trajectory query authority.
+type trajectoryManager struct {
 	trajectories map[string]*agentic.Trajectory
 	mu           sync.RWMutex
 }
 
-// NewTrajectoryManager creates a new TrajectoryManager
-func NewTrajectoryManager() *TrajectoryManager {
-	return &TrajectoryManager{
+func newTrajectoryManager() *trajectoryManager {
+	return &trajectoryManager{
 		trajectories: make(map[string]*agentic.Trajectory),
 	}
 }
 
-// StartTrajectory starts a new trajectory for a loop
-func (m *TrajectoryManager) StartTrajectory(loopID string) (agentic.Trajectory, error) {
+func (m *trajectoryManager) startTrajectory(loopID string) (agentic.Trajectory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -33,8 +31,7 @@ func (m *TrajectoryManager) StartTrajectory(loopID string) (agentic.Trajectory, 
 	return traj, nil
 }
 
-// AddStep adds a step to a trajectory
-func (m *TrajectoryManager) AddStep(loopID string, step agentic.TrajectoryStep) (agentic.Trajectory, error) {
+func (m *trajectoryManager) addStep(loopID string, step agentic.TrajectoryStep) (agentic.Trajectory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -48,8 +45,7 @@ func (m *TrajectoryManager) AddStep(loopID string, step agentic.TrajectoryStep) 
 	return *traj, nil
 }
 
-// CompleteTrajectory marks a trajectory as complete
-func (m *TrajectoryManager) CompleteTrajectory(loopID, outcome string) (agentic.Trajectory, error) {
+func (m *trajectoryManager) completeTrajectory(loopID, outcome string) (agentic.Trajectory, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -63,8 +59,7 @@ func (m *TrajectoryManager) CompleteTrajectory(loopID, outcome string) (agentic.
 	return *traj, nil
 }
 
-// GetTrajectory retrieves a trajectory by loop ID
-func (m *TrajectoryManager) GetTrajectory(loopID string) (agentic.Trajectory, error) {
+func (m *trajectoryManager) getTrajectory(loopID string) (agentic.Trajectory, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -74,19 +69,4 @@ func (m *TrajectoryManager) GetTrajectory(loopID string) (agentic.Trajectory, er
 	}
 
 	return *traj, nil
-}
-
-// DeleteTrajectory removes an uncommitted trajectory during loop-creation
-// rollback. It performs no persistence or publication.
-func (m *TrajectoryManager) DeleteTrajectory(loopID string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.trajectories, loopID)
-}
-
-// SaveTrajectory saves a trajectory to KV storage
-func (m *TrajectoryManager) SaveTrajectory(_ context.Context, _ agentic.Trajectory) error {
-	// In unit tests with mock KV, this is a no-op
-	// Integration tests will implement actual KV persistence
-	return nil
 }

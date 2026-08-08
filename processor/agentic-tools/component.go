@@ -28,8 +28,10 @@ var agenticToolsSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{})
 
 // Component implements the agentic-tools processor
 type Component struct {
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 	// registry is this component's private executor registry —
 	// populated via RegisterToolExecutor at construction time and
 	// dispatched local-first.
@@ -73,28 +75,48 @@ type consumerInfo struct {
 
 // NewComponent creates a new agentic-tools processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	var config Config
-	if err := json.Unmarshal(rawConfig, &config); err != nil {
-		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
-	}
-
-	// Use default config if ports not set
-	if config.Ports == nil {
-		config = DefaultConfig()
-		// Re-unmarshal to get user-provided values
+	defaults := DefaultConfig()
+	config := DefaultConfig()
+	if len(rawConfig) > 0 {
 		if err := json.Unmarshal(rawConfig, &config); err != nil {
 			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 		}
 	}
+	if config.Ports == nil {
+		config.Ports = defaults.Ports
+	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "validate config")
 	}
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve input port")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
 
 	comp := &Component{
 		name:       "agentic-tools",
 		config:     config,
+		inputs:     inputs,
+		outputs:    outputs,
 		registry:   NewExecutorRegistry(),
 		shared:     deps.ToolRegistry,
 		decoder:    message.NewDecoder(deps.PayloadRegistry),
@@ -138,16 +160,14 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Set up consumers for input ports
-	for _, port := range c.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
-
-		// Only set up JetStream consumers for jetstream ports
-		// Plain NATS subscriptions are handled separately below
-		if port.Type == "jetstream" {
+		if facts.Kind() == component.PortKindJetStream {
 			if err := c.setupConsumer(ctx, port); err != nil {
-				return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", port.Subject))
+				return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", port.Name))
 			}
 		}
 	}
@@ -158,10 +178,14 @@ func (c *Component) Start(ctx context.Context) error {
 	// would capture the request/reply before the core NATS handler responds
 	// (e.g., override to "discovery.tool.list").
 	toolListSubject := "tool.list"
-	for _, port := range c.config.Ports.Inputs {
+	for _, port := range c.inputs {
 		if port.Name == "tool.list" {
-			if port.Subject != "" {
-				toolListSubject = port.Subject
+			facts, factsErr := port.Facts()
+			if factsErr != nil {
+				return factsErr
+			}
+			if subjects := facts.NATSSubjects(); len(subjects) == 1 {
+				toolListSubject = subjects[0]
 			}
 			break
 		}
@@ -187,15 +211,17 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
-func (c *Component) setupConsumer(ctx context.Context, port component.PortDefinition) error {
-	// Determine stream name
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = c.config.StreamName
+func (c *Component) setupConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-	if streamName == "" {
-		streamName = "AGENT"
+	stream, ok := facts.Stream()
+	if !ok || len(stream.Subjects()) != 1 {
+		return fmt.Errorf("port %s must declare one JetStream subject", port.Name)
 	}
+	streamName := stream.Name()
+	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -203,7 +229,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	}
 
 	// Create durable consumer name (with optional suffix for uniqueness in tests)
-	consumerName := fmt.Sprintf("agentic-tools-%s", sanitizeSubject(port.Subject))
+	consumerName := fmt.Sprintf("agentic-tools-%s", sanitizeSubject(subject))
 	if c.config.ConsumerNameSuffix != "" {
 		consumerName = consumerName + "-" + c.config.ConsumerNameSuffix
 	}
@@ -211,11 +237,14 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	c.logger.Info("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
 	// Defaults to "new" - only process new tool calls, don't replay old ones
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "Component", "setupConsumer", "resolve consumer config")
+	}
 
 	// Per-component defaults preserved as fallbacks so zero-config
 	// deployments behave identically to pre-port-config builds. The 5m
@@ -238,7 +267,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		// Honor consumerCfg.MaxDeliver — was hardcoded to 3 even when
@@ -261,7 +290,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	// "always ack on completion" semantics. A future PR can differentiate
 	// success/failure semantics by returning err on tool-execution
 	// failure, but that's a behaviour change beyond this PR's scope.
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				c.handleToolCall(workCtx, msg.Data())
@@ -282,7 +311,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	})
 
 	c.logger.Info("Subscribed to tool calls (JetStream)",
-		"subject", port.Subject,
+		"subject", subject,
 		"stream", streamName,
 		"consumer", consumerName)
 	return nil
@@ -712,19 +741,8 @@ func backoffFor(attempt int, policy RetryPolicy) time.Duration {
 
 // publishResult publishes a tool result to JetStream.
 //
-// Uses component.ResolveSubject with a default-subject fallback so that an
-// empty Ports.Outputs slice (or a config that overrides Outputs without
-// specifying tool.result) still publishes to the canonical
-// "tool.result.<call_id>" subject instead of silently dropping the
-// message. Mirrors agentic-model's publishResponse pattern
-// (processor/agentic-model/component.go:854) — the framework precedent
-// is "outputs always go somewhere; defaults apply when unconfigured."
-//
-// Pre-fix bug: a config that overrode Ports without an Outputs entry
-// (or set outputs:[]) caused this loop's body to never execute, so
-// every tool result vanished with no log, no metric, no error. semspec
-// hit this 2026-05-08; agentic-model dodged the same shape because of
-// its ResolveSubject fallback.
+// The constructor merges and resolves the required tool.result declaration;
+// publication fails closed if that declaration is absent or malformed.
 func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult) error {
 	resultMsg := message.NewBaseMessage(result.Schema(), &result, "agentic-tools")
 	data, err := json.Marshal(resultMsg)
@@ -732,17 +750,18 @@ func (c *Component) publishResult(ctx context.Context, result agentic.ToolResult
 		return errs.Wrap(err, "Component", "publishResult", "marshal result")
 	}
 
-	subject := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.CallID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "tool.result", result.CallID)
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "publishResult", "resolve output subject")
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		return errs.WrapTransient(err, "Component", "publishResult", fmt.Sprintf("publish to %s", subject))
 	}
 	return nil
 }
 
-// outputPortDefs returns the configured output port definitions slice, or
-// nil when Ports is unset. Lets ResolveSubject fall back gracefully to
-// portName + "." + suffix for test configs without port wiring. Mirrors
-// the agentic-model helper of the same name.
+// outputPortDefs returns the effective canonical output declarations used by
+// publishResult to resolve the required tool.result subject.
 func (c *Component) outputPortDefs() []component.PortDefinition {
 	if c.config.Ports == nil {
 		return nil
@@ -893,45 +912,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Inputs))
-	for i, portDef := range c.config.Ports.Inputs {
-		port := component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionInput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-		}
-		// Use JetStreamPort for jetstream type ports, NATSPort for others (e.g., request/reply)
-		if portDef.Type == "jetstream" {
-			port.Config = component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			}
-		} else {
-			port.Config = component.NATSPort{
-				Subject: portDef.Subject,
-			}
-		}
-		ports[i] = port
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns configured output port definitions
 func (c *Component) OutputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Outputs))
-	for i, portDef := range c.config.Ports.Outputs {
-		ports[i] = component.BuildPortFromDefinition(portDef, component.DirectionOutput)
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema

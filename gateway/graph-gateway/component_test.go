@@ -30,14 +30,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 		{
 			name: "valid minimal config",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:       validTestPortConfig(),
 				GraphQLPath: "/graphql",
 				MCPPath:     "/mcp",
 				BindAddress: "localhost:8080",
@@ -46,14 +39,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 		{
 			name: "valid full config with playground",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:            validTestPortConfig(),
 				GraphQLPath:      "/graphql",
 				MCPPath:          "/mcp",
 				BindAddress:      "localhost:8080",
@@ -87,14 +73,13 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name: "empty inputs",
+			name: "legacy input",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports: func() *component.PortConfig {
+					ports := validTestPortConfig()
+					ports.Inputs = []component.PortDefinition{{Name: "http", Config: component.NetworkPort{Protocol: "http", Host: "localhost", Port: 8080}}}
+					return ports
+				}(),
 				GraphQLPath: "/graphql",
 				MCPPath:     "/mcp",
 				BindAddress: "localhost:8080",
@@ -104,12 +89,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 		{
 			name: "empty outputs",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{},
-				},
+				Ports:       &component.PortConfig{},
 				GraphQLPath: "/graphql",
 				MCPPath:     "/mcp",
 				BindAddress: "localhost:8080",
@@ -139,14 +119,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 		{
 			name: "empty GraphQL path",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:       validTestPortConfig(),
 				GraphQLPath: "", // Empty - invalid
 				MCPPath:     "/mcp",
 				BindAddress: "localhost:8080",
@@ -156,14 +129,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 		{
 			name: "empty MCP path",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:       validTestPortConfig(),
 				GraphQLPath: "/graphql",
 				MCPPath:     "", // Empty - invalid
 				BindAddress: "localhost:8080",
@@ -173,35 +139,21 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 		{
 			name: "empty bind address with standalone server",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:            validTestPortConfig(),
 				GraphQLPath:      "/graphql",
 				MCPPath:          "/mcp",
 				StandaloneServer: true,
-				BindAddress:      "", // Empty - invalid when standalone
+				BindAddress:      "",
 			},
 			wantErr: true,
 		},
 		{
 			name: "empty bind address without standalone server",
 			config: Config{
-				Ports: &component.PortConfig{
-					Inputs: []component.PortDefinition{
-						{Name: "http", Type: "http", Subject: "/graphql"},
-					},
-					Outputs: []component.PortDefinition{
-						{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-					},
-				},
+				Ports:       validTestPortConfig(),
 				GraphQLPath: "/graphql",
 				MCPPath:     "/mcp",
-				BindAddress: "", // OK when not standalone
+				BindAddress: "",
 			},
 			wantErr: false,
 		},
@@ -221,14 +173,7 @@ func TestConfig_Validate_InvalidPaths(t *testing.T) {
 
 func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
-		Ports: &component.PortConfig{
-			Inputs: []component.PortDefinition{
-				{Name: "http", Type: "http", Subject: "/graphql"},
-			},
-			Outputs: []component.PortDefinition{
-				{Name: "queries", Type: "nats-request", Subject: "graph.query.*"},
-			},
-		},
+		Ports: validTestPortConfig(),
 	}
 
 	config.ApplyDefaults()
@@ -255,8 +200,8 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 
 	// Verify expected defaults
 	assert.NotNil(t, config.Ports)
-	assert.NotEmpty(t, config.Ports.Inputs)
-	assert.NotEmpty(t, config.Ports.Outputs)
+	assert.Empty(t, config.Ports.Inputs)
+	assert.Len(t, config.Ports.Outputs, 3)
 	assert.Equal(t, "/graphql", config.GraphQLPath)
 	assert.Equal(t, "/mcp", config.MCPPath)
 	assert.Equal(t, "localhost:8080", config.BindAddress)
@@ -279,26 +224,13 @@ func TestComponent_Meta_ReturnsCorrectMetadata(t *testing.T) {
 	assert.NotEmpty(t, meta.Version)
 }
 
-func TestComponent_InputPorts_ReturnsHTTPPort(t *testing.T) {
+func TestComponent_InputPorts_ReturnsNoCompositionPort(t *testing.T) {
 	comp := createTestComponent(t)
 	require.NoError(t, comp.Initialize()) // Ports are populated during Initialize
 
 	ports := comp.InputPorts()
 
-	require.NotEmpty(t, ports, "should have at least one input port")
-
-	// Verify HTTP input port exists
-	hasHTTP := false
-	for _, port := range ports {
-		assert.NotEmpty(t, port.Name)
-		assert.Equal(t, component.DirectionInput, port.Direction)
-
-		if port.Name == "http" {
-			hasHTTP = true
-		}
-	}
-
-	assert.True(t, hasHTTP, "should have HTTP input port")
+	assert.Empty(t, ports, "shared-mux gateway owns no composition input")
 }
 
 func TestComponent_OutputPorts_ReturnsNATSRequestPort(t *testing.T) {
@@ -309,7 +241,7 @@ func TestComponent_OutputPorts_ReturnsNATSRequestPort(t *testing.T) {
 
 	require.NotEmpty(t, ports, "should have at least one output port")
 
-	// Verify the gateway exposes only its query request port.
+	// Verify the gateway exposes all three query request families.
 	subjects := make(map[string]bool)
 	for _, port := range ports {
 		assert.NotEmpty(t, port.Name)
@@ -321,6 +253,8 @@ func TestComponent_OutputPorts_ReturnsNATSRequestPort(t *testing.T) {
 	}
 
 	assert.True(t, subjects["graph.query.*"], "should have graph.query.* output port")
+	assert.True(t, subjects["graph.index.query.*"], "should have graph.index.query.* output port")
+	assert.True(t, subjects["agentic.query.*"], "should have agentic.query.* output port")
 	assert.NotContains(t, subjects, "graph.mutation.*", "graph-gateway is not a mutation requester")
 }
 
@@ -400,7 +334,7 @@ func TestComponent_Initialize_Success(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify ports are initialized
-	assert.NotEmpty(t, comp.InputPorts())
+	assert.Empty(t, comp.InputPorts())
 	assert.NotEmpty(t, comp.OutputPorts())
 }
 
@@ -661,7 +595,7 @@ func TestCreateGraphGateway_ValidConfig(t *testing.T) {
 }
 
 func TestCreateGraphGateway_EmptyConfig(t *testing.T) {
-	// Empty config should use defaults
+	// An explicit empty object is a configured component with no port contract.
 	emptyJSON := []byte(`{}`)
 
 	natsClient, err := natsclient.NewClient("nats://localhost:4222")
@@ -673,8 +607,8 @@ func TestCreateGraphGateway_EmptyConfig(t *testing.T) {
 
 	comp, err := CreateGraphGateway(emptyJSON, deps)
 
-	assert.NoError(t, err)
-	assert.NotNil(t, comp)
+	assert.Error(t, err)
+	assert.Nil(t, comp)
 }
 
 func TestCreateGraphGateway_InvalidConfig(t *testing.T) {
@@ -711,14 +645,14 @@ func TestCreateGraphGateway_MissingDependencies(t *testing.T) {
 }
 
 func TestCreateGraphGateway_PartialConfig(t *testing.T) {
-	// Partial config with only some fields - should apply defaults for missing fields
+	// The breaking port contract is not auto-filled around unrelated declarations.
 	partialJSON := []byte(`{
 		"ports": {
 			"inputs": [
-				{"name": "http", "type": "http", "subject": "/graphql"}
+				{"name": "http", "config": {"kind": "network", "protocol": "http", "host": "localhost", "port": 8080}}
 			],
 			"outputs": [
-				{"name": "audit", "type": "nats", "subject": "audit.events"}
+				{"name": "audit", "config": {"kind": "nats", "subject": "audit.events"}}
 			]
 		},
 		"graphql_path": "/custom-graphql"
@@ -733,22 +667,8 @@ func TestCreateGraphGateway_PartialConfig(t *testing.T) {
 
 	comp, err := CreateGraphGateway(partialJSON, deps)
 
-	assert.NoError(t, err)
-	assert.NotNil(t, comp)
-
-	// Verify partial config was used and defaults applied
-	component := comp.(*Component)
-	assert.Equal(t, "/custom-graphql", component.config.GraphQLPath, "should use provided GraphQL path")
-	assert.Equal(t, "/mcp", component.config.MCPPath, "should apply default MCP path")
-	assert.Equal(t, "localhost:8080", component.config.BindAddress, "should apply default bind address")
-
-	// Verify queries was injected while the unrelated configured output survived.
-	outputNames := make(map[string]bool)
-	for _, p := range component.config.Ports.Outputs {
-		outputNames[p.Name] = true
-	}
-	assert.True(t, outputNames["queries"], "ensureDefaults should inject queries port when missing")
-	assert.True(t, outputNames["audit"], "ensureDefaults should preserve existing unrelated outputs")
+	assert.Error(t, err)
+	assert.Nil(t, comp)
 }
 
 func TestRegister_AddsToRegistry(t *testing.T) {
@@ -926,4 +846,10 @@ func createTestComponent(t *testing.T) *Component {
 	require.NoError(t, err)
 
 	return comp.(*Component)
+}
+
+func validTestPortConfig() *component.PortConfig {
+	return &component.PortConfig{
+		Outputs: canonicalQueryOutputs("graph.query.*", "graph.index.query.*", "agentic.query.*"),
+	}
 }

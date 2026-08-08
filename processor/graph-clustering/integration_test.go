@@ -33,10 +33,10 @@ func TestIntegration_ClusteringFlow(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",  // Short interval for testing
@@ -236,10 +236,10 @@ func TestIntegration_ClusteringHierarchy(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -418,10 +418,10 @@ func TestIntegration_ClusteringMinSize(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -590,10 +590,10 @@ func TestIntegration_ClusteringMetrics(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -705,10 +705,10 @@ func TestIntegration_LLMEnhancementWorkerStarts(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -806,10 +806,10 @@ func TestIntegration_LLMEnhancementDisabled(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -880,10 +880,10 @@ func TestIntegration_FreshStartOmitsRetiredStructuralBucket(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -1017,10 +1017,10 @@ func TestIntegration_AnomalyDetectionEnabled(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr:   "1h", // drive the production cycle synchronously below
@@ -1173,10 +1173,10 @@ func TestIntegration_AnomalyDisabledByDefault(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",
@@ -1254,10 +1254,10 @@ func TestIntegration_EntityCommunityLookup(t *testing.T) {
 		AllowUngatedReads: true, // gh#474 Codex #4: standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr: "1s",

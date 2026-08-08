@@ -68,6 +68,9 @@ services:
     container_name: semstreams-tiered-seminstruct-fast
     profiles:
       - semantic
+    depends_on:
+      semembed:
+        condition: service_healthy
     ports:
       - "38084:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
     environment:
@@ -101,6 +104,9 @@ services:
     container_name: semstreams-tiered-seminstruct-mid-answer
     profiles:
       - semantic
+    depends_on:
+      semembed:
+        condition: service_healthy
     ports:
       - "38085:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
     environment:
@@ -134,6 +140,9 @@ services:
     container_name: semstreams-tiered-seminstruct-mid-summary
     profiles:
       - semantic
+    depends_on:
+      semembed:
+        condition: service_healthy
     ports:
       - "38086:8083" # OpenAI-compatible /v1/chat/completions (3xxxx range)
     environment:
@@ -315,6 +324,10 @@ services:
       - SEMSTREAMS_LOG_LEVEL=debug
       - SEMSTREAMS_DEBUG=${SEMSTREAMS_DEBUG:-false}
       - SEMSTREAMS_DEBUG_PORT=6060
+      # Local semantic queries legitimately compose classifier, embedding,
+      # community reads, and answer synthesis. Keep the generic production
+      # default unchanged; this E2E profile observes the complete slow path.
+      - SEMSTREAMS_NATS_REQUEST_HANDLER_TIMEOUT=120s
     volumes:
       - ../../configs:/app/configs:ro
       - ../../testdata:/data/testdata:ro

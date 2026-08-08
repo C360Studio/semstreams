@@ -24,9 +24,8 @@ import (
 //
 //  1. the `graph.query.*` family is UNWRAPPED (the family gh#762 broke),
 //  2. the `graph.index.query.*` family is UNCHANGED (regression guard),
-//  3. `graph.query.prefix` is UNTOUCHED — PrefixQueryResponse is its own struct,
-//     not a QueryResponse[T], and keeps its own separate unwrap (regression
-//     guard).
+//  3. `graph.query.prefix` remains its own typed EntityPage rather than a
+//     QueryResponse[T] or a bare entity array (regression guard).
 //
 // Falsifiability: this stage is RED against a gateway that gates unwrapping on
 // the subject prefix, and green after detection lands. That was recorded before
@@ -47,9 +46,6 @@ type shapeProbe struct {
 	// forbidRepeatedDataHop — but a probe that finds none of its expected keys
 	// is querying something other than what it thinks.
 	expectKeys []string
-	// arrayShaped marks a field projected as a bare JSON array rather than an
-	// object (graph.query.prefix after its own unwrap).
-	arrayShaped bool
 }
 
 func gatewayShapeProbes() []shapeProbe {
@@ -73,14 +69,14 @@ func gatewayShapeProbes() []shapeProbe {
 			expectKeys: []string{"predicates"},
 		},
 		{
-			// (3) Regression guard: PrefixQueryResponse is NOT the query
-			// envelope and must not be claimed by detection. Its own unwrap
-			// still produces a bare entities array.
-			name:        "graph_query_prefix_untouched",
-			field:       "entitiesByPrefix",
-			query:       `query($prefix: String!) { entitiesByPrefix(prefix: $prefix) { id } }`,
-			variables:   map[string]any{"prefix": ""},
-			arrayShaped: true,
+			// (3) Regression guard: PrefixQueryResponse is NOT the generic
+			// query envelope. GraphQL projects its complete EntityPage so the
+			// continuation token remains available to callers.
+			name:       "graph_query_prefix_entity_page",
+			field:      "entitiesByPrefix",
+			query:      `query($prefix: String!) { entitiesByPrefix(prefix: $prefix) { entities { id } next_cursor } }`,
+			variables:  map[string]any{"prefix": ""},
+			expectKeys: []string{"entities"},
 		},
 	}
 }
@@ -186,18 +182,6 @@ func (s *TieredScenario) probeGatewayFieldShape(
 // shape ALSO makes the leaves reachable — one hop deeper — so a
 // reachability-only assertion cannot distinguish the defect from the fix.
 func assertProjectedShape(probe shapeProbe, projected json.RawMessage) error {
-	if probe.arrayShaped {
-		// SHAPE only, deliberately: an empty array passes. This is not a data
-		// assertion and must not be read as one — its job is that a removed or
-		// reordered prefix unwrap yields an OBJECT and turns this RED. Entity
-		// counts are asserted by the dedicated prefix stages.
-		var arr []json.RawMessage
-		if err := json.Unmarshal(projected, &arr); err != nil {
-			return fmt.Errorf("expected a bare array, got %q", truncateForError(projected))
-		}
-		return nil
-	}
-
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(projected, &fields); err != nil {
 		return fmt.Errorf("expected an object, got %q", truncateForError(projected))

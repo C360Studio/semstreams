@@ -1,15 +1,14 @@
-// Package portgrammarcontrol freezes the Foundation B migration population.
-// It is an internal release-control tool, not a framework port API.
+// Package portgrammarcontrol validates the retained Foundation B migration record.
+// It is internal test support, not a framework port API.
 package portgrammarcontrol
 
 import (
-	"crypto/sha256"
 	"encoding/csv"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -63,11 +62,6 @@ type Disposition struct {
 	Reason     string
 }
 
-// Population is a syntax-aware census of the Foundation B migration surface.
-type Population struct {
-	Items []WorkItem
-}
-
 // Plan combines the immutable worklist with its reviewed dispositions.
 type Plan struct {
 	Items        []WorkItem
@@ -102,7 +96,7 @@ func LoadPlan(root string) (*Plan, error) {
 	return plan, nil
 }
 
-// ValidateLegacyPhase verifies the accepted legacy population and classifications.
+// ValidateLegacyPhase verifies the accepted historical population and classifications.
 func (p *Plan) ValidateLegacyPhase() error {
 	configItems := p.ConfigItems()
 	adjudicated := 0
@@ -202,39 +196,6 @@ func (p *Plan) GoSourceCount() int {
 		set[item.Path+"#"+item.Enclosing] = struct{}{}
 	}
 	return len(set)
-}
-
-// ValidateAgainst compares the immutable worklist with a live repository census.
-func (p *Plan) ValidateAgainst(live *Population) error {
-	if live == nil {
-		return errors.New("nil live population")
-	}
-	want, err := indexItems(p.Items)
-	if err != nil {
-		return fmt.Errorf("frozen worklist: %w", err)
-	}
-	got, err := indexItems(live.Items)
-	if err != nil {
-		return fmt.Errorf("live census: %w", err)
-	}
-	if len(want) != len(got) {
-		return fmt.Errorf("work item count changed: frozen=%d live=%d", len(want), len(got))
-	}
-	for id, expected := range want {
-		actual, ok := got[id]
-		if !ok {
-			return fmt.Errorf("missing live work item %s", id)
-		}
-		if expected != actual {
-			return fmt.Errorf("work item changed %s: frozen=%+v live=%+v", id, expected, actual)
-		}
-	}
-	for id := range got {
-		if _, ok := want[id]; !ok {
-			return fmt.Errorf("extra live work item %s", id)
-		}
-	}
-	return nil
 }
 
 func indexItems(items []WorkItem) (map[string]WorkItem, error) {
@@ -413,11 +374,6 @@ func sortedKeys[V any](set map[string]V) []string {
 	return keys
 }
 
-func sha256Hex(data []byte) string {
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:])
-}
-
 func compactJSON(value any) (string, error) {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -468,4 +424,27 @@ func ensureJSONEOF(decoder *json.Decoder) error {
 		return errors.New("multiple JSON values")
 	}
 	return err
+}
+
+func parseListenSubject(subject string) (string, int, error) {
+	if subject == "" {
+		return "", 0, fmt.Errorf("blank listen subject")
+	}
+	value := subject
+	if strings.HasPrefix(value, ":") {
+		value = "0.0.0.0" + value
+	}
+	parsed, err := url.Parse("http://" + value)
+	if err != nil {
+		return "", 0, fmt.Errorf("parse listen subject %q: %w", subject, err)
+	}
+	port, err := strconv.Atoi(parsed.Port())
+	if err != nil || port < 1 || port > 65535 {
+		return "", 0, fmt.Errorf("invalid listen port in %q", subject)
+	}
+	host := parsed.Hostname()
+	if host == "" {
+		host = "0.0.0.0"
+	}
+	return host, port, nil
 }

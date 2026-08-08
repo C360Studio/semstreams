@@ -109,7 +109,7 @@ func RegisterPayloads(reg *payloadregistry.Registry) error {
 // This enables the "store once, reference everywhere" pattern where:
 //   - ObjectStore stores the full raw message
 //   - Graph processor receives semantic data plus storage reference
-//   - Components can retrieve full message via ObjectStore API if needed
+//   - Authorized components resolve the reference through StoreRegistry
 type StoredMessage struct {
 	// Semantic data from the original message
 	entityID string

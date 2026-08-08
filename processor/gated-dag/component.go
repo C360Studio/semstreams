@@ -41,6 +41,7 @@ type Component struct {
 	mgr        *lifecycle.Manager
 	metricsReg *metric.MetricsRegistry
 	logger     *slog.Logger
+	outputs    []component.Port
 
 	mu        sync.RWMutex
 	running   bool
@@ -65,12 +66,52 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (*Comp
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid gated-dag config: %w", err)
 	}
+	dispatchRetention := "limits"
+	if cfg.DispatchStreamRetention == "workqueue" {
+		dispatchRetention = "work_queue"
+	}
+	outputDefinitions := []component.PortDefinition{
+		{
+			Name:        "dispatch",
+			Required:    true,
+			Description: "Dispatch reference (unit entity ID) for a dispatchable unit",
+			Config: component.JetStreamPort{
+				StreamName:      cfg.DispatchStream,
+				Subjects:        []string{cfg.DispatchSubject},
+				Storage:         "file",
+				RetentionPolicy: dispatchRetention,
+			},
+		},
+		{
+			Name:     "graph_mutations",
+			Required: true,
+			Config: component.NATSRequestPort{
+				Subject: graphmutation.SubjectFamily,
+				Interface: &component.InterfaceContract{
+					Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion,
+				},
+			},
+		},
+	}
+	outputs := make([]component.Port, len(outputDefinitions))
+	for index, definition := range outputDefinitions {
+		output, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, fmt.Errorf("resolve gated-dag output port %q: %w", definition.Name, err)
+		}
+		outputs[index] = output
+	}
+	// The dispatch declaration is discovery/flow truth. Start remains the sole
+	// physical provisioner because its bounded work-queue policy also owns
+	// MaxBytes, discard, max-age, and deduplication settings that the generic
+	// port declaration cannot completely represent.
 	return &Component{
 		cfg:        cfg,
 		natsClient: deps.NATSClient,
 		mgr:        deps.LifecycleManager,
 		metricsReg: deps.MetricsRegistry,
 		logger:     deps.GetLoggerWithComponent(componentName),
+		outputs:    outputs,
 	}, nil
 }
 
@@ -271,30 +312,11 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns the input ports — none (re-eval rides the lifecycle Watch,
 // not a configured port).
-func (c *Component) InputPorts() []component.Port { return []component.Port{} }
+func (c *Component) InputPorts() []component.Port { return nil }
 
 // OutputPorts returns the dispatch subject and required graph mutation port.
 func (c *Component) OutputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "dispatch",
-			Direction:   component.DirectionOutput,
-			Required:    true,
-			Description: "Dispatch reference (unit entity ID) for a dispatchable unit",
-			Config:      component.NATSPort{Subject: c.cfg.DispatchSubject},
-		},
-		{
-			Name:      "graph_mutations",
-			Direction: component.DirectionOutput,
-			Required:  true,
-			Config: component.NATSRequestPort{
-				Subject: graphmutation.SubjectFamily,
-				Interface: &component.InterfaceContract{
-					Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion,
-				},
-			},
-		},
-	}
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema.

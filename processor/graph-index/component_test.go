@@ -242,13 +242,13 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
-						{Name: "incoming_index", Type: "kv-write", Subject: "INCOMING_INDEX"},
-						{Name: "alias_index", Type: "kv-write", Subject: "ALIAS_INDEX"},
-						{Name: "predicate_index", Type: "kv-write", Subject: "PREDICATE_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
+						{Name: "incoming_index", Config: component.KVWritePort{Bucket: "INCOMING_INDEX"}},
+						{Name: "alias_index", Config: component.KVWritePort{Bucket: "ALIAS_INDEX"}},
+						{Name: "predicate_index", Config: component.KVWritePort{Bucket: "PREDICATE_INDEX"}},
 					},
 				},
 			},
@@ -258,13 +258,13 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
-						{Name: "incoming_index", Type: "kv-write", Subject: "INCOMING_INDEX"},
-						{Name: "alias_index", Type: "kv-write", Subject: "ALIAS_INDEX"},
-						{Name: "predicate_index", Type: "kv-write", Subject: "PREDICATE_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
+						{Name: "incoming_index", Config: component.KVWritePort{Bucket: "INCOMING_INDEX"}},
+						{Name: "alias_index", Config: component.KVWritePort{Bucket: "ALIAS_INDEX"}},
+						{Name: "predicate_index", Config: component.KVWritePort{Bucket: "PREDICATE_INDEX"}},
 					},
 				},
 				Workers:   4,
@@ -300,7 +300,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
 					},
 				},
 			},
@@ -311,7 +311,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -323,10 +323,10 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
 						// Missing INCOMING_INDEX, ALIAS_INDEX, PREDICATE_INDEX
 					},
 				},
@@ -358,13 +358,13 @@ func TestConfig_Validate_InvalidWorkers(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
-						{Name: "incoming_index", Type: "kv-write", Subject: "INCOMING_INDEX"},
-						{Name: "alias_index", Type: "kv-write", Subject: "ALIAS_INDEX"},
-						{Name: "predicate_index", Type: "kv-write", Subject: "PREDICATE_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
+						{Name: "incoming_index", Config: component.KVWritePort{Bucket: "INCOMING_INDEX"}},
+						{Name: "alias_index", Config: component.KVWritePort{Bucket: "ALIAS_INDEX"}},
+						{Name: "predicate_index", Config: component.KVWritePort{Bucket: "PREDICATE_INDEX"}},
 					},
 				},
 				Workers: -1,
@@ -384,13 +384,13 @@ func TestConfig_Validate_InvalidWorkers(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
-						{Name: "incoming_index", Type: "kv-write", Subject: "INCOMING_INDEX"},
-						{Name: "alias_index", Type: "kv-write", Subject: "ALIAS_INDEX"},
-						{Name: "predicate_index", Type: "kv-write", Subject: "PREDICATE_INDEX"},
+						{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
+						{Name: "incoming_index", Config: component.KVWritePort{Bucket: "INCOMING_INDEX"}},
+						{Name: "alias_index", Config: component.KVWritePort{Bucket: "ALIAS_INDEX"}},
+						{Name: "predicate_index", Config: component.KVWritePort{Bucket: "PREDICATE_INDEX"}},
 					},
 				},
 				BatchSize: -10,
@@ -415,13 +415,13 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "outgoing_index", Type: "kv-write", Subject: "OUTGOING_INDEX"},
-				{Name: "incoming_index", Type: "kv-write", Subject: "INCOMING_INDEX"},
-				{Name: "alias_index", Type: "kv-write", Subject: "ALIAS_INDEX"},
-				{Name: "predicate_index", Type: "kv-write", Subject: "PREDICATE_INDEX"},
+				{Name: "outgoing_index", Config: component.KVWritePort{Bucket: "OUTGOING_INDEX"}},
+				{Name: "incoming_index", Config: component.KVWritePort{Bucket: "INCOMING_INDEX"}},
+				{Name: "alias_index", Config: component.KVWritePort{Bucket: "ALIAS_INDEX"}},
+				{Name: "predicate_index", Config: component.KVWritePort{Bucket: "PREDICATE_INDEX"}},
 			},
 		},
 	}
@@ -452,8 +452,12 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	assert.GreaterOrEqual(t, len(outputs), 4, "should have at least 4 output buckets")
 
 	buckets := make(map[string]bool)
-	for _, out := range outputs {
-		buckets[out.Subject] = true
+	for _, definition := range outputs {
+		port, resolveErr := definition.Resolve(component.DirectionOutput)
+		require.NoError(t, resolveErr)
+		facts, factsErr := port.Facts()
+		require.NoError(t, factsErr)
+		buckets[strings.TrimPrefix(facts.ResourceID(), "kv:")] = true
 	}
 
 	assert.True(t, buckets["OUTGOING_INDEX"], "should have OUTGOING_INDEX")
@@ -784,13 +788,13 @@ func TestCreateGraphIndex_PartialConfig(t *testing.T) {
 	partialJSON := []byte(`{
 		"ports": {
 			"inputs": [
-				{"name": "entity_watch", "type": "kv-watch", "subject": "ENTITY_STATES"}
+				{"name": "entity_watch", "config": {"kind": "kv-watch", "bucket": "ENTITY_STATES"}}
 			],
 			"outputs": [
-				{"name": "outgoing_index", "type": "kv-write", "subject": "OUTGOING_INDEX"},
-				{"name": "incoming_index", "type": "kv-write", "subject": "INCOMING_INDEX"},
-				{"name": "alias_index", "type": "kv-write", "subject": "ALIAS_INDEX"},
-				{"name": "predicate_index", "type": "kv-write", "subject": "PREDICATE_INDEX"}
+				{"name": "outgoing_index", "config": {"kind": "kv-write", "bucket": "OUTGOING_INDEX"}},
+				{"name": "incoming_index", "config": {"kind": "kv-write", "bucket": "INCOMING_INDEX"}},
+				{"name": "alias_index", "config": {"kind": "kv-write", "bucket": "ALIAS_INDEX"}},
+				{"name": "predicate_index", "config": {"kind": "kv-write", "bucket": "PREDICATE_INDEX"}}
 			]
 		}
 	}`)

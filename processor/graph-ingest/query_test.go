@@ -319,7 +319,7 @@ func TestComponent_HandleQueryPrefix_Success(t *testing.T) {
 			require.NoError(t, err)
 
 			// Call handler
-			responseJSON, err := comp.handleQueryPrefixNATS(ctx, requestJSON)
+			responseJSON, err := comp.handleQueryPrefixWithMaxPayload(ctx, requestJSON, 1<<20)
 			require.NoError(t, err)
 
 			// Parse response - should be entities envelope
@@ -382,7 +382,7 @@ func TestComponent_HandleQueryPrefix_ReturnsFullEntities(t *testing.T) {
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	responseJSON, err := comp.handleQueryPrefixNATS(ctx, requestJSON)
+	responseJSON, err := comp.handleQueryPrefixWithMaxPayload(ctx, requestJSON, 1<<20)
 	require.NoError(t, err)
 
 	// Parse response as entities envelope
@@ -411,7 +411,7 @@ func TestComponent_HandleQueryPrefix_InvalidRequest(t *testing.T) {
 	ctx := context.Background()
 
 	// Malformed JSON
-	_, err := comp.handleQueryPrefixNATS(ctx, []byte(`{invalid json}`))
+	_, err := comp.handleQueryPrefixWithMaxPayload(ctx, []byte(`{invalid json}`), 1<<20)
 	assert.Error(t, err, "should return error for invalid JSON")
 }
 
@@ -436,7 +436,7 @@ func TestComponent_HandleQueryPrefix_NoMatches(t *testing.T) {
 	requestJSON, err := json.Marshal(request)
 	require.NoError(t, err)
 
-	responseJSON, err := comp.handleQueryPrefixNATS(ctx, requestJSON)
+	responseJSON, err := comp.handleQueryPrefixWithMaxPayload(ctx, requestJSON, 1<<20)
 	require.NoError(t, err)
 
 	var resp struct {

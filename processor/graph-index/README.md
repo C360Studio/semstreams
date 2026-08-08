@@ -38,15 +38,14 @@ ENTITY_STATES ─────►│   graph-index   ├──► INCOMING_INDEX 
       "inputs": [
         {
           "name": "entity_watch",
-          "subject": "ENTITY_STATES",
-          "type": "kv-watch"
+          "config": {"kind":"kv-watch","bucket":"ENTITY_STATES"}
         }
       ],
       "outputs": [
-        {"name": "outgoing_index", "subject": "OUTGOING_INDEX", "type": "kv"},
-        {"name": "incoming_index", "subject": "INCOMING_INDEX", "type": "kv"},
-        {"name": "alias_index", "subject": "ALIAS_INDEX", "type": "kv"},
-        {"name": "predicate_index", "subject": "PREDICATE_INDEX", "type": "kv"}
+        {"name":"outgoing_index","config":{"kind":"kv-write","bucket":"OUTGOING_INDEX"}},
+        {"name":"incoming_index","config":{"kind":"kv-write","bucket":"INCOMING_INDEX"}},
+        {"name":"alias_index","config":{"kind":"kv-write","bucket":"ALIAS_INDEX"}},
+        {"name":"predicate_index","config":{"kind":"kv-write","bucket":"PREDICATE_INDEX"}}
       ]
     },
     "workers": 4,

@@ -88,15 +88,18 @@ func newMetrics(registry *metric.MetricsRegistry, name string) *Metrics {
 
 // Input implements a file reader that publishes lines to NATS
 type Input struct {
-	name       string
-	path       string
-	format     string
-	interval   time.Duration
-	loop       bool
-	subject    string
-	config     Config // Store full config for port type checking
-	natsClient *natsclient.Client
-	logger     *slog.Logger
+	name            string
+	path            string
+	format          string
+	interval        time.Duration
+	loop            bool
+	subject         string
+	config          Config // Store full config for port type checking
+	inputPorts      []component.Port
+	outputPorts     []component.Port
+	jetStreamOutput bool
+	natsClient      *natsclient.Client
+	logger          *slog.Logger
 
 	// Lifecycle management - use separate mutex for lifecycle operations
 	lifecycleMu sync.Mutex // Protects start/stop operations
@@ -152,13 +155,22 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate output ports
-	if c.Ports != nil {
-		for _, output := range c.Ports.Outputs {
-			if (output.Type == "nats" || output.Type == "jetstream") && output.Subject == "" {
-				return errs.WrapInvalid(errs.ErrMissingConfig, "Config", "Validate", "NATS output subject is required")
-			}
-		}
+	if c.Ports == nil || len(c.Ports.Outputs) != 1 {
+		return errs.WrapInvalid(errs.ErrMissingConfig, "Config", "Validate", "exactly one output port is required")
+	}
+	output, err := c.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		return errs.WrapInvalid(err, "Config", "Validate", "resolve output port")
+	}
+	facts, err := output.Facts()
+	if err != nil {
+		return errs.WrapInvalid(err, "Config", "Validate", "project output port facts")
+	}
+	if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate", "output port must be nats or jetstream")
+	}
+	if len(facts.NATSSubjects()) != 1 {
+		return errs.WrapInvalid(errs.ErrMissingConfig, "Config", "Validate", "output port must declare exactly one NATS subject")
 	}
 
 	return nil
@@ -174,30 +186,39 @@ func DefaultConfig() Config {
 }
 
 // getConfiguredPorts extracts port configuration
-func (c *Config) getConfiguredPorts() (path, subject string, interval time.Duration, loop bool) {
+func (c *Config) getConfiguredPorts() (path, subject string, interval time.Duration, loop bool, inputPorts, outputPorts []component.Port, jetStreamOutput bool, err error) {
 	path = c.Path
 
 	// Default interval
 	interval = 10 * time.Millisecond
 	if c.Interval != "" {
-		if d, err := time.ParseDuration(c.Interval); err == nil {
-			interval = d
+		interval, err = time.ParseDuration(c.Interval)
+		if err != nil {
+			return "", "", 0, false, nil, nil, false, err
 		}
 	}
 
 	loop = c.Loop
 
-	// Extract output subject from ports config
-	if c.Ports != nil {
-		for _, output := range c.Ports.Outputs {
-			if (output.Type == "nats" || output.Type == "jetstream") && output.Subject != "" {
-				subject = output.Subject
-				break
-			}
-		}
+	input, err := (component.PortDefinition{
+		Name: "file_source", Required: true,
+		Description: fmt.Sprintf("File source: %s", path),
+		Config:      component.FilePort{Path: path, Pattern: c.Format},
+	}).Resolve(component.DirectionInput)
+	if err != nil {
+		return "", "", 0, false, nil, nil, false, err
 	}
+	output, err := c.Ports.Outputs[0].Resolve(component.DirectionOutput)
+	if err != nil {
+		return "", "", 0, false, nil, nil, false, err
+	}
+	facts, err := output.Facts()
+	if err != nil {
+		return "", "", 0, false, nil, nil, false, err
+	}
+	subject = facts.NATSSubjects()[0]
 
-	return path, subject, interval, loop
+	return path, subject, interval, loop, []component.Port{input}, []component.Port{output}, facts.Kind() == component.PortKindJetStream, nil
 }
 
 // InputDeps holds runtime dependencies for file input component
@@ -210,8 +231,14 @@ type InputDeps struct {
 }
 
 // NewInput creates a new file input component
-func NewInput(deps InputDeps) *Input {
-	path, subject, interval, loop := deps.Config.getConfiguredPorts()
+func NewInput(deps InputDeps) (*Input, error) {
+	if err := deps.Config.Validate(); err != nil {
+		return nil, err
+	}
+	path, subject, interval, loop, inputPorts, outputPorts, jetStreamOutput, err := deps.Config.getConfiguredPorts()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "file-input", "NewInput", "resolve configured ports")
+	}
 
 	var metrics *Metrics
 	if deps.MetricsRegistry != nil {
@@ -224,24 +251,27 @@ func NewInput(deps InputDeps) *Input {
 	}
 
 	return &Input{
-		name:       deps.Name,
-		path:       path,
-		format:     deps.Config.Format,
-		interval:   interval,
-		loop:       loop,
-		subject:    subject,
-		config:     deps.Config, // Store full config for port type checking
-		natsClient: deps.NATSClient,
-		logger:     logger,
-		startTime:  time.Now(),
-		metrics:    metrics,
+		name:            deps.Name,
+		path:            path,
+		format:          deps.Config.Format,
+		interval:        interval,
+		loop:            loop,
+		subject:         subject,
+		config:          deps.Config, // Store full config for port type checking
+		inputPorts:      inputPorts,
+		outputPorts:     outputPorts,
+		jetStreamOutput: jetStreamOutput,
+		natsClient:      deps.NATSClient,
+		logger:          logger,
+		startTime:       time.Now(),
+		metrics:         metrics,
 		scannerBufferPool: &sync.Pool{
 			New: func() any {
 				buf := make([]byte, scannerInitialBuffer)
 				return &buf
 			},
 		},
-	}
+	}, nil
 }
 
 // Meta returns the component metadata
@@ -261,33 +291,12 @@ func (f *Input) Meta() component.Metadata {
 
 // InputPorts returns the input ports for this component
 func (f *Input) InputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "file_source",
-			Direction:   component.DirectionInput,
-			Required:    true,
-			Description: fmt.Sprintf("File source: %s", f.path),
-			Config: component.FilePort{
-				Path:    f.path,
-				Pattern: f.format, // Using pattern to indicate format (jsonl/json)
-			},
-		},
-	}
+	return append([]component.Port(nil), f.inputPorts...)
 }
 
 // OutputPorts returns the output ports for this component
 func (f *Input) OutputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "nats_output",
-			Direction:   component.DirectionOutput,
-			Required:    true,
-			Description: "NATS subject for publishing file lines",
-			Config: component.NATSPort{
-				Subject: f.subject,
-			},
-		},
-	}
+	return append([]component.Port(nil), f.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema
@@ -602,15 +611,7 @@ func (f *Input) recordParseError() {
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (f *Input) isJetStreamPortBySubject(subject string) bool {
-	if f.config.Ports == nil {
-		return false
-	}
-	for _, port := range f.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
+	return subject == f.subject && f.jetStreamOutput
 }
 
 // publishToNATS publishes a line to the configured NATS subject
@@ -641,10 +642,12 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 	cfg := DefaultConfig()
 
 	if len(rawConfig) > 0 {
-		var userConfig Config
-		if err := component.SafeUnmarshal(rawConfig, &userConfig); err != nil {
+		type configOverride Config
+		var override configOverride
+		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
 			return nil, errs.Wrap(err, "file-input-factory", "create", "secure config parsing")
 		}
+		userConfig := Config(override)
 
 		// Apply user overrides
 		if userConfig.Ports != nil {
@@ -674,7 +677,7 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 		Logger:          deps.GetLoggerWithComponent("file-input"),
 	}
 
-	return NewInput(inputDeps), nil
+	return NewInput(inputDeps)
 }
 
 // Register registers the file input component with the given registry

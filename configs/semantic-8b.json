@@ -187,9 +187,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "udp_out",
-              "subject": "raw.sensor.udp",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.sensor.udp"
+                ]
+              },
+              "name": "nats_output"
             }
           ]
         },
@@ -207,9 +211,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "file_out",
-              "subject": "raw.document.corpus",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.document.corpus"
+                ]
+              },
+              "name": "file_out"
             }
           ]
         },
@@ -228,9 +236,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "file_out",
-              "subject": "raw.document.corpus",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.document.corpus"
+                ]
+              },
+              "name": "file_out"
             }
           ]
         },
@@ -249,9 +261,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "file_out",
-              "subject": "raw.document.corpus",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.document.corpus"
+                ]
+              },
+              "name": "file_out"
             }
           ]
         },
@@ -270,9 +286,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "file_out",
-              "subject": "raw.document.corpus",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.document.corpus"
+                ]
+              },
+              "name": "file_out"
             }
           ]
         },
@@ -291,9 +311,13 @@
           "inputs": [],
           "outputs": [
             {
-              "name": "file_out",
-              "subject": "raw.sensor.file",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "raw.sensor.file"
+                ]
+              },
+              "name": "file_out"
             }
           ]
         },
@@ -311,17 +335,28 @@
         "ports": {
           "inputs": [
             {
-              "name": "doc_in",
-              "subject": "raw.document.corpus",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "RAW",
+                "subjects": [
+                  "raw.document.corpus"
+                ]
+              },
+              "name": "doc_in"
             }
           ],
           "outputs": [
             {
-              "name": "doc_out",
-              "subject": "document.processed.entity",
-              "type": "jetstream",
-              "interface": "content.document.v1"
+              "config": {
+                "interface": {
+                  "type": "content.document.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "document.processed.entity"
+                ]
+              },
+              "name": "doc_out"
             }
           ]
         },
@@ -337,17 +372,28 @@
         "ports": {
           "inputs": [
             {
-              "name": "sensor_in",
-              "subject": "raw.sensor.>",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "RAW",
+                "subjects": [
+                  "raw.sensor.>"
+                ]
+              },
+              "name": "sensor_in"
             }
           ],
           "outputs": [
             {
-              "name": "sensor_out",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1"
+              "config": {
+                "interface": {
+                  "type": "iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "name": "sensor_out"
             }
           ]
         },
@@ -369,30 +415,49 @@
         "ports": {
           "inputs": [
             {
-              "name": "rule_entity_in",
-              "subject": "objectstore.stored.entity",
-              "type": "jetstream",
-              "description": "Stored document entity events"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "OBJECTSTORE",
+                "subjects": [
+                  "objectstore.stored.entity"
+                ]
+              },
+              "description": "Stored document entity events",
+              "name": "rule_entity_in"
             },
             {
-              "name": "rule_sensor_in",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "description": "Sensor entity events (bypass ObjectStore)"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "SENSOR",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "description": "Sensor entity events (bypass ObjectStore)",
+              "name": "rule_sensor_in"
             }
           ],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "rule_out",
-              "subject": "rule.triggered.alert",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "rule.triggered.alert"
+                ]
+              },
+              "name": "rule_out"
             }
           ]
         },
@@ -561,33 +626,54 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "objectstore_in",
-              "subject": "objectstore.stored.entity",
-              "type": "jetstream",
-              "interface": "storage.stored.v1",
-              "description": "Stored document entity events from ObjectStore"
+              "config": {
+                "interface": {
+                  "type": "storage.stored.v1"
+                },
+                "kind": "jetstream",
+                "stream_name": "OBJECTSTORE",
+                "subjects": [
+                  "objectstore.stored.entity"
+                ]
+              },
+              "description": "Stored document entity events from ObjectStore",
+              "name": "objectstore_in"
             },
             {
-              "name": "sensor_in",
-              "subject": "sensor.processed.entity",
-              "type": "jetstream",
-              "interface": "iot.sensor.v1",
-              "description": "Sensor entity events from IoT processor"
+              "config": {
+                "interface": {
+                  "type": "iot.sensor.v1"
+                },
+                "kind": "jetstream",
+                "stream_name": "SENSOR",
+                "subjects": [
+                  "sensor.processed.entity"
+                ]
+              },
+              "description": "Sensor entity events from IoT processor",
+              "name": "sensor_in"
             }
           ],
           "outputs": [
             {
-              "name": "entity_states",
-              "subject": "ENTITY_STATES",
-              "type": "kv",
-              "description": "Entity state KV bucket"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "description": "Entity state KV bucket",
+              "name": "entity_states"
             }
           ]
         },
@@ -602,36 +688,46 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch",
-              "description": "Watch entity state changes"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "description": "Watch entity state changes",
+              "name": "entity_watch"
             }
           ],
           "outputs": [
             {
-              "name": "outgoing_index",
-              "subject": "OUTGOING_INDEX",
-              "type": "kv",
-              "description": "Outgoing relationship index"
+              "config": {
+                "bucket": "OUTGOING_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Outgoing relationship index",
+              "name": "outgoing_index"
             },
             {
-              "name": "incoming_index",
-              "subject": "INCOMING_INDEX",
-              "type": "kv",
-              "description": "Incoming relationship index"
+              "config": {
+                "bucket": "INCOMING_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Incoming relationship index",
+              "name": "incoming_index"
             },
             {
-              "name": "alias_index",
-              "subject": "ALIAS_INDEX",
-              "type": "kv",
-              "description": "Entity alias index"
+              "config": {
+                "bucket": "ALIAS_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Entity alias index",
+              "name": "alias_index"
             },
             {
-              "name": "predicate_index",
-              "subject": "PREDICATE_INDEX",
-              "type": "kv",
-              "description": "Predicate index"
+              "config": {
+                "bucket": "PREDICATE_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Predicate index",
+              "name": "predicate_index"
             }
           ]
         },
@@ -647,10 +743,12 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch",
-              "description": "Watch entity state changes"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "description": "Watch entity state changes",
+              "name": "entity_watch"
             }
           ]
         },
@@ -666,25 +764,34 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch",
-              "description": "Watch entity state changes for batch trigger"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "description": "Watch entity state changes for batch trigger",
+              "name": "entity_watch"
             }
           ],
           "outputs": [
             {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
               "name": "graph_mutations",
-              "subject": "graph.mutation.>",
-              "type": "nats-request",
-              "interface": "semstreams.graph.mutation",
               "required": true
             },
             {
-              "name": "communities",
-              "subject": "COMMUNITY_INDEX",
-              "type": "kv",
-              "description": "Community detection results"
+              "config": {
+                "bucket": "COMMUNITY_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Community detection results",
+              "name": "communities"
             }
           ]
         },
@@ -731,18 +838,22 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch",
-              "description": "Watch entity state changes"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "description": "Watch entity state changes",
+              "name": "entity_watch"
             }
           ],
           "outputs": [
             {
-              "name": "spatial_index",
-              "subject": "SPATIAL_INDEX",
-              "type": "kv",
-              "description": "Spatial index"
+              "config": {
+                "bucket": "SPATIAL_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Spatial index",
+              "name": "spatial_index"
             }
           ]
         },
@@ -759,18 +870,22 @@
         "ports": {
           "inputs": [
             {
-              "name": "entity_watch",
-              "subject": "ENTITY_STATES",
-              "type": "kv-watch",
-              "description": "Watch entity state changes"
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "description": "Watch entity state changes",
+              "name": "entity_watch"
             }
           ],
           "outputs": [
             {
-              "name": "temporal_index",
-              "subject": "TEMPORAL_INDEX",
-              "type": "kv",
-              "description": "Temporal index"
+              "config": {
+                "bucket": "TEMPORAL_INDEX",
+                "kind": "kv-write"
+              },
+              "description": "Temporal index",
+              "name": "temporal_index"
             }
           ]
         },
@@ -787,10 +902,12 @@
         "ports": {
           "inputs": [
             {
-              "name": "query_requests",
-              "subject": "graph.query.>",
-              "type": "nats-request",
-              "description": "Query requests from gateway"
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.>"
+              },
+              "description": "Query requests from gateway",
+              "name": "query_requests"
             }
           ],
           "outputs": []
@@ -805,23 +922,38 @@
       "name": "graph-gateway",
       "enabled": true,
       "config": {
-        "ports": {
-          "inputs": [
-            {
-              "name": "http",
-              "subject": ":8084",
-              "type": "http",
-              "description": "HTTP server for GraphQL and MCP"
-            }
-          ],
-          "outputs": [
-            {
-              "name": "queries",
-              "subject": "graph.query.*",
-              "type": "nats-request"
-            }
-          ]
-        },
+      "ports": {
+        "outputs": [
+          {
+            "config": {
+              "kind": "nats-request",
+              "subject": "graph.query.*"
+            },
+            "name": "graph_queries",
+            "required": true
+          },
+          {
+            "config": {
+              "kind": "nats-request",
+              "subject": "graph.index.query.*"
+            },
+            "name": "graph_index_queries",
+            "required": true
+          },
+          {
+            "config": {
+              "interface": {
+                "type": "agentic.query",
+                "version": "v1"
+              },
+              "kind": "nats-request",
+              "subject": "agentic.query.*"
+            },
+            "name": "agentic_queries",
+            "required": true
+          }
+        ]
+      },
         "graphql_path": "/graphql",
         "mcp_path": "/mcp",
         "enable_playground": true,
@@ -836,10 +968,17 @@
         "ports": {
           "inputs": [
             {
-              "name": "file_in",
-              "subject": "objectstore.stored.entity",
-              "type": "jetstream",
-              "interface": "content.document.v1"
+              "config": {
+                "interface": {
+                  "type": "content.document.v1"
+                },
+                "kind": "jetstream",
+                "stream_name": "OBJECTSTORE",
+                "subjects": [
+                  "objectstore.stored.entity"
+                ]
+              },
+              "name": "file_in"
             }
           ],
           "outputs": []
@@ -857,17 +996,25 @@
         "ports": {
           "inputs": [
             {
-              "name": "write",
-              "subject": "document.processed.entity",
-              "type": "jetstream",
-              "stream_name": "DOCUMENT"
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "DOCUMENT",
+                "subjects": [
+                  "document.processed.entity"
+                ]
+              },
+              "name": "write"
             }
           ],
           "outputs": [
             {
-              "name": "stored",
-              "subject": "objectstore.stored.entity",
-              "type": "jetstream"
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "objectstore.stored.entity"
+                ]
+              },
+              "name": "stored"
             }
           ]
         },

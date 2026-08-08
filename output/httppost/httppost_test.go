@@ -17,7 +17,7 @@ func TestHTTPPostOutput_Creation(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL:         "http://localhost:8080/webhook",
@@ -48,7 +48,9 @@ func TestHTTPPostOutput_DefaultConfig(t *testing.T) {
 
 	assert.NotNil(t, config.Ports)
 	assert.Len(t, config.Ports.Inputs, 1)
-	assert.Equal(t, "output.>", config.Ports.Inputs[0].Subject)
+	input, ok := config.Ports.Inputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	assert.Equal(t, "output.>", input.Subject)
 	assert.Equal(t, "http://localhost:8080/webhook", config.URL)
 	assert.Equal(t, 30, config.Timeout)
 	assert.Equal(t, 3, config.RetryCount)
@@ -59,7 +61,7 @@ func TestHTTPPostOutput_Lifecycle(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL:         "http://localhost:8080/test",
@@ -114,7 +116,7 @@ func TestHTTPPostOutput_SendHTTPPost(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL:         server.URL,
@@ -160,7 +162,7 @@ func TestHTTPPostOutput_SendWithCustomHeaders(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL: server.URL,
@@ -212,7 +214,7 @@ func TestHTTPPostOutput_RetryOnFailure(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL:         server.URL,
@@ -257,7 +259,7 @@ func TestHTTPPostOutput_ExponentialBackoff(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 			},
 		},
 		URL:         server.URL,
@@ -327,7 +329,7 @@ func TestHTTPPostOutput_StatusCodeValidation(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "input", Type: "nats", Subject: "test.input", Required: true},
+						{Name: "input", Config: component.NATSPort{Subject: "test.input"}, Required: true},
 					},
 				},
 				URL:         server.URL,

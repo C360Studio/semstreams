@@ -68,6 +68,8 @@ type Input struct {
 	config   Config
 	resolved resolved
 	client   *nethttp.Client
+	inputs   []component.Port
+	outputs  []component.Port
 
 	publisher publisher
 	logger    *slog.Logger
@@ -108,10 +110,55 @@ type InputDeps struct {
 }
 
 // NewInput constructs a new HTTP polling input from the given
-// dependencies. Caller is expected to have called Config.Validate
-// already; the constructor does not re-validate.
-func NewInput(deps InputDeps) *Input {
-	resolved := deps.Config.resolve()
+// dependencies. The constructor validates so direct callers cannot bypass the
+// same fail-closed port and endpoint contract used by registry construction.
+func NewInput(deps InputDeps) (*Input, error) {
+	if err := deps.Config.Validate(); err != nil {
+		return nil, errs.WrapInvalid(err, "Input", "NewInput", "validate config")
+	}
+	resolved, err := deps.Config.resolve()
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve config")
+	}
+	if deps.Config.Ports == nil || len(deps.Config.Ports.Outputs) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrMissingConfig, "Input", "NewInput", "exactly one output port is required")
+	}
+	const schedulePortName = "http_schedule"
+	scheduleConfig := component.TimerPort{Interval: resolved.interval.String()}
+	sourceConfig := component.HTTPClientPort{
+		Method: resolved.method, URLPattern: resolved.url, TriggerPort: schedulePortName,
+	}
+	scheduleDefinition := component.PortDefinition{
+		Name:        "http_schedule",
+		Required:    true,
+		Description: "HTTP polling cadence",
+		Config:      scheduleConfig,
+	}
+	sourceDefinition := component.PortDefinition{
+		Name:        "http_source",
+		Required:    true,
+		Description: fmt.Sprintf("HTTP endpoint: %s", resolved.url),
+		Config:      sourceConfig,
+	}
+	schedule, err := scheduleDefinition.Resolve(component.DirectionInput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP schedule port")
+	}
+	input, err := sourceDefinition.Resolve(component.DirectionInput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Input", "NewInput", "resolve HTTP source port")
+	}
+	if sourceConfig.TriggerPort != scheduleDefinition.Name || scheduleConfig.Interval != resolved.interval.String() {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Input", "NewInput", "HTTP source trigger must reference the runtime polling cadence")
+	}
+	outputs := make([]component.Port, len(deps.Config.Ports.Outputs))
+	for index, definition := range deps.Config.Ports.Outputs {
+		output, resolveErr := definition.Resolve(component.DirectionOutput)
+		if resolveErr != nil {
+			return nil, errs.WrapInvalid(resolveErr, "Input", "NewInput", "resolve output port")
+		}
+		outputs[index] = output
+	}
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default().With("component", "http-input", "url", resolved.url)
@@ -122,6 +169,8 @@ func NewInput(deps InputDeps) *Input {
 		config:   deps.Config,
 		resolved: resolved,
 		client:   &nethttp.Client{Timeout: resolved.timeout},
+		inputs:   []component.Port{schedule, input},
+		outputs:  outputs,
 		publisher: &natsPublisher{
 			client:       deps.NATSClient,
 			useJetStream: resolved.useJetStream,
@@ -129,7 +178,7 @@ func NewInput(deps InputDeps) *Input {
 		logger:    logger,
 		metrics:   newMetrics(deps.MetricsRegistry, deps.Name),
 		startTime: time.Now(),
-	}
+	}, nil
 }
 
 // Meta returns the component metadata.
@@ -148,33 +197,12 @@ func (h *Input) Meta() component.Metadata {
 
 // InputPorts returns this component's input ports.
 func (h *Input) InputPorts() []component.Port {
-	return []component.Port{
-		{
-			Name:        "http_source",
-			Direction:   component.DirectionInput,
-			Required:    true,
-			Description: fmt.Sprintf("HTTP endpoint: %s", h.resolved.url),
-		},
-	}
+	return append([]component.Port(nil), h.inputs...)
 }
 
 // OutputPorts returns this component's output ports.
 func (h *Input) OutputPorts() []component.Port {
-	portType := "nats"
-	if h.resolved.useJetStream {
-		portType = "jetstream"
-	}
-	return []component.Port{
-		{
-			Name:        portType + "_output",
-			Direction:   component.DirectionOutput,
-			Required:    true,
-			Description: "NATS subject for publishing decoded HTTP responses",
-			Config: component.NATSPort{
-				Subject: h.resolved.subject,
-			},
-		},
-	}
+	return append([]component.Port(nil), h.outputs...)
 }
 
 // ConfigSchema returns the component config schema.

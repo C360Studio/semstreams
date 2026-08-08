@@ -37,11 +37,11 @@
 //	{
 //	  "ports": {
 //	    "inputs": [
-//	      {"name": "objectstore_in", "subject": "objectstore.stored.entity", "type": "jetstream"},
-//	      {"name": "sensor_in", "subject": "sensor.processed.entity", "type": "jetstream"}
+//	      {"name":"objectstore_in","config":{"kind":"jetstream","subjects":["objectstore.stored.entity"]}},
+//	      {"name":"sensor_in","config":{"kind":"jetstream","subjects":["sensor.processed.entity"]}}
 //	    ],
 //	    "outputs": [
-//	      {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv"}
+//	      {"name":"entity_states","config":{"kind":"kv-write","bucket":"ENTITY_STATES"}}
 //	    ]
 //	  },
 //	  "enable_hierarchy": true

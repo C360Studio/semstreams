@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -81,19 +82,10 @@ func (c *Config) Validate() error {
 		return errs.WrapInvalid(fmt.Errorf("timeout must be positive"), "Config", "Validate", "check timeout value")
 	}
 
-	// When the operator supplied a Ports block, enforce that Inputs and
-	// Outputs are non-empty whenever DefaultConfig declares ports in
-	// those directions. Pre-fix, an operator config that overrode Ports
-	// without any Inputs (or set inputs:[]) started the component
-	// running and healthy with zero JetStream consumers — silent
-	// dispatch death. Symmetric to the publishResult silent-drop bug
-	// closed in beta.57. Audit finding 2026-05-08.
-	//
-	// Validation is by-presence-of-any-port, not by-canonical-name:
-	// operators can rename ports freely, override subjects, etc., as
-	// long as they don't omit the entire direction. Subject coherence
-	// across components is an operator concern; per-component validation
-	// only catches structural emptiness.
+	// NewComponent first applies canonical complete named replacements to
+	// DefaultConfig. Keep this non-empty check as a final effective-config
+	// guard against silent dispatch or publish loss; name, kind, direction,
+	// and duplicate enforcement belongs to MergePortConfig.
 	if c.Ports != nil {
 		if err := c.validatePortsNonEmpty(); err != nil {
 			return err
@@ -106,10 +98,7 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// validatePortsNonEmpty enforces that when the operator supplied a Ports
-// block, neither Inputs nor Outputs is empty (provided DefaultConfig
-// declares ports in those directions). Catches the silent-broken case
-// where Ports is overridden but a direction is forgotten.
+// validatePortsNonEmpty rejects an incomplete effective port topology.
 func (c *Config) validatePortsNonEmpty() error {
 	defaults := DefaultConfig()
 	if defaults.Ports == nil {
@@ -136,35 +125,22 @@ func (c *Config) validatePortsNonEmpty() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "tool.execute",
-			Type:        "jetstream",
-			Subject:     "tool.execute.>",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "tool.execute", Config: component.JetStreamPort{Subjects: []string{"tool.execute.>"}, StreamName: "AGENT"}, Required: true,
 			Description: "Tool execution requests (JetStream)",
 		},
 		{
-			Name:        "tool.list",
-			Type:        "nats",
-			Subject:     "tool.list",
-			Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
+			Name: "tool.list", Config: component.NATSPort{Subject: "tool.list"}, Description: "Tool discovery request/reply (core NATS). Override to e.g. 'discovery.tool.list' when JetStream streams cover 'tool.>'.",
 		},
+		{Name: "entity_states", Config: component.KVReadPort{Bucket: graph.BucketEntityStates}},
+		{Name: "agent_loops", Config: component.KVReadPort{Bucket: "AGENT_LOOPS"}},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:      "graph_mutations",
-			Type:      "nats-request",
-			Subject:   graphmutation.SubjectFamily,
-			Interface: graphmutation.InterfaceType,
-			Required:  true,
+			Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 		},
 		{
-			Name:        "tool.result",
-			Type:        "jetstream",
-			Subject:     "tool.result.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "tool.result", Config: component.JetStreamPort{Subjects: []string{"tool.result.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Tool execution results (JetStream)",
 		},
 	}

@@ -15,7 +15,7 @@
 //	config := file.Config{
 //	    Ports: &component.PortConfig{
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "events.ingest", Required: true},
+//	            {Name: "output", Config: component.NATSPort{Subject: "events.ingest"}, Required: true},
 //	        },
 //	    },
 //	    Path:     "/data/events/*.jsonl",
@@ -107,15 +107,17 @@
 //
 //	Ports:
 //	  Outputs:
-//	    - Type: "nats"
-//	      Subject: "events.raw"
+//	    - Config:
+//	        Kind: "nats"
+//	        Subject: "events.raw"
 //
 // **JetStream:**
 //
 //	Ports:
 //	  Outputs:
-//	    - Type: "jetstream"
-//	      Subject: "events.raw"
+//	    - Config:
+//	        Kind: "jetstream"
+//	        Subjects: ["events.raw"]
 //
 // JetStream publishing uses acknowledgments and ensures message durability.
 //
@@ -266,7 +268,7 @@
 //	{
 //	  "ports": {
 //	    "outputs": [
-//	      {"name": "output", "type": "jetstream", "subject": "events.raw", "required": true}
+//	      {"name":"output","required":true,"config":{"kind":"jetstream","subjects":["events.raw"]}}
 //	    ]
 //	  },
 //	  "path": "/data/events/*.jsonl",

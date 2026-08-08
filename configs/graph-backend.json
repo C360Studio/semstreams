@@ -40,10 +40,27 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "name": "entity_states"
+            }
           ]
         },
         "enable_hierarchy": true
@@ -56,13 +73,43 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_watch"
+            }
           ],
           "outputs": [
-            {"name": "outgoing_index", "subject": "OUTGOING_INDEX", "type": "kv"},
-            {"name": "incoming_index", "subject": "INCOMING_INDEX", "type": "kv"},
-            {"name": "alias_index", "subject": "ALIAS_INDEX", "type": "kv"},
-            {"name": "predicate_index", "subject": "PREDICATE_INDEX", "type": "kv"}
+            {
+              "config": {
+                "bucket": "OUTGOING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "outgoing_index"
+            },
+            {
+              "config": {
+                "bucket": "INCOMING_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "incoming_index"
+            },
+            {
+              "config": {
+                "bucket": "ALIAS_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "alias_index"
+            },
+            {
+              "config": {
+                "bucket": "PREDICATE_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "predicate_index"
+            }
           ]
         },
         "workers": 2,
@@ -76,10 +123,22 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_watch"
+            }
           ],
           "outputs": [
-            {"name": "spatial_index", "subject": "SPATIAL_INDEX", "type": "kv"}
+            {
+              "config": {
+                "bucket": "SPATIAL_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "spatial_index"
+            }
           ]
         },
         "geohash_precision": 6,
@@ -94,10 +153,22 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "entity_watch", "subject": "ENTITY_STATES", "type": "kv-watch"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_watch"
+            }
           ],
           "outputs": [
-            {"name": "temporal_index", "subject": "TEMPORAL_INDEX", "type": "kv"}
+            {
+              "config": {
+                "bucket": "TEMPORAL_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "temporal_index"
+            }
           ]
         },
         "time_resolution": "hour",
@@ -112,7 +183,13 @@
       "config": {
         "ports": {
           "inputs": [
-            {"name": "query_requests", "subject": "graph.query.>", "type": "nats-request"}
+            {
+              "config": {
+                "kind": "nats-request",
+                "subject": "graph.query.>"
+              },
+              "name": "query_requests"
+            }
           ],
           "outputs": []
         },

@@ -113,10 +113,10 @@ func TestIntegration_SemanticEdges_ScopedToDetectionNotStructural(t *testing.T) 
 		AllowUngatedReads: true, // standalone test reads without a co-deployed graph-index handler
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex},
+				{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}},
 			},
 		},
 		DetectionIntervalStr:   "1s",

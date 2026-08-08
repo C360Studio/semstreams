@@ -65,10 +65,12 @@ func portComponent(t *testing.T, streamName, subject string) types.ComponentConf
 	raw, err := json.Marshal(map[string]any{
 		"ports": map[string]any{
 			"outputs": []map[string]any{{
-				"name":        "out",
-				"type":        "jetstream",
-				"subject":     subject,
-				"stream_name": streamName,
+				"name": "out",
+				"config": map[string]any{
+					"kind":        "jetstream",
+					"subjects":    []string{subject},
+					"stream_name": streamName,
+				},
 			}},
 		},
 	})

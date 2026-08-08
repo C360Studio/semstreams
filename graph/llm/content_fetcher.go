@@ -8,7 +8,8 @@ import (
 )
 
 // ContentFetcher abstracts content retrieval for LLM prompts.
-// Implementations may use NATS request/reply, direct store access, or mocks.
+// Implementations are injected by the owning composition and may use registered
+// Store access or mocks.
 type ContentFetcher interface {
 	// FetchEntityContent retrieves title/abstract for entities with StorageRefs.
 	// Returns map[entityID]*EntityContent for successful fetches.

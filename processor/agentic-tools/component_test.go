@@ -40,10 +40,9 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	ports := comp.InputPorts()
 
-	// tool.execute is the JetStream input for tool invocations;
-	// tool.list is the core NATS request/reply discovery endpoint.
-	if len(ports) != 2 {
-		t.Fatalf("InputPorts() count = %d, want 2", len(ports))
+	// Two communication inputs plus the two exact KV read dependencies.
+	if len(ports) != 4 {
+		t.Fatalf("InputPorts() count = %d, want 4", len(ports))
 	}
 
 	byName := map[string]component.Port{}
@@ -74,6 +73,17 @@ func TestComponent_InputPorts(t *testing.T) {
 
 	if _, ok := byName["tool.list"]; !ok {
 		t.Errorf("expected input port tool.list for discovery request/reply, got %v", byName)
+	}
+	for name, bucket := range map[string]string{"entity_states": "ENTITY_STATES", "agent_loops": "AGENT_LOOPS"} {
+		port, ok := byName[name]
+		if !ok {
+			t.Errorf("expected KV read input %s", name)
+			continue
+		}
+		read, ok := port.Config.(component.KVReadPort)
+		if !ok || read.Bucket != bucket {
+			t.Errorf("%s config = %#v, want KVReadPort bucket %s", name, port.Config, bucket)
+		}
 	}
 }
 
@@ -162,10 +172,10 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 	config := agentictools.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "tool.execute.>", Required: true},
+				{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.execute.>"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "tool.result.*", Required: true},
+				{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"custom.tool.result.*"}}, Required: true},
 			},
 		},
 		Timeout:      "60s",

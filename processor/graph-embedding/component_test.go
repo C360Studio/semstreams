@@ -166,7 +166,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "bm25",
@@ -177,7 +177,7 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "http",
@@ -208,13 +208,13 @@ func TestConfig_Validate_RejectsDeclaredOutputs(t *testing.T) {
 		{
 			name: "stale EMBEDDINGS_CACHE output",
 			outputs: []component.PortDefinition{
-				{Name: "embeddings", Type: "kv-write", Subject: "EMBEDDINGS_CACHE"},
+				{Name: "embeddings", Config: component.KVWritePort{Bucket: "EMBEDDINGS_CACHE"}},
 			},
 		},
 		{
 			name: "any other declared output",
 			outputs: []component.PortDefinition{
-				{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
+				{Name: "other", Config: component.KVWritePort{Bucket: "OTHER_BUCKET"}},
 			},
 		},
 	}
@@ -224,7 +224,7 @@ func TestConfig_Validate_RejectsDeclaredOutputs(t *testing.T) {
 			cfg := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: tt.outputs,
 				},
@@ -248,7 +248,7 @@ func TestConfig_Validate_RejectsDeclaredOutputs(t *testing.T) {
 func TestCreateGraphEmbedding_RejectsRemovedCacheTTL(t *testing.T) {
 	raw := []byte(`{
 		"ports": {
-			"inputs": [{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}]
+			"inputs": [{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}]
 		},
 		"embedder_type": "bm25",
 		"cache_ttl": "1h"
@@ -297,7 +297,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -330,7 +330,7 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "",
@@ -342,7 +342,7 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "openai",
@@ -354,7 +354,7 @@ func TestConfig_Validate_InvalidEmbedderType(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "bm25",
@@ -380,7 +380,7 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 		},
 		EmbedderType: "bm25",
@@ -417,7 +417,8 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 	// Verify ENTITY_STATES input
 	hasEntityWatch := false
 	for _, in := range inputs {
-		if in.Subject == "ENTITY_STATES" {
+		port, ok := in.Config.(component.KVWatchPort)
+		if ok && port.Bucket == "ENTITY_STATES" {
 			hasEntityWatch = true
 			break
 		}
@@ -738,7 +739,7 @@ func TestCreateGraphEmbedding_HTTPEmbedderConfig(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 		},
 		EmbedderType: "http",
@@ -907,7 +908,7 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "bm25",
@@ -919,7 +920,7 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "http",
@@ -931,7 +932,7 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 				},
 				EmbedderType: "unknown",

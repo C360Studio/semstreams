@@ -12,7 +12,6 @@ import (
 // Model endpoints are resolved from the unified model registry (component.Dependencies.ModelRegistry).
 type Config struct {
 	Ports                *component.PortConfig `json:"ports"                schema:"type:ports,description:Port configuration,category:basic"`
-	StreamName           string                `json:"stream_name"          schema:"type:string,description:JetStream stream name for agentic messages,category:basic,default:AGENT"`
 	ConsumerNameSuffix   string                `json:"consumer_name_suffix" schema:"type:string,description:Suffix appended to consumer names for uniqueness,category:advanced"`
 	DeleteConsumerOnStop bool                  `json:"delete_consumer_on_stop,omitempty" schema:"type:bool,description:Delete durable consumers on Stop (use for tests only),category:advanced,default:false"`
 	Timeout              string                `json:"timeout"              schema:"type:string,description:Per-request LLM call timeout. Sized 10s below the agentic-model JetStream consumer AckWait (120s) so the LLM context.Done propagates and the call closes cleanly before NATS would otherwise redeliver. Operators raising this past ~115s should also raise the consumer AckWait in lockstep.,category:advanced,default:110s"`
@@ -127,29 +126,18 @@ func (r *RetryConfig) rateLimitDelayDuration(defaultDelay time.Duration) time.Du
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "agent.request",
-			Type:        "jetstream",
-			Subject:     "agent.request.>",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.request", Config: component.JetStreamPort{Subjects: []string{"agent.request.>"}, StreamName: "AGENT"}, Required: true,
 			Description: "Agent request input (JetStream)",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "agent.response",
-			Type:        "jetstream",
-			Subject:     "agent.response.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.response", Config: component.JetStreamPort{Subjects: []string{"agent.response.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Agent response output (JetStream)",
 		},
 		{
-			Name:        "agent.stream",
-			Type:        "nats",
-			Subject:     "agent.stream.*",
-			Description: "Streaming delta chunks (core NATS, fire-and-forget)",
+			Name: "agent.stream", Config: component.NATSPort{Subject: "agent.stream.*"}, Description: "Streaming delta chunks (core NATS, fire-and-forget)",
 		},
 	}
 
@@ -158,8 +146,7 @@ func DefaultConfig() Config {
 			Inputs:  inputDefs,
 			Outputs: outputDefs,
 		},
-		StreamName: "AGENT",
-		Timeout:    "110s",
+		Timeout: "110s",
 		Retry: RetryConfig{
 			MaxAttempts:         3,
 			MaxRateLimitRetries: 5,

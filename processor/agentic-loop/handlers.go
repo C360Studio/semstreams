@@ -81,6 +81,11 @@ type HandlerResult struct {
 	// Nil means either the loop terminated through a real decide call or
 	// the synthesis opt-in is off; either way, no synthetic triples.
 	SyntheticDecide *SyntheticDecideRequest
+
+	// trajectoryObservations are full-fidelity audit inputs carried only to
+	// Component's local recorder. They are never published or persisted in the
+	// loop aggregate; large bodies leave the process only through StoreRegistry.
+	trajectoryObservations []trajectoryObservation
 }
 
 // SyntheticDecideRequest carries the data needed for graphWriter to stamp
@@ -97,7 +102,7 @@ type SyntheticDecideRequest struct {
 type MessageHandler struct {
 	config            Config
 	loopManager       *LoopManager
-	trajectoryManager *TrajectoryManager
+	trajectoryManager *trajectoryManager
 	compactor         *Compactor
 	// governanceDispatcher implements subject-mode tool-call governance
 	// (ADR-039). Set via SetGovernanceDispatcher at component boot. Nil
@@ -161,7 +166,7 @@ func NewMessageHandler(config Config, loopManagerOpts ...LoopManagerOption) *Mes
 	return &MessageHandler{
 		config:            config,
 		loopManager:       loopManager,
-		trajectoryManager: NewTrajectoryManager(),
+		trajectoryManager: newTrajectoryManager(),
 		compactor:         NewCompactor(config.Context),
 		logger:            slog.Default(),
 	}
@@ -331,6 +336,7 @@ func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, l
 		slog.Int("model_limit", cm.ModelLimit()),
 		slog.Int("headroom", cm.resolveHeadroom()))
 
+	beforeCompaction := cm.GetContext()
 	compactStart := time.Now()
 	compactResult, compactErr := h.compactor.Compact(ctx, cm)
 	if compactErr != nil {
@@ -360,7 +366,25 @@ func (h *MessageHandler) maybeCompact(ctx context.Context, cm *ContextManager, l
 		Duration:    compactDuration,
 	}
 	result.TrajectorySteps = append(result.TrajectorySteps, compactionStep)
-	if _, addErr := h.trajectoryManager.AddStep(loopID, compactionStep); addErr != nil {
+	appendTrajectoryObservation(result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindContextCompacted,
+		SourceKind:        agentic.TrajectorySourceCompaction,
+		SourceCorrelation: "threshold",
+		CausalIteration:   positiveUint32(iteration),
+		CausalPhase:       agentic.TrajectoryPhaseCompaction,
+		ElapsedMS:         compactDuration,
+		Status:            agentic.TrajectoryStatusCompleted,
+		TokensIn:          positiveUint64(compactResult.EvictedTokens),
+		TokensOut:         positiveUint64(compactResult.NewTokens),
+		ModelPreview:      compactResult.Model,
+		Evidence: trajectoryCompactionEvidence{
+			Before: beforeCompaction,
+			After:  cm.GetContext(),
+			Result: compactResult,
+		},
+	})
+	if _, addErr := h.trajectoryManager.addStep(loopID, compactionStep); addErr != nil {
 		h.logger.Warn("failed to add compaction trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -518,18 +542,13 @@ func (h *MessageHandler) computeToolDuration(callID string) int64 {
 }
 
 // buildTaskTrajectoryStep creates the trajectory step for a HandleTask invocation.
-func (h *MessageHandler) buildTaskTrajectoryStep(requestID string, task TaskMessage, messages []agentic.ChatMessage) agentic.TrajectoryStep {
-	step := agentic.TrajectoryStep{
+func (h *MessageHandler) buildTaskTrajectoryStep(requestID string, task TaskMessage) agentic.TrajectoryStep {
+	return agentic.TrajectoryStep{
 		Timestamp: time.Now(),
 		StepType:  "model_call",
 		RequestID: requestID,
 		Prompt:    task.Prompt,
 	}
-	if h.config.TrajectoryDetail == "full" {
-		step.Messages = messages
-		step.Model = task.Model
-	}
-	return step
 }
 
 // resolveRunEntityID returns the full 6-part ChainExecutionEntityID for a run
@@ -827,7 +846,7 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	h.configureLoopMetadata(loopID, task)
 
 	// Start trajectory
-	_, err = h.trajectoryManager.StartTrajectory(loopID)
+	_, err = h.trajectoryManager.startTrajectory(loopID)
 	if err != nil {
 		return HandlerResult{}, err
 	}
@@ -942,16 +961,12 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 		return HandlerResult{}, err
 	}
 
-	step := h.buildTaskTrajectoryStep(request.RequestID, task, messages)
+	step := h.buildTaskTrajectoryStep(request.RequestID, task)
 
-	// Persist the task-initiation step eagerly so its `messages` survive into
-	// the trajectory. Every OTHER handler in this file calls AddStep right
-	// after building its step; HandleTask was the lone outlier — its
-	// TrajectorySteps return field is never consumed by the component
-	// (persistHandlerResult only forwards published messages + final state),
-	// so the request-side audit trail was silently dropped. Caught
-	// 2026-05-21 while wiring trajectory_detail:full into the UI.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	// Keep the summary step in the active execution manager for token and
+	// terminal-tool mechanics. The append-only recorder separately owns the
+	// full request body; TrajectorySteps is not a persistence surface.
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add task trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -961,23 +976,57 @@ func (h *MessageHandler) buildTaskRequest(loopID string, task TaskMessage, entit
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	createdSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
 
-	return HandlerResult{
+	result := HandlerResult{
 		LoopID:  loopID,
 		State:   entity.State,
 		Created: true,
 		PublishedMessages: []PublishedMessage{
 			{
-				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+				Subject: requestSubject,
 				Data:    requestData,
 			},
 			{
-				Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.created", loopID),
+				Subject: createdSubject,
 				Data:    createdData,
 			},
 		},
 		TrajectorySteps: []agentic.TrajectoryStep{step},
-	}, nil
+	}
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindLoopStarted,
+		SourceKind:        agentic.TrajectorySourceTask,
+		SourceCorrelation: task.TaskID,
+		CausalPhase:       agentic.TrajectoryPhaseLoopStart,
+		Status:            agentic.TrajectoryStatusCompleted,
+		ModelPreview:      task.Model,
+		CapabilityPreview: task.Role,
+		Evidence:          task,
+	})
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindModelRequested,
+		SourceKind:        agentic.TrajectorySourceRequest,
+		SourceCorrelation: request.RequestID,
+		CausalIteration:   1,
+		CausalPhase:       agentic.TrajectoryPhaseModelRequest,
+		Status:            agentic.TrajectoryStatusRequested,
+		MessageCount:      uint32(len(request.Messages)),
+		ToolCount:         uint32(len(request.Tools)),
+		ModelPreview:      request.Model,
+		CapabilityPreview: request.Role,
+		Evidence:          request,
+	})
+	return result, nil
 }
 
 // HandleModelResponse processes a model response
@@ -986,6 +1035,35 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 	if err := ctx.Err(); err != nil {
 		return HandlerResult{}, err
 	}
+	entity, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	result := HandlerResult{
+		LoopID:            loopID,
+		State:             entity.State,
+		PublishedMessages: []PublishedMessage{},
+		TrajectorySteps:   []agentic.TrajectoryStep{},
+		ContextEvents:     []agentic.ContextEvent{},
+	}
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindModelCompleted,
+		SourceKind:        agentic.TrajectorySourceRequest,
+		SourceCorrelation: response.RequestID,
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseModelResult,
+		ElapsedMS:         h.computeRequestDuration(response.RequestID),
+		Status:            modelResponseStatus(response),
+		TokensIn:          positiveUint64(response.TokenUsage.PromptTokens),
+		TokensOut:         positiveUint64(response.TokenUsage.CompletionTokens),
+		ToolCount:         uint32(len(response.Message.ToolCalls)),
+		ModelPreview:      entity.Model,
+		ProviderPreview:   h.resolveProvider(entity.Model),
+		CapabilityPreview: entity.Role,
+		ErrorCategory:     modelResponseErrorCategory(response),
+		Evidence:          response,
+	})
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
@@ -995,21 +1073,13 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 				slog.String("loop_id", loopID),
 				slog.String("error", err.Error()))
 		}
-		result := HandlerResult{
-			LoopID: loopID,
-			State:  agentic.LoopStateFailed,
-		}
+		result.State = agentic.LoopStateFailed
 		// Publish failure events for reactive workflows to observe
 		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
 			result.PublishedMessages = failMsgs
 			result.FailureState = failure
 		}
 		return result, errs.WrapFatal(fmt.Errorf("loop timeout exceeded"), "agentic-loop", "HandleModelResponse", "check timeout")
-	}
-
-	entity, err := h.loopManager.GetLoop(loopID)
-	if err != nil {
-		return HandlerResult{}, err
 	}
 
 	// Reject responses for loops already in terminal state (defense-in-depth:
@@ -1019,25 +1089,17 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		h.logger.Warn("ignoring model response for terminal loop",
 			slog.String("loop_id", loopID),
 			slog.String("state", entity.State.String()))
-		return HandlerResult{LoopID: loopID, State: entity.State}, nil
+		return result, nil
 	}
 
 	// Check if max iterations reached
 	if entity.Iterations >= entity.MaxIterations {
-		return HandlerResult{}, errs.WrapFatal(
+		return result, errs.WrapFatal(
 			fmt.Errorf("%w: loop %s at %d/%d iterations", ErrMaxIterationsReached, loopID, entity.Iterations, entity.MaxIterations),
 			"agentic-loop",
 			"HandleModelResponse",
 			"check max iterations",
 		)
-	}
-
-	result := HandlerResult{
-		LoopID:            loopID,
-		State:             entity.State,
-		PublishedMessages: []PublishedMessage{},
-		TrajectorySteps:   []agentic.TrajectoryStep{},
-		ContextEvents:     []agentic.ContextEvent{},
 	}
 
 	// Record trajectory step
@@ -1054,14 +1116,11 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 		Capability: entity.Role,
 		RetryCount: response.RetryCount,
 	}
-	if h.config.TrajectoryDetail == "full" {
-		step.ToolCalls = response.Message.ToolCalls
-	}
 	result.TrajectorySteps = append(result.TrajectorySteps, step)
 
 	// Eagerly add step to trajectory manager so token totals are available
 	// when handleCompleteResponse queries the trajectory for cost tracking.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -1144,6 +1203,9 @@ func (h *MessageHandler) HandleModelResponse(ctx context.Context, loopID string,
 // and approved calls are dispatched. Domain metadata from the task is
 // propagated to each approved tool call.
 func (h *MessageHandler) handleToolCallResponse(result *HandlerResult, loopID string, toolCalls []agentic.ToolCall) error {
+	for index, toolCall := range toolCalls {
+		h.loopManager.TrackToolOrdinal(toolCall.ID, uint32(index+1))
+	}
 	// Reject tool calls with empty names — Gemini sometimes emits these as
 	// acknowledgment non-responses. Store error results so the model gets a
 	// nudge to call a real tool or respond with text.
@@ -1553,8 +1615,24 @@ func (h *MessageHandler) dispatchToolCall(result *HandlerResult, loopID string, 
 	if err != nil {
 		return err
 	}
+	toolSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name)
+	if err != nil {
+		return err
+	}
+	appendTrajectoryObservation(result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindToolRequested,
+		SourceKind:        agentic.TrajectorySourceToolCall,
+		SourceCorrelation: tc.ID,
+		CausalIteration:   positiveUint32(h.loopManager.GetCurrentIteration(loopID)),
+		CausalPhase:       agentic.TrajectoryPhaseToolRequest,
+		CausalOrdinal:     h.loopManager.GetToolOrdinal(tc.ID),
+		Status:            agentic.TrajectoryStatusRequested,
+		ToolPreview:       tc.Name,
+		Evidence:          tc,
+	})
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "tool.execute", tc.Name),
+		Subject: toolSubject,
 		Data:    toolData,
 	})
 	return nil
@@ -1613,6 +1691,7 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 		slog.Int("completion_tokens", completionTokens),
 		slog.Int("model_limit", modelLimit))
 
+	beforeCompaction := cm.GetContext()
 	compactStart := time.Now()
 	compactResult, compactErr := h.compactor.Compact(ctx, cm)
 	if compactErr != nil {
@@ -1652,7 +1731,25 @@ func (h *MessageHandler) handleLengthTruncation(ctx context.Context, loopID stri
 		Duration:    compactDuration,
 	}
 	result.TrajectorySteps = append(result.TrajectorySteps, retryStep)
-	if _, addErr := h.trajectoryManager.AddStep(loopID, retryStep); addErr != nil {
+	appendTrajectoryObservation(result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindContextCompacted,
+		SourceKind:        agentic.TrajectorySourceCompaction,
+		SourceCorrelation: "length_truncation_retry",
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseCompaction,
+		ElapsedMS:         compactDuration,
+		Status:            agentic.TrajectoryStatusCompleted,
+		TokensIn:          positiveUint64(compactResult.EvictedTokens),
+		TokensOut:         positiveUint64(compactResult.NewTokens),
+		ModelPreview:      compactResult.Model,
+		Evidence: trajectoryCompactionEvidence{
+			Before: beforeCompaction,
+			After:  cm.GetContext(),
+			Result: compactResult,
+		},
+	})
+	if _, addErr := h.trajectoryManager.addStep(loopID, retryStep); addErr != nil {
 		h.logger.Warn("failed to add compaction-retry trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -1716,9 +1813,27 @@ func (h *MessageHandler) emitRetryRequest(ctx context.Context, loopID string, en
 	if err != nil {
 		return err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return err
+	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+		Subject: requestSubject,
 		Data:    requestData,
+	})
+	appendTrajectoryObservation(result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindModelRequested,
+		SourceKind:        agentic.TrajectorySourceRequest,
+		SourceCorrelation: request.RequestID,
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseModelRequest,
+		Status:            agentic.TrajectoryStatusRequested,
+		MessageCount:      uint32(len(request.Messages)),
+		ToolCount:         uint32(len(request.Tools)),
+		ModelPreview:      request.Model,
+		CapabilityPreview: request.Role,
+		Evidence:          request,
 	})
 
 	h.logger.Info("emitted compaction-retry agent.request",
@@ -1864,10 +1979,10 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	// Pull token totals from trajectory for cost tracking. Also doubles as
 	// the source-of-truth for the #133 terminal-tool-less check below —
 	// scanning the same trajectory snapshot here avoids a second
-	// trajectoryManager.GetTrajectory round-trip and keeps the cost +
+	// trajectoryManager.getTrajectory round-trip and keeps the cost +
 	// synthesis decisions consistent on the same step set.
 	var trajectorySteps []agentic.TrajectoryStep
-	if traj, trajErr := h.trajectoryManager.GetTrajectory(loopID); trajErr == nil {
+	if traj, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {
 		completion.TokensIn = traj.TotalTokensIn
 		completion.TokensOut = traj.TotalTokensOut
 		trajectorySteps = traj.Steps
@@ -1913,8 +2028,12 @@ func (h *MessageHandler) handleCompleteResponse(result *HandlerResult, loopID st
 	if err != nil {
 		return err
 	}
+	completionSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID)
+	if err != nil {
+		return err
+	}
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.complete", loopID),
+		Subject: completionSubject,
 		Data:    completionData,
 	})
 
@@ -1931,6 +2050,37 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 	if err := ctx.Err(); err != nil {
 		return HandlerResult{}, err
 	}
+	originalToolResult := toolResult
+	entity, err := h.loopManager.GetLoop(loopID)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	result := HandlerResult{
+		LoopID:            loopID,
+		State:             entity.State,
+		PendingTools:      h.loopManager.GetPendingTools(loopID),
+		PublishedMessages: []PublishedMessage{},
+		TrajectorySteps:   []agentic.TrajectoryStep{},
+		ContextEvents:     []agentic.ContextEvent{},
+	}
+	appendTrajectoryObservation(&result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindToolCompleted,
+		SourceKind:        agentic.TrajectorySourceToolCall,
+		SourceCorrelation: originalToolResult.CallID,
+		CausalIteration:   positiveUint32(entity.Iterations),
+		CausalPhase:       agentic.TrajectoryPhaseToolResult,
+		CausalOrdinal:     h.loopManager.GetToolOrdinal(originalToolResult.CallID),
+		ElapsedMS:         h.computeToolDuration(originalToolResult.CallID),
+		Status:            toolResultStatus(originalToolResult),
+		ToolPreview:       originalToolResult.Name,
+		CapabilityPreview: entity.Role,
+		ErrorCategory:     toolErrorCategory(originalToolResult),
+		Evidence: trajectoryToolCompletionEvidence{
+			Result:            originalToolResult,
+			DispatchArguments: h.loopManager.GetToolArguments(originalToolResult.CallID),
+		},
+	})
 
 	// Check for timeout before processing
 	if h.loopManager.IsTimedOut(loopID) {
@@ -1940,10 +2090,7 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 				slog.String("loop_id", loopID),
 				slog.String("error", err.Error()))
 		}
-		result := HandlerResult{
-			LoopID: loopID,
-			State:  agentic.LoopStateFailed,
-		}
+		result.State = agentic.LoopStateFailed
 		// Publish failure events for reactive workflows to observe
 		if failure, failMsgs, fErr := h.BuildFailureMessages(loopID, "timeout", "loop timeout exceeded"); fErr == nil {
 			result.PublishedMessages = failMsgs
@@ -1963,11 +2110,6 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 			slog.Int("max_bytes", h.config.ToolResultMaxBytes))
 	}
 
-	entity, err := h.loopManager.GetLoop(loopID)
-	if err != nil {
-		return HandlerResult{}, err
-	}
-
 	// Store this tool result for accumulation
 	err = h.loopManager.StoreToolResult(loopID, toolResult)
 	if err != nil {
@@ -1980,22 +2122,15 @@ func (h *MessageHandler) HandleToolResult(ctx context.Context, loopID string, to
 		return HandlerResult{}, err
 	}
 
-	result := HandlerResult{
-		LoopID:            loopID,
-		State:             entity.State,
-		PendingTools:      h.loopManager.GetPendingTools(loopID),
-		PublishedMessages: []PublishedMessage{},
-		TrajectorySteps:   []agentic.TrajectoryStep{},
-		ContextEvents:     []agentic.ContextEvent{},
-	}
+	result.PendingTools = h.loopManager.GetPendingTools(loopID)
 
 	// Record trajectory step
 	step := h.buildToolTrajectoryStep(toolResult, entity)
 	result.TrajectorySteps = append(result.TrajectorySteps, step)
 
-	// Eagerly add step to trajectory manager so the tool_call is available
-	// when finalizeTrajectory snapshots the trajectory for the TTL cache.
-	if _, addErr := h.trajectoryManager.AddStep(loopID, step); addErr != nil {
+	// Eagerly add the step so active-loop completion mechanics can inspect
+	// tool calls and calculate token totals from one in-process snapshot.
+	if _, addErr := h.trajectoryManager.addStep(loopID, step); addErr != nil {
 		h.logger.Warn("failed to add tool_call trajectory step",
 			slog.String("loop_id", loopID),
 			slog.String("error", addErr.Error()))
@@ -2124,8 +2259,12 @@ func (h *MessageHandler) gateForApproval(loopID string, entity *agentic.LoopEnti
 	if err != nil {
 		return nil, fmt.Errorf("marshal approval pending event: %w", err)
 	}
+	subject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID)
+	if err != nil {
+		return nil, err
+	}
 	return &PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.approval_pending", loopID),
+		Subject: subject,
 		Data:    data,
 	}, nil
 }
@@ -2286,10 +2425,28 @@ func (h *MessageHandler) handleToolsComplete(
 	if err != nil {
 		return *result, err
 	}
+	requestSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID)
+	if err != nil {
+		return *result, err
+	}
 
 	result.PublishedMessages = append(result.PublishedMessages, PublishedMessage{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.request", loopID),
+		Subject: requestSubject,
 		Data:    requestData,
+	})
+	appendTrajectoryObservation(result, trajectoryObservation{
+		LoopID:            loopID,
+		Kind:              agentic.TrajectoryKindModelRequested,
+		SourceKind:        agentic.TrajectorySourceRequest,
+		SourceCorrelation: request.RequestID,
+		CausalIteration:   positiveUint32(newIteration),
+		CausalPhase:       agentic.TrajectoryPhaseModelRequest,
+		Status:            agentic.TrajectoryStatusRequested,
+		MessageCount:      uint32(len(request.Messages)),
+		ToolCount:         uint32(len(request.Tools)),
+		ModelPreview:      request.Model,
+		CapabilityPreview: request.Role,
+		Evidence:          request,
 	})
 
 	return *result, nil
@@ -2406,7 +2563,7 @@ func (h *MessageHandler) buildFailureEvent(loopID, reason, errorMsg string) (*ag
 	}
 
 	// Pull token totals from trajectory for cost tracking
-	if traj, trajErr := h.trajectoryManager.GetTrajectory(loopID); trajErr == nil {
+	if traj, trajErr := h.trajectoryManager.getTrajectory(loopID); trajErr == nil {
 		failure.TokensIn = traj.TotalTokensIn
 		failure.TokensOut = traj.TotalTokensOut
 	} else {
@@ -2436,9 +2593,13 @@ func (h *MessageHandler) BuildFailureMessages(loopID, reason, errorMsg string) (
 	if err != nil {
 		return nil, nil, err
 	}
+	failureSubject, err := component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	return failure, []PublishedMessage{{
-		Subject: component.ResolveSubject(h.config.Ports.Outputs, "agent.failed", loopID),
+		Subject: failureSubject,
 		Data:    data,
 	}}, nil
 }
@@ -2456,11 +2617,6 @@ func (h *MessageHandler) UpdateLoop(entity agentic.LoopEntity) error {
 // CancelLoop atomically cancels a loop and populates completion data.
 func (h *MessageHandler) CancelLoop(loopID, cancelledBy string) (agentic.LoopEntity, error) {
 	return h.loopManager.CancelLoop(loopID, cancelledBy)
-}
-
-// GetTrajectory retrieves a trajectory snapshot for a given loop ID.
-func (h *MessageHandler) GetTrajectory(loopID string) (agentic.Trajectory, error) {
-	return h.trajectoryManager.GetTrajectory(loopID)
 }
 
 // GetContextManager returns the ContextManager for a given loop ID.

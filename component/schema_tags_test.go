@@ -545,34 +545,71 @@ func TestGenerateConfigSchema_NonStruct(t *testing.T) {
 }
 
 func TestGeneratePortFieldSchema(t *testing.T) {
-	// This test assumes PortDefinition has schema tags added
-	// For now, test the basic structure
 	fields := GeneratePortFieldSchema()
-
-	if fields == nil {
-		t.Errorf("GeneratePortFieldSchema() returned nil")
-		return
+	configField, ok := fields["config"]
+	if !ok || configField.Type != "object" || !configField.Editable {
+		t.Fatalf("config field = %#v", configField)
 	}
-
-	// Check that we get field metadata
-	expectedFields := []string{
-		"name",
-		"type",
-		"subject",
-		"interface",
-		"required",
-		"description",
-		"timeout",
-		"stream_name",
+	if len(fields) != 4 {
+		t.Fatalf("fields = %#v, want only canonical common-envelope fields", fields)
 	}
-	for _, fieldName := range expectedFields {
-		if _, exists := fields[fieldName]; !exists {
-			// Without schema tags on PortDefinition, fields will have defaults
-			// This is expected for now
-			t.Logf("Field %s has default metadata", fieldName)
+	if len(configField.Variants) != len(canonicalPortKinds) {
+		t.Fatalf("config variants = %d, want %d canonical kinds", len(configField.Variants), len(canonicalPortKinds))
+	}
+	nats := configField.Variants[string(PortKindNATS)]
+	if !sameStrings(nats.Required, []string{"kind", "subject"}) ||
+		!sameDirections(nats.Directions, []Direction{DirectionInput, DirectionOutput}) {
+		t.Fatalf("nats schema = %#v", nats)
+	}
+	if kind := nats.Properties["kind"]; !sameStrings(kind.Enum, []string{string(PortKindNATS)}) {
+		t.Fatalf("nats kind schema = %#v", kind)
+	}
+	jetstream := configField.Variants[string(PortKindJetStream)]
+	if !sameStrings(jetstream.Required, []string{"kind", "subjects"}) {
+		t.Fatalf("jetstream common requirements = %#v", jetstream.Required)
+	}
+	if got := jetstream.RequiredByDirection[DirectionInput]; !sameStrings(got, []string{"stream_name"}) {
+		t.Fatalf("jetstream input requirements = %#v", jetstream.RequiredByDirection)
+	}
+	if got := jetstream.RequiredByDirection[DirectionOutput]; len(got) != 0 {
+		t.Fatalf("jetstream output requirements = %#v", jetstream.RequiredByDirection)
+	}
+	if len(jetstream.AnyRequired) != 0 {
+		t.Fatalf("jetstream retains alternative requirements = %#v", jetstream.AnyRequired)
+	}
+	if got := configField.Variants[string(PortKindTimer)].Directions; !sameDirections(got, []Direction{DirectionInput}) {
+		t.Fatalf("timer directions = %v", got)
+	}
+	if got := configField.Variants[string(PortKindKVWrite)].Directions; !sameDirections(got, []Direction{DirectionOutput}) {
+		t.Fatalf("kv-write directions = %v", got)
+	}
+	for kind, variant := range configField.Variants {
+		if variant.AdditionalProperties == nil || *variant.AdditionalProperties {
+			t.Errorf("variant %q does not close unknown fields", kind)
+		}
+		for _, required := range variant.Required {
+			if _, ok := variant.Properties[required]; !ok {
+				t.Errorf("variant %q requires missing property %q", kind, required)
+			}
+		}
+		for direction, requiredFields := range variant.RequiredByDirection {
+			if direction != DirectionInput && direction != DirectionOutput {
+				t.Errorf("variant %q has unknown required direction %q", kind, direction)
+			}
+			for _, required := range requiredFields {
+				if _, ok := variant.Properties[required]; !ok {
+					t.Errorf("variant %q requires missing %s property %q", kind, direction, required)
+				}
+			}
 		}
 	}
 }
+
+func sameStrings(got, want []string) bool { return reflect.DeepEqual(got, want) }
+
+func sameDirections(got, want []Direction) bool { return reflect.DeepEqual(got, want) }
+
+func sameStringGroups(got, want [][]string) bool { return reflect.DeepEqual(got, want) }
 
 func TestGeneratePortFieldSchema_WithTags(t *testing.T) {
 	// Test struct with schema tags

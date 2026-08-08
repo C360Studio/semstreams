@@ -32,11 +32,11 @@ func TestWebSocketFederation_AckFlow(t *testing.T) {
 
 	// Setup WebSocket Output (sender)
 	outputPort := getIntegrationPort(t)
-	wsOutput := NewOutputFromConfig(ConstructorConfig{
+	wsOutput := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-output",
-		Port:            outputPort,
 		Path:            "/stream",
-		Subjects:        []string{"sensor.data"},
+		InputPorts:      natsInputDefinitions([]string{"sensor.data"}),
+		OutputPorts:     websocketOutputDefinitions(outputPort),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
@@ -138,16 +138,16 @@ func TestWebSocketFederation_NackFlow(t *testing.T) {
 
 	// Setup WebSocket Output (sender)
 	outputPort := getIntegrationPort(t)
-	wsOutput := NewOutputFromConfig(ConstructorConfig{
+	wsOutput := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-output-nack",
-		Port:            outputPort,
 		Path:            "/stream",
-		Subjects:        []string{"sensor.nack"},
+		InputPorts:      natsInputDefinitions([]string{"sensor.nack"}),
+		OutputPorts:     websocketOutputDefinitions(outputPort),
 		NATSClient:      natsClientOutput.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtLeastOnce,
-		AckTimeout:      2 * time.Second, // Short timeout for faster test
+		AckTimeout:      2 * time.Second,
 	})
 
 	require.NoError(t, wsOutput.Initialize())
@@ -236,11 +236,11 @@ func TestWebSocketFederation_MessageEnvelopeProtocol(t *testing.T) {
 
 	// Setup WebSocket Output
 	outputPort := getAvailablePort(t)
-	wsOutput := NewOutputFromConfig(ConstructorConfig{
+	wsOutput := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-output-envelope",
-		Port:            outputPort,
 		Path:            "/stream",
-		Subjects:        []string{"sensor.envelope"},
+		InputPorts:      natsInputDefinitions([]string{"sensor.envelope"}),
+		OutputPorts:     websocketOutputDefinitions(outputPort),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
@@ -350,15 +350,16 @@ func TestWebSocketFederation_PassthroughPreservesBytes(t *testing.T) {
 			ctx := context.Background()
 
 			outputPort := getAvailablePort(t)
-			wsOutput := NewOutputFromConfig(ConstructorConfig{
+			wsOutput := mustNewOutputFromConfig(t, ConstructorConfig{
 				Name:        "test-passthrough-wire",
-				Port:        outputPort,
 				Path:        "/stream",
-				Subjects:    []string{"boid.snapshot"},
+				InputPorts:  natsInputDefinitions([]string{"boid.snapshot"}),
+				OutputPorts: websocketOutputDefinitions(outputPort),
 				NATSClient:  natsClient.Client,
 				Security:    security.Config{},
 				Passthrough: tc.passthrough,
 			})
+
 			require.NoError(t, wsOutput.Initialize())
 			require.NoError(t, wsOutput.Start(ctx))
 			defer wsOutput.Stop(5 * time.Second)
@@ -453,17 +454,18 @@ func TestWebSocketOutput_PingSerializesWithFrameWrites(t *testing.T) {
 	ctx := context.Background()
 
 	outputPort := getAvailablePort(t)
-	wsOutput := NewOutputFromConfig(ConstructorConfig{
+	wsOutput := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-output-ping-lock",
-		Port:            outputPort,
 		Path:            "/stream",
-		Subjects:        []string{"sensor.pinglock"},
+		InputPorts:      natsInputDefinitions([]string{"sensor.pinglock"}),
+		OutputPorts:     websocketOutputDefinitions(outputPort),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: metric.NewMetricsRegistry(),
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NoError(t, wsOutput.Initialize())
 	require.NoError(t, wsOutput.Start(ctx))
 	defer wsOutput.Stop(5 * time.Second)

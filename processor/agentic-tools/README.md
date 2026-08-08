@@ -38,10 +38,10 @@ The `agentic-tools` component executes tool calls from the agentic loop orchestr
     "allowed_tools": null,
     "ports": {
       "inputs": [
-        {"name": "tool_calls", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "AGENT"}
+        {"name":"tool_calls","config":{"kind":"jetstream","subjects":["tool.execute.>"],"stream_name":"AGENT"}}
       ],
       "outputs": [
-        {"name": "tool_results", "type": "jetstream", "subject": "tool.result.*", "stream_name": "AGENT"}
+        {"name":"tool_results","config":{"kind":"jetstream","subjects":["tool.result.*"],"stream_name":"AGENT"}}
       ]
     }
   }

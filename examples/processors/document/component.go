@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
@@ -37,21 +36,14 @@ type ComponentConfig struct {
 func DefaultConfig() ComponentConfig {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "raw.document.>",
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "raw.document.>"}, Required: true,
 			Description: "NATS subjects with document JSON data",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_output",
-			Type:        "nats",
-			Subject:     "events.graph.entity.document",
-			Interface:   "domain.content.document.v1",
-			Required:    true,
+			Name: "nats_output", Config: component.NATSPort{Subject: "events.graph.entity.document", Interface: &component.InterfaceContract{Type: "domain.content.document.v1"}}, Required: true,
 			Description: "NATS subject for Graphable document payloads",
 		},
 	}
@@ -71,12 +63,14 @@ var documentSchema = component.GenerateConfigSchema(reflect.TypeOf(ComponentConf
 
 // Component wraps the domain-specific document processor with component lifecycle.
 type Component struct {
-	name       string
-	subjects   []string
-	outputSubj string
-	config     ComponentConfig // Store full config for port type checking
-	natsClient *natsclient.Client
-	logger     *slog.Logger
+	name        string
+	subjects    []string
+	outputSubj  string
+	inputPorts  []component.Port
+	outputPorts []component.Port
+	config      ComponentConfig // Store full config for port type checking
+	natsClient  *natsclient.Client
+	logger      *slog.Logger
 
 	// Domain processor (stateless, pure business logic)
 	processor *Processor
@@ -127,20 +121,40 @@ func NewComponent(
 			errs.ErrInvalidConfig, "DocumentComponent", "NewComponent",
 			"Platform is required")
 	}
+	if len(config.Ports.Outputs) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "exactly one output port is required")
+	}
 
 	// Extract subjects from port configuration
 	var inputSubjects []string
 	var outputSubject string
-
-	for _, input := range config.Ports.Inputs {
-		if input.Type == "nats" || input.Type == "jetstream" {
-			inputSubjects = append(inputSubjects, input.Subject)
+	inputPorts := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		input, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve input port")
 		}
+		facts, err := input.Facts()
+		if err != nil || len(facts.NATSSubjects()) != 1 {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "input port must declare one NATS subject")
+		}
+		inputPorts = append(inputPorts, input)
+		inputSubjects = append(inputSubjects, facts.NATSSubjects()[0])
 	}
-
-	if len(config.Ports.Outputs) > 0 {
-		outputSubject = config.Ports.Outputs[0].Subject
+	outputPorts := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		output, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, "DocumentComponent", "NewComponent", "resolve output port")
+		}
+		facts, err := output.Facts()
+		if err != nil || len(facts.NATSSubjects()) != 1 {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "DocumentComponent", "NewComponent", "output port must declare one NATS subject")
+		}
+		outputPorts = append(outputPorts, output)
 	}
+	facts, _ := outputPorts[0].Facts()
+	outputSubject = facts.NATSSubjects()[0]
 
 	if len(inputSubjects) == 0 {
 		return nil, errs.WrapInvalid(
@@ -155,16 +169,18 @@ func NewComponent(
 	})
 
 	return &Component{
-		name:       "document-processor",
-		subjects:   inputSubjects,
-		outputSubj: outputSubject,
-		config:     config, // Store full config for port type checking
-		natsClient: deps.NATSClient,
-		logger:     deps.GetLogger(),
-		processor:  processor,
-		shutdown:   make(chan struct{}),
-		done:       make(chan struct{}),
-		wg:         &sync.WaitGroup{},
+		name:        "document-processor",
+		subjects:    inputSubjects,
+		outputSubj:  outputSubject,
+		inputPorts:  inputPorts,
+		outputPorts: outputPorts,
+		config:      config, // Store full config for port type checking
+		natsClient:  deps.NATSClient,
+		logger:      deps.GetLogger(),
+		processor:   processor,
+		shutdown:    make(chan struct{}),
+		done:        make(chan struct{}),
+		wg:          &sync.WaitGroup{},
 	}, nil
 }
 
@@ -187,21 +203,22 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Subscribe to input subjects - check port type for each
-	for i, port := range c.config.Ports.Inputs {
-		subject := port.Subject
-		if subject == "" && i < len(c.subjects) {
-			subject = c.subjects[i]
+	for _, port := range c.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
+		subject := facts.NATSSubjects()[0]
 
 		c.logger.Debug("Setting up subscription",
 			"component", c.name,
 			"port", port.Name,
 			"subject", subject,
-			"type", port.Type)
+			"type", facts.Kind())
 
-		if port.Type == "jetstream" {
+		if facts.Kind() == component.PortKindJetStream {
 			// JetStream subscription - use durable consumer
-			if err := c.setupJetStreamConsumer(ctx, port.Name, subject); err != nil {
+			if err := c.setupJetStreamConsumer(ctx, port); err != nil {
 				c.logger.Error("Failed to setup JetStream consumer",
 					"component", c.name,
 					"port", port.Name,
@@ -209,7 +226,7 @@ func (c *Component) Start(ctx context.Context) error {
 					"error", err)
 				return errs.WrapTransient(err, "DocumentComponent", "Start", fmt.Sprintf("setup JetStream consumer for %s", subject))
 			}
-		} else {
+		} else if facts.Kind() == component.PortKindNATS {
 			// Core NATS subscription
 			sub, err := c.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				c.handleMessage(ctx, msg.Data)
@@ -222,12 +239,14 @@ func (c *Component) Start(ctx context.Context) error {
 				return errs.WrapTransient(err, "DocumentComponent", "Start", fmt.Sprintf("subscribe to %s", subject))
 			}
 			c.subscriptions = append(c.subscriptions, sub)
+		} else {
+			return fmt.Errorf("unsupported input port %s kind %s", port.Name, facts.Kind())
 		}
 
 		c.logger.Debug("Subscription setup successfully",
 			"component", c.name,
 			"subject", subject,
-			"type", port.Type,
+			"type", facts.Kind(),
 			"output_subject", c.outputSubj)
 	}
 
@@ -297,45 +316,27 @@ func (c *Component) IsStarted() bool {
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (c *Component) isJetStreamPortBySubject(subject string) bool {
-	if c.config.Ports == nil {
-		return false
-	}
-	for _, port := range c.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
+	for _, port := range c.outputPorts {
+		facts, err := port.Facts()
+		if err == nil && len(facts.NATSSubjects()) == 1 && facts.NATSSubjects()[0] == subject {
+			return facts.Kind() == component.PortKindJetStream
 		}
 	}
 	return false
 }
 
-// getInputPortDef returns the port definition for an input port by name
-func (c *Component) getInputPortDef(portName string) *component.PortDefinition {
-	if c.config.Ports == nil {
-		return nil
-	}
-	for _, port := range c.config.Ports.Inputs {
-		if port.Name == portName {
-			return &port
-		}
-	}
-	return nil
-}
-
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subject string) error {
-	portDef := c.getInputPortDef(portName)
-	if portDef == nil {
-		return fmt.Errorf("port %s not found", portName)
+func (c *Component) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-
-	// Derive stream name from subject or use explicit stream name
-	streamName := portDef.StreamName
-	if streamName == "" {
-		streamName = config.DeriveStreamName(subject)
+	stream, ok := facts.Stream()
+	if !ok || len(stream.Subjects()) != 1 {
+		return fmt.Errorf("port %s must declare one JetStream subject", port.Name)
 	}
-	if streamName == "" {
-		return fmt.Errorf("could not derive stream name for subject %s", subject)
-	}
+	streamName := stream.Name()
+	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -363,7 +364,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 		AutoCreate:    false,
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamMessage(msgCtx, msg)
 	})
 	if err != nil {
@@ -604,39 +605,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns the NATS input ports this processor subscribes to.
 func (c *Component) InputPorts() []component.Port {
-	ports := make([]component.Port, len(c.subjects))
-	for i, subj := range c.subjects {
-		ports[i] = component.Port{
-			Name:      fmt.Sprintf("input_%d", i),
-			Direction: component.DirectionInput,
-			Required:  true,
-			Config: component.NATSPort{
-				Subject: subj,
-			},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), c.inputPorts...)
 }
 
 // OutputPorts returns the NATS output port for Graphable documents.
 func (c *Component) OutputPorts() []component.Port {
-	if c.outputSubj == "" {
-		return []component.Port{}
-	}
-	return []component.Port{
-		{
-			Name:      "output",
-			Direction: component.DirectionOutput,
-			Required:  false,
-			Config: component.NATSPort{
-				Subject: c.outputSubj,
-				Interface: &component.InterfaceContract{
-					Type:    "domain.content.document.v1",
-					Version: "v1",
-				},
-			},
-		},
-	}
+	return append([]component.Port(nil), c.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema for this processor.

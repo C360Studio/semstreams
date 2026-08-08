@@ -87,7 +87,7 @@ func TestHandleSpawnIdentityFailure_GraphStatePoisonFailsLoopPerEntity(t *testin
 	if err != nil {
 		t.Fatalf("GetLoop() before error = %v", err)
 	}
-	if _, err := handler.trajectoryManager.StartTrajectory(loopID); err != nil {
+	if _, err := handler.trajectoryManager.startTrajectory(loopID); err != nil {
 		t.Fatalf("StartTrajectory() error = %v", err)
 	}
 
@@ -167,7 +167,7 @@ func TestHandleSpawnIdentityFailure_OperationalErrorUsesBusinessFailurePath(t *t
 	c := &Component{
 		handler: &MessageHandler{
 			loopManager:       loopManager,
-			trajectoryManager: NewTrajectoryManager(),
+			trajectoryManager: newTrajectoryManager(),
 			logger:            logger,
 		},
 		logger: logger,

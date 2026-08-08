@@ -51,7 +51,7 @@ func TestCanonicalMutationRoutesComeOnlyFromTypedProvider(t *testing.T) {
 func TestCanonicalMutationRoutesRejectLegacyCompanionPort(t *testing.T) {
 	c := createTestComponentWithMockKV(t)
 	c.config.Ports.Inputs = append(c.config.Ports.Inputs, component.PortDefinition{
-		Name: "legacy_mutations", Type: "nats-request", Subject: "graph.mutation.*", Required: true,
+		Name: "legacy_mutations", Config: component.NATSRequestPort{Subject: "graph.mutation.*"}, Required: true,
 	})
 	if routes, err := c.canonicalMutationRoutes(); err == nil {
 		t.Fatalf("legacy mutation port was accepted beside canonical routes: %#v", routes)

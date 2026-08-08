@@ -187,69 +187,38 @@ func (c *ViolationConfig) Validate() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "task_validation",
-			Type:        "jetstream",
-			Subject:     "agent.task.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "task_validation", Config: component.JetStreamPort{Subjects: []string{"agent.task.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "User task requests to validate (JetStream)",
 		},
 		{
-			Name:        "request_validation",
-			Type:        "jetstream",
-			Subject:     "agent.request.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "request_validation", Config: component.JetStreamPort{Subjects: []string{"agent.request.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Outgoing model requests to validate (JetStream)",
 		},
 		{
-			Name:        "response_validation",
-			Type:        "jetstream",
-			Subject:     "agent.response.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "response_validation", Config: component.JetStreamPort{Subjects: []string{"agent.response.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Incoming model responses to validate (JetStream)",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "agent.task.validated",
-			Type:        "jetstream",
-			Subject:     "agent.task.validated.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.task.validated", Config: component.JetStreamPort{Subjects: []string{"agent.task.validated.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Validated task messages",
 		},
 		{
-			Name:        "agent.request.validated",
-			Type:        "jetstream",
-			Subject:     "agent.request.validated.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.request.validated", Config: component.JetStreamPort{Subjects: []string{"agent.request.validated.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Validated agent requests",
 		},
 		{
-			Name:        "agent.response.validated",
-			Type:        "jetstream",
-			Subject:     "agent.response.validated.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "agent.response.validated", Config: component.JetStreamPort{Subjects: []string{"agent.response.validated.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Validated agent responses",
 		},
 		{
-			Name:        "violations",
-			Type:        "jetstream",
-			Subject:     "governance.violation.*",
-			StreamName:  "AGENT",
-			Required:    true,
+			Name: "violations", Config: component.JetStreamPort{Subjects: []string{"governance.violation.*"}, StreamName: "AGENT"}, Required: true,
 			Description: "Policy violations for audit (JetStream)",
 		},
 		{
-			Name:        "user_errors",
-			Type:        "nats",
-			Subject:     "user.response.*",
-			Required:    false,
+			Name: "user_errors", Config: component.NATSPort{Subject: "user.response.*"}, Required: false,
 			Description: "Error notifications to users (NATS)",
 		},
 	}

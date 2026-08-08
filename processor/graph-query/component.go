@@ -91,10 +91,10 @@ func DefaultConfig() Config {
 	return Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "query_entity", Type: "nats-request", Subject: "graph.query.entity"},
-				{Name: "query_batch", Type: "nats-request", Subject: "graph.query.batch"},
-				{Name: "query_relationships", Type: "nats-request", Subject: "graph.query.relationships"},
-				{Name: "query_path_search", Type: "nats-request", Subject: "graph.query.pathSearch"},
+				{Name: "query_entity", Config: component.NATSRequestPort{Subject: "graph.query.entity"}},
+				{Name: "query_batch", Config: component.NATSRequestPort{Subject: "graph.query.batch"}},
+				{Name: "query_relationships", Config: component.NATSRequestPort{Subject: "graph.query.relationships"}},
+				{Name: "query_path_search", Config: component.NATSRequestPort{Subject: "graph.query.pathSearch"}},
 			},
 			Outputs: []component.PortDefinition{},
 		},
@@ -106,6 +106,7 @@ func DefaultConfig() Config {
 // Component implements the graph query coordinator
 type Component struct {
 	config        Config
+	inputs        []component.Port
 	natsClient    natsRequester
 	pathSearcher  *PathSearcher
 	router        *StaticRouter
@@ -193,10 +194,19 @@ func CreateGraphQuery(rawConfig json.RawMessage, deps component.Dependencies) (c
 	}
 
 	logger := deps.GetLoggerWithComponent("graph-query")
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, fmt.Errorf("resolve input port: %w", err)
+		}
+		inputs = append(inputs, port)
+	}
 
 	// Create component with keyword-only classifier; LLM classifier wired in Start()
 	comp := &Component{
 		config:               config,
+		inputs:               inputs,
 		natsClient:           deps.NATSClient, // Assign to interface field
 		pathSearcher:         NewPathSearcher(deps.NATSClient, config.QueryTimeout, config.MaxDepth, logger),
 		logger:               logger,
@@ -238,24 +248,13 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	// Build ports from configuration
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		port := component.BuildPortFromDefinition(portDef, component.DirectionInput)
-		ports = append(ports, port)
-	}
-
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns the component's output ports (none for query coordinator)
 func (c *Component) OutputPorts() []component.Port {
 	// Query coordinator has no output ports - it returns data via request/reply
-	return []component.Port{}
+	return nil
 }
 
 // ConfigSchema returns the JSON schema for the component's configuration

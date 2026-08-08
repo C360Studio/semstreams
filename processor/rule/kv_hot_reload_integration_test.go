@@ -40,20 +40,12 @@ func buildHotReloadProcessor(t *testing.T, natsClient *natsclient.Client) *Proce
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "entity_events",
-				Type:      "nats",
-				Subject:   "events.graph.entity.>",
-				Interface: "core.entity.v1",
-				Required:  true,
+				Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>", Interface: &component.InterfaceContract{Type: "core.entity.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.triggered",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}
@@ -369,20 +361,12 @@ func TestHotReload_KVInitFailure(t *testing.T) {
 	cfg.Ports = &component.PortConfig{
 		Inputs: []component.PortDefinition{
 			{
-				Name:      "entity_events",
-				Type:      "nats",
-				Subject:   "events.graph.entity.>",
-				Interface: "core.entity.v1",
-				Required:  true,
+				Name: "entity_events", Config: component.NATSPort{Subject: "events.graph.entity.>", Interface: &component.InterfaceContract{Type: "core.entity.v1"}}, Required: true,
 			},
 		},
 		Outputs: []component.PortDefinition{
 			{
-				Name:      "rule_events",
-				Type:      "nats",
-				Subject:   "events.rule.triggered",
-				Interface: "core.rule.v1",
-				Required:  true,
+				Name: "rule_events", Config: component.NATSPort{Subject: "events.rule.triggered", Interface: &component.InterfaceContract{Type: "core.rule.v1"}}, Required: true,
 			},
 		},
 	}

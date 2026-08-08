@@ -17,7 +17,7 @@ recipe for tuning each layer in lockstep.
 │  max_deliver           // cap on redelivery attempts                  │
 │  deliver_policy        // "new" / "all" / "last"                      │
 │  ack_policy            // "explicit" / "none" / "all"                 │
-│  // max_ack_pending is per-component (not on JetStreamPort yet)       │
+│  max_ack_pending       // cap delivered-but-unacked work              │
 └──────────────────────────────────────────────────────────────────────┘
             ↓ work goroutine receives workCtx (cancel on heartbeat fail)
 ┌─ Per-task LLM call wallclock budget ─────────────────────────────────┐
@@ -93,7 +93,6 @@ config-shape implications across the chain, not just one knob.
 
 ```yaml
 # agentic-loop consumer (agent.task / response / tool.result)
-# component-level ConsumerConfig (legacy surface, still supported)
 ack_wait: 90s
 max_deliver: 2
 max_ack_pending: 1
@@ -103,7 +102,7 @@ backoff: [30s, 2m]
 # agentic-model
 timeout: 110s          # framework default
 
-# agentic-model + agentic-tools per-port consumer config (preferred surface)
+# agentic-model + agentic-tools per-port consumer config
 # ports[].config.ack_wait, .heartbeat_interval, .max_deliver, .deliver_policy,
 # .ack_policy. When unset on the port, components fall back to their
 # historical hardcoded values (agentic-model 120s/90s/3, agentic-tools 5m/2m/3).
@@ -118,7 +117,7 @@ correct since beta.52.
 ### Posture B — fail-loud-once (cost-sensitive paid LLM)
 
 ```yaml
-# agentic-loop consumer (component-level ConsumerConfig — legacy surface)
+# agentic-loop consumer
 ack_wait: 300s          # exceed worst-case request budget; never reap working tasks
 max_deliver: 1          # no redelivery, ever
 max_ack_pending: 1
@@ -132,9 +131,9 @@ timeout: 270s           # strictly less than ack_wait, leaves 30s for
 ports:
   inputs:
     - name: agent.request
-      type: jetstream
-      subject: "agent.request.>"
       config:
+        kind: jetstream
+        subjects: ["agent.request.>"]
         ack_wait: 300s
         heartbeat_interval: 60s
         max_deliver: 1
@@ -190,7 +189,7 @@ The framework exposes consumer config at two levels. Both work; the
 per-port surface is preferred for new code because it generalizes to
 any JetStream consumer without per-component plumbing.
 
-### Per-port (preferred — `JetStreamPort`)
+### Per-port `JetStreamPort`
 
 `AckWait`, `HeartbeatInterval`, `MaxDeliver`, `DeliverPolicy`,
 `AckPolicy` live on the port struct. Operators tune them per-port
@@ -200,9 +199,9 @@ in component config:
 ports:
   inputs:
     - name: agent.request
-      type: jetstream
-      subject: "agent.request.>"
       config:
+        kind: jetstream
+        subjects: ["agent.request.>"]
         ack_wait: 300s             # parsed via time.ParseDuration
         heartbeat_interval: 60s
         max_deliver: 1
@@ -210,18 +209,10 @@ ports:
         ack_policy: explicit
 ```
 
-`component.GetConsumerConfigFromDefinition(portDef)` extracts the
-parsed values. Empty strings or invalid durations log a warning and
-fall through to component-level defaults — malformed config never
-blocks startup. agentic-model and agentic-tools both use this path.
-
-### Component-level (legacy — `agentic-loop.Config.Consumer`)
-
-agentic-loop predates per-port consumer config and exposes
-`ack_wait` / `heartbeat_interval` / `max_deliver` directly on its
-component config. Backward compat is preserved; existing deployments
-don't need to migrate. New components should NOT add this surface —
-use the per-port fields instead.
+`component.GetConsumerConfig(port)` extracts the parsed values from canonical
+facts. Empty strings leave consumer-local defaults unset; malformed or
+non-positive durations fail port resolution and block startup rather than
+silently changing redelivery behavior.
 
 ## Default values reference
 

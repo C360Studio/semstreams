@@ -15,8 +15,7 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 			Inputs: []component.PortDefinition{
 				{
 					Name:        "nats_input",
-					Type:        "nats",
-					Subject:     "raw.sensor.>",
+					Config:      component.NATSPort{Subject: "raw.sensor.>"},
 					Required:    true,
 					Description: "NATS subjects with sensor JSON data",
 				},
@@ -24,9 +23,7 @@ func TestNewComponent_ValidConfig(t *testing.T) {
 			Outputs: []component.PortDefinition{
 				{
 					Name:        "nats_output",
-					Type:        "nats",
-					Subject:     "events.graph.entity.sensor",
-					Interface:   "domain.iot.sensor.v1",
+					Config:      component.NATSPort{Subject: "events.graph.entity.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}},
 					Required:    true,
 					Description: "NATS subject for Graphable sensor readings",
 				},
@@ -60,16 +57,14 @@ func TestNewComponent_MissingOrgID(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "nats_input",
-					Type:    "nats",
-					Subject: "raw.sensor.>",
+					Name:   "nats_input",
+					Config: component.NATSPort{Subject: "raw.sensor.>"},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "nats_output",
-					Type:    "nats",
-					Subject: "events.graph.entity.sensor",
+					Name:   "nats_output",
+					Config: component.NATSPort{Subject: "events.graph.entity.sensor"},
 				},
 			},
 		},
@@ -94,16 +89,14 @@ func TestNewComponent_MissingPlatform(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "nats_input",
-					Type:    "nats",
-					Subject: "raw.sensor.>",
+					Name:   "nats_input",
+					Config: component.NATSPort{Subject: "raw.sensor.>"},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "nats_output",
-					Type:    "nats",
-					Subject: "events.graph.entity.sensor",
+					Name:   "nats_output",
+					Config: component.NATSPort{Subject: "events.graph.entity.sensor"},
 				},
 			},
 		},
@@ -127,11 +120,11 @@ func TestComponent_InputPorts(t *testing.T) {
 	config := ComponentConfig{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input1", Type: "nats", Subject: "raw.sensor.1", Required: true},
-				{Name: "input2", Type: "nats", Subject: "raw.sensor.2", Required: false},
+				{Name: "input1", Config: component.NATSPort{Subject: "raw.sensor.1"}, Required: true},
+				{Name: "input2", Config: component.NATSPort{Subject: "raw.sensor.2"}, Required: false},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "events.sensor", Interface: "domain.iot.sensor.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "events.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}}, Required: true},
 			},
 		},
 		OrgID:    "acme",
@@ -166,10 +159,10 @@ func TestComponent_OutputPorts(t *testing.T) {
 	config := ComponentConfig{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "raw.sensor.>", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "raw.sensor.>"}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "events.sensor", Interface: "domain.iot.sensor.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "events.sensor", Interface: &component.InterfaceContract{Type: "domain.iot.sensor.v1"}}, Required: true},
 			},
 		},
 		OrgID:    "acme",

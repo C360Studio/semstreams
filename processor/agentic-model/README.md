@@ -36,7 +36,6 @@ The `agentic-model` component routes agent requests to OpenAI-compatible LLM end
   "name": "agentic-model",
   "enabled": true,
   "config": {
-    "stream_name": "AGENT",
     "timeout": "120s",
     "retry": {
       "max_attempts": 3,
@@ -46,10 +45,10 @@ The `agentic-model` component routes agent requests to OpenAI-compatible LLM end
     },
     "ports": {
       "inputs": [
-        {"name": "requests", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT"}
+        {"name":"requests","config":{"kind":"jetstream","subjects":["agent.request.>"],"stream_name":"AGENT"}}
       ],
       "outputs": [
-        {"name": "responses", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT"}
+        {"name":"responses","config":{"kind":"jetstream","subjects":["agent.response.*"],"stream_name":"AGENT"}}
       ]
     }
   }
@@ -65,7 +64,6 @@ for endpoint configuration.
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `timeout` | string | "120s" | Request timeout |
-| `stream_name` | string | "AGENT" | JetStream stream name |
 | `consumer_name_suffix` | string | "" | Suffix for consumer names (for testing) |
 | `retry.max_attempts` | int | 3 | Maximum retry attempts |
 | `retry.initial_delay` | string | "1s" | Initial delay before first retry |

@@ -57,19 +57,11 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:        "agent_events",
-					Subject:     "agent.>",
-					Type:        "jetstream",
-					StreamName:  "AGENT",
-					Required:    true,
+					Name: "agent_events", Config: component.JetStreamPort{Subjects: []string{"agent.>"}, StreamName: "AGENT"}, Required: true,
 					Description: "Agent lifecycle events for span collection",
 				},
 				{
-					Name:        "tool_events",
-					Subject:     "tool.result.>",
-					Type:        "jetstream",
-					StreamName:  "AGENT",
-					Required:    false,
+					Name: "tool_events", Config: component.JetStreamPort{Subjects: []string{"tool.result.>"}, StreamName: "AGENT"}, Required: false,
 					Description: "Tool results for tool span creation",
 				},
 			},

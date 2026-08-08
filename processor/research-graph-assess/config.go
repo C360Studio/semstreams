@@ -109,16 +109,12 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:        "trigger",
-					Type:        "nats",
-					Subject:     "component.assess_sufficiency.>",
-					Required:    true,
+					Name: "trigger", Config: component.NATSPort{Subject: "component.assess_sufficiency.>"}, Required: true,
 					Description: "R3's publish target. Subject suffix carries the research-pipeline loop_id.",
 				},
 			},
 			Outputs: []component.PortDefinition{{
-				Name: "graph_mutations", Type: "nats-request", Subject: graphmutation.SubjectFamily,
-				Interface: graphmutation.InterfaceType, Required: true,
+				Name: "graph_mutations", Config: component.NATSRequestPort{Subject: graphmutation.SubjectFamily, Interface: &component.InterfaceContract{Type: graphmutation.InterfaceType, Version: graphmutation.InterfaceVersion}}, Required: true,
 			}},
 		},
 		LoopsBucket:             "AGENT_LOOPS",

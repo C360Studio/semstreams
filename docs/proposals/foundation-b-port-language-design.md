@@ -19,6 +19,9 @@ Canonical exported kinds are:
 
 `timer`, `network`, `file`, `http-client`, `nats`, `nats-request`, `jetstream`, `kv-watch`, `kv-read`, `kv-write`, `store-read`, `store-provide`.
 
+`kv-watch`, `kv-read`, and `kv-write` remain distinct `PortKind` values, but all three normalize both resource ID and
+connection identity to the common `kv:<bucket>` spelling.
+
 `Portable.Type() string` becomes `Kind() PortKind`. One closed binding table owns kind factory, allowed directions, strict decoding, validation, normalization, resource identity, exclusivity, interface, interaction pattern, connection identifiers, NATS subjects, and stream facts. No custom-kind registration exists.
 
 `PortDefinition` retains `name`, `required`, `description`, and typed `Config Portable`. Definition and runtime `Port` use one wire:
@@ -52,7 +55,7 @@ An immutable normalized facts projection is produced by the unexported resolver 
 6. Delete dead `NATSStreamPortConfig` and `NATSRequestPortConfig`.
 7. Network, file, store-read, and store-provide receive strict decode/resolve/runtime round trips. Store-provide remains nonexclusive; StoreRegistry retains duplicate-owner authority.
 8. Preserve every JetStream field, including subjects, storage, retention, size, replicas, consumer settings, `MaxAckPending`, and interface.
-9. Delete all 93 flat `PortDefinition.Type` interpretations. Replace the 16 projection assertions with normalized facts. All 70 hand-rolled renderers delegate grammar work to strict merge/resolve; component-local optional-port selection may remain but cannot classify kinds.
+9. Delete all 93 flat `PortDefinition.Type` interpretations. Replace the 16 projection assertions with normalized facts. All 76 hand-rolled renderers delegate grammar work to strict merge/resolve; component-local optional-port selection may remain but cannot classify kinds.
 10. Two raw-config owner families remain visible:
     - stream provisioning consumes the canonical decoder/facts for explicit JetStream outputs;
     - message-logger temporarily projects canonical NATS/JetStream subjects from raw config until Foundation C.

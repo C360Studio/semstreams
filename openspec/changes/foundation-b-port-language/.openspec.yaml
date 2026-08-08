@@ -1,0 +1,4 @@
+schema: spec-driven
+created: 2026-08-07
+goal: Record the strict canonical port grammar, normalized discovery facts,
+  stream provisioning, mutation topology, and remaining release gates.

@@ -44,11 +44,16 @@
         "ports": {
           "inputs": [
             {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "EVENTS",
+                "subjects": [
+                  "events.entity.>"
+                ]
+              },
+              "description": "Entity event stream for graph indexing",
               "name": "entity_stream",
-              "type": "jetstream",
-              "subject": "events.entity.>",
-              "required": true,
-              "description": "Entity event stream for graph indexing"
+              "required": true
             }
           ]
         },

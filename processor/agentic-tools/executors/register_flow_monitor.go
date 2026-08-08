@@ -5,10 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/nats-io/nats.go/jetstream"
-
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/retry"
 	agentictools "github.com/c360studio/semstreams/processor/agentic-tools"
 )
 
@@ -27,11 +24,9 @@ func (a *flowStateAdapter) Get(ctx context.Context, id string) (agentictools.Flo
 	return agentictools.FlowState{RuntimeState: string(flow.RuntimeState)}, nil
 }
 
-// registerFlowMonitor opens the loops KV bucket and wires the monitor_flow
-// tool. Nil natsClient or flowMgr → skip with warn (the tool requires
-// both). A bucket-open failure is a non-fatal skip. A registry-level
-// failure (duplicate name) propagates so RegisterBuiltins can surface it
-// at boot.
+// registerFlowMonitor wires monitor_flow without opening AGENT_LOOPS. Nil
+// natsClient or flowMgr remains a legal dependency skip. The executor binds
+// the bucket must-exist when each call runs.
 //
 // The bucketName must match the one registerReadLoopResult used —
 // they're the same physical bucket, different access pattern (scan vs
@@ -47,26 +42,8 @@ func registerFlowMonitor(tools *agentictools.ExecutorRegistry, natsClient *natsc
 		return nil
 	}
 
-	// Open a fresh handle to the same KV bucket read_loop_result opened.
-	// Shared KV config means whichever register fn (or the agentic-loop
-	// component) lands first creates the bucket with the agreed-upon
-	// History/TTL; the others get the existing handle idempotently.
-	// Wrapped in retry.Quick so a transient NATS hiccup at boot doesn't
-	// silently disable the tool for the process lifetime.
-	ctx := context.Background()
-	bucket, err := retry.DoWithResult(ctx, retry.Quick(), func() (jetstream.KeyValue, error) {
-		return natsClient.CreateKeyValueBucket(ctx, newLoopResultBucketConfig(bucketName))
-	})
-	if err != nil {
-		logger.Warn("monitor_flow tool disabled: could not open loops bucket after retries",
-			slog.String("bucket", bucketName),
-			slog.Any("error", err))
-		return nil
-	}
-
-	store := natsClient.NewKVStore(bucket)
 	adapter := &flowStateAdapter{mgr: flowMgr}
-	executor := agentictools.NewFlowMonitorExecutor(store, adapter, logger)
+	executor := agentictools.NewFlowMonitorExecutor(lazyLoopsKV{client: natsClient, bucket: bucketName}, adapter, logger)
 
 	if err := tools.RegisterTool(agentictools.FlowMonitorToolName, executor); err != nil {
 		return fmt.Errorf("register monitor_flow: %w", err)

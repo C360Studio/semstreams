@@ -313,7 +313,7 @@ func (v *Validator) convertAnalysisToResult(analysis *flowgraph.FlowAnalysisResu
 
 		switch port.Issue {
 		case "no_publishers":
-			if port.Required && port.Pattern == flowgraph.PatternStream {
+			if port.Required && port.Pattern == component.PatternStream {
 				severity = "error"
 				suggestions = []string{
 					"Connect an output from another component",
@@ -330,7 +330,7 @@ func (v *Validator) convertAnalysisToResult(analysis *flowgraph.FlowAnalysisResu
 			// The component functions correctly - it just publishes to NATS with nobody listening
 			// This is not ideal, but it's not a deployment blocker
 			severity = "warning"
-			if port.Required && port.Pattern == flowgraph.PatternStream {
+			if port.Required && port.Pattern == component.PatternStream {
 				suggestions = []string{
 					"Consider connecting to a processor or output component",
 					fmt.Sprintf("Data will be published to %s but not consumed", port.ConnectionID),

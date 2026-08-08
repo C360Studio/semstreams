@@ -4,6 +4,7 @@ package flowengine_test
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"testing"
 	"time"
@@ -15,7 +16,9 @@ import (
 	"github.com/c360studio/semstreams/config"
 	flowengine "github.com/c360studio/semstreams/engine"
 	"github.com/c360studio/semstreams/flowstore"
+	udpinput "github.com/c360studio/semstreams/input/udp"
 	"github.com/c360studio/semstreams/natsclient"
+	websocketoutput "github.com/c360studio/semstreams/output/websocket"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
 )
@@ -57,6 +60,14 @@ func (s *EngineIntegrationSuite) SetupTest() {
 			Environment: "test",
 		},
 		Components: make(config.ComponentConfigs),
+		Streams: config.StreamConfigs{
+			"INPUT": {
+				Subjects: []string{"input.>"},
+				MaxAge:   "1h",
+				MaxBytes: 64 << 20,
+				Discard:  config.StreamDiscardOld,
+			},
+		},
 	}
 
 	// Create config manager
@@ -108,7 +119,7 @@ func (s *EngineIntegrationSuite) TestDeployFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5000},
+				Config:    udpFlowNodeConfig(s.T(), 5000),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -161,7 +172,7 @@ func (s *EngineIntegrationSuite) TestStartFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-start-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5001},
+				Config:    udpFlowNodeConfig(s.T(), 5001),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -223,7 +234,7 @@ func (s *EngineIntegrationSuite) TestStopFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-stop-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5002},
+				Config:    udpFlowNodeConfig(s.T(), 5002),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -277,7 +288,7 @@ func (s *EngineIntegrationSuite) TestStopNotRunningFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-minimal",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5003},
+				Config:    udpFlowNodeConfig(s.T(), 5003),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -309,7 +320,7 @@ func (s *EngineIntegrationSuite) TestUndeployFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-undeploy-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5004},
+				Config:    udpFlowNodeConfig(s.T(), 5004),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -350,7 +361,7 @@ func (s *EngineIntegrationSuite) TestUndeployRunningFlow() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-running-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5005},
+				Config:    udpFlowNodeConfig(s.T(), 5005),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -386,7 +397,7 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-lifecycle-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5006},
+				Config:    udpFlowNodeConfig(s.T(), 5006),
 			},
 			{
 				ID:        "node-2",
@@ -394,16 +405,16 @@ func (s *EngineIntegrationSuite) TestFullLifecycle() {
 				Type:      types.ComponentTypeOutput,
 				Name:      "ws-lifecycle-1",
 				Position:  flowstore.Position{X: 300, Y: 100},
-				Config:    map[string]any{"port": 8080},
+				Config:    websocketFlowNodeConfig(s.T(), 8080, "input.udp.mavlink"),
 			},
 		},
 		Connections: []flowstore.FlowConnection{
 			{
 				ID:           "conn-1",
 				SourceNodeID: "node-1",
-				SourcePort:   "output",
+				SourcePort:   "nats_output",
 				TargetNodeID: "node-2",
-				TargetPort:   "input",
+				TargetPort:   "nats_input",
 			},
 		},
 	}
@@ -477,7 +488,7 @@ func (s *EngineIntegrationSuite) TestStart_AfterDeploy_DoesNotRewriteAlreadyEnab
 				Type:      types.ComponentTypeInput,
 				Name:      "udp-idem-1",
 				Position:  flowstore.Position{X: 100, Y: 100},
-				Config:    map[string]any{"port": 5051},
+				Config:    udpFlowNodeConfig(s.T(), 5051),
 			},
 		},
 		Connections: []flowstore.FlowConnection{},
@@ -516,6 +527,55 @@ func drainUntilQuiet(ch <-chan config.Update, quiet time.Duration) {
 			return
 		}
 	}
+}
+
+func udpFlowNodeConfig(t testing.TB, port int) map[string]any {
+	t.Helper()
+
+	cfg := udpinput.DefaultConfig()
+	network, ok := cfg.Ports.Inputs[0].Config.(component.NetworkPort)
+	if !ok {
+		t.Fatalf("udp default input port config type = %T, want component.NetworkPort", cfg.Ports.Inputs[0].Config)
+	}
+	network.Port = port
+	cfg.Ports.Inputs[0].Config = network
+
+	return flowNodeConfigMap(t, cfg)
+}
+
+func websocketFlowNodeConfig(t testing.TB, port int, subject string) map[string]any {
+	t.Helper()
+
+	cfg := websocketoutput.DefaultConfig()
+	input, ok := cfg.Ports.Inputs[0].Config.(component.NATSPort)
+	if !ok {
+		t.Fatalf("websocket default input port config type = %T, want component.NATSPort", cfg.Ports.Inputs[0].Config)
+	}
+	input.Subject = subject
+	cfg.Ports.Inputs[0].Config = input
+
+	network, ok := cfg.Ports.Outputs[0].Config.(component.NetworkPort)
+	if !ok {
+		t.Fatalf("websocket default output port config type = %T, want component.NetworkPort", cfg.Ports.Outputs[0].Config)
+	}
+	network.Port = port
+	cfg.Ports.Outputs[0].Config = network
+
+	return flowNodeConfigMap(t, cfg)
+}
+
+func flowNodeConfigMap(t testing.TB, cfg any) map[string]any {
+	t.Helper()
+
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal typed flow-node config: %v", err)
+	}
+	var mapped map[string]any
+	if err := json.Unmarshal(data, &mapped); err != nil {
+		t.Fatalf("decode typed flow-node config as map: %v", err)
+	}
+	return mapped
 }
 
 func TestEngineIntegrationSuite(t *testing.T) {

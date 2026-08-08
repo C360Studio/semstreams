@@ -190,10 +190,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -206,10 +206,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "minute",
@@ -222,10 +222,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "day",
@@ -263,7 +263,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -275,7 +275,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -288,10 +288,10 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
+						{Name: "other", Config: component.KVWritePort{Bucket: "OTHER_BUCKET"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -355,10 +355,10 @@ func TestConfig_Validate_InvalidTimeResolution(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: tt.timeResolution,
@@ -404,10 +404,10 @@ func TestConfig_Validate_InvalidWorkers(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -453,10 +453,10 @@ func TestConfig_Validate_InvalidBatchSize(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -478,10 +478,10 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+				{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 			},
 		},
 	}
@@ -515,8 +515,12 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 
 	// Verify ENTITY_STATES kv-watch input
 	hasEntityWatch := false
-	for _, in := range inputs {
-		if in.Subject == "ENTITY_STATES" && in.Type == "kv-watch" {
+	for _, definition := range inputs {
+		port, resolveErr := definition.Resolve(component.DirectionInput)
+		require.NoError(t, resolveErr)
+		facts, factsErr := port.Facts()
+		require.NoError(t, factsErr)
+		if facts.ResourceID() == "kv:ENTITY_STATES" && facts.Kind() == component.PortKindKVWatch {
 			hasEntityWatch = true
 			break
 		}
@@ -529,8 +533,12 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 
 	// Verify TEMPORAL_INDEX output
 	hasTemporalIndex := false
-	for _, out := range outputs {
-		if out.Subject == "TEMPORAL_INDEX" {
+	for _, definition := range outputs {
+		port, resolveErr := definition.Resolve(component.DirectionOutput)
+		require.NoError(t, resolveErr)
+		facts, factsErr := port.Facts()
+		require.NoError(t, factsErr)
+		if facts.ResourceID() == "kv:TEMPORAL_INDEX" {
 			hasTemporalIndex = true
 			break
 		}
@@ -862,10 +870,10 @@ func TestCreateGraphIndexTemporal_CustomResolution(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+				{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 			},
 		},
 		TimeResolution: "minute",
@@ -1036,10 +1044,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",
@@ -1053,10 +1061,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "minute",
@@ -1070,10 +1078,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "second",
@@ -1087,10 +1095,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "temporal_index", Type: "kv-write", Subject: "TEMPORAL_INDEX"},
+						{Name: "temporal_index", Config: component.KVWritePort{Bucket: "TEMPORAL_INDEX"}},
 					},
 				},
 				TimeResolution: "hour",

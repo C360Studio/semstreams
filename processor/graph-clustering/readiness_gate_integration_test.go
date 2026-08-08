@@ -85,8 +85,8 @@ const testHeartbeat = 200 * time.Millisecond
 func newGateHarness(ctx context.Context, t *testing.T, nc *natsclient.Client, f *statusFixture, cfg Config) *gateHarness {
 	t.Helper()
 	cfg.Ports = &component.PortConfig{
-		Inputs:  []component.PortDefinition{{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates}},
-		Outputs: []component.PortDefinition{{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex}},
+		Inputs:  []component.PortDefinition{{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}}},
+		Outputs: []component.PortDefinition{{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}}},
 	}
 	cfg.DetectionIntervalStr = "1s"
 	cfg.MinCommunitySize = 2
@@ -419,8 +419,8 @@ func TestIntegration_ReadinessGate_WiredByComponentStart(t *testing.T) {
 		MinCommunitySize:     2,
 		MaxIterations:        10,
 		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "entity_watch", Type: "kv-watch", Subject: graph.BucketEntityStates}},
-			Outputs: []component.PortDefinition{{Name: "communities", Type: "kv-write", Subject: graph.BucketCommunityIndex}},
+			Inputs:  []component.PortDefinition{{Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates}}},
+			Outputs: []component.PortDefinition{{Name: "communities", Config: component.KVWritePort{Bucket: graph.BucketCommunityIndex}}},
 		},
 	}
 	config.ApplyDefaults()

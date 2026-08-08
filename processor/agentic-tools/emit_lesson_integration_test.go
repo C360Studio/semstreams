@@ -72,10 +72,10 @@ func startToolsWithEmitLesson(t *testing.T, natsClient *natsclient.Client) {
 	cfg := agentictools.Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "tool_calls", Type: "jetstream", Subject: "tool.execute.>", StreamName: "AGENT", Required: true},
+				{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "tool_results", Type: "jetstream", Subject: "tool.result.*", StreamName: "AGENT"},
+				{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}},
 			},
 		},
 		StreamName:         "AGENT",

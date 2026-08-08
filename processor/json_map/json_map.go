@@ -39,22 +39,18 @@ type FieldMapping struct {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_input",
-			Type:        "nats",
-			Subject:     "raw.>",
-			Interface:   "core .json.v1", // Require GenericJSON
-			Required:    true,
+			Name: "nats_input", Config: component.NATSPort{Subject: "raw.>", Interface: &component.InterfaceContract{
+				// Require GenericJSON
+				Type: "core .json.v1"}}, Required: true,
 			Description: "NATS subjects to transform (must be GenericJSON payloads)",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "nats_output",
-			Type:        "nats",
-			Subject:     "mapped.messages",
-			Interface:   "core .json.v1", // Output GenericJSON
-			Required:    true,
+			Name: "nats_output", Config: component.NATSPort{Subject: "mapped.messages", Interface: &component.InterfaceContract{
+				// Output GenericJSON
+				Type: "core .json.v1"}}, Required: true,
 			Description: "NATS subject for transformed messages",
 		},
 	}
@@ -75,16 +71,19 @@ var jsonMapSchema = component.GenerateConfigSchema(reflect.TypeOf(Config{}))
 
 // Processor implements a GenericJSON message field transformer
 type Processor struct {
-	name         string
-	subjects     []string
-	outputSubj   string
-	mappings     []FieldMapping
-	addFields    map[string]any
-	removeFields map[string]bool // Set for fast lookup
-	config       Config          // Store full config for port type checking
-	decoder      *message.Decoder
-	natsClient   *natsclient.Client
-	logger       *slog.Logger
+	name             string
+	subjects         []string
+	outputSubj       string
+	mappings         []FieldMapping
+	addFields        map[string]any
+	removeFields     map[string]bool // Set for fast lookup
+	config           Config          // Store full config for port type checking
+	inputPorts       []component.Port
+	outputPorts      []component.Port
+	jetStreamOutputs map[string]bool
+	decoder          *message.Decoder
+	natsClient       *natsclient.Client
+	logger           *slog.Logger
 
 	// Lifecycle management
 	shutdown      chan struct{}
@@ -118,25 +117,32 @@ func NewProcessor(
 	if config.Ports == nil {
 		config = DefaultConfig()
 	}
-
-	// Extract subjects from port configuration
-	var inputSubjects []string
-	var outputSubject string
-
-	for _, input := range config.Ports.Inputs {
-		if input.Type == "nats" || input.Type == "jetstream" {
-			inputSubjects = append(inputSubjects, input.Subject)
-		}
+	if len(config.Ports.Outputs) != 1 {
+		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "JSONMapProcessor", "NewProcessor", "exactly one output port is required")
 	}
 
-	if len(config.Ports.Outputs) > 0 {
-		outputSubject = config.Ports.Outputs[0].Subject
+	inputPorts, inputSubjects, err := resolveMessagePorts(config.Ports.Inputs, component.DirectionInput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "JSONMapProcessor", "NewProcessor", "resolve input ports")
 	}
+	outputPorts, outputSubjects, err := resolveMessagePorts(config.Ports.Outputs, component.DirectionOutput)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "JSONMapProcessor", "NewProcessor", "resolve output ports")
+	}
+	outputSubject := outputSubjects[0]
 
 	if len(inputSubjects) == 0 {
 		return nil, errs.WrapInvalid(
 			errs.ErrInvalidConfig, "JSONMapProcessor", "NewProcessor",
 			"no input subjects configured")
+	}
+	jetStreamOutputs := make(map[string]bool, len(outputPorts))
+	for _, port := range outputPorts {
+		facts, factsErr := port.Facts()
+		if factsErr != nil {
+			return nil, errs.WrapInvalid(factsErr, "JSONMapProcessor", "NewProcessor", "project output port facts")
+		}
+		jetStreamOutputs[facts.NATSSubjects()[0]] = facts.Kind() == component.PortKindJetStream
 	}
 
 	// Convert removeFields to set for fast lookup
@@ -153,21 +159,49 @@ func NewProcessor(
 	}
 
 	return &Processor{
-		name:         "json-map-processor",
-		subjects:     inputSubjects,
-		outputSubj:   outputSubject,
-		mappings:     config.Mappings,
-		addFields:    config.AddFields,
-		removeFields: removeFieldsSet,
-		config:       config, // Store full config for port type checking
-		decoder:      message.NewDecoder(deps.PayloadRegistry),
-		natsClient:   deps.NATSClient,
-		logger:       deps.GetLogger(),
-		shutdown:     make(chan struct{}),
-		done:         make(chan struct{}),
-		wg:           &sync.WaitGroup{},
-		metrics:      metrics,
+		name:             "json-map-processor",
+		subjects:         inputSubjects,
+		outputSubj:       outputSubject,
+		mappings:         config.Mappings,
+		addFields:        config.AddFields,
+		removeFields:     removeFieldsSet,
+		config:           config, // Store full config for port type checking
+		inputPorts:       inputPorts,
+		outputPorts:      outputPorts,
+		jetStreamOutputs: jetStreamOutputs,
+		decoder:          message.NewDecoder(deps.PayloadRegistry),
+		natsClient:       deps.NATSClient,
+		logger:           deps.GetLogger(),
+		shutdown:         make(chan struct{}),
+		done:             make(chan struct{}),
+		wg:               &sync.WaitGroup{},
+		metrics:          metrics,
 	}, nil
+}
+
+func resolveMessagePorts(definitions []component.PortDefinition, direction component.Direction) ([]component.Port, []string, error) {
+	ports := make([]component.Port, len(definitions))
+	var subjects []string
+	for index, definition := range definitions {
+		port, err := definition.Resolve(direction)
+		if err != nil {
+			return nil, nil, err
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, nil, err
+		}
+		if facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream {
+			return nil, nil, fmt.Errorf("port %q kind %q does not carry messages", port.Name, facts.Kind())
+		}
+		portSubjects := facts.NATSSubjects()
+		if len(portSubjects) != 1 {
+			return nil, nil, fmt.Errorf("port %q declares %d NATS subjects, want exactly one", port.Name, len(portSubjects))
+		}
+		ports[index] = port
+		subjects = append(subjects, portSubjects[0])
+	}
+	return ports, subjects, nil
 }
 
 // Initialize prepares the processor (no-op for JSON map)
@@ -223,62 +257,63 @@ func (m *Processor) Start(ctx context.Context) error {
 
 // setupSubscriptions creates subscriptions for input ports based on port type
 func (m *Processor) setupSubscriptions(ctx context.Context) error {
-	for _, port := range m.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range m.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "JSONMapProcessor", "Start", "project input port facts")
 		}
+		subject := facts.NATSSubjects()[0]
 
-		switch port.Type {
-		case "jetstream":
+		switch facts.Kind() {
+		case component.PortKindJetStream:
 			if err := m.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.WrapTransient(err, "JSONMapProcessor", "Start",
-					fmt.Sprintf("JetStream consumer for %s", port.Subject))
+					fmt.Sprintf("JetStream consumer for %s", subject))
 			}
 
-		case "nats":
-			sub, err := m.natsClient.Subscribe(ctx, port.Subject, func(ctx context.Context, msg *nats.Msg) {
+		case component.PortKindNATS:
+			sub, err := m.natsClient.Subscribe(ctx, subject, func(ctx context.Context, msg *nats.Msg) {
 				m.handleMessage(ctx, msg.Data)
 			})
 			if err != nil {
 				m.logger.Error("Failed to subscribe to NATS subject",
 					"component", m.name,
-					"subject", port.Subject,
+					"subject", subject,
 					"error", err)
 				return errs.WrapTransient(err, "JSONMapProcessor", "Start",
-					fmt.Sprintf("subscribe to %s", port.Subject))
+					fmt.Sprintf("subscribe to %s", subject))
 			}
 			m.subscriptions = append(m.subscriptions, sub)
 			m.logger.Debug("Subscribed to NATS subject successfully",
 				"component", m.name,
-				"subject", port.Subject,
+				"subject", subject,
 				"output_subject", m.outputSubj,
 				"mappings_count", len(m.mappings))
 
-		default:
-			m.logger.Warn("Unknown port type, skipping", "port", port.Name, "type", port.Type)
 		}
 	}
 	return nil
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (m *Processor) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = m.deriveStreamName(port.Subject)
+func (m *Processor) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-	if streamName == "" {
-		return errs.WrapInvalid(
-			errs.ErrInvalidConfig, "JSONMapProcessor", "setupJetStreamConsumer",
-			fmt.Sprintf("derive stream name for subject %s", port.Subject))
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("port %q does not declare JetStream facts", port.Name)
 	}
+	subject := facts.NATSSubjects()[0]
+	streamName := stream.Name()
 
 	if err := m.waitForStream(ctx, streamName); err != nil {
 		return errs.WrapTransient(err, "JSONMapProcessor", "setupJetStreamConsumer",
 			fmt.Sprintf("wait for stream %s", streamName))
 	}
 
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("json-map-%s", sanitizedSubject)
@@ -286,22 +321,25 @@ func (m *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 	m.logger.Debug("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "JSONMapProcessor", "setupJetStreamConsumer", "resolve consumer config")
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	err := m.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = m.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		m.handleMessage(msgCtx, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			m.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -312,7 +350,7 @@ func (m *Processor) setupJetStreamConsumer(ctx context.Context, port component.P
 			fmt.Sprintf("consumer setup for stream %s", streamName))
 	}
 
-	m.logger.Debug("JSON map subscribed (JetStream)", "subject", port.Subject, "stream", streamName)
+	m.logger.Debug("JSON map subscribed (JetStream)", "subject", subject, "stream", streamName)
 	return nil
 }
 
@@ -344,19 +382,6 @@ func (m *Processor) waitForStream(ctx context.Context, streamName string) error 
 	return errs.WrapTransient(
 		errs.ErrMaxRetriesExceeded, "JSONMapProcessor", "waitForStream",
 		fmt.Sprintf("stream %s not available after %d retries", streamName, maxRetries))
-}
-
-// deriveStreamName extracts stream name from subject convention
-func (m *Processor) deriveStreamName(subject string) string {
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // Stop gracefully stops the processor
@@ -408,15 +433,7 @@ func (m *Processor) Stop(timeout time.Duration) error {
 
 // isJetStreamPortBySubject checks if an output port with the given subject is configured for JetStream
 func (m *Processor) isJetStreamPortBySubject(subject string) bool {
-	if m.config.Ports == nil {
-		return false
-	}
-	for _, port := range m.config.Ports.Outputs {
-		if port.Subject == subject {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
+	return m.jetStreamOutputs[subject]
 }
 
 // handleMessage processes incoming GenericJSON messages
@@ -648,43 +665,12 @@ func (m *Processor) Meta() component.Metadata {
 
 // InputPorts returns the NATS input ports this processor subscribes to.
 func (m *Processor) InputPorts() []component.Port {
-	ports := make([]component.Port, len(m.subjects))
-	for i, subj := range m.subjects {
-		ports[i] = component.Port{
-			Name:      fmt.Sprintf("input_%d", i),
-			Direction: component.DirectionInput,
-			Required:  true,
-			Config: component.NATSPort{
-				Subject: subj,
-				Interface: &component.InterfaceContract{
-					Type:    "core .json.v1",
-					Version: "v1",
-				},
-			},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), m.inputPorts...)
 }
 
 // OutputPorts returns the NATS output port for transformed messages.
 func (m *Processor) OutputPorts() []component.Port {
-	if m.outputSubj == "" {
-		return []component.Port{}
-	}
-	return []component.Port{
-		{
-			Name:      "output",
-			Direction: component.DirectionOutput,
-			Required:  false,
-			Config: component.NATSPort{
-				Subject: m.outputSubj,
-				Interface: &component.InterfaceContract{
-					Type:    "core .json.v1",
-					Version: "v1",
-				},
-			},
-		},
-	}
+	return append([]component.Port(nil), m.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema for this processor.

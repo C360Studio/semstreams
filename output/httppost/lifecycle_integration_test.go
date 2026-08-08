@@ -26,10 +26,7 @@ func createTestComponent() component.LifecycleComponent {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:     "nats_input",
-					Type:     "nats",
-					Subject:  "test.httppost.output",
-					Required: true,
+					Name: "nats_input", Config: component.NATSPort{Subject: "test.httppost.output"}, Required: true,
 				},
 			},
 		},

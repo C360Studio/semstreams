@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/c360studio/semstreams/component"
 	agenticloop "github.com/c360studio/semstreams/processor/agentic-loop"
 )
 
@@ -205,8 +206,8 @@ func TestDefaultConfig(t *testing.T) {
 	// in-the-loop flow, and the ADR-039 verdict ports
 	// agent.toolcall.approved/rejected for subject-mode tool-call
 	// governance).
-	if len(cfg.Ports.Inputs) != 7 {
-		t.Errorf("DefaultConfig() input ports count = %d, want 7", len(cfg.Ports.Inputs))
+	if len(cfg.Ports.Inputs) != 8 {
+		t.Errorf("DefaultConfig() input ports count = %d, want 8", len(cfg.Ports.Inputs))
 	}
 
 	// Verify output ports (agent.created + agent.failed declared as explicit
@@ -214,13 +215,8 @@ func TestDefaultConfig(t *testing.T) {
 	// port config, matching the existing treatment of agent.request etc.
 	// agent.toolcall.proposed added in ADR-039 — published before dispatch
 	// when governance mode is audit or enforce).
-	if len(cfg.Ports.Outputs) != 9 {
-		t.Errorf("DefaultConfig() output ports count = %d, want 9", len(cfg.Ports.Outputs))
-	}
-
-	// Verify KV ports
-	if len(cfg.Ports.KVWrite) != 1 {
-		t.Errorf("DefaultConfig() KV write ports count = %d, want 1", len(cfg.Ports.KVWrite))
+	if len(cfg.Ports.Outputs) != 11 {
+		t.Errorf("DefaultConfig() output ports count = %d, want 11", len(cfg.Ports.Outputs))
 	}
 
 	// Verify specific input subjects
@@ -232,7 +228,15 @@ func TestDefaultConfig(t *testing.T) {
 	for name, subject := range expectedInputs {
 		found := false
 		for _, port := range cfg.Ports.Inputs {
-			if port.Name == name && port.Subject == subject {
+			resolved, err := port.Resolve(component.DirectionInput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := resolved.Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if port.Name == name && len(facts.NATSSubjects()) == 1 && facts.NATSSubjects()[0] == subject {
 				found = true
 				break
 			}
@@ -250,15 +254,24 @@ func TestDefaultConfig(t *testing.T) {
 		"agent.complete":  "agent.complete.*",
 	}
 	for _, port := range cfg.Ports.Outputs {
+		request, ok := port.Config.(component.NATSRequestPort)
 		if port.Name == "graph_mutations" &&
-			(port.Type != "nats-request" || port.Interface != "semstreams.graph.mutation" || !port.Required) {
+			(!ok || request.Interface == nil || request.Interface.Type != "semstreams.graph.mutation" || !port.Required) {
 			t.Errorf("graph_mutations output is not the required typed request port: %#v", port)
 		}
 	}
 	for name, subject := range expectedOutputs {
 		found := false
 		for _, port := range cfg.Ports.Outputs {
-			if port.Name == name && port.Subject == subject {
+			resolved, err := port.Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := resolved.Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if port.Name == name && len(facts.NATSSubjects()) == 1 && facts.NATSSubjects()[0] == subject {
 				found = true
 				break
 			}
@@ -364,29 +377,14 @@ func TestConfig_BucketNames(t *testing.T) {
 	}
 }
 
-func TestConfig_TrajectoryDetail(t *testing.T) {
-	tests := []struct {
-		name      string
-		detail    string
-		wantValid bool
-	}{
-		{"summary", "summary", true},
-		{"full", "full", true},
-		{"empty (uses default)", "", true},
-		{"invalid", "verbose", false},
+func TestConfig_TrajectoryEvidenceStorageInstance(t *testing.T) {
+	config := agenticloop.DefaultConfig()
+	if config.TrajectoryEvidenceStorageInstance != "objectstore" {
+		t.Fatalf("default trajectory evidence storage instance = %q, want objectstore", config.TrajectoryEvidenceStorageInstance)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := validBaseConfig()
-			config.TrajectoryDetail = tt.detail
-
-			err := config.Validate()
-			isValid := err == nil
-			if isValid != tt.wantValid {
-				t.Errorf("Validate() with trajectory_detail=%q: valid=%v, want %v (err: %v)", tt.detail, isValid, tt.wantValid, err)
-			}
-		})
+	config.TrajectoryEvidenceStorageInstance = " "
+	if err := config.Validate(); err == nil {
+		t.Fatal("Validate() accepted an empty trajectory evidence storage instance")
 	}
 }
 
@@ -394,10 +392,11 @@ func TestConfig_TrajectoryDetail(t *testing.T) {
 // Tests override specific fields to test validation of those fields.
 func validBaseConfig() agenticloop.Config {
 	return agenticloop.Config{
-		MaxIterations: 20,
-		Timeout:       "120s",
-		LoopsBucket:   "AGENT_LOOPS",
-		Context:       agenticloop.DefaultContextConfig(),
+		TrajectoryEvidenceStorageInstance: "objectstore",
+		MaxIterations:                     20,
+		Timeout:                           "120s",
+		LoopsBucket:                       "AGENT_LOOPS",
+		Context:                           agenticloop.DefaultContextConfig(),
 	}
 }
 

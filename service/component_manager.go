@@ -382,12 +382,12 @@ func (cm *ComponentManager) Start(ctx context.Context) error {
 	// Initialize NATS-backed capability discovery
 	cm.initCapabilityDiscovery(ctx)
 
-	// Start all components. startAllComponents is a component-start barrier:
-	// components launch in parallel but it returns only after every launched
-	// Start has returned, joining all failures. Mark started even on failure so
-	// a subsequent Stop tears down the components that DID start, then fail
-	// boot closed — the composition root must not proceed to the post-start
-	// catalog-retention check or HTTP setup on a partially failed component set.
+	// Start all components through the provider-first barriers. Providers launch
+	// concurrently and register before the concurrent consumer phase begins;
+	// each phase joins all of its failures. Mark started even on failure so a
+	// subsequent Stop tears down the components that DID start, then fail boot
+	// closed — the composition root must not proceed to post-start setup on a
+	// partially failed component set.
 	startErr := cm.startAllComponents(ctx)
 
 	cm.started.Store(true)
@@ -469,11 +469,8 @@ type componentToStart struct {
 	lifecycle component.LifecycleComponent
 }
 
-// startAllComponents starts all lifecycle components and acts as the
-// component-start barrier (framework-composition spec): Start calls launch in
-// parallel for startup latency, but this function returns only after every
-// launched Start has returned, and returns the joined errors of all that
-// failed — each naming its component.
+// startAllComponents starts all lifecycle components in the provider-first
+// component-start barriers required by the framework-composition spec.
 func (cm *ComponentManager) startAllComponents(ctx context.Context) error {
 	cm.mu.RLock()
 	names := make([]string, 0, len(cm.components))
@@ -485,14 +482,38 @@ func (cm *ComponentManager) startAllComponents(ctx context.Context) error {
 }
 
 // startComponentsBarrier starts the named components with barrier semantics:
-// parallel launch, return only after every launched Start has returned,
-// errors.Join of all failures (each naming its component). It is the shared
-// core of the cold-boot batch AND the boot-boundary config drain, so
-// drain-created components get exactly the batch's fail-closed treatment. The
-// batch WaitGroup is deliberately scoped here rather than reusing cm.wg, which
-// tracks long-lived loops (watchConfigUpdates, publishHealthLoop) that outlive
-// a launch batch.
+// existing StoreProvider components first, then all remaining consumers. Each
+// phase launches concurrently and completes before the next begins. It is the
+// shared core of the cold-boot batch AND the boot-boundary config drain, so
+// drain-created components get the same fail-closed ordering.
 func (cm *ComponentManager) startComponentsBarrier(ctx context.Context, names []string) error {
+	cm.mu.RLock()
+	providers := make([]string, 0, len(names))
+	consumers := make([]string, 0, len(names))
+	for _, name := range names {
+		mc, exists := cm.components[name]
+		if !exists {
+			continue
+		}
+		if _, ok := mc.Component.(component.StoreProvider); ok {
+			providers = append(providers, name)
+		} else {
+			consumers = append(consumers, name)
+		}
+	}
+	cm.mu.RUnlock()
+
+	if err := cm.startComponentsPhase(ctx, providers); err != nil {
+		return err
+	}
+	return cm.startComponentsPhase(ctx, consumers)
+}
+
+// startComponentsPhase starts one parallel launch batch, returns only after
+// every launched Start has returned, and joins every component-named failure.
+// The WaitGroup is deliberately scoped here rather than reusing cm.wg, which
+// tracks long-lived loops that outlive a launch batch.
+func (cm *ComponentManager) startComponentsPhase(ctx context.Context, names []string) error {
 	cm.mu.Lock()
 	componentsToStart := make([]componentToStart, 0, len(names))
 	for _, name := range names {
@@ -545,7 +566,12 @@ func (cm *ComponentManager) startComponent(name string, mc *component.ManagedCom
 	}
 
 	cm.updateComponentState(name, component.StateStarted, nil)
-	cm.registerProvidedStores(name, mc.Component)
+	if err := cm.registerProvidedStores(name, mc.Component); err != nil {
+		cm.updateComponentState(name, component.StateFailed, err)
+		cm.logger.Error("Component store registration failed",
+			"name", name, "type", mc.Component.Meta().Type, "error", err)
+		return err
+	}
 	cm.logger.Debug("Component started successfully", "name", name, "type", mc.Component.Meta().Type)
 	return nil
 }
@@ -956,7 +982,10 @@ func (cm *ComponentManager) CreateComponent(
 	}
 
 	// Register resource usage
-	cm.registerPorts(instanceName, comp)
+	if err := cm.registerPorts(instanceName, comp); err != nil {
+		cm.registry.UnregisterInstance(instanceName)
+		return fmt.Errorf("resolve ports for component '%s': %w", instanceName, err)
+	}
 
 	// Track as managed component. Retain the effective config so a later
 	// per-component config update can be compared and skipped when unchanged
@@ -973,7 +1002,7 @@ func (cm *ComponentManager) CreateComponent(
 			// Release the port ownership registered just above (the component
 			// never makes it into cm.components, so unregisterPorts-by-name
 			// can't find it) and remove from registry on init failure (gh#417).
-			cm.unregisterPortsForComp(instanceName, comp)
+			cm.unregisterPortsForComp(instanceName)
 			cm.registry.UnregisterInstance(instanceName)
 			return fmt.Errorf("failed to initialize component '%s': %w", instanceName, err)
 		}
@@ -1079,14 +1108,18 @@ func (cm *ComponentManager) GetManagedComponents() map[string]*component.Managed
 
 // checkPortConflicts checks for conflicts with existing port registrations
 func (cm *ComponentManager) checkPortConflicts(comp component.Discoverable) error {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
+	allPorts := append([]component.Port(nil), comp.InputPorts()...)
+	allPorts = append(allPorts, comp.OutputPorts()...)
 
 	for _, port := range allPorts {
-		if port.Config != nil && port.Config.IsExclusive() {
-			resourceID := port.Config.ResourceID()
-			if owners, exists := cm.resources[resourceID]; exists && len(owners) > 0 {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
+		}
+		if facts.IsExclusive() {
+			if owners, exists := cm.resources[facts.ResourceID()]; exists && len(owners) > 0 {
 				return fmt.Errorf("exclusive resource %s already used by %v",
-					resourceID, owners)
+					facts.ResourceID(), owners)
 			}
 		}
 	}
@@ -1094,16 +1127,21 @@ func (cm *ComponentManager) checkPortConflicts(comp component.Discoverable) erro
 }
 
 // registerPorts registers all ports from a component to track resource usage
-func (cm *ComponentManager) registerPorts(name string, comp component.Discoverable) {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
-
+func (cm *ComponentManager) registerPorts(name string, comp component.Discoverable) error {
+	allPorts := append([]component.Port(nil), comp.InputPorts()...)
+	allPorts = append(allPorts, comp.OutputPorts()...)
+	resourceIDs := make([]string, 0, len(allPorts))
 	for _, port := range allPorts {
-		if port.Config == nil {
-			continue
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
-		resourceID := port.Config.ResourceID()
+		resourceIDs = append(resourceIDs, facts.ResourceID())
+	}
+	for _, resourceID := range resourceIDs {
 		cm.resources[resourceID] = append(cm.resources[resourceID], name)
 	}
+	return nil
 }
 
 // unregisterPorts removes all port registrations for a component still tracked
@@ -1113,21 +1151,14 @@ func (cm *ComponentManager) unregisterPorts(name string) {
 	if !exists || mc.Component == nil {
 		return
 	}
-	cm.unregisterPortsForComp(name, mc.Component)
+	cm.unregisterPortsForComp(name)
 }
 
-// unregisterPortsForComp releases cm.resources ownership entries for comp's
-// ports. It takes the component directly (rather than looking it up in
-// cm.components) so it can also clean up a component that registerPorts already
-// recorded but that was never committed to cm.components — e.g. a
-// CreateComponent that fails at Initialize. Caller must hold cm.mu.
-func (cm *ComponentManager) unregisterPortsForComp(name string, comp component.Discoverable) {
-	allPorts := append(comp.InputPorts(), comp.OutputPorts()...)
-	for _, port := range allPorts {
-		if port.Config == nil {
-			continue
-		}
-		resourceID := port.Config.ResourceID()
+// unregisterPortsForComp releases every cm.resources ownership entry recorded
+// for name. Scanning the tracker avoids reinterpreting component ports that may
+// have changed since registration. Caller must hold cm.mu.
+func (cm *ComponentManager) unregisterPortsForComp(name string) {
+	for resourceID := range cm.resources {
 		cm.removeFromSlice(resourceID, name)
 	}
 }
@@ -1874,17 +1905,9 @@ func (cm *ComponentManager) createAndStartComponent(ctx context.Context, name st
 	// Step 2: Start the component if the system is running
 	if cm.started.Load() {
 		if err := cm.startSingleComponent(ctx, name); err != nil {
-			// If start fails, remove the component to keep state clean
-			cm.mu.Lock()
-			if mc, exists := cm.components[name]; exists {
-				cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
-				delete(cm.components, name)
-				cm.removeFromStartOrder(name)
-				if mc.Cancel != nil {
-					mc.Cancel()
-				}
-			}
-			cm.mu.Unlock()
+			// Keep the failed component tracked. Dynamic lifecycle failures are
+			// process-nonfatal but must remain visible through manager health until
+			// a later configuration update restarts or removes the component.
 			return fmt.Errorf("failed to start new component: %w", err)
 		}
 	}
@@ -1963,9 +1986,9 @@ func (cm *ComponentManager) removeFromStartOrder(name string) {
 // startSingleComponent starts a single component (assumes it's already created).
 //
 // Concurrency: cm.components + cm.startOrder reads/writes are guarded by
-// cm.mu. The actual component.Start runs in a detached goroutine launched
-// without the lock so retry loops and slow Start methods don't serialize
-// the whole manager.
+// cm.mu. Ordinary dynamic consumer starts retain their detached behavior.
+// StoreProvider starts complete synchronously so their registration failure can
+// propagate to dynamic add/restart callers while remaining visible in health.
 func (cm *ComponentManager) startSingleComponent(ctx context.Context, name string) error {
 	cm.mu.Lock()
 	mc, exists := cm.components[name]
@@ -1993,43 +2016,78 @@ func (cm *ComponentManager) startSingleComponent(ctx context.Context, name strin
 	cm.startOrder = append(cm.startOrder, name)
 	cm.mu.Unlock()
 
+	if _, isProvider := mc.Component.(component.StoreProvider); isProvider {
+		startErr := cm.startComponentWithRetry(name, mc, lifecycle)
+		if startErr != nil {
+			return startErr
+		}
+		cm.logger.Debug("Component started successfully", "component", name)
+		return nil
+	}
+
 	// Start the component in a goroutine for non-blocking operation
 	cm.wg.Add(1)
 	go func() {
 		defer cm.wg.Done()
 
-		// Use retry for component startup to handle transient failures
-		// Components may fail to start due to dependencies not being ready
-		retryConfig := retry.Quick() // 10 attempts over ~1 second
-		startErr := retry.Do(mc.Context, retryConfig, func() error {
-			if err := lifecycle.Start(mc.Context); err != nil {
-				cm.logger.Debug("Component start attempt failed, will retry",
-					"component", name,
-					"error", err)
-				return err
-			}
-			return nil
-		})
-
-		if startErr != nil {
-			// Post-boot dynamic start: record the failure but don't crash the
-			// process. The StateFailed + LastError pair is what makes the
-			// failure visible through performDetailedHealthCheck.
-			cm.updateComponentState(name, component.StateFailed, startErr)
-			cm.logger.Error("Component start failed after retries",
-				"component", name,
-				"error", startErr)
+		if err := cm.startComponentWithRetry(name, mc, lifecycle); err != nil {
 			return
 		}
-
-		// Update component state
-		cm.updateComponentState(name, component.StateStarted, nil)
-		cm.registerProvidedStores(name, mc.Component)
 
 		cm.logger.Debug("Component started successfully",
 			"component", name)
 	}()
 
+	return nil
+}
+
+func (cm *ComponentManager) startComponentWithRetry(
+	name string, mc *component.ManagedComponent, lifecycle component.LifecycleComponent,
+) error {
+	retryConfig := retry.Quick() // 10 attempts over ~1 second
+	startErr := retry.Do(mc.Context, retryConfig, func() error {
+		if err := lifecycle.Start(mc.Context); err != nil {
+			cm.logger.Debug("Component start attempt failed, will retry",
+				"component", name,
+				"error", err)
+			return err
+		}
+		return nil
+	})
+	if startErr != nil {
+		cm.updateComponentState(name, component.StateFailed, startErr)
+		cm.logger.Error("Component start failed after retries",
+			"component", name,
+			"error", startErr)
+		return startErr
+	}
+
+	cm.updateComponentState(name, component.StateStarted, nil)
+	if registrationErr := cm.registerProvidedStores(name, mc.Component); registrationErr != nil {
+		// Start succeeded, so a rejected dynamic/restarted provider may already
+		// own subscriptions or other live resources. Roll it back synchronously:
+		// remove any tracked claims before Stop can close their handles, then
+		// cancel and clear its component context. The provider remains tracked as
+		// failed so health reports the wiring fault until reconfigured or removed.
+		cm.deregisterProvidedStores(name)
+		stopErr := lifecycle.Stop(30 * time.Second)
+		cm.mu.Lock()
+		cm.cancelComponentContext(mc)
+		cm.mu.Unlock()
+
+		startErr := registrationErr
+		if stopErr != nil {
+			startErr = errors.Join(
+				registrationErr,
+				fmt.Errorf("roll back started provider %q: %w", name, stopErr),
+			)
+		}
+		cm.updateComponentState(name, component.StateFailed, startErr)
+		cm.logger.Error("Component store registration failed",
+			"component", name,
+			"error", startErr)
+		return startErr
+	}
 	return nil
 }
 
@@ -2106,18 +2164,17 @@ func (cm *ComponentManager) buildComponentDependencies() component.Dependencies 
 }
 
 // registerProvidedStores registers a just-started component's provided stores
-// into the shared StoreRegistry (ADR-063). Called after a component reaches
-// StateStarted. A duplicate-ownership collision (two live components claiming the
-// same StorageInstance) is logged loudly and skipped rather than clobbering the
-// incumbent. The component call happens OUTSIDE any manager lock; only the
-// storeProvided tracking map is guarded (storeMu).
-func (cm *ComponentManager) registerProvidedStores(name string, comp component.Discoverable) {
+// into the shared StoreRegistry (ADR-063). Invalid and duplicate claims are
+// provider startup errors. Registrations from the failing provider are rolled
+// back while a duplicate incumbent remains untouched. The component call
+// happens OUTSIDE any manager lock; only storeProvided is guarded by storeMu.
+func (cm *ComponentManager) registerProvidedStores(name string, comp component.Discoverable) error {
 	if cm.storeRegistry == nil {
-		return
+		return nil
 	}
 	provider, ok := comp.(component.StoreProvider)
 	if !ok {
-		return
+		return nil
 	}
 	// Liveness guard: skip if a concurrent stop/reconfig already removed or
 	// halted this component between Start and here. Without it, a reconfig that
@@ -2133,30 +2190,54 @@ func (cm *ComponentManager) registerProvidedStores(name string, comp component.D
 	live := tracked && mc.State == component.StateStarted
 	cm.mu.RUnlock()
 	if !live {
-		return
+		return nil
 	}
 	provided := provider.ProvidedStores()
 	if len(provided) == 0 {
-		return
+		return nil
 	}
-	registered := make([]string, 0, len(provided))
+
+	instances := make([]string, 0, len(provided))
 	for instance, store := range provided {
-		if store == nil || instance == "" {
-			continue
+		if strings.TrimSpace(instance) == "" {
+			return fmt.Errorf("store registry: component %q claimed an empty StorageInstance", name)
 		}
+		storeIsNil := store == nil
+		if !storeIsNil {
+			storeValue := reflect.ValueOf(store)
+			switch storeValue.Kind() {
+			case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+				storeIsNil = storeValue.IsNil()
+			}
+		}
+		if storeIsNil {
+			return fmt.Errorf("store registry: component %q claimed nil store for instance %q", name, instance)
+		}
+		instances = append(instances, instance)
+	}
+	sort.Strings(instances)
+
+	registered := make([]string, 0, len(provided))
+	for _, instance := range instances {
+		store := provided[instance]
 		if err := cm.storeRegistry.Register(instance, store); err != nil {
-			cm.logger.Error("store registry: refusing duplicate store ownership",
-				"component", name, "instance", instance, "error", err)
-			continue
+			for _, registeredInstance := range registered {
+				cm.storeRegistry.Deregister(registeredInstance)
+			}
+			return fmt.Errorf("store registry: component %q instance %q: %w", name, instance, err)
 		}
 		registered = append(registered, instance)
 		cm.logger.Debug("store registry: registered store", "component", name, "instance", instance)
 	}
 	if len(registered) > 0 {
 		cm.storeMu.Lock()
+		if cm.storeProvided == nil {
+			cm.storeProvided = make(map[string][]string)
+		}
 		cm.storeProvided[name] = append(cm.storeProvided[name], registered...)
 		cm.storeMu.Unlock()
 	}
+	return nil
 }
 
 // deregisterProvidedStores clears a stopping/removed component's stores from the
@@ -2289,7 +2370,7 @@ type FlowGap struct {
 }
 
 // extractComponentPortInfo extracts port information from a component for flow validation
-func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable) *ComponentPortInfo {
+func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable) (*ComponentPortInfo, error) {
 	metadata := comp.Meta()
 
 	portInfo := &ComponentPortInfo{
@@ -2300,50 +2381,44 @@ func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable
 
 	// Extract input ports
 	for _, port := range comp.InputPorts() {
-		detail := cm.extractPortDetail(port)
-		if detail != nil {
-			portInfo.InputPorts = append(portInfo.InputPorts, *detail)
+		detail, err := cm.extractPortDetail(port)
+		if err != nil {
+			return nil, err
 		}
+		portInfo.InputPorts = append(portInfo.InputPorts, detail)
 	}
 
 	// Extract output ports
 	for _, port := range comp.OutputPorts() {
-		detail := cm.extractPortDetail(port)
-		if detail != nil {
-			portInfo.OutputPorts = append(portInfo.OutputPorts, *detail)
+		detail, err := cm.extractPortDetail(port)
+		if err != nil {
+			return nil, err
 		}
+		portInfo.OutputPorts = append(portInfo.OutputPorts, detail)
 	}
 
-	return portInfo
+	return portInfo, nil
 }
 
 // extractPortDetail extracts subject and type information from a port
-func (cm *ComponentManager) extractPortDetail(port component.Port) *ComponentPortDetail {
+func (cm *ComponentManager) extractPortDetail(port component.Port) (ComponentPortDetail, error) {
+	facts, err := port.Facts()
+	if err != nil {
+		return ComponentPortDetail{}, err
+	}
 	detail := &ComponentPortDetail{
 		Name:      port.Name,
 		Direction: port.Direction,
-		Subject:   "",
-		PortType:  "",
+		PortType:  string(facts.Kind()),
 	}
-
-	// Extract subject based on port type
-	switch portCfg := port.Config.(type) {
-	case component.NATSPort:
-		detail.Subject = portCfg.Subject
-		detail.PortType = "nats"
-	case component.NATSRequestPort:
-		detail.Subject = portCfg.Subject
-		detail.PortType = "nats-request"
-	default:
-		// For now, only handle NATS ports (simple implementation)
-		return nil
+	if subjects := facts.NATSSubjects(); len(subjects) > 0 {
+		detail.Subject = subjects[0]
 	}
-
-	return detail
+	return *detail, nil
 }
 
 // analyzeFlowConnections identifies connections between components based on subject matching
-func (cm *ComponentManager) analyzeFlowConnections(components []component.Discoverable) []FlowConnection {
+func (cm *ComponentManager) analyzeFlowConnections(components []component.Discoverable) ([]FlowConnection, error) {
 	var connections []FlowConnection
 
 	// Build lists of publishers and subscribers
@@ -2351,7 +2426,10 @@ func (cm *ComponentManager) analyzeFlowConnections(components []component.Discov
 	var subscribers []subscriberInfo
 
 	for _, comp := range components {
-		portInfo := cm.extractComponentPortInfo(comp)
+		portInfo, err := cm.extractComponentPortInfo(comp)
+		if err != nil {
+			return nil, err
+		}
 
 		// Collect publishers (output ports)
 		for _, outPort := range portInfo.OutputPorts {
@@ -2391,7 +2469,7 @@ func (cm *ComponentManager) analyzeFlowConnections(components []component.Discov
 		}
 	}
 
-	return connections
+	return connections, nil
 }
 
 // Helper types for flow analysis
@@ -2420,14 +2498,14 @@ type flowGraphCache struct {
 	lastUpdate   time.Time
 }
 
-// GetFlowGraph returns the current FlowGraph, using cache if valid
-func (cm *ComponentManager) GetFlowGraph() *flowgraph.FlowGraph {
+// GetFlowGraph returns the current FlowGraph, using cache if valid.
+func (cm *ComponentManager) GetFlowGraph() (*flowgraph.FlowGraph, error) {
 	// Check cache validity under read lock
 	cm.graphCache.mu.RLock()
 	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
 		graph := cm.graphCache.currentGraph
 		cm.graphCache.mu.RUnlock()
-		return graph
+		return graph, nil
 	}
 	cm.graphCache.mu.RUnlock()
 
@@ -2437,22 +2515,25 @@ func (cm *ComponentManager) GetFlowGraph() *flowgraph.FlowGraph {
 
 	// Double-check after acquiring write lock
 	if cm.graphCache.cacheValid && cm.graphCache.currentGraph != nil {
-		return cm.graphCache.currentGraph
+		return cm.graphCache.currentGraph, nil
 	}
 
 	// Build new graph
-	graph := cm.buildFlowGraph()
+	graph, err := cm.buildFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	// Update cache
 	cm.graphCache.currentGraph = graph
 	cm.graphCache.cacheValid = true
 	cm.graphCache.lastUpdate = time.Now()
 
-	return graph
+	return graph, nil
 }
 
 // buildFlowGraph creates a new FlowGraph from current components
-func (cm *ComponentManager) buildFlowGraph() *flowgraph.FlowGraph {
+func (cm *ComponentManager) buildFlowGraph() (*flowgraph.FlowGraph, error) {
 	cm.mu.RLock()
 	defer cm.mu.RUnlock()
 
@@ -2461,22 +2542,18 @@ func (cm *ComponentManager) buildFlowGraph() *flowgraph.FlowGraph {
 	// Phase 1: Add all components as nodes
 	for name, mc := range cm.components {
 		if mc.Component != nil {
-			err := graph.AddComponentNode(name, mc.Component)
-			if err != nil {
-				cm.logger.Warn("Failed to add component to FlowGraph",
-					"component", name, "error", err)
-				continue
+			if err := graph.AddComponentNode(name, mc.Component); err != nil {
+				return nil, fmt.Errorf("add component %q to flow graph: %w", name, err)
 			}
 		}
 	}
 
 	// Phase 2: Build edges by matching connection patterns
-	err := graph.ConnectComponentsByPatterns()
-	if err != nil {
-		cm.logger.Error("Failed to connect components in FlowGraph", "error", err)
+	if err := graph.ConnectComponentsByPatterns(); err != nil {
+		return nil, fmt.Errorf("connect component flow graph: %w", err)
 	}
 
-	return graph
+	return graph, nil
 }
 
 // invalidateFlowGraph marks the cached FlowGraph as invalid
@@ -2489,19 +2566,22 @@ func (cm *ComponentManager) invalidateFlowGraph() {
 	cm.graphCache.lastAnalysis = nil
 }
 
-// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching
-func (cm *ComponentManager) ValidateFlowConnectivity() *flowgraph.FlowAnalysisResult {
+// ValidateFlowConnectivity performs FlowGraph connectivity analysis with caching.
+func (cm *ComponentManager) ValidateFlowConnectivity() (*flowgraph.FlowAnalysisResult, error) {
 	// Check if we have a cached analysis
 	cm.graphCache.mu.RLock()
 	if cm.graphCache.cacheValid && cm.graphCache.lastAnalysis != nil {
 		analysis := cm.graphCache.lastAnalysis
 		cm.graphCache.mu.RUnlock()
-		return analysis
+		return analysis, nil
 	}
 	cm.graphCache.mu.RUnlock()
 
 	// Get graph (may trigger rebuild)
-	graph := cm.GetFlowGraph()
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	// Perform analysis
 	analysis := graph.AnalyzeConnectivity()
@@ -2511,12 +2591,15 @@ func (cm *ComponentManager) ValidateFlowConnectivity() *flowgraph.FlowAnalysisRe
 	cm.graphCache.lastAnalysis = analysis
 	cm.graphCache.mu.Unlock()
 
-	return analysis
+	return analysis, nil
 }
 
 // GetFlowPaths returns data paths from input components to all reachable components
-func (cm *ComponentManager) GetFlowPaths() map[string][]string {
-	graph := cm.GetFlowGraph()
+func (cm *ComponentManager) GetFlowPaths() (map[string][]string, error) {
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 
 	paths := make(map[string][]string)
 
@@ -2529,12 +2612,15 @@ func (cm *ComponentManager) GetFlowPaths() map[string][]string {
 		paths[inputComponent] = reachable
 	}
 
-	return paths
+	return paths, nil
 }
 
 // DetectObjectStoreGaps identifies disconnected storage components
-func (cm *ComponentManager) DetectObjectStoreGaps() []ComponentGap {
-	graph := cm.GetFlowGraph()
+func (cm *ComponentManager) DetectObjectStoreGaps() ([]ComponentGap, error) {
+	graph, err := cm.GetFlowGraph()
+	if err != nil {
+		return nil, err
+	}
 	var gaps []ComponentGap
 
 	nodes := graph.GetNodes()
@@ -2558,7 +2644,7 @@ func (cm *ComponentManager) DetectObjectStoreGaps() []ComponentGap {
 		}
 	}
 
-	return gaps
+	return gaps, nil
 }
 
 // Helper methods for FlowGraph analysis
@@ -2594,7 +2680,7 @@ func (cm *ComponentManager) isInputComponent(componentName string, node *flowgra
 	// the internal graph: PatternNetwork binds a local listener, PatternHTTPClient
 	// initiates an outbound poll. Either makes the component an input origin.
 	for _, port := range node.InputPorts {
-		if port.Pattern == flowgraph.PatternNetwork || port.Pattern == flowgraph.PatternHTTPClient {
+		if port.Pattern == component.PatternNetwork || port.Pattern == component.PatternHTTPClient {
 			return true
 		}
 	}

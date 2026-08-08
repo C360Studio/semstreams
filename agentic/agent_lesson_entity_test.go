@@ -117,7 +117,6 @@ func TestAgentLessonMessageType_Distinct(t *testing.T) {
 		agentic.CategoryOpsDiagnosis,
 		agentic.CategoryLoopExecution,
 		agentic.CategoryModelEndpoint,
-		agentic.CategoryTrajectoryStep,
 		agentic.CategoryLoopCreated,
 		agentic.CategoryLoopCompleted,
 		agentic.CategoryLoopFailed,

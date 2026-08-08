@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/c360studio/semstreams/component"
-	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/metric"
@@ -52,32 +51,19 @@ type Component struct {
 	metricsRegistry *metric.MetricsRegistry
 	config          Config
 	logger          *slog.Logger
+	inputPorts      []component.Port
+	outputPorts     []component.Port
+	portsByName     map[string]component.Port
+	portKinds       map[string]component.PortKind
+	portSubjects    map[string]string
 
 	// NATS subscriptions
-	apiSub   *nats.Subscription
 	writeSub *nats.Subscription
 
 	// Metrics tracking
 	messagesReceived uint64
 	messagesStored   uint64
 	lastActivity     atomic.Value // stores time.Time
-}
-
-// Request represents a request to the ObjectStore API
-type Request struct {
-	Action string          `json:"action"` // "get", "store", "list"
-	Key    string          `json:"key,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
-	Prefix string          `json:"prefix,omitempty"` // For list operation
-}
-
-// Response represents a response from the ObjectStore API
-type Response struct {
-	Success bool            `json:"success"`
-	Key     string          `json:"key,omitempty"`
-	Data    json.RawMessage `json:"data,omitempty"`
-	Keys    []string        `json:"keys,omitempty"` // For list operation
-	Error   string          `json:"error,omitempty"`
 }
 
 // Event represents a simple storage event published by ObjectStore
@@ -147,6 +133,10 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 
 	// Default instance name - would be provided by ComponentManager
 	instanceName := "objectstore"
+	inputPorts, outputPorts, portsByName, portKinds, portSubjects, err := resolveObjectStorePorts(cfg, instanceName)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")
+	}
 
 	return &Component{
 		instanceName:    instanceName,
@@ -156,7 +146,73 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		natsClient:      deps.NATSClient,
 		metricsRegistry: deps.MetricsRegistry,
 		logger:          deps.GetLogger(),
+		inputPorts:      inputPorts,
+		outputPorts:     outputPorts,
+		portsByName:     portsByName,
+		portKinds:       portKinds,
+		portSubjects:    portSubjects,
 	}, nil
+}
+
+func resolveObjectStorePorts(cfg Config, instanceName string) ([]component.Port, []component.Port, map[string]component.Port, map[string]component.PortKind, map[string]string, error) {
+	if cfg.Ports == nil {
+		return nil, nil, nil, nil, nil, errors.New("ports configuration is required")
+	}
+	byName := make(map[string]component.Port, len(cfg.Ports.Inputs)+len(cfg.Ports.Outputs)+1)
+	kinds := make(map[string]component.PortKind, len(byName))
+	subjects := make(map[string]string, len(byName))
+	resolve := func(definitions []component.PortDefinition, direction component.Direction, allowed map[component.PortKind]bool) ([]component.Port, error) {
+		ports := make([]component.Port, len(definitions))
+		for index, definition := range definitions {
+			if direction == component.DirectionInput && definition.Name == "api" {
+				return nil, errors.New("ObjectStore input \"api\" was removed; use the registered Store")
+			}
+			port, err := definition.Resolve(direction)
+			if err != nil {
+				return nil, err
+			}
+			if _, duplicate := byName[port.Name]; duplicate {
+				return nil, fmt.Errorf("duplicate port name %q", port.Name)
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				return nil, err
+			}
+			if !allowed[facts.Kind()] {
+				return nil, fmt.Errorf("port %q kind %q is not supported", port.Name, facts.Kind())
+			}
+			portSubjects := facts.NATSSubjects()
+			if len(portSubjects) != 1 {
+				return nil, fmt.Errorf("port %q declares %d subjects, want one", port.Name, len(portSubjects))
+			}
+			ports[index] = port
+			byName[port.Name] = port
+			kinds[port.Name] = facts.Kind()
+			subjects[port.Name] = portSubjects[0]
+		}
+		return ports, nil
+	}
+	inputs, err := resolve(cfg.Ports.Inputs, component.DirectionInput, map[component.PortKind]bool{
+		component.PortKindNATS: true, component.PortKindJetStream: true,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	outputs, err := resolve(cfg.Ports.Outputs, component.DirectionOutput, map[component.PortKind]bool{
+		component.PortKindNATS: true, component.PortKindJetStream: true,
+	})
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	provider, err := (component.PortDefinition{
+		Name: "store-provide", Description: "Owns the store instance addressable as StorageInstance=" + instanceName,
+		Config: component.StoreProvidePort{Instance: instanceName},
+	}).Resolve(component.DirectionOutput)
+	if err != nil {
+		return nil, nil, nil, nil, nil, err
+	}
+	outputs = append(outputs, provider)
+	return inputs, outputs, byName, kinds, subjects, nil
 }
 
 // startStoreError classifies a store-constructor error for Component.Start,
@@ -229,29 +285,10 @@ func (c *Component) Start(ctx context.Context) error {
 	// Get raw NATS connection for subscriptions
 	nc := c.natsClient.GetConnection()
 
-	// Subscribe to API requests (Request/Response pattern)
-	if c.hasPort("api") {
-		apiSubject := c.getPortSubject("api", "storage.%s.api")
-		c.logger.Debug("Subscribing to API subject", "name", c.instanceName, "subject", apiSubject)
-		c.apiSub, err = nc.Subscribe(apiSubject, c.handleAPIRequest)
-		if err != nil {
-			c.logger.Error(
-				"Failed to subscribe to API subject",
-				"name",
-				c.instanceName,
-				"subject",
-				apiSubject,
-				"error",
-				err,
-			)
-			return errs.WrapTransient(err, "Component", "Start", fmt.Sprintf("subscribe to API subject %s", apiSubject))
-		}
-	}
-
 	// Subscribe to write requests (async fire-and-forget)
 	// Check port type to determine subscription method (JetStream vs core NATS)
 	if c.hasPort("write") {
-		writeSubject := c.getPortSubject("write", "storage.%s.write")
+		writeSubject := c.getPortSubject("write")
 		c.logger.Debug("Subscribing to write subject", "name", c.instanceName, "subject", writeSubject)
 
 		if c.isJetStreamInputPort("write") {
@@ -305,12 +342,6 @@ func (c *Component) Stop(_ time.Duration) error {
 	}
 
 	// Then unsubscribe from NATS
-	if c.apiSub != nil {
-		if err := c.apiSub.Unsubscribe(); err != nil {
-			return errs.WrapTransient(err, "Component", "Stop", "unsubscribe from API")
-		}
-	}
-
 	if c.writeSub != nil {
 		if err := c.writeSub.Unsubscribe(); err != nil {
 			return errs.WrapTransient(err, "Component", "Stop", "unsubscribe from write")
@@ -326,81 +357,6 @@ func (c *Component) IsStarted() bool {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.started
-}
-
-// handleAPIRequest handles synchronous Request/Response operations
-func (c *Component) handleAPIRequest(msg *nats.Msg) {
-	atomic.AddUint64(&c.messagesReceived, 1)
-	c.lastActivity.Store(time.Now())
-
-	var req Request
-	if err := json.Unmarshal(msg.Data, &req); err != nil {
-		c.respondWithError(msg, errs.WrapInvalid(err, "Component", "handleAPIRequest", "unmarshal request"))
-		return
-	}
-
-	// Use proper timeout context for API requests
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	switch req.Action {
-	case "get":
-		data, err := c.store.Get(ctx, req.Key)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		resp := Response{
-			Success: true,
-			Key:     req.Key,
-			Data:    data,
-		}
-		c.respond(msg, resp)
-
-	case "store":
-		var msgData any
-		if err := json.Unmarshal(req.Data, &msgData); err != nil {
-			c.respondWithError(msg, errs.WrapInvalid(err, "Component", "handleAPIRequest", "unmarshal data"))
-			return
-		}
-
-		key, err := c.store.Store(ctx, msgData)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		atomic.AddUint64(&c.messagesStored, 1)
-		resp := Response{
-			Success: true,
-			Key:     key,
-		}
-		c.respond(msg, resp)
-
-		// Publish stored event
-		c.publishEvent(Event{
-			Type:      "stored",
-			Key:       key,
-			Timestamp: time.Now(),
-		})
-
-	case "list":
-		keys, err := c.store.List(ctx, req.Prefix)
-		if err != nil {
-			c.respondWithError(msg, err)
-			return
-		}
-
-		resp := Response{
-			Success: true,
-			Keys:    keys,
-		}
-		c.respond(msg, resp)
-
-	default:
-		c.respondWithError(msg, errs.WrapInvalid(errs.ErrInvalidData, "Component", "handleAPIRequest", fmt.Sprintf("unknown action: %s", req.Action)))
-	}
 }
 
 // handleWriteRequest handles async write operations via core NATS
@@ -530,7 +486,7 @@ func (c *Component) publishStoredMessage(
 		return errs.WrapInvalid(err, "Component", "publishStoredMessage", "marshal StoredMessage")
 	}
 
-	storedSubject := c.getPortSubject("stored", "storage.%s.stored")
+	storedSubject := c.getPortSubject("stored")
 
 	// Use JetStream publishing when port type is "jetstream" for durability
 	if c.isJetStreamPort("stored") {
@@ -554,7 +510,7 @@ func (c *Component) publishEvent(event Event) {
 		return // No events port configured
 	}
 
-	eventSubject := c.getPortSubject("events", "storage.%s.events")
+	eventSubject := c.getPortSubject("events")
 	data, err := json.Marshal(event)
 	if err != nil {
 		c.logger.Error("Failed to marshal event",
@@ -570,105 +526,38 @@ func (c *Component) publishEvent(event Event) {
 	}
 }
 
-// respond sends a response for Request/Response pattern
-func (c *Component) respond(msg *nats.Msg, resp Response) {
-	data, err := json.Marshal(resp)
-	if err != nil {
-		c.logger.Error("Failed to marshal response",
-			"error", err,
-			"subject", msg.Subject)
-		return
-	}
-
-	if err := msg.Respond(data); err != nil {
-		c.logger.Error("Failed to send response",
-			"error", err,
-			"subject", msg.Subject)
-		return
-	}
-}
-
-// respondWithError sends an error response
-func (c *Component) respondWithError(msg *nats.Msg, err error) {
-	resp := Response{
-		Success: false,
-		Error:   err.Error(),
-	}
-	c.respond(msg, resp)
-}
-
 // hasPort checks if a port with the given name is configured
 func (c *Component) hasPort(name string) bool {
-	if c.config.Ports == nil {
-		return false
-	}
-	for _, port := range c.config.Ports.Inputs {
-		if port.Name == name {
-			return true
-		}
-	}
-	for _, port := range c.config.Ports.Outputs {
-		if port.Name == name {
-			return true
-		}
-	}
-	return false
+	_, found := c.portsByName[name]
+	return found
 }
 
 // isJetStreamPort checks if an output port is configured for JetStream
 func (c *Component) isJetStreamPort(portName string) bool {
-	if c.config.Ports == nil {
-		return false
-	}
-	for _, port := range c.config.Ports.Outputs {
-		if port.Name == portName {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
+	return c.portKinds[portName] == component.PortKindJetStream
 }
 
 // isJetStreamInputPort checks if an input port is configured for JetStream
 func (c *Component) isJetStreamInputPort(portName string) bool {
-	if c.config.Ports == nil {
-		return false
-	}
-	for _, port := range c.config.Ports.Inputs {
-		if port.Name == portName {
-			return port.Type == "jetstream"
-		}
-	}
-	return false
-}
-
-// getInputPortDef returns the port definition for an input port
-func (c *Component) getInputPortDef(portName string) *component.PortDefinition {
-	if c.config.Ports == nil {
-		return nil
-	}
-	for _, port := range c.config.Ports.Inputs {
-		if port.Name == portName {
-			return &port
-		}
-	}
-	return nil
+	return c.portKinds[portName] == component.PortKindJetStream
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
 func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subject string) error {
-	portDef := c.getInputPortDef(portName)
-	if portDef == nil {
+	port, found := c.portsByName[portName]
+	if !found || port.Direction != component.DirectionInput {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("port %s not found", portName))
 	}
+	facts, err := port.Facts()
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "setupJetStreamConsumer", "project input port facts")
+	}
+	stream, ok := facts.Stream()
+	if !ok {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("port %s is not JetStream", portName))
+	}
 
-	// Derive stream name from subject or use explicit stream name
-	streamName := portDef.StreamName
-	if streamName == "" {
-		streamName = config.DeriveStreamName(subject)
-	}
-	if streamName == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Component", "setupJetStreamConsumer", fmt.Sprintf("could not derive stream name for subject %s", subject))
-	}
+	streamName := stream.Name()
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -692,7 +581,13 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 	// consumer bound. A JSON config that omits deliver_policy would otherwise
 	// fall to the framework "new" default and silently drop the first document
 	// (the startup first-message race). An explicit deliver_policy still wins.
-	consumerCfg := component.GetConsumerConfigFromDefinitionWithDefault(*portDef, "all")
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "ObjectStoreComponent", "setupJetStreamConsumer", "resolve consumer config")
+	}
+	if stream.DeliverPolicy() == "" {
+		consumerCfg.DeliverPolicy = "all"
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
@@ -704,7 +599,7 @@ func (c *Component) setupJetStreamConsumer(ctx context.Context, portName, subjec
 		AutoCreate:    false,
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		c.handleJetStreamWriteRequest(msgCtx, msg)
 	})
 	if err != nil {
@@ -819,8 +714,8 @@ func classifyWriteDisposition(ctxErr, procErr error) writeDisposition {
 // just-written content with identical bytes (an idempotent overwrite), never
 // a distinct message.
 //
-// Retry is BOUNDED, not indefinite: the write consumer's default MaxDeliver=3
-// (component.GetConsumerConfigFromDefinitionWithDefault) caps delivery
+// Retry is BOUNDED, not indefinite: the write consumer's canonical port
+// declaration defaults MaxDeliver to 3, which caps delivery
 // attempts — roughly 60s of backend-outage tolerance at the 30s transient NAK
 // delay — after which the message parks un-acked awaiting operator action;
 // parked-message visibility is tracked as the MaxDeliver parking follow-up.
@@ -943,21 +838,9 @@ func (c *Component) processWriteMessage(ctx context.Context, data []byte) error 
 	return c.emitStoredMessage(baseMsg, decodeErr, data, key)
 }
 
-// getPortSubject gets the subject for a named port, or generates a default
-func (c *Component) getPortSubject(portName, defaultFormat string) string {
-	if c.config.Ports != nil {
-		for _, port := range c.config.Ports.Inputs {
-			if port.Name == portName {
-				return port.Subject
-			}
-		}
-		for _, port := range c.config.Ports.Outputs {
-			if port.Name == portName {
-				return port.Subject
-			}
-		}
-	}
-	return fmt.Sprintf(defaultFormat, c.instanceName)
+// getPortSubject gets the canonical subject for a configured named port.
+func (c *Component) getPortSubject(portName string) string {
+	return c.portSubjects[portName]
 }
 
 // Meta returns component metadata
@@ -972,63 +855,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns the input ports for this component
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0)
-	for _, portDef := range c.config.Ports.Inputs {
-		var port component.Port
-		if portDef.Type == "nats-request" {
-			port = component.Port{
-				Name:        portDef.Name,
-				Direction:   component.DirectionInput,
-				Required:    portDef.Required,
-				Description: portDef.Description,
-				Config: component.NATSRequestPort{
-					Subject: portDef.Subject,
-					Timeout: "2s",
-				},
-			}
-		} else {
-			port = component.Port{
-				Name:        portDef.Name,
-				Direction:   component.DirectionInput,
-				Required:    portDef.Required,
-				Description: portDef.Description,
-				Config: component.NATSPort{
-					Subject: portDef.Subject,
-				},
-			}
-		}
-		ports = append(ports, port)
-	}
-	return ports
+	return append([]component.Port(nil), c.inputPorts...)
 }
 
 // OutputPorts returns the output ports for this component
 func (c *Component) OutputPorts() []component.Port {
-	ports := make([]component.Port, 0)
-	if c.config.Ports != nil {
-		for _, portDef := range c.config.Ports.Outputs {
-			// Use BuildPortFromDefinition to properly handle different port types (nats, jetstream, etc.)
-			port := component.BuildPortFromDefinition(portDef, component.DirectionOutput)
-			ports = append(ports, port)
-		}
-	}
-
-	// Declare store ownership (ADR-063): this component owns the store instance
-	// it stamps into every StorageReference (c.instanceName). Non-exclusive; the
-	// ComponentManager reads ProvidedStores() to populate the shared
-	// StoreRegistry that content-fetch consumers resolve against.
-	ports = append(ports, component.Port{
-		Name:        "store-provide",
-		Direction:   component.DirectionOutput,
-		Description: "Owns the store instance addressable as StorageInstance=" + c.instanceName,
-		Config:      component.StoreProvidePort{Instance: c.instanceName},
-	})
-
-	return ports
+	return append([]component.Port(nil), c.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema for this component

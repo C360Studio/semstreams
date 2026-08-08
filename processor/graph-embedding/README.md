@@ -41,8 +41,7 @@ ENTITY_STATES ─────►│                  ├──► EMBEDDING_INDE
       "inputs": [
         {
           "name": "entity_watch",
-          "subject": "ENTITY_STATES",
-          "type": "kv-watch"
+          "config": {"kind":"kv-watch","bucket":"ENTITY_STATES"}
         }
       ]
     },

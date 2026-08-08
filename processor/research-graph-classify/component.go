@@ -29,9 +29,11 @@ import (
 // own the NATS / model-registry plumbing and the per-message handler
 // hands off to the pure classifyAndRetrieve function in handler.go.
 type Component struct {
-	config Config
-	deps   component.Dependencies
-	logger *slog.Logger
+	config  Config
+	deps    component.Dependencies
+	logger  *slog.Logger
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Injected dependencies. Tests replace these directly via the
 	// constructor; production wires them via Start() from the
@@ -109,11 +111,33 @@ func NewProcessor(rawConfig json.RawMessage, deps component.Dependencies) (compo
 	}
 
 	logger := deps.GetLoggerWithComponent(ComponentName)
+	inputs := make([]component.Port, 0, len(config.Ports.Inputs))
+	for _, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve input port")
+		}
+		facts, err := port.Facts()
+		if err != nil || facts.Kind() != component.PortKindNATS || len(facts.NATSSubjects()) != 1 {
+			return nil, errs.WrapInvalid(errs.ErrInvalidConfig, ComponentName, "NewProcessor", "input ports must each declare one NATS subject")
+		}
+		inputs = append(inputs, port)
+	}
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.WrapInvalid(err, ComponentName, "NewProcessor", "resolve output port")
+		}
+		outputs = append(outputs, port)
+	}
 
 	return &Component{
 		config:     config,
 		deps:       deps,
 		logger:     logger,
+		inputs:     inputs,
+		outputs:    outputs,
 		classifier: &classifierChainAdapter{chain: query.NewClassifierChain(query.NewKeywordClassifier(), nil, nil)},
 		retriever:  newSearchGraphRetriever(deps.NATSClient, config.RetrieveTimeout),
 		loops:      nil, // wired in Start() once the bucket is open
@@ -233,27 +257,23 @@ func (c *Component) initLLMClassifierIfEnabled() {
 
 // subscribeInputs wires NATS subscriptions for each input port.
 func (c *Component) subscribeInputs(ctx context.Context) error {
-	for _, port := range c.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range c.inputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, ComponentName, "Start", "resolve input facts")
 		}
-		if port.Type != "nats" {
-			c.logger.Warn("unsupported port type; skipping",
-				slog.String("port", port.Name),
-				slog.String("type", port.Type))
-			continue
-		}
-		sub, err := c.deps.NATSClient.Subscribe(ctx, port.Subject, func(msgCtx context.Context, msg *nats.Msg) {
+		subject := facts.NATSSubjects()[0]
+		sub, err := c.deps.NATSClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
 			c.handleMessage(msgCtx, msg.Subject, msg.Data)
 		})
 		if err != nil {
 			return errs.WrapTransient(err, ComponentName, "Start",
-				fmt.Sprintf("subscribe to %s", port.Subject))
+				fmt.Sprintf("subscribe to %s", subject))
 		}
 		c.subscriptions = append(c.subscriptions, sub)
 		c.logger.Debug("subscribed to NATS subject",
 			slog.String("port", port.Name),
-			slog.String("subject", port.Subject))
+			slog.String("subject", subject))
 	}
 	return nil
 }
@@ -426,27 +446,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts implements Discoverable.
 func (c *Component) InputPorts() []component.Port {
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, p := range c.config.Ports.Inputs {
-		ports = append(ports, component.Port{
-			Name:      p.Name,
-			Direction: component.DirectionInput,
-			Required:  p.Required,
-			Config: component.NATSPort{
-				Subject: p.Subject,
-			},
-		})
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts implements Discoverable.
 func (c *Component) OutputPorts() []component.Port {
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, definition := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(definition, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema implements Discoverable.

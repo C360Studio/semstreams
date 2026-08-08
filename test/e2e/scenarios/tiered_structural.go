@@ -870,70 +870,84 @@ func (s *TieredScenario) executeTestEntitiesByPrefix(ctx context.Context, result
 	gatewayURL := s.config.GraphQLURL
 	httpClient := &http.Client{Timeout: 10 * time.Second}
 
-	// Test: Query entities by prefix (all temperature sensors)
-	// entitiesByPrefix returns [Entity] - an array of full entity objects
+	// Test: Query every entity page under the temperature-sensor prefix.
 	prefix := "c360.logistics.environmental.sensor.temperature"
-	prefixQuery := map[string]any{
-		"query": `query($prefix: String!, $limit: Int) {
-			entitiesByPrefix(prefix: $prefix, limit: $limit) {
-				id
-			}}`,
-		"variables": map[string]any{"prefix": prefix, "limit": 100},
+	type prefixEntity struct {
+		ID string `json:"id"`
 	}
-
-	queryJSON, err := json.Marshal(prefixQuery)
-	if err != nil {
-		return fmt.Errorf("failed to marshal prefix query: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL, bytes.NewReader(queryJSON))
-	if err != nil {
-		return fmt.Errorf("failed to create prefix request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
+	var entities []prefixEntity
+	cursor := ""
+	pageCount := 0
 	start := time.Now()
-	resp, err := httpClient.Do(req)
+	for {
+		prefixQuery := map[string]any{
+			"query": `query($prefix: String!, $limit: Int, $cursor: String) {
+				entitiesByPrefix(prefix: $prefix, limit: $limit, cursor: $cursor) {
+					entities { id }
+					next_cursor
+				}}`,
+			"variables": map[string]any{"prefix": prefix, "limit": 100, "cursor": cursor},
+		}
+
+		queryJSON, err := json.Marshal(prefixQuery)
+		if err != nil {
+			return fmt.Errorf("failed to marshal prefix query: %w", err)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, "POST", gatewayURL, bytes.NewReader(queryJSON))
+		if err != nil {
+			return fmt.Errorf("failed to create prefix request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("prefix request failed: %w", err)
+		}
+		bodyBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			return fmt.Errorf("failed to read prefix response: %w", readErr)
+		}
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("prefix query returned status %d: %s", resp.StatusCode, string(bodyBytes))
+		}
+
+		var prefixResp struct {
+			Data struct {
+				EntitiesByPrefix struct {
+					Entities   []prefixEntity `json:"entities"`
+					NextCursor string         `json:"next_cursor"`
+				} `json:"entitiesByPrefix"`
+			} `json:"data"`
+			Errors []struct {
+				Message string `json:"message"`
+			} `json:"errors"`
+		}
+		if err := json.Unmarshal(bodyBytes, &prefixResp); err != nil {
+			return fmt.Errorf("failed to parse prefix response: %w", err)
+		}
+		if len(prefixResp.Errors) > 0 {
+			return fmt.Errorf("prefix query GraphQL error: %s", prefixResp.Errors[0].Message)
+		}
+
+		page := prefixResp.Data.EntitiesByPrefix
+		entities = append(entities, page.Entities...)
+		pageCount++
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			return fmt.Errorf("prefix query returned repeated continuation cursor %q", cursor)
+		}
+		cursor = page.NextCursor
+	}
 	latency := time.Since(start)
-	if err != nil {
-		return fmt.Errorf("prefix request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("prefix query returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("failed to read prefix response: %w", err)
-	}
-
-	var prefixResp struct {
-		Data struct {
-			EntitiesByPrefix []struct {
-				ID string `json:"id"`
-			} `json:"entitiesByPrefix"`
-		} `json:"data"`
-		Errors []struct {
-			Message string `json:"message"`
-		} `json:"errors"`
-	}
-
-	if err := json.Unmarshal(bodyBytes, &prefixResp); err != nil {
-		return fmt.Errorf("failed to parse prefix response: %w", err)
-	}
-
-	if len(prefixResp.Errors) > 0 {
-		return fmt.Errorf("prefix query GraphQL error: %s", prefixResp.Errors[0].Message)
-	}
-
-	entities := prefixResp.Data.EntitiesByPrefix
 	totalCount := len(entities)
 
 	result.Metrics["prefix_query_total_count"] = totalCount
 	result.Metrics["prefix_query_returned"] = totalCount
+	result.Metrics["prefix_query_pages"] = pageCount
 	result.Metrics["prefix_query_latency_ms"] = latency.Milliseconds()
 
 	// We expect at least 1 temperature sensor from the test data
@@ -962,7 +976,7 @@ func (s *TieredScenario) executeTestEntitiesByPrefix(ctx context.Context, result
 		"prefix":      prefix,
 		"total_count": totalCount,
 		"returned":    totalCount,
-		"truncated":   false, // Array response doesn't indicate truncation
+		"pages":       pageCount,
 		"latency_ms":  latency.Milliseconds(),
 		"message":     fmt.Sprintf("Prefix query successful: found %d temperature sensors", totalCount),
 	}

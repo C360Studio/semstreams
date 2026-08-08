@@ -25,23 +25,23 @@ func TestWebSocketOutput_MetricsInitialization(t *testing.T) {
 	port := getAvailablePort(t)
 
 	// Test without metrics registry
-	ws := NewOutput(port, "/ws", []string{"test.>"}, natsClient.Client)
+	ws := mustNewOutput(t, port, "/ws", []string{"test.>"}, natsClient.Client)
 	assert.Nil(t, ws.metrics)
 
 	// Test with metrics registry
 	registry := metric.NewMetricsRegistry()
 	cfg := ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port + 1,
 		Path:            "/ws",
-		Subjects:        []string{"test.>"},
+		InputPorts:      natsInputDefinitions([]string{"test.>"}),
+		OutputPorts:     websocketOutputDefinitions(port + 1),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	}
-	wsWithMetrics := NewOutputFromConfig(cfg)
+	wsWithMetrics := mustNewOutputFromConfig(t, cfg)
 
 	assert.NotNil(t, wsWithMetrics.metrics)
 	assert.NotNil(t, wsWithMetrics.metrics.messagesReceived)
@@ -62,17 +62,18 @@ func TestWebSocketOutput_ClientConnectionMetrics(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	port := getAvailablePort(t)
 
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port,
 		Path:            "/ws",
-		Subjects:        []string{"test.>"},
+		InputPorts:      natsInputDefinitions([]string{"test.>"}),
+		OutputPorts:     websocketOutputDefinitions(port),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NotNil(t, ws.metrics)
 
 	// Start the WebSocket server
@@ -127,17 +128,18 @@ func TestWebSocketOutput_MessageBroadcastMetrics(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	port := getAvailablePort(t)
 
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port,
 		Path:            "/ws",
-		Subjects:        []string{"test.subject"},
+		InputPorts:      natsInputDefinitions([]string{"test.subject"}),
+		OutputPorts:     websocketOutputDefinitions(port),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NotNil(t, ws.metrics)
 
 	// Start the WebSocket server
@@ -209,26 +211,27 @@ func TestWebSocketOutput_ErrorMetrics(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	port := getAvailablePort(t)
 
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port,
 		Path:            "/ws",
-		Subjects:        []string{"test.>"},
+		InputPorts:      natsInputDefinitions([]string{"test.>"}),
+		OutputPorts:     websocketOutputDefinitions(port),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NotNil(t, ws.metrics)
 
 	// Test connection upgrade error by using invalid port - use separate registry to avoid metric name conflicts
 	invalidRegistry := metric.NewMetricsRegistry()
-	invalidWs := NewOutputFromConfig(ConstructorConfig{
+	_, err := NewOutputFromConfig(ConstructorConfig{
 		Name:            "test-ws-invalid",
-		Port:            99999,
 		Path:            "/ws",
-		Subjects:        []string{"test.>"},
+		InputPorts:      natsInputDefinitions([]string{"test.>"}),
+		OutputPorts:     websocketOutputDefinitions(99999),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: invalidRegistry,
 		Security:        security.Config{},
@@ -236,9 +239,7 @@ func TestWebSocketOutput_ErrorMetrics(t *testing.T) {
 		AckTimeout:      5 * time.Second,
 	})
 
-	// This should fail during initialization due to invalid port
-	err := invalidWs.Initialize()
-	// Error expected due to invalid port validation
+	// The canonical network declaration fails during construction.
 	assert.Error(t, err)
 
 	// Create a connection and then close it abruptly to test client errors
@@ -273,17 +274,18 @@ func TestWebSocketOutput_ServerUptimeMetrics(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	port := getAvailablePort(t)
 
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port,
 		Path:            "/ws",
-		Subjects:        []string{"test.>"},
+		InputPorts:      natsInputDefinitions([]string{"test.>"}),
+		OutputPorts:     websocketOutputDefinitions(port),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NotNil(t, ws.metrics)
 
 	// Start the WebSocket server
@@ -307,17 +309,18 @@ func TestWebSocketOutput_MessageSizeMetrics(t *testing.T) {
 	registry := metric.NewMetricsRegistry()
 	port := getAvailablePort(t)
 
-	ws := NewOutputFromConfig(ConstructorConfig{
+	ws := mustNewOutputFromConfig(t, ConstructorConfig{
 		Name:            "test-ws",
-		Port:            port,
 		Path:            "/ws",
-		Subjects:        []string{"test.size"},
+		InputPorts:      natsInputDefinitions([]string{"test.size"}),
+		OutputPorts:     websocketOutputDefinitions(port),
 		NATSClient:      natsClient.Client,
 		MetricsRegistry: registry,
 		Security:        security.Config{},
 		DeliveryMode:    DeliveryAtMostOnce,
 		AckTimeout:      5 * time.Second,
 	})
+
 	require.NotNil(t, ws.metrics)
 
 	// Start the WebSocket server

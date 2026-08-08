@@ -43,11 +43,11 @@
 //	config := jsongeneric.JSONGenericConfig{
 //	    Ports: &component.PortConfig{
 //	        Inputs: []component.PortDefinition{
-//	            {Name: "input", Type: "nats", Subject: "external.sensors.>", Required: true},
+//	            {Name: "input", Config: component.NATSPort{Subject: "external.sensors.>"}, Required: true},
 //	        },
 //	        Outputs: []component.PortDefinition{
-//	            {Name: "output", Type: "nats", Subject: "internal.sensors",
-//	             Interface: "core .json.v1", Required: true},
+//	            {Name: "output", Config: component.NATSPort{Subject: "internal.sensors",
+//	             Interface: &component.InterfaceContract{Type: "core.json.v1"}}, Required: true},
 //	        },
 //	    },
 //	}
@@ -106,8 +106,7 @@
 //	    "inputs": [
 //	      {
 //	        "name": "nats_input",
-//	        "type": "nats",
-//	        "subject": "raw.>",
+//	        "config": {"kind":"nats","subject":"raw.>"},
 //	        "required": true,
 //	        "description": "NATS subjects with plain JSON data"
 //	      }
@@ -115,9 +114,7 @@
 //	    "outputs": [
 //	      {
 //	        "name": "nats_output",
-//	        "type": "nats",
-//	        "subject": "generic.messages",
-//	        "interface": "core .json.v1",
+//	        "config": {"kind":"nats","subject":"generic.messages","interface":{"type":"core.json.v1"}},
 //	        "required": true,
 //	        "description": "NATS subject for GenericJSON wrapped messages"
 //	      }

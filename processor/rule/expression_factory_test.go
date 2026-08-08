@@ -485,7 +485,7 @@ func TestCreateRuleProcessor_InlineRulesPassedThrough(t *testing.T) {
 
 	configJSON := `{
 		"ports": {
-			"inputs": [{"name": "rule_in", "subject": "test.input", "type": "nats"}],
+			"inputs": [{"name": "rule_in", "config": {"kind": "nats", "subject": "test.input"}}],
 			"outputs": []
 		},
 		"inline_rules": [

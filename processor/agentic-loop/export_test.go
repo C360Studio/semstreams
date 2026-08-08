@@ -7,9 +7,39 @@ import (
 	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/storage/objectstore"
 	"github.com/c360studio/semstreams/types"
 )
+
+// TrajectoryManager is a test-only view of active-loop execution mechanics.
+// Production builds expose no aggregate trajectory manager or read method.
+type TrajectoryManager struct {
+	manager *trajectoryManager
+}
+
+func NewTrajectoryManager() *TrajectoryManager {
+	return &TrajectoryManager{manager: newTrajectoryManager()}
+}
+
+func (m *TrajectoryManager) StartTrajectory(loopID string) (agentic.Trajectory, error) {
+	return m.manager.startTrajectory(loopID)
+}
+
+func (m *TrajectoryManager) AddStep(loopID string, step agentic.TrajectoryStep) (agentic.Trajectory, error) {
+	return m.manager.addStep(loopID, step)
+}
+
+func (m *TrajectoryManager) CompleteTrajectory(loopID, outcome string) (agentic.Trajectory, error) {
+	return m.manager.completeTrajectory(loopID, outcome)
+}
+
+func (m *TrajectoryManager) GetTrajectory(loopID string) (agentic.Trajectory, error) {
+	return m.manager.getTrajectory(loopID)
+}
+
+// GetTrajectory exposes active-loop state only to external-package tests.
+func (h *MessageHandler) GetTrajectory(loopID string) (agentic.Trajectory, error) {
+	return h.trajectoryManager.getTrajectory(loopID)
+}
 
 // SetTestPublishHook wires a capturing function onto c.testPublishHook so
 // unit tests can observe wire-level publishes from publishApprovalResponseToWire
@@ -38,11 +68,6 @@ func NewGraphWriterForTest(client *natsclient.Client, reg model.RegistryReader, 
 	}
 }
 
-// SetContentStore sets the ObjectStore for content storage in integration tests.
-func (g *GraphWriterForTest) SetContentStore(store *objectstore.Store) {
-	g.w.contentStore = store
-}
-
 // SetLogger replaces the graphWriter's logger for integration tests that need
 // to capture log output (e.g. verifying divergent task_id warnings).
 func (g *GraphWriterForTest) SetLogger(logger *slog.Logger) {
@@ -58,9 +83,6 @@ func (g *GraphWriterForTest) WriteLoopFailure(ctx context.Context, e *agentic.Lo
 }
 func (g *GraphWriterForTest) WriteLoopCancellation(ctx context.Context, e *agentic.LoopCancelledEvent) {
 	g.w.WriteLoopCancellation(ctx, e)
-}
-func (g *GraphWriterForTest) WriteTrajectorySteps(ctx context.Context, loopID string, trajectory *agentic.Trajectory) {
-	g.w.WriteTrajectorySteps(ctx, loopID, trajectory)
 }
 func (g *GraphWriterForTest) WriteLineageTriples(ctx context.Context, loopID string, related map[string]any) error {
 	return g.w.WriteLineageTriples(ctx, loopID, related)

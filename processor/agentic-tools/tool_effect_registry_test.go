@@ -190,8 +190,8 @@ func TestEffectSurvivesRegistrationThroughDiscovery(t *testing.T) {
 
 	rawConfig, err := json.Marshal(agentictools.Config{
 		Ports: &component.PortConfig{
-			Inputs:  []component.PortDefinition{{Name: "input", Type: "nats", Subject: "tool.execute.>", Required: true}},
-			Outputs: []component.PortDefinition{{Name: "output", Type: "nats", Subject: "tool.result.*", Required: true}},
+			Inputs:  []component.PortDefinition{{Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.>"}}, Required: true}},
+			Outputs: []component.PortDefinition{{Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.*"}}, Required: true}},
 		},
 		Timeout: "60s",
 	})

@@ -55,11 +55,11 @@ func TestIntegration_UDPInput_Creation_ValidConfig(t *testing.T) {
 	require.Equal(t, 14550, networkPort.Port)
 	require.Equal(t, "127.0.0.1", networkPort.Host)
 
-	// Verify NATS output configuration
+	// Verify JetStream output configuration
 	outputPorts := udpInput.OutputPorts()
 	require.Len(t, outputPorts, 1)
-	natsPort := outputPorts[0].Config.(component.NATSPort)
-	require.Equal(t, "test.udp.mavlink", natsPort.Subject)
+	streamPort := outputPorts[0].Config.(component.JetStreamPort)
+	require.Equal(t, []string{"test.udp.mavlink"}, streamPort.Subjects)
 }
 
 func TestIntegration_UDPInput_Creation_DefaultConfig(t *testing.T) {
@@ -136,10 +136,20 @@ func TestIntegration_UDPInput_Creation_InvalidPort(t *testing.T) {
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Create UDP config with test port
-			udpConfig := testUDPConfig(tc.port.(int), "127.0.0.1", "test.udp")
-			configJSON, err := json.Marshal(udpConfig)
-			require.NoError(t, err)
+			// Keep the invalid value on the wire so the production decoder,
+			// rather than typed fixture marshaling, owns its rejection.
+			configJSON := json.RawMessage(fmt.Sprintf(`{
+				"ports": {
+					"inputs": [{
+						"name": "udp_socket",
+						"config": {"kind": "network", "protocol": "udp", "host": "127.0.0.1", "port": %d}
+					}],
+					"outputs": [{
+						"name": "nats_output",
+						"config": {"kind": "jetstream", "subjects": ["test.udp"]}
+					}]
+				}
+			}`, tc.port))
 
 			// Create component dependencies
 			deps := component.Dependencies{
@@ -150,14 +160,13 @@ func TestIntegration_UDPInput_Creation_InvalidPort(t *testing.T) {
 				},
 			}
 
-			// With SafeUnmarshal validation, invalid ports are now caught at creation time
+			// The merged effective configuration rejects invalid ports at creation time.
 			udpComponent, err := CreateInput(configJSON, deps)
 			require.Error(t, err) // Creation should fail with invalid port
 			require.Nil(t, udpComponent)
 
 			// Verify error mentions port validation
 			require.Contains(t, err.Error(), "port")
-			require.Contains(t, err.Error(), "validation")
 		})
 	}
 }
@@ -217,7 +226,9 @@ func TestIntegration_UDPInput_Integration_RealUDPAndNATS(t *testing.T) {
 	}
 
 	// Create real NATS client with JetStream for message verification
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	testClient := natsclient.NewTestClient(t, natsclient.WithStreams(natsclient.TestStreamConfig{
+		Name: "INTEGRATION", Subjects: []string{"integration.udp.>"},
+	}))
 
 	// Find available port for UDP
 	port := findAvailablePort(t)
@@ -297,7 +308,9 @@ func TestIntegration_UDPInput_Integration_MultipleMessages(t *testing.T) {
 		t.Skip("skipping integration test in short mode")
 	}
 
-	testClient := natsclient.NewTestClient(t, natsclient.WithJetStream())
+	testClient := natsclient.NewTestClient(t, natsclient.WithStreams(natsclient.TestStreamConfig{
+		Name: "INTEGRATION", Subjects: []string{"integration.udp.>"},
+	}))
 	port := findAvailablePort(t)
 	subject := "integration.udp.multi"
 

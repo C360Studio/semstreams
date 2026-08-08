@@ -13,10 +13,10 @@ func TestJSONMapProcessor_Creation(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Interface: "core .json.v1", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "test.output", Interface: "core .json.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "test.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 		},
 		Mappings: []FieldMapping{
@@ -49,10 +49,16 @@ func TestJSONMapProcessor_DefaultConfig(t *testing.T) {
 	assert.NotNil(t, config.Ports)
 	assert.Len(t, config.Ports.Inputs, 1)
 	assert.Len(t, config.Ports.Outputs, 1)
-	assert.Equal(t, "raw.>", config.Ports.Inputs[0].Subject)
-	assert.Equal(t, "core .json.v1", config.Ports.Inputs[0].Interface)
-	assert.Equal(t, "mapped.messages", config.Ports.Outputs[0].Subject)
-	assert.Equal(t, "core .json.v1", config.Ports.Outputs[0].Interface)
+	input, ok := config.Ports.Inputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	output, ok := config.Ports.Outputs[0].Config.(component.NATSPort)
+	require.True(t, ok)
+	assert.Equal(t, "raw.>", input.Subject)
+	require.NotNil(t, input.Interface)
+	assert.Equal(t, "core .json.v1", input.Interface.Type)
+	assert.Equal(t, "mapped.messages", output.Subject)
+	require.NotNil(t, output.Interface)
+	assert.Equal(t, "core .json.v1", output.Interface.Type)
 }
 
 func TestJSONMapProcessor_TransformMessage(t *testing.T) {
@@ -180,10 +186,10 @@ func TestJSONMapProcessor_Lifecycle(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "input", Type: "nats", Subject: "test.input", Interface: "core .json.v1", Required: true},
+				{Name: "input", Config: component.NATSPort{Subject: "test.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "output", Type: "nats", Subject: "test.output", Interface: "core .json.v1", Required: true},
+				{Name: "output", Config: component.NATSPort{Subject: "test.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true},
 			},
 		},
 		Mappings: []FieldMapping{},

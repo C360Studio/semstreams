@@ -166,10 +166,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -182,10 +182,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 8,
@@ -198,10 +198,10 @@ func TestConfig_Validate_ValidConfig(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 5,
@@ -239,7 +239,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -251,7 +251,7 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{},
 				},
@@ -264,10 +264,10 @@ func TestConfig_Validate_MissingPorts(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "other", Type: "kv-write", Subject: "OTHER_BUCKET"},
+						{Name: "other", Config: component.KVWritePort{Bucket: "OTHER_BUCKET"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -331,10 +331,10 @@ func TestConfig_Validate_InvalidGeohashPrecision(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: tt.precision,
@@ -385,10 +385,10 @@ func TestConfig_Validate_InvalidWorkers(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -439,10 +439,10 @@ func TestConfig_Validate_InvalidBatchSize(t *testing.T) {
 			config := Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -464,10 +464,10 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+				{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 			},
 		},
 	}
@@ -497,8 +497,12 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 
 	// Verify required inputs
 	hasEntityWatch := false
-	for _, in := range config.Ports.Inputs {
-		if in.Subject == "ENTITY_STATES" && in.Type == "kv-watch" {
+	for _, definition := range config.Ports.Inputs {
+		port, resolveErr := definition.Resolve(component.DirectionInput)
+		require.NoError(t, resolveErr)
+		facts, factsErr := port.Facts()
+		require.NoError(t, factsErr)
+		if facts.ResourceID() == "kv:ENTITY_STATES" && facts.Kind() == component.PortKindKVWatch {
 			hasEntityWatch = true
 			break
 		}
@@ -507,8 +511,12 @@ func TestDefaultConfig_ReturnsValidConfig(t *testing.T) {
 
 	// Verify required outputs
 	hasSpatialIndex := false
-	for _, out := range config.Ports.Outputs {
-		if out.Subject == "SPATIAL_INDEX" {
+	for _, definition := range config.Ports.Outputs {
+		port, resolveErr := definition.Resolve(component.DirectionOutput)
+		require.NoError(t, resolveErr)
+		facts, factsErr := port.Facts()
+		require.NoError(t, factsErr)
+		if facts.ResourceID() == "kv:SPATIAL_INDEX" {
 			hasSpatialIndex = true
 			break
 		}
@@ -839,10 +847,10 @@ func TestCreateGraphIndexSpatial_CustomConfig(t *testing.T) {
 	config := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+				{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+				{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 			},
 		},
 		GeohashPrecision: 8,
@@ -1013,10 +1021,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,
@@ -1030,10 +1038,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 8,
@@ -1047,10 +1055,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 0,
@@ -1064,10 +1072,10 @@ func TestComponent_MultipleConfigValidations(t *testing.T) {
 			config: Config{
 				Ports: &component.PortConfig{
 					Inputs: []component.PortDefinition{
-						{Name: "entity_watch", Type: "kv-watch", Subject: "ENTITY_STATES"},
+						{Name: "entity_watch", Config: component.KVWatchPort{Bucket: "ENTITY_STATES"}},
 					},
 					Outputs: []component.PortDefinition{
-						{Name: "spatial_index", Type: "kv-write", Subject: "SPATIAL_INDEX"},
+						{Name: "spatial_index", Config: component.KVWritePort{Bucket: "SPATIAL_INDEX"}},
 					},
 				},
 				GeohashPrecision: 6,

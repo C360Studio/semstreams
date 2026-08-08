@@ -93,7 +93,7 @@ The agentic configuration (`configs/agentic.json`) defines the component pipelin
     "timeout": "30s",           // Overall loop timeout
     "stream_name": "AGENT",     // NATS JetStream stream
     "loops_bucket": "AGENT_LOOPS",           // KV for loop state
-    "trajectories_bucket": "AGENT_TRAJECTORIES"  // KV for trajectories
+    "trajectory_evidence_storage_instance": "objectstore"
   }
 }
 ```
@@ -205,9 +205,37 @@ nats kv watch AGENT_LOOPS
 # Get a specific loop
 nats kv get AGENT_LOOPS loop_abc123
 
-# View trajectories after completion
-nats kv get AGENT_TRAJECTORIES loop_abc123
+# Internal operators can watch append-only fact keys. Keys contain a loop digest,
+# not the raw loop ID, and the bucket has history 1 with no TTL.
+nats kv watch AGENT_TRAJECTORIES
 ```
+
+Application readers use graph-gateway GraphQL. The query returns one cursor-paged selection of observed fact metadata
+and durable evidence references; it never returns evidence bodies:
+
+```graphql
+query {
+  trajectory(loopId: "loop_abc123", limit: 64) {
+    coverage
+    terminal_observed
+    observed_totals { facts tokens_in tokens_out }
+    facts {
+      attempt_id
+      kind
+      status
+      evidence_digest
+      evidence_capture
+      evidence { storage_instance key content_type size }
+    }
+    next_cursor
+  }
+}
+```
+
+Treat `next_cursor` as opaque and pass it unchanged as the `cursor` argument to request the next page. Totals and
+`terminal_observed` describe only the returned page. An authorized evidence reader separately resolves
+`facts[].evidence.storage_instance` through the injected StoreRegistry and reads `facts[].evidence.key` from that
+registered Store. Readers without that authority stop at the reference.
 
 ### Via HTTP API
 

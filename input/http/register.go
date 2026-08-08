@@ -9,19 +9,17 @@ import (
 )
 
 // CreateInput is the factory function the component registry uses
-// to construct an http input from raw JSON config. Validates the
-// merged config before handing off to NewInput.
+// to construct an http input from raw JSON config. NewInput validates
+// the merged effective config during construction.
 func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	cfg := DefaultConfig()
 	if len(rawConfig) > 0 {
-		var userConfig Config
-		if err := component.SafeUnmarshal(rawConfig, &userConfig); err != nil {
+		type configOverride Config
+		var override configOverride
+		if err := component.SafeUnmarshal(rawConfig, &override); err != nil {
 			return nil, errs.Wrap(err, "http-input-factory", "create", "config parse")
 		}
-		cfg = mergeConfig(cfg, userConfig)
-	}
-	if err := cfg.Validate(); err != nil {
-		return nil, err
+		cfg = mergeConfig(cfg, Config(override))
 	}
 
 	if deps.NATSClient == nil {
@@ -35,7 +33,7 @@ func CreateInput(rawConfig json.RawMessage, deps component.Dependencies) (compon
 		NATSClient:      deps.NATSClient,
 		MetricsRegistry: deps.MetricsRegistry,
 		Logger:          deps.Logger,
-	}), nil
+	})
 }
 
 // mergeConfig overlays user-supplied fields onto the defaults.

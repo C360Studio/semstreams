@@ -5,11 +5,13 @@ package agenticloop_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -25,6 +27,85 @@ var (
 	sharedTestClient *natsclient.TestClient
 	sharedNATSClient *natsclient.Client
 )
+
+func TestTrajectoryFactBucketIsImmutableHistoryWithoutTTL(t *testing.T) {
+	natsClient := getSharedNATSClient(t)
+	raw, err := json.Marshal(map[string]any{
+		"consumer_name_suffix":    "trajectory-fact-bucket-contract",
+		"delete_consumer_on_stop": true,
+	})
+	require.NoError(t, err)
+	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{
+		NATSClient:      natsClient,
+		PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	lifecycle := discoverable.(component.LifecycleComponent)
+	require.NoError(t, lifecycle.Start(context.Background()))
+	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	bucket, err := js.KeyValue(context.Background(), agentic.TrajectoryBucketName)
+	require.NoError(t, err)
+	status, err := bucket.Status(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), status.History())
+	assert.Zero(t, status.TTL())
+}
+
+func TestExistingIncompatibleTrajectoryBucketDisablesAuditAndDegradesHealth(t *testing.T) {
+	testClient, err := natsclient.NewSharedTestClient(
+		natsclient.WithJetStream(),
+		natsclient.WithKV(),
+		natsclient.WithKVBuckets("AGENT_LOOPS"),
+		natsclient.WithStreams(natsclient.TestStreamConfig{Name: "AGENT", Subjects: []string{"agent.>", "tool.>"}}),
+		natsclient.WithTestTimeout(5*time.Second),
+		natsclient.WithStartTimeout(30*time.Second),
+	)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = testClient.Terminate() })
+	natsClient := testClient.Client
+	ctx := context.Background()
+	js, err := natsClient.JetStream()
+	require.NoError(t, err)
+	bucket, err := js.CreateKeyValue(ctx, jetstream.KeyValueConfig{
+		Bucket: agentic.TrajectoryBucketName, History: 2,
+	})
+	require.NoError(t, err)
+
+	raw, err := json.Marshal(map[string]any{
+		"consumer_name_suffix":    "trajectory-incompatible-contract",
+		"delete_consumer_on_stop": true,
+	})
+	require.NoError(t, err)
+	discoverable, err := agenticloop.NewComponent(raw, component.Dependencies{
+		NATSClient: natsClient, PayloadRegistry: payloadbuiltins.NewTestRegistry(t),
+	})
+	require.NoError(t, err)
+	lifecycle := discoverable.(component.LifecycleComponent)
+	require.NoError(t, lifecycle.Start(ctx))
+	t.Cleanup(func() { _ = lifecycle.Stop(5 * time.Second) })
+
+	health := lifecycle.Health()
+	require.False(t, health.Healthy)
+	require.Equal(t, "degraded", health.Status)
+	require.Contains(t, strings.ToLower(health.LastError), "wipe")
+	const loopID = "loop_incompatible_trajectory_bucket"
+	publishTaskMessage(t, natsClient, "agent.task.test", &agentic.TaskMessage{
+		LoopID: loopID, TaskID: "task_incompatible_trajectory_bucket",
+		Role: "general", Model: "test-model", Prompt: "continue useful work",
+	})
+	loops, err := js.KeyValue(ctx, "AGENT_LOOPS")
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		_, getErr := loops.Get(ctx, loopID)
+		return getErr == nil
+	}, 5*time.Second, 25*time.Millisecond, "useful task state should persist despite incompatible audit bucket")
+	status, err := bucket.Status(ctx)
+	require.NoError(t, err)
+	require.Zero(t, status.Values(), "incompatible bucket must receive no audit writes")
+}
 
 // TestMain sets up shared NATS container for all loop integration tests
 func TestMain(m *testing.M) {
@@ -101,31 +182,18 @@ func TestIntegration_LoopFullCycle(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -248,43 +316,24 @@ func TestIntegration_LoopWithToolCalls(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 				{
-					Name:       "tool_results",
-					Type:       "jetstream",
-					Subject:    "tool.result.>",
-					StreamName: "AGENT",
+					Name: "tool.result", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.result.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "tool_calls",
-					Type:       "jetstream",
-					Subject:    "tool.execute.*",
-					StreamName: "AGENT",
+					Name: "tool.execute", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"tool.execute.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -429,31 +478,18 @@ func TestIntegration_LoopMaxIterations(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -582,25 +618,15 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 			},
 		},
@@ -670,7 +696,7 @@ func TestIntegration_LoopStatePersistence(t *testing.T) {
 	assert.Equal(t, "test-model", entity.Model)
 }
 
-// TestIntegration_LoopTrajectoryCapture tests that trajectory is saved on completion.
+// TestIntegration_LoopTrajectoryCapture tests that durable observations are readable on completion.
 // Uses its own NATS client to avoid query handler conflicts with other test components.
 func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 	tc := natsclient.NewTestClient(t, natsclient.WithFastStartup(), natsclient.WithJetStream(),
@@ -682,31 +708,18 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:       "tasks",
-					Type:       "jetstream",
-					Subject:    "agent.task.*",
-					StreamName: "AGENT",
-					Required:   true,
+					Name: "agent.task", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.task.*"}}, Required: true,
 				},
 				{
-					Name:       "responses",
-					Type:       "jetstream",
-					Subject:    "agent.response.>",
-					StreamName: "AGENT",
+					Name: "agent.response", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.response.>"}},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:       "requests",
-					Type:       "jetstream",
-					Subject:    "agent.request.*",
-					StreamName: "AGENT",
+					Name: "agent.request", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.request.*"}},
 				},
 				{
-					Name:       "complete",
-					Type:       "jetstream",
-					Subject:    "agent.complete.*",
-					StreamName: "AGENT",
+					Name: "agent.complete", Config: component.JetStreamPort{StreamName: "AGENT", Subjects: []string{"agent.complete.*"}},
 				},
 			},
 		},
@@ -796,19 +809,33 @@ func TestIntegration_LoopTrajectoryCapture(t *testing.T) {
 
 	time.Sleep(1 * time.Second)
 
-	// Verify trajectory via NATS query handler (served from TTLCache)
+	// Verify trajectory via the declared NATS query handler. The response is
+	// reconstructed from immutable KV facts, not process memory.
 	trajReq, err := json.Marshal(map[string]string{"loopId": loopID})
 	require.NoError(t, err)
 
 	trajResp, err := natsClient.Request(ctx, "agentic.query.trajectory", trajReq, 5*time.Second)
 	require.NoError(t, err, "Trajectory should be available via query handler")
 
-	var trajectory agentic.Trajectory
+	var trajectory struct {
+		LoopID           string `json:"loop_id"`
+		Coverage         string `json:"coverage"`
+		TerminalObserved bool   `json:"terminal_observed"`
+		ObservedTotals   struct {
+			Facts                uint64 `json:"facts"`
+			TokensIn             uint64 `json:"tokens_in"`
+			TokensOut            uint64 `json:"tokens_out"`
+			TerminalObservations uint64 `json:"terminal_observations"`
+		} `json:"observed_totals"`
+		Facts []agentic.TrajectoryFactV1 `json:"facts"`
+	}
 	err = json.Unmarshal(trajResp, &trajectory)
 	require.NoError(t, err)
 
 	assert.Equal(t, loopID, trajectory.LoopID)
-	assert.NotNil(t, trajectory.EndTime, "Trajectory should be completed")
-	assert.Equal(t, "complete", trajectory.Outcome)
-	assert.Greater(t, len(trajectory.Steps), 0, "Trajectory should have steps")
+	assert.Equal(t, "observed", trajectory.Coverage)
+	assert.True(t, trajectory.TerminalObserved)
+	assert.Greater(t, trajectory.ObservedTotals.Facts, uint64(0))
+	assert.Equal(t, uint64(1), trajectory.ObservedTotals.TerminalObservations)
+	assert.Greater(t, len(trajectory.Facts), 0, "trajectory should expose visible facts")
 }

@@ -29,10 +29,10 @@ func TestComponent_HierarchyInference_ConfigDefaults(t *testing.T) {
 	customConfig := Config{
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
-				{Name: "test", Type: "jetstream", Subject: "test.>"},
+				{Name: "test", Config: component.JetStreamPort{StreamName: "TEST", Subjects: []string{"test.>"}}},
 			},
 			Outputs: []component.PortDefinition{
-				{Name: "test", Type: "kv-write", Subject: "TEST"},
+				{Name: "test", Config: component.KVWritePort{Bucket: "TEST"}},
 			},
 		},
 	}

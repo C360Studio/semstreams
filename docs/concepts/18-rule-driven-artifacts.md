@@ -89,8 +89,7 @@ Pair it with an `output/file` component subscribed to that subject:
     "ports": {
       "inputs": [{
         "name": "snapshots",
-        "subject": "output.drone-snapshot.>",
-        "type": "jetstream"
+        "config": {"kind":"jetstream","subjects":["output.drone-snapshot.>"]}
       }]
     },
     "destination": "/var/lib/semstreams/drone-snapshots/"

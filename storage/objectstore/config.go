@@ -75,38 +75,20 @@ func (c Config) Validate() error {
 func DefaultConfig() Config {
 	inputDefs := []component.PortDefinition{
 		{
-			Name:        "write",
-			Type:        "nats",
-			Subject:     "storage.objectstore.write",
-			Interface:   "", // No interface requirement - accepts any message
-			Required:    false,
+			Name: "write", Config: component.NATSPort{Subject: "storage.objectstore.write"}, Required: false,
 			Description: "NATS subject for write operations (accepts any message)",
-		},
-		{
-			Name:        "api",
-			Type:        "nats-request",
-			Subject:     "storage.objectstore.api",
-			Interface:   "", // Request/Response operations
-			Required:    false,
-			Description: "Request/Response API for synchronous operations",
 		},
 	}
 
 	outputDefs := []component.PortDefinition{
 		{
-			Name:        "events",
-			Type:        "nats",
-			Subject:     "storage.objectstore.events",
-			Interface:   "", // Generic storage events
-			Required:    false,
+			Name: "events", Config: component.NATSPort{Subject: "storage.objectstore.events"}, Required: false,
 			Description: "Storage events (stored, retrieved)",
 		},
 		{
-			Name:        "stored",
-			Type:        "nats",
-			Subject:     "storage.objectstore.stored",
-			Interface:   "storage.stored.v1", // StoredMessage with StorageRef
-			Required:    false,
+			Name: "stored", Config: component.NATSPort{Subject: "storage.objectstore.stored", Interface: &component.InterfaceContract{
+				// StoredMessage with StorageRef
+				Type: "storage.stored.v1"}}, Required: false,
 			Description: "StoredMessage output for ContentStorable pattern",
 		},
 	}

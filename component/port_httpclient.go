@@ -18,7 +18,7 @@ import "fmt"
 // REFERENCE (a key name resolved at runtime from the component's secret source),
 // never a value. No field holds a secret.
 type HTTPClientPort struct {
-	Method        string             `json:"method,omitempty"`         // HTTP method; defaults to GET when empty
+	Method        string             `json:"method,omitempty"`         // Required HTTP method
 	URLPattern    string             `json:"url_pattern"`              // target endpoint/resource pattern; NO inline creds, NO query-string secrets
 	TriggerPort   string             `json:"trigger_port,omitempty"`   // NAME of a sibling TimerPort driving cadence (empty = event-driven/internal)
 	AuthRef       string             `json:"auth_ref,omitempty"`       // credential key name resolved at runtime; NEVER a secret value; empty = unauthenticated
@@ -29,16 +29,12 @@ type HTTPClientPort struct {
 // ResourceID returns a unique identifier for the HTTP client dependency.
 // Two ports with the same method and URL pattern identify the same external resource.
 func (h HTTPClientPort) ResourceID() string {
-	method := h.Method
-	if method == "" {
-		method = "GET"
-	}
-	return fmt.Sprintf("http-client:%s:%s", method, h.URLPattern)
+	return fmt.Sprintf("http-client:%s:%s", h.Method, h.URLPattern)
 }
 
 // IsExclusive returns false: an outbound client relationship is shareable
 // (multiple components may poll the same endpoint), unlike a NetworkPort listener.
 func (h HTTPClientPort) IsExclusive() bool { return false }
 
-// Type returns the port type identifier.
-func (h HTTPClientPort) Type() string { return "http-client" }
+// Kind returns the canonical port kind.
+func (h HTTPClientPort) Kind() PortKind { return PortKindHTTPClient }

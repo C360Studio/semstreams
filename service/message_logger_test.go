@@ -504,6 +504,13 @@ func TestContainsWildcard(t *testing.T) {
 	}
 }
 
+func TestUniqueStringsPreservesFirstOccurrence(t *testing.T) {
+	t.Parallel()
+
+	got := uniqueStrings([]string{"graph.mutation.>", "raw.>", "graph.mutation.>", "raw.>"})
+	require.Equal(t, []string{"graph.mutation.>", "raw.>"}, got)
+}
+
 // TestDiscoverSubjectsFromComponents tests subject discovery from component configs
 func TestDiscoverSubjectsFromComponents(t *testing.T) {
 	t.Run("empty_components", func(t *testing.T) {
@@ -518,17 +525,17 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 				"ports": {
 					"inputs": [],
 					"outputs": [
-						{"name": "udp_out", "subject": "raw.udp.messages", "type": "jetstream"}
+						{"name": "udp_out", "config": {"kind": "jetstream", "subjects": ["raw.udp.messages"]}}
 					]
 				}
 			}`),
 			"json_generic": json.RawMessage(`{
 				"ports": {
 					"inputs": [
-						{"name": "generic_in", "subject": "raw.udp.messages", "type": "jetstream"}
+						{"name": "generic_in", "config": {"kind": "jetstream", "stream_name": "RAW", "subjects": ["raw.udp.messages"]}}
 					],
 					"outputs": [
-						{"name": "generic_out", "subject": "generic.messages", "type": "jetstream", "interface": "core.json.v1"}
+						{"name": "generic_out", "config": {"kind": "jetstream", "subjects": ["generic.messages"], "interface": {"type": "core.json.v1"}}}
 					]
 				}
 			}`),
@@ -559,7 +566,7 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 			"invalid": json.RawMessage(`{not valid json`),
 			"valid": json.RawMessage(`{
 				"ports": {
-					"outputs": [{"name": "out", "subject": "valid.subject", "type": "nats"}]
+					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "valid.subject"}}]
 				}
 			}`),
 		}
@@ -572,12 +579,12 @@ func TestDiscoverSubjectsFromComponents(t *testing.T) {
 		assert.Len(t, metadata, 1)
 	})
 
-	t.Run("skips_empty_subjects", func(t *testing.T) {
+	t.Run("skips_ports_without_NATS_subjects", func(t *testing.T) {
 		components := map[string]json.RawMessage{
 			"test": json.RawMessage(`{
 				"ports": {
-					"inputs": [{"name": "in", "subject": "", "type": "nats"}],
-					"outputs": [{"name": "out", "subject": "real.subject", "type": "nats"}]
+					"inputs": [{"name": "in", "config": {"kind": "network", "protocol": "udp", "port": 14550}}],
+					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "real.subject"}}]
 				}
 			}`),
 		}
@@ -691,6 +698,61 @@ func TestMessageLogger_TraceIndexing(t *testing.T) {
 	// Verify unknown trace returns empty
 	entriesUnknown := ml.GetEntriesByTrace("00000000000000000000000000000000")
 	assert.Nil(t, entriesUnknown, "Unknown trace should return nil")
+}
+
+func TestMessageLogger_TraceIndexingOutOfOrderStore(t *testing.T) {
+	t.Parallel()
+
+	ml, err := createTestMessageLogger()
+	require.NoError(t, err)
+
+	firstTrace := "11111111111111111111111111111111"
+	secondTrace := "22222222222222222222222222222222"
+	firstSequence := ml.nextSequence.Add(1)
+	secondSequence := ml.nextSequence.Add(1)
+
+	// Model two subscription callbacks allocating in order but reaching the
+	// circular-buffer lock in reverse order.
+	ml.storeEntry(MessageLogEntry{Sequence: secondSequence, TraceID: secondTrace, Summary: "second"})
+	ml.indexTrace(secondTrace, secondSequence)
+	ml.storeEntry(MessageLogEntry{Sequence: firstSequence, TraceID: firstTrace, Summary: "first"})
+	ml.indexTrace(firstTrace, firstSequence)
+
+	first := ml.GetEntriesByTrace(firstTrace)
+	second := ml.GetEntriesByTrace(secondTrace)
+	require.Len(t, first, 1)
+	require.Len(t, second, 1)
+	assert.Equal(t, "first", first[0].Summary)
+	assert.Equal(t, "second", second[0].Summary)
+}
+
+func TestMessageLogger_OutOfOrderStoreCannotOverwriteNewerWrappedSequence(t *testing.T) {
+	t.Parallel()
+
+	ml := &MessageLogger{entries: make([]MessageLogEntry, 1), traceIndex: make(map[string][]uint64)}
+	older := ml.nextSequence.Add(1)
+	newer := ml.nextSequence.Add(1)
+
+	ml.storeEntry(MessageLogEntry{Sequence: newer, Summary: "newer"})
+	ml.storeEntry(MessageLogEntry{Sequence: older, Summary: "delayed older"})
+
+	entries := ml.GetLogEntries(0)
+	require.Len(t, entries, 1)
+	assert.Equal(t, newer, entries[0].Sequence)
+	assert.Equal(t, "newer", entries[0].Summary)
+}
+
+func TestMessageLogger_RecentEntriesUseStoredSequenceNotAllocationCompletion(t *testing.T) {
+	t.Parallel()
+
+	ml := &MessageLogger{entries: make([]MessageLogEntry, 2), traceIndex: make(map[string][]uint64)}
+	stored := ml.nextSequence.Add(1)
+	_ = ml.nextSequence.Add(1) // allocated by a callback that has not reached storage
+	ml.storeEntry(MessageLogEntry{Sequence: stored, Summary: "visible"})
+
+	entries := ml.GetLogEntries(0)
+	require.Len(t, entries, 1)
+	assert.Equal(t, stored, entries[0].Sequence)
 }
 
 // TestMessageLogger_TraceIndexing_CircularBuffer tests trace retrieval with buffer wraparound

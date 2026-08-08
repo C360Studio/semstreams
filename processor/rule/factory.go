@@ -24,12 +24,6 @@ func Register(registry *component.Registry) error {
 	})
 }
 
-// convertDefinitionToPort converts a PortDefinition to Port
-// Delegates to component.BuildPortFromDefinition for consistent port type handling
-func convertDefinitionToPort(portDef component.PortDefinition, direction component.Direction) component.Port {
-	return component.BuildPortFromDefinition(portDef, direction)
-}
-
 // CreateRuleProcessor creates a rule processor with the new factory pattern
 func CreateRuleProcessor(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	// Validate required dependencies

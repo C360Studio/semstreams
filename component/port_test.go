@@ -2,7 +2,6 @@ package component
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -59,8 +58,8 @@ func TestNetworkPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -98,8 +97,8 @@ func TestNATSPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -137,8 +136,8 @@ func TestFilePort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -154,8 +153,8 @@ func TestNATSRequestPort(t *testing.T) {
 	}{
 		{
 			name:        "Request/Response with timeout",
-			port:        NATSRequestPort{Subject: "storage.api", Timeout: "1s"},
-			resourceID:  "nats-request:storage.api",
+			port:        NATSRequestPort{Subject: "example.request", Timeout: "1s"},
+			resourceID:  "nats-request:example.request",
 			isExclusive: false,
 			portType:    "nats-request",
 		},
@@ -176,8 +175,8 @@ func TestNATSRequestPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -228,8 +227,8 @@ func TestJetStreamPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -248,9 +247,9 @@ func TestKVWatchPort(t *testing.T) {
 			port: KVWatchPort{
 				Bucket: "ENTITY_STATES",
 			},
-			resourceID:  "kvwatch:ENTITY_STATES",
+			resourceID:  "kv:ENTITY_STATES",
 			isExclusive: false,
-			portType:    "kvwatch",
+			portType:    "kv-watch",
 		},
 		{
 			name: "KV Watch specific keys with history",
@@ -259,9 +258,9 @@ func TestKVWatchPort(t *testing.T) {
 				Keys:    []string{"services.*", "components.*"},
 				History: true,
 			},
-			resourceID:  "kvwatch:CONFIG",
+			resourceID:  "kv:CONFIG",
 			isExclusive: false,
-			portType:    "kvwatch",
+			portType:    "kv-watch",
 		},
 	}
 
@@ -273,8 +272,8 @@ func TestKVWatchPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -288,8 +287,12 @@ func TestPortableInterface(_ *testing.T) {
 	var _ Portable = FilePort{}
 	var _ Portable = JetStreamPort{}
 	var _ Portable = KVWatchPort{}
+	var _ Portable = KVReadPort{}
 	var _ Portable = KVWritePort{}
 	var _ Portable = HTTPClientPort{}
+	var _ Portable = TimerPort{}
+	var _ Portable = StoreReadPort{}
+	var _ Portable = StoreProvidePort{}
 }
 
 func TestPortJSONSerialization(t *testing.T) {
@@ -353,7 +356,7 @@ func testNATSRequestSerialization(t *testing.T) {
 		Direction:   DirectionInput,
 		Required:    false,
 		Description: "Storage API request/response",
-		Config:      NATSRequestPort{Subject: "storage.api", Timeout: "1s", Retries: 3},
+		Config:      NATSRequestPort{Subject: "example.request", Timeout: "1s", Retries: 3},
 	}
 
 	data, err := json.Marshal(port)
@@ -374,8 +377,8 @@ func testNATSRequestSerialization(t *testing.T) {
 	if !ok {
 		t.Fatal("Expected config to be a map")
 	}
-	if config["type"] != "nats-request" {
-		t.Errorf("Expected config type 'nats-request', got %v", config["type"])
+	if config["kind"] != "nats-request" {
+		t.Errorf("Expected config kind 'nats-request', got %v", config["kind"])
 	}
 }
 
@@ -409,8 +412,9 @@ func verifyPortFields(t *testing.T, unmarshaled map[string]any, original Port) {
 	if unmarshaled["direction"] != string(original.Direction) {
 		t.Errorf("Expected direction %s, got %s", string(original.Direction), unmarshaled["direction"])
 	}
-	if unmarshaled["required"] != original.Required {
-		t.Errorf("Expected required %t, got %t", original.Required, unmarshaled["required"])
+	required, _ := unmarshaled["required"].(bool)
+	if required != original.Required {
+		t.Errorf("Expected required %t, got %t", original.Required, required)
 	}
 	if unmarshaled["description"] != original.Description {
 		t.Errorf("Expected description %s, got %s", original.Description, unmarshaled["description"])
@@ -576,17 +580,12 @@ func testJetStreamSerialization(t *testing.T) {
 		t.Fatal("Config should be a map")
 	}
 
-	if config["type"] != "jetstream" {
-		t.Errorf("Expected type jetstream, got %v", config["type"])
+	if config["kind"] != "jetstream" {
+		t.Errorf("Expected kind jetstream, got %v", config["kind"])
 	}
 
-	configData, ok := config["data"].(map[string]any)
-	if !ok {
-		t.Fatal("Data should be a map")
-	}
-
-	if configData["stream_name"] != "ENTITY_EVENTS" {
-		t.Errorf("Expected stream_name ENTITY_EVENTS, got %v", configData["stream_name"])
+	if config["stream_name"] != "ENTITY_EVENTS" {
+		t.Errorf("Expected stream_name ENTITY_EVENTS, got %v", config["stream_name"])
 	}
 }
 
@@ -622,21 +621,16 @@ func testKVWatchSerialization(t *testing.T) {
 		t.Fatal("Config should be a map")
 	}
 
-	if config["type"] != "kvwatch" {
-		t.Errorf("Expected type kvwatch, got %v", config["type"])
+	if config["kind"] != "kv-watch" {
+		t.Errorf("Expected kind kv-watch, got %v", config["kind"])
 	}
 
-	configData, ok := config["data"].(map[string]any)
-	if !ok {
-		t.Fatal("Data should be a map")
+	if config["bucket"] != "ENTITY_STATES" {
+		t.Errorf("Expected bucket ENTITY_STATES, got %v", config["bucket"])
 	}
 
-	if configData["bucket"] != "ENTITY_STATES" {
-		t.Errorf("Expected bucket ENTITY_STATES, got %v", configData["bucket"])
-	}
-
-	if configData["history"] != true {
-		t.Errorf("Expected history true, got %v", configData["history"])
+	if config["history"] != true {
+		t.Errorf("Expected history true, got %v", config["history"])
 	}
 }
 
@@ -724,9 +718,9 @@ func TestKVWritePort(t *testing.T) {
 			port: KVWritePort{
 				Bucket: "ENTITY_STATES",
 			},
-			resourceID:  "kvwrite:ENTITY_STATES",
+			resourceID:  "kv:ENTITY_STATES",
 			isExclusive: false,
-			portType:    "kvwrite",
+			portType:    "kv-write",
 		},
 		{
 			name: "KV Write with interface contract",
@@ -737,9 +731,9 @@ func TestKVWritePort(t *testing.T) {
 					Version: "v1",
 				},
 			},
-			resourceID:  "kvwrite:PREDICATE_INDEX",
+			resourceID:  "kv:PREDICATE_INDEX",
 			isExclusive: false,
-			portType:    "kvwrite",
+			portType:    "kv-write",
 		},
 	}
 
@@ -751,8 +745,8 @@ func TestKVWritePort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("Expected IsExclusive %t, got %t", tt.isExclusive, tt.port.IsExclusive())
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Expected Type %s, got %s", tt.portType, tt.port.Type())
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Expected Kind %s, got %s", tt.portType, tt.port.Kind())
 			}
 		})
 	}
@@ -805,6 +799,7 @@ func TestGetConsumerConfig(t *testing.T) {
 		wantDeliverPol string
 		wantAckPol     string
 		wantMaxDeliver int
+		wantErr        bool
 	}{
 		{
 			name: "JetStream port with all values",
@@ -812,6 +807,8 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:    "TEST",
+					Subjects:      []string{"test.>"},
 					DeliverPolicy: "all",
 					AckPolicy:     "none",
 					MaxDeliver:    10,
@@ -827,6 +824,8 @@ func TestGetConsumerConfig(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:    "TEST",
+					Subjects:      []string{"test.>"},
 					DeliverPolicy: "last",
 					// AckPolicy and MaxDeliver not set
 				},
@@ -840,11 +839,11 @@ func TestGetConsumerConfig(t *testing.T) {
 			port: Port{
 				Name:      "test_input",
 				Direction: DirectionInput,
-				Config:    JetStreamPort{},
+				Config:    JetStreamPort{StreamName: "TEST", Subjects: []string{"test.>"}},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantDeliverPol: "new",
+			wantAckPol:     "explicit",
+			wantMaxDeliver: 3,
 		},
 		{
 			name: "Non-JetStream port (NATS)",
@@ -853,9 +852,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    NATSPort{Subject: "test.subject"},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 		{
 			name: "Non-JetStream port (KVWatch)",
@@ -864,9 +861,7 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    KVWatchPort{Bucket: "TEST"},
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 		{
 			name: "Port with nil config",
@@ -875,15 +870,22 @@ func TestGetConsumerConfig(t *testing.T) {
 				Direction: DirectionInput,
 				Config:    nil,
 			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cfg := GetConsumerConfig(tt.port)
+			cfg, err := GetConsumerConfig(tt.port)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("GetConsumerConfig accepted a non-JetStream or invalid port")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetConsumerConfig: %v", err)
+			}
 
 			if cfg.DeliverPolicy != tt.wantDeliverPol {
 				t.Errorf("DeliverPolicy = %q, want %q", cfg.DeliverPolicy, tt.wantDeliverPol)
@@ -898,169 +900,6 @@ func TestGetConsumerConfig(t *testing.T) {
 	}
 }
 
-func TestGetConsumerConfigFromDefinition(t *testing.T) {
-	tests := []struct {
-		name           string
-		portDef        PortDefinition
-		wantDeliverPol string
-		wantAckPol     string
-		wantMaxDeliver int
-	}{
-		{
-			name: "PortDefinition with JetStreamPort config",
-			portDef: PortDefinition{
-				Name:    "entity_watch",
-				Type:    "jetstream",
-				Subject: "events.graph.entity.>",
-				Config: JetStreamPort{
-					DeliverPolicy: "all",
-					AckPolicy:     "explicit",
-					MaxDeliver:    5,
-				},
-			},
-			wantDeliverPol: "all",
-			wantAckPol:     "explicit",
-			wantMaxDeliver: 5,
-		},
-		{
-			name: "PortDefinition with partial JetStreamPort config",
-			portDef: PortDefinition{
-				Name:    "entity_watch",
-				Type:    "jetstream",
-				Subject: "events.graph.entity.>",
-				Config: JetStreamPort{
-					DeliverPolicy: "new",
-				},
-			},
-			wantDeliverPol: "new",
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with empty JetStreamPort config",
-			portDef: PortDefinition{
-				Name:    "entity_watch",
-				Type:    "jetstream",
-				Subject: "events.graph.entity.>",
-				Config:  JetStreamPort{},
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with nil config",
-			portDef: PortDefinition{
-				Name:    "entity_watch",
-				Type:    "jetstream",
-				Subject: "events.graph.entity.>",
-				Config:  nil,
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-		{
-			name: "PortDefinition with non-JetStream config type",
-			portDef: PortDefinition{
-				Name:    "nats_port",
-				Type:    "nats",
-				Subject: "test.subject",
-				Config:  NATSPort{Subject: "test.subject"},
-			},
-			wantDeliverPol: "new",      // default
-			wantAckPol:     "explicit", // default
-			wantMaxDeliver: 3,          // default
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := GetConsumerConfigFromDefinition(tt.portDef)
-
-			if cfg.DeliverPolicy != tt.wantDeliverPol {
-				t.Errorf("DeliverPolicy = %q, want %q", cfg.DeliverPolicy, tt.wantDeliverPol)
-			}
-			if cfg.AckPolicy != tt.wantAckPol {
-				t.Errorf("AckPolicy = %q, want %q", cfg.AckPolicy, tt.wantAckPol)
-			}
-			if cfg.MaxDeliver != tt.wantMaxDeliver {
-				t.Errorf("MaxDeliver = %d, want %d", cfg.MaxDeliver, tt.wantMaxDeliver)
-			}
-		})
-	}
-}
-
-// TestGetConsumerConfigFromDefinitionWithDefault pins the idempotent catch-up
-// contract: a component (graph-ingest, objectstore) can default its consumer to
-// "all" so it recovers messages published before its consumer bound, while an
-// explicit port deliver_policy still wins. Regression guard for the first-
-// message loss where a JSON config omitting deliver_policy silently fell to the
-// framework "new" default and dropped the first document/entity.
-func TestGetConsumerConfigFromDefinitionWithDefault(t *testing.T) {
-	// Port omits deliver_policy → the caller's "all" default applies (the fix).
-	{
-		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
-			Name: "write", Type: "jetstream", Subject: "document.processed.entity",
-			Config: JetStreamPort{}, // no deliver_policy
-		}, "all")
-		if cfg.DeliverPolicy != "all" {
-			t.Errorf("DeliverPolicy = %q, want %q (idempotent default must apply when port omits it)", cfg.DeliverPolicy, "all")
-		}
-	}
-	// Explicit port deliver_policy overrides the caller's default.
-	{
-		cfg := GetConsumerConfigFromDefinitionWithDefault(PortDefinition{
-			Name: "write", Type: "jetstream", Subject: "document.processed.entity",
-			Config: JetStreamPort{DeliverPolicy: "new"},
-		}, "all")
-		if cfg.DeliverPolicy != "new" {
-			t.Errorf("DeliverPolicy = %q, want %q (explicit port policy must win)", cfg.DeliverPolicy, "new")
-		}
-	}
-	// The plain wrapper still yields the framework "new" default (unchanged).
-	{
-		cfg := GetConsumerConfigFromDefinition(PortDefinition{
-			Name: "in", Type: "jetstream", Subject: "x.>", Config: JetStreamPort{},
-		})
-		if cfg.DeliverPolicy != "new" {
-			t.Errorf("DeliverPolicy = %q, want %q (default wrapper unchanged)", cfg.DeliverPolicy, "new")
-		}
-	}
-}
-
-func TestConsumerConfigDefaults(t *testing.T) {
-	// Test that default values are safe for production use
-	emptyPort := Port{Name: "test", Direction: DirectionInput}
-	cfg := GetConsumerConfig(emptyPort)
-
-	// "new" is the safe default - doesn't replay historical messages
-	if cfg.DeliverPolicy != "new" {
-		t.Errorf("Default DeliverPolicy should be 'new' (safe), got %q", cfg.DeliverPolicy)
-	}
-
-	// "explicit" requires ack - prevents message loss
-	if cfg.AckPolicy != "explicit" {
-		t.Errorf("Default AckPolicy should be 'explicit' (safe), got %q", cfg.AckPolicy)
-	}
-
-	// 3 retries is a reasonable default
-	if cfg.MaxDeliver != 3 {
-		t.Errorf("Default MaxDeliver should be 3, got %d", cfg.MaxDeliver)
-	}
-}
-
-// TestResolveSubject covers the four behavioral branches in
-// component.ResolveSubject. The function is load-bearing for every
-// component that needs to publish to an output port: it returns the
-// configured subject pattern with the wildcard replaced, falling back
-// to "portName.<suffix>" when no matching port is configured. This
-// fallback is what makes a component robust against operator configs
-// that override Ports without listing every default — without it,
-// components like agentic-tools (publishResult) silently drop messages
-// when their output port isn't in the user's config (regression
-// surfaced 2026-05-08; agentic-model dodged the same shape because it
-// was already using ResolveSubject).
 func TestResolveSubject(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1068,34 +907,22 @@ func TestResolveSubject(t *testing.T) {
 		portName string
 		suffix   string
 		want     string
+		wantErr  bool
 	}{
+		{name: "no ports", portName: "tool.result", suffix: "call-abc", wantErr: true},
 		{
-			name:     "no ports falls back to portName.suffix",
-			ports:    nil,
-			portName: "tool.result",
-			suffix:   "call-abc",
-			want:     "tool.result.call-abc",
-		},
-		{
-			name:     "empty slice falls back to portName.suffix",
-			ports:    []PortDefinition{},
-			portName: "tool.result",
-			suffix:   "call-xyz",
-			want:     "tool.result.call-xyz",
-		},
-		{
-			name: "non-matching port falls back to portName.suffix",
+			name: "non-matching port",
 			ports: []PortDefinition{
-				{Name: "other.port", Subject: "some.other.subject.>"},
+				{Name: "other.port", Config: NATSPort{Subject: "some.other.subject.>"}},
 			},
 			portName: "tool.result",
 			suffix:   "call-123",
-			want:     "tool.result.call-123",
+			wantErr:  true,
 		},
 		{
 			name: "trailing-star wildcard replaced with suffix",
 			ports: []PortDefinition{
-				{Name: "tool.result", Subject: "tool.result.*"},
+				{Name: "tool.result", Config: NATSPort{Subject: "tool.result.*"}},
 			},
 			portName: "tool.result",
 			suffix:   "call-abc",
@@ -1104,7 +931,7 @@ func TestResolveSubject(t *testing.T) {
 		{
 			name: "trailing-arrow wildcard replaced with suffix",
 			ports: []PortDefinition{
-				{Name: "agent.response", Subject: "agent.response.>"},
+				{Name: "agent.response", Config: NATSPort{Subject: "agent.response.>"}},
 			},
 			portName: "agent.response",
 			suffix:   "req-123",
@@ -1113,7 +940,7 @@ func TestResolveSubject(t *testing.T) {
 		{
 			name: "no wildcard appends suffix with separator",
 			ports: []PortDefinition{
-				{Name: "events", Subject: "events.graph"},
+				{Name: "events", Config: NATSPort{Subject: "events.graph"}},
 			},
 			portName: "events",
 			suffix:   "entity",
@@ -1122,27 +949,45 @@ func TestResolveSubject(t *testing.T) {
 		{
 			name: "operator-overridden subject prefix honored",
 			ports: []PortDefinition{
-				{Name: "tool.result", Subject: "custom.tool.results.*"},
+				{Name: "tool.result", Config: NATSPort{Subject: "custom.tool.results.*"}},
 			},
 			portName: "tool.result",
 			suffix:   "call-99",
 			want:     "custom.tool.results.call-99",
 		},
 		{
-			name: "first matching port wins on duplicate names",
+			name: "duplicate names",
 			ports: []PortDefinition{
-				{Name: "tool.result", Subject: "first.subject.>"},
-				{Name: "tool.result", Subject: "second.subject.>"},
+				{Name: "tool.result", Config: NATSPort{Subject: "first.subject.>"}},
+				{Name: "tool.result", Config: NATSPort{Subject: "second.subject.>"}},
 			},
 			portName: "tool.result",
 			suffix:   "tail",
-			want:     "first.subject.tail",
+			wantErr:  true,
+		},
+		{
+			name: "non-subject port",
+			ports: []PortDefinition{
+				{Name: "timer", Config: TimerPort{Interval: "1s"}},
+			},
+			portName: "timer",
+			suffix:   "tail",
+			wantErr:  true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := ResolveSubject(tt.ports, tt.portName, tt.suffix)
+			got, err := ResolveSubject(tt.ports, tt.portName, tt.suffix)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ResolveSubject succeeded with %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ResolveSubject: %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("ResolveSubject(%v, %q, %q) = %q, want %q", tt.ports, tt.portName, tt.suffix, got, tt.want)
 			}
@@ -1154,8 +999,7 @@ func TestResolveSubject(t *testing.T) {
 // regression test for the beta.55 hotfix: a JSON-loaded PortDefinition
 // must place a JetStreamPort struct into Config (not a map[string]any),
 // otherwise every consumer-config field declared in YAML/JSON is
-// silently dropped at the type assertion in BuildPortFromDefinition
-// and applyJetStreamConsumerConfig.
+// silently dropped before applyJetStreamConsumerConfig.
 //
 // The semspec repro (2026-05-07) showed AckWait/HeartbeatInterval/
 // MaxDeliver/DeliverPolicy all reaching zero values at runtime even
@@ -1163,9 +1007,10 @@ func TestResolveSubject(t *testing.T) {
 func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
 	raw := []byte(`{
 		"name": "agent.request",
-		"type": "jetstream",
-		"subject": "agent.request.>",
 		"config": {
+			"kind": "jetstream",
+			"stream_name": "AGENT",
+			"subjects": ["agent.request.>"],
 			"deliver_policy": "all",
 			"ack_policy": "explicit",
 			"max_deliver": 1,
@@ -1180,7 +1025,7 @@ func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	if pd.Name != "agent.request" || pd.Type != "jetstream" || pd.Subject != "agent.request.>" {
+	if pd.Name != "agent.request" || pd.Config.Kind() != PortKindJetStream {
 		t.Errorf("top-level fields lost: %+v", pd)
 	}
 
@@ -1209,15 +1054,16 @@ func TestPortDefinition_UnmarshalJSON_JetStreamConfig(t *testing.T) {
 }
 
 // TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig closes the
-// loop by going JSON → PortDefinition → ConsumerConfig — the path every
+// loop by going JSON → PortDefinition → Port → ConsumerConfig — the path every
 // agentic-model / agentic-tools consumer uses at runtime. This is the
 // end-to-end test that would have caught the beta.54 ship-to-runtime gap.
 func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
 	raw := []byte(`{
 		"name": "agent.request",
-		"type": "jetstream",
-		"subject": "agent.request.>",
 		"config": {
+			"kind": "jetstream",
+			"stream_name": "AGENT",
+			"subjects": ["agent.request.>"],
 			"max_deliver": 1,
 			"ack_wait": "5m",
 			"heartbeat_interval": "2m"
@@ -1229,7 +1075,14 @@ func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	cfg := GetConsumerConfigFromDefinition(pd)
+	port, err := pd.Resolve(DirectionInput)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	cfg, err := GetConsumerConfig(port)
+	if err != nil {
+		t.Fatalf("GetConsumerConfig: %v", err)
+	}
 	if cfg.MaxDeliver != 1 {
 		t.Errorf("MaxDeliver = %d, want 1 (Posture B fail-loud-once value must reach the consumer)", cfg.MaxDeliver)
 	}
@@ -1241,57 +1094,22 @@ func TestPortDefinition_UnmarshalJSON_RoundTripsToConsumerConfig(t *testing.T) {
 	}
 }
 
-// TestPortDefinition_UnmarshalJSON_NoConfig asserts an entry with no
-// `config` block round-trips cleanly (no panic, Config stays nil).
-func TestPortDefinition_UnmarshalJSON_NoConfig(t *testing.T) {
-	raw := []byte(`{"name":"x","type":"jetstream","subject":"x.>"}`)
-
-	var pd PortDefinition
-	if err := json.Unmarshal(raw, &pd); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if pd.Config != nil {
-		t.Errorf("Config = %v, want nil when JSON had no config block", pd.Config)
-	}
-}
-
-// TestPortDefinition_UnmarshalJSON_UnknownType falls back to map[string]any
-// so custom port types not yet known to the framework are forward-compat.
-func TestPortDefinition_UnmarshalJSON_UnknownType(t *testing.T) {
-	raw := []byte(`{"name":"x","type":"custom-future-type","config":{"key":"value"}}`)
-
-	var pd PortDefinition
-	if err := json.Unmarshal(raw, &pd); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	m, ok := pd.Config.(map[string]any)
-	if !ok {
-		t.Fatalf("Config = %T, want map[string]any for unknown types", pd.Config)
-	}
-	if m["key"] != "value" {
-		t.Errorf("map missing key/value: %v", m)
-	}
-}
-
-// TestBuildPortFromDefinition_CopiesAckWaitAndHeartbeat asserts the second
-// half of the beta.55 fix: even with a Go-constructed PortDefinition
-// (not JSON-loaded), BuildPortFromDefinition's jetstream case must copy
-// AckWait + HeartbeatInterval into the resulting Port's JetStreamPort.
-// Beta.54 added these fields to the struct but didn't add the merge
-// branch.
-func TestBuildPortFromDefinition_CopiesAckWaitAndHeartbeat(t *testing.T) {
+func TestResolvePortPreservesAckWaitAndHeartbeat(t *testing.T) {
 	pd := PortDefinition{
-		Name:    "agent.request",
-		Type:    "jetstream",
-		Subject: "agent.request.>",
+		Name: "agent.request",
 		Config: JetStreamPort{
+			StreamName:        "AGENT",
+			Subjects:          []string{"agent.request.>"},
 			AckWait:           "300s",
 			HeartbeatInterval: "60s",
 			MaxDeliver:        1,
 			DeliverPolicy:     "all",
 		},
 	}
-	port := BuildPortFromDefinition(pd, DirectionInput)
+	port, err := pd.Resolve(DirectionInput)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
 	js, ok := port.Config.(JetStreamPort)
 	if !ok {
 		t.Fatalf("Config = %T, want JetStreamPort", port.Config)
@@ -1312,8 +1130,8 @@ func TestBuildPortFromDefinition_CopiesAckWaitAndHeartbeat(t *testing.T) {
 
 // TestGetConsumerConfig_AckWaitAndHeartbeat verifies the per-port AckWait
 // and HeartbeatInterval fields parse from string ("90s", "2m") into a
-// time.Duration on ConsumerConfig, and that empty/invalid values produce
-// the zero duration so callers can apply their per-component default.
+// time.Duration on ConsumerConfig. Empty values produce the zero duration so
+// callers can apply their per-component default; invalid values are rejected.
 //
 // This is the load-bearing surface for semspec ADR-? — a single AckWait
 // per consumer/port lets paid-LLM deployments tune ack_wait above their
@@ -1326,6 +1144,7 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 		heartbeatInterval string
 		wantAckWait       time.Duration
 		wantHeartbeat     time.Duration
+		wantErr           bool
 	}{
 		{
 			name:              "both set with valid durations",
@@ -1349,18 +1168,16 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 			wantHeartbeat:     0,
 		},
 		{
-			name:              "invalid AckWait stays zero (caller default)",
+			name:              "invalid AckWait is rejected",
 			ackWait:           "not-a-duration",
 			heartbeatInterval: "60s",
-			wantAckWait:       0,
-			wantHeartbeat:     60 * time.Second,
+			wantErr:           true,
 		},
 		{
-			name:              "invalid HeartbeatInterval stays zero (caller default)",
+			name:              "invalid HeartbeatInterval is rejected",
 			ackWait:           "90s",
 			heartbeatInterval: "garbage",
-			wantAckWait:       90 * time.Second,
-			wantHeartbeat:     0,
+			wantErr:           true,
 		},
 		{
 			name:              "only AckWait set",
@@ -1377,34 +1194,27 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 				Name:      "test_input",
 				Direction: DirectionInput,
 				Config: JetStreamPort{
+					StreamName:        "TEST",
+					Subjects:          []string{"test.>"},
 					AckWait:           tt.ackWait,
 					HeartbeatInterval: tt.heartbeatInterval,
 				},
 			}
-			cfg := GetConsumerConfig(port)
+			cfg, err := GetConsumerConfig(port)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("GetConsumerConfig accepted an invalid duration")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("GetConsumerConfig: %v", err)
+			}
 			if cfg.AckWait != tt.wantAckWait {
 				t.Errorf("AckWait = %v, want %v", cfg.AckWait, tt.wantAckWait)
 			}
 			if cfg.HeartbeatInterval != tt.wantHeartbeat {
 				t.Errorf("HeartbeatInterval = %v, want %v", cfg.HeartbeatInterval, tt.wantHeartbeat)
-			}
-
-			// Same surface via PortDefinition path
-			portDef := PortDefinition{
-				Name:    "test_input",
-				Type:    "jetstream",
-				Subject: "test.>",
-				Config: JetStreamPort{
-					AckWait:           tt.ackWait,
-					HeartbeatInterval: tt.heartbeatInterval,
-				},
-			}
-			cfgDef := GetConsumerConfigFromDefinition(portDef)
-			if cfgDef.AckWait != tt.wantAckWait {
-				t.Errorf("FromDefinition AckWait = %v, want %v", cfgDef.AckWait, tt.wantAckWait)
-			}
-			if cfgDef.HeartbeatInterval != tt.wantHeartbeat {
-				t.Errorf("FromDefinition HeartbeatInterval = %v, want %v", cfgDef.HeartbeatInterval, tt.wantHeartbeat)
 			}
 		})
 	}
@@ -1420,8 +1230,7 @@ func TestGetConsumerConfig_AckWaitAndHeartbeat(t *testing.T) {
 // (Port.UnmarshalJSON breaking type-discrimination silently). Mirrors the
 // PortDefinition coverage from PR #42 / beta.55.
 //
-// Wire shape under test is Port's `{"type":"...","data":{...}}` envelope
-// (component/port.go:50-71), distinct from PortDefinition's flat shape.
+// The runtime port and declaration use the same config.kind envelope.
 func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1494,15 +1303,15 @@ func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 				Direction:   DirectionInput,
 				Required:    false,
 				Description: "Storage API request/response",
-				Config:      NATSRequestPort{Subject: "storage.api", Timeout: "1s", Retries: 3},
+				Config:      NATSRequestPort{Subject: "example.request", Timeout: "1s", Retries: 3},
 			},
 			assert: func(t *testing.T, decoded Port) {
 				nr, ok := decoded.Config.(NATSRequestPort)
 				if !ok {
 					t.Fatalf("Config = %T, want NATSRequestPort", decoded.Config)
 				}
-				if nr.Subject != "storage.api" {
-					t.Errorf("Subject = %q, want %q", nr.Subject, "storage.api")
+				if nr.Subject != "example.request" {
+					t.Errorf("Subject = %q, want %q", nr.Subject, "example.request")
 				}
 				if nr.Retries != 3 {
 					t.Errorf("Retries = %d, want 3", nr.Retries)
@@ -1643,78 +1452,7 @@ func TestPort_UnmarshalJSON_RoundTripsToTypedConfig(t *testing.T) {
 	}
 }
 
-// TestPort_UnmarshalJSON_KVDashedAliases locks in audit-finding-5
-// (2026-05-08): Port.UnmarshalJSON must accept the dashed kv
-// spellings that PortDefinition.UnmarshalJSON already accepts.
-// Pre-fix, operator configs using "kv-watch" / "kv-write" / "kv"
-// parsed via the PortDefinition path but failed loudly if the same
-// Port struct was round-tripped through Port.UnmarshalJSON (e.g.
-// KV-stored Port descriptors or serialized flow definitions).
-//
-// Each case feeds a raw envelope-shaped Port JSON and asserts the
-// Config decodes to the expected typed Portable. Drift between this
-// switch and component/ports.go's PortDefinition.UnmarshalJSON
-// switch trips the test immediately.
-func TestPort_UnmarshalJSON_KVDashedAliases(t *testing.T) {
-	tests := []struct {
-		name     string
-		typeStr  string
-		wantImpl string // pretty-printed concrete type the Config should decode to
-	}{
-		{name: "kvwatch concatenated", typeStr: "kvwatch", wantImpl: "component.KVWatchPort"},
-		{name: "kv-watch dashed", typeStr: "kv-watch", wantImpl: "component.KVWatchPort"},
-		{name: "kvwrite concatenated", typeStr: "kvwrite", wantImpl: "component.KVWritePort"},
-		{name: "kv-write dashed", typeStr: "kv-write", wantImpl: "component.KVWritePort"},
-		{name: "kv shorthand", typeStr: "kv", wantImpl: "component.KVWritePort"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Wire-format mirror of how Port serializes: top-level
-			// name/direction/required/description, plus a config
-			// envelope with {type, data}.
-			var configData string
-			switch tt.wantImpl {
-			case "component.KVWatchPort":
-				configData = `{"bucket":"ENTITY_STATES"}`
-			case "component.KVWritePort":
-				configData = `{"bucket":"AGENT_LOOPS"}`
-			default:
-				t.Fatalf("test setup gap: no fixture for impl %q", tt.wantImpl)
-			}
-			raw := fmt.Sprintf(`{
-				"name": "test.port",
-				"direction": "output",
-				"required": false,
-				"description": "audit-finding-5 dashed-alias coverage",
-				"config": {"type": %q, "data": %s}
-			}`, tt.typeStr, configData)
-
-			var decoded Port
-			if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
-				t.Fatalf("unmarshal %q: %v", tt.typeStr, err)
-			}
-
-			// Locate which typed Portable the Config decoded to.
-			var gotImpl string
-			switch decoded.Config.(type) {
-			case KVWatchPort:
-				gotImpl = "component.KVWatchPort"
-			case KVWritePort:
-				gotImpl = "component.KVWritePort"
-			default:
-				gotImpl = fmt.Sprintf("%T", decoded.Config)
-			}
-			if gotImpl != tt.wantImpl {
-				t.Errorf("Config = %s, want %s (spelling %q dropped to map or wrong type)", gotImpl, tt.wantImpl, tt.typeStr)
-			}
-		})
-	}
-}
-
-// TestHTTPClientPort exercises ResourceID, IsExclusive, and Type.
-// ResourceID must prefix with "http-client:", default an empty Method to GET,
-// and incorporate the URL pattern. IsExclusive must be false (outbound client
-// relationships are shareable). Type must be "http-client".
+// TestHTTPClientPort exercises ResourceID, IsExclusive, and Kind.
 func TestHTTPClientPort(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -1727,13 +1465,6 @@ func TestHTTPClientPort(t *testing.T) {
 			name:        "GET with full URL",
 			port:        HTTPClientPort{Method: "GET", URLPattern: "https://api.weather.gov/alerts/active"},
 			resourceID:  "http-client:GET:https://api.weather.gov/alerts/active",
-			isExclusive: false,
-			portType:    "http-client",
-		},
-		{
-			name:        "empty method defaults to GET",
-			port:        HTTPClientPort{URLPattern: "https://api.opensky-network.org/api/states/all"},
-			resourceID:  "http-client:GET:https://api.opensky-network.org/api/states/all",
 			isExclusive: false,
 			portType:    "http-client",
 		},
@@ -1754,8 +1485,8 @@ func TestHTTPClientPort(t *testing.T) {
 			if tt.port.IsExclusive() != tt.isExclusive {
 				t.Errorf("IsExclusive = %v, want %v", tt.port.IsExclusive(), tt.isExclusive)
 			}
-			if tt.port.Type() != tt.portType {
-				t.Errorf("Type = %q, want %q", tt.port.Type(), tt.portType)
+			if string(tt.port.Kind()) != tt.portType {
+				t.Errorf("Kind = %q, want %q", tt.port.Kind(), tt.portType)
 			}
 		})
 	}
@@ -1894,137 +1625,28 @@ func TestHTTPClientPort_SecretsNotInSerializedOutput(t *testing.T) {
 	})
 }
 
-// TestPortDefinition_UnmarshalJSON_HTTPClientConfig is the load-bearing
-// regression test for PortDefinition.UnmarshalJSON's http-client case.
-// Mirrors TestPortDefinition_UnmarshalJSON_JetStreamConfig: a JSON-loaded
-// PortDefinition with type "http-client" must place an HTTPClientPort struct
-// into Config (not a map[string]any), otherwise every type assertion in
-// BuildPortFromDefinition silently fails.
-func TestPortDefinition_UnmarshalJSON_HTTPClientConfig(t *testing.T) {
+func TestPortDefinitionUnmarshalHTTPClientConfig(t *testing.T) {
 	raw := []byte(`{
 		"name": "cap_feed",
-		"type": "http-client",
-		"subject": "https://api.weather.gov/alerts/active",
 		"config": {
+			"kind": "http-client",
 			"method": "GET",
+			"url_pattern": "https://api.weather.gov/alerts/active",
 			"auth_ref": "opensky_basic",
 			"trigger_port": "cap_timer"
 		}
 	}`)
 
-	var pd PortDefinition
-	if err := json.Unmarshal(raw, &pd); err != nil {
+	var definition PortDefinition
+	if err := json.Unmarshal(raw, &definition); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-
-	if pd.Name != "cap_feed" || pd.Type != "http-client" {
-		t.Errorf("top-level fields lost: %+v", pd)
-	}
-
-	hc, ok := pd.Config.(HTTPClientPort)
+	httpPort, ok := definition.Config.(HTTPClientPort)
 	if !ok {
-		t.Fatalf("Config = %T, want HTTPClientPort (http-client case in PortDefinition.UnmarshalJSON missing)", pd.Config)
+		t.Fatalf("Config = %T, want HTTPClientPort", definition.Config)
 	}
-	if hc.Method != "GET" {
-		t.Errorf("Method = %q, want GET", hc.Method)
+	if httpPort.Method != "GET" || httpPort.URLPattern != "https://api.weather.gov/alerts/active" ||
+		httpPort.AuthRef != "opensky_basic" || httpPort.TriggerPort != "cap_timer" {
+		t.Fatalf("HTTP client fields lost: %#v", httpPort)
 	}
-	if hc.AuthRef != "opensky_basic" {
-		t.Errorf("AuthRef = %q, want opensky_basic", hc.AuthRef)
-	}
-	if hc.TriggerPort != "cap_timer" {
-		t.Errorf("TriggerPort = %q, want cap_timer", hc.TriggerPort)
-	}
-}
-
-// TestBuildPortFromDefinition_HTTPClient exercises BuildPortFromDefinition's
-// http-client case:
-//   - def.Subject is used as the default URLPattern when no typed Config is present.
-//   - A typed def.Config.(HTTPClientPort) overrides non-empty fields including
-//     URLPattern (typed Config wins over def.Subject).
-func TestBuildPortFromDefinition_HTTPClient(t *testing.T) {
-	t.Run("subject is default URLPattern", func(t *testing.T) {
-		def := PortDefinition{
-			Name:    "cap_feed",
-			Type:    "http-client",
-			Subject: "https://api.weather.gov/alerts/active",
-		}
-		port := BuildPortFromDefinition(def, DirectionInput)
-		hc, ok := port.Config.(HTTPClientPort)
-		if !ok {
-			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
-		}
-		if hc.URLPattern != "https://api.weather.gov/alerts/active" {
-			t.Errorf("URLPattern = %q, want def.Subject value", hc.URLPattern)
-		}
-	})
-
-	t.Run("typed Config overrides subject for URLPattern", func(t *testing.T) {
-		def := PortDefinition{
-			Name:    "cap_feed",
-			Type:    "http-client",
-			Subject: "https://api.weather.gov/alerts/active", // scalar default
-			Config: HTTPClientPort{
-				URLPattern:  "https://api.weather.gov/alerts/active?area=US", // typed Config wins
-				Method:      "GET",
-				TriggerPort: "cap_timer",
-				AuthRef:     "opensky_basic",
-			},
-		}
-		port := BuildPortFromDefinition(def, DirectionInput)
-		hc, ok := port.Config.(HTTPClientPort)
-		if !ok {
-			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
-		}
-		if hc.URLPattern != "https://api.weather.gov/alerts/active?area=US" {
-			t.Errorf("URLPattern = %q, want typed Config value (Config wins over Subject)", hc.URLPattern)
-		}
-		if hc.Method != "GET" {
-			t.Errorf("Method = %q, want GET", hc.Method)
-		}
-		if hc.TriggerPort != "cap_timer" {
-			t.Errorf("TriggerPort = %q, want cap_timer", hc.TriggerPort)
-		}
-		if hc.AuthRef != "opensky_basic" {
-			t.Errorf("AuthRef = %q, want opensky_basic", hc.AuthRef)
-		}
-	})
-
-	t.Run("flat interface field is honored when no Config block", func(t *testing.T) {
-		// Regression (go-reviewer C3-2): a config-less declaration that sets
-		// only the flat `interface:` scalar must not silently lose its contract.
-		def := PortDefinition{
-			Name:      "cap_feed",
-			Type:      "http-client",
-			Subject:   "https://api.weather.gov/alerts/active",
-			Interface: "alert.CAP",
-		}
-		port := BuildPortFromDefinition(def, DirectionInput)
-		hc, ok := port.Config.(HTTPClientPort)
-		if !ok {
-			t.Fatalf("Config = %T, want HTTPClientPort", port.Config)
-		}
-		if hc.Interface == nil {
-			t.Fatal("Interface = nil, want flat def.Interface to seed the contract")
-		}
-		if hc.Interface.Type != "alert.CAP" {
-			t.Errorf("Interface.Type = %q, want alert.CAP", hc.Interface.Type)
-		}
-	})
-
-	t.Run("typed Config.Interface wins over flat interface field", func(t *testing.T) {
-		def := PortDefinition{
-			Name:      "cap_feed",
-			Type:      "http-client",
-			Subject:   "https://api.weather.gov/alerts/active",
-			Interface: "alert.CAP", // flat seed
-			Config: HTTPClientPort{
-				Interface: &InterfaceContract{Type: "alert.CAP.v2", Version: "v2"}, // typed wins
-			},
-		}
-		port := BuildPortFromDefinition(def, DirectionInput)
-		hc := port.Config.(HTTPClientPort)
-		if hc.Interface == nil || hc.Interface.Type != "alert.CAP.v2" {
-			t.Errorf("Interface = %+v, want typed Config.Interface (alert.CAP.v2) to win", hc.Interface)
-		}
-	})
 }

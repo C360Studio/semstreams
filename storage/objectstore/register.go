@@ -10,7 +10,7 @@ import "github.com/c360studio/semstreams/component"
 //   - LRU/TTL/Hybrid caching support
 //   - Pluggable key generation (composition-friendly)
 //   - Pluggable metadata extraction (composition-friendly)
-//   - Request/Response API for synchronous operations
+//   - Registered StoreProvider access for authorized readers
 //   - Fire-and-forget write operations
 //   - Storage event publishing
 //

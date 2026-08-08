@@ -59,7 +59,7 @@ func TestComponentManager_FreesExclusivePortOnStopAndRemove(t *testing.T) {
 	// Simulate a created + registered component (what CreateComponent does).
 	cm.mu.Lock()
 	cm.components[name] = &component.ManagedComponent{Component: comp, State: component.StateInitialized}
-	cm.registerPorts(name, comp)
+	require.NoError(t, cm.registerPorts(name, comp))
 	mc := cm.components[name]
 	cm.mu.Unlock()
 
@@ -91,12 +91,12 @@ func TestComponentManager_UnregisterPortsForCompFreesOwnership(t *testing.T) {
 
 	// Ownership recorded before the component is committed to cm.components.
 	cm.mu.Lock()
-	cm.registerPorts(name, comp)
+	require.NoError(t, cm.registerPorts(name, comp))
 	cm.mu.Unlock()
 	require.Error(t, cm.checkPortConflicts(comp), "exclusive port should be owned after registerPorts")
 
 	cm.mu.Lock()
-	cm.unregisterPortsForComp(name, comp)
+	cm.unregisterPortsForComp(name)
 	cm.mu.Unlock()
 
 	require.NoError(t, cm.checkPortConflicts(comp),

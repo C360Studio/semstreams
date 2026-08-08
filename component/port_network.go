@@ -19,7 +19,7 @@ func (n NetworkPort) IsExclusive() bool {
 	return true
 }
 
-// Type returns the port type identifier
-func (n NetworkPort) Type() string {
-	return "network"
+// Kind returns the canonical port kind.
+func (n NetworkPort) Kind() PortKind {
+	return PortKindNetwork
 }

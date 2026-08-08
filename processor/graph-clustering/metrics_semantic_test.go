@@ -44,8 +44,8 @@ func registryExportsMetric(t *testing.T, reg *metric.MetricsRegistry, name strin
 // basePortsJSON is the minimal valid port block, inline so this test drives the real
 // factory config path.
 const basePortsJSON = `"ports":{` +
-	`"inputs":[{"name":"entity_watch","type":"kv-watch","subject":"ENTITY_STATES"}],` +
-	`"outputs":[{"name":"communities","type":"kv-write","subject":"COMMUNITY_INDEX"}]}`
+	`"inputs":[{"name":"entity_watch","config":{"kind":"kv-watch","bucket":"ENTITY_STATES"}}],` +
+	`"outputs":[{"name":"communities","config":{"kind":"kv-write","bucket":"COMMUNITY_INDEX"}}]}`
 
 // TestSemanticMetrics_DisabledDeploymentExportsNoSemanticSeries is the Codex P2#4/P2#5
 // scrape-level regression: a DEFAULT-OFF (disabled) deployment must export NONE of the

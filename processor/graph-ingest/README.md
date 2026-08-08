@@ -35,22 +35,17 @@ sensor.processed   ─┤                 │
       "inputs": [
         {
           "name": "objectstore_in",
-          "subject": "objectstore.stored.entity",
-          "type": "jetstream",
-          "interface": "storage.stored.v1"
+          "config": {"kind":"jetstream","subjects":["objectstore.stored.entity"],"interface":{"type":"storage.stored.v1"}}
         },
         {
           "name": "sensor_in",
-          "subject": "sensor.processed.entity",
-          "type": "jetstream",
-          "interface": "iot.sensor.v1"
+          "config": {"kind":"jetstream","subjects":["sensor.processed.entity"],"interface":{"type":"iot.sensor.v1"}}
         }
       ],
       "outputs": [
         {
           "name": "entity_states",
-          "subject": "ENTITY_STATES",
-          "type": "kv"
+          "config": {"kind":"kv-write","bucket":"ENTITY_STATES"}
         }
       ]
     },

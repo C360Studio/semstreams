@@ -4,6 +4,7 @@ package agenticloop
 import (
 	"sync"
 
+	"github.com/c360studio/semstreams/agentic"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/prometheus/client_golang/prometheus"
 )
@@ -25,7 +26,8 @@ type loopMetrics struct {
 	loopDuration *prometheus.HistogramVec
 
 	// Trajectory
-	trajectorySteps *prometheus.CounterVec
+	trajectorySteps         *prometheus.CounterVec
+	trajectoryAuditFailures *prometheus.CounterVec
 
 	// Tool calls
 	toolCallsDispatched *prometheus.CounterVec
@@ -135,6 +137,13 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 				Name:      "trajectory_steps_total",
 				Help:      "Total trajectory steps by type",
 			}, []string{"step_type"}),
+
+			trajectoryAuditFailures: prometheus.NewCounterVec(prometheus.CounterOpts{
+				Namespace: "semstreams",
+				Subsystem: "agentic_loop",
+				Name:      "trajectory_audit_failures_total",
+				Help:      "Best-effort trajectory audit failures by bounded stage, fact kind, and reason",
+			}, []string{"stage", "kind", "reason"}),
 
 			toolCallsDispatched: prometheus.NewCounterVec(prometheus.CounterOpts{
 				Namespace: "semstreams",
@@ -268,6 +277,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = registry.RegisterHistogram("agentic-loop", "iterations_per_loop", metrics.iterationsPerLoop)
 			_ = registry.RegisterHistogramVec("agentic-loop", "duration_seconds", metrics.loopDuration)
 			_ = registry.RegisterCounterVec("agentic-loop", "trajectory_steps_total", metrics.trajectorySteps)
+			_ = registry.RegisterCounterVec("agentic-loop", "trajectory_audit_failures_total", metrics.trajectoryAuditFailures)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_calls_dispatched_total", metrics.toolCallsDispatched)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_received_total", metrics.toolResultsReceived)
 			_ = registry.RegisterCounterVec("agentic-loop", "tool_results_dropped_total", metrics.toolResultsDropped)
@@ -295,6 +305,7 @@ func getMetrics(registry *metric.MetricsRegistry) *loopMetrics {
 			_ = prometheus.DefaultRegisterer.Register(metrics.iterationsPerLoop)
 			_ = prometheus.DefaultRegisterer.Register(metrics.loopDuration)
 			_ = prometheus.DefaultRegisterer.Register(metrics.trajectorySteps)
+			_ = prometheus.DefaultRegisterer.Register(metrics.trajectoryAuditFailures)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolCallsDispatched)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsReceived)
 			_ = prometheus.DefaultRegisterer.Register(metrics.toolResultsDropped)
@@ -362,6 +373,46 @@ func (m *loopMetrics) recordGraphWritePublishTimeout(state string) {
 
 func (m *loopMetrics) recordTaskIntakeRejection(lane, reason string) {
 	m.taskIntakeRejections.WithLabelValues(lane, reason).Inc()
+}
+
+func (m *loopMetrics) recordTrajectoryAuditFailure(stage trajectoryAuditStage, kind agentic.TrajectoryKind, reason trajectoryAuditReason) {
+	stage = boundedTrajectoryAuditStage(stage)
+	kind = boundedTrajectoryAuditKind(kind)
+	reason = boundedTrajectoryAuditReason(reason)
+	m.trajectoryAuditFailures.WithLabelValues(string(stage), string(kind), string(reason)).Inc()
+}
+
+func boundedTrajectoryAuditStage(stage trajectoryAuditStage) trajectoryAuditStage {
+	switch stage {
+	case trajectoryStageProviderResolve, trajectoryStageEvidenceGet, trajectoryStageEvidencePut,
+		trajectoryStageEvidenceVerify, trajectoryStageFactEncode, trajectoryStageFactCreate,
+		trajectoryStageFactVerify:
+		return stage
+	default:
+		return trajectoryStageFactEncode
+	}
+}
+
+func boundedTrajectoryAuditKind(kind agentic.TrajectoryKind) agentic.TrajectoryKind {
+	switch kind {
+	case agentic.TrajectoryKindLoopStarted, agentic.TrajectoryKindModelRequested,
+		agentic.TrajectoryKindModelCompleted, agentic.TrajectoryKindToolRequested,
+		agentic.TrajectoryKindToolCompleted, agentic.TrajectoryKindContextCompacted,
+		agentic.TrajectoryKindLoopTerminal:
+		return kind
+	default:
+		return agentic.TrajectoryKindLoopStarted
+	}
+}
+
+func boundedTrajectoryAuditReason(reason trajectoryAuditReason) trajectoryAuditReason {
+	switch reason {
+	case trajectoryReasonProviderUnavailable, trajectoryReasonBackend,
+		trajectoryReasonIntegrity, trajectoryReasonEncode, trajectoryReasonTimeout:
+		return reason
+	default:
+		return trajectoryReasonBackend
+	}
 }
 
 // recordLoopCreated increments the loops created counter and active gauge.

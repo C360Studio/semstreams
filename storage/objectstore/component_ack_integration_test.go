@@ -66,10 +66,7 @@ func startWriteComponent(
 		BucketName: bucket,
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{{
-				Name:       "write",
-				Type:       "jetstream",
-				Subject:    writeSubject,
-				StreamName: streamName,
+				Name: "write", Config: component.JetStreamPort{StreamName: streamName, Subjects: []string{writeSubject}},
 			}},
 			Outputs: outputs,
 		},
@@ -316,9 +313,7 @@ func TestIntegration_JetStreamWrite_StoredEmitFailureNaksAfterCommit(t *testing.
 	require.NoError(t, document.RegisterPayloads(reg))
 	startWriteComponent(t, ctx, client, bucket, streamName, writeSubject, reg,
 		[]component.PortDefinition{{
-			Name:    "stored",
-			Type:    "jetstream",
-			Subject: "os727emitstored.nostream", // deliberately uncovered by any stream
+			Name: "stored", Config: component.JetStreamPort{Subjects: []string{"os727emitstored.nostream"}}, // deliberately uncovered by any stream
 		}})
 
 	doc := &document.Document{

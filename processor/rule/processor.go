@@ -322,7 +322,9 @@ func NewProcessorWithMetrics(natsClient *natsclient.Client, config *Config, metr
 	rp.readinessGauges = initReadinessGauges(metricsRegistry)
 
 	// Set up input and output ports
-	rp.setupPorts()
+	if err := rp.setupPorts(); err != nil {
+		return nil, err
+	}
 
 	// Note: entityCoalescer will be initialized in Start() when we have a context
 
@@ -360,16 +362,25 @@ func (rp *Processor) SetLifecycleManager(m LifecycleManager) {
 // setupPorts initializes input and output port definitions. Ports
 // configuration is validated in the constructor, so config.Ports is
 // guaranteed non-nil.
-func (rp *Processor) setupPorts() {
+func (rp *Processor) setupPorts() error {
 	rp.inputPorts = make([]component.Port, len(rp.config.Ports.Inputs))
 	for i, portDef := range rp.config.Ports.Inputs {
-		rp.inputPorts[i] = convertDefinitionToPort(portDef, component.DirectionInput)
+		port, err := portDef.Resolve(component.DirectionInput)
+		if err != nil {
+			return fmt.Errorf("resolve input port %q: %w", portDef.Name, err)
+		}
+		rp.inputPorts[i] = port
 	}
 
 	rp.outputPorts = make([]component.Port, len(rp.config.Ports.Outputs))
 	for i, portDef := range rp.config.Ports.Outputs {
-		rp.outputPorts[i] = convertDefinitionToPort(portDef, component.DirectionOutput)
+		port, err := portDef.Resolve(component.DirectionOutput)
+		if err != nil {
+			return fmt.Errorf("resolve output port %q: %w", portDef.Name, err)
+		}
+		rp.outputPorts[i] = port
 	}
+	return nil
 }
 
 // Meta returns component metadata
@@ -970,8 +981,9 @@ func (rp *Processor) Start(ctx context.Context) error {
 
 	// Count subjects for logging
 	subjectCount := 0
-	for _, port := range rp.config.Ports.Inputs {
-		if (port.Type == "nats" || port.Type == "jetstream") && port.Subject != "" {
+	for _, port := range rp.inputPorts {
+		facts, err := port.Facts()
+		if err == nil && (facts.Kind() == component.PortKindNATS || facts.Kind() == component.PortKindJetStream) && len(facts.NATSSubjects()) == 1 {
 			subjectCount++
 		}
 	}
@@ -1020,38 +1032,48 @@ func (rp *Processor) setupSubscriptions(ctx context.Context) error {
 		return errs.WrapFatal(errs.ErrNoConnection, "RuleProcessor", "Start", "check NATS health")
 	}
 
-	for _, port := range rp.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range rp.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return err
 		}
 
-		// Skip entity.events subjects since we use KV watch for entity states
-		if strings.HasPrefix(port.Subject, "events.graph.entity") {
-			rp.logger.Debug("Skipping subscription - using KV watch for entity states", "subject", port.Subject)
+		switch facts.Kind() {
+		case component.PortKindKVWatch:
+			// Entity state watches are owned by the dedicated watcher lifecycle.
+			rp.logger.Debug("Skipping input subscription - using dedicated KV watcher", "port", port.Name)
 			continue
-		}
 
-		switch port.Type {
-		case "jetstream":
+		case component.PortKindJetStream:
+			subjects := facts.NATSSubjects()
+			if len(subjects) != 1 {
+				return fmt.Errorf("input port %q must declare one JetStream subject", port.Name)
+			}
+			subject := subjects[0]
 			// JetStream subscription - use durable consumer
 			if err := rp.setupJetStreamConsumer(ctx, port); err != nil {
 				return errs.Wrap(err, "RuleProcessor", "setupSubscriptions",
-					fmt.Sprintf("JetStream consumer for %s", port.Subject))
+					fmt.Sprintf("JetStream consumer for %s", subject))
 			}
 
-		case "nats":
+		case component.PortKindNATS:
+			subjects := facts.NATSSubjects()
+			if len(subjects) != 1 {
+				return fmt.Errorf("input port %q must declare one NATS subject", port.Name)
+			}
+			subject := subjects[0]
 			// Core NATS subscription
-			sub, err := rp.natsClient.Subscribe(ctx, port.Subject, func(msgCtx context.Context, msg *nats.Msg) {
+			sub, err := rp.natsClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
 				rp.handleMessage(msgCtx, msg.Subject, msg.Data)
 			})
 			if err != nil {
-				return errs.Wrap(err, "RuleProcessor", "Start", fmt.Sprintf("subscribe to %s", port.Subject))
+				return errs.Wrap(err, "RuleProcessor", "Start", fmt.Sprintf("subscribe to %s", subject))
 			}
 			rp.subscriptions = append(rp.subscriptions, sub)
-			rp.logger.Info("Rule processor subscribed (NATS)", "subject", port.Subject)
+			rp.logger.Info("Rule processor subscribed (NATS)", "subject", subject)
 
 		default:
-			rp.logger.Warn("Unknown port type, skipping", "port", port.Name, "type", port.Type)
+			return fmt.Errorf("unsupported input port %q kind %q", port.Name, facts.Kind())
 		}
 	}
 
@@ -1059,15 +1081,17 @@ func (rp *Processor) setupSubscriptions(ctx context.Context) error {
 }
 
 // setupJetStreamConsumer creates a JetStream consumer for an input port
-func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.PortDefinition) error {
-	// Derive stream name from subject or use explicit stream name
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = deriveStreamName(port.Subject)
+func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-	if streamName == "" {
-		return fmt.Errorf("could not derive stream name for subject %s", port.Subject)
+	stream, ok := facts.Stream()
+	if !ok || len(stream.Subjects()) != 1 {
+		return fmt.Errorf("port %q must declare one JetStream subject", port.Name)
 	}
+	streamName := stream.Name()
+	subject := stream.Subjects()[0]
 
 	// Wait for stream to be available
 	if err := rp.waitForStream(ctx, streamName); err != nil {
@@ -1075,7 +1099,7 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 	}
 
 	// Generate unique consumer name
-	sanitizedSubject := strings.ReplaceAll(port.Subject, ".", "-")
+	sanitizedSubject := strings.ReplaceAll(subject, ".", "-")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, "*", "all")
 	sanitizedSubject = strings.ReplaceAll(sanitizedSubject, ">", "wildcard")
 	consumerName := fmt.Sprintf("rule-processor-%s", sanitizedSubject)
@@ -1083,23 +1107,25 @@ func (rp *Processor) setupJetStreamConsumer(ctx context.Context, port component.
 	rp.logger.Info("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return fmt.Errorf("resolve JetStream consumer config for port %q: %w", port.Name, consumerErr)
+	}
 
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		MaxDeliver:    consumerCfg.MaxDeliver,
 		AutoCreate:    false,
 	}
 
-	subject := port.Subject // capture for closure
-	err := rp.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = rp.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		rp.handleMessage(msgCtx, subject, msg.Data())
 		if ackErr := msg.Ack(); ackErr != nil {
 			rp.logger.Error("Failed to ack JetStream message", "error", ackErr)
@@ -1142,21 +1168,6 @@ func (rp *Processor) waitForStream(ctx context.Context, streamName string) error
 	}
 
 	return fmt.Errorf("stream %s not available after %d retries", streamName, maxRetries)
-}
-
-// deriveStreamName extracts stream name from subject convention.
-// Convention: subject "component.action.type" → stream "COMPONENT"
-func deriveStreamName(subject string) string {
-	// Handle wildcard subjects
-	subject = strings.TrimPrefix(subject, "*.")
-	subject = strings.TrimSuffix(subject, ".>")
-	subject = strings.TrimSuffix(subject, ".*")
-
-	parts := strings.Split(subject, ".")
-	if len(parts) == 0 || parts[0] == "" || parts[0] == "*" || parts[0] == ">" {
-		return ""
-	}
-	return strings.ToUpper(parts[0])
 }
 
 // Message handling functions (handleMessage, handleSemanticMessage, evaluateRulesForMessage,

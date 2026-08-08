@@ -21,7 +21,7 @@ func (s StoreReadPort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (s StoreReadPort) Type() string {
-	return "store-read"
+// Kind returns the canonical port kind.
+func (s StoreReadPort) Kind() PortKind {
+	return PortKindStoreRead
 }

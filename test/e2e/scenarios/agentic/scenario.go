@@ -51,7 +51,7 @@ type Config struct {
 	CompleteTimeout time.Duration `json:"complete_timeout"`
 
 	// Expected results
-	MinTrajectorySteps int `json:"min_trajectory_steps"`
+	MinTrajectoryFacts int `json:"min_trajectory_facts"`
 }
 
 // DefaultConfig returns default configuration.
@@ -62,7 +62,7 @@ func DefaultConfig() *Config {
 		LLMEndpointURL:     "", // Empty means use mock
 		TaskTimeout:        30 * time.Second,
 		CompleteTimeout:    60 * time.Second,
-		MinTrajectorySteps: 1,
+		MinTrajectoryFacts: 1,
 	}
 }
 
@@ -308,15 +308,21 @@ func (s *Scenario) waitForCompletion(ctx context.Context, result *scenarios.Resu
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-time.After(500 * time.Millisecond):
-			traj, err := s.nats.GetTrajectory(ctx, loopID)
+			pages, err := s.nats.GetTrajectoryPages(ctx, loopID)
 			if err == nil {
-				lastTrajectoryError = ""
-				if traj.Outcome == "complete" && traj.EndTime != nil {
-					result.Details["completion_method"] = "target_trajectory"
-					return nil
-				}
-				if traj.Outcome != "" && traj.EndTime != nil {
-					return fmt.Errorf("target loop %s ended with outcome %q", loopID, traj.Outcome)
+				summary, summaryErr := summarizeTrajectoryPages(pages)
+				if summaryErr != nil {
+					lastTrajectoryError = summaryErr.Error()
+				} else {
+					lastTrajectoryError = ""
+					if summary.completed {
+						result.Details["completion_method"] = "target_trajectory"
+						return nil
+					}
+					if summary.terminalStatus == agentic.TrajectoryStatusFailed ||
+						summary.terminalStatus == agentic.TrajectoryStatusCancelled {
+						return fmt.Errorf("target loop %s ended with status %q", loopID, summary.terminalStatus)
+					}
 				}
 			} else {
 				lastTrajectoryError = err.Error()
@@ -352,54 +358,103 @@ func (s *Scenario) validateTrajectory(ctx context.Context, result *scenarios.Res
 		return fmt.Errorf("loop_id not found in result details")
 	}
 
-	traj, err := s.nats.GetTrajectory(ctx, loopID)
+	pages, err := s.nats.GetTrajectoryPages(ctx, loopID)
 	if err != nil {
 		return fmt.Errorf("failed to get trajectory for loop %s: %w", loopID, err)
 	}
-
-	// Validate minimum steps
-	if len(traj.Steps) < s.config.MinTrajectorySteps {
-		return fmt.Errorf("trajectory has %d steps, expected at least %d", len(traj.Steps), s.config.MinTrajectorySteps)
+	summary, err := summarizeTrajectoryPages(pages)
+	if err != nil {
+		return fmt.Errorf("invalid trajectory for loop %s: %w", loopID, err)
 	}
 
-	// Validate at least one model_call step exists
+	// Validate minimum observed facts.
+	if len(summary.facts) < s.config.MinTrajectoryFacts {
+		return fmt.Errorf("trajectory has %d facts, expected at least %d", len(summary.facts), s.config.MinTrajectoryFacts)
+	}
+
+	// Validate at least one model and tool observation exists.
 	hasModelCall := false
 	hasToolCall := false
-	for _, step := range traj.Steps {
-		switch step.StepType {
-		case "model_call":
+	for _, fact := range summary.facts {
+		switch fact.Kind {
+		case agentic.TrajectoryKindModelRequested, agentic.TrajectoryKindModelCompleted:
 			hasModelCall = true
-		case "tool_call":
+		case agentic.TrajectoryKindToolRequested, agentic.TrajectoryKindToolCompleted:
 			hasToolCall = true
 		}
 	}
 
 	if !hasModelCall {
-		return fmt.Errorf("trajectory has no model_call steps")
+		return fmt.Errorf("trajectory has no model observations")
 	}
 	if !hasToolCall {
-		return fmt.Errorf("trajectory has no tool_call steps")
+		return fmt.Errorf("trajectory has no tool observations")
 	}
 
-	// Validate completion
-	if traj.Outcome != "complete" {
-		return fmt.Errorf("trajectory outcome is %q, expected \"complete\"", traj.Outcome)
-	}
-	if traj.EndTime == nil {
-		return fmt.Errorf("trajectory end_time is nil")
-	}
-	if traj.Duration < 0 {
-		return fmt.Errorf("trajectory duration is %d, expected >= 0", traj.Duration)
+	if !summary.completed {
+		return fmt.Errorf("trajectory terminal status is %q, expected %q",
+			summary.terminalStatus, agentic.TrajectoryStatusCompleted)
 	}
 
 	// Store metrics
-	result.Metrics["trajectory_steps"] = len(traj.Steps)
-	result.Metrics["trajectory_tokens_in"] = traj.TotalTokensIn
-	result.Metrics["trajectory_tokens_out"] = traj.TotalTokensOut
-	result.Metrics["trajectory_duration_ms"] = traj.Duration
-	result.Details["trajectory_outcome"] = traj.Outcome
+	result.Metrics["trajectory_facts"] = len(summary.facts)
+	result.Metrics["trajectory_tokens_in"] = summary.tokensIn
+	result.Metrics["trajectory_tokens_out"] = summary.tokensOut
+	result.Metrics["trajectory_elapsed_ms"] = summary.elapsedMS
+	result.Details["trajectory_terminal_status"] = summary.terminalStatus
 
 	return nil
+}
+
+type trajectorySummary struct {
+	facts          []agentic.TrajectoryFactV1
+	terminalStatus agentic.TrajectoryStatus
+	completed      bool
+	tokensIn       uint64
+	tokensOut      uint64
+	elapsedMS      int64
+}
+
+func summarizeTrajectoryPages(pages []agentic.TrajectoryPage) (trajectorySummary, error) {
+	var summary trajectorySummary
+	if len(pages) == 0 {
+		return summary, fmt.Errorf("trajectory returned no pages")
+	}
+	loopID := pages[0].LoopID
+	for index, page := range pages {
+		if page.SchemaVersion != agentic.TrajectorySchemaV1 || page.LoopID != loopID || page.Coverage != "observed" {
+			return trajectorySummary{}, fmt.Errorf("trajectory page %d has invalid metadata", index)
+		}
+		if page.ObservedTotals.Facts != uint64(len(page.Facts)) {
+			return trajectorySummary{}, fmt.Errorf("trajectory page %d fact total does not match facts", index)
+		}
+		if index < len(pages)-1 && page.NextCursor == "" {
+			return trajectorySummary{}, fmt.Errorf("trajectory page %d ends before the final page", index)
+		}
+		if index == len(pages)-1 && page.NextCursor != "" {
+			return trajectorySummary{}, fmt.Errorf("trajectory final page still has continuation")
+		}
+
+		pageTerminal := false
+		for _, fact := range page.Facts {
+			if fact.Kind == agentic.TrajectoryKindLoopTerminal {
+				pageTerminal = true
+				summary.terminalStatus = fact.Status
+				if fact.Status == agentic.TrajectoryStatusCompleted {
+					summary.completed = true
+				}
+			}
+		}
+		if page.TerminalObserved != pageTerminal {
+			return trajectorySummary{}, fmt.Errorf("trajectory page %d terminal truth does not match facts", index)
+		}
+
+		summary.facts = append(summary.facts, page.Facts...)
+		summary.tokensIn += page.ObservedTotals.TokensIn
+		summary.tokensOut += page.ObservedTotals.TokensOut
+		summary.elapsedMS += page.ObservedTotals.ElapsedMS
+	}
+	return summary, nil
 }
 
 func sumSnapshotMetric(snapshot *client.MetricsSnapshot, metricName string) float64 {

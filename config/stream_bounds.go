@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/natsclient"
 )
 
@@ -208,8 +210,8 @@ type portAttribution struct {
 // applied it before this function existed (operator map first, sorted, then
 // ports) so a config with several offenders always names the same one.
 //
-// Pure and I/O-free. logger may be nil.
-func resolveStreamDeclarations(cfg *Config, logger *slog.Logger) ([]streamDeclaration, error) {
+// Pure and I/O-free.
+func resolveStreamDeclarations(cfg *Config, _ *slog.Logger) ([]streamDeclaration, error) {
 	type resolved struct {
 		cfg      StreamConfig
 		source   string
@@ -251,35 +253,46 @@ func resolveStreamDeclarations(cfg *Config, logger *slog.Logger) ([]streamDeclar
 
 		ports, err := extractPortsFromConfig(compCfg.Config)
 		if err != nil {
-			logAt(logger, slog.LevelDebug, "Could not parse ports from component config",
-				"component", compName, "error", err)
-			continue
+			return nil, fmt.Errorf("decode component %q ports: %w", compName, err)
 		}
 
-		for _, port := range ports.Outputs {
-			if port.Type != "jetstream" {
+		for _, definition := range ports.Outputs {
+			port, err := definition.Resolve(component.DirectionOutput)
+			if err != nil {
+				return nil, fmt.Errorf("resolve component %q output port %q: %w", compName, definition.Name, err)
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				return nil, fmt.Errorf("inspect component %q output port %q: %w", compName, definition.Name, err)
+			}
+			if facts.Kind() != component.PortKindJetStream {
 				continue
 			}
-
-			streamName, subjects := derivePortStream(port)
-			if streamName == "" {
-				logAt(logger, slog.LevelWarn, "Could not derive stream name from subject",
-					"component", compName, "subject", port.Subject)
-				continue
+			stream, ok := facts.Stream()
+			if !ok {
+				return nil, fmt.Errorf("component %q output port %q has no JetStream facts", compName, definition.Name)
+			}
+			streamName, subjects, err := derivePortStream(stream)
+			if err != nil {
+				return nil, fmt.Errorf("derive component %q output port %q stream: %w", compName, definition.Name, err)
+			}
+			streamConfig, err := streamConfigFromFacts(stream, subjects)
+			if err != nil {
+				return nil, fmt.Errorf("project component %q output port %q stream policy: %w", compName, definition.Name, err)
 			}
 
-			source := fmt.Sprintf("component %q port %q", compName, port.Name)
+			source := fmt.Sprintf("component %q port %q", compName, definition.Name)
 			if err := checkOrdinaryStream(streamName, source); err != nil {
 				return nil, fmt.Errorf("validate stream declaration %q: %w", streamName, err)
 			}
 
-			attribution := portAttribution{component: compName, port: port.Name}
+			attribution := portAttribution{component: compName, port: definition.Name}
 			if existing, ok := decls[streamName]; ok {
 				existing.derived = append(existing.derived, attribution)
 				continue
 			}
 			decls[streamName] = &resolved{
-				cfg:     StreamConfig{Subjects: subjects},
+				cfg:     streamConfig,
 				derived: []portAttribution{attribution},
 			}
 		}
@@ -334,15 +347,61 @@ func describeSource(explicitSource string, explicit bool, derived []portAttribut
 // having been retired in favour of component.PortDefinition; a previous shadow
 // stripped this field on JSON unmarshal and silently swallowed every tool.result
 // publish in semspec (project_open_work_2026_05_08.md, bug class 3).
-func derivePortStream(port PortDefinition) (string, []string) {
-	if port.StreamName != "" {
-		return port.StreamName, []string{strings.ToLower(port.StreamName) + ".>"}
+func derivePortStream(stream component.StreamFacts) (string, []string, error) {
+	subjects := stream.Subjects()
+	if len(subjects) == 0 {
+		return "", nil, fmt.Errorf("JetStream output requires at least one subject")
 	}
-	name := DeriveStreamName(port.Subject)
+	if stream.Name() != "" {
+		return stream.Name(), subjects, nil
+	}
+	name := DeriveStreamName(subjects[0])
 	if name == "" {
-		return "", nil
+		return "", nil, fmt.Errorf("cannot derive stream name from subject %q", subjects[0])
 	}
-	return name, DeriveStreamSubjects(port.Subject)
+	return name, subjects, nil
+}
+
+func streamConfigFromFacts(stream component.StreamFacts, subjects []string) (StreamConfig, error) {
+	config := StreamConfig{
+		Subjects: append([]string(nil), subjects...),
+		Storage:  strings.TrimSpace(stream.Storage()),
+		Replicas: stream.Replicas(),
+	}
+	if config.Storage != "" && config.Storage != "file" && config.Storage != "memory" {
+		return StreamConfig{}, fmt.Errorf("unknown storage %q", config.Storage)
+	}
+
+	switch retention := strings.TrimSpace(stream.RetentionPolicy()); retention {
+	case "":
+	case "limits", "interest":
+		config.Retention = retention
+	case "work_queue":
+		config.Retention = "workqueue"
+	default:
+		return StreamConfig{}, fmt.Errorf("unknown retention policy %q", retention)
+	}
+
+	days := stream.RetentionDays()
+	if days < 0 || int64(days) > math.MaxInt64/int64(24*time.Hour) {
+		return StreamConfig{}, fmt.Errorf("retention_days %d is outside the supported duration range", days)
+	}
+	if days > 0 {
+		config.MaxAge = fmt.Sprintf("%dd", days)
+	}
+
+	maxSizeGB := stream.MaxSizeGB()
+	const bytesPerGiB int64 = 1024 * 1024 * 1024
+	if maxSizeGB < 0 || int64(maxSizeGB) > math.MaxInt64/bytesPerGiB {
+		return StreamConfig{}, fmt.Errorf("max_size_gb %d is outside the supported byte range", maxSizeGB)
+	}
+	if maxSizeGB > 0 {
+		config.MaxBytes = int64(maxSizeGB) * bytesPerGiB
+	}
+	if config.Replicas < 0 {
+		return StreamConfig{}, fmt.Errorf("replicas %d must not be negative", config.Replicas)
+	}
+	return config, nil
 }
 
 // logAt logs only when a logger was supplied. Config validation runs with none.

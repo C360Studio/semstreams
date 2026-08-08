@@ -20,6 +20,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/graph"
 	"github.com/c360studio/semstreams/natsclient"
 	semerrs "github.com/c360studio/semstreams/pkg/errs"
@@ -997,9 +998,10 @@ func TestExtractInlineArguments_StringValue(t *testing.T) {
 }
 
 func TestExtractInlineArguments_MultipleArgs(t *testing.T) {
-	args := extractInlineArguments(`entitiesByPrefix(prefix: "", limit: 5)`)
+	args := extractInlineArguments(`entitiesByPrefix(prefix: "", limit: 5, cursor: "next-page")`)
 	assert.Equal(t, "", args["prefix"])
 	assert.Equal(t, int64(5), args["limit"])
+	assert.Equal(t, "next-page", args["cursor"])
 }
 
 func TestExtractInlineArguments_BooleanValue(t *testing.T) {
@@ -1334,8 +1336,9 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 
 		assert.Equal(t, "", payload["prefix"], "inline empty prefix should be extracted")
 		assert.Equal(t, float64(5), payload["limit"], "inline limit should be extracted")
+		assert.Equal(t, "next-page", payload["cursor"], "inline cursor should be forwarded")
 
-		return []byte(`{"entities":[{"id":"acme.ops.test.system.widget.001"},{"id":"acme.ops.test.system.widget.002"}]}`), nil
+		return []byte(`{"entities":[{"id":"acme.ops.test.system.widget.001"},{"id":"acme.ops.test.system.widget.002"}],"next_cursor":"after-page"}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)
@@ -1344,7 +1347,7 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entitiesByPrefix(prefix: "", limit: 5) { id } }`,
+		"query": `{ entitiesByPrefix(prefix: "", limit: 5, cursor: "next-page") { entities { id } next_cursor } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1356,15 +1359,16 @@ func TestGateway_InlineArgs_PrefixQuery(t *testing.T) {
 	comp.handleGraphQL(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t,
+		`{"data":{"entitiesByPrefix":{"entities":[{"id":"acme.ops.test.system.widget.001"},{"id":"acme.ops.test.system.widget.002"}],"next_cursor":"after-page"}}}`,
+		w.Body.String(),
+	)
 }
 
-// TestGateway_PrefixQuery_DefaultsLimitTo100 pins gh#172's gateway-
-// layer cap. When the GraphQL client omits `limit`, the gateway
-// injects 100 into the NATS payload before forwarding. graph-ingest's
-// internal default stays 1000 (non-gateway callers can still hit that
-// ceiling explicitly); the gateway layer is the user-facing surface
-// where the 1MB max_payload safety floor matters.
-func TestGateway_PrefixQuery_DefaultsLimitTo100(t *testing.T) {
+// TestGateway_PrefixQueryLeavesOmittedLimitToResultOwner proves the gateway
+// does not predict a carrier-safe count. Graph-ingest owns the count default
+// and exact encoded-page fitting against the active NATS limit.
+func TestGateway_PrefixQueryLeavesOmittedLimitToResultOwner(t *testing.T) {
 	mock := newMockNATSRequester()
 
 	mock.requestFunc = func(_ context.Context, subject string, data []byte, _ time.Duration) ([]byte, error) {
@@ -1373,8 +1377,8 @@ func TestGateway_PrefixQuery_DefaultsLimitTo100(t *testing.T) {
 		var payload map[string]interface{}
 		require.NoError(t, json.Unmarshal(data, &payload))
 
-		assert.Equal(t, float64(100), payload["limit"],
-			"omitted limit should be capped at the gateway-layer default of 100 (gh#172)")
+		_, hasLimit := payload["limit"]
+		assert.False(t, hasLimit, "gateway must not invent a carrier-size prediction")
 
 		return []byte(`{"entities":[]}`), nil
 	}
@@ -1385,7 +1389,7 @@ func TestGateway_PrefixQuery_DefaultsLimitTo100(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entitiesByPrefix(prefix: "test") { id } }`,
+		"query": `{ entitiesByPrefix(prefix: "test") { entities { id } next_cursor } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1418,7 +1422,7 @@ func TestGateway_PrefixQuery_ExplicitLimitOverridesDefault(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ entitiesByPrefix(prefix: "test", limit: 500) { id } }`,
+		"query": `{ entitiesByPrefix(prefix: "test", limit: 500) { entities { id } next_cursor } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1439,7 +1443,7 @@ func TestGateway_PrefixQueriesRejectInvalidPrefixBeforeNATS(t *testing.T) {
 		subject string
 		query   string
 	}{
-		{name: "entities by prefix", subject: "graph.query.prefix", query: `{ entitiesByPrefix(prefix: "acme.*") { id } }`},
+		{name: "entities by prefix", subject: "graph.query.prefix", query: `{ entitiesByPrefix(prefix: "acme.*") { entities { id } next_cursor } }`},
 		{name: "hierarchy stats", subject: "graph.query.hierarchyStats", query: `{ entityIdHierarchy(prefix: "acme.*") { prefix } }`},
 	}
 
@@ -1653,13 +1657,13 @@ func TestGateway_TransformPathSearchVars(t *testing.T) {
 // Trajectory Limit Tests
 // ====================================================================================
 
-func TestGateway_TrajectoryQuery_PassesLimit(t *testing.T) {
+func TestGateway_TrajectoryQueryForwardsCursorAndPreservesReferencePage(t *testing.T) {
 	mock := newMockNATSRequester()
 
 	var capturedPayload map[string]interface{}
 	mock.requestFunc = func(ctx context.Context, subject string, data []byte, timeout time.Duration) ([]byte, error) {
 		_ = json.Unmarshal(data, &capturedPayload)
-		return []byte(`{"loopId":"loop-1","steps":[],"outcome":"complete"}`), nil
+		return []byte(`{"schema_version":"v1","loop_id":"loop-1","coverage":"observed","observed_totals":{"facts":1},"terminal_observed":false,"facts":[{"attempt_id":"attempt1","evidence_capture":"stored","evidence":{"storage_instance":"objectstore","key":"trajectory-evidence/v1/sha256/abc","content_type":"application/vnd.semstreams.agentic-trajectory-evidence.v1+json","size":42}}],"next_cursor":"next-page"}`), nil
 	}
 
 	comp := createTestGatewayWithMock(t, mock)
@@ -1668,7 +1672,7 @@ func TestGateway_TrajectoryQuery_PassesLimit(t *testing.T) {
 	defer comp.Stop(5 * time.Second)
 
 	gqlRequest := map[string]interface{}{
-		"query": `{ trajectory(loopId: "loop-1", limit: 10) { loopId steps { stepType } outcome } }`,
+		"query": `{ trajectory(loopId: "loop-1", limit: 10, cursor: "current-page") { loop_id coverage observed_totals terminal_observed facts { attempt_id evidence_capture evidence { storage_instance key content_type size } } next_cursor } }`,
 	}
 	body, err := json.Marshal(gqlRequest)
 	require.NoError(t, err)
@@ -1682,6 +1686,39 @@ func TestGateway_TrajectoryQuery_PassesLimit(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Equal(t, "loop-1", capturedPayload["loopId"])
 	assert.Equal(t, float64(10), capturedPayload["limit"])
+	assert.Equal(t, "current-page", capturedPayload["cursor"])
+	assert.NotContains(t, capturedPayload, "hydrateEvidence")
+	assert.Contains(t, w.Body.String(), `"coverage":"observed"`)
+	assert.Contains(t, w.Body.String(), `"next_cursor":"next-page"`)
+	assert.Contains(t, w.Body.String(), `"storage_instance":"objectstore"`)
+	assert.NotContains(t, w.Body.String(), "evidence_body")
+}
+
+func TestGateway_TrajectoryQueryRejectsHydrateEvidence(t *testing.T) {
+	mock := newMockNATSRequester()
+	called := false
+	mock.requestFunc = func(context.Context, string, []byte, time.Duration) ([]byte, error) {
+		called = true
+		return nil, nil
+	}
+
+	comp := createTestGatewayWithMock(t, mock)
+	require.NoError(t, comp.Initialize())
+	require.NoError(t, comp.Start(context.Background()))
+	defer comp.Stop(5 * time.Second)
+
+	body, err := json.Marshal(map[string]interface{}{
+		"query": `{ trajectory(loopId: "loop-1", hydrateEvidence: true) { facts { attempt_id } } }`,
+	})
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	comp.handleGraphQL(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assert.False(t, called)
 }
 
 // ====================================================================================
@@ -1879,6 +1916,14 @@ func createTestGatewayWithMock(t *testing.T, mock *mockNATSRequester) *Component
 	t.Helper()
 
 	config := DefaultConfig()
+	outputs := make([]component.Port, 0, len(config.Ports.Outputs))
+	for _, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		require.NoError(t, err)
+		outputs = append(outputs, port)
+	}
+	families, err := queryFamiliesFromPorts(outputs)
+	require.NoError(t, err)
 
 	// Create component with injected mock
 	// Note: Builder must implement a way to inject mock for testing
@@ -1886,6 +1931,8 @@ func createTestGatewayWithMock(t *testing.T, mock *mockNATSRequester) *Component
 	comp := &Component{
 		name:          "graph-gateway",
 		config:        config,
+		outputs:       outputs,
+		queries:       families,
 		natsRequester: mock, // Builder will add this field for NATS request/reply
 		logger:        createTestLogger(),
 	}

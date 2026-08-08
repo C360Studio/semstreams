@@ -86,12 +86,36 @@ func quietLogger() *slog.Logger {
 // dependencies stubbed. Skips Start — handleMessage doesn't touch
 // deps once router/loops are set.
 func newTestComponent(loops LoopStore, router Router) *Component {
+	config := DefaultConfig()
+	inputs, outputs := mustResolveTestPorts(config.Ports)
 	return &Component{
-		config: DefaultConfig(),
-		router: router,
-		loops:  loops,
-		logger: quietLogger(),
+		config:  config,
+		inputs:  inputs,
+		outputs: outputs,
+		router:  router,
+		loops:   loops,
+		logger:  quietLogger(),
 	}
+}
+
+func mustResolveTestPorts(config *component.PortConfig) ([]component.Port, []component.Port) {
+	inputs := make([]component.Port, len(config.Inputs))
+	for index, definition := range config.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			panic(err)
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Outputs))
+	for index, definition := range config.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			panic(err)
+		}
+		outputs[index] = port
+	}
+	return inputs, outputs
 }
 
 func TestComponent_HandleMessage_HappyPath(t *testing.T) {

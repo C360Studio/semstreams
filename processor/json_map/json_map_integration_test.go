@@ -79,20 +79,12 @@ func TestIntegration_FieldRenaming(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonmap.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonmap.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonmap.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonmap.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -190,20 +182,12 @@ func TestIntegration_StringTransforms(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonmap.transform.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonmap.transform.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonmap.transform.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonmap.transform.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -291,20 +275,12 @@ func TestIntegration_AddRemoveFields(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonmap.addremove.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonmap.addremove.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonmap.addremove.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonmap.addremove.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},
@@ -401,20 +377,12 @@ func TestIntegration_CombinedTransformations(t *testing.T) {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:      "input",
-					Type:      "nats",
-					Subject:   "test.jsonmap.combined.input",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "input", Config: component.NATSPort{Subject: "test.jsonmap.combined.input", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:      "output",
-					Type:      "nats",
-					Subject:   "test.jsonmap.combined.output",
-					Interface: "core .json.v1",
-					Required:  true,
+					Name: "output", Config: component.NATSPort{Subject: "test.jsonmap.combined.output", Interface: &component.InterfaceContract{Type: "core .json.v1"}}, Required: true,
 				},
 			},
 		},

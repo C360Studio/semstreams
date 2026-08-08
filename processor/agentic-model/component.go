@@ -5,6 +5,7 @@ package agenticmodel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -38,6 +39,8 @@ type Component struct {
 	decoder      *message.Decoder
 	natsClient   *natsclient.Client
 	logger       *slog.Logger
+	inputPorts   []component.Port
+	outputPorts  []component.Port
 
 	// Dynamic client cache — clients are created on-demand from registry endpoints
 	clientCache map[string]*Client // cache key -> client
@@ -92,19 +95,19 @@ type consumerInfo struct {
 
 // NewComponent creates a new agentic-model processor component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
-	var config Config
+	defaults := DefaultConfig()
+	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
 	}
-
-	// Use default config if ports not set
 	if config.Ports == nil {
-		config = DefaultConfig()
-		// Re-unmarshal to get user-provided values
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponent", "unmarshal config")
-		}
+		config.Ports = defaults.Ports
 	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 
 	// Validate configuration
 	if err := config.Validate(); err != nil {
@@ -126,7 +129,11 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 		}
 	}
 
-	return newComponent(config, deps, messageTimeout), nil
+	inputPorts, outputPorts, err := resolveConfiguredPorts(config)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponent", "resolve ports")
+	}
+	return newComponent(config, deps, messageTimeout, inputPorts, outputPorts), nil
 }
 
 // NewComponentWithOptions is the option-aware constructor. The factory
@@ -134,16 +141,19 @@ func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (compo
 // in-process RollingWindowBreaker for circuit breaking. Tests and
 // callers wanting a custom HealthPolicy use this directly.
 func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependencies, opts ...Option) (component.Discoverable, error) {
-	var config Config
+	defaults := DefaultConfig()
+	config := DefaultConfig()
 	if err := json.Unmarshal(rawConfig, &config); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
 	}
 	if config.Ports == nil {
-		config = DefaultConfig()
-		if err := json.Unmarshal(rawConfig, &config); err != nil {
-			return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "unmarshal config")
-		}
+		config.Ports = defaults.Ports
 	}
+	mergedPorts, err := component.MergePortConfig(*defaults.Ports, *config.Ports)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "merge port overrides")
+	}
+	config.Ports = &mergedPorts
 	if err := config.Validate(); err != nil {
 		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "validate config")
 	}
@@ -160,7 +170,11 @@ func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependenc
 		}
 	}
 
-	c := newComponent(config, deps, messageTimeout)
+	inputPorts, outputPorts, err := resolveConfiguredPorts(config)
+	if err != nil {
+		return nil, errs.WrapInvalid(err, "Component", "NewComponentWithOptions", "resolve ports")
+	}
+	c := newComponent(config, deps, messageTimeout, inputPorts, outputPorts)
 	for _, opt := range opts {
 		opt(c)
 	}
@@ -170,7 +184,7 @@ func NewComponentWithOptions(rawConfig json.RawMessage, deps component.Dependenc
 // newComponent builds the Component value with default policies wired
 // in. Shared between NewComponent (no options) and
 // NewComponentWithOptions (caller-supplied options applied after).
-func newComponent(config Config, deps component.Dependencies, messageTimeout time.Duration) *Component {
+func newComponent(config Config, deps component.Dependencies, messageTimeout time.Duration, inputPorts, outputPorts []component.Port) *Component {
 	return &Component{
 		name:           "agentic-model",
 		config:         config,
@@ -180,9 +194,48 @@ func newComponent(config Config, deps component.Dependencies, messageTimeout tim
 		clientCache:    make(map[string]*Client),
 		natsClient:     deps.NATSClient,
 		logger:         deps.GetLogger(),
+		inputPorts:     inputPorts,
+		outputPorts:    outputPorts,
 		messageTimeout: messageTimeout,
 		metrics:        getMetrics(deps.MetricsRegistry),
 	}
+}
+
+func resolveConfiguredPorts(config Config) ([]component.Port, []component.Port, error) {
+	if config.Ports == nil {
+		return nil, nil, errors.New("ports configuration is required")
+	}
+	inputs := make([]component.Port, len(config.Ports.Inputs))
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, nil, err
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, nil, err
+		}
+		if facts.Kind() != component.PortKindJetStream || len(facts.NATSSubjects()) != 1 {
+			return nil, nil, fmt.Errorf("input port %q must declare exactly one JetStream subject", port.Name)
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Ports.Outputs))
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, nil, err
+		}
+		facts, err := port.Facts()
+		if err != nil {
+			return nil, nil, err
+		}
+		if (facts.Kind() != component.PortKindNATS && facts.Kind() != component.PortKindJetStream) || len(facts.NATSSubjects()) != 1 {
+			return nil, nil, fmt.Errorf("output port %q must declare exactly one NATS or JetStream subject", port.Name)
+		}
+		outputs[index] = port
+	}
+	return inputs, outputs, nil
 }
 
 // Initialize prepares the component (no-op for this component)
@@ -212,13 +265,14 @@ func (c *Component) Start(ctx context.Context) error {
 	}
 
 	// Set up consumers for input ports
-	for _, port := range c.config.Ports.Inputs {
-		if port.Subject == "" {
-			continue
+	for _, port := range c.inputPorts {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.WrapInvalid(err, "Component", "Start", "project input port facts")
 		}
-
+		subject := facts.NATSSubjects()[0]
 		if err := c.setupConsumer(ctx, port); err != nil {
-			return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", port.Subject))
+			return errs.Wrap(err, "Component", "Start", fmt.Sprintf("setup consumer for %s", subject))
 		}
 	}
 
@@ -229,15 +283,17 @@ func (c *Component) Start(ctx context.Context) error {
 }
 
 // setupConsumer sets up a JetStream consumer for an input port
-func (c *Component) setupConsumer(ctx context.Context, port component.PortDefinition) error {
-	// Determine stream name
-	streamName := port.StreamName
-	if streamName == "" {
-		streamName = c.config.StreamName
+func (c *Component) setupConsumer(ctx context.Context, port component.Port) error {
+	facts, err := port.Facts()
+	if err != nil {
+		return err
 	}
-	if streamName == "" {
-		streamName = "AGENT"
+	stream, ok := facts.Stream()
+	if !ok {
+		return fmt.Errorf("input port %q does not declare JetStream facts", port.Name)
 	}
+	subject := facts.NATSSubjects()[0]
+	streamName := stream.Name()
 
 	// Wait for stream to be available
 	if err := c.waitForStream(ctx, streamName); err != nil {
@@ -245,7 +301,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	}
 
 	// Create durable consumer name (with optional suffix for uniqueness in tests)
-	consumerName := fmt.Sprintf("agentic-model-%s", sanitizeSubject(port.Subject))
+	consumerName := fmt.Sprintf("agentic-model-%s", sanitizeSubject(subject))
 	if c.config.ConsumerNameSuffix != "" {
 		consumerName = consumerName + "-" + c.config.ConsumerNameSuffix
 	}
@@ -253,11 +309,14 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	c.logger.Info("Setting up JetStream consumer",
 		"stream", streamName,
 		"consumer", consumerName,
-		"filter_subject", port.Subject)
+		"filter_subject", subject)
 
 	// Get consumer config from port definition (allows user configuration)
 	// Defaults to "new" - only process new requests, don't replay old ones
-	consumerCfg := component.GetConsumerConfigFromDefinition(port)
+	consumerCfg, consumerErr := component.GetConsumerConfig(port)
+	if consumerErr != nil {
+		return errs.WrapInvalid(consumerErr, "agentic-model", "setupConsumer", "resolve consumer config")
+	}
 
 	// Per-component defaults for tunables that were previously hardcoded.
 	// Operators tune via JetStreamPort.AckWait / .HeartbeatInterval; the
@@ -283,7 +342,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	cfg := natsclient.StreamConsumerConfig{
 		StreamName:    streamName,
 		ConsumerName:  consumerName,
-		FilterSubject: port.Subject,
+		FilterSubject: subject,
 		DeliverPolicy: consumerCfg.DeliverPolicy,
 		AckPolicy:     consumerCfg.AckPolicy,
 		// Honor consumerCfg.MaxDeliver (port-level tunable, default 3).
@@ -299,7 +358,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 		MessageTimeout: 30 * time.Minute,
 	}
 
-	err := c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
+	err = c.natsClient.ConsumeStreamWithConfig(ctx, cfg, func(msgCtx context.Context, msg jetstream.Msg) {
 		if hbErr := natsclient.ConsumeWithHeartbeat(msgCtx, msg, heartbeatInterval,
 			func(workCtx context.Context) error {
 				c.handleRequest(workCtx, msg.Data())
@@ -320,7 +379,7 @@ func (c *Component) setupConsumer(ctx context.Context, port component.PortDefini
 	})
 
 	c.logger.Info("Subscribed to agent requests (JetStream)",
-		"subject", port.Subject,
+		"subject", subject,
 		"stream", streamName,
 		"consumer", consumerName)
 	return nil
@@ -759,7 +818,11 @@ func (c *Component) makeChunkHandler() ChunkHandler {
 			return
 		}
 
-		subject := component.ResolveSubject(c.outputPortDefs(), "agent.stream", chunk.RequestID)
+		subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.stream", chunk.RequestID)
+		if err != nil {
+			c.logger.Warn("Failed to resolve stream chunk subject", "error", err)
+			return
+		}
 		if err := c.natsClient.Publish(context.Background(), subject, data); err != nil {
 			c.logger.Debug("Failed to publish stream chunk", "subject", subject, "error", err)
 		}
@@ -874,7 +937,10 @@ func (c *Component) publishResponse(ctx context.Context, resp agentic.AgentRespo
 		return errs.WrapInvalid(err, "Component", "publishResponse", "marshal response")
 	}
 
-	subject := component.ResolveSubject(c.outputPortDefs(), "agent.response", resp.RequestID)
+	subject, err := component.ResolveSubject(c.outputPortDefs(), "agent.response", resp.RequestID)
+	if err != nil {
+		return errs.WrapInvalid(err, "Component", "publishResponse", "resolve response subject")
+	}
 	if err := c.natsClient.PublishToStream(ctx, subject, data); err != nil {
 		return errs.WrapTransient(err, "Component", "publishResponse", fmt.Sprintf("publish to %s", subject))
 	}
@@ -926,46 +992,12 @@ func (c *Component) Meta() component.Metadata {
 
 // InputPorts returns configured input port definitions
 func (c *Component) InputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Inputs))
-	for i, portDef := range c.config.Ports.Inputs {
-		ports[i] = component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionInput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-			Config: component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), c.inputPorts...)
 }
 
 // OutputPorts returns configured output port definitions
 func (c *Component) OutputPorts() []component.Port {
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, len(c.config.Ports.Outputs))
-	for i, portDef := range c.config.Ports.Outputs {
-		ports[i] = component.Port{
-			Name:        portDef.Name,
-			Direction:   component.DirectionOutput,
-			Required:    portDef.Required,
-			Description: portDef.Description,
-			Config: component.JetStreamPort{
-				StreamName: portDef.StreamName,
-				Subjects:   []string{portDef.Subject},
-			},
-		}
-	}
-	return ports
+	return append([]component.Port(nil), c.outputPorts...)
 }
 
 // ConfigSchema returns the configuration schema

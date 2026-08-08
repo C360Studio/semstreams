@@ -12,7 +12,7 @@ type KVWatchPort struct {
 
 // ResourceID returns unique identifier for KV watch ports
 func (k KVWatchPort) ResourceID() string {
-	return fmt.Sprintf("kvwatch:%s", k.Bucket)
+	return fmt.Sprintf("kv:%s", k.Bucket)
 }
 
 // IsExclusive returns false as multiple watchers are allowed
@@ -20,9 +20,31 @@ func (k KVWatchPort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (k KVWatchPort) Type() string {
-	return "kvwatch"
+// Kind returns the canonical port kind.
+func (k KVWatchPort) Kind() PortKind {
+	return PortKindKVWatch
+}
+
+// KVReadPort declares exact or list access to current values in one KV bucket.
+// It is metadata only: acquisition and missing-value policy remain component-owned.
+type KVReadPort struct {
+	Bucket    string             `json:"bucket"`
+	Interface *InterfaceContract `json:"interface,omitempty"`
+}
+
+// ResourceID returns the canonical KV read resource identity.
+func (k KVReadPort) ResourceID() string {
+	return fmt.Sprintf("kv:%s", k.Bucket)
+}
+
+// IsExclusive reports that concurrent readers may share a bucket.
+func (k KVReadPort) IsExclusive() bool {
+	return false
+}
+
+// Kind returns the canonical port kind.
+func (k KVReadPort) Kind() PortKind {
+	return PortKindKVRead
 }
 
 // KVWritePort - NATS KV Write for state persistence
@@ -33,7 +55,7 @@ type KVWritePort struct {
 
 // ResourceID returns unique identifier for KV write ports
 func (k KVWritePort) ResourceID() string {
-	return fmt.Sprintf("kvwrite:%s", k.Bucket)
+	return fmt.Sprintf("kv:%s", k.Bucket)
 }
 
 // IsExclusive returns false as multiple writers are allowed (with CAS handling)
@@ -41,7 +63,7 @@ func (k KVWritePort) IsExclusive() bool {
 	return false
 }
 
-// Type returns the port type identifier
-func (k KVWritePort) Type() string {
-	return "kvwrite"
+// Kind returns the canonical port kind.
+func (k KVWritePort) Kind() PortKind {
+	return PortKindKVWrite
 }

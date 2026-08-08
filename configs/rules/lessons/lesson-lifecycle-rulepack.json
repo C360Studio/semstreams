@@ -8,21 +8,27 @@
   "ports": {
     "inputs": [
       {
-        "name": "entity_states",
-        "subject": "ENTITY_STATES.>",
-        "type": "kv-watch",
-        "bucket": "ENTITY_STATES",
-        "description": "Watch agent.lesson.record entity state changes"
+        "config": {
+          "bucket": "ENTITY_STATES",
+          "kind": "kv-watch"
+        },
+        "description": "Watch agent.lesson.record entity state changes",
+        "name": "entity_states"
       }
     ],
     "outputs": [
       {
+        "config": {
+          "interface": {
+            "type": "semstreams.graph.mutation",
+            "version": "v1"
+          },
+          "kind": "nats-request",
+          "subject": "graph.mutation.>"
+        },
+        "description": "Lesson lifecycle mutations through the canonical graph request/reply interface",
         "name": "graph_mutations",
-        "subject": "graph.mutation.>",
-        "type": "nats-request",
-        "interface": "semstreams.graph.mutation",
-        "required": true,
-        "description": "Lesson lifecycle mutations through the canonical graph request/reply interface"
+        "required": true
       }
     ]
   },

@@ -12,7 +12,7 @@
 //   - Request/Response types for agent communication (AgentRequest, AgentResponse)
 //   - State machine types for loop lifecycle (LoopState, LoopEntity)
 //   - Tool system types (ToolDefinition, ToolCall, ToolResult)
-//   - Trajectory tracking for observability (Trajectory, TrajectoryStep)
+//   - Immutable trajectory facts/evidence plus transient active-loop helper types
 //
 // # Architecture Context
 //
@@ -20,7 +20,7 @@
 //
 //	┌─────────────────┐
 //	│  agentic-loop   │  Orchestrates the agent lifecycle
-//	│  (state machine)│  Manages state, routes messages, captures trajectory
+//	│  (state machine)│  Manages state, routes messages, records observations
 //	└────────┬────────┘
 //	         │
 //	    ┌────┴────┐
@@ -176,43 +176,27 @@
 //
 // # Trajectory Tracking
 //
-// Trajectories capture the complete execution path of an agentic loop for
-// observability, debugging, and compliance.
+// Durable trajectory history consists of immutable TrajectoryFactV1 observations.
+// Each fact is bounded and body-free; full prompts, messages, tool arguments/results,
+// URLs, and raw errors belong in content-addressed TrajectoryEvidenceV1 storage.
 //
-// Create and populate a trajectory:
+// Construct one observed fact:
 //
-//	trajectory := agentic.NewTrajectory("loop_123")
+//	fact := agentic.TrajectoryFactV1{
+//	    SchemaVersion:   agentic.TrajectorySchemaV1,
+//	    LoopDigest:      agentic.TrajectoryLoopDigest("loop_123"),
+//	    AttemptID:       "attempt1",
+//	    AttemptOrdinal:  1,
+//	    Kind:            agentic.TrajectoryKindModelCompleted,
+//	    CausalPhase:     agentic.TrajectoryPhaseModelResult,
+//	    ObservedAt:      time.Now(),
+//	    EvidenceCapture: agentic.TrajectoryEvidenceNone,
+//	}
+//	encoded, err := fact.CanonicalBytes()
 //
-//	// Record a model call
-//	trajectory.AddStep(agentic.TrajectoryStep{
-//	    Timestamp: time.Now(),
-//	    StepType:  "model_call",
-//	    RequestID: "req_001",
-//	    Prompt:    "Analyze this code...",
-//	    Response:  "I found 3 issues...",
-//	    TokensIn:  150,
-//	    TokensOut: 200,
-//	    Duration:  1250, // milliseconds
-//	})
-//
-//	// Record a tool call
-//	trajectory.AddStep(agentic.TrajectoryStep{
-//	    Timestamp:     time.Now(),
-//	    StepType:      "tool_call",
-//	    ToolName:      "read_file",
-//	    ToolArguments: map[string]any{"path": "main.go"},
-//	    ToolResult:    "package main...",
-//	    Duration:      50,
-//	})
-//
-//	// Complete the trajectory
-//	trajectory.Complete("complete")
-//
-// Trajectories automatically track:
-//
-//   - Total input/output tokens across all model calls
-//   - Cumulative duration of all steps
-//   - Start and end times with final outcome
+// One or more terminal facts mean terminal outcomes were observed; they are not
+// seals or completeness proofs. Aggregate Trajectory and TrajectoryStep remain
+// transient execution helpers, not durable/public read authority.
 //
 // # Token Usage
 //
@@ -271,18 +255,20 @@
 //
 // # KV Storage
 //
-// Loop state and trajectories are persisted to NATS KV buckets:
+// Loop state and observed trajectory facts are persisted to NATS KV buckets:
 //
 //   - AGENT_LOOPS: LoopEntity per loop ID
-//   - AGENT_TRAJECTORIES: Trajectory per loop ID
+//   - AGENT_TRAJECTORIES: TrajectoryFactV1 per immutable attempt key
 //
-// This enables recovery after restarts and provides queryable execution history.
+// AGENT_TRAJECTORIES uses history 1 and no TTL. Full evidence is stored through a
+// registered storage.Store and referenced by digest, exact size, content type, and
+// logical storage instance.
 //
 // # Thread Safety
 //
 // Types in this package are not inherently thread-safe. When used concurrently,
 // external synchronization is required. The agentic-loop component provides
-// thread-safe managers (LoopManager, TrajectoryManager) that wrap these types.
+// thread-safe loop/context managers and private active-loop mechanics that wrap these types.
 //
 // # Error Handling
 //
@@ -296,8 +282,8 @@
 //
 //   - No streaming support (responses are complete documents)
 //   - Tool parameters use map[string]any (no strong typing)
-//   - Trajectory steps are append-only (no editing)
-//   - Maximum trajectory size limited by NATS KV (1MB default)
+//   - Fact envelopes are strictly smaller than 8 KiB
+//   - Visible facts are observed coverage, never a complete execution claim
 //
 // # See Also
 //

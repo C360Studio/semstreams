@@ -1,7 +1,6 @@
 package agenticloop_test
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -238,63 +237,6 @@ func TestTrajectoryManager_GetTrajectory_NonExistent(t *testing.T) {
 	if err == nil {
 		t.Error("GetTrajectory() with non-existent loop should return error")
 	}
-}
-
-func TestTrajectoryManager_SaveTrajectory(t *testing.T) {
-	manager := agenticloop.NewTrajectoryManager()
-
-	loopID := "loop-001"
-	_, err := manager.StartTrajectory(loopID)
-	if err != nil {
-		t.Fatalf("StartTrajectory() error = %v", err)
-	}
-
-	// Add steps
-	_, err = manager.AddStep(loopID, agentic.TrajectoryStep{
-		Timestamp: time.Now(),
-		StepType:  "model_call",
-		TokensIn:  100,
-		TokensOut: 50,
-		Duration:  1000,
-	})
-	if err != nil {
-		t.Fatalf("AddStep() error = %v", err)
-	}
-
-	// Complete
-	completedTraj, err := manager.CompleteTrajectory(loopID, "success")
-	if err != nil {
-		t.Fatalf("CompleteTrajectory() error = %v", err)
-	}
-
-	// Save trajectory (to KV)
-	ctx := context.Background()
-	err = manager.SaveTrajectory(ctx, completedTraj)
-	if err != nil {
-		t.Fatalf("SaveTrajectory() error = %v", err)
-	}
-
-	// In unit tests with mock KV, just verify no error
-	// Integration tests will verify actual KV persistence
-}
-
-func TestTrajectoryManager_SaveTrajectory_Incomplete(t *testing.T) {
-	manager := agenticloop.NewTrajectoryManager()
-
-	loopID := "loop-001"
-	traj, err := manager.StartTrajectory(loopID)
-	if err != nil {
-		t.Fatalf("StartTrajectory() error = %v", err)
-	}
-
-	// Try to save incomplete trajectory (no EndTime)
-	ctx := context.Background()
-	err = manager.SaveTrajectory(ctx, traj)
-
-	// Saving incomplete trajectory may be allowed or disallowed
-	// Implementation decision: either allow (for checkpointing) or disallow
-	// Just ensure it doesn't panic
-	_ = err
 }
 
 func TestTrajectoryManager_MultipleLoops(t *testing.T) {

@@ -74,7 +74,7 @@ Migration state has five allowed values:
   authority; none unless key bytes change; dispatch persistence contract; unassessed; assigned.
 - Message-logger KV diagnostics: operator-supplied key/filter; service diagnostics; authorization plus filter grammar;
   none; diagnostics API contract; unassessed; pending.
-- ObjectStore names and keys: ObjectStore API rather than KV key suffixes; storage/objectstore; outside this
+- ObjectStore names and keys: registered Store contract rather than KV key suffixes; storage/objectstore; outside this
   capability; none; ObjectStore contract; out-of-scope; out-of-scope.
 
 ## Explicit production call-site assignments

@@ -63,8 +63,8 @@ Each component:
 
 ### 1. agentic-loop - Loop Orchestrator
 
-**Purpose**: Manages the agentic loop state machine, coordinates between model and tools, tracks pending tool
-calls, and captures execution trajectories.
+**Purpose**: Manages the agentic loop state machine, coordinates between model and tools, tracks pending tool calls,
+and appends bounded trajectory observations with separately stored full evidence.
 
 **Interfaces**: `Discoverable`, `LifecycleComponent`
 
@@ -75,6 +75,7 @@ calls, and captures execution trajectories.
 | agent_task | jetstream | agent.task.* | Incoming task requests |
 | agent_response | jetstream | agent.response.> | Model responses |
 | tool_result | jetstream | tool.result.> | Tool execution results |
+| trajectory_query | nats-request | agentic.query.trajectory | Observed trajectory queries |
 
 **Output Ports**:
 
@@ -84,7 +85,7 @@ calls, and captures execution trajectories.
 | tool_execute | jetstream | tool.execute.* | Tool execution requests |
 | agent_complete | jetstream | agent.complete.* | Loop completion events |
 | loops_bucket | kv-bucket | AGENT_LOOPS | Loop entity storage |
-| trajectories_bucket | kv-bucket | AGENT_TRAJECTORIES | Trajectory storage |
+| trajectories | kv-write | AGENT_TRAJECTORIES | Immutable `agentic.trajectory.fact` v1 observations |
 
 **Configuration**:
 
@@ -94,20 +95,37 @@ calls, and captures execution trajectories.
   "timeout": "120s",
   "stream_name": "AGENT",
   "loops_bucket": "AGENT_LOOPS",
-  "trajectories_bucket": "AGENT_TRAJECTORIES",
+  "trajectory_evidence_storage_instance": "objectstore",
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "agent_task", "type": "jetstream", "subject": "agent.task.*"},
-      {"name": "agent_response", "type": "jetstream", "subject": "agent.response.>"},
-      {"name": "tool_result", "type": "jetstream", "subject": "tool.result.>"}
+      {"name":"agent_task","config":{"kind":"jetstream","subjects":["agent.task.*"]}},
+      {"name":"agent_response","config":{"kind":"jetstream","subjects":["agent.response.>"]}},
+      {"name":"tool_result","config":{"kind":"jetstream","subjects":["tool.result.>"]}},
+      {
+        "name":"trajectory_query",
+        "required":true,
+        "config":{
+          "kind":"nats-request",
+          "subject":"agentic.query.trajectory",
+          "interface":{"type":"agentic.query","version":"v1"}
+        }
+      }
     ],
     "outputs": [
-      {"name": "agent_request", "type": "jetstream", "subject": "agent.request.*"},
-      {"name": "tool_execute", "type": "jetstream", "subject": "tool.execute.*"},
-      {"name": "agent_complete", "type": "jetstream", "subject": "agent.complete.*"},
-      {"name": "loops_bucket", "type": "kv-bucket", "bucket": "AGENT_LOOPS"},
-      {"name": "trajectories_bucket", "type": "kv-bucket", "bucket": "AGENT_TRAJECTORIES"}
+      {"name":"agent_request","config":{"kind":"jetstream","subjects":["agent.request.*"]}},
+      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.*"]}},
+      {"name":"agent_complete","config":{"kind":"jetstream","subjects":["agent.complete.*"]}},
+      {"name":"loops","config":{"kind":"kv-write","bucket":"AGENT_LOOPS"}},
+      {
+        "name":"trajectories",
+        "required":true,
+        "config":{
+          "kind":"kv-write",
+          "bucket":"AGENT_TRAJECTORIES",
+          "interface":{"type":"agentic.trajectory.fact","version":"v1"}
+        }
+      }
     ]
   }
 }
@@ -121,7 +139,7 @@ calls, and captures execution trajectories.
 | `timeout` | string | 120s | Maximum loop duration |
 | `stream_name` | string | AGENT | JetStream stream name |
 | `loops_bucket` | string | AGENT_LOOPS | KV bucket for loop entities |
-| `trajectories_bucket` | string | AGENT_TRAJECTORIES | KV bucket for trajectories |
+| `trajectory_evidence_storage_instance` | string | objectstore | Registered Store instance for full evidence |
 | `consumer_name_suffix` | string | "" | Suffix for unique consumer names |
 
 **State Machine**:
@@ -199,10 +217,10 @@ implements retry logic with configurable backoff.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "agent_request", "type": "jetstream", "subject": "agent.request.>"}
+      {"name":"agent_request","config":{"kind":"jetstream","subjects":["agent.request.>"]}}
     ],
     "outputs": [
-      {"name": "agent_response", "type": "jetstream", "subject": "agent.response.*"}
+      {"name":"agent_response","config":{"kind":"jetstream","subjects":["agent.response.*"]}}
     ]
   }
 }
@@ -329,10 +347,10 @@ and returns results.
   "consumer_name_suffix": "",
   "ports": {
     "inputs": [
-      {"name": "tool_execute", "type": "jetstream", "subject": "tool.execute.>"}
+      {"name":"tool_execute","config":{"kind":"jetstream","subjects":["tool.execute.>"]}}
     ],
     "outputs": [
-      {"name": "tool_result", "type": "jetstream", "subject": "tool.result.*"}
+      {"name":"tool_result","config":{"kind":"jetstream","subjects":["tool.result.*"]}}
     ]
   }
 }
@@ -412,7 +430,7 @@ When a tool is blocked, the result contains an error message that the model can 
 | Bucket | Writer | Readers | Purpose |
 |--------|--------|---------|---------|
 | `AGENT_LOOPS` | agentic-loop | (optional) rule, graph-query | Loop entity state |
-| `AGENT_TRAJECTORIES` | agentic-loop | (optional) graph-query | Execution traces |
+| `AGENT_TRAJECTORIES` | agentic-loop | agentic-loop query reader | Immutable observed attempt facts |
 
 Note: The rule processor and graph-query are optional readers. The agentic system operates independently
 without them.
@@ -699,25 +717,45 @@ gate, dispatch errors).
 
 ### Trajectory Analysis
 
-Query trajectories for debugging and analytics:
+Query observed facts through graph-gateway GraphQL. This is the sole public trajectory API:
 
-```bash
-# Get trajectory for a specific loop
-nats kv get AGENT_TRAJECTORIES loop_xyz789
-
-# Watch for new trajectories
-nats kv watch AGENT_TRAJECTORIES
+```graphql
+query {
+  trajectory(loopId: "loop_xyz789", limit: 64) {
+    coverage
+    terminal_observed
+    observed_totals { facts tokens_in tokens_out elapsed_ms }
+    facts {
+      attempt_id
+      kind
+      status
+      evidence_digest
+      evidence_capture
+      evidence { storage_instance key content_type size }
+    }
+    next_cursor
+  }
+}
 ```
 
-**Trajectory fields for analysis**:
+Every response says `coverage: observed`. A terminal fact is an observation, not a seal or completeness proof.
+`AGENT_TRAJECTORIES` uses immutable `v1.<loop-digest>.<attempt-id>` keys, history 1, and no TTL. Full evidence is
+content-addressed through the configured registered Store. Treat `next_cursor` as opaque and pass it unchanged as the
+`cursor` argument for the next page. `observed_totals` and `terminal_observed` describe only the returned page.
+
+Trajectory GraphQL never carries evidence bodies. An authorized component or service resolves
+`facts[].evidence.storage_instance` through its injected StoreRegistry and reads `facts[].evidence.key` from the
+registered Store. Consumers without that authority use the metadata and durable reference only.
+
+**Observed fields for analysis**:
 
 | Field | Use Case |
 |-------|----------|
-| `total_tokens_in` | Cost tracking |
-| `total_tokens_out` | Cost tracking |
-| `steps[].duration` | Performance analysis |
-| `steps[].tool_name` | Tool usage patterns |
-| `outcome` | Success/failure rates |
+| `observed_totals.tokens_in` | Observed cost evidence |
+| `observed_totals.tokens_out` | Observed cost evidence |
+| `facts[].elapsed_ms` | Observed latency |
+| `facts[].tool_preview` | Bounded tool identity preview |
+| `facts[].status` | Observed attempt outcome |
 
 ### Debugging Failed Loops
 
@@ -729,18 +767,16 @@ When a loop fails:
    nats kv get AGENT_LOOPS loop_xyz789
    ```
 
-2. **Review trajectory**:
-
-   ```bash
-   nats kv get AGENT_TRAJECTORIES loop_xyz789
-   ```
+2. **Review observed facts through the GraphQL query above**. Follow `next_cursor` until absent when the diagnosis
+   needs more than one metadata/reference page.
 
 3. **Check for pending tools**:
    Look at `pending_tool_results` in the loop entity — tools that never returned results indicate
    execution failures in agentic-tools.
 
-4. **Review model responses**:
-   Trajectory steps include model outputs — check for error messages or unexpected behavior.
+4. **Retrieve full evidence only through an authorized registered-Store reader**. Resolve the reference's
+   `storage_instance` through StoreRegistry, then read its `key`. Fact metadata and GraphQL never embed model output
+   bodies.
 
 ---
 
@@ -1142,11 +1178,8 @@ registry.ListAllTools()
 
 **Symptoms**: Metrics show unexpectedly high token counts.
 
-**Diagnosis**: Review trajectories for patterns:
-
-```bash
-nats kv get AGENT_TRAJECTORIES <loop_id>
-```
+**Diagnosis**: Query observed facts through graph-gateway GraphQL and, when authorized, separately retrieve referenced
+full evidence through the registered Store as shown above.
 
 **Common causes**:
 

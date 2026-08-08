@@ -35,15 +35,13 @@ ENTITY_STATES ─────►│                     │
       "inputs": [
         {
           "name": "entity_watch",
-          "subject": "ENTITY_STATES",
-          "type": "kv-watch"
+          "config": {"kind":"kv-watch","bucket":"ENTITY_STATES"}
         }
       ],
       "outputs": [
         {
           "name": "spatial_index",
-          "subject": "SPATIAL_INDEX",
-          "type": "kv"
+          "config": {"kind":"kv-write","bucket":"SPATIAL_INDEX"}
         }
       ]
     },

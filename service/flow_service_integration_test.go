@@ -413,10 +413,10 @@ func (s *FlowServiceHTTPSuite) TestHTTP_ValidateFlowInvalid() {
 				"config": map[string]any{
 					"ports": map[string]any{
 						"inputs": []map[string]any{
-							{"name": "input", "type": "nats", "subject": "test.in", "required": true},
+							{"name": "input", "config": map[string]any{"kind": "nats", "subject": "test.in"}, "required": true},
 						},
 						"outputs": []map[string]any{
-							{"name": "output", "type": "nats", "subject": "test.out", "required": true},
+							{"name": "output", "config": map[string]any{"kind": "nats", "subject": "test.out"}, "required": true},
 						},
 					},
 					"rules": []map[string]any{
@@ -591,10 +591,10 @@ func (s *FlowServiceHTTPSuite) TestHTTP_DeployInvalidFlow() {
 				"config": map[string]any{
 					"ports": map[string]any{
 						"inputs": []map[string]any{
-							{"name": "input", "type": "nats", "subject": "test.in", "required": true},
+							{"name": "input", "config": map[string]any{"kind": "nats", "subject": "test.in"}, "required": true},
 						},
 						"outputs": []map[string]any{
-							{"name": "output", "type": "nats", "subject": "test.out", "required": true},
+							{"name": "output", "config": map[string]any{"kind": "nats", "subject": "test.out"}, "required": true},
 						},
 					},
 					"rules": []map[string]any{

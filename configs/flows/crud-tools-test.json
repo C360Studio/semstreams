@@ -88,6 +88,14 @@
     }
   },
   "components": {
+    "objectstore": {
+      "type": "storage",
+      "name": "objectstore",
+      "enabled": true,
+      "config": {
+        "bucket_name": "AGENT_CONTENT"
+      }
+    },
     "agentic-dispatch": {
       "type": "processor",
       "name": "agentic-dispatch",
@@ -99,12 +107,50 @@
         "stream_name": "USER",
         "ports": {
           "inputs": [
-            {"name": "user.message", "type": "jetstream", "subject": "user.message.>", "stream_name": "USER", "required": true},
-            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "USER",
+                "subjects": [
+                  "user.message.>"
+                ]
+              },
+              "name": "user.message",
+              "required": true
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.complete.*"
+                ]
+              },
+              "name": "agent.complete",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT"},
-            {"name": "user.response", "type": "nats", "subject": "user.response.*"}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.task.*"
+                ]
+              },
+              "name": "agent.task"
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "USER",
+                "subjects": [
+                  "user.response.*"
+                ]
+              },
+              "name": "user.response"
+            }
           ]
         }
       }
@@ -125,19 +171,90 @@
         },
         "ports": {
           "inputs": [
-            {"name": "agent.task", "type": "jetstream", "subject": "agent.task.*", "stream_name": "AGENT", "required": true},
-            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.>", "stream_name": "AGENT", "required": true},
-            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.>", "stream_name": "TOOL", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.task.*"
+                ]
+              },
+              "name": "agent.task",
+              "required": true
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.response.>"
+                ]
+              },
+              "name": "agent.response",
+              "required": true
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.result.>"
+                ]
+              },
+              "name": "tool.result",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
-            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.*", "stream_name": "AGENT"},
-            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.*", "stream_name": "TOOL"},
-            {"name": "agent.complete", "type": "jetstream", "subject": "agent.complete.*", "stream_name": "AGENT"}
-          ],
-          "kv_write": [
-            {"name": "loops", "type": "kv-write", "bucket": "AGENT_LOOPS"},
-            {"name": "trajectories", "type": "kv-write", "bucket": "AGENT_TRAJECTORIES"}
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.request.*"
+                ]
+              },
+              "name": "agent.request"
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.execute.*"
+                ]
+              },
+              "name": "tool.execute"
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.complete.*"
+                ]
+              },
+              "name": "agent.complete"
+            },
+            {
+              "config": {
+                "bucket": "AGENT_LOOPS",
+                "kind": "kv-write"
+              },
+              "name": "loops"
+            }
           ]
         }
       }
@@ -147,7 +264,6 @@
       "name": "agentic-model",
       "enabled": true,
       "config": {
-        "stream_name": "AGENT",
         "timeout": "15s",
         "retry": {
           "max_attempts": 2,
@@ -155,10 +271,30 @@
         },
         "ports": {
           "inputs": [
-            {"name": "agent.request", "type": "jetstream", "subject": "agent.request.>", "stream_name": "AGENT", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.request.>"
+                ]
+              },
+              "name": "agent.request",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "agent.response", "type": "jetstream", "subject": "agent.response.*", "stream_name": "AGENT", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.response.*"
+                ]
+              },
+              "name": "agent.response",
+              "required": true
+            }
           ]
         }
       }
@@ -173,11 +309,42 @@
         "allowed_tools": ["create_rule", "update_rule", "delete_rule", "list_rules", "get_rule"],
         "ports": {
           "inputs": [
-            {"name": "tool.execute", "type": "jetstream", "subject": "tool.execute.>", "stream_name": "TOOL", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.execute.>"
+                ]
+              },
+              "name": "tool.execute",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true},
-            {"name": "tool.result", "type": "jetstream", "subject": "tool.result.*", "stream_name": "TOOL", "required": true}
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "TOOL",
+                "subjects": [
+                  "tool.result.*"
+                ]
+              },
+              "name": "tool.result",
+              "required": true
+            }
           ]
         }
       }
@@ -190,10 +357,27 @@
         "enable_hierarchy": true,
         "ports": {
           "inputs": [
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            }
           ],
           "outputs": [
-            {"name": "entity_states", "subject": "ENTITY_STATES", "type": "kv-write"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-write"
+              },
+              "name": "entity_states"
+            }
           ]
         }
       }
@@ -210,11 +394,37 @@
         },
         "ports": {
           "inputs": [
-            {"name": "entity_states", "subject": "ENTITY_STATES.>", "type": "kv-watch", "bucket": "ENTITY_STATES"}
+            {
+              "config": {
+                "bucket": "ENTITY_STATES",
+                "kind": "kv-watch"
+              },
+              "name": "entity_states"
+            }
           ],
           "outputs": [
-            {"name": "agent.task", "subject": "agent.task.*", "type": "jetstream", "stream_name": "AGENT"},
-            {"name": "graph_mutations", "subject": "graph.mutation.>", "type": "nats-request", "interface": "semstreams.graph.mutation", "required": true}
+            {
+              "config": {
+                "kind": "jetstream",
+                "stream_name": "AGENT",
+                "subjects": [
+                  "agent.task.*"
+                ]
+              },
+              "name": "agent.task"
+            },
+            {
+              "config": {
+                "interface": {
+                  "type": "semstreams.graph.mutation",
+                  "version": "v1"
+                },
+                "kind": "nats-request",
+                "subject": "graph.mutation.>"
+              },
+              "name": "graph_mutations",
+              "required": true
+            }
           ]
         }
       }

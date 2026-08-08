@@ -74,21 +74,31 @@ func (c *Config) Validate() error {
 		graph.BucketPredicateIndex: false,
 	}
 
-	for _, output := range c.Ports.Outputs {
-		if output.Subject == "" {
-			continue
+	for _, definition := range c.Ports.Outputs {
+		output, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return errs.Wrap(err, "Config", "Validate", "resolve output port")
 		}
-		if _, required := requiredBuckets[output.Subject]; !required {
-			if owner := graph.OwnerOf(output.Subject); owner != "" {
+		facts, err := output.Facts()
+		if err != nil {
+			return errs.Wrap(err, "Config", "Validate", "project output port facts")
+		}
+		if facts.Kind() != component.PortKindKVWrite {
+			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
+				fmt.Sprintf("output port %q kind %q is not a KV writer", output.Name, facts.Kind()))
+		}
+		bucket := strings.TrimPrefix(facts.ResourceID(), "kv:")
+		if _, required := requiredBuckets[bucket]; !required {
+			if owner := graph.OwnerOf(bucket); owner != "" {
 				return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 					fmt.Sprintf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
-						output.Name, output.Subject, owner))
+						output.Name, bucket, owner))
 			}
 			return errs.WrapInvalid(errs.ErrInvalidConfig, "Config", "Validate",
 				fmt.Sprintf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
-					output.Name, output.Subject))
+					output.Name, bucket))
 		}
-		requiredBuckets[output.Subject] = true
+		requiredBuckets[bucket] = true
 	}
 
 	for bucket, found := range requiredBuckets {
@@ -138,33 +148,23 @@ func (c *Config) ApplyDefaults() {
 		if len(c.Ports.Inputs) == 0 {
 			c.Ports.Inputs = []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			}
 		}
 		if len(c.Ports.Outputs) == 0 {
 			c.Ports.Outputs = []component.PortDefinition{
 				{
-					Name:    "outgoing_index",
-					Type:    "kv-write",
-					Subject: graph.BucketOutgoingIndex,
+					Name: "outgoing_index", Config: component.KVWritePort{Bucket: graph.BucketOutgoingIndex},
 				},
 				{
-					Name:    "incoming_index",
-					Type:    "kv-write",
-					Subject: graph.BucketIncomingIndex,
+					Name: "incoming_index", Config: component.KVWritePort{Bucket: graph.BucketIncomingIndex},
 				},
 				{
-					Name:    "alias_index",
-					Type:    "kv-write",
-					Subject: graph.BucketAliasIndex,
+					Name: "alias_index", Config: component.KVWritePort{Bucket: graph.BucketAliasIndex},
 				},
 				{
-					Name:    "predicate_index",
-					Type:    "kv-write",
-					Subject: graph.BucketPredicateIndex,
+					Name: "predicate_index", Config: component.KVWritePort{Bucket: graph.BucketPredicateIndex},
 				},
 			}
 		}
@@ -177,31 +177,21 @@ func DefaultConfig() Config {
 		Ports: &component.PortConfig{
 			Inputs: []component.PortDefinition{
 				{
-					Name:    "entity_watch",
-					Type:    "kv-watch",
-					Subject: graph.BucketEntityStates,
+					Name: "entity_watch", Config: component.KVWatchPort{Bucket: graph.BucketEntityStates},
 				},
 			},
 			Outputs: []component.PortDefinition{
 				{
-					Name:    "outgoing_index",
-					Type:    "kv-write",
-					Subject: graph.BucketOutgoingIndex,
+					Name: "outgoing_index", Config: component.KVWritePort{Bucket: graph.BucketOutgoingIndex},
 				},
 				{
-					Name:    "incoming_index",
-					Type:    "kv-write",
-					Subject: graph.BucketIncomingIndex,
+					Name: "incoming_index", Config: component.KVWritePort{Bucket: graph.BucketIncomingIndex},
 				},
 				{
-					Name:    "alias_index",
-					Type:    "kv-write",
-					Subject: graph.BucketAliasIndex,
+					Name: "alias_index", Config: component.KVWritePort{Bucket: graph.BucketAliasIndex},
 				},
 				{
-					Name:    "predicate_index",
-					Type:    "kv-write",
-					Subject: graph.BucketPredicateIndex,
+					Name: "predicate_index", Config: component.KVWritePort{Bucket: graph.BucketPredicateIndex},
 				},
 			},
 		},
@@ -225,8 +215,10 @@ type entityStatesStatusReader interface {
 // Component implements the graph-index processor
 type Component struct {
 	// Component metadata
-	name   string
-	config Config
+	name    string
+	config  Config
+	inputs  []component.Port
+	outputs []component.Port
 
 	// Dependencies
 	natsClient      *natsclient.Client
@@ -392,6 +384,22 @@ func CreateGraphIndex(rawConfig json.RawMessage, deps component.Dependencies) (c
 	if err := config.Validate(); err != nil {
 		return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "config validation")
 	}
+	inputs := make([]component.Port, len(config.Ports.Inputs))
+	for index, definition := range config.Ports.Inputs {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve input port")
+		}
+		inputs[index] = port
+	}
+	outputs := make([]component.Port, len(config.Ports.Outputs))
+	for index, definition := range config.Ports.Outputs {
+		port, err := definition.Resolve(component.DirectionOutput)
+		if err != nil {
+			return nil, errs.Wrap(err, "CreateGraphIndex", "factory", "resolve output port")
+		}
+		outputs[index] = port
+	}
 
 	// Create logger with component context
 	logger := deps.GetLoggerWithComponent("graph-index")
@@ -400,6 +408,8 @@ func CreateGraphIndex(rawConfig json.RawMessage, deps component.Dependencies) (c
 	comp := &Component{
 		name:            "graph-index",
 		config:          config,
+		inputs:          inputs,
+		outputs:         outputs,
 		natsClient:      natsClient,
 		logger:          logger,
 		metrics:         getMetrics(deps.MetricsRegistry),
@@ -446,15 +456,7 @@ func (c *Component) InputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Inputs))
-	for _, portDef := range c.config.Ports.Inputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionInput))
-	}
-	return ports
+	return append([]component.Port(nil), c.inputs...)
 }
 
 // OutputPorts returns output port definitions.
@@ -463,15 +465,7 @@ func (c *Component) OutputPorts() []component.Port {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.config.Ports == nil {
-		return []component.Port{}
-	}
-
-	ports := make([]component.Port, 0, len(c.config.Ports.Outputs))
-	for _, portDef := range c.config.Ports.Outputs {
-		ports = append(ports, component.BuildPortFromDefinition(portDef, component.DirectionOutput))
-	}
-	return ports
+	return append([]component.Port(nil), c.outputs...)
 }
 
 // ConfigSchema returns the configuration schema
@@ -748,27 +742,37 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 		graph.BucketAliasIndex:     true,
 		graph.BucketPredicateIndex: true,
 	}
-	for _, portDef := range c.config.Ports.Outputs {
-		if ownedOutputs[portDef.Subject] {
+	for _, port := range c.outputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.Wrap(err, "Component", "createOutputBuckets", "project output port facts")
+		}
+		bucketName := strings.TrimPrefix(facts.ResourceID(), "kv:")
+		if ownedOutputs[bucketName] {
 			continue
 		}
-		if owner := graph.OwnerOf(portDef.Subject); owner != "" {
+		if owner := graph.OwnerOf(bucketName); owner != "" {
 			return errs.WrapInvalid(
 				fmt.Errorf("output port %q subject %q is a framework bucket owned by %s, not graph-index",
-					portDef.Name, portDef.Subject, owner),
+					port.Name, bucketName, owner),
 				"Component", "createOutputBuckets", "enforce graph-index bucket ownership")
 		}
 		return errs.WrapInvalid(
 			fmt.Errorf("output port %q subject %q does not resolve to a graph-index-owned framework KV catalog bucket",
-				portDef.Name, portDef.Subject),
+				port.Name, bucketName),
 			"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
 	}
-	for _, portDef := range c.config.Ports.Outputs {
-		spec, ok := graph.SpecFor(portDef.Subject)
+	for _, port := range c.outputs {
+		facts, err := port.Facts()
+		if err != nil {
+			return errs.Wrap(err, "Component", "createOutputBuckets", "project output port facts")
+		}
+		bucketName := strings.TrimPrefix(facts.ResourceID(), "kv:")
+		spec, ok := graph.SpecFor(bucketName)
 		if !ok {
 			return errs.WrapInvalid(
 				fmt.Errorf("output port %q subject %q does not resolve to a framework KV catalog bucket",
-					portDef.Name, portDef.Subject),
+					port.Name, bucketName),
 				"Component", "createOutputBuckets", "resolve output bucket against the KV catalog")
 		}
 		bucket, err := natsclient.EnsureFrameworkBucket(ctx, c.natsClient, spec)
@@ -776,9 +780,9 @@ func (c *Component) createOutputBuckets(ctx context.Context) error {
 			if ctx.Err() != nil {
 				return errs.Wrap(ctx.Err(), "Component", "createOutputBuckets", "context cancelled")
 			}
-			return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", portDef.Subject))
+			return errs.Wrap(err, "Component", "createOutputBuckets", fmt.Sprintf("KV bucket: %s", bucketName))
 		}
-		c.assignBucket(portDef.Subject, bucket)
+		c.assignBucket(bucketName, bucket)
 	}
 
 	// NAME_INDEX bucket for name→ranked-IDs lookup (gh#376). Internal like

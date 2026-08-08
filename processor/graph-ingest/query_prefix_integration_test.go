@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,8 +71,8 @@ func seedPrefixEntity(t *testing.T, ctx context.Context, c *Component, id string
 // asserts:
 //   - Multiple pages with a cursor return sorted, disjoint results.
 //   - The union of all pages covers the full seeded set.
-//   - A single no-cursor page has the "entities" key (old-shape compatibility).
-//   - No "next_cursor" key on the final page (wire-compatible omitempty).
+//   - A single no-cursor page has the "entities" key.
+//   - No "next_cursor" key appears on the final page.
 func TestIntegration_PrefixQuery_PaginationCoverage(t *testing.T) {
 	ctx := context.Background()
 	c, nc := startPrefixTestComponent(t)
@@ -157,37 +158,81 @@ func TestIntegration_PrefixQuery_ErrorClassification(t *testing.T) {
 		"invalid cursor must be classified as invalid, not transient; got: %v", classifiedErr)
 }
 
-// TestIntegration_PrefixQuery_SinglePageWireCompat verifies that a single-page
-// response (no pagination needed) has the "entities" key and no "next_cursor"
-// key — preserving backward-compatibility for old consumers that expect only
-// {"entities":[…]}.
-func TestIntegration_PrefixQuery_SinglePageWireCompat(t *testing.T) {
+// TestIntegration_PrefixQuery_IndivisibleEntityTooLarge drives the production
+// request subscription and classified wire contract. The entity authority is
+// an in-memory KV seam so it can hold a value larger than the broker carrier;
+// the responder itself uses the real connected NATS MaxPayload observation.
+func TestIntegration_PrefixQuery_IndivisibleEntityTooLarge(t *testing.T) {
+	ctx := context.Background()
+	testClient := natsclient.NewTestClient(t)
+	comp := createTestComponentWithMockKV(t)
+	comp.natsClient = testClient.Client
+
+	maxPayload, err := testClient.Client.MaxPayload()
+	require.NoError(t, err)
+	const id = "oversize.ops.dom.sys.type.entity-001"
+	entity := &graph.EntityState{
+		ID: id,
+		Triples: []message.Triple{{
+			Subject:   id,
+			Predicate: "test.entity.attribute",
+			Object:    strings.Repeat("x", int(maxPayload)),
+			Timestamp: time.Now(),
+		}},
+		Version:   1,
+		UpdatedAt: time.Now(),
+	}
+	require.NoError(t, comp.CreateEntity(ctx, entity))
+	require.NoError(t, comp.setupQueryHandlers(ctx))
+	require.NoError(t, testClient.Client.GetConnection().Flush())
+
+	request, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "oversize", Limit: 1})
+	require.NoError(t, err)
+	response, requestErr := testClient.Client.RequestClassified(
+		ctx,
+		"graph.ingest.query.prefix",
+		request,
+		5*time.Second,
+	)
+	require.Error(t, requestErr)
+	assert.Nil(t, response)
+	assert.True(t, errs.IsInvalid(requestErr))
+	var classified *errs.ClassifiedError
+	require.ErrorAs(t, requestErr, &classified)
+	assert.Equal(t, "response_too_large", classified.Code)
+	responseBytes, ok := classified.Detail["response_bytes"].(float64)
+	require.True(t, ok, "response_bytes detail must survive the JSON wire contract as a number")
+	assert.Greater(t, responseBytes, float64(maxPayload))
+	assert.Equal(t, float64(maxPayload), classified.Detail["max_payload"])
+}
+
+// TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor verifies that an
+// exhausted single-page response has "entities" and no continuation token.
+func TestIntegration_PrefixQuery_ExhaustedPageOmitsCursor(t *testing.T) {
 	ctx := context.Background()
 	c, nc := startPrefixTestComponent(t)
 
-	const id = "wirecompat.ops.dom.sys.type.entity-001"
+	const id = "singlepage.ops.dom.sys.type.entity-001"
 	seedPrefixEntity(t, ctx, c, id)
 
-	// Old-style request (no cursor key, no typed struct) — raw map as old consumers send.
-	oldReq := map[string]any{"prefix": "wirecompat", "limit": 100}
-	reqData, err := json.Marshal(oldReq)
+	reqData, err := json.Marshal(graph.PrefixQueryRequest{Prefix: "singlepage", Limit: 100})
 	require.NoError(t, err)
 
 	respData, err := nc.RequestClassified(ctx, "graph.ingest.query.prefix", reqData, 5*time.Second)
 	require.NoError(t, err)
 
-	// 1. Must decode into old-shape: {"entities":[…]}.
-	var oldShapeResp struct {
+	// 1. Must decode the typed page's entities.
+	var pageResp struct {
 		Entities []map[string]any `json:"entities"`
 	}
-	require.NoError(t, json.Unmarshal(respData, &oldShapeResp), "must parse as old-shape envelope")
-	require.Len(t, oldShapeResp.Entities, 1, "must return the seeded entity")
+	require.NoError(t, json.Unmarshal(respData, &pageResp), "must parse the entity page")
+	require.Len(t, pageResp.Entities, 1, "must return the seeded entity")
 
 	// 2. Must NOT include "next_cursor" on the last/only page.
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(respData, &raw))
 	_, hasCursor := raw["next_cursor"]
-	assert.False(t, hasCursor, "next_cursor must be absent on a single-page response (old consumers)")
+	assert.False(t, hasCursor, "next_cursor must be absent on an exhausted page")
 
 	// 3. Must decode into typed PrefixQueryResponse.
 	var typedResp graph.PrefixQueryResponse

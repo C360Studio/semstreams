@@ -2,20 +2,21 @@ package config
 
 import (
 	"encoding/json"
-	"strings"
+	"reflect"
 	"testing"
+
+	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/types"
 )
 
 // TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName closes the
-// shadow-struct gap surfaced 2026-05-08 (semspec). PortsConfig and
-// PortDefinition are now type aliases for the canonical component-package
-// types (after the cycle break that promoted PlatformConfig to
-// pkg/platform). Pre-fix, a parallel shadow PortDefinition lacked the
-// StreamName field, so a JSON config like
+// shadow-struct gap surfaced 2026-05-08 (semspec). Stream extraction now
+// decodes the canonical component-package definitions directly. Pre-fix, a
+// parallel definition lacked the StreamName field, so a JSON config like
 //
 //	{"ports":{"outputs":[{
-//	    "name":"tool.result", "type":"jetstream",
-//	    "subject":"tool.result.*", "stream_name":"AGENT"}]}}
+//	    "name":"tool.result", "config":{"kind":"jetstream",
+//	    "subjects":["tool.result.*"], "stream_name":"AGENT"}}]}}
 //
 // silently dropped stream_name on unmarshal. EnsureStreams would then fall
 // back to DeriveStreamName("tool.result.*") = "TOOL", create a colliding
@@ -30,8 +31,7 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 		name           string
 		rawConfig      string
 		wantStreamName string
-		wantSubject    string
-		wantType       string
+		wantSubjects   []string
 	}{
 		{
 			name: "explicit stream_name preserved through JSON round-trip",
@@ -39,15 +39,16 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 				"ports": {
 					"outputs": [{
 						"name": "tool.result",
-						"type": "jetstream",
-						"subject": "tool.result.*",
-						"stream_name": "AGENT"
+						"config": {
+							"kind": "jetstream",
+							"subjects": ["tool.result.*"],
+							"stream_name": "AGENT"
+						}
 					}]
 				}
 			}`,
 			wantStreamName: "AGENT",
-			wantSubject:    "tool.result.*",
-			wantType:       "jetstream",
+			wantSubjects:   []string{"tool.result.*"},
 		},
 		{
 			name: "absent stream_name leaves field empty for derivation fallback",
@@ -55,14 +56,15 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 				"ports": {
 					"outputs": [{
 						"name": "iot.sensor",
-						"type": "jetstream",
-						"subject": "iot.sensor.>"
+						"config": {
+							"kind": "jetstream",
+							"subjects": ["iot.sensor.>"]
+						}
 					}]
 				}
 			}`,
 			wantStreamName: "",
-			wantSubject:    "iot.sensor.>",
-			wantType:       "jetstream",
+			wantSubjects:   []string{"iot.sensor.>"},
 		},
 		{
 			name: "operator override of stream_name preserved",
@@ -70,15 +72,16 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 				"ports": {
 					"outputs": [{
 						"name": "agent.response",
-						"type": "jetstream",
-						"subject": "custom.agent.response.*",
-						"stream_name": "CUSTOM_AGENT"
+						"config": {
+							"kind": "jetstream",
+							"subjects": ["custom.agent.response.*"],
+							"stream_name": "CUSTOM_AGENT"
+						}
 					}]
 				}
 			}`,
 			wantStreamName: "CUSTOM_AGENT",
-			wantSubject:    "custom.agent.response.*",
-			wantType:       "jetstream",
+			wantSubjects:   []string{"custom.agent.response.*"},
 		},
 	}
 
@@ -91,17 +94,34 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 			if len(ports.Outputs) != 1 {
 				t.Fatalf("want 1 output port, got %d", len(ports.Outputs))
 			}
-			got := ports.Outputs[0]
-			if got.StreamName != tt.wantStreamName {
-				t.Errorf("StreamName: got %q, want %q", got.StreamName, tt.wantStreamName)
+			port, err := ports.Outputs[0].Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got.Subject != tt.wantSubject {
-				t.Errorf("Subject: got %q, want %q", got.Subject, tt.wantSubject)
+			facts, err := port.Facts()
+			if err != nil {
+				t.Fatal(err)
 			}
-			if got.Type != tt.wantType {
-				t.Errorf("Type: got %q, want %q", got.Type, tt.wantType)
+			stream, ok := facts.Stream()
+			if !ok || stream.Name() != tt.wantStreamName {
+				t.Fatalf("stream name = %q, present=%v, want %q", stream.Name(), ok, tt.wantStreamName)
 			}
+			assertStringsEqual(t, stream.Subjects(), tt.wantSubjects)
 		})
+	}
+}
+
+func TestExtractPortsFromConfig_AbsentIsEmptyAndMalformedIsRejected(t *testing.T) {
+	ports, err := extractPortsFromConfig(nil)
+	if err != nil {
+		t.Fatalf("absent component config: %v", err)
+	}
+	if len(ports.Inputs) != 0 || len(ports.Outputs) != 0 {
+		t.Fatalf("absent component config produced ports: %#v", ports)
+	}
+
+	if _, err := extractPortsFromConfig(json.RawMessage(`{"ports":`)); err == nil {
+		t.Fatal("malformed component config must be rejected")
 	}
 }
 
@@ -113,51 +133,60 @@ func TestExtractPortsFromConfig_JSONRoundTripPopulatesStreamName(t *testing.T) {
 func TestStreamDerivation_HonorsExplicitStreamName(t *testing.T) {
 	tests := []struct {
 		name         string
-		port         PortDefinition
+		port         component.PortDefinition
 		wantStream   string
 		wantSubjects []string
 	}{
 		{
 			name: "explicit stream_name wins over derived name",
-			port: PortDefinition{
-				Name:       "tool.result",
-				Type:       "jetstream",
-				Subject:    "tool.result.*",
-				StreamName: "AGENT",
+			port: component.PortDefinition{
+				Name: "tool.result",
+				Config: component.JetStreamPort{
+					StreamName: "AGENT", Subjects: []string{"tool.result.*"},
+				},
 			},
 			wantStream:   "AGENT",
-			wantSubjects: []string{"agent.>"},
+			wantSubjects: []string{"tool.result.*"},
 		},
 		{
 			name: "no stream_name falls back to DeriveStreamName",
-			port: PortDefinition{
-				Name:    "iot.sensor",
-				Type:    "jetstream",
-				Subject: "iot.sensor.>",
+			port: component.PortDefinition{
+				Name:   "iot.sensor",
+				Config: component.JetStreamPort{Subjects: []string{"iot.sensor.>"}},
 			},
 			wantStream:   "IOT",
-			wantSubjects: []string{"iot.>"},
+			wantSubjects: []string{"iot.sensor.>"},
 		},
 		{
 			name: "explicit stream_name lowercased for subject pattern",
-			port: PortDefinition{
-				Name:       "agent.response",
-				Type:       "jetstream",
-				Subject:    "agent.response.*",
-				StreamName: "CUSTOM_AGENT",
+			port: component.PortDefinition{
+				Name: "agent.response",
+				Config: component.JetStreamPort{
+					StreamName: "CUSTOM_AGENT", Subjects: []string{"agent.response.*"},
+				},
 			},
 			wantStream:   "CUSTOM_AGENT",
-			wantSubjects: []string{"custom_agent.>"},
+			wantSubjects: []string{"agent.response.*"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			streamName := tt.port.StreamName
-			subjects := []string{strings.ToLower(streamName) + ".>"}
-			if streamName == "" {
-				streamName = DeriveStreamName(tt.port.Subject)
-				subjects = DeriveStreamSubjects(tt.port.Subject)
+			port, err := tt.port.Resolve(component.DirectionOutput)
+			if err != nil {
+				t.Fatal(err)
+			}
+			facts, err := port.Facts()
+			if err != nil {
+				t.Fatal(err)
+			}
+			stream, ok := facts.Stream()
+			if !ok {
+				t.Fatal("stream facts absent")
+			}
+			streamName, subjects, err := derivePortStream(stream)
+			if err != nil {
+				t.Fatal(err)
 			}
 			if streamName != tt.wantStream {
 				t.Errorf("streamName: got %q, want %q", streamName, tt.wantStream)
@@ -171,5 +200,60 @@ func TestStreamDerivation_HonorsExplicitStreamName(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPortDerivedStreamPreservesCanonicalOutputPolicy(t *testing.T) {
+	raw, err := json.Marshal(map[string]any{
+		"ports": map[string]any{"outputs": []map[string]any{{
+			"name": "events",
+			"config": map[string]any{
+				"kind": "jetstream", "stream_name": "EVENTS", "subjects": []string{"events.>"},
+				"storage": "memory", "retention": "work_queue", "retention_days": 3,
+				"max_size_gb": 2, "replicas": 3,
+			},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := guardTestConfig()
+	cfg.Components["publisher"] = types.ComponentConfig{
+		Type: types.ComponentTypeProcessor, Name: "publisher", Enabled: true, Config: raw,
+	}
+
+	declarations, err := resolveStreamDeclarations(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := declarationNamed(t, declarations, "EVENTS")
+	if events.cfg.Storage != "memory" || events.cfg.Retention != "workqueue" ||
+		events.cfg.MaxAge != "3d" || events.cfg.MaxBytes != 2*1024*1024*1024 || events.cfg.Replicas != 3 {
+		t.Fatalf("derived stream policy = %+v", events.cfg)
+	}
+
+	cfg.Streams["EVENTS"] = StreamConfig{
+		Subjects: []string{"operator.>"}, Storage: "file", Retention: "interest",
+		MaxAge: "12h", MaxBytes: 1024, Replicas: 1, Discard: StreamDiscardNew,
+	}
+	declarations, err = resolveStreamDeclarations(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = declarationNamed(t, declarations, "EVENTS")
+	if !reflect.DeepEqual(events.cfg, cfg.Streams["EVENTS"]) {
+		t.Fatalf("explicit stream declaration lost precedence: got %+v want %+v", events.cfg, cfg.Streams["EVENTS"])
+	}
+}
+
+func assertStringsEqual(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for index := range want {
+		if got[index] != want[index] {
+			t.Fatalf("got[%d] = %q, want %q", index, got[index], want[index])
+		}
 	}
 }

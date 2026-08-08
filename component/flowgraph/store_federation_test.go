@@ -25,14 +25,14 @@ func federationConsumer(name string) component.Discoverable {
 		[]component.Port{{
 			Name:      "store-federation",
 			Direction: component.DirectionInput,
-			Config:    component.StoreReadPort{},
+			Config:    component.StoreReadPort{Bucket: "CONTENT"},
 		}}, nil)
 }
 
 func storeOrphans(res *FlowAnalysisResult) []OrphanedPort {
 	var out []OrphanedPort
 	for _, o := range res.OrphanedPorts {
-		if o.Pattern == PatternStore {
+		if o.Pattern == component.PatternStore {
 			out = append(out, o)
 		}
 	}
@@ -48,7 +48,7 @@ func TestStoreFederation_ProviderToConsumerEdge(t *testing.T) {
 	edges := graph.GetEdges()
 	require.Len(t, edges, 1)
 	e := edges[0]
-	assert.Equal(t, PatternStore, e.Pattern)
+	assert.Equal(t, component.PatternStore, e.Pattern)
 	assert.Equal(t, "objectstore", e.From.ComponentName)
 	assert.Equal(t, "graph-embedding", e.To.ComponentName)
 	assert.Equal(t, "store:objectstore", e.ConnectionID)
@@ -80,7 +80,7 @@ func TestStoreFederation_FanIn(t *testing.T) {
 	require.Len(t, edges, 2, "federation consumer connects to both providers")
 	got := map[string]bool{}
 	for _, e := range edges {
-		assert.Equal(t, PatternStore, e.Pattern)
+		assert.Equal(t, component.PatternStore, e.Pattern)
 		assert.Equal(t, "graph-embedding", e.To.ComponentName)
 		got[e.ConnectionID] = true
 	}
