@@ -16,21 +16,6 @@ type Configurable interface {
 	ConfigSchema() ConfigSchema
 }
 
-// RuntimeConfigurable is an optional interface for services that support
-// runtime configuration updates without restart.
-type RuntimeConfigurable interface {
-	Configurable
-
-	// ValidateConfigUpdate checks if the proposed changes are valid
-	ValidateConfigUpdate(changes map[string]any) error
-
-	// ApplyConfigUpdate applies validated configuration changes
-	ApplyConfigUpdate(changes map[string]any) error
-
-	// GetRuntimeConfig returns current runtime configuration values
-	GetRuntimeConfig() map[string]any
-}
-
 // ConfigSchema describes the configuration parameters for a service.
 // We embed the component ConfigSchema for consistency across the system.
 type ConfigSchema struct {
@@ -43,9 +28,6 @@ type ConfigSchema struct {
 // PropertySchema extends component.PropertySchema with service-specific fields
 type PropertySchema struct {
 	component.PropertySchema
-
-	// Runtime indicates if this property can be changed without restart
-	Runtime bool `json:"runtime,omitempty"`
 
 	// Category groups related properties for UI organization
 	Category string `json:"category,omitempty"`

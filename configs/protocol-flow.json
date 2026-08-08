@@ -13,37 +13,28 @@
   },
   "services": {
     "component-manager": {
-      "name": "component-manager",
       "enabled": true,
       "config": {}
     },
     "metrics": {
-      "name": "metrics",
       "enabled": true,
       "config": {
         "port": 9090,
-        "path": "/metrics",
-        "include_go_metrics": true
+        "path": "/metrics"
       }
     },
     "message-logger": {
-      "name": "message-logger",
       "enabled": true,
       "config": {
-        "buffer_size": 10000,
         "monitor_subjects": ["*", "graph.mutation.>"],
-        "sample_rate": 1,
-        "enable_kv_query": true,
-        "log_level": "INFO"
+        "sample_rate": 1
       }
     },
     "flow-builder": {
-      "name": "flow-builder",
       "enabled": true,
       "config": {}
     },
     "log-forwarder": {
-      "name": "log-forwarder",
       "enabled": true,
       "config": {
         "min_level": "DEBUG",
@@ -51,7 +42,6 @@
       }
     },
     "metrics-forwarder": {
-      "name": "metrics-forwarder",
       "enabled": true,
       "config": {
         "push_interval": "5s",

@@ -58,11 +58,7 @@ func TestService_Creation(t *testing.T) {
 			Type: "vessel",
 		},
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "30s", "health_interval": "10s"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "30s", "health_interval": "10s"}`)},
 		},
 	}
 
@@ -86,11 +82,7 @@ func TestService_Lifecycle(t *testing.T) {
 			Type: "vessel",
 		},
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "100ms", "health_interval": "50ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms", "health_interval": "50ms"}`)},
 		},
 	}
 
@@ -120,11 +112,7 @@ func TestService_Lifecycle(t *testing.T) {
 func TestService_HealthMonitoring(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"health_interval": "50ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"health_interval": "50ms"}`)},
 		},
 	}
 
@@ -161,11 +149,7 @@ func TestService_HealthMonitoring(t *testing.T) {
 func TestService_GracefulShutdown(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "200ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "200ms"}`)},
 		},
 	}
 
@@ -191,11 +175,7 @@ func TestService_GracefulShutdown(t *testing.T) {
 func TestService_ContextCancellation(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "100ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
 		},
 	}
 
@@ -222,11 +202,7 @@ func TestService_ContextCancellation(t *testing.T) {
 func TestService_GetStatus(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "30s"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "30s"}`)},
 		},
 	}
 
@@ -246,11 +222,7 @@ func TestService_GetStatus(t *testing.T) {
 func TestService_CustomHealthCheck(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"health_interval": "50ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"health_interval": "50ms"}`)},
 		},
 	}
 
@@ -288,11 +260,7 @@ func TestService_CustomHealthCheck(t *testing.T) {
 func TestService_FailingHealthCheck(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"health_interval": "50ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"health_interval": "50ms"}`)},
 		},
 	}
 
@@ -324,11 +292,7 @@ func TestService_FailingHealthCheck(t *testing.T) {
 func TestService_ConcurrentOperations(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "100ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
 		},
 	}
 
@@ -366,11 +330,7 @@ func TestService_ConcurrentOperations(t *testing.T) {
 func TestService_Restart(t *testing.T) {
 	cfg := &config.Config{
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"default_timeout": "100ms"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
 		},
 	}
 
@@ -426,11 +386,7 @@ func TestService_StatusTransitions(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cfg := &config.Config{
 				Services: types.ServiceConfigs{
-					"test": types.ServiceConfig{
-						Name:    "test",
-						Enabled: true,
-						Config:  json.RawMessage(`{"default_timeout": "100ms"}`),
-					},
+					"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"default_timeout": "100ms"}`)},
 				},
 			}
 
@@ -467,11 +423,7 @@ func TestService_FunctionalOptions(t *testing.T) {
 			Type: "vessel",
 		},
 		Services: types.ServiceConfigs{
-			"test": types.ServiceConfig{
-				Name:    "test",
-				Enabled: true,
-				Config:  json.RawMessage(`{"health_interval": "10s"}`),
-			},
+			"test": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"health_interval": "10s"}`)},
 		},
 	}
 

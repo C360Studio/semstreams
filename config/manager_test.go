@@ -60,11 +60,7 @@ func TestConfigManager_Subscriptions(t *testing.T) {
 	cfg := &Config{
 		Version: "1.0.0",
 		Services: types.ServiceConfigs{
-			"metrics": types.ServiceConfig{
-				Name:    "metrics",
-				Enabled: true,
-				Config:  json.RawMessage(`{"port": 9090}`),
-			},
+			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
 		},
 		Components: ComponentConfigs{
 			"udp-sensor": types.ComponentConfig{
@@ -136,11 +132,7 @@ func TestConfigManager_KVUpdates(t *testing.T) {
 			Type: "test",
 		},
 		Services: types.ServiceConfigs{
-			"metrics": types.ServiceConfig{
-				Name:    "metrics",
-				Enabled: true,
-				Config:  json.RawMessage(`{"port": 9090}`),
-			},
+			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
 		},
 		Components: make(ComponentConfigs),
 	}
@@ -207,16 +199,9 @@ func TestConfigManager_PushToKV(t *testing.T) {
 			ID:  "test-id",
 		},
 		Services: types.ServiceConfigs{
-			"metrics": types.ServiceConfig{
-				Name:    "metrics",
-				Enabled: true,
-				Config:  json.RawMessage(`{}`),
-			},
-			"discovery": types.ServiceConfig{
-				Name:    "discovery",
-				Enabled: false,
-				Config:  json.RawMessage(`{"port": 8080}`),
-			},
+			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{}`)},
+
+			"discovery": types.ServiceConfig{Enabled: false, Config: json.RawMessage(`{"port": 8080}`)},
 		},
 		Components: ComponentConfigs{
 			"udp-sensor": types.ComponentConfig{
@@ -268,7 +253,6 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	var metricsConfig types.ServiceConfig
 	err = json.Unmarshal(entry.Value(), &metricsConfig)
 	require.NoError(t, err)
-	assert.Equal(t, "metrics", metricsConfig.Name)
 	assert.True(t, metricsConfig.Enabled)
 
 	entry, err = cm.kv.Get(ctx, "services.discovery")
@@ -276,7 +260,6 @@ func TestConfigManager_PushToKV(t *testing.T) {
 	var discoveryConfig types.ServiceConfig
 	err = json.Unmarshal(entry.Value(), &discoveryConfig)
 	require.NoError(t, err)
-	assert.Equal(t, "discovery", discoveryConfig.Name)
 	assert.False(t, discoveryConfig.Enabled)
 
 	// Verify discovery config contains port

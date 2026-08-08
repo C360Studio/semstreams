@@ -1,32 +1,39 @@
 # Tasks — Post-Foundation-B declaration generation
 
-This change is inactive. Every task remains unchecked until implementation is explicitly started.
+Implementation is active. Slice A is complete and independently approved; Slices B–E remain unchecked.
 
 Each slice receives independent SemStreams review before the next starts. Later slices MUST NOT reopen
 owner-accepted rulings absent implementation evidence of an internal contradiction.
 
 ## A. Service composition, restart truth, and dead surfaces
 
-- [ ] A.1 Characterize unchanged arbitration: newer file pushes file state; equal/older file selects KV;
+- [x] A.1 Characterize unchanged arbitration: newer file pushes file state; equal/older file selects KV;
   equal-version content edit does not apply.
-- [ ] A.2 When KV is selected, replace only Services from current `services.*` keys; retain existing synchronization
+- [x] A.2 When KV is selected, replace only Services from current `services.*` keys; retain existing synchronization
   for every other top-level section.
-- [ ] A.3 Add pure non-mutating outer `ServiceConfigs` resolver: map-key identity, canonical raw JSON, mandatory entry
+- [x] A.3 Add pure non-mutating outer `ServiceConfigs` resolver: map-key identity, canonical raw JSON, mandatory entry
   materialization, explicit-false preservation, optional outer defaults, no inner service interpretation.
-- [ ] A.4 Construct from post-Start `SafeConfig` and retain immutable clone of exact resolved boot desired map.
-- [ ] A.5 Make `CreateService` and error-returning `RegisterInstance` pre-seal APIs; reject duplicates and post-seal
+- [x] A.4 Construct from post-Start `SafeConfig` and retain immutable clone of exact resolved boot desired map.
+- [x] A.5 Make `CreateService` and error-returning `RegisterInstance` pre-seal APIs; reject duplicates and post-seal
   calls typed, with no void wrapper.
-- [ ] A.6 Validate configured/mandatory composition, register fixed root services, seal sorted full identity set, then
+- [x] A.6 Validate configured/mandatory composition, register fixed root services, seal sorted full identity set, then
   start/bind routes/expose OpenAPI.
-- [ ] A.7 Remove service-manager `services.*` mutation subscription/watcher/channel/diff/apply,
+- [x] A.7 Remove service-manager `services.*` mutation subscription/watcher/channel/diff/apply,
   `RuntimeConfigurable`, runtime schema marker, and exported `StartService`/`StopService`/`RemoveService`.
-- [ ] A.8 Remove `ServiceConfig.Name`, loader message-logger injection, logger inner `enabled`/`log_level`, and metrics
+- [x] A.8 Remove `ServiceConfig.Name`, loader message-logger injection, logger inner `enabled`/`log_level`, and metrics
   inner `enabled`; strict config rejects them without aliases.
-- [ ] A.9 Add deterministic `GET /services` `restart_required` plus sorted pending
+- [x] A.9 Add deterministic `GET /services` `restart_required` plus sorted pending
   add/enable/disable/remove/reconfigure classifications.
-- [ ] A.10 Prove runtime rows, `HTTPHandler` routes, and OpenAPI contributors match sealed subsets while
+- [x] A.10 Prove runtime rows, `HTTPHandler` routes, and OpenAPI contributors match sealed subsets while
   health/readiness/`GRAPH_STATUS` remain unchanged.
-- [ ] A.11 Obtain independent review for Slice A.
+- [x] A.11 Obtain independent review for Slice A.
+
+Slice A evidence: independent `semstreams-reviewer` verdict `REVIEW PASS / APPROVE`; all findings closed. Targeted
+lifecycle evidence is `TestConfigureFromServicesRejectsPostSealWithoutRewritingBootTruth`,
+`TestConfigureFromServicesRejectsFixedConfiguredIdentityCollision`, and
+`TestServiceCompositionDesiredStateProductionSeam`, proving typed post-seal/collision rejection without boot-truth
+mutation and stable desired-versus-sealed reporting. Uncached `go test -race -count=1 ./types ./config ./service`,
+shipped-config checks, schema drift check, contract tests, and strict OpenSpec validation pass.
 
 ## B. Registry generation snapshots and resource admission
 

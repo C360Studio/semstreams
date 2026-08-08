@@ -233,7 +233,7 @@ func run() error {
 	// component services so StopAll stops it after their event publishers. Its Start
 	// can abort boot on a genuine consumer-start failure;
 	// the stream-absent case graceful-skips inside the subscriber (gh#246).
-	manager.RegisterInstance("milestone", service.NewMilestoneService(
+	if err := manager.RegisterInstance("milestone", service.NewMilestoneService(
 		agentrun.NewMilestoneSubscriber(
 			svcDeps.LifecycleManager,
 			agentrun.NewNATSLoopTripleReader(natsClient),
@@ -244,10 +244,13 @@ func run() error {
 		natsClient,
 		agentrun.StartConfig{StreamName: agentrun.AgentStreamName},
 		logger,
-	))
+	)); err != nil {
+		return fmt.Errorf("register milestone service: %w", err)
+	}
 
 	// 11. Configure and create services
-	if err := configureAndCreateServices(cfg, manager, svcDeps); err != nil {
+	effectiveConfig := configManager.GetConfig().Get()
+	if err := configureAndCreateServices(effectiveConfig, manager, svcDeps); err != nil {
 		return err
 	}
 
@@ -458,59 +461,8 @@ func setupRegistriesAndManager(cfg *config.Config) (*component.Registry, *servic
 	}
 
 	manager := service.NewServiceManager(serviceRegistry)
-	ensureServiceManagerConfig(cfg)
-	ensureMetricsConfig(cfg)
 
 	return componentRegistry, manager, nil
-}
-
-// ensureServiceManagerConfig ensures service-manager config exists with defaults
-func ensureServiceManagerConfig(cfg *config.Config) {
-	if cfg.Services == nil {
-		cfg.Services = make(types.ServiceConfigs)
-	}
-
-	if _, exists := cfg.Services["service-manager"]; !exists {
-		slog.Debug("Adding default service-manager config")
-		defaultConfig := map[string]any{
-			"http_port":  8080,
-			"swagger_ui": true,
-			"server_info": map[string]string{
-				"title":       "SemStreams API",
-				"description": "semantic stream processing framework - protocol and semantic layers",
-				"version":     Version,
-			},
-		}
-		defaultConfigJSON, _ := json.Marshal(defaultConfig)
-		cfg.Services["service-manager"] = types.ServiceConfig{
-			Name:    "service-manager",
-			Enabled: true,
-			Config:  defaultConfigJSON,
-		}
-		slog.Debug("Service-manager config added", "enabled", true)
-	} else {
-		slog.Debug("Service-manager config already exists", "enabled", cfg.Services["service-manager"].Enabled)
-	}
-}
-
-// ensureMetricsConfig ensures metrics service is always present with defaults.
-// Observability should not be opt-in — metrics are critical for tuning and SLA validation.
-func ensureMetricsConfig(cfg *config.Config) {
-	if _, exists := cfg.Services["metrics"]; !exists {
-		slog.Debug("Adding default metrics config")
-		defaultConfig := map[string]any{
-			"port":               9090,
-			"path":               "/metrics",
-			"include_go_metrics": true,
-		}
-		defaultConfigJSON, _ := json.Marshal(defaultConfig)
-		cfg.Services["metrics"] = types.ServiceConfig{
-			Name:    "metrics",
-			Enabled: true,
-			Config:  defaultConfigJSON,
-		}
-		slog.Debug("Metrics config added", "port", 9090)
-	}
 }
 
 // createServiceDependencies creates the Dependencies struct for services
@@ -542,47 +494,6 @@ func configureAndCreateServices(
 	if err := manager.ConfigureFromServices(cfg.Services, svcDeps); err != nil {
 		return fmt.Errorf("configure service manager: %w", err)
 	}
-
-	slog.Debug("Creating services from config", "count", len(cfg.Services))
-	for name, svcConfig := range cfg.Services {
-		if name == "service-manager" {
-			slog.Debug("Skipping service-manager (configured directly)")
-			continue
-		}
-
-		if err := createServiceIfEnabled(manager, name, svcConfig, svcDeps); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// createServiceIfEnabled creates a service if it's enabled and registered
-func createServiceIfEnabled(
-	manager *service.Manager,
-	name string,
-	svcConfig types.ServiceConfig,
-	svcDeps *service.Dependencies,
-) error {
-	slog.Debug("Processing service config", "key", name, "name", svcConfig.Name, "enabled", svcConfig.Enabled)
-
-	if !svcConfig.Enabled {
-		slog.Info("Service disabled in config", "name", name)
-		return nil
-	}
-
-	if !manager.HasConstructor(name) {
-		slog.Warn("Service configured but not registered", "key", name, "available_constructors", manager.ListConstructors())
-		return nil
-	}
-
-	slog.Debug("Creating service", "name", name, "has_constructor", true)
-	if _, err := manager.CreateService(name, svcConfig.Config, svcDeps); err != nil {
-		return fmt.Errorf("create service %s: %w", name, err)
-	}
-
-	slog.Info("Created service", "name", name, "config_name", svcConfig.Name)
 	return nil
 }
 

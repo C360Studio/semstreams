@@ -262,11 +262,7 @@ func TestServiceManagerMandatoryService(t *testing.T) {
 		},
 		Services: types.ServiceConfigs{
 			// Do NOT include component-manager in config
-			"metrics": types.ServiceConfig{
-				Name:    "metrics",
-				Enabled: true,
-				Config:  json.RawMessage(`{"port": 9090}`),
-			},
+			"metrics": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{"port": 9090}`)},
 		},
 	}, testClient.Client, slog.Default())
 	require.NoError(t, err)

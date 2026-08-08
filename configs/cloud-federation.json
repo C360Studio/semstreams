@@ -13,21 +13,17 @@
   },
   "services": {
     "component-manager": {
-      "name": "component-manager",
       "enabled": true,
       "config": {}
     },
     "metrics": {
-      "name": "metrics",
       "enabled": true,
       "config": {
         "port": 9092,
-        "path": "/metrics",
-        "include_go_metrics": true
+        "path": "/metrics"
       }
     },
     "log-forwarder": {
-      "name": "log-forwarder",
       "enabled": true,
       "config": {
         "min_level": "DEBUG",
@@ -35,7 +31,6 @@
       }
     },
     "metrics-forwarder": {
-      "name": "metrics-forwarder",
       "enabled": true,
       "config": {
         "push_interval": "5s",

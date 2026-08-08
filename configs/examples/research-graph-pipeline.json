@@ -63,7 +63,6 @@
   },
   "services": {
     "service-manager": {
-      "name": "service-manager",
       "enabled": true,
       "config": {
         "http_port": 8080,
@@ -75,7 +74,6 @@
       }
     },
     "component-manager": {
-      "name": "component-manager",
       "enabled": true,
       "config": {}
     }

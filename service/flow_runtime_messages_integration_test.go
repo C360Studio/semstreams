@@ -82,7 +82,6 @@ func TestRuntimeMessagesIntegration(t *testing.T) {
 		MonitorSubjects: []string{"input.>", "process.>", "output.>"},
 		MaxEntries:      1000,
 		OutputToStdout:  false,
-		LogLevel:        "INFO",
 	}
 
 	msgLogger, err := NewMessageLogger(msgLoggerConfig, natsClient)
@@ -480,7 +479,6 @@ func TestRuntimeMessagesWithActualNATSFlow(t *testing.T) {
 		MonitorSubjects: []string{"input.>", "process.>"},
 		MaxEntries:      100,
 		OutputToStdout:  false,
-		LogLevel:        "INFO",
 	}
 
 	msgLogger, err := NewMessageLogger(msgLoggerConfig, natsClient)

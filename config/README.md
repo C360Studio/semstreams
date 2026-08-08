@@ -5,7 +5,7 @@
 
 ## Purpose & Scope
 
-**What this component does**: Manages application configuration for SemStreams with support for JSON file loading, environment variable overrides, NATS KV-based dynamic configuration, and thread-safe configuration updates.
+**What this component does**: Manages application configuration for SemStreams with support for JSON file loading, environment variable overrides, NATS KV desired-state updates, and thread-safe configuration access.
 
 **Key responsibilities**:
 
@@ -13,8 +13,8 @@
 - Provide thread-safe concurrent access to configuration data via SafeConfig wrapper
 - Monitor NATS KV bucket for real-time configuration changes using Manager
 - Validate configuration data with extensible validation framework
-- Merge base configuration with dynamic KV overrides
-- Provide channel-based configuration updates to services
+- Select file or KV state by version at startup; KV selection replaces the Services map
+- Provide channel-based updates for component and other live configuration consumers
 - Support both typed (strongly structured) and flexible (map-based) configuration formats
 
 **NOT responsible for**: Component lifecycle management, NATS connection establishment, business logic implementation, or configuration persistence (beyond JSON file writing).
@@ -32,7 +32,7 @@
 ```text
 JSON Files + Env Vars → Loader → Config → SafeConfig → Services/Components
                                     ↓
-NATS KV Changes → Manager → Channel Updates → Service/Component Updates
+NATS KV Changes → Manager → Desired Service State + Live Component Updates
 ```
 
 ### Configuration Structure
@@ -71,19 +71,25 @@ The configuration has been simplified to four main sections:
   "services": {                           // Service configurations (JSON-only format)
     "metrics": {                          // Each service gets complete JSON config
       "enabled": true,
-      "port": 9090,
-      "path": "/metrics"
+      "config": {
+        "port": 9090,
+        "path": "/metrics"
+      }
     },
-    "message_logger": {
+    "message-logger": {
       "enabled": true,
-      "monitor_subjects": ["process.>", "input.>"],
-      "max_entries": 10000,
-      "output_to_stdout": false
+      "config": {
+        "monitor_subjects": ["process.>", "input.>"],
+        "max_entries": 10000,
+        "output_to_stdout": false
+      }
     },
     "health": {
       "enabled": true,
-      "port": 8080,
-      "path": "/health"
+      "config": {
+        "port": 8080,
+        "path": "/health"
+      }
     }
   },
   "components": {                         // Component instance configurations
@@ -256,7 +262,7 @@ if metricsConfig, exists := cfg.Services["metrics"]; exists {
 
 - **Component Initialization**: Components receive ComponentConfig from the components map
 - **Service Initialization**: Services receive ServiceConfig JSON from the services map
-- **Dynamic Reconfiguration**: Services subscribe to Manager channels for real-time updates
+- **Service Desired State**: Service changes are reported as restart-required and apply on next boot
 - **Pattern-Based Subscriptions**: Use wildcards like "services.*" or "components.*"
 - **JSON-Only Updates**: All configuration updates replace entire JSON objects, not individual fields
 
@@ -376,7 +382,7 @@ func deepMergeMaps(base, override map[string]any) map[string]any {
 1. Verify all existing tests still pass with `go test -race` enabled
 2. Add tests for new configuration fields or validation rules
 3. Update this README if responsibilities or integration points changed
-4. Check integration points still work (component initialization, dynamic reconfiguration)
+4. Check integration points still work (component initialization and service restart reporting)
 5. Update configuration examples if new fields or formats added
 
 ## Related Documentation

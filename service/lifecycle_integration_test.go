@@ -74,7 +74,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 			Logger:     slog.Default(),
 		}
 
-		msgLoggerConfig := json.RawMessage(`{"max_messages": 100}`)
+		msgLoggerConfig := json.RawMessage(`{"max_entries": 1000}`)
 		msgLogger, err := service.NewMessageLoggerService(msgLoggerConfig, deps)
 		require.NoError(t, err)
 
@@ -101,7 +101,7 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 			Logger:     slog.Default(),
 		}
 
-		msgLoggerConfig := json.RawMessage(`{"max_messages": 100}`)
+		msgLoggerConfig := json.RawMessage(`{"max_entries": 1000}`)
 		msgLogger, err := service.NewMessageLoggerService(msgLoggerConfig, deps)
 		require.NoError(t, err)
 

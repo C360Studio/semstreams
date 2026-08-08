@@ -736,12 +736,9 @@ func (cm *ComponentManager) handlePutComponentConfig(w http.ResponseWriter, r *h
 //     component implementing it (e.g. processor/rule) is reachable via the
 //     ComponentManager HTTP API (gh#455).
 //
-// It type-asserts the reconfig METHOD PAIR, NOT the full
-// service.RuntimeConfigurable interface: RuntimeConfigurable embeds
-// Configurable.ConfigSchema() service.ConfigSchema, but a component's
-// ConfigSchema() returns component.ConfigSchema — so a full-interface assert
-// would silently miss every component. The narrow anonymous interface matches
-// exactly the methods this bridge calls.
+// It type-asserts the reconfig method pair rather than a broader service
+// contract because a component's ConfigSchema returns component.ConfigSchema.
+// The narrow anonymous interface matches exactly the methods this bridge calls.
 //
 // A component implementing neither contract returns (false, nil); the caller
 // reports applied:false. On the method-pair path, ValidateConfigUpdate runs

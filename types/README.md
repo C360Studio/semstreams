@@ -37,7 +37,7 @@ Configuration structure for component instances, shared between `config` and `co
 type ComponentConfig struct {
     Type    ComponentType   `json:"type"`    // Component category
     Name    string          `json:"name"`    // Factory name (e.g., "udp", "websocket")
-    Enabled bool            `json:"enabled"` // Runtime enable/disable
+    Enabled bool            `json:"enabled"` // Desired component activation
     Config  json.RawMessage `json:"config"`  // Component-specific configuration
 }
 ```
@@ -48,11 +48,13 @@ Configuration structure for service instances:
 
 ```go
 type ServiceConfig struct {
-    Name    string          `json:"name"`    // Service identifier
-    Enabled bool            `json:"enabled"` // Runtime enable/disable
+    Enabled bool            `json:"enabled"` // Desired next-boot activation
     Config  json.RawMessage `json:"config"`  // Service-specific configuration
 }
 ```
+
+The containing map key is the sole service identity. Service activation and
+inner configuration changes take effect on process restart.
 
 ### PlatformMeta
 
@@ -84,8 +86,8 @@ if err := cfg.Validate(); err != nil {
 
 // Service configuration
 svcCfg := types.ServiceConfig{
-    Name:    "metrics",
     Enabled: true,
+    Config:  json.RawMessage(`{"port":9090,"path":"/metrics"}`),
 }
 ```
 

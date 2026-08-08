@@ -9,8 +9,8 @@
     "jetstream": { "enabled": true }
   },
   "services": {
-    "message_logger": {"enabled": true},
-    "discovery": {"enabled": true}
+    "message-logger": {"enabled": true, "config": {}},
+    "discovery": {"enabled": true, "config": {}}
   },
   "components": {
     "udp-input": {

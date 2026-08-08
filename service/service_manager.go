@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	stderrors "errors"
@@ -10,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -18,7 +18,6 @@ import (
 	"github.com/c360studio/semstreams/config"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/natsclient"
-	"github.com/c360studio/semstreams/pkg/retry"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -31,6 +30,10 @@ type Manager struct {
 	services map[string]Service
 	order    []string // Track registration order for cleanup
 	mu       sync.RWMutex
+	sealed   bool
+
+	bootServiceConfigs types.ServiceConfigs
+	sealedServices     []string
 
 	// HTTP server infrastructure
 	httpServer     *http.Server
@@ -57,8 +60,7 @@ type Manager struct {
 	// Config management
 	natsClient    *natsclient.Client
 	configManager *config.Manager
-	configUpdates <-chan config.Update // Channel for config updates
-	dependencies  *Dependencies        // Store full dependencies for mandatory services
+	dependencies  *Dependencies // Store full dependencies for mandatory services
 }
 
 // NewServiceManager creates a new service manager
@@ -76,84 +78,127 @@ func NewServiceManager(registry *Registry) *Manager {
 // ConfigureFromServices configures Manager directly from services config
 // This replaces the old pattern where Manager was a service itself
 func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig, deps *Dependencies) error {
+	m.mu.RLock()
+	sealed := m.sealed
+	m.mu.RUnlock()
+	if sealed {
+		return &CompositionSealedError{Operation: "configure", Name: "service-manager"}
+	}
+
+	resolved, err := ResolveServiceConfigs(services)
+	if err != nil {
+		return fmt.Errorf("resolve service configs: %w", err)
+	}
+	for _, name := range []string{"service-manager", "component-manager"} {
+		if !resolved[name].Enabled {
+			return &MandatoryServiceDisabledError{Name: name}
+		}
+	}
+
 	// Use the injected logger if available
 	logger := slog.Default()
 	if deps != nil && deps.Logger != nil {
 		logger = deps.Logger
 	}
 
-	// Look for service-manager config
-	smConfig, hasConfig := services["service-manager"]
-	if !hasConfig || !smConfig.Enabled {
-		logger.Debug("Manager: No service-manager config or disabled, using defaults")
-		// Use defaults
-		m.config = ManagerConfig{
-			HTTPPort:  8080,
-			SwaggerUI: false,
-			ServerInfo: InfoSpec{
-				Title:       "SemStreams API",
-				Description: "Flow-based programming framework API",
-				Version:     "0.7.0",
-			},
-		}
-	} else {
-		// Parse the config
-		var cfg ManagerConfig
-		if len(smConfig.Config) > 0 {
-			if err := json.Unmarshal(smConfig.Config, &cfg); err != nil {
-				return fmt.Errorf("parse service-manager config: %w", err)
-			}
-		}
-
-		// Apply defaults
-		if cfg.HTTPPort == 0 {
-			cfg.HTTPPort = 8080
-		}
-		if cfg.ServerInfo.Title == "" {
-			cfg.ServerInfo.Title = "SemStreams API"
-		}
-		if cfg.ServerInfo.Description == "" {
-			cfg.ServerInfo.Description = "Flow-based programming framework API"
-		}
-		if cfg.ServerInfo.Version == "" {
-			cfg.ServerInfo.Version = "0.7.0"
-		}
-
-		// Validate configuration
-		if err := cfg.Validate(); err != nil {
-			return fmt.Errorf("validate service-manager config: %w", err)
-		}
-
-		m.config = cfg
+	var cfg ManagerConfig
+	if err := decodeStrictServiceJSON(resolved["service-manager"].Config, &cfg); err != nil {
+		return fmt.Errorf("parse service-manager config: %w", err)
+	}
+	if cfg.HTTPPort == 0 {
+		cfg.HTTPPort = 8080
+	}
+	if cfg.ServerInfo.Title == "" {
+		cfg.ServerInfo.Title = "SemStreams API"
+	}
+	if cfg.ServerInfo.Description == "" {
+		cfg.ServerInfo.Description = "Flow-based programming framework API"
+	}
+	if cfg.ServerInfo.Version == "" {
+		cfg.ServerInfo.Version = "0.7.0"
+	}
+	if err := cfg.Validate(); err != nil {
+		return fmt.Errorf("validate service-manager config: %w", err)
 	}
 
-	// Store dependencies
+	names := make([]string, 0, len(resolved))
+	for name := range resolved {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	// A configured identity may not alias a fixed/prebuilt instance. Perform
+	// this check before invoking any constructor so a collision leaves both the
+	// manager state and external constructor effects untouched.
+	m.mu.RLock()
+	if m.sealed {
+		m.mu.RUnlock()
+		return &CompositionSealedError{Operation: "configure", Name: "service-manager"}
+	}
+	for _, name := range names {
+		if name == "service-manager" {
+			continue
+		}
+		if _, exists := m.services[name]; exists {
+			m.mu.RUnlock()
+			return &DuplicateServiceError{Name: name}
+		}
+	}
+	m.mu.RUnlock()
+
+	constructed := make([]admittedService, 0, len(names))
+	for _, name := range names {
+		serviceConfig := resolved[name]
+		if name == "service-manager" || !serviceConfig.Enabled {
+			continue
+		}
+		constructor, exists := m.registry.Constructor(name)
+		if !exists {
+			return fmt.Errorf("create configured service %s: no constructor registered for service %s", name, name)
+		}
+		instance, err := constructor(serviceConfig.Config, deps)
+		if err != nil {
+			return fmt.Errorf("create configured service %s: %w", name, err)
+		}
+		constructed = append(constructed, admittedService{name: name, service: instance})
+	}
+
+	// Commit the fully validated composition atomically. Repeat the seal and
+	// collision checks because another pre-start writer may have raced the
+	// constructor staging above.
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.sealed {
+		return &CompositionSealedError{Operation: "configure", Name: "service-manager"}
+	}
+	for _, name := range names {
+		if name == "service-manager" {
+			continue
+		}
+		if _, exists := m.services[name]; exists {
+			return &DuplicateServiceError{Name: name}
+		}
+	}
+
+	m.config = cfg
 	if deps != nil {
-		m.dependencies = deps // Store full dependencies for mandatory services
+		m.dependencies = deps
 		if deps.NATSClient != nil {
 			m.natsClient = deps.NATSClient
 		}
 		if deps.Manager != nil {
 			m.configManager = deps.Manager
-			// Subscribe to service config changes
-			m.configUpdates = deps.Manager.OnChange("services.*")
 		}
 	}
-
-	// Create BaseService for lifecycle management
-	if m.BaseService == nil {
-		m.BaseService = NewBaseServiceWithOptions(
-			"service-manager",
-			nil,
-			WithLogger(deps.Logger),
-			WithMetrics(deps.MetricsRegistry),
-		)
+	m.bootServiceConfigs = cloneResolvedServiceConfigs(resolved)
+	for _, admitted := range constructed {
+		m.services[admitted.name] = admitted.service
+		m.order = append(m.order, admitted.name)
 	}
 
 	logger.Debug("Manager configured",
 		"http_port", m.config.HTTPPort,
 		"swagger_ui", m.config.SwaggerUI)
-
 	return nil
 }
 
@@ -164,10 +209,13 @@ func (m *Manager) ConfigureFromServices(services map[string]types.ServiceConfig,
 func (m *Manager) CreateService(name string, rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.sealed {
+		return nil, &CompositionSealedError{Operation: "create", Name: name}
+	}
 
 	// Check if service already exists
 	if _, exists := m.services[name]; exists {
-		return nil, fmt.Errorf("service %s already created", name)
+		return nil, &DuplicateServiceError{Name: name}
 	}
 
 	constructor, exists := m.registry.Constructor(name)
@@ -190,23 +238,18 @@ func (m *Manager) CreateService(name string, rawConfig json.RawMessage, deps *De
 // RegisterInstance admits a pre-built Service to the manager (composition-root
 // wiring, as opposed to config-driven CreateService). Same map + order tracking
 // CreateService uses, so StartAll/StopAll treat it identically.
-func (m *Manager) RegisterInstance(name string, svc Service) {
+func (m *Manager) RegisterInstance(name string, svc Service) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.sealed {
+		return &CompositionSealedError{Operation: "register", Name: name}
+	}
 	if _, exists := m.services[name]; exists {
-		// Composition-root duplicate registration is a wiring bug. Overwrite the
-		// instance but do NOT re-track order — a second m.order entry would make
-		// StopAll call Stop twice. Mirrors CreateService's duplicate rejection
-		// without the error return (RegisterInstance is void by design).
-		if m.logger != nil {
-			m.logger.Warn("service instance already registered — overwriting, not re-tracking order",
-				"service", name)
-		}
-		m.services[name] = svc
-		return
+		return &DuplicateServiceError{Name: name}
 	}
 	m.services[name] = svc
 	m.order = append(m.order, name)
+	return nil
 }
 
 // GetService returns a service instance by name
@@ -265,28 +308,28 @@ func (m *Manager) StartAll(ctx context.Context) error {
 		logger = slog.Default()
 	}
 
-	// Initialize HTTP infrastructure (but don't start listening yet)
-	logger.Debug("Manager.StartAll: Initializing HTTP infrastructure")
-	if err := m.initializeHTTPInfrastructure(); err != nil {
-		return fmt.Errorf("initialize HTTP infrastructure: %w", err)
-	}
-
 	// Create mandatory services if they don't exist
 	if err := m.createMandatoryServices(logger); err != nil {
 		return fmt.Errorf("create mandatory services: %w", err)
 	}
 
-	m.mu.RLock()
-	services := make(map[string]Service)
-	for name, service := range m.services {
-		services[name] = service
+	services, err := m.sealComposition()
+	if err != nil {
+		return err
 	}
-	m.mu.RUnlock()
+
+	// No route or OpenAPI surface is built until the complete identity set is
+	// fixed. A later Start failure changes lifecycle state, not composition.
+	logger.Debug("Manager.StartAll: Initializing HTTP infrastructure")
+	if err := m.initializeHTTPInfrastructure(); err != nil {
+		return fmt.Errorf("initialize HTTP infrastructure: %w", err)
+	}
 
 	logger.Debug("Manager.StartAll: Beginning service startup sequence", "service_count", len(services))
 
 	// Start all services (Manager is no longer in this list)
-	for name, service := range services {
+	for _, admitted := range services {
+		name, service := admitted.name, admitted.service
 		logger.Debug("Manager.StartAll: Starting service", "name", name, "type", fmt.Sprintf("%T", service))
 		if err := service.Start(ctx); err != nil {
 			logger.Error("Manager.StartAll: Failed to start service", "name", name, "error", err)
@@ -317,6 +360,48 @@ func (m *Manager) StartAll(ctx context.Context) error {
 
 	logger.Info("Manager.StartAll: All services started", "count", len(services))
 	return nil
+}
+
+type admittedService struct {
+	name    string
+	service Service
+}
+
+func (m *Manager) sealComposition() ([]admittedService, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.sealed {
+		return nil, &CompositionSealedError{Operation: "start", Name: "service-manager"}
+	}
+	for name, configured := range m.bootServiceConfigs {
+		if name == "service-manager" || !configured.Enabled {
+			continue
+		}
+		if _, exists := m.services[name]; !exists {
+			return nil, fmt.Errorf("enabled configured service %s was not constructed", name)
+		}
+	}
+	if _, exists := m.services["component-manager"]; !exists {
+		return nil, fmt.Errorf("mandatory service component-manager was not constructed")
+	}
+
+	identities := make([]string, 0, len(m.services))
+	for name := range m.services {
+		identities = append(identities, name)
+	}
+	sort.Strings(identities)
+	m.sealedServices = append([]string(nil), identities...)
+	m.sealed = true
+
+	services := make([]admittedService, 0, len(m.order))
+	for _, name := range m.order {
+		service, exists := m.services[name]
+		if exists {
+			services = append(services, admittedService{name: name, service: service})
+		}
+	}
+	return services, nil
 }
 
 // publishHealthLoop publishes service health to JetStream every 5s.
@@ -504,117 +589,6 @@ func (m *Manager) StopAll(timeout time.Duration) error {
 	return nil
 }
 
-// StartService creates and starts a single service if not already running
-func (m *Manager) StartService(ctx context.Context, name string, rawConfig json.RawMessage, deps *Dependencies) error {
-	// Use the injected logger from BaseService if available
-	logger := m.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	// Check if service already exists
-	m.mu.RLock()
-	_, exists := m.services[name]
-	m.mu.RUnlock()
-
-	if exists {
-		// Service already exists - check if it's running
-		logger.Debug("Service already exists", "service", name)
-		// Note: We can't easily check if a service is "running" without a Status() method
-		// For now, assume if it exists, it's running
-		return nil
-	}
-
-	// Create the service
-	logger.Info("Creating service", "service", name)
-	service, err := m.CreateService(name, rawConfig, deps)
-	if err != nil {
-		return fmt.Errorf("failed to create service %s: %w", name, err)
-	}
-
-	// Start the service with retry for resilience
-	logger.Info("Starting service", "service", name)
-
-	// Use Quick retry config for service startup
-	// Services may have dependencies that aren't ready yet
-	retryConfig := retry.Quick() // 10 attempts over ~1 second
-	startErr := retry.Do(ctx, retryConfig, func() error {
-		if err := service.Start(ctx); err != nil {
-			logger.Debug("Service start attempt failed, will retry",
-				"service", name,
-				"error", err)
-			return err
-		}
-		return nil
-	})
-
-	if startErr != nil {
-		// Remove from registry if start fails after all retries
-		m.RemoveService(name)
-		return fmt.Errorf("failed to start service %s after retries: %w", name, startErr)
-	}
-
-	logger.Info("Service started successfully", "service", name)
-	return nil
-}
-
-// StopService stops and removes a single service
-func (m *Manager) StopService(name string, timeout time.Duration) error {
-	// Use the injected logger from BaseService if available
-	logger := m.logger
-	if logger == nil {
-		logger = slog.Default()
-	}
-
-	// Check if service exists
-	m.mu.RLock()
-	service, exists := m.services[name]
-	m.mu.RUnlock()
-
-	if !exists {
-		logger.Debug("Service not found", "service", name)
-		return nil // Not an error - service already stopped
-	}
-
-	// Check if it's a mandatory service
-	for _, mandatoryName := range mandatoryServices {
-		if name == mandatoryName {
-			logger.Warn("Cannot stop mandatory service", "service", name)
-			return fmt.Errorf("cannot stop mandatory service %s", name)
-		}
-	}
-
-	// Stop the service
-	logger.Info("Stopping service", "service", name)
-	if err := service.Stop(timeout); err != nil {
-		logger.Error("Failed to stop service", "service", name, "error", err)
-		// Continue with removal even if stop fails - service might be stuck
-	}
-
-	// Remove from registry
-	m.RemoveService(name)
-	logger.Info("Service stopped and removed", "service", name)
-	return nil
-}
-
-// RemoveService removes a service instance
-func (m *Manager) RemoveService(name string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.services[name]; exists {
-		delete(m.services, name)
-
-		// Remove from order tracking
-		for i, n := range m.order {
-			if n == name {
-				m.order = append(m.order[:i], m.order[i+1:]...)
-				break
-			}
-		}
-	}
-}
-
 // GetHealthyServices returns a list of healthy services
 func (m *Manager) GetHealthyServices() []string {
 	m.mu.RLock()
@@ -673,201 +647,11 @@ func (m *Manager) hasNATSAccess() bool {
 	return m.natsClient != nil && m.natsClient.GetConnection() != nil
 }
 
-// watchConfigUpdates monitors for configuration changes from Manager
-func (m *Manager) watchConfigUpdates(ctx context.Context) {
-	// Keep track of previous configs to detect changes
-	var previousConfigs types.ServiceConfigs
-
-	for {
-		select {
-		case update, ok := <-m.configUpdates:
-			if !ok {
-				// Channel closed
-				return
-			}
-
-			// Process the update
-			fullConfig := update.Config.Get()
-			currentConfigs := fullConfig.Services
-
-			// Compare with previous configs to find changes
-			if previousConfigs != nil {
-				m.processServiceConfigChanges(previousConfigs, currentConfigs)
-			}
-
-			// Update previous configs for next iteration
-			previousConfigs = currentConfigs
-
-		case <-ctx.Done():
-			return
-		}
-	}
-}
-
-// processServiceConfigChanges compares old and new configs and applies changes
-func (m *Manager) processServiceConfigChanges(oldConfigs, newConfigs types.ServiceConfigs) {
-	// Check each service for changes
-	for serviceName, newConfig := range newConfigs {
-		oldConfig, existed := oldConfigs[serviceName]
-
-		if !existed {
-			// New service added
-			slog.Debug("New service configuration detected",
-				"service", serviceName)
-			// Start the new service if it's enabled
-			if newConfig.Enabled {
-				// Use stored dependencies if available
-				deps := m.dependencies
-				if deps == nil {
-					deps = &Dependencies{
-						NATSClient: m.natsClient,
-						Manager:    m.configManager,
-						Logger:     m.logger,
-					}
-				}
-				if err := m.StartService(context.Background(), serviceName, newConfig.Config, deps); err != nil {
-					slog.Error("Failed to start new service", "service", serviceName, "error", err)
-				}
-			}
-			continue
-		}
-
-		// Compare configs - check if Config field changed or Enabled state changed
-		if !bytes.Equal(oldConfig.Config, newConfig.Config) || oldConfig.Enabled != newConfig.Enabled {
-			// Handle enable/disable
-			if oldConfig.Enabled != newConfig.Enabled {
-				if newConfig.Enabled {
-					slog.Debug("Service enabled in config", "service", serviceName)
-					// Start service if not running
-					// Use stored dependencies if available
-					deps := m.dependencies
-					if deps == nil {
-						deps = &Dependencies{
-							NATSClient: m.natsClient,
-							Manager:    m.configManager,
-							Logger:     m.logger,
-						}
-					}
-					if err := m.StartService(context.Background(), serviceName, newConfig.Config, deps); err != nil {
-						slog.Error("Failed to start service", "service", serviceName, "error", err)
-					}
-				} else {
-					slog.Debug("Service disabled in config", "service", serviceName)
-					// Stop service if running
-					if err := m.StopService(serviceName, 5*time.Second); err != nil {
-						slog.Error("Failed to stop service", "service", serviceName, "error", err)
-					}
-				}
-			}
-			// Apply config changes if Config field changed
-			if !bytes.Equal(oldConfig.Config, newConfig.Config) {
-				m.applyServiceConfigChange(serviceName, newConfig.Config)
-			}
-		}
-	}
-
-	// Check for removed services
-	for serviceName := range oldConfigs {
-		if _, exists := newConfigs[serviceName]; !exists {
-			slog.Debug("Service configuration removed",
-				"service", serviceName)
-			// Stop the service if it's running
-			if err := m.StopService(serviceName, 5*time.Second); err != nil {
-				slog.Error("Failed to stop removed service", "service", serviceName, "error", err)
-			}
-		}
-	}
-}
-
-// applyServiceConfigChange applies configuration changes to a service
-func (m *Manager) applyServiceConfigChange(serviceName string, newConfig json.RawMessage) {
-	// Get service instance
-	service, exists := m.GetService(serviceName)
-	if !exists {
-		slog.Warn("Configuration change for unknown service",
-			"service", serviceName)
-		return
-	}
-
-	// Check if service supports runtime configuration
-	runtimeConfigurable, ok := service.(RuntimeConfigurable)
-	if !ok {
-		slog.Debug("Service does not support runtime configuration, restart required",
-			"service", serviceName)
-		return
-	}
-
-	// Parse new config to map for validation
-	var newConfigMap map[string]any
-	if err := json.Unmarshal(newConfig, &newConfigMap); err != nil {
-		slog.Error("Failed to parse new service configuration",
-			"service", serviceName,
-			"error", err)
-		return
-	}
-
-	// Validate the configuration change
-	if err := runtimeConfigurable.ValidateConfigUpdate(newConfigMap); err != nil {
-		slog.Error("Invalid service configuration update",
-			"service", serviceName,
-			"error", err)
-		return
-	}
-
-	// Apply the validated configuration change
-	if err := runtimeConfigurable.ApplyConfigUpdate(newConfigMap); err != nil {
-		slog.Error("Failed to apply service configuration update",
-			"service", serviceName,
-			"error", err)
-		return
-	}
-
-	slog.Debug("Successfully applied service configuration update",
-		"service", serviceName)
-}
-
-// hasRuntimeConfigSupport checks if a service supports runtime configuration
-func (m *Manager) hasRuntimeConfigSupport(serviceName string) bool {
-	service, exists := m.GetService(serviceName)
-	if !exists {
-		return false
-	}
-
-	_, ok := service.(RuntimeConfigurable)
-	return ok
-}
-
-// GetServiceRuntimeConfig returns current runtime configuration for a service
-func (m *Manager) GetServiceRuntimeConfig(serviceName string) (map[string]any, error) {
-	service, exists := m.GetService(serviceName)
-	if !exists {
-		return nil, fmt.Errorf("service %s not found", serviceName)
-	}
-
-	runtimeConfigurable, ok := service.(RuntimeConfigurable)
-	if !ok {
-		return nil, fmt.Errorf("service %s does not support runtime configuration", serviceName)
-	}
-
-	return runtimeConfigurable.GetRuntimeConfig(), nil
-}
-
 // Start starts the Manager HTTP server if configured
 func (m *Manager) Start(ctx context.Context) error {
 	// First start the base service
 	if err := m.BaseService.Start(ctx); err != nil {
 		return err
-	}
-
-	// Start watching for config updates if channel is available
-	// This only applies to HTTP manager instances since they have lifecycle management
-	if m.isHTTPManager && m.configUpdates != nil {
-		m.waitGroup.Add(1) // Track the goroutine for proper shutdown
-		go func() {
-			defer m.waitGroup.Done()
-			m.watchConfigUpdates(ctx)
-		}()
-		slog.Info("Config watching enabled for Manager")
 	}
 
 	// HTTP server is now started in StartAll(), not here
@@ -1206,7 +990,11 @@ func (m *Manager) stopHTTPServer() error {
 
 // registerServiceHandlers registers HTTP handlers for all services that implement HTTPHandler
 func (m *Manager) registerServiceHandlers() error {
-	for name, service := range m.services {
+	for _, name := range m.sealedServices {
+		service, exists := m.services[name]
+		if !exists {
+			continue
+		}
 		if handler, ok := service.(HTTPHandler); ok {
 			// Convert service name to URL prefix (e.g., "component-manager" -> "/components")
 			prefix := "/" + m.serviceNameToPrefix(name)
@@ -1324,14 +1112,17 @@ func (m *Manager) generateOpenAPIDocument() *OpenAPIDocument {
 
 	// Snapshot services under read lock to avoid data race
 	m.mu.RLock()
-	services := make(map[string]Service, len(m.services))
-	for name, svc := range m.services {
-		services[name] = svc
+	services := make([]admittedService, 0, len(m.sealedServices))
+	for _, name := range m.sealedServices {
+		if svc, exists := m.services[name]; exists {
+			services = append(services, admittedService{name: name, service: svc})
+		}
 	}
 	m.mu.RUnlock()
 
 	// Collect specs from all services that implement HTTPHandler
-	for name, svc := range services {
+	for _, admitted := range services {
+		name, svc := admitted.name, admitted.service
 		if handler, ok := svc.(HTTPHandler); ok {
 			serviceSpec := handler.OpenAPISpec()
 			if serviceSpec != nil {
@@ -1487,10 +1278,27 @@ func (m *Manager) handleReadiness(w http.ResponseWriter, _ *http.Request) {
 // handleServiceList returns a list of all registered services
 func (m *Manager) handleServiceList(w http.ResponseWriter, _ *http.Request) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	services := make([]map[string]any, 0, len(m.services))
+	identities := append([]string(nil), m.sealedServices...)
+	if len(identities) == 0 {
+		for name := range m.services {
+			identities = append(identities, name)
+		}
+		sort.Strings(identities)
+	}
+	instances := make(map[string]Service, len(m.services))
 	for name, service := range m.services {
+		instances[name] = service
+	}
+	boot := cloneResolvedServiceConfigs(m.bootServiceConfigs)
+	configManager := m.configManager
+	m.mu.RUnlock()
+
+	services := make([]map[string]any, 0, len(identities))
+	for _, name := range identities {
+		service, exists := instances[name]
+		if !exists {
+			continue
+		}
 		services = append(services, map[string]any{
 			"name":    name,
 			"status":  service.Status().String(),
@@ -1498,9 +1306,23 @@ func (m *Manager) handleServiceList(w http.ResponseWriter, _ *http.Request) {
 		})
 	}
 
+	desired := boot
+	if configManager != nil {
+		current := configManager.GetConfig().Get()
+		resolved, err := ResolveServiceConfigs(current.Services)
+		if err != nil {
+			http.Error(w, "Failed to resolve desired service configuration", http.StatusInternalServerError)
+			return
+		}
+		desired = resolved
+	}
+	pending := pendingServiceChanges(boot, desired)
+
 	response := map[string]any{
-		"services": services,
-		"count":    len(services),
+		"services":                services,
+		"count":                   len(services),
+		"restart_required":        len(pending) > 0,
+		"pending_service_changes": pending,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

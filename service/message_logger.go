@@ -21,10 +21,8 @@ import (
 func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Service, error) {
 	// Parse config - handle empty or invalid JSON properly
 	var cfg MessageLoggerConfig
-	if len(rawConfig) > 0 {
-		if err := json.Unmarshal(rawConfig, &cfg); err != nil {
-			return nil, fmt.Errorf("parse message-logger config: %w", err)
-		}
+	if err := decodeStrictServiceJSON(rawConfig, &cfg); err != nil {
+		return nil, fmt.Errorf("parse message-logger config: %w", err)
 	}
 
 	// Apply defaults - clear and visible in constructor
@@ -33,9 +31,6 @@ func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Ser
 	}
 	if len(cfg.MonitorSubjects) == 0 {
 		cfg.MonitorSubjects = []string{"*"} // Default to auto-discover
-	}
-	if cfg.LogLevel == "" {
-		cfg.LogLevel = "INFO"
 	}
 	if cfg.SampleRate == 0 {
 		cfg.SampleRate = 1 // Default: log all messages
@@ -149,9 +144,6 @@ type MessageLoggerConfig struct {
 	// Whether to output to stdout
 	OutputToStdout bool `json:"output_to_stdout"`
 
-	// Log level threshold (DEBUG, INFO, WARN, ERROR)
-	LogLevel string `json:"log_level"`
-
 	// SampleRate controls message sampling (1 in N messages logged)
 	// 0 or 1 = log all messages, 10 = log 10% of messages
 	SampleRate int `json:"sample_rate"`
@@ -166,7 +158,6 @@ func (c MessageLoggerConfig) Validate() error {
 		return fmt.Errorf("max_entries cannot exceed 100000")
 	}
 	// MonitorSubjects can be empty (will get defaults)
-	// LogLevel can be empty (will get default)
 	return nil
 }
 
@@ -176,7 +167,6 @@ func DefaultMessageLoggerConfig() MessageLoggerConfig {
 		MonitorSubjects: []string{"*"}, // Auto-discover from flow config
 		MaxEntries:      10000,
 		OutputToStdout:  false,
-		LogLevel:        "INFO",
 		SampleRate:      1, // Log all messages by default (increase for high-volume flows)
 	}
 }
@@ -704,22 +694,12 @@ func (ml *MessageLogger) GetStatistics() map[string]any {
 // This implements the Configurable interface for UI discovery.
 func (ml *MessageLogger) ConfigSchema() ConfigSchema {
 	return NewConfigSchema(map[string]PropertySchema{
-		"enabled": {
-			PropertySchema: component.PropertySchema{
-				Type:        "bool",
-				Description: "Enable or disable message logging",
-				Default:     false,
-			},
-			Runtime:  true,
-			Category: "lifecycle",
-		},
 		"monitor_subjects": {
 			PropertySchema: component.PropertySchema{
 				Type:        "array",
 				Description: "NATS subjects to monitor for messages",
 				Default:     []string{"process.>", "input.>", "events.>"},
 			},
-			Runtime:  true,
 			Category: "monitoring",
 		},
 		"max_entries": {
@@ -730,7 +710,6 @@ func (ml *MessageLogger) ConfigSchema() ConfigSchema {
 				Minimum:     intPtr(1000),
 				Maximum:     intPtr(100000),
 			},
-			Runtime:  true,
 			Category: "storage",
 		},
 		"output_to_stdout": {
@@ -739,242 +718,16 @@ func (ml *MessageLogger) ConfigSchema() ConfigSchema {
 				Description: "Whether to output messages to stdout",
 				Default:     false,
 			},
-			Runtime:  true,
 			Category: "output",
 		},
+		"sample_rate": {
+			PropertySchema: component.PropertySchema{
+				Type:        "integer",
+				Description: "Capture one in every N accepted messages",
+				Default:     1,
+				Minimum:     intPtr(1),
+			},
+			Category: "monitoring",
+		},
 	}, []string{}) // No required fields - all have defaults
-}
-
-// ValidateConfigUpdate checks if the proposed changes are valid.
-// This implements the RuntimeConfigurable interface.
-func (ml *MessageLogger) ValidateConfigUpdate(changes map[string]any) error {
-	for key, value := range changes {
-		switch key {
-		case "enabled":
-			if _, ok := value.(bool); !ok {
-				return fmt.Errorf("enabled must be boolean, got %T", value)
-			}
-
-		case "monitor_subjects":
-			subjects, ok := value.([]any)
-			if !ok {
-				return fmt.Errorf("monitor_subjects must be array, got %T", value)
-			}
-			if len(subjects) == 0 {
-				return fmt.Errorf("monitor_subjects cannot be empty")
-			}
-			for i, s := range subjects {
-				if _, ok := s.(string); !ok {
-					return fmt.Errorf("monitor_subjects[%d] must be string, got %T", i, s)
-				}
-			}
-
-		case "max_entries":
-			var entries int
-			switch v := value.(type) {
-			case float64:
-				entries = int(v) // JSON numbers are float64
-			case int:
-				entries = v
-			default:
-				return fmt.Errorf("max_entries must be number, got %T", value)
-			}
-			if entries < 1000 || entries > 100000 {
-				return fmt.Errorf("max_entries must be between 1000 and 100000, got %d", entries)
-			}
-
-		case "output_to_stdout":
-			if _, ok := value.(bool); !ok {
-				return fmt.Errorf("output_to_stdout must be boolean, got %T", value)
-			}
-
-		default:
-			return fmt.Errorf("unknown configuration property: %s", key)
-		}
-	}
-	return nil
-}
-
-// ApplyConfigUpdate applies validated configuration changes.
-// This implements the RuntimeConfigurable interface.
-func (ml *MessageLogger) ApplyConfigUpdate(changes map[string]any) error {
-	ml.entriesMu.Lock()
-	defer ml.entriesMu.Unlock()
-
-	for key, value := range changes {
-		switch key {
-		case "enabled":
-			// The enabled state is managed by Manager
-			// This is just for tracking
-			ml.logger.Info("MessageLogger enabled state changed", "enabled", value.(bool))
-
-		case "monitor_subjects":
-			subjects := make([]string, 0)
-			for _, s := range value.([]any) {
-				subjects = append(subjects, s.(string))
-			}
-			if err := ml.updateMonitorSubjects(subjects); err != nil {
-				return fmt.Errorf("failed to update monitor subjects: %w", err)
-			}
-			ml.config.MonitorSubjects = subjects
-
-		case "max_entries":
-			var newMax int
-			switch v := value.(type) {
-			case float64:
-				newMax = int(v)
-			case int:
-				newMax = v
-			}
-			if err := ml.updateMaxEntries(newMax); err != nil {
-				return fmt.Errorf("failed to update max entries: %w", err)
-			}
-			ml.config.MaxEntries = newMax
-
-		case "output_to_stdout":
-			ml.config.OutputToStdout = value.(bool)
-		}
-	}
-	return nil
-}
-
-// GetRuntimeConfig returns current configuration values.
-// This implements the RuntimeConfigurable interface.
-func (ml *MessageLogger) GetRuntimeConfig() map[string]any {
-	ml.entriesMu.RLock()
-	defer ml.entriesMu.RUnlock()
-
-	return map[string]any{
-		"enabled":          true, // MessageLogger is running if this method is called
-		"monitor_subjects": ml.config.MonitorSubjects,
-		"max_entries":      ml.config.MaxEntries,
-		"output_to_stdout": ml.config.OutputToStdout,
-	}
-}
-
-// updateEnabledState starts or stops message logging.
-func (ml *MessageLogger) updateEnabledState(enabled bool) error {
-	if enabled && !ml.running {
-		// Starting: subscribe to subjects if we're not already running
-		ml.running = true
-		return ml.startRuntime()
-	} else if !enabled && ml.running {
-		// Stopping: unsubscribe from subjects
-		ml.running = false
-		return ml.stopRuntime()
-	}
-	return nil
-}
-
-// updateMonitorSubjects changes NATS subscriptions.
-func (ml *MessageLogger) updateMonitorSubjects(subjects []string) error {
-	if !ml.running {
-		// If not running, just update the config - subscriptions will be created when enabled
-		return nil
-	}
-
-	// If enabled, we need to update active subscriptions
-	// First stop current subscriptions
-	if err := ml.stopRuntime(); err != nil {
-		return fmt.Errorf("failed to stop current subscriptions: %w", err)
-	}
-
-	// Update subjects
-	ml.config.MonitorSubjects = subjects
-
-	// Start new subscriptions
-	if err := ml.startRuntime(); err != nil {
-		return fmt.Errorf("failed to start new subscriptions: %w", err)
-	}
-
-	return nil
-}
-
-// updateMaxEntries resizes the circular buffer.
-// NOTE: This method should be called with entriesMu already locked
-func (ml *MessageLogger) updateMaxEntries(maxEntries int) error {
-	if maxEntries == len(ml.entries) {
-		return nil // No change needed
-	}
-
-	// Create new buffer with new size
-	newEntries := make([]MessageLogEntry, maxEntries)
-
-	// Copy existing entries without calling GetLogEntries while holding entriesMu.
-	// Preserve the newest sequence for every slot when shrinking causes collisions.
-	if len(ml.entries) > 0 {
-		currentEntries := newestEntries(ml.entries, len(ml.entries))
-
-		// Copy as many as we can fit, starting with most recent
-		copyCount := len(currentEntries)
-		if copyCount > maxEntries {
-			copyCount = maxEntries
-		}
-
-		for i := 0; i < copyCount; i++ {
-			entry := currentEntries[i]
-			index := int((entry.Sequence - 1) % uint64(maxEntries))
-			if newEntries[index].Sequence < entry.Sequence {
-				newEntries[index] = entry
-			}
-		}
-	}
-
-	// Replace the buffer
-	ml.entries = newEntries
-
-	return nil
-}
-
-// startRuntime starts NATS subscriptions and logging.
-func (ml *MessageLogger) startRuntime() error {
-	if ml.natsClient == nil {
-		return fmt.Errorf("NATS client not available")
-	}
-
-	// Create shutdown channels if not already created
-	if ml.shutdown == nil {
-		ml.shutdown = make(chan struct{})
-	}
-	if ml.done == nil {
-		ml.done = make(chan struct{})
-	}
-
-	// Subscribe to configured subjects
-	for _, subject := range ml.config.MonitorSubjects {
-		sub, err := ml.natsClient.Subscribe(context.Background(), subject, func(msgCtx context.Context, msg *nats.Msg) {
-			ml.handleMessage(msgCtx, msg.Subject, msg.Data)
-		})
-		if err != nil {
-			ml.logger.Error("Failed to subscribe to subject",
-				"subject", subject,
-				"error", err)
-			continue
-		}
-		ml.subscriptions[subject] = true
-		ml.natsSubsRefs = append(ml.natsSubsRefs, sub)
-		ml.logger.Debug("Subscribed to subject", "subject", subject)
-	}
-
-	ml.logger.Debug("MessageLogger runtime started",
-		"monitored_subjects", len(ml.subscriptions),
-		"max_entries", ml.config.MaxEntries,
-		"output_to_stdout", ml.config.OutputToStdout)
-
-	return nil
-}
-
-// stopRuntime stops NATS subscriptions and logging.
-func (ml *MessageLogger) stopRuntime() error {
-	// Unsubscribe from all NATS subjects
-	for _, sub := range ml.natsSubsRefs {
-		if err := sub.Unsubscribe(); err != nil {
-			ml.logger.Warn("Failed to unsubscribe", "error", err)
-		}
-	}
-	ml.subscriptions = make(map[string]bool)
-	ml.natsSubsRefs = nil
-
-	ml.logger.Debug("MessageLogger runtime stopped")
-	return nil
 }

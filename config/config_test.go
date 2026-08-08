@@ -57,7 +57,7 @@ func TestLoader_LoadJSON(t *testing.T) {
 			"reconnect_wait": "5s"
 		},
 		"services": {
-			"message_logger": {"enabled": true},
+			"message-logger": {"enabled": true, "config": {}},
 			"discovery": {"enabled": true}
 		}
 	}`
@@ -114,9 +114,9 @@ func TestLoader_Defaults(t *testing.T) {
 	assert.Equal(t, -1, cfg.NATS.MaxReconnects)                       // default infinite reconnects
 	assert.Equal(t, 2*time.Second, cfg.NATS.ReconnectWait)            // default wait
 	// Parse service config from types.ServiceConfigs
-	msgLoggerEnabled := getServiceEnabled(cfg.Services["message-logger"])
+	_, msgLoggerExists := cfg.Services["message-logger"]
 	discoveryEnabled := getServiceEnabled(cfg.Services["discovery"])
-	assert.True(t, msgLoggerEnabled)           // default enabled
+	assert.False(t, msgLoggerExists)           // default-off by omission
 	assert.False(t, discoveryEnabled)          // dormant by default
 	assert.True(t, cfg.NATS.JetStream.Enabled) // default enabled
 	// ObjectStore moved to components
@@ -261,11 +261,7 @@ func TestLoader_MergeConfigs(t *testing.T) {
 			MaxReconnects: -1,
 		},
 		Services: types.ServiceConfigs{
-			"message_logger": types.ServiceConfig{
-				Name:    "message_logger",
-				Enabled: true,
-				Config:  json.RawMessage(`{}`),
-			},
+			"message-logger": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{}`)},
 		},
 	}
 
@@ -280,11 +276,7 @@ func TestLoader_MergeConfigs(t *testing.T) {
 			Username:      "testuser",
 		},
 		Services: types.ServiceConfigs{
-			"discovery": types.ServiceConfig{
-				Name:    "discovery",
-				Enabled: true,
-				Config:  json.RawMessage(`{}`),
-			},
+			"discovery": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{}`)},
 		},
 	}
 
@@ -301,7 +293,7 @@ func TestLoader_MergeConfigs(t *testing.T) {
 	assert.Equal(t, "testuser", merged.NATS.Username)                    // from override
 
 	// Parse service config from types.ServiceConfigs
-	msgLoggerEnabled := getServiceEnabled(merged.Services["message_logger"])
+	msgLoggerEnabled := getServiceEnabled(merged.Services["message-logger"])
 	discoveryEnabled := getServiceEnabled(merged.Services["discovery"])
 	assert.True(t, msgLoggerEnabled) // from base
 	assert.True(t, discoveryEnabled) // from override
@@ -321,16 +313,9 @@ func TestConfig_Save(t *testing.T) {
 			MaxReconnects: 10,
 		},
 		Services: types.ServiceConfigs{
-			"message-logger": types.ServiceConfig{
-				Name:    "message-logger",
-				Enabled: true,
-				Config:  json.RawMessage(`{}`),
-			},
-			"discovery": types.ServiceConfig{
-				Name:    "discovery",
-				Enabled: true,
-				Config:  json.RawMessage(`{}`),
-			},
+			"message-logger": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{}`)},
+
+			"discovery": types.ServiceConfig{Enabled: true, Config: json.RawMessage(`{}`)},
 		},
 	}
 

@@ -2,14 +2,13 @@ package service
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/health"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
@@ -87,53 +86,6 @@ func (m *MockService) Health() health.Status {
 	}
 }
 
-// MockRuntimeConfigurableService provides a mock service that implements RuntimeConfigurable
-type MockRuntimeConfigurableService struct {
-	MockService
-	runtimeConfig map[string]any
-	validateError error
-	applyError    error
-	applied       bool
-	lastChanges   map[string]any
-}
-
-func (m *MockRuntimeConfigurableService) ConfigSchema() ConfigSchema {
-	return NewConfigSchema(map[string]PropertySchema{
-		"enabled": {
-			PropertySchema: component.PropertySchema{
-				Type:        "bool",
-				Description: "Enable the service",
-				Default:     false,
-			},
-			Runtime: true,
-		},
-	}, []string{})
-}
-
-func (m *MockRuntimeConfigurableService) ValidateConfigUpdate(_ map[string]any) error {
-	if m.validateError != nil {
-		return m.validateError
-	}
-	return nil
-}
-
-func (m *MockRuntimeConfigurableService) ApplyConfigUpdate(changes map[string]any) error {
-	if m.applyError != nil {
-		return m.applyError
-	}
-	m.applied = true
-	m.lastChanges = make(map[string]any)
-	for k, v := range changes {
-		m.lastChanges[k] = v
-		m.runtimeConfig[k] = v
-	}
-	return nil
-}
-
-func (m *MockRuntimeConfigurableService) GetRuntimeConfig() map[string]any {
-	return m.runtimeConfig
-}
-
 // createTestServiceDependencies creates Dependencies for testing
 func createTestServiceDependencies(natsClient *mockNATSClient) *Dependencies {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
@@ -177,7 +129,6 @@ func createTestServiceManager(config ManagerConfig, deps *Dependencies) *Manager
 	}
 	if deps != nil && deps.Manager != nil {
 		serviceManager.configManager = deps.Manager
-		serviceManager.configUpdates = deps.Manager.OnChange("services.*")
 	}
 	return serviceManager
 }
@@ -399,143 +350,6 @@ func TestServiceManager_HandleServiceConfigChange_KeyParsing(t *testing.T) {
 	}
 }
 
-func TestServiceManager_GetServiceRuntimeConfig_UnknownService(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Test with service that doesn't exist using public API
-	config, err := manager.GetServiceRuntimeConfig("unknown-service")
-	if err == nil {
-		t.Error("Expected error for unknown service")
-	}
-	if config != nil {
-		t.Error("Expected nil config for unknown service")
-	}
-	if !strings.Contains(err.Error(), "not found") {
-		t.Errorf("Expected 'not found' in error message, got: %v", err)
-	}
-}
-
-func TestServiceManager_RuntimeConfigSupport_ServiceWithoutRuntimeConfig(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Create a mock service that doesn't implement RuntimeConfigurable
-	mockService := &MockService{
-		name:    "mock-service",
-		status:  StatusRunning,
-		healthy: true,
-	}
-
-	// Add it to the manager
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	// Try to get runtime config - should indicate no support
-	_, err := manager.GetServiceRuntimeConfig("mock-service")
-	if err == nil {
-		t.Error("Expected error for service without RuntimeConfigurable")
-	}
-	if !strings.Contains(err.Error(), "does not support runtime configuration") {
-		t.Errorf("Expected specific error message, got: %v", err)
-	}
-}
-
-func TestServiceManager_HandleServiceConfigChange_ValidationFailure(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Create a mock RuntimeConfigurable service that always fails validation
-	mockService := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "mock-service",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		validateError: fmt.Errorf("validation failed"),
-	}
-
-	// Add it to the manager
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	// Test that validation would fail through direct interface
-	err := mockService.ValidateConfigUpdate(map[string]any{"enabled": false})
-	if err == nil {
-		t.Error("Expected validation error")
-	}
-	if err.Error() != "validation failed" {
-		t.Errorf("Expected 'validation failed', got %v", err)
-	}
-}
-
-func TestServiceManager_HandleServiceConfigChange_ApplicationFailure(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Create a mock RuntimeConfigurable service that validates but fails application
-	mockService := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "mock-service",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		applyError: fmt.Errorf("application failed"),
-	}
-
-	// Add it to the manager
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	// Test that application would fail through direct interface
-	err := mockService.ValidateConfigUpdate(map[string]any{"enabled": false})
-	if err != nil {
-		t.Errorf("Validation should succeed, got: %v", err)
-	}
-
-	err = mockService.ApplyConfigUpdate(map[string]any{"enabled": false})
-	if err == nil {
-		t.Error("Expected application error")
-	}
-	if err.Error() != "application failed" {
-		t.Errorf("Expected 'application failed', got %v", err)
-	}
-}
-
-func TestServiceManager_RuntimeConfigSupport_Success(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Create a mock RuntimeConfigurable service that works correctly
-	mockService := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "mock-service",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		runtimeConfig: map[string]any{"enabled": false},
-	}
-
-	// Add it to the manager
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	// Test runtime configuration through public API
-	config, err := manager.GetServiceRuntimeConfig("mock-service")
-	if err != nil {
-		t.Errorf("Unexpected error getting runtime config: %v", err)
-	}
-
-	// Verify initial config
-	if enabled, ok := config["enabled"]; !ok || enabled != false {
-		t.Errorf("Expected enabled=false initially, got %v", config)
-	}
-
-	// Test that the service supports runtime configuration
-	if !manager.hasRuntimeConfigSupport("mock-service") {
-		t.Error("Service should support runtime configuration")
-	}
-}
-
 func TestServiceManager_ConfigWatcher_RealNATSConnection(t *testing.T) {
 	// This test validates that when a real NATS connection is available,
 	// ConfigWatcher is properly initialized
@@ -591,216 +405,6 @@ func TestServiceManager_NormalizeServiceName(t *testing.T) {
 	}
 }
 
-func TestServiceManager_HasRuntimeConfigSupport(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Test with non-existent service
-	if manager.hasRuntimeConfigSupport("non-existent") {
-		t.Error("Expected false for non-existent service")
-	}
-
-	// Add a service without RuntimeConfigurable
-	mockService := &MockService{
-		name:    "mock-service",
-		status:  StatusRunning,
-		healthy: true,
-	}
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	if manager.hasRuntimeConfigSupport("mock-service") {
-		t.Error("Expected false for service without RuntimeConfigurable")
-	}
-
-	// Add a service with RuntimeConfigurable
-	mockRuntimeService := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "runtime-service",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		runtimeConfig: map[string]any{"enabled": true},
-	}
-	manager.mu.Lock()
-	manager.services["runtime-service"] = mockRuntimeService
-	manager.mu.Unlock()
-
-	if !manager.hasRuntimeConfigSupport("runtime-service") {
-		t.Error("Expected true for service with RuntimeConfigurable")
-	}
-}
-
-func TestServiceManager_GetServiceRuntimeConfig(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Test with non-existent service
-	_, err := manager.GetServiceRuntimeConfig("non-existent")
-	if err == nil || err.Error() != "service non-existent not found" {
-		t.Errorf("Expected 'service non-existent not found' error, got %v", err)
-	}
-
-	// Add a service without RuntimeConfigurable
-	mockService := &MockService{
-		name:    "mock-service",
-		status:  StatusRunning,
-		healthy: true,
-	}
-	manager.mu.Lock()
-	manager.services["mock-service"] = mockService
-	manager.mu.Unlock()
-
-	_, err = manager.GetServiceRuntimeConfig("mock-service")
-	if err == nil || err.Error() != "service mock-service does not support runtime configuration" {
-		t.Errorf("Expected runtime configuration error, got %v", err)
-	}
-
-	// Add a service with RuntimeConfigurable
-	expectedConfig := map[string]any{
-		"enabled":     true,
-		"max_entries": 10000,
-	}
-	mockRuntimeService := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "runtime-service",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		runtimeConfig: expectedConfig,
-	}
-	manager.mu.Lock()
-	manager.services["runtime-service"] = mockRuntimeService
-	manager.mu.Unlock()
-
-	config, err := manager.GetServiceRuntimeConfig("runtime-service")
-	if err != nil {
-		t.Errorf("Unexpected error: %v", err)
-	}
-
-	if len(config) != len(expectedConfig) {
-		t.Errorf("Expected config length %d, got %d", len(expectedConfig), len(config))
-	}
-
-	for key, expected := range expectedConfig {
-		if actual, ok := config[key]; !ok || actual != expected {
-			t.Errorf("Expected config[%s] = %v, got %v", key, expected, actual)
-		}
-	}
-}
-
-func TestServiceManager_RuntimeConfigurable_Interface(t *testing.T) {
-	manager := createTestServiceManager(ManagerConfig{}, nil)
-
-	// Test that MessageLogger constructor is registered and supports RuntimeConfigurable
-	// We can't easily test the full NATS-dependent MessageLogger in unit tests,
-	// so we'll verify the interface contract works with our mock service.
-
-	// Create a mock RuntimeConfigurable service that mimics MessageLogger behavior
-	mockMessageLogger := &MockRuntimeConfigurableService{
-		MockService: MockService{
-			name:    "message-logger",
-			status:  StatusRunning,
-			healthy: true,
-		},
-		runtimeConfig: map[string]any{
-			"enabled":          false,
-			"monitor_subjects": []string{"test.>"},
-			"max_entries":      5000,
-			"output_to_stdout": false,
-		},
-	}
-
-	// Add to manager
-	manager.mu.Lock()
-	manager.services["message-logger"] = mockMessageLogger
-	manager.mu.Unlock()
-
-	// Test configuration changes that MessageLogger supports
-	tests := []struct {
-		name     string
-		key      string
-		oldValue any
-		newValue any
-	}{
-		{
-			name:     "enable service",
-			key:      "services.message-logger.enabled",
-			oldValue: false,
-			newValue: true,
-		},
-		{
-			name:     "change max entries",
-			key:      "services.message-logger.max_entries",
-			oldValue: 5000,
-			newValue: 8000,
-		},
-		{
-			name:     "change output setting",
-			key:      "services.message-logger.output_to_stdout",
-			oldValue: false,
-			newValue: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Test configuration validation and application directly
-			// Extract property name from key for direct testing
-			parts := strings.Split(tt.key, ".")
-			if len(parts) >= 3 {
-				property := parts[2]
-				changes := map[string]any{property: tt.newValue}
-
-				// Test validation
-				err := mockMessageLogger.ValidateConfigUpdate(changes)
-				if err != nil {
-					t.Errorf("Validation should succeed for %s: %v", property, err)
-				}
-
-				// Test application
-				err = mockMessageLogger.ApplyConfigUpdate(changes)
-				if err != nil {
-					t.Errorf("Application should succeed for %s: %v", property, err)
-				}
-
-				// Verify the change was applied
-				if !mockMessageLogger.applied {
-					t.Error("Expected configuration change to be applied")
-				}
-
-				if actual, ok := mockMessageLogger.lastChanges[property]; !ok || actual != tt.newValue {
-					t.Errorf("Expected %s = %v, got %v", property, tt.newValue, actual)
-				}
-			}
-
-			// Reset for next test
-			mockMessageLogger.applied = false
-			mockMessageLogger.lastChanges = make(map[string]any)
-		})
-	}
-
-	// Verify that the service indeed implements RuntimeConfigurable
-	var _ RuntimeConfigurable = mockMessageLogger // Compile-time check
-
-	// Verify manager recognizes it as RuntimeConfigurable
-	if !manager.hasRuntimeConfigSupport("message-logger") {
-		t.Error("Manager should recognize message-logger as RuntimeConfigurable")
-	}
-
-	// Test GetServiceRuntimeConfig
-	config, err := manager.GetServiceRuntimeConfig("message-logger")
-	if err != nil {
-		t.Errorf("Unexpected error getting runtime config: %v", err)
-	}
-
-	expectedKeys := []string{"enabled", "monitor_subjects", "max_entries", "output_to_stdout"}
-	for _, key := range expectedKeys {
-		if _, ok := config[key]; !ok {
-			t.Errorf("Expected runtime config to contain key: %s", key)
-		}
-	}
-}
-
 // TestServiceManager_RegisterInstance verifies that RegisterInstance places the
 // service into the map AND the order slice so StartAll and StopAll treat it
 // identically to a config-driven CreateService registration.
@@ -814,7 +418,9 @@ func TestServiceManager_RegisterInstance(t *testing.T) {
 		healthy: true,
 	}
 
-	manager.RegisterInstance("instance-svc", svc)
+	if err := manager.RegisterInstance("instance-svc", svc); err != nil {
+		t.Fatalf("RegisterInstance: %v", err)
+	}
 
 	// GetService must find it.
 	got, ok := manager.GetService("instance-svc")
@@ -841,23 +447,26 @@ func TestServiceManager_RegisterInstance(t *testing.T) {
 	}
 }
 
-// TestServiceManager_RegisterInstance_DuplicateNoDoubleTrack verifies the C2 fix:
-// a second RegisterInstance with the same name overwrites the instance but does
-// NOT append a second order entry — otherwise StopAll would call Stop twice.
-func TestServiceManager_RegisterInstance_DuplicateNoDoubleTrack(t *testing.T) {
+func TestServiceManager_RegisterInstance_DuplicateRejected(t *testing.T) {
 	t.Parallel()
 	manager := createTestServiceManager(ManagerConfig{}, nil)
 
 	first := &MockService{name: "dup-svc", status: StatusStopped, healthy: true}
 	second := &MockService{name: "dup-svc", status: StatusStopped, healthy: true}
 
-	manager.RegisterInstance("dup-svc", first)
-	manager.RegisterInstance("dup-svc", second)
+	if err := manager.RegisterInstance("dup-svc", first); err != nil {
+		t.Fatal(err)
+	}
+	err := manager.RegisterInstance("dup-svc", second)
+	var duplicate *DuplicateServiceError
+	if !errors.As(err, &duplicate) {
+		t.Fatalf("duplicate error = %v", err)
+	}
 
-	// Latest instance wins.
+	// The original instance and registration order remain unchanged.
 	got, ok := manager.GetService("dup-svc")
-	if !ok || got != second {
-		t.Errorf("duplicate RegisterInstance: GetService = %v,%v, want the second instance", got, ok)
+	if !ok || got != first {
+		t.Errorf("duplicate RegisterInstance: GetService = %v,%v, want the first instance", got, ok)
 	}
 
 	// order must contain exactly ONE entry for the name (no double-Stop).

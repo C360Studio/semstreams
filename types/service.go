@@ -2,27 +2,44 @@
 package types
 
 import (
+	"bytes"
 	"encoding/json"
-
-	"github.com/c360studio/semstreams/pkg/errs"
+	"fmt"
+	"io"
 )
 
 // ServiceConfig provides configuration for creating a service instance.
 // This standardizes service configuration similar to ComponentConfig,
-// providing metadata (name, enabled) separate from service-specific config.
+// providing activation separately from service-specific config. The containing
+// map key is the sole service identity.
 type ServiceConfig struct {
-	Name    string          `json:"name"`    // Service name (redundant with map key but useful for validation)
 	Enabled bool            `json:"enabled"` // Whether service is enabled at runtime
 	Config  json.RawMessage `json:"config"`  // Service-specific configuration
 }
 
-// Validate ensures the service configuration is valid
-func (s ServiceConfig) Validate() error {
-	if s.Name == "" {
-		return errs.WrapInvalid(errs.ErrMissingConfig, "ServiceConfig", "Validate", "service name cannot be empty")
+// UnmarshalJSON rejects retired outer fields rather than silently accepting an
+// alias for map-key identity.
+func (s *ServiceConfig) UnmarshalJSON(data []byte) error {
+	type serviceConfig ServiceConfig
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var decoded serviceConfig
+	if err := decoder.Decode(&decoded); err != nil {
+		return fmt.Errorf("decode service config: %w", err)
 	}
-	// Config can be empty (service uses defaults)
-	// Enabled can be false (service disabled)
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("decode service config: multiple JSON values")
+		}
+		return fmt.Errorf("decode service config: %w", err)
+	}
+	*s = ServiceConfig(decoded)
+	return nil
+}
+
+// Validate ensures the service configuration is structurally valid.
+func (s ServiceConfig) Validate() error {
 	return nil
 }
 

@@ -497,18 +497,11 @@ func (l *Loader) getDefaults() *Config {
 			},
 		},
 		Services: types.ServiceConfigs{
-			"message-logger": types.ServiceConfig{
-				Name:    "message-logger",
-				Enabled: true,
-				Config:  json.RawMessage(`{"monitor_subjects": ["*"], "sample_rate": 1}`),
-			},
 			"discovery": types.ServiceConfig{
-				Name:    "discovery",
 				Enabled: false, // Dormant by default
 				Config:  json.RawMessage(`{}`),
 			},
 			"heartbeat": types.ServiceConfig{
-				Name:    "heartbeat",
 				Enabled: true,
 				Config:  json.RawMessage(`{"interval": "30s"}`),
 			},
