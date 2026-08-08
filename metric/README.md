@@ -13,7 +13,12 @@ The design follows Prometheus best practices with proper metric naming, labeling
 ## Installation
 
 ```go
-import "github.com/c360/semstreams/metric"
+import (
+    "log"
+
+    "github.com/c360/semstreams/metric"
+    "github.com/c360/semstreams/pkg/security"
+)
 ```
 
 ## core Concepts
@@ -39,14 +44,14 @@ import "github.com/c360/semstreams/metric"
 
 // Create metrics registry with core platform metrics
 registry := metric.NewMetricsRegistry()
+securityCfg := security.Config{}
 
 // Start metrics HTTP server
-server := metric.NewServer(9090, "/metrics", registry)
-go func() {
-    if err := server.Start(); err != nil && err != http.ErrServerClosed {
-        log.Printf("Metrics server error: %v", err)
-    }
-}()
+server := metric.NewServer(9090, "/metrics", registry, securityCfg)
+if err := server.Start(); err != nil {
+    log.Fatalf("Failed to start metrics server: %v", err)
+}
+defer server.Stop()
 
 // Record core platform metrics
 coreMetrics := registry.CoreMetrics()
@@ -177,10 +182,10 @@ type Server struct {
     // private fields
 }
 
-func NewServer(port int, path string, registry *MetricsRegistry) *Server  // Create server
-func (s *Server) Start() error                            // Start HTTP server (blocking)
-func (s *Server) Stop() error                            // Stop HTTP server
-func (s *Server) Address() string                        // Get server address
+func NewServer(port int, path string, registry *MetricsRegistry, security security.Config) *Server
+func (s *Server) Start() error // Bind synchronously, then serve in the background
+func (s *Server) Stop() error  // Close the listener and wait for serving to exit
+func (s *Server) Address() string // Get server address
 ```
 
 ### Interfaces
@@ -202,7 +207,7 @@ type MetricsRegistrar interface {
 #### `NewMetricsRegistry() *MetricsRegistry`
 Creates a new metrics registry with core platform metrics and Go runtime metrics.
 
-#### `NewServer(port int, path string, registry *MetricsRegistry) *Server`
+#### `NewServer(port int, path string, registry *MetricsRegistry, security security.Config) *Server`
 Creates a new HTTP metrics server with default values for zero port (9090) and empty path ("/metrics").
 
 ## Architecture
@@ -283,13 +288,10 @@ if !registry.Unregister("service", "metric") {
 
 ```go
 // Start server with error handling
-server := metric.NewServer(9090, "/metrics", registry)
-
-go func() {
-    if err := server.Start(); err != nil && err != http.ErrServerClosed {
-        log.Printf("Metrics server failed: %v", err)
-    }
-}()
+server := metric.NewServer(9090, "/metrics", registry, security.Config{})
+if err := server.Start(); err != nil {
+    log.Fatalf("Metrics server failed: %v", err)
+}
 
 // Graceful shutdown
 if err := server.Stop(); err != nil {
@@ -528,13 +530,11 @@ func main() {
     registry := metric.NewMetricsRegistry()
 
     // Start metrics server
-    server := metric.NewServer(9090, "/metrics", registry)
-    go func() {
-        log.Printf("Starting metrics server on %s", server.Address())
-        if err := server.Start(); err != nil {
-            log.Printf("Metrics server error: %v", err)
-        }
-    }()
+    server := metric.NewServer(9090, "/metrics", registry, security.Config{})
+    log.Printf("Starting metrics server on %s", server.Address())
+    if err := server.Start(); err != nil {
+        log.Fatalf("Failed to start metrics server: %v", err)
+    }
 
     // Create and start GPS service
     gpsService, err := NewGPSService(registry)
@@ -732,13 +732,11 @@ func main() {
     // Create metrics infrastructure
     registry := metric.NewMetricsRegistry()
 
-    server := metric.NewServer(9090, "/metrics", registry)
-    go func() {
-        log.Printf("Metrics server running at %s", server.Address())
-        if err := server.Start(); err != nil {
-            log.Printf("Metrics server error: %v", err)
-        }
-    }()
+    server := metric.NewServer(9090, "/metrics", registry, security.Config{})
+    log.Printf("Metrics server running at %s", server.Address())
+    if err := server.Start(); err != nil {
+        log.Fatalf("Failed to start metrics server: %v", err)
+    }
 
     // Create multiple services
     serviceNames := []string{"auth", "api", "processor", "storage", "notification"}
