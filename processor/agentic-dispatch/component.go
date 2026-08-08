@@ -126,6 +126,19 @@ type consumerInfo struct {
 	consumerName string
 }
 
+type subscriptionInputBinding struct {
+	streamName string
+	subject    string
+}
+
+type subscriptionInputBindings struct {
+	userMessage     subscriptionInputBinding
+	agentComplete   subscriptionInputBinding
+	agentCreated    subscriptionInputBinding
+	agentFailed     subscriptionInputBinding
+	approvalPending subscriptionInputBinding
+}
+
 // NewComponent creates a new router component
 func NewComponent(rawConfig json.RawMessage, deps component.Dependencies) (component.Discoverable, error) {
 	// Parse configuration
@@ -356,40 +369,17 @@ func (c *Component) Stop(timeout time.Duration) error {
 
 // setupSubscriptions sets up JetStream consumers for durable messaging
 func (c *Component) setupSubscriptions(ctx context.Context) error {
-	userStream, userSubject, err := c.inputPortBinding("user.message")
+	bindings, err := c.resolveAndWaitForSubscriptionBindings(ctx, c.waitForStream)
 	if err != nil {
 		return err
-	}
-	completeStream, completeSubject, err := c.inputPortBinding("agent.complete")
-	if err != nil {
-		return err
-	}
-	createdStream, createdSubject, err := c.inputPortBinding("agent.created")
-	if err != nil {
-		return err
-	}
-	failedStream, failedSubject, err := c.inputPortBinding("agent.failed")
-	if err != nil {
-		return err
-	}
-	approvalStream, approvalSubject, err := c.inputPortBinding("agent.approval_pending")
-	if err != nil {
-		return err
-	}
-	// Wait for streams to be available
-	if err := c.waitForStream(ctx, userStream); err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", fmt.Sprintf("wait for stream %s", userStream))
-	}
-	if err := c.waitForStream(ctx, "AGENT"); err != nil {
-		return errs.WrapTransient(err, "Component", "setupSubscriptions", "wait for stream AGENT")
 	}
 
 	// Subscribe to user messages via JetStream
 	// Use "last" policy to catch messages sent just before consumer starts
 	userMsgCfg := natsclient.StreamConsumerConfig{
-		StreamName:    userStream,
+		StreamName:    bindings.userMessage.streamName,
 		ConsumerName:  c.consumerName("agentic-dispatch-user-message"),
-		FilterSubject: userSubject,
+		FilterSubject: bindings.userMessage.subject,
 		DeliverPolicy: "last",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -411,9 +401,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to agent completions via JetStream
 	agentCompleteCfg := natsclient.StreamConsumerConfig{
-		StreamName:    completeStream,
+		StreamName:    bindings.agentComplete.streamName,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-complete"),
-		FilterSubject: completeSubject,
+		FilterSubject: bindings.agentComplete.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -435,9 +425,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop created events for workflow context sync
 	agentCreatedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    createdStream,
+		StreamName:    bindings.agentCreated.streamName,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-created"),
-		FilterSubject: createdSubject,
+		FilterSubject: bindings.agentCreated.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -459,9 +449,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 
 	// Subscribe to loop failed events
 	agentFailedCfg := natsclient.StreamConsumerConfig{
-		StreamName:    failedStream,
+		StreamName:    bindings.agentFailed.streamName,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-failed"),
-		FilterSubject: failedSubject,
+		FilterSubject: bindings.agentFailed.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    3,
@@ -496,9 +486,9 @@ func (c *Component) setupSubscriptions(ctx context.Context) error {
 	// buffer (drains on the matching agent.created), 10 retries gives
 	// generous slack for race resolution without unbounded redelivery.
 	agentApprovalPendingCfg := natsclient.StreamConsumerConfig{
-		StreamName:    approvalStream,
+		StreamName:    bindings.approvalPending.streamName,
 		ConsumerName:  c.consumerName("agentic-dispatch-agent-approval-pending"),
-		FilterSubject: approvalSubject,
+		FilterSubject: bindings.approvalPending.subject,
 		DeliverPolicy: "new",
 		AckPolicy:     "explicit",
 		MaxDeliver:    10,
@@ -1146,6 +1136,71 @@ func (c *Component) inputPortBinding(portName string) (string, string, error) {
 		return stream.Name(), stream.Subjects()[0], nil
 	}
 	return "", "", fmt.Errorf("input port %q not found", portName)
+}
+
+// resolveAndWaitForSubscriptionBindings resolves the complete dispatch input
+// topology before waiting once for each distinct configured backing stream.
+// The returned bindings are the same values setupSubscriptions uses to create
+// consumers, so resolved port facts remain the only stream/subject authority.
+func (c *Component) resolveAndWaitForSubscriptionBindings(
+	ctx context.Context,
+	wait func(context.Context, string) error,
+) (subscriptionInputBindings, error) {
+	resolve := func(portName string) (subscriptionInputBinding, error) {
+		streamName, subject, err := c.inputPortBinding(portName)
+		if err != nil {
+			return subscriptionInputBinding{}, err
+		}
+		return subscriptionInputBinding{streamName: streamName, subject: subject}, nil
+	}
+
+	var bindings subscriptionInputBindings
+	var err error
+	bindings.userMessage, err = resolve("user.message")
+	if err != nil {
+		return subscriptionInputBindings{}, err
+	}
+	bindings.agentComplete, err = resolve("agent.complete")
+	if err != nil {
+		return subscriptionInputBindings{}, err
+	}
+	bindings.agentCreated, err = resolve("agent.created")
+	if err != nil {
+		return subscriptionInputBindings{}, err
+	}
+	bindings.agentFailed, err = resolve("agent.failed")
+	if err != nil {
+		return subscriptionInputBindings{}, err
+	}
+	bindings.approvalPending, err = resolve("agent.approval_pending")
+	if err != nil {
+		return subscriptionInputBindings{}, err
+	}
+
+	streamNames := []string{
+		bindings.userMessage.streamName,
+		bindings.agentComplete.streamName,
+		bindings.agentCreated.streamName,
+		bindings.agentFailed.streamName,
+		bindings.approvalPending.streamName,
+	}
+	seen := make(map[string]struct{}, len(streamNames))
+	for _, streamName := range streamNames {
+		if _, ok := seen[streamName]; ok {
+			continue
+		}
+		seen[streamName] = struct{}{}
+		if err := wait(ctx, streamName); err != nil {
+			return subscriptionInputBindings{}, errs.WrapTransient(
+				err,
+				"Component",
+				"setupSubscriptions",
+				fmt.Sprintf("wait for stream %s", streamName),
+			)
+		}
+	}
+
+	return bindings, nil
 }
 
 // consumerName appends ConsumerNameSuffix to the base name when set, allowing

@@ -1,7 +1,9 @@
 package agenticdispatch
 
 import (
+	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -60,6 +62,48 @@ func TestInputPortBindingRejectsMissingPort(t *testing.T) {
 	c := &Component{}
 	if _, _, err := c.inputPortBinding("agent.complete"); err == nil {
 		t.Fatal("missing port accepted")
+	}
+}
+
+func TestResolveAndWaitForSubscriptionBindingsUsesOnlyDistinctResolvedStreams(t *testing.T) {
+	definitions := []component.PortDefinition{
+		{Name: "user.message", Config: component.JetStreamPort{StreamName: "TENANT_USER", Subjects: []string{"tenant.user.message.>"}}},
+		{Name: "agent.complete", Config: component.JetStreamPort{StreamName: "TENANT_COMPLETE", Subjects: []string{"tenant.agent.complete.*"}}},
+		{Name: "agent.created", Config: component.JetStreamPort{StreamName: "TENANT_EVENTS", Subjects: []string{"tenant.agent.created.*"}}},
+		{Name: "agent.failed", Config: component.JetStreamPort{StreamName: "TENANT_EVENTS", Subjects: []string{"tenant.agent.failed.*"}}},
+		{Name: "agent.approval_pending", Config: component.JetStreamPort{StreamName: "TENANT_APPROVAL", Subjects: []string{"tenant.agent.approval-pending.*"}}},
+	}
+	c := &Component{}
+	for _, definition := range definitions {
+		port, err := definition.Resolve(component.DirectionInput)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.inputPorts = append(c.inputPorts, port)
+	}
+
+	var waited []string
+	bindings, err := c.resolveAndWaitForSubscriptionBindings(context.Background(), func(_ context.Context, streamName string) error {
+		waited = append(waited, streamName)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	want := []string{"TENANT_USER", "TENANT_COMPLETE", "TENANT_EVENTS", "TENANT_APPROVAL"}
+	if !reflect.DeepEqual(waited, want) {
+		t.Fatalf("waited streams = %v, want distinct resolved streams %v", waited, want)
+	}
+	wantBindings := subscriptionInputBindings{
+		userMessage:     subscriptionInputBinding{streamName: "TENANT_USER", subject: "tenant.user.message.>"},
+		agentComplete:   subscriptionInputBinding{streamName: "TENANT_COMPLETE", subject: "tenant.agent.complete.*"},
+		agentCreated:    subscriptionInputBinding{streamName: "TENANT_EVENTS", subject: "tenant.agent.created.*"},
+		agentFailed:     subscriptionInputBinding{streamName: "TENANT_EVENTS", subject: "tenant.agent.failed.*"},
+		approvalPending: subscriptionInputBinding{streamName: "TENANT_APPROVAL", subject: "tenant.agent.approval-pending.*"},
+	}
+	if !reflect.DeepEqual(bindings, wantBindings) {
+		t.Fatalf("resolved bindings = %+v, want %+v", bindings, wantBindings)
 	}
 }
 
