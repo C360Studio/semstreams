@@ -74,15 +74,6 @@ func (t *Trajectory) AddStep(step TrajectoryStep) {
 	t.Duration += step.Duration
 }
 
-// Complete marks the trajectory as complete and calculates final duration
-func (t *Trajectory) Complete(outcome string) {
-	t.Outcome = outcome
-	now := time.Now()
-	t.EndTime = &now
-	// Calculate actual elapsed time in milliseconds
-	t.Duration = now.Sub(t.StartTime).Milliseconds()
-}
-
 // NewTrajectory creates a new Trajectory with initialized values
 func NewTrajectory(loopID string) Trajectory {
 	return Trajectory{

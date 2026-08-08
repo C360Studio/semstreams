@@ -732,7 +732,8 @@ func TestHandleToolResult_SingleTool(t *testing.T) {
 		t.Error("Should record trajectory step for tool result")
 	}
 
-	// Verify tool_call step was persisted in trajectory manager
+	// Verify the active execution aggregate contains the tool step used for
+	// terminal token/synthesis mechanics.
 	traj, trajErr := handler.GetTrajectory(loopID)
 	if trajErr != nil {
 		t.Fatalf("GetTrajectory() error = %v", trajErr)
@@ -1126,9 +1127,9 @@ func TestHandleToolResult_StopLoop(t *testing.T) {
 		t.Error("CompletionState should be set for StopLoop")
 	}
 
-	// Verify tool_call step was persisted in trajectory manager (regression test:
-	// prior to fix, tool_call steps were only on result.TrajectorySteps but never
-	// added to the trajectory manager, so they were missing from query responses).
+	// Verify the active execution aggregate contains the tool step. Component
+	// finalization evicts this aggregate after terminal token/synthesis consumers
+	// finish; durable queries use TrajectoryFactV1 instead.
 	traj, trajErr := handler.GetTrajectory(loopID)
 	if trajErr != nil {
 		t.Fatalf("GetTrajectory() error = %v", trajErr)
