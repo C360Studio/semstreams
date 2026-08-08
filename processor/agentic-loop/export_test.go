@@ -28,10 +28,6 @@ func (m *TrajectoryManager) AddStep(loopID string, step agentic.TrajectoryStep) 
 	return m.manager.addStep(loopID, step)
 }
 
-func (m *TrajectoryManager) CompleteTrajectory(loopID, outcome string) (agentic.Trajectory, error) {
-	return m.manager.completeTrajectory(loopID, outcome)
-}
-
 func (m *TrajectoryManager) GetTrajectory(loopID string) (agentic.Trajectory, error) {
 	return m.manager.getTrajectory(loopID)
 }

@@ -159,57 +159,6 @@ func TestTrajectoryManager_AddStep_Multiple(t *testing.T) {
 	}
 }
 
-func TestTrajectoryManager_CompleteTrajectory(t *testing.T) {
-	manager := agenticloop.NewTrajectoryManager()
-
-	loopID := "loop-001"
-	startTraj, err := manager.StartTrajectory(loopID)
-	if err != nil {
-		t.Fatalf("StartTrajectory() error = %v", err)
-	}
-
-	// Add some steps
-	_, err = manager.AddStep(loopID, agentic.TrajectoryStep{
-		Timestamp: time.Now(),
-		StepType:  "model_call",
-		TokensIn:  100,
-		TokensOut: 50,
-		Duration:  1000,
-	})
-	if err != nil {
-		t.Fatalf("AddStep() error = %v", err)
-	}
-
-	// Sleep briefly to ensure elapsed time
-	time.Sleep(10 * time.Millisecond)
-
-	outcome := "success"
-	completedTraj, err := manager.CompleteTrajectory(loopID, outcome)
-	if err != nil {
-		t.Fatalf("CompleteTrajectory() error = %v", err)
-	}
-
-	if completedTraj.Outcome != outcome {
-		t.Errorf("Trajectory.Outcome = %s, want %s", completedTraj.Outcome, outcome)
-	}
-
-	if completedTraj.EndTime == nil {
-		t.Error("Trajectory.EndTime should not be nil after completion")
-	}
-
-	if completedTraj.EndTime.Before(startTraj.StartTime) {
-		t.Error("Trajectory.EndTime should be after StartTime")
-	}
-
-	// Duration should be calculated as actual elapsed time
-	actualDuration := completedTraj.EndTime.Sub(startTraj.StartTime).Milliseconds()
-	if completedTraj.Duration < actualDuration-100 || completedTraj.Duration > actualDuration+100 {
-		// Allow 100ms tolerance for timing precision
-		t.Logf("Warning: Duration = %dms, actual elapsed = %dms (difference may be acceptable)",
-			completedTraj.Duration, actualDuration)
-	}
-}
-
 func TestTrajectoryManager_GetTrajectory(t *testing.T) {
 	manager := agenticloop.NewTrajectoryManager()
 
@@ -294,15 +243,6 @@ func TestTrajectoryManager_AddStep_NonExistentLoop(t *testing.T) {
 	_, err := manager.AddStep("loop-does-not-exist", step)
 	if err == nil {
 		t.Error("AddStep() with non-existent loop should return error")
-	}
-}
-
-func TestTrajectoryManager_CompleteTrajectory_NonExistent(t *testing.T) {
-	manager := agenticloop.NewTrajectoryManager()
-
-	_, err := manager.CompleteTrajectory("loop-does-not-exist", "success")
-	if err == nil {
-		t.Error("CompleteTrajectory() with non-existent loop should return error")
 	}
 }
 
@@ -521,28 +461,5 @@ func TestTrajectory_DurationAccumulation(t *testing.T) {
 	expectedDuration := int64(1000 + 500 + 2000 + 750 + 1500)
 	if traj.Duration != expectedDuration {
 		t.Errorf("Duration = %d, want %d", traj.Duration, expectedDuration)
-	}
-}
-
-func TestTrajectory_OutcomeTypes(t *testing.T) {
-	manager := agenticloop.NewTrajectoryManager()
-
-	outcomes := []string{"success", "failed", "max_iterations", "timeout", "cancelled"}
-
-	for _, outcome := range outcomes {
-		loopID := "loop-" + outcome
-		_, err := manager.StartTrajectory(loopID)
-		if err != nil {
-			t.Fatalf("StartTrajectory(%s) error = %v", loopID, err)
-		}
-
-		traj, err := manager.CompleteTrajectory(loopID, outcome)
-		if err != nil {
-			t.Fatalf("CompleteTrajectory(%s) error = %v", loopID, err)
-		}
-
-		if traj.Outcome != outcome {
-			t.Errorf("Trajectory outcome = %s, want %s", traj.Outcome, outcome)
-		}
 	}
 }

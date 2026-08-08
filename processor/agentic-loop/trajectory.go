@@ -42,21 +42,17 @@ func (m *trajectoryManager) addStep(loopID string, step agentic.TrajectoryStep) 
 
 	traj.AddStep(step)
 
-	return *traj, nil
+	return snapshotTrajectory(traj), nil
 }
 
-func (m *trajectoryManager) completeTrajectory(loopID, outcome string) (agentic.Trajectory, error) {
+// discardTrajectory releases the full-text aggregate once a loop has no more
+// active execution consumers. It is intentionally idempotent so competing
+// terminal/error cleanup paths cannot turn cleanup into another failure.
+func (m *trajectoryManager) discardTrajectory(loopID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	traj, exists := m.trajectories[loopID]
-	if !exists {
-		return agentic.Trajectory{}, errs.Wrap(fmt.Errorf("trajectory for loop %s not found", loopID), "TrajectoryManager", "operation", "find trajectory")
-	}
-
-	traj.Complete(outcome)
-
-	return *traj, nil
+	delete(m.trajectories, loopID)
 }
 
 func (m *trajectoryManager) getTrajectory(loopID string) (agentic.Trajectory, error) {
@@ -68,5 +64,14 @@ func (m *trajectoryManager) getTrajectory(loopID string) (agentic.Trajectory, er
 		return agentic.Trajectory{}, errs.Wrap(fmt.Errorf("trajectory for loop %s not found", loopID), "TrajectoryManager", "operation", "find trajectory")
 	}
 
-	return *traj, nil
+	// Detach the slice before releasing the lock. Active writers may append a
+	// later step until the terminal owner discards the entry; readers must not
+	// retain the manager's mutable backing array after the synchronized read.
+	return snapshotTrajectory(traj), nil
+}
+
+func snapshotTrajectory(traj *agentic.Trajectory) agentic.Trajectory {
+	snapshot := *traj
+	snapshot.Steps = append([]agentic.TrajectoryStep(nil), traj.Steps...)
+	return snapshot
 }

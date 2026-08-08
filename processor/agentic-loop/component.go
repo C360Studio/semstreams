@@ -1306,6 +1306,10 @@ func (c *Component) extractAgentResponse(data []byte) (*agentic.AgentResponse, s
 
 // handleLoopFailure records failure metrics and publishes failure events.
 func (c *Component) handleLoopFailure(ctx context.Context, loopID string, entity agentic.LoopEntity, reason string, err error) {
+	// Failure-event construction reads token totals twice below. Release the
+	// active aggregate only after those terminal consumers have returned.
+	defer c.handler.trajectoryManager.discardTrajectory(loopID)
+
 	c.logger.Error("Loop processing failed", "error", err, "loop_id", loopID, "reason", reason)
 
 	// Transition loop to failed and persist — without this, the loop entity
@@ -1466,6 +1470,13 @@ const graphWritePublishBudget = 2 * time.Second
 // agent.complete.* event downstream rules wait on. On budget timeout,
 // publish proceeds with a loud log and Prom counter increment.
 func (c *Component) persistHandlerResult(ctx context.Context, result HandlerResult) {
+	if result.State == agentic.LoopStateComplete || result.State == agentic.LoopStateFailed {
+		// MessageHandler has already extracted terminal token/step data into
+		// result. Keep the aggregate alive through persistence/publication, then
+		// release it even when an adjacent terminal side effect degrades.
+		defer c.handler.trajectoryManager.discardTrajectory(result.LoopID)
+	}
+
 	c.recordHandlerResultTrajectory(ctx, result)
 	c.persistLoopState(ctx, result.LoopID)
 
@@ -1648,6 +1659,12 @@ func (c *Component) handleToolResultMessage(ctx context.Context, data []byte) {
 	result, err := c.handler.HandleToolResult(ctx, loopID, toolResult)
 	if err != nil {
 		c.recordHandlerResultTrajectory(ctx, result)
+		if result.State.IsTerminal() {
+			// The handler has already built terminal failure state (including
+			// token totals). This error branch bypasses persistHandlerResult, so
+			// release the active aggregate after its terminal audit completes.
+			c.handler.trajectoryManager.discardTrajectory(loopID)
+		}
 		c.logger.Error("Failed to handle tool result", "error", err, "loop_id", loopID)
 		return
 	}
@@ -1958,6 +1975,10 @@ func (c *Component) handleCancelSignal(ctx context.Context, signal agentic.UserS
 			slog.String("loop_id", loopID))
 		return
 	}
+	// Cancellation has no aggregate token/step consumer. Defer cleanup so all
+	// terminal observation and publication work sees a stable active-loop
+	// lifetime, including early-return degradation paths below.
+	defer c.handler.trajectoryManager.discardTrajectory(loopID)
 
 	// Persist loop state to KV
 	c.persistLoopState(ctx, loopID)

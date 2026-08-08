@@ -850,6 +850,12 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 	if err != nil {
 		return HandlerResult{}, err
 	}
+	keepTrajectory := false
+	defer func() {
+		if !keepTrajectory {
+			h.trajectoryManager.discardTrajectory(loopID)
+		}
+	}()
 
 	// Get loop entity
 	entity, err := h.loopManager.GetLoop(loopID)
@@ -934,7 +940,12 @@ func (h *MessageHandler) HandleTask(ctx context.Context, task TaskMessage) (Hand
 		h.loopManager.CacheResponseFormat(loopID, task.ResponseFormat)
 	}
 
-	return h.buildTaskRequest(loopID, task, entity, messages, tools)
+	result, err := h.buildTaskRequest(loopID, task, entity, messages, tools)
+	if err != nil {
+		return HandlerResult{}, err
+	}
+	keepTrajectory = true
+	return result, nil
 }
 
 // buildTaskRequest creates the initial agent request, trajectory step, and loop-created
