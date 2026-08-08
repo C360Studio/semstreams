@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/service"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,8 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 
 	t.Run("Metrics double-stop is safe", func(t *testing.T) {
 		deps := &service.Dependencies{
-			Logger: slog.Default(),
+			Logger:          slog.Default(),
+			MetricsRegistry: metric.NewMetricsRegistry(),
 		}
 
 		metricsConfig := json.RawMessage(`{"port": 9091}`)
@@ -43,7 +45,8 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 
 	t.Run("Metrics double-start returns error", func(t *testing.T) {
 		deps := &service.Dependencies{
-			Logger: slog.Default(),
+			Logger:          slog.Default(),
+			MetricsRegistry: metric.NewMetricsRegistry(),
 		}
 
 		metricsConfig := json.RawMessage(`{"port": 9092}`)
@@ -115,7 +118,8 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 
 	t.Run("Concurrent start/stop stress test", func(t *testing.T) {
 		deps := &service.Dependencies{
-			Logger: slog.Default(),
+			Logger:          slog.Default(),
+			MetricsRegistry: metric.NewMetricsRegistry(),
 		}
 
 		// Test with multiple goroutines trying to start/stop simultaneously

@@ -1,7 +1,10 @@
 package metric
 
 import (
+	"crypto/tls"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"sync"
 
@@ -14,12 +17,14 @@ import (
 
 // Server represents the metrics HTTP server
 type Server struct {
-	port     int
-	path     string
-	server   *http.Server
-	registry *MetricsRegistry
-	security security.Config
-	mu       sync.Mutex // protects server field
+	port      int
+	path      string
+	server    *http.Server
+	listener  net.Listener
+	serveDone chan error
+	registry  *MetricsRegistry
+	security  security.Config
+	mu        sync.Mutex // serializes server lifecycle fields
 }
 
 // NewServer creates a new metrics server with the provided registry
@@ -39,15 +44,15 @@ func NewServer(port int, path string, registry *MetricsRegistry, securityCfg sec
 	}
 }
 
-// Start starts the metrics HTTP server. Blocks until the server is stopped.
+// Start starts the metrics HTTP server. It binds synchronously and returns only
+// after this Server owns its listener; request serving continues in a managed
+// goroutine until Stop is called.
 func (s *Server) Start() error {
-	// Hold the lock only for setup, NOT during ListenAndServe.
-	// Stop() needs to acquire this lock to call server.Close().
 	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	// Check if server is already running
 	if s.server != nil {
-		s.mu.Unlock()
 		return errs.WrapInvalid(
 			fmt.Errorf("server already running"),
 			"Server", "Start", "cannot start server that is already running")
@@ -55,7 +60,6 @@ func (s *Server) Start() error {
 
 	// Validate that we have a registry
 	if s.registry == nil {
-		s.mu.Unlock()
 		return errs.WrapFatal(
 			fmt.Errorf("nil registry"),
 			"Server", "Start", "metrics registry not provided")
@@ -103,28 +107,30 @@ func (s *Server) Start() error {
 	if s.security.TLS.Server.Enabled {
 		tlsConfig, err := tlsutil.LoadServerTLSConfig(s.security.TLS.Server)
 		if err != nil {
-			s.mu.Unlock()
+			s.server = nil
 			return errs.WrapFatal(err, "Server", "Start", "load TLS config")
 		}
 		s.server.TLSConfig = tlsConfig
 	}
 
-	// Release lock BEFORE blocking on ListenAndServe — Stop() needs the lock
-	// to call server.Close() which unblocks ListenAndServe.
-	s.mu.Unlock()
-
-	// Start HTTP or HTTPS server (blocks until Close/Shutdown is called)
-	var err error
-	if s.security.TLS.Server.Enabled {
-		err = s.server.ListenAndServeTLS("", "")
-	} else {
-		err = s.server.ListenAndServe()
-	}
-
-	if err != nil && err != http.ErrServerClosed {
+	httpServer := s.server
+	listener, err := net.Listen("tcp", httpServer.Addr)
+	if err != nil {
+		s.server = nil
 		return errs.WrapFatal(err, "Server", "Start",
 			fmt.Sprintf("failed to start server on port %d", s.port))
 	}
+	if s.security.TLS.Server.Enabled {
+		listener = tls.NewListener(listener, httpServer.TLSConfig)
+	}
+
+	serveDone := make(chan error, 1)
+	s.listener = listener
+	s.serveDone = serveDone
+	go func() {
+		serveDone <- httpServer.Serve(listener)
+		close(serveDone)
+	}()
 
 	return nil
 }
@@ -133,16 +139,31 @@ func (s *Server) Start() error {
 func (s *Server) Stop() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	if s.server != nil {
-		err := s.server.Close()
-		s.server = nil // reset server field to allow restart
-		if err != nil {
-			return errs.WrapTransient(err, "Server", "Stop",
-				"failed to stop HTTP server")
-		}
+	if s.server == nil {
+		return nil
 	}
-	return nil
+
+	httpServer := s.server
+	listener := s.listener
+	serveDone := s.serveDone
+
+	var stopErr error
+	if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
+			"failed to close metrics listener"))
+	}
+	if err := httpServer.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
+			"failed to stop HTTP server"))
+	}
+	if err := <-serveDone; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		stopErr = errors.Join(stopErr, errs.WrapTransient(err, "Server", "Stop",
+			"metrics server exited with an error"))
+	}
+	s.server = nil
+	s.listener = nil
+	s.serveDone = nil
+	return stopErr
 }
 
 // Address returns the server address

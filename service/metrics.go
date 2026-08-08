@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
@@ -104,26 +104,26 @@ func (m *Metrics) Start(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.server != nil {
+		m.mu.Unlock()
 		return fmt.Errorf("metrics server already started")
 	}
 
-	// Create the metric server with platform security
-	m.server = metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
-
-	// Start the server in a goroutine
-	go func() {
-		slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
-		if err := m.server.Start(); err != nil && err != http.ErrServerClosed {
-			slog.Error("Metrics server error", "error", err)
+	// Bind synchronously while holding lifecycle exclusion. Stop cannot overtake
+	// an unstarted server, and a bind failure cannot be reported as success.
+	server := metric.NewServer(m.config.Port, m.config.Path, m.registry, m.security)
+	slog.Info("Starting metrics server", "port", m.config.Port, "path", m.config.Path)
+	if err := server.Start(); err != nil {
+		m.mu.Unlock()
+		if stopErr := m.BaseService.Stop(5 * time.Second); stopErr != nil {
+			return errors.Join(fmt.Errorf("start metrics server: %w", err), stopErr)
 		}
-	}()
+		return fmt.Errorf("start metrics server: %w", err)
+	}
+	m.server = server
 
-	// Give server a moment to start
-	time.Sleep(100 * time.Millisecond)
-
+	m.mu.Unlock()
 	scheme := "http"
 	if m.security.TLS.Server.Enabled {
 		scheme = "https"

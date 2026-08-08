@@ -26,11 +26,10 @@
 //	securityCfg := security.Config{} // Platform security config
 //	server := metric.NewServer(9090, "/metrics", registry, securityCfg)
 //
-//	go func() {
-//	    if err := server.Start(); err != nil && err != http.ErrServerClosed {
-//	        log.Printf("Metrics server error: %v", err)
-//	    }
-//	}()
+//	if err := server.Start(); err != nil {
+//	    log.Fatalf("Failed to start metrics server: %v", err)
+//	}
+//	defer server.Stop()
 //
 //	// Record core platform metrics
 //	coreMetrics := registry.CoreMetrics()
@@ -153,12 +152,12 @@
 //	// Custom configuration
 //	server := metric.NewServer(8080, "/prometheus", registry, securityCfg)
 //
-//	// Start server (blocking)
+//	// Start server (binds synchronously, then serves in the background)
 //	if err := server.Start(); err != nil {
 //	    log.Fatalf("Failed to start metrics server: %v", err)
 //	}
 //
-//	// Stop server (in another goroutine)
+//	// Stop server and wait for its serving goroutine to exit
 //	if err := server.Stop(); err != nil {
 //	    log.Printf("Error stopping server: %v", err)
 //	}
@@ -323,8 +322,8 @@
 // abstraction to leverage native features, avoid wrapper overhead, and ensure
 // compatibility with Prometheus ecosystem.
 //
-// No Context in Server.Start(): Current design uses blocking Start() without
-// context. Future enhancement could add context-aware lifecycle management.
+// Synchronous Bind in Server.Start(): Start reports listener ownership or bind
+// failure before returning, while Stop closes the listener and joins serving.
 //
 // # Examples
 //
@@ -347,11 +346,9 @@
 //	    // Start metrics server
 //	    securityCfg := security.Config{} // Platform security config
 //	    server := metric.NewServer(9090, "/metrics", registry, securityCfg)
-//	    go func() {
-//	        if err := server.Start(); err != nil {
-//	            log.Printf("Metrics server error: %v", err)
-//	        }
-//	    }()
+//	    if err := server.Start(); err != nil {
+//	        log.Fatalf("Failed to start metrics server: %v", err)
+//	    }
 //	    defer server.Stop()
 //
 //	    // Get core metrics
