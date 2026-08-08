@@ -1,8 +1,8 @@
 # Tasks — Foundation B port language
 
 > Checkpoints 1-4, the append-only trajectory cutover, response-bound work, and clean ObjectStore API retirement are
-> implemented in the Foundation B working tree. Release evidence below records the completed-tree results; independent
-> review, post-merge inventory, merged-baseline recording, and archive remain open.
+> complete. The release record distinguishes pre-merge validation from the post-merge census and records the final
+> merged baseline before this change was archived.
 
 ## 1. Grammar and codec — completed
 
@@ -32,7 +32,7 @@
 - [x] 4.3 Apply the owner-approved graph-gateway clean break: no inputs and exactly three required canonical
   query-family outputs across the eight shipped configurations (`26417f25`).
 
-## 5. Release gate — in progress
+## 5. Release gate — completed
 
 - [x] 5.0 Correct JetStream input identity at the closed binding: require subjects in both directions and explicit
   `stream_name` on inputs, preserve generic provisioner-owned subject-only output derivation, migrate the 61 shipped
@@ -100,13 +100,17 @@ Completed-tree evidence on 2026-08-07 is retained in
   ten strict trajectory facts plus terminal completion.
 - [x] 5.7 Obtain an independent SemStreams reviewer pass on the complete implementation and OpenSpec diff. Final
   verdict: `REVIEW PASS — APPROVE`; no blocking or high findings remained.
-- [ ] 5.8 Re-inventory the merged Foundation B tree and hard-stop on any alias, flat discriminator, top-level side lane,
+- [x] 5.8 Re-inventory the merged Foundation B tree and hard-stop on any alias, flat discriminator, top-level side lane,
   dead type, independent shared projection, false KV declaration, JetStream input without explicit stream identity,
-  consumer-local stream-name derivation fallback, undeclared runtime-policy dependency, trajectory aggregate/cache,
-  private ObjectStore handle, direct trajectory HTTP/OpenAPI, trajectory graph write, or completeness machinery.
-- [ ] 5.9 Record the actual merged baseline and implementation evidence; do not begin Foundation C before a new accepted
-  inventory and owner remap.
-- [ ] 5.10 Archive `foundation-b-port-language` only after tasks 5.1-5.9 are truthful.
+  consumer-local stream-name derivation fallback, undeclared runtime-policy dependency, durable/public trajectory
+  aggregate/cache authority, private ObjectStore handle, direct trajectory HTTP/OpenAPI, trajectory graph write, or
+  completeness machinery. The private transient active-loop helper and exported `agentic.Trajectory` execution type
+  remain allowed. The census found one literal `AGENT` stream wait after consumers had resolved their declared
+  bindings; #911 removed it, and the repeated census at `d3ba7ec7` was clean.
+- [x] 5.9 Record the actual merged baseline and implementation evidence; do not begin Foundation C before a new accepted
+  inventory and owner remap. The merged chain is #909 `fbac161f`, #910 `44d2a322`, and #911 `d3ba7ec7`; detailed
+  pre-merge and post-merge evidence is retained in `docs/proposals/foundation-b-release-evidence.md`.
+- [x] 5.10 Archive `foundation-b-port-language` only after tasks 5.1-5.9 are truthful.
 
 The hierarchy write-path-versus-derived-index placement question, including its performance and complexity trade-offs,
 is a post-Foundation graph index-program input. The research create-before-append and hierarchy consequences are inputs

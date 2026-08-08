@@ -1,6 +1,6 @@
 # Foundation B port-language approval
 
-**Status:** implementation authorized; release not yet approved.
+**Status:** implementation complete; archived after merged-tree verification.
 
 ## Approved identities
 
@@ -78,8 +78,8 @@ The second turn is explicit risk acceptance for the graph-gateway amendment; it 
 
 This approval authorized implementation checkpoints 1-4, the accepted trajectory cutover, and the response-bounds
 clean break. The completed-tree static, race, integration, generated-artifact, contract, OpenSpec, and breaking E2E
-results are recorded in `docs/proposals/foundation-b-release-evidence.md`. Independent implementation review,
-post-merge inventory/baseline recording, merge, and archive remain open.
+results are recorded in `docs/proposals/foundation-b-release-evidence.md`. Independent implementation review and the
+post-merge inventory completed through the #911 merged baseline before archive.
 
 The prior agentic E2E startup failure on the redundant `trajectories` override is superseded by the completed-tree
 agentic and aggregate E2E passes. The clean cutover adds the canonical required port, removes the seven redundant

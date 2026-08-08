@@ -17,6 +17,14 @@ No flat field, legacy alias, or builder fallback SHALL restore missing port mean
 - **THEN** it remains a graph-mutation request port
 - **AND** its subject, timeout, direction, required state, interface type, and interface version are unchanged
 
+#### Scenario: JSON-loaded mutation port keeps its contract
+
+- **GIVEN** JSON configuration declares a required `nats-request` mutation output with interface
+  `semstreams.graph.mutation` and family `graph.mutation.>`
+- **WHEN** the definition is decoded and built into an effective port
+- **THEN** the resulting port carries the same interface and family
+- **AND** flow validation classifies it as request/reply rather than pub/sub
+
 ## ADDED Requirements
 
 ### Requirement: Component ports have one strict canonical grammar
