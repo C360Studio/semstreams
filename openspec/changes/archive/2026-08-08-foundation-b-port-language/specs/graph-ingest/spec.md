@@ -17,6 +17,13 @@ restore the mutation API.
 - **THEN** mutation subscriptions are derived from the provider's resolved subject and interface facts
 - **AND** the declared subject family remains the runtime authority
 
+#### Scenario: An undeclared mutation side channel cannot boot
+
+- **GIVEN** graph-ingest has no compatible mutation provider input port
+- **WHEN** the flow is validated
+- **THEN** validation fails before mutation subscriptions are installed
+- **AND** graph-ingest does not fall back to hardcoded subjects
+
 #### Scenario: Missing provider fails before subscription
 
 - **GIVEN** graph ingest without a graph-mutation provider input

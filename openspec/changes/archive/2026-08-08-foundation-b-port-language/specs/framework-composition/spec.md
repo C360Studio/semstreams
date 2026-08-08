@@ -20,6 +20,13 @@ flat port fields, or hard-coded subjects.
 - **THEN** the requester connects to the provider using their resolved interface and subject facts
 - **AND** no consumer reconstructs their protocol from concrete config types
 
+#### Scenario: Multiple requesters share one provider
+
+- **GIVEN** three components declare compatible mutation output ports and graph-ingest declares one provider input
+- **WHEN** the flow graph is validated
+- **THEN** all three requesters connect to the provider
+- **AND** validation creates no stream, consumer, leader, or lease
+
 #### Scenario: Missing provider fails composition
 
 - **GIVEN** one or more graph-mutation requester outputs

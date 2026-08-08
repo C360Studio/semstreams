@@ -30,9 +30,10 @@ The seven additional deletions are the
 exact frozen agentic-loop trajectory override records enumerated in the control document; the target guard requires
 their absence without rewriting either immutable ledger. See proposal.md for motivation.
 
-The implementation working tree is based on `4d3ea2ff`; the eventual merged identity remains task 5.9. Completed-tree
-validation and breaking E2E evidence are recorded in `docs/proposals/foundation-b-release-evidence.md`. Independent
-review, the post-merge inventory/baseline record, and archive remain open.
+The implementation merged through #909 at `fbac161f`, its terminal aggregate cleanup merged through #910 at
+`44d2a322`, and the final resolved-stream correction merged through #911 at `d3ba7ec7`. Completed-tree validation,
+breaking E2E evidence, independent review, and the post-merge census are recorded in
+`docs/proposals/foundation-b-release-evidence.md`.
 
 ## Goals / Non-Goals
 
@@ -129,9 +130,8 @@ Commit `fe4e5018` corrects JetStream input identity. Release fallout then migrat
 (`ffe0f705`), enforced agentic-model and agentic-governance roles (`8178a10c`), migrated agentic-loop integration
 fixture names (`69a723f5`), and routed rule subscriptions by canonical port kind (`d630c8fd`).
 
-The evidence at `d630c8fd` is historical. Completed-tree validation, including breaking E2E, is recorded in
-`docs/proposals/foundation-b-release-evidence.md`; independent review and the mandatory post-merge inventory remain
-open release gates.
+The evidence at `d630c8fd` is historical. Completed-tree validation, including breaking E2E, and the post-merge
+census through `d3ba7ec7` are recorded in `docs/proposals/foundation-b-release-evidence.md`.
 
 ### Append-only attempt observations replace aggregate trajectory authority
 
@@ -174,9 +174,11 @@ interface `agentic.query` v1. Graph-gateway retains exactly three outputs; `agen
 because named overrides are complete replacements and would erase required/interface facts. Isolated deployments may
 use explicit complete paired query overrides; there is no platform-derived owner, alias, dual subscription, or shim.
 
-Aggregate/public `Trajectory`, terminal cache, `trajectory_detail`, private `content_bucket` construction,
-timestamp-derived evidence keys, direct trajectory HTTP/OpenAPI, and terminal batch graph writes are deleted cleanly.
-Graph indexing is deferred: any later graph trace is a separate projection consuming the durable fact log.
+Durable/public aggregate `Trajectory` authority, terminal cache, `trajectory_detail`, private `content_bucket`
+construction, timestamp-derived evidence keys, direct trajectory HTTP/OpenAPI, and terminal batch graph writes are
+deleted cleanly. The exported `agentic.Trajectory` execution type and private transient active-loop
+`trajectoryManager` remain; neither is durable or a query authority, and terminal paths evict the helper state. Graph
+indexing is deferred: any later graph trace is a separate projection consuming the durable fact log.
 
 The `kv-or-stream` decision is KV: these are immutable observed facts whose readers rehydrate by prefix/watch, not
 queued requests requiring acknowledgement. Agent work requests remain on their existing JetStream paths.
@@ -269,7 +271,7 @@ validation gate; a failure there does not widen this change into hierarchy or re
 4. Implement the accepted response-boundary slices: observed carrier refusal, exact graph-prefix pages and GraphQL
    continuation, strict trajectory cursors, and clean ObjectStore RPC/NATS fetcher deletion.
 5. Re-inventory the merged tree. Stop if an alias, flat discriminator, top-level side lane, dead type, independent
-   shared projection, false KV declaration, undeclared runtime-policy dependency, trajectory cache/aggregate, private
-   ObjectStore handle, direct HTTP route, or completeness machinery remains.
+   shared projection, false KV declaration, undeclared runtime-policy dependency, durable/public trajectory
+   cache/aggregate authority, private ObjectStore handle, direct HTTP route, or completeness machinery remains.
 6. Archive this change only after the release and post-B inventory gates are truthful. Rollback is whole-cutover
    rollback; there is no dual-wire runtime mode.

@@ -2,10 +2,17 @@
 
 ## Scope
 
-This record captures the final local validation of the Foundation B implementation working tree on 2026-08-07. The
-tree was based on `4d3ea2ff5db69b40840c51ef76a3e2f730edef62`; task 5.9 remains responsible for recording the
-eventual merged commit and baseline. This is command/result evidence, not a claim that local output replaces required
-CI.
+This record separates the completed-tree validation performed before merge on 2026-08-07 from the merged-tree census
+and corrective verification completed on 2026-08-08. Foundation B merged through three pull requests:
+
+- #909 at `fbac161fa3469e2afb8f077d2ae36fc3794d20c5` implemented the accepted Foundation B cutover;
+- #910 at `44d2a32218bd7aee5d0fbceb5e0c1d88cb8398cf` removed the remaining terminal lifetime of the private transient
+  trajectory helper;
+- #911 at `d3ba7ec73b381b99a674a0297cfdbae1ffdd29d8` removed the remaining consumer-local literal stream wait.
+
+The static, unit, integration, generated-artifact, contract, and breaking E2E sections below record pre-merge
+completed-tree evidence. The final section records the post-merge census and focused verification. Local command
+output supplements rather than replaces required CI.
 
 ## Static and unit gates
 
@@ -57,5 +64,33 @@ The two owner-approved request/reply artifacts retained their exact accepted ide
   `e71bd4f2e0e8ef24440c2632721bb939a2d24ad9344e6c95aea50887d93c1015`.
 
 The design file's own status paragraph records its state when it was presented for review. The later owner approval in
-`openspec/changes/foundation-b-port-language/approval.md` supersedes that historical prose without mutating the frozen
-artifact.
+`openspec/changes/archive/2026-08-08-foundation-b-port-language/approval.md` supersedes that historical prose without
+mutating the frozen artifact.
+
+## Post-merge census and corrective verification
+
+The mandatory merged-tree census after #909 found one residual terminal lifetime in the private transient active-loop
+trajectory helper and one undeclared runtime-policy dependency. #910 evicts that helper state on every terminal path
+and deletes the dead completion surface. #911 makes agentic-dispatch wait on the five distinct stream identities
+resolved from its canonical input ports; no literal/default/fallback stream wait remains. The repeated Foundation B
+census at `d3ba7ec7` found no remaining alias, flat discriminator, top-level side lane, dead type, independent shared
+projection, false KV declaration, implicit JetStream input identity, consumer-local stream derivation, undeclared
+runtime-policy dependency, durable/public trajectory aggregate/cache authority, private ObjectStore handle, direct
+trajectory HTTP/OpenAPI route, trajectory graph write, or completeness machinery.
+
+Focused verification at the #910 merged baseline `44d2a322` passed:
+
+- `go test -race ./internal/portgrammarcontrol ./component ./component/flowgraph ./processor/agentic-loop
+  ./storage/objectstore ./gateway/graph-gateway ./test/contract/...`;
+- `task openspec:validate`.
+
+The #911 correction passed:
+
+- `go test -race ./internal/portgrammarcontrol ./processor/agentic-dispatch ./test/contract/...`;
+- `go vet ./processor/agentic-dispatch`;
+- `task e2e:agentic`;
+- `git diff --check`.
+
+All required GitHub checks for #911 passed before merge. This closes Foundation B only. Foundation C declaration
+authorship, graph-index and hierarchy placement, research ordering, downstream migration, and retention policy remain
+outside this increment and require a fresh accepted inventory and owner remap before implementation.
