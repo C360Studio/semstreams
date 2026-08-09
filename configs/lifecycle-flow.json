@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "c360",
     "id": "semstreams-lifecycle",
@@ -101,11 +101,8 @@
           "inputs": [
             {
               "config": {
-                "kind": "jetstream",
-                "stream_name": "RAW",
-                "subjects": [
-                  "raw.mission.command"
-                ]
+                "kind": "nats",
+                "subject": "raw.mission.command"
               },
               "name": "command_in"
             }
@@ -116,10 +113,8 @@
                 "interface": {
                   "type": "mission.command.v1"
                 },
-                "kind": "jetstream",
-                "subjects": [
-                  "mission.processed.entity"
-                ]
+                "kind": "nats",
+                "subject": "mission.processed.entity"
               },
               "name": "command_out"
             }

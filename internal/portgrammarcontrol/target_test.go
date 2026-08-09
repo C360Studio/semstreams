@@ -57,6 +57,7 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 	inputIdentityCorrections := 0
 	portNameCorrections := 0
 	primitiveCorrections := 0
+	retired := retiredConfigAccounting{documents: make(map[string]struct{})}
 	for _, target := range targets {
 		if target.inputIdentityCorrected {
 			inputIdentityCorrections++
@@ -66,6 +67,9 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		}
 		if target.primitiveCorrected {
 			primitiveCorrections++
+		}
+		if retired.consume(t, root, target) {
+			continue
 		}
 		document, ok := documents[target.workItem.Path]
 		if !ok {
@@ -131,7 +135,44 @@ func TestFoundationBTargetCompleteness(t *testing.T) {
 		inputIdentityCorrections: inputIdentityCorrections,
 		portNameCorrections:      portNameCorrections,
 		primitiveCorrections:     primitiveCorrections,
+		retiredSurvivors:         retired.survivors,
+		retiredDeletions:         retired.deletions,
+		retiredDocuments:         len(retired.documents),
 	}, root, plan, documents, portsParents, graphGatewayParents)
+}
+
+func isOwnerApprovedRetiredConfig(path string) bool {
+	_, retired := map[string]struct{}{
+		"configs/examples/bm25-semantic-search.json":    {},
+		"configs/examples/pathrag-graph-traversal.json": {},
+		"configs/http-gateway-semantic-search.json":     {},
+		"configs/semantic-basic.json":                   {},
+	}[path]
+	return retired
+}
+
+type retiredConfigAccounting struct {
+	survivors int
+	deletions int
+	documents map[string]struct{}
+}
+
+func (a *retiredConfigAccounting) consume(t *testing.T, root string, target targetConfigItem) bool {
+	t.Helper()
+	if !isOwnerApprovedRetiredConfig(target.workItem.Path) {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(target.workItem.Path))); !os.IsNotExist(err) {
+		t.Fatalf("owner-approved retired config %s still exists or cannot be checked: %v",
+			target.workItem.Path, err)
+	}
+	a.documents[target.workItem.Path] = struct{}{}
+	if target.deleted {
+		a.deletions++
+	} else {
+		a.survivors++
+	}
+	return true
 }
 
 type targetAccounting struct {
@@ -140,6 +181,9 @@ type targetAccounting struct {
 	inputIdentityCorrections int
 	portNameCorrections      int
 	primitiveCorrections     int
+	retiredSurvivors         int
+	retiredDeletions         int
+	retiredDocuments         int
 }
 
 func assertFoundationBTargetAccounting(
@@ -152,22 +196,34 @@ func assertFoundationBTargetAccounting(
 	graphGatewayParents map[string]struct{},
 ) {
 	t.Helper()
-	if accounting.survivors != 505 || accounting.deletions != 17 {
-		t.Fatalf("target accounting: survivors=%d deletions=%d, want 505 and 17",
-			accounting.survivors, accounting.deletions)
+	if accounting.survivors+accounting.retiredSurvivors != 505 ||
+		accounting.deletions+accounting.retiredDeletions != 17 {
+		t.Fatalf("target accounting: active=%d/%d retired=%d/%d, want historical 505 survivors and 17 deletions",
+			accounting.survivors, accounting.deletions,
+			accounting.retiredSurvivors, accounting.retiredDeletions)
 	}
-	if accounting.inputIdentityCorrections != 61 {
-		t.Fatalf("JetStream input identity corrections=%d, want 61", accounting.inputIdentityCorrections)
+	retiredTargets := accounting.retiredSurvivors + accounting.retiredDeletions
+	if retiredTargets != 5 || accounting.retiredDocuments != 2 {
+		t.Fatalf("owner-approved retired Foundation B fixture targets=%d documents=%d, want 5 and 2",
+			retiredTargets, accounting.retiredDocuments)
+	}
+	if accounting.inputIdentityCorrections != 60 {
+		t.Fatalf("JetStream input identity corrections=%d, want 60", accounting.inputIdentityCorrections)
 	}
 	if accounting.portNameCorrections != 11 {
 		t.Fatalf("component-default port name corrections=%d, want 11", accounting.portNameCorrections)
 	}
-	if accounting.primitiveCorrections != 8 {
-		t.Fatalf("component-default primitive corrections=%d, want 8", accounting.primitiveCorrections)
+	if accounting.primitiveCorrections != 10 {
+		t.Fatalf("component-default primitive corrections=%d, want 10", accounting.primitiveCorrections)
 	}
 	actualRows := countCanonicalConfigRows(t, documents, portsParents)
-	if actualRows != 522 {
-		t.Fatalf("canonical config rows=%d, want 522", actualRows)
+	// cloud-federation's ws_control and hello-world's ALIAS_INDEX are the
+	// two owner-approved production-prerequisite additions outside the frozen
+	// worklist. They offset two of the five retired historical rows.
+	const approvedPrerequisiteAdditions = 2
+	if actualRows != 522-retiredTargets+approvedPrerequisiteAdditions {
+		t.Fatalf("canonical active config rows=%d, want historical 522 minus %d retired targets plus %d prerequisite additions",
+			actualRows, retiredTargets, approvedPrerequisiteAdditions)
 	}
 	assertProtocolFlowWebSocketOutput(t, documents)
 	assertGraphGatewayConfigAmendment(t, documents, graphGatewayParents)
@@ -736,11 +792,33 @@ func targetForConfigItem(item WorkItem, dispositions map[string]Disposition) (ta
 	if err != nil {
 		return targetConfigItem{}, err
 	}
-	return correctComponentPortName(correctJetStreamInputIdentity(targetConfigItem{
+	return correctComponentPortName(correctJetStreamInputIdentity(correctMissionCommandPrimitive(targetConfigItem{
 		workItem: item,
 		lane:     lane,
 		row:      canonicalRow(legacy, item.CurrentKind, data),
-	}))
+	})))
+}
+
+func correctMissionCommandPrimitive(target targetConfigItem) targetConfigItem {
+	if target.workItem.Path != "configs/lifecycle-flow.json" ||
+		target.workItem.Enclosing != "mission-command" || target.row == nil {
+		return target
+	}
+	config, ok := target.row["config"].(map[string]any)
+	if !ok || stringValue(config["kind"]) != "jetstream" {
+		return target
+	}
+	subjects, ok := config["subjects"].([]any)
+	if !ok || len(subjects) != 1 {
+		return target
+	}
+	data := map[string]any{"subject": stringValue(subjects[0])}
+	if contract, exists := config["interface"]; exists {
+		data["interface"] = contract
+	}
+	target.row = canonicalRow(target.row, "nats", data)
+	target.primitiveCorrected = true
+	return target
 }
 
 func correctComponentPortName(target targetConfigItem, err error) (targetConfigItem, error) {

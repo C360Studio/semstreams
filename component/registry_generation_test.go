@@ -216,6 +216,59 @@ func TestRegistryObserverStartsEmptyCoalescesAndCancels(t *testing.T) {
 	}
 }
 
+func TestRegistrySnapshotObserverPinsInitialThenCoalescesNewestRemoval(t *testing.T) {
+	for range 16 {
+		assertSnapshotObserverPinsInitialThenCoalescesNewestRemoval(t)
+	}
+}
+
+func assertSnapshotObserverPinsInitialThenCoalescesNewestRemoval(t *testing.T) {
+	t.Helper()
+	registry := NewRegistry()
+	first := &generationTestComponent{outputs: []Port{generationTestPort("first")}}
+	second := &generationTestComponent{outputs: []Port{generationTestPort("second")}}
+	for name, candidate := range map[string]*generationTestComponent{
+		"first-factory":  first,
+		"second-factory": second,
+	} {
+		candidate := candidate
+		requireNoError(t, registry.RegisterWithConfig(RegistrationConfig{
+			Name: name, Type: "processor",
+			Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return candidate, nil },
+		}))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	updates := registry.ObserveSnapshots(ctx, componentadmission.Access{})
+	_, err := registry.CreateComponent(
+		"worker", generationTestConfig("first-factory", `{}`), generationTestDeps())
+	requireNoError(t, err)
+	_, err = registry.ReplaceComponent(
+		componentadmission.Access{}, "worker", generationTestConfig("second-factory", `{}`),
+		generationTestDeps(), nil)
+	requireNoError(t, err)
+	registry.UnregisterInstance("worker")
+
+	initial := <-updates
+	if len(initial) != 0 {
+		t.Fatalf("registration-time snapshot = %#v, want pinned empty set", initial)
+	}
+	latest := <-updates
+	if len(latest) != 0 {
+		t.Fatalf("coalesced snapshot = %#v, want newest complete empty removal set", latest)
+	}
+
+	cancel()
+	select {
+	case _, ok := <-updates:
+		if ok {
+			t.Fatal("snapshot observer delivered after cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot observer remained open after cancellation")
+	}
+}
+
 func TestRegistryReplacementFailurePreservesOldAndSuccessSwapsWholeGeneration(t *testing.T) {
 	registry := NewRegistry()
 	ctx, cancel := context.WithCancel(context.Background())

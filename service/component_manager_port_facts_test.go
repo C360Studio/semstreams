@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
@@ -32,7 +31,7 @@ func newPortOwnershipCM(t *testing.T) *ComponentManager {
 
 func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *testing.T) {
 	manager := newPortOwnershipCM(t)
-	instance := portFactsDiscoverable{
+	instance := &portFactsDiscoverable{
 		baseDiscoverable: baseDiscoverable{name: "facts"},
 		inputs: []component.Port{
 			{Name: "events", Direction: component.DirectionInput, Config: component.JetStreamPort{StreamName: "EVENTS", Subjects: []string{"events.>", "audit.>"}}},
@@ -42,8 +41,9 @@ func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *
 			{Name: "request", Direction: component.DirectionOutput, Config: component.NATSRequestPort{Subject: "graph.mutation.>"}},
 		},
 	}
+	admitTestRegistryComponent(t, manager.registry, "facts", instance)
 
-	info, err := manager.extractComponentPortInfo(instance)
+	info, err := manager.extractComponentPortInfo("facts")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,45 +61,32 @@ func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *
 	}
 }
 
-func TestComponentManagerPortReportingRejectsInvalidMutablePort(t *testing.T) {
+func TestComponentManagerPortReportingRejectsUnadmittedInstance(t *testing.T) {
 	manager := newPortOwnershipCM(t)
-	instance := portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "broken"},
-		inputs: []component.Port{{
-			Name: "broken", Direction: component.DirectionInput, Config: component.NATSPort{},
-		}},
-	}
-	if _, err := manager.extractComponentPortInfo(instance); err == nil {
-		t.Fatal("manager reporting accepted an invalid mutable port")
+	if _, err := manager.extractComponentPortInfo("missing"); err == nil {
+		t.Fatal("manager reporting accepted an unadmitted instance")
 	}
 }
 
-func TestComponentManagerFlowReportingRejectsInvalidPortWithoutCachingPartialGraph(t *testing.T) {
+func TestComponentManagerFlowReportingUsesRetainedPortsAfterComponentMutation(t *testing.T) {
 	manager := newPortOwnershipCM(t)
-	manager.components["broken"] = &component.ManagedComponent{Component: portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "broken"},
+	instance := &portFactsDiscoverable{
+		baseDiscoverable: baseDiscoverable{name: "source"},
 		inputs: []component.Port{{
-			Name: "broken", Direction: component.DirectionInput, Config: component.NATSPort{},
+			Name: "events", Direction: component.DirectionInput,
+			Config: component.NATSPort{Subject: "events.original"},
 		}},
-	}}
+	}
+	admitTestRegistryComponent(t, manager.registry, "source", instance)
+	instance.inputs[0].Config = component.NATSPort{}
 
-	if _, err := manager.GetFlowGraph(); err == nil || !strings.Contains(err.Error(), `component "broken" input ports`) {
-		t.Fatalf("GetFlowGraph error = %v, want rejected component context", err)
+	graph, err := manager.GetFlowGraph()
+	if err != nil {
+		t.Fatalf("GetFlowGraph reread mutated component declaration: %v", err)
 	}
-	manager.graphCache.mu.RLock()
-	cacheValid := manager.graphCache.cacheValid
-	manager.graphCache.mu.RUnlock()
-	if cacheValid {
-		t.Fatal("failed partial flowgraph was cached as valid")
-	}
-	if _, err := manager.ValidateFlowConnectivity(); err == nil {
-		t.Fatal("ValidateFlowConnectivity reported success for an invalid component port")
-	}
-	if _, err := manager.GetFlowPaths(); err == nil {
-		t.Fatal("GetFlowPaths reported success for an invalid component port")
-	}
-	if _, err := manager.DetectObjectStoreGaps(); err == nil {
-		t.Fatal("DetectObjectStoreGaps reported success for an invalid component port")
+	node := graph.GetNodes()["source"]
+	if node == nil || len(node.InputPorts) != 1 || node.InputPorts[0].ConnectionID != "events.original" {
+		t.Fatalf("flowgraph node = %#v, want retained events.original declaration", node)
 	}
 
 	handlers := map[string]http.HandlerFunc{
@@ -113,8 +100,8 @@ func TestComponentManagerFlowReportingRejectsInvalidPortWithoutCachingPartialGra
 			recorder := httptest.NewRecorder()
 			request := httptest.NewRequest(http.MethodGet, "/flow/"+name, nil)
 			handler(recorder, request)
-			if recorder.Code != http.StatusInternalServerError {
-				t.Fatalf("HTTP status = %d, want %d", recorder.Code, http.StatusInternalServerError)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("HTTP status = %d, want %d", recorder.Code, http.StatusOK)
 			}
 		})
 	}

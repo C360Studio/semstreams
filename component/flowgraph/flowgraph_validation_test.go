@@ -38,7 +38,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 		}
 
 		udpComponent := createMockComponentWithPorts("udp-input", "input", udpPorts, udpOutputPorts)
-		err := graph.AddComponentNode("udp-input", udpComponent)
+		err := addTestComponentNode(graph, "udp-input", udpComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -83,7 +83,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 		}
 
 		wsComponent := createMockComponentWithPorts("websocket-output", "output", wsInputPorts, wsOutputPorts)
-		err := graph.AddComponentNode("websocket-output", wsComponent)
+		err := addTestComponentNode(graph, "websocket-output", wsComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -117,7 +117,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 		}
 
 		apiComponent := createMockComponentWithPorts("storage", "storage", apiPorts, nil)
-		err := graph.AddComponentNode("storage", apiComponent)
+		err := addTestComponentNode(graph, "storage", apiComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -157,7 +157,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 		}
 
 		kvComponent := createMockComponentWithPorts("graph", "processor", nil, kvOutputPorts)
-		err := graph.AddComponentNode("graph", kvComponent)
+		err := addTestComponentNode(graph, "graph", kvComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -197,7 +197,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 		}
 
 		streamComponent := createMockComponentWithPorts("processor", "processor", streamPorts, nil)
-		err := graph.AddComponentNode("processor", streamComponent)
+		err := addTestComponentNode(graph, "processor", streamComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -239,7 +239,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 			},
 		}
 		udpComponent := createMockComponentWithPorts("udp", "input", udpPorts, nil)
-		err := graph.AddComponentNode("udp", udpComponent)
+		err := addTestComponentNode(graph, "udp", udpComponent)
 		require.NoError(t, err)
 
 		// 2. Optional API (should be marked optional)
@@ -254,7 +254,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 			},
 		}
 		apiComponent := createMockComponentWithPorts("api", "processor", apiPorts, nil)
-		err = graph.AddComponentNode("api", apiComponent)
+		err = addTestComponentNode(graph, "api", apiComponent)
 		require.NoError(t, err)
 
 		// 3. Critical stream (should be marked critical)
@@ -268,7 +268,7 @@ func TestFlowGraphPortValidationRefinement(t *testing.T) {
 			},
 		}
 		streamComponent := createMockComponentWithPorts("stream", "processor", streamPorts, nil)
-		err = graph.AddComponentNode("stream", streamComponent)
+		err = addTestComponentNode(graph, "stream", streamComponent)
 		require.NoError(t, err)
 
 		// Connect and analyze
@@ -398,7 +398,7 @@ func TestFlowGraphInterfaceAlternatives(t *testing.T) {
 		}
 
 		storageComponent := createMockComponentWithPorts("objectstore", "storage", storageInputPorts, nil)
-		err := graph.AddComponentNode("objectstore", storageComponent)
+		err := addTestComponentNode(graph, "objectstore", storageComponent)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -467,7 +467,7 @@ func TestFlowGraphInterfaceAlternatives(t *testing.T) {
 		}
 
 		testComponent := createMockComponentWithPorts("processor", "processor", testPorts, nil)
-		err := graph.AddComponentNode("processor", testComponent)
+		err := addTestComponentNode(graph, "processor", testComponent)
 		require.NoError(t, err)
 
 		// Connect and analyze
@@ -522,8 +522,8 @@ func TestJetStreamSubjectMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("graph-ingestor", jsPublisher))
-		require.NoError(t, graph.AddComponentNode("graph-processor", natsSubscriber))
+		require.NoError(t, addTestComponentNode(graph, "graph-ingestor", jsPublisher))
+		require.NoError(t, addTestComponentNode(graph, "graph-processor", natsSubscriber))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -569,8 +569,8 @@ func TestJetStreamSubjectMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("event-source", jsPublisher))
-		require.NoError(t, graph.AddComponentNode("entity-handler", natsSubscriber))
+		require.NoError(t, addTestComponentNode(graph, "event-source", jsPublisher))
+		require.NoError(t, addTestComponentNode(graph, "entity-handler", natsSubscriber))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -613,8 +613,8 @@ func TestJetStreamSubjectMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("writer", jsPublisher))
-		require.NoError(t, graph.AddComponentNode("reader", natsSubscriber))
+		require.NoError(t, addTestComponentNode(graph, "writer", jsPublisher))
+		require.NoError(t, addTestComponentNode(graph, "reader", natsSubscriber))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -655,8 +655,8 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("query-client", clientComponent))
-		require.NoError(t, graph.AddComponentNode("query-server", serverComponent))
+		require.NoError(t, addTestComponentNode(graph, "query-client", clientComponent))
+		require.NoError(t, addTestComponentNode(graph, "query-server", serverComponent))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -701,8 +701,8 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("mutation-client", clientComponent))
-		require.NoError(t, graph.AddComponentNode("mutation-server", serverComponent))
+		require.NoError(t, addTestComponentNode(graph, "mutation-client", clientComponent))
+		require.NoError(t, addTestComponentNode(graph, "mutation-server", serverComponent))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -736,7 +736,7 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 			},
 		)
 
-		require.NoError(t, graph.AddComponentNode("self-component", selfComponent))
+		require.NoError(t, addTestComponentNode(graph, "self-component", selfComponent))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -773,8 +773,8 @@ func TestRequestPortWildcardMatching(t *testing.T) {
 			nil,
 		)
 
-		require.NoError(t, graph.AddComponentNode("exact-client", clientComponent))
-		require.NoError(t, graph.AddComponentNode("exact-server", serverComponent))
+		require.NoError(t, addTestComponentNode(graph, "exact-client", clientComponent))
+		require.NoError(t, addTestComponentNode(graph, "exact-server", serverComponent))
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)

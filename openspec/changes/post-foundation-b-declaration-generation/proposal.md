@@ -27,11 +27,14 @@ before implementation.
   snapshots through one bounded, coalescing, process-local observer.
 - Keep that snapshot/observer an internal framework API, not a cross-repo or ADR contract, with no durable replay or
   recovery claim.
-- Preserve the measured message-logger expansion from 389 raw rows / 245 keys / 51 strings to 565 effective rows /
-  380 keys / 66 strings, including 176 added rows, 135 net-new keys, 15 net-new strings, zero removals, 41 exact-key
+- Preserve the measured message-logger expansion across the 21 production-constructible shipped configurations from
+  385 raw rows / 243 keys / 51 strings to 561 effective rows / 378 keys / 66 strings, including 176 added rows, 135
+  net-new keys, 15 net-new strings, zero removals, 41 exact-key
   collapses, and the three accepted containment overlaps: new `agent.toolcall.proposed.*` under raw
   `agent.toolcall.proposed.>`; raw `agent.toolcall.approved.*` under new `agent.toolcall.approved.>`; and raw
   `agent.toolcall.rejected.*` under new `agent.toolcall.rejected.>`.
+- Retire exactly four configurations whose enabled `graph`/`graph-processor` factories have no production
+  registration. Add no alias, synthetic census factory, substitute configuration, or exclusion lane.
 - **BREAKING** Remove `types.ServiceConfig.Name`; the `ServiceConfigs` map key is the sole service identity.
 - Make services restart-only process-composition units while components remain runtime-configurable flow units.
   `services.*` is durable desired next-boot state and never mutates running services.

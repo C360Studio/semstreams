@@ -6,6 +6,11 @@
 SHA-256 `be8e4c2c6fbcfbcd966038448011cf98112e62e52147b088a0a794808ec9b814`.
 **Verdict:** `DESIGN PASS`.
 
+**Later Slice C census amendment (2026-08-09):** The owner retired four configurations whose enabled factories had no
+production registration and approved a mechanically recomputed 21-config census of 385/243/51 raw and 561/378/66
+effective. The historical `DESIGN PASS` below applies to its recorded identity; independent review of the amendment
+remains C.9.
+
 The owner accepts the complete design, and independent review confirms the exact identity above.
 
 ## Review basis and chain
@@ -56,7 +61,7 @@ Closed. Component `Registry.RegisterInstance(name, component)` is removed or int
 `CreateComponent`; any internal replacement/test helper requires validated factory identity and the same capture,
 validation, conflict, and atomic-admission contract. No shim or inferred identity remains.
 
-## Declaration census preservation
+## Historical declaration census preservation (superseded by the Slice C amendment above)
 
 The final design preserves both distinct censuses and does not use one as evidence for the other.
 

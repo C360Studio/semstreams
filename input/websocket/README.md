@@ -63,11 +63,13 @@ config:
   ports:
     outputs:
       - name: ws_data
-        subject: federated.data
-        type: nats
+        config:
+          kind: nats
+          subject: federated.data
       - name: ws_control
-        subject: federated.control
-        type: nats
+        config:
+          kind: nats
+          subject: federated.control
 ```
 
 ### Client Mode Example
@@ -95,8 +97,13 @@ config:
   ports:
     outputs:
       - name: ws_data
-        subject: federated.data
-        type: nats
+        config:
+          kind: nats
+          subject: federated.data
+      - name: ws_control
+        config:
+          kind: nats
+          subject: federated.control
 ```
 
 ## Authentication Options

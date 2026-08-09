@@ -434,6 +434,7 @@ func TestComponentManagerGetFlowGraph(t *testing.T) {
 	cm.components["flow-comp"] = &component.ManagedComponent{
 		Component: flowComp,
 	}
+	admitTestRegistryComponent(t, cm.registry, "flow-comp", flowComp)
 
 	// Get FlowGraph
 	graph, err := cm.GetFlowGraph()

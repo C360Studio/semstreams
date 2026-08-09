@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/metric"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/service"
@@ -70,8 +71,9 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		defer testClient.Terminate()
 
 		deps := &service.Dependencies{
-			NATSClient: testClient.Client,
-			Logger:     slog.Default(),
+			NATSClient:        testClient.Client,
+			Logger:            slog.Default(),
+			ComponentRegistry: component.NewRegistry(),
 		}
 
 		msgLoggerConfig := json.RawMessage(`{"max_entries": 1000}`)
@@ -97,8 +99,9 @@ func TestServiceLifecycleRobustness(t *testing.T) {
 		defer testClient.Terminate()
 
 		deps := &service.Dependencies{
-			NATSClient: testClient.Client,
-			Logger:     slog.Default(),
+			NATSClient:        testClient.Client,
+			Logger:            slog.Default(),
+			ComponentRegistry: component.NewRegistry(),
 		}
 
 		msgLoggerConfig := json.RawMessage(`{"max_entries": 1000}`)

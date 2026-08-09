@@ -1,6 +1,7 @@
 # Tasks — Post-Foundation-B declaration generation
 
-Implementation is active. Slice A is complete and independently approved; Slices B–E remain unchecked.
+Implementation is active. Slices A, B, and C are complete and independently approved; Slices D and E remain
+unchecked.
 
 Each slice receives independent SemStreams review before the next starts. Later slices MUST NOT reopen
 owner-accepted rulings absent implementation evidence of an internal contradiction.
@@ -83,23 +84,53 @@ Independent `semstreams-reviewer` verdict: `REVIEW PASS / APPROVE`; all Slice B 
 
 ## C. Consumer migrations and message logger
 
-- [ ] C.1 Move flowgraph, capability publication, management responses, and conflict reporting to defensive Registry
+- [x] C.1 Move flowgraph, capability publication, management responses, and conflict reporting to defensive Registry
   snapshots; no component port re-read remains.
-- [ ] C.2 Capture capability snapshots before asynchronous publication.
-- [ ] C.3 Make only an outer-enabled, started message-logger in `"*"` mode attach Registry observer and lazily reconcile
+- [x] C.2 Capture capability snapshots before asynchronous publication.
+- [x] C.3 Make only an outer-enabled, started message-logger in `"*"` mode attach Registry observer and lazily reconcile
   declared subjects.
-- [ ] C.4 Reconcile complete add/replace/remove snapshot sets; union explicit subjects; cancel observer and all
+- [x] C.4 Reconcile complete add/replace/remove snapshot sets; union explicit subjects; cancel observer and all
   logger-owned subscriptions on Stop.
-- [ ] C.5 Deliberately deduplicate exact and the three accepted containment overlaps—new
+- [x] C.5 Deliberately deduplicate exact and the three accepted containment overlaps—new
   `agent.toolcall.proposed.*` under raw `agent.toolcall.proposed.>`; raw `agent.toolcall.approved.*` under new
   `agent.toolcall.approved.>`; raw `agent.toolcall.rejected.*` under new `agent.toolcall.rejected.>`—and expose the
   resolved union/overlap handling through runtime inspection.
-- [ ] C.6 Delete raw component-config port parsing from message-logger.
-- [ ] C.7 Prove 25-config census: 389/245/51 raw becomes 565/380/66 effective; delta 176/135/15, zero removals, 41
+- [x] C.6 Delete raw component-config port parsing from message-logger.
+- [x] C.7 Prove 21-config census: 385/243/51 raw becomes 561/378/66 effective; delta 176/135/15, zero removals, 41
   exact collapses, three named wildcard overlaps without duplicate capture.
-- [ ] C.8 Prove omitted/disabled logger creates no instance, buffer, observer, subscription, route, delivery work,
+- [x] C.8 Prove omitted/disabled logger creates no instance, buffer, observer, subscription, route, delivery work,
   capture, or backpressure.
-- [ ] C.9 Obtain independent review for Slice C.
+- [x] C.9 Obtain independent review for Slice C.
+
+Slice C.1-C.6/C.8 evidence: Registry capability preparation, flowgraph construction, ComponentManager management
+views, and flow validation consume defensive admitted-generation ports/facts; the only production component port-method
+calls remaining are the Registry admission capture. Capability JSON and publish subject are captured before the
+asynchronous publisher starts. Focused component, flowgraph, service, and race tests pass for retained publication,
+management views, latest-state observer replacement/removal, logger add/replace/remove reconciliation, explicit-only
+observer absence, exact/named-containment deduplication with runtime inspection, single capture, Stop cleanup, and
+omitted/disabled no-construction/no-route behavior. Raw message-logger `PortConfig` parsing is removed.
+
+C.7 evidence is the version-2 artifact at `service/testdata/message_logger_subject_census.json`, frozen against baseline
+SHA `f2b7c4506ae78b1b8ace9fbc581994a2d14f1d55` and the 2026-08-09 owner ruling. The ruling retired exactly four
+configurations whose enabled factories had no production registration:
+`configs/http-gateway-semantic-search.json`, `configs/semantic-basic.json`,
+`configs/examples/bm25-semantic-search.json`, and `configs/examples/pathrag-graph-traversal.json`. No alias, synthetic
+factory, substitute configuration, or census exclusion was added.
+
+The production-loader/real-factory harness discovers all 21 remaining shipped component configurations, constructs
+every enabled component, accumulates every construction failure deterministically, and fails if any exist. The
+completeness pass exposed and the owner ruled three bounded production prerequisites: WebSocket documented duration
+decoding plus explicit `ws_control` in `configs/cloud-federation.json@1.0.2`; explicit `ALIAS_INDEX` in
+`configs/hello-world.json@1.1.1`; and core-NATS declarations matching mission-command behavior in
+`configs/lifecycle-flow.json@1.1.1`. The final unskipped pass proves 385/243/51 raw becomes 561/378/66 effective, with
+the unchanged 176/135/15 delta, zero removals, 41 exact collapses, and the three accepted agentic overlaps.
+
+Independent `semstreams-reviewer` verdict: `APPROVE`; all Slice C findings are closed. The final observer ordering
+proof passed 800 race-enabled fresh-registry add/replace/remove sequences. Focused component, flowgraph, engine,
+WebSocket, port-grammar, and service race suites pass; logger lifecycle and failed-subscription reconciliation tests
+pass repeatedly; the validator retains real factory identity with no synthetic registration; the census mechanically
+derives the 40 loop/dispatch and one governance exact-collapse attribution. Full Go tests, lint, build, contract tests,
+strict OpenSpec validation (37/37), diff checks, and negative `flow-validation-` searches pass.
 
 ## D. Stream-planning invariant and removal searches
 
@@ -131,3 +162,39 @@ Independent `semstreams-reviewer` verdict: `REVIEW PASS / APPROVE`; all Slice B 
   `semstreams-ui`, `semteams`, `semconnect`, `semlink`, `semops` only after framework gates. Do not implement
   downstream here; differences are migration evidence and do not reopen/block framework ruling.
 - [ ] E.10 Re-run all negative searches on merged tree and archive only when task truth/evidence complete.
+
+## Slice C owner-ruling conformance
+
+| Owner ruling | Implementation evidence | Deviation |
+|---|---|---|
+| Retire exactly four unregistered-factory configs | C1 | None |
+| Add no alias, synthetic factory, substitute config, or exclusion | C2 | None |
+| Derive the complete 21-config census through production paths | C3 | None |
+| Fail on every future unknown enabled factory | C4 | None |
+| Decode documented WebSocket durations within the component seam | C5 | None |
+| Preserve strict WebSocket port replacement and declare both outputs | C6 | None |
+| Preserve strict graph-index validation and declare `ALIAS_INDEX` | C7 | None |
+| Describe mission-command's actual core-NATS behavior | C8 | None |
+| Remove live usage references while preserving historical evidence | C9 | None |
+| Keep C.9 unchecked until independent approval and D/E untouched | C10 | None |
+
+- **C1:** artifact ruling at `service/testdata/message_logger_subject_census.json:8-18`; absence guard at
+  `service/message_logger_census_test.go:76-120`.
+- **C2:** prohibited substitutes at `service/testdata/message_logger_subject_census.json:14-18`; construction has no
+  exclusion lane at `service/message_logger_census_test.go:220-248`.
+- **C3:** production loader/factories and exact comparisons at
+  `service/message_logger_census_test.go:89-163,210-248`; frozen values at
+  `service/testdata/message_logger_subject_census.json:25-73`.
+- **C4:** complete-set failure gate and unknown-factory test at
+  `service/message_logger_census_test.go:122-124,166-185,243-248`.
+- **C5:** private duration decoder at `input/websocket/register.go:42-125`; string, numeric, default, and invalid tests
+  at `input/websocket/register_test.go:20-100`.
+- **C6:** explicit versioned config at `configs/cloud-federation.json:2,58-80`; corrected examples at
+  `input/websocket/README.md:63-106` and `input/websocket/doc.go:144-187`.
+- **C7:** version and explicit fourth output at `configs/hello-world.json:2,196-225`.
+- **C8:** version and canonical NATS declarations at `configs/lifecycle-flow.json:2,95-125`.
+- **C9:** live links end at `gateway/http/README.md:467-470`; historical rows remain at
+  `docs/proposals/foundation-b-port-language-worklist.tsv:274,380-383` and
+  `docs/adr/065-predicate-index-composite-key-sharding.md:373`.
+- **C10:** C.9 changed only after independent approval; D/E remain unchecked at
+  `openspec/changes/post-foundation-b-declaration-generation/tasks.md:138-164`.

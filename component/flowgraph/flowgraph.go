@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/internal/graphmutation"
 	"github.com/c360studio/semstreams/pkg/errs"
 )
@@ -123,8 +124,35 @@ func (g *FlowGraph) GetEdges() []FlowEdge {
 	return result
 }
 
-// AddComponentNode adds a component as a node in the graph
-func (g *FlowGraph) AddComponentNode(name string, comp component.Discoverable) error {
+// BuildFromRegistry constructs a flow graph solely from retained Registry
+// declarations. Its internal token keeps this runtime seam framework-only.
+func BuildFromRegistry(
+	access componentadmission.Access, registry *component.Registry,
+) (*FlowGraph, error) {
+	graph := NewFlowGraph()
+	for _, snapshot := range registry.Snapshots(access) {
+		if err := graph.addComponentNode(
+			snapshot.Name(), snapshot.Discoverable(),
+			snapshot.Inputs(), snapshot.InputDeclarationFacts(),
+			snapshot.Outputs(), snapshot.OutputDeclarationFacts(),
+		); err != nil {
+			return nil, fmt.Errorf("add component %q to flow graph: %w", snapshot.Name(), err)
+		}
+	}
+	if err := graph.ConnectComponentsByPatterns(); err != nil {
+		return nil, fmt.Errorf("connect component flow graph: %w", err)
+	}
+	return graph, nil
+}
+
+func (g *FlowGraph) addComponentNode(
+	name string,
+	comp component.Discoverable,
+	inputDeclaration []component.Port,
+	inputFacts []component.PortFacts,
+	outputDeclaration []component.Port,
+	outputFacts []component.PortFacts,
+) error {
 	if name == "" {
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", "component name cannot be empty")
 	}
@@ -135,11 +163,11 @@ func (g *FlowGraph) AddComponentNode(name string, comp component.Discoverable) e
 		return errs.WrapInvalid(errs.ErrInvalidConfig, "FlowGraph", "AddComponentNode", fmt.Sprintf("component %s already exists", name))
 	}
 
-	inputPorts, err := g.extractPortInfo(comp.InputPorts())
+	inputPorts, err := g.extractPortInfo(inputDeclaration, inputFacts)
 	if err != nil {
 		return fmt.Errorf("component %q input ports: %w", name, err)
 	}
-	outputPorts, err := g.extractPortInfo(comp.OutputPorts())
+	outputPorts, err := g.extractPortInfo(outputDeclaration, outputFacts)
 	if err != nil {
 		return fmt.Errorf("component %q output ports: %w", name, err)
 	}
@@ -155,14 +183,16 @@ func (g *FlowGraph) AddComponentNode(name string, comp component.Discoverable) e
 }
 
 // extractPortInfo converts component ports to PortInfo for graph analysis
-func (g *FlowGraph) extractPortInfo(ports []component.Port) ([]PortInfo, error) {
+func (g *FlowGraph) extractPortInfo(
+	ports []component.Port, retainedFacts []component.PortFacts,
+) ([]PortInfo, error) {
+	if len(ports) != len(retainedFacts) {
+		return nil, fmt.Errorf("retained port/fact count mismatch: %d ports, %d facts", len(ports), len(retainedFacts))
+	}
 	result := make([]PortInfo, 0, len(ports))
 
-	for _, port := range ports {
-		facts, err := port.Facts()
-		if err != nil {
-			return nil, err
-		}
+	for index, port := range ports {
+		facts := retainedFacts[index]
 		connections := facts.ConnectionIDs()
 		if len(connections) == 0 {
 			return nil, fmt.Errorf("port %q has no connection identity", port.Name)

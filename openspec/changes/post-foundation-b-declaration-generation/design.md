@@ -1,7 +1,8 @@
 # Design — Post-Foundation-B declaration generation
 
-**Status:** OWNER-ACCEPTED / DESIGN PASS — implementation active. Slice A is complete and independently approved with
-verdict `REVIEW PASS / APPROVE`; Slices B–E remain unchecked.
+**Status:** OWNER-ACCEPTED / DESIGN PASS — implementation active. Slices A and B are complete and independently
+approved. Slice C implementation is complete through C.8 and awaits C.9 independent review; Slices D and E remain
+unchecked.
 **Repository baseline:** `ee3b43ce67f3ee6b39547317529da7ce1a783233`.
 
 The accepted inventory and owner-accepted design below are incorporated by reference as the sole authority for this
@@ -21,13 +22,19 @@ or reinterpreted here.
 - **Identity:** 1,035 lines, 73,672 bytes, SHA-256
   `be8e4c2c6fbcfbcd966038448011cf98112e62e52147b088a0a794808ec9b814`.
 - **Owner acceptance and independent review:**
-  `docs/proposals/post-foundation-b-declaration-generation-design-review.md:1-9,162-166`; verdict `DESIGN PASS`.
+  `docs/proposals/post-foundation-b-declaration-generation-design-review.md:1-7,167-171`; verdict `DESIGN PASS`.
+
+The reviewed identity above remains the historical design baseline. On 2026-08-09 the owner approved a bounded Slice C
+census amendment: retire exactly four configurations whose enabled factories have no production registration, add no
+alias/synthetic factory/substitute, repair three production-constructibility prerequisites at their owners, and freeze
+the mechanically recomputed 21-config census. Independent review of this amendment remains task C.9.
 
 ## Part III — Ordered implementation slices
 
 The exact implementation order, current task truth, and independent review checkpoints live in [tasks.md](./tasks.md).
-Slice A is complete and independently approved; Slices B–E remain unchecked. Slices A–E translate the accepted
-design; they do not amend it.
+Slices A and B are complete and independently approved. Slice C is implemented through C.8 and awaits C.9; Slices D
+and E remain unchecked. The bounded owner-approved Slice C census correction is recorded above and in the accepted
+design artifact.
 
 Decision-skill outcomes already bound by the accepted design:
 
@@ -38,8 +45,9 @@ Decision-skill outcomes already bound by the accepted design:
 
 ## Part IV — Owner-ruling conformance
 
-The OpenSpec change translates all twelve owner-accepted rulings without amendment. The evidence sets below bind each
-ruling to proposal, delta-spec, and implementation-task text. There are no deviations.
+The OpenSpec change translates the original twelve owner-accepted rulings plus the bounded 2026-08-09 Slice C census
+amendment. The evidence sets below bind each ruling to proposal, delta-spec, and implementation-task text. There are no
+deviations from either authority.
 
 | Ruling | Accepted disposition | Evidence set | Deviation |
 |---:|---|:---:|:---:|
@@ -47,7 +55,7 @@ ruling to proposal, delta-spec, and implementation-task text. There are no devia
 | 2 | A declaration is immutable within its generation | R2 | None |
 | 3 | Registry solely owns declaration-derived resource admission | R3 | None |
 | 4 | Default-only JetStream output coverage is exactly 61/61/0 | R4 | None |
-| 5 | Logger expansion preserves the measured census and three accepted overlaps | R5 | None |
+| 5 | Logger expansion preserves the amended 21-config census and three accepted overlaps | R5 | None |
 | 6 | Identity-free component admission is removed without a shim | R6 | None |
 | 7 | Provisioning intent and admitted runtime declaration remain distinct facts | R7 | None |
 | 8 | Registry snapshot observation remains an internal framework API | R8 | None |
@@ -64,7 +72,7 @@ ruling to proposal, delta-spec, and implementation-task text. There are no devia
 - **R3:** proposal `proposal.md:20-21`; spec `specs/component-discovery/spec.md:36-42`; tasks `tasks.md:37-38`.
 - **R4:** proposal `proposal.md:51-53`; spec `specs/stream-provisioning/spec.md:31-38`; tasks
   `tasks.md:77-79`.
-- **R5:** proposal `proposal.md:30-34`; spec `specs/message-logger/spec.md:56-70`; tasks `tasks.md:61-67`.
+- **R5:** proposal `proposal.md:30-37`; spec `specs/message-logger/spec.md:56-77`; tasks `tasks.md:99-127`.
 - **R6:** proposal `proposal.md:22-23`; spec `specs/component-discovery/spec.md:90-96`; tasks `tasks.md:39`.
 - **R7:** proposal `proposal.md:51-53`, `proposal.md:69-70`; spec `specs/stream-provisioning/spec.md:3-9`; tasks
   `tasks.md:74-76`.

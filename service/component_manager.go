@@ -2389,43 +2389,37 @@ type FlowGap struct {
 	Issue         string `json:"issue"`     // "no_publishers" or "no_subscribers"
 }
 
-// extractComponentPortInfo extracts port information from a component for flow validation
-func (cm *ComponentManager) extractComponentPortInfo(comp component.Discoverable) (*ComponentPortInfo, error) {
-	metadata := comp.Meta()
-
+// extractComponentPortInfo extracts retained port information for flow validation.
+func (cm *ComponentManager) extractComponentPortInfo(instanceName string) (*ComponentPortInfo, error) {
+	snapshot, ok := cm.registry.Snapshot(componentadmission.Access{}, instanceName)
+	if !ok {
+		return nil, fmt.Errorf("component %q has no admitted declaration", instanceName)
+	}
 	portInfo := &ComponentPortInfo{
-		ComponentName: metadata.Name,
+		ComponentName: instanceName,
 		InputPorts:    []ComponentPortDetail{},
 		OutputPorts:   []ComponentPortDetail{},
 	}
 
-	// Extract input ports
-	for _, port := range comp.InputPorts() {
-		detail, err := cm.extractPortDetail(port)
-		if err != nil {
-			return nil, err
-		}
-		portInfo.InputPorts = append(portInfo.InputPorts, detail)
+	inputs := snapshot.Inputs()
+	inputFacts := snapshot.InputDeclarationFacts()
+	for index, port := range inputs {
+		portInfo.InputPorts = append(portInfo.InputPorts, cm.extractPortDetail(port, inputFacts[index]))
 	}
 
-	// Extract output ports
-	for _, port := range comp.OutputPorts() {
-		detail, err := cm.extractPortDetail(port)
-		if err != nil {
-			return nil, err
-		}
-		portInfo.OutputPorts = append(portInfo.OutputPorts, detail)
+	outputs := snapshot.Outputs()
+	outputFacts := snapshot.OutputDeclarationFacts()
+	for index, port := range outputs {
+		portInfo.OutputPorts = append(portInfo.OutputPorts, cm.extractPortDetail(port, outputFacts[index]))
 	}
 
 	return portInfo, nil
 }
 
 // extractPortDetail extracts subject and type information from a port
-func (cm *ComponentManager) extractPortDetail(port component.Port) (ComponentPortDetail, error) {
-	facts, err := port.Facts()
-	if err != nil {
-		return ComponentPortDetail{}, err
-	}
+func (cm *ComponentManager) extractPortDetail(
+	port component.Port, facts component.PortFacts,
+) ComponentPortDetail {
 	detail := &ComponentPortDetail{
 		Name:      port.Name,
 		Direction: port.Direction,
@@ -2434,19 +2428,19 @@ func (cm *ComponentManager) extractPortDetail(port component.Port) (ComponentPor
 	if subjects := facts.NATSSubjects(); len(subjects) > 0 {
 		detail.Subject = subjects[0]
 	}
-	return *detail, nil
+	return *detail
 }
 
 // analyzeFlowConnections identifies connections between components based on subject matching
-func (cm *ComponentManager) analyzeFlowConnections(components []component.Discoverable) ([]FlowConnection, error) {
+func (cm *ComponentManager) analyzeFlowConnections(instanceNames []string) ([]FlowConnection, error) {
 	var connections []FlowConnection
 
 	// Build lists of publishers and subscribers
 	var publishers []publisherInfo
 	var subscribers []subscriberInfo
 
-	for _, comp := range components {
-		portInfo, err := cm.extractComponentPortInfo(comp)
+	for _, instanceName := range instanceNames {
+		portInfo, err := cm.extractComponentPortInfo(instanceName)
 		if err != nil {
 			return nil, err
 		}
@@ -2554,26 +2548,7 @@ func (cm *ComponentManager) GetFlowGraph() (*flowgraph.FlowGraph, error) {
 
 // buildFlowGraph creates a new FlowGraph from current components
 func (cm *ComponentManager) buildFlowGraph() (*flowgraph.FlowGraph, error) {
-	cm.mu.RLock()
-	defer cm.mu.RUnlock()
-
-	graph := flowgraph.NewFlowGraph()
-
-	// Phase 1: Add all components as nodes
-	for name, mc := range cm.components {
-		if mc.Component != nil {
-			if err := graph.AddComponentNode(name, mc.Component); err != nil {
-				return nil, fmt.Errorf("add component %q to flow graph: %w", name, err)
-			}
-		}
-	}
-
-	// Phase 2: Build edges by matching connection patterns
-	if err := graph.ConnectComponentsByPatterns(); err != nil {
-		return nil, fmt.Errorf("connect component flow graph: %w", err)
-	}
-
-	return graph, nil
+	return flowgraph.BuildFromRegistry(componentadmission.Access{}, cm.registry)
 }
 
 // invalidateFlowGraph marks the cached FlowGraph as invalid

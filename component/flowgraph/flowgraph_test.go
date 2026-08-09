@@ -23,7 +23,7 @@ func TestFlowGraphConstruction(t *testing.T) {
 		graph := NewFlowGraph()
 		mockComponent := createMockComponent("test-component", "processor")
 
-		err := graph.AddComponentNode("test-component", mockComponent)
+		err := addTestComponentNode(graph, "test-component", mockComponent)
 		require.NoError(t, err)
 
 		nodes := graph.GetNodes()
@@ -39,11 +39,11 @@ func TestFlowGraphConstruction(t *testing.T) {
 		graph := NewFlowGraph()
 		mockComponent := createMockComponent("test-component", "processor")
 
-		err := graph.AddComponentNode("test-component", mockComponent)
+		err := addTestComponentNode(graph, "test-component", mockComponent)
 		require.NoError(t, err)
 
 		// Adding same component again should return error
-		err = graph.AddComponentNode("test-component", mockComponent)
+		err = addTestComponentNode(graph, "test-component", mockComponent)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "already exists")
 	})
@@ -59,7 +59,7 @@ func TestGetNodesReturnsIndependentInterfaceContracts(t *testing.T) {
 			Interface: &component.InterfaceContract{Type: "example.events", Compatible: []string{"v1"}},
 		},
 	}}, nil)
-	require.NoError(t, graph.AddComponentNode("reader", instance))
+	require.NoError(t, addTestComponentNode(graph, "reader", instance))
 
 	first := graph.GetNodes()
 	first["reader"].InputPorts[0].Interface.Type = "corrupt"
@@ -97,9 +97,9 @@ func TestStreamPatternConnections(t *testing.T) {
 		)
 
 		// Add components to graph
-		err := graph.AddComponentNode("publisher", publisher)
+		err := addTestComponentNode(graph, "publisher", publisher)
 		require.NoError(t, err)
-		err = graph.AddComponentNode("subscriber", subscriber)
+		err = addTestComponentNode(graph, "subscriber", subscriber)
 		require.NoError(t, err)
 
 		// Connect components by patterns
@@ -143,8 +143,8 @@ func TestStreamPatternConnections(t *testing.T) {
 		)
 
 		// Add components and connect
-		graph.AddComponentNode("publisher", publisher)
-		graph.AddComponentNode("subscriber", subscriber)
+		addTestComponentNode(graph, "publisher", publisher)
+		addTestComponentNode(graph, "subscriber", subscriber)
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -187,9 +187,9 @@ func TestStreamPatternConnections(t *testing.T) {
 		)
 
 		// Add components and connect
-		graph.AddComponentNode("publisher", publisher)
-		graph.AddComponentNode("subscriber1", subscriber1)
-		graph.AddComponentNode("subscriber2", subscriber2)
+		addTestComponentNode(graph, "publisher", publisher)
+		addTestComponentNode(graph, "subscriber1", subscriber1)
+		addTestComponentNode(graph, "subscriber2", subscriber2)
 
 		err := graph.ConnectComponentsByPatterns()
 		require.NoError(t, err)
@@ -247,9 +247,9 @@ func TestFlowGraphAnalysis(t *testing.T) {
 		)
 
 		// Add components and connect
-		graph.AddComponentNode("input", input)
-		graph.AddComponentNode("processor", processor)
-		graph.AddComponentNode("output", output)
+		addTestComponentNode(graph, "input", input)
+		addTestComponentNode(graph, "processor", processor)
+		addTestComponentNode(graph, "output", output)
 		graph.ConnectComponentsByPatterns()
 
 		// Analyze connectivity
@@ -302,9 +302,9 @@ func TestFlowGraphAnalysis(t *testing.T) {
 		)
 
 		// Add components and connect
-		graph.AddComponentNode("connected1", connected1)
-		graph.AddComponentNode("connected2", connected2)
-		graph.AddComponentNode("isolated", isolated)
+		addTestComponentNode(graph, "connected1", connected1)
+		addTestComponentNode(graph, "connected2", connected2)
+		addTestComponentNode(graph, "isolated", isolated)
 		graph.ConnectComponentsByPatterns()
 
 		// Analyze connectivity
@@ -330,7 +330,7 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
 
 	t.Run("canonical facts classify and identify HTTP client", func(t *testing.T) {
-		infos, err := g.extractPortInfo([]component.Port{{
+		infos, err := extractTestPortInfo(g, []component.Port{{
 			Name: "http", Direction: component.DirectionInput,
 			Config: component.HTTPClientPort{Method: "GET", URLPattern: "https://api.weather.gov/alerts/active"},
 		}})
@@ -341,7 +341,7 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 	})
 
 	t.Run("missing URL is rejected", func(t *testing.T) {
-		_, err := g.extractPortInfo([]component.Port{{
+		_, err := extractTestPortInfo(g, []component.Port{{
 			Name: "http", Direction: component.DirectionInput, Config: component.HTTPClientPort{Method: "GET"},
 		}})
 		require.Error(t, err)
@@ -369,7 +369,7 @@ func TestHTTPClientPortFlowGraph(t *testing.T) {
 			}},
 		)
 		graph := NewFlowGraph()
-		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+		require.NoError(t, addTestComponentNode(graph, "cap_poller", comp))
 
 		orphans := graph.findOrphanedPorts()
 
@@ -395,7 +395,7 @@ func TestTimerPortFlowGraph(t *testing.T) {
 	g := &FlowGraph{nodes: make(map[string]*ComponentNode), edges: []FlowEdge{}}
 
 	t.Run("canonical facts classify component.PatternTimer", func(t *testing.T) {
-		infos, err := g.extractPortInfo([]component.Port{{
+		infos, err := extractTestPortInfo(g, []component.Port{{
 			Name: "timer", Direction: component.DirectionInput, Config: component.TimerPort{Interval: "30s"},
 		}})
 		require.NoError(t, err)
@@ -433,7 +433,7 @@ func TestTimerPortFlowGraph(t *testing.T) {
 			}},
 		)
 		graph := NewFlowGraph()
-		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+		require.NoError(t, addTestComponentNode(graph, "cap_poller", comp))
 
 		orphans := graph.findOrphanedPorts()
 
@@ -459,7 +459,7 @@ func TestTimerPortFlowGraph(t *testing.T) {
 			nil,
 		)
 		graph := NewFlowGraph()
-		require.NoError(t, graph.AddComponentNode("cap_poller", comp))
+		require.NoError(t, addTestComponentNode(graph, "cap_poller", comp))
 
 		node := graph.nodes["cap_poller"]
 		require.NotNil(t, node)

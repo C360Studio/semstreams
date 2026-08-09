@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.2",
   "platform": {
     "org": "c360",
     "id": "streamkit-cloud",
@@ -67,6 +67,16 @@
               },
               "description": "Data received from edge via WebSocket",
               "name": "ws_data"
+            },
+            {
+              "config": {
+                "kind": "jetstream",
+                "subjects": [
+                  "cloud.federated.control"
+                ]
+              },
+              "description": "Control messages received from edge via WebSocket",
+              "name": "ws_control"
             }
           ]
         },

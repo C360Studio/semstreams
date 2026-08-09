@@ -1,0 +1,75 @@
+{
+  "version": 2,
+  "baseline_sha": "f2b7c4506ae78b1b8ace9fbc581994a2d14f1d55",
+  "ruling": {
+    "authority": "owner-approved Slice C ruling",
+    "date": "2026-08-09",
+    "disposition": "retire enabled configs whose factories have no production registration",
+    "retired_configs": [
+      "configs/examples/bm25-semantic-search.json",
+      "configs/examples/pathrag-graph-traversal.json",
+      "configs/http-gateway-semantic-search.json",
+      "configs/semantic-basic.json"
+    ],
+    "prohibited_substitutes": [
+      "aliases",
+      "synthetic factories",
+      "substitute configurations"
+    ],
+    "production_prerequisite_repairs": [
+      "configs/cloud-federation.json@1.0.2: explicit ws_control plus documented WebSocket duration decoding",
+      "configs/hello-world.json@1.1.1: explicit ALIAS_INDEX graph-index output",
+      "configs/lifecycle-flow.json@1.1.1: mission-command ports declare actual core NATS behavior"
+    ]
+  },
+  "scope": [
+    "configs/agentic.json",
+    "configs/cloud-federation.json",
+    "configs/e2e-structural.json",
+    "configs/edge-federation.json",
+    "configs/examples/research-graph-pipeline.json",
+    "configs/flows/crud-tools-test.json",
+    "configs/flows/deep-research-test.json",
+    "configs/flows/deep-research.json",
+    "configs/flows/lesson-example.json",
+    "configs/flows/ops-agent-test.json",
+    "configs/flows/ops-agent.json",
+    "configs/graph-backend.json",
+    "configs/hello-world.json",
+    "configs/lifecycle-flow.json",
+    "configs/protocol-flow.json",
+    "configs/research-graph-e2e.json",
+    "configs/semantic-8b.json",
+    "configs/semantic-frontier.json",
+    "configs/semantic.json",
+    "configs/statistical.json",
+    "configs/structural.json"
+  ],
+  "raw": {"rows": 385, "per_config_exact_keys": 243, "global_strings": 51},
+  "effective": {"rows": 561, "per_config_exact_keys": 378, "global_strings": 66},
+  "delta": {"rows": 176, "per_config_exact_keys": 135, "global_strings": 15, "removals": 0},
+  "exact_collapses": {"loop_dispatch": 40, "governance": 1, "total": 41},
+  "added_kinds": {
+    "jetstream_inputs": 60,
+    "jetstream_outputs": 61,
+    "nats_inputs": 18,
+    "nats_outputs": 28,
+    "nats_request_inputs": 9
+  },
+  "affected_configs": [
+    "configs/agentic.json",
+    "configs/research-graph-e2e.json",
+    "configs/examples/research-graph-pipeline.json",
+    "configs/flows/crud-tools-test.json",
+    "configs/flows/deep-research-test.json",
+    "configs/flows/deep-research.json",
+    "configs/flows/lesson-example.json",
+    "configs/flows/ops-agent-test.json",
+    "configs/flows/ops-agent.json"
+  ],
+  "containment_overlaps": [
+    {"config": "configs/agentic.json", "broader": "agent.toolcall.proposed.>", "covered": "agent.toolcall.proposed.*"},
+    {"config": "configs/agentic.json", "broader": "agent.toolcall.approved.>", "covered": "agent.toolcall.approved.*"},
+    {"config": "configs/agentic.json", "broader": "agent.toolcall.rejected.>", "covered": "agent.toolcall.rejected.*"}
+  ]
+}

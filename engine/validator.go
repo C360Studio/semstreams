@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/flowstore"
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
@@ -199,8 +201,14 @@ func (v *Validator) ValidateFlow(flow *flowstore.Flow) (*ValidationResult, error
 // buildFlowGraph creates a FlowGraph from a Flow
 // Returns the graph and any errors encountered (e.g., unknown component types)
 func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, []ValidationIssue) {
-	graph := flowgraph.NewFlowGraph()
 	var buildErrors []ValidationIssue
+	validationRegistry, registrations, err := v.newValidationRegistry()
+	if err != nil {
+		return flowgraph.NewFlowGraph(), []ValidationIssue{{
+			Type: "graph_build_error", Severity: "error",
+			Message: fmt.Sprintf("Failed to prepare validation registry: %v", err),
+		}}
+	}
 
 	for _, node := range flow.Nodes {
 		v.logger.Debug("Adding component to FlowGraph",
@@ -210,12 +218,9 @@ func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, 
 			"node_name", node.Name,
 			"config", node.Config)
 
-		// Get component from registry with node's actual config
-		comp, err := v.getComponentFromRegistry(node.Component, node.Config)
-		if err != nil {
+		if _, exists := registrations[node.Component]; !exists {
 			v.logger.Debug("Component lookup failed",
-				"component", node.Component,
-				"error", err)
+				"component", node.Component)
 			// Unknown component type is a critical error
 			buildErrors = append(buildErrors, ValidationIssue{
 				Type:          "unknown_component",
@@ -231,17 +236,25 @@ func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, 
 		}
 		v.logger.Debug("Component lookup succeeded", "component", node.Component)
 
-		// Add to graph using node.ID (unique identifier), not node.Name (user-friendly label)
-		if err := graph.AddComponentNode(node.ID, comp); err != nil {
+		configJSON, admissionErr := json.Marshal(node.Config)
+		if node.Config == nil {
+			configJSON = json.RawMessage(`{}`)
+		}
+		if admissionErr == nil {
+			_, admissionErr = validationRegistry.CreateComponent(node.ID, types.ComponentConfig{
+				Name: node.Component, Type: node.Type, Enabled: true, Config: configJSON,
+			}, component.Dependencies{NATSClient: v.natsClient})
+		}
+		if admissionErr != nil {
 			v.logger.Debug("Failed to add component to graph",
 				"node_id", node.ID,
 				"node_name", node.Name,
-				"error", err)
+				"error", admissionErr)
 			buildErrors = append(buildErrors, ValidationIssue{
 				Type:          "graph_build_error",
 				Severity:      "error",
 				ComponentName: node.Name,
-				Message:       fmt.Sprintf("Failed to add component to graph: %v", err),
+				Message:       fmt.Sprintf("Failed to add component to graph: %v", admissionErr),
 			})
 		} else {
 			v.logger.Debug("Component added to graph successfully",
@@ -250,46 +263,37 @@ func (v *Validator) buildFlowGraph(flow *flowstore.Flow) (*flowgraph.FlowGraph, 
 		}
 	}
 
+	graph, err := flowgraph.BuildFromRegistry(componentadmission.Access{}, validationRegistry)
+	if err != nil {
+		buildErrors = append(buildErrors, ValidationIssue{
+			Type: "graph_build_error", Severity: "error",
+			Message: fmt.Sprintf("Failed to connect component graph: %v", err),
+		})
+		return flowgraph.NewFlowGraph(), buildErrors
+	}
 	return graph, buildErrors
 }
 
-// getComponentFromRegistry retrieves a component from the registry by type
-// Creates a temporary instance using the factory for port discovery
-func (v *Validator) getComponentFromRegistry(
-	componentType string,
-	nodeConfig map[string]any,
-) (component.Discoverable, error) {
-	// Get the factory function
-	factory, exists := v.componentRegistry.GetFactory(componentType)
-	if !exists {
-		return nil, fmt.Errorf("component type %s not found in registry", componentType)
+func (v *Validator) newValidationRegistry() (*component.Registry, map[string]*component.Registration, error) {
+	validationRegistry := component.NewRegistry()
+	registrations := v.componentRegistry.ListFactories()
+	names := make([]string, 0, len(registrations))
+	for name := range registrations {
+		names = append(names, name)
 	}
-
-	// Marshal node config to JSON for factory
-	var configJSON []byte
-	var err error
-	if len(nodeConfig) == 0 {
-		configJSON = []byte("{}")
-	} else {
-		configJSON, err = json.Marshal(nodeConfig)
-		if err != nil {
-			return nil, fmt.Errorf("failed to marshal node config: %w", err)
+	sort.Strings(names)
+	for _, name := range names {
+		factory, exists := v.componentRegistry.GetFactory(name)
+		if !exists {
+			return nil, nil, fmt.Errorf("factory %s disappeared while preparing validation", name)
+		}
+		registration := *registrations[name]
+		registration.Factory = factory
+		if err := validationRegistry.RegisterFactory(name, &registration); err != nil {
+			return nil, nil, fmt.Errorf("register validation factory %s: %w", name, err)
 		}
 	}
-
-	// Create dependencies with real NATS client
-	deps := component.Dependencies{
-		NATSClient: v.natsClient,
-		Logger:     nil, // Logger not needed for port discovery
-	}
-
-	// Create component instance with actual config
-	comp, err := factory(configJSON, deps)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create component instance for port discovery: %w", err)
-	}
-
-	return comp, nil
+	return validationRegistry, registrations, nil
 }
 
 // convertAnalysisToResult converts FlowGraph analysis to ValidationResult

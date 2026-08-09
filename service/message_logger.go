@@ -4,14 +4,17 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/message"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/nats-io/nats.go"
@@ -36,42 +39,6 @@ func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Ser
 		cfg.SampleRate = 1 // Default: log all messages
 	}
 
-	// Handle "*" wildcard for auto-discovery from flow config
-	var subjectMetadata map[string]portMetadata
-	if containsWildcard(cfg.MonitorSubjects) {
-		// Extract component configs for discovery
-		var componentConfigs map[string]json.RawMessage
-		if deps.Manager != nil {
-			safeConfig := deps.Manager.GetConfig()
-			if safeConfig != nil {
-				flowConfig := safeConfig.Get()
-				if flowConfig != nil && flowConfig.Components != nil {
-					componentConfigs = make(map[string]json.RawMessage)
-					for name, comp := range flowConfig.Components {
-						if comp.Enabled {
-							componentConfigs[name] = comp.Config
-						}
-					}
-				}
-			}
-		}
-
-		// Discover subjects from component port configs
-		discoveredSubjects, metadata := discoverSubjectsFromComponents(componentConfigs)
-		subjectMetadata = metadata
-
-		// Replace "*" with discovered subjects, keep other explicit subjects
-		var finalSubjects []string
-		for _, subj := range cfg.MonitorSubjects {
-			if subj == "*" {
-				finalSubjects = append(finalSubjects, discoveredSubjects...)
-			} else {
-				finalSubjects = append(finalSubjects, subj)
-			}
-		}
-		cfg.MonitorSubjects = uniqueStrings(finalSubjects)
-	}
-
 	// Validate configuration
 	if err := cfg.Validate(); err != nil {
 		return nil, fmt.Errorf("validate message-logger config: %w", err)
@@ -94,14 +61,10 @@ func NewMessageLoggerService(rawConfig json.RawMessage, deps *Dependencies) (Ser
 	ml, err := NewMessageLogger(&cfg, deps.NATSClient, opts...)
 	if ml != nil {
 		ml.SetDecoder(message.NewDecoder(deps.PayloadRegistry))
+		ml.componentRegistry = deps.ComponentRegistry
 	}
 	if err != nil {
 		return nil, err
-	}
-
-	// Set discovered metadata if available
-	if subjectMetadata != nil {
-		ml.subjectMetadata = subjectMetadata
 	}
 
 	return ml, nil
@@ -193,6 +156,22 @@ type portMetadata struct {
 	Interface string // Interface contract (e.g., "core.json.v1")
 }
 
+type subjectOverlap struct {
+	Broader    string `json:"broader"`
+	Covered    string `json:"covered"`
+	Resolution string `json:"resolution"`
+}
+
+type messageLoggerSubscription interface {
+	Unsubscribe() error
+}
+
+type messageLoggerSubscribe func(
+	context.Context, string, func(context.Context, *nats.Msg),
+) (messageLoggerSubscription, error)
+
+const messageLoggerReconcileRetryDelay = 100 * time.Millisecond
+
 // MessageLogger provides message observation and logging as a service
 type MessageLogger struct {
 	*BaseService
@@ -206,9 +185,16 @@ type MessageLogger struct {
 	decoder *message.Decoder
 
 	// NATS dependencies
-	natsClient    *natsclient.Client
-	subscriptions map[string]bool            // Track which subjects we're subscribed to
-	natsSubsRefs  []*natsclient.Subscription // Subscription references for cleanup
+	natsClient        *natsclient.Client
+	componentRegistry *component.Registry
+	subscribe         messageLoggerSubscribe
+	subscriptions     map[string]messageLoggerSubscription
+	autoDiscover      bool
+	explicitSubjects  []string
+	resolvedSubjects  []string
+	subjectOverlaps   []subjectOverlap
+	reconcileError    string
+	retryAfter        func(time.Duration) <-chan time.Time
 
 	// Message storage (circular buffer)
 	entries   []MessageLogEntry
@@ -225,6 +211,7 @@ type MessageLogger struct {
 
 	// Subject metadata for enriched logging
 	subjectMetadata map[string]portMetadata
+	subjectMu       sync.RWMutex
 
 	// Statistics
 	stats struct {
@@ -237,11 +224,14 @@ type MessageLogger struct {
 	}
 
 	// Lifecycle management
-	lifecycleMu sync.Mutex // Protects lifecycle fields
-	shutdown    chan struct{}
-	done        chan struct{}
-	logger      *slog.Logger
-	running     bool // Track if service is running (replaces config.Enabled)
+	transitionMu   sync.Mutex // Serializes complete Start and Stop transitions.
+	lifecycleMu    sync.Mutex // Protects lifecycle fields and subscription state.
+	observerCancel context.CancelFunc
+	observerDone   chan struct{}
+	retryCancel    context.CancelFunc
+	retryDone      chan struct{}
+	logger         *slog.Logger
+	running        bool // Track if service is running (replaces config.Enabled)
 }
 
 // NewMessageLogger creates a new MessageLogger service
@@ -271,15 +261,23 @@ func NewMessageLogger(
 	}
 
 	ml := &MessageLogger{
-		BaseService:     baseService,
-		config:          *loggerConfig, // Store config as value
-		natsClient:      natsClient,
-		subscriptions:   make(map[string]bool),
-		entries:         make([]MessageLogEntry, maxEntries),
-		traceIndex:      make(map[string][]uint64),
-		sampleRate:      sampleRate,
-		subjectMetadata: make(map[string]portMetadata),
-		logger:          baseService.logger.With("source", "message-logger"),
+		BaseService: baseService,
+		config:      *loggerConfig, // Store config as value
+		natsClient:  natsClient,
+		subscribe: func(
+			ctx context.Context, subject string, handler func(context.Context, *nats.Msg),
+		) (messageLoggerSubscription, error) {
+			return natsClient.Subscribe(ctx, subject, handler)
+		},
+		subscriptions:    make(map[string]messageLoggerSubscription),
+		autoDiscover:     containsWildcard(loggerConfig.MonitorSubjects),
+		explicitSubjects: explicitMonitorSubjects(loggerConfig.MonitorSubjects),
+		entries:          make([]MessageLogEntry, maxEntries),
+		traceIndex:       make(map[string][]uint64),
+		sampleRate:       sampleRate,
+		subjectMetadata:  make(map[string]portMetadata),
+		retryAfter:       time.After,
+		logger:           baseService.logger.With("source", "message-logger"),
 	}
 
 	// Initialize statistics
@@ -289,63 +287,15 @@ func NewMessageLogger(
 	return ml, nil
 }
 
-// discoverSubjectsFromComponents extracts NATS subjects from component port configs.
-// Returns a list of subjects and a map of subject -> portMetadata for enriched logging.
-func discoverSubjectsFromComponents(components map[string]json.RawMessage) ([]string, map[string]portMetadata) {
-	subjects := make(map[string]bool)
-	metadata := make(map[string]portMetadata)
-
-	for compName, rawConfig := range components {
-		// Parse the component's config to extract ports
-		var compConfig struct {
-			Ports component.PortConfig `json:"ports"`
-		}
-
-		if err := json.Unmarshal(rawConfig, &compConfig); err != nil {
-			continue // Skip components we can't parse
-		}
-
-		collectSubjectsFromDefinitions(compName, component.DirectionInput, compConfig.Ports.Inputs, subjects, metadata)
-		collectSubjectsFromDefinitions(compName, component.DirectionOutput, compConfig.Ports.Outputs, subjects, metadata)
-	}
-
-	result := make([]string, 0, len(subjects))
-	for subj := range subjects {
-		result = append(result, subj)
-	}
-	return result, metadata
-}
-
-func collectSubjectsFromDefinitions(
-	componentName string,
-	direction component.Direction,
-	definitions []component.PortDefinition,
-	subjects map[string]bool,
-	metadata map[string]portMetadata,
-) {
-	for _, definition := range definitions {
-		port, err := definition.Resolve(direction)
-		if err != nil {
-			continue
-		}
-		facts, err := port.Facts()
-		if err != nil {
-			continue
-		}
-		interfaceType := ""
-		if contract, ok := facts.Interface(); ok {
-			interfaceType = contract.Type
-		}
-		for _, subject := range facts.NATSSubjects() {
-			subjects[subject] = true
-			metadata[subject] = portMetadata{
-				Component: componentName,
-				PortName:  definition.Name,
-				PortType:  string(facts.Kind()),
-				Interface: interfaceType,
-			}
+func explicitMonitorSubjects(configured []string) []string {
+	explicit := make([]string, 0, len(configured))
+	for _, subject := range configured {
+		if subject != "*" {
+			explicit = append(explicit, subject)
 		}
 	}
+	sort.Strings(explicit)
+	return uniqueStrings(explicit)
 }
 
 // SetDecoder installs the payload Decoder used for typed BaseMessage
@@ -376,45 +326,315 @@ func (ml *MessageLogger) shouldSample() bool {
 	return count%uint64(ml.sampleRate) == 0
 }
 
+func (ml *MessageLogger) registrySubjects() (map[string]portMetadata, []string, []subjectOverlap) {
+	metadata := make(map[string]portMetadata)
+	desired := make(map[string]struct{}, len(ml.explicitSubjects))
+	for _, subject := range ml.explicitSubjects {
+		desired[subject] = struct{}{}
+	}
+	for _, snapshot := range ml.componentRegistry.Snapshots(componentadmission.Access{}) {
+		collectSnapshotSubjects(snapshot.Name(), snapshot.Inputs(), snapshot.InputDeclarationFacts(), desired, metadata)
+		collectSnapshotSubjects(snapshot.Name(), snapshot.Outputs(), snapshot.OutputDeclarationFacts(), desired, metadata)
+	}
+	subjects, overlaps := resolveLoggerSubjects(desired)
+	return metadata, subjects, overlaps
+}
+
+func collectSnapshotSubjects(
+	componentName string,
+	ports []component.Port,
+	facts []component.PortFacts,
+	desired map[string]struct{},
+	metadata map[string]portMetadata,
+) {
+	for index, port := range ports {
+		portFacts := facts[index]
+		switch portFacts.Kind() {
+		case component.PortKindNATS, component.PortKindNATSRequest, component.PortKindJetStream:
+		default:
+			continue
+		}
+		interfaceType := ""
+		if contract, ok := portFacts.Interface(); ok {
+			interfaceType = contract.Type
+		}
+		for _, subject := range portFacts.NATSSubjects() {
+			if subject == "*" || subject == ">" || subject == "_INBOX" || strings.HasPrefix(subject, "_INBOX.") {
+				continue
+			}
+			desired[subject] = struct{}{}
+			if _, exists := metadata[subject]; !exists {
+				metadata[subject] = portMetadata{
+					Component: componentName,
+					PortName:  port.Name,
+					PortType:  string(portFacts.Kind()),
+					Interface: interfaceType,
+				}
+			}
+		}
+	}
+}
+
+func resolveLoggerSubjects(desired map[string]struct{}) ([]string, []subjectOverlap) {
+	overlaps := make([]subjectOverlap, 0, 3)
+	for _, pair := range [][2]string{
+		{"agent.toolcall.proposed.>", "agent.toolcall.proposed.*"},
+		{"agent.toolcall.approved.>", "agent.toolcall.approved.*"},
+		{"agent.toolcall.rejected.>", "agent.toolcall.rejected.*"},
+	} {
+		if _, broad := desired[pair[0]]; !broad {
+			continue
+		}
+		if _, covered := desired[pair[1]]; !covered {
+			continue
+		}
+		delete(desired, pair[1])
+		overlaps = append(overlaps, subjectOverlap{
+			Broader: pair[0], Covered: pair[1], Resolution: "covered subscription omitted",
+		})
+	}
+	subjects := make([]string, 0, len(desired))
+	for subject := range desired {
+		subjects = append(subjects, subject)
+	}
+	sort.Strings(subjects)
+	return subjects, overlaps
+}
+
+func (ml *MessageLogger) reconcileRegistryState(ctx context.Context) error {
+	metadata, subjects, overlaps := ml.registrySubjects()
+	return ml.reconcileSubjects(ctx, subjects, metadata, overlaps)
+}
+
+func (ml *MessageLogger) reconcileSubjects(
+	ctx context.Context,
+	desired []string,
+	metadata map[string]portMetadata,
+	overlaps []subjectOverlap,
+) error {
+	ml.lifecycleMu.Lock()
+	defer ml.lifecycleMu.Unlock()
+	return ml.reconcileSubjectsLocked(ctx, desired, metadata, overlaps)
+}
+
+func (ml *MessageLogger) reconcileSubjectsLocked(
+	ctx context.Context,
+	desired []string,
+	metadata map[string]portMetadata,
+	overlaps []subjectOverlap,
+) error {
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, subject := range desired {
+		desiredSet[subject] = struct{}{}
+	}
+
+	if !ml.running {
+		return nil
+	}
+	var reconcileErrors []error
+	retainedObsolete := make(map[string]struct{})
+	for subject, subscription := range ml.subscriptions {
+		if _, keep := desiredSet[subject]; keep {
+			continue
+		}
+		if err := subscription.Unsubscribe(); err != nil {
+			ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
+			retainedObsolete[subject] = struct{}{}
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
+			continue
+		}
+		delete(ml.subscriptions, subject)
+	}
+	for _, subject := range desired {
+		if _, exists := ml.subscriptions[subject]; exists {
+			continue
+		}
+		if retained, ok := retainedAcceptedOverlap(subject, retainedObsolete); ok {
+			err := fmt.Errorf("subscribe %s deferred while overlapping subscription %s remains active", subject, retained)
+			ml.logger.Warn("Deferred overlapping subscription", "subject", subject, "retained_subject", retained)
+			reconcileErrors = append(reconcileErrors, err)
+			continue
+		}
+		subscription, err := ml.subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
+			ml.handleMessage(msgCtx, msg.Subject, msg.Data)
+		})
+		if err != nil {
+			ml.logger.Error("Failed to subscribe to subject", "subject", subject, "error", err)
+			reconcileErrors = append(reconcileErrors, fmt.Errorf("subscribe %s: %w", subject, err))
+			continue
+		}
+		ml.subscriptions[subject] = subscription
+		ml.logger.Debug("Subscribed to subject", "subject", subject)
+	}
+
+	ml.resolvedSubjects = ml.resolvedSubjects[:0]
+	for subject := range ml.subscriptions {
+		ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
+	}
+	sort.Strings(ml.resolvedSubjects)
+	ml.subjectOverlaps = ml.subjectOverlaps[:0]
+	for _, overlap := range overlaps {
+		_, broaderActive := ml.subscriptions[overlap.Broader]
+		_, coveredActive := ml.subscriptions[overlap.Covered]
+		if broaderActive && !coveredActive {
+			ml.subjectOverlaps = append(ml.subjectOverlaps, overlap)
+		}
+	}
+	reconcileErr := errors.Join(reconcileErrors...)
+	if reconcileErr == nil {
+		ml.reconcileError = ""
+	} else {
+		ml.reconcileError = reconcileErr.Error()
+	}
+
+	ml.subjectMu.Lock()
+	actualMetadata := make(map[string]portMetadata, len(ml.subscriptions))
+	for subject := range ml.subscriptions {
+		if current, ok := metadata[subject]; ok {
+			actualMetadata[subject] = current
+		} else if previous, ok := ml.subjectMetadata[subject]; ok {
+			actualMetadata[subject] = previous
+		}
+	}
+	ml.subjectMetadata = actualMetadata
+	ml.subjectMu.Unlock()
+	return reconcileErr
+}
+
+func retainedAcceptedOverlap(subject string, retained map[string]struct{}) (string, bool) {
+	for _, pair := range [][2]string{
+		{"agent.toolcall.proposed.>", "agent.toolcall.proposed.*"},
+		{"agent.toolcall.approved.>", "agent.toolcall.approved.*"},
+		{"agent.toolcall.rejected.>", "agent.toolcall.rejected.*"},
+	} {
+		if subject == pair[0] {
+			if _, ok := retained[pair[1]]; ok {
+				return pair[1], true
+			}
+		}
+		if subject == pair[1] {
+			if _, ok := retained[pair[0]]; ok {
+				return pair[0], true
+			}
+		}
+	}
+	return "", false
+}
+
+func (ml *MessageLogger) runExplicitRetry(
+	ctx context.Context, done chan<- struct{}, desired []string,
+) {
+	defer close(done)
+	for {
+		select {
+		case <-ml.retryAfter(messageLoggerReconcileRetryDelay):
+			if ml.reconcileSubjects(ctx, desired, map[string]portMetadata{}, nil) == nil {
+				return
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 // Start begins message observation
 func (ml *MessageLogger) Start(ctx context.Context) error {
+	ml.transitionMu.Lock()
+	defer ml.transitionMu.Unlock()
+
+	ml.lifecycleMu.Lock()
+	if ml.running {
+		ml.lifecycleMu.Unlock()
+		return fmt.Errorf("message logger already running")
+	}
+	if ml.autoDiscover && ml.componentRegistry == nil {
+		ml.lifecycleMu.Unlock()
+		return fmt.Errorf("message logger wildcard mode requires component registry")
+	}
+	ml.lifecycleMu.Unlock()
+
 	if err := ml.BaseService.Start(ctx); err != nil {
 		return err
 	}
 
-	ml.lifecycleMu.Lock()
-	defer ml.lifecycleMu.Unlock()
-
-	if ml.running {
-		return fmt.Errorf("message logger already running")
-	}
-
 	// MessageLogger is always enabled when running (managed by Manager)
 	ml.logger.Info("MessageLogger starting")
+	ml.lifecycleMu.Lock()
 	ml.running = true
+	ml.lifecycleMu.Unlock()
 
-	// Create shutdown channels
-	ml.shutdown = make(chan struct{})
-	ml.done = make(chan struct{})
+	if ml.autoDiscover {
+		observerCtx, cancel := context.WithCancel(ctx)
+		updates := ml.componentRegistry.ObserveSnapshots(observerCtx, componentadmission.Access{})
+		done := make(chan struct{})
+		ml.lifecycleMu.Lock()
+		ml.observerCancel = cancel
+		ml.observerDone = done
+		ml.lifecycleMu.Unlock()
 
-	// Subscribe to configured subjects
-	for _, subject := range ml.config.MonitorSubjects {
-		sub, err := ml.natsClient.Subscribe(ctx, subject, func(msgCtx context.Context, msg *nats.Msg) {
-			ml.handleMessage(msgCtx, msg.Subject, msg.Data)
-		})
-		if err != nil {
-			ml.logger.Error("Failed to subscribe to subject",
-				"subject", subject,
-				"error", err)
-			continue
+		select {
+		case _, ok := <-updates:
+			if !ok {
+				cancel()
+				close(done)
+				ml.lifecycleMu.Lock()
+				ml.running = false
+				ml.observerCancel = nil
+				ml.observerDone = nil
+				ml.lifecycleMu.Unlock()
+				_ = ml.BaseService.Stop(time.Second)
+				return fmt.Errorf("component declaration observer closed during message logger start")
+			}
+			retry := ml.reconcileRegistryState(observerCtx) != nil
+			go func() {
+				defer close(done)
+				for {
+					var retryTimer <-chan time.Time
+					if retry {
+						retryTimer = ml.retryAfter(messageLoggerReconcileRetryDelay)
+					}
+					select {
+					case _, ok := <-updates:
+						if !ok {
+							return
+						}
+						retry = ml.reconcileRegistryState(observerCtx) != nil
+					case <-retryTimer:
+						retry = ml.reconcileRegistryState(observerCtx) != nil
+					case <-observerCtx.Done():
+						return
+					}
+				}
+			}()
+		case <-observerCtx.Done():
+			close(done)
+			ml.lifecycleMu.Lock()
+			ml.running = false
+			ml.observerCancel = nil
+			ml.observerDone = nil
+			ml.lifecycleMu.Unlock()
+			_ = ml.BaseService.Stop(time.Second)
+			return observerCtx.Err()
 		}
-		ml.subscriptions[subject] = true
-		ml.natsSubsRefs = append(ml.natsSubsRefs, sub)
-		ml.logger.Debug("Subscribed to subject", "subject", subject)
+	} else {
+		retryCtx, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		retry := ml.reconcileSubjects(retryCtx, ml.explicitSubjects, map[string]portMetadata{}, nil) != nil
+		if retry {
+			ml.lifecycleMu.Lock()
+			ml.retryCancel = cancel
+			ml.retryDone = done
+			ml.lifecycleMu.Unlock()
+			go ml.runExplicitRetry(retryCtx, done, ml.explicitSubjects)
+		} else {
+			cancel()
+			close(done)
+		}
 	}
 
+	subjects, _ := ml.subjectInspection()
 	ml.logger.Info("MessageLogger started",
-		"monitored_subjects", len(ml.subscriptions),
+		"monitored_subjects", len(subjects),
 		"max_entries", ml.config.MaxEntries,
 		"output_to_stdout", ml.config.OutputToStdout)
 
@@ -423,41 +643,90 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 
 // Stop gracefully stops the MessageLogger
 func (ml *MessageLogger) Stop(timeout time.Duration) error {
+	ml.transitionMu.Lock()
+	defer ml.transitionMu.Unlock()
+
 	ml.lifecycleMu.Lock()
-
-	if !ml.running {
-		ml.lifecycleMu.Unlock()
-		return nil // Already stopped
-	}
-
 	ml.running = false
-	shutdown := ml.shutdown // Capture channel reference
+	observerCancel := ml.observerCancel
+	observerDone := ml.observerDone
+	retryCancel := ml.retryCancel
+	retryDone := ml.retryDone
+	ml.observerCancel = nil
+	ml.observerDone = nil
+	ml.retryCancel = nil
+	ml.retryDone = nil
 	ml.lifecycleMu.Unlock()
 
-	if shutdown != nil {
-		close(shutdown)
-
-		// Unsubscribe from all NATS subjects
-		for _, sub := range ml.natsSubsRefs {
-			if err := sub.Unsubscribe(); err != nil {
-				ml.logger.Warn("Failed to unsubscribe", "error", err)
-			}
-		}
-
-		ml.lifecycleMu.Lock()
-		ml.subscriptions = make(map[string]bool)
-		ml.natsSubsRefs = nil
-		ml.shutdown = nil // Prevent double-close
-		ml.done = nil     // Clear done channel reference
-		ml.lifecycleMu.Unlock()
-
-		// MessageLogger doesn't have worker goroutines to wait for
-		// NATS subscriptions run in NATS goroutines and will be cleaned up
-		// when the connection closes
-		ml.logger.Info("MessageLogger stopped")
+	if observerCancel != nil {
+		observerCancel()
+	}
+	if retryCancel != nil {
+		retryCancel()
+	}
+	var stopErrors []error
+	if err := waitForMessageLoggerShutdown(observerDone, timeout, "declaration observer"); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	if err := waitForMessageLoggerShutdown(retryDone, timeout, "reconciliation retry"); err != nil {
+		stopErrors = append(stopErrors, err)
 	}
 
-	return ml.BaseService.Stop(timeout)
+	ml.lifecycleMu.Lock()
+	retainedSubjects := make(map[string]struct{})
+	for subject, subscription := range ml.subscriptions {
+		if err := subscription.Unsubscribe(); err != nil {
+			ml.logger.Warn("Failed to unsubscribe", "subject", subject, "error", err)
+			stopErrors = append(stopErrors, fmt.Errorf("unsubscribe %s: %w", subject, err))
+			retainedSubjects[subject] = struct{}{}
+			continue
+		}
+		delete(ml.subscriptions, subject)
+	}
+	ml.resolvedSubjects = ml.resolvedSubjects[:0]
+	for subject := range ml.subscriptions {
+		ml.resolvedSubjects = append(ml.resolvedSubjects, subject)
+	}
+	sort.Strings(ml.resolvedSubjects)
+	ml.subjectOverlaps = nil
+	if len(stopErrors) == 0 {
+		ml.reconcileError = ""
+	} else {
+		ml.reconcileError = errors.Join(stopErrors...).Error()
+	}
+	ml.lifecycleMu.Unlock()
+	ml.subjectMu.Lock()
+	for subject := range ml.subjectMetadata {
+		_, retained := retainedSubjects[subject]
+		if !retained {
+			delete(ml.subjectMetadata, subject)
+		}
+	}
+	ml.subjectMu.Unlock()
+	ml.logger.Info("MessageLogger stopped")
+
+	if err := ml.BaseService.Stop(timeout); err != nil {
+		stopErrors = append(stopErrors, err)
+	}
+	return errors.Join(stopErrors...)
+}
+
+func waitForMessageLoggerShutdown(done <-chan struct{}, timeout time.Duration, name string) error {
+	if done == nil {
+		return nil
+	}
+	if timeout <= 0 {
+		<-done
+		return nil
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("timed out waiting for %s shutdown", name)
+	}
 }
 
 // handleMessage processes incoming messages
@@ -529,7 +798,10 @@ func (ml *MessageLogger) handleMessage(ctx context.Context, subject string, data
 	}
 
 	// Add port metadata if available
-	if meta, ok := ml.subjectMetadata[subject]; ok {
+	ml.subjectMu.RLock()
+	meta, hasMetadata := ml.subjectMetadata[subject]
+	ml.subjectMu.RUnlock()
+	if hasMetadata {
 		logArgs = append(logArgs, "component", meta.Component)
 		logArgs = append(logArgs, "port", meta.PortName)
 		if meta.PortType != "" {
@@ -675,19 +947,36 @@ func newestEntries(entries []MessageLogEntry, limit int) []MessageLogEntry {
 // GetStatistics returns runtime statistics
 func (ml *MessageLogger) GetStatistics() map[string]any {
 	lastMessageTime, _ := ml.stats.lastMessageTime.Load().(time.Time)
+	subjects, overlaps, reconcileError := ml.subjectInspectionState()
 
 	return map[string]any{
-		"total_messages":     ml.stats.totalMessages.Load(),
-		"sampled_messages":   ml.stats.sampledMessages.Load(),
-		"valid_messages":     ml.stats.validMessages.Load(),
-		"invalid_messages":   ml.stats.invalidMessages.Load(),
-		"sample_rate":        ml.sampleRate,
-		"start_time":         ml.stats.startTime,
-		"last_message_time":  lastMessageTime,
-		"uptime_seconds":     time.Since(ml.stats.startTime).Seconds(),
-		"monitored_subjects": ml.config.MonitorSubjects,
-		"max_entries":        ml.config.MaxEntries,
+		"total_messages":                  ml.stats.totalMessages.Load(),
+		"sampled_messages":                ml.stats.sampledMessages.Load(),
+		"valid_messages":                  ml.stats.validMessages.Load(),
+		"invalid_messages":                ml.stats.invalidMessages.Load(),
+		"sample_rate":                     ml.sampleRate,
+		"start_time":                      ml.stats.startTime,
+		"last_message_time":               lastMessageTime,
+		"uptime_seconds":                  time.Since(ml.stats.startTime).Seconds(),
+		"monitored_subjects":              subjects,
+		"subject_overlaps":                overlaps,
+		"subject_reconciliation_degraded": reconcileError != "",
+		"subject_reconciliation_error":    reconcileError,
+		"max_entries":                     ml.config.MaxEntries,
 	}
+}
+
+func (ml *MessageLogger) subjectInspection() ([]string, []subjectOverlap) {
+	subjects, overlaps, _ := ml.subjectInspectionState()
+	return subjects, overlaps
+}
+
+func (ml *MessageLogger) subjectInspectionState() ([]string, []subjectOverlap, string) {
+	ml.lifecycleMu.Lock()
+	defer ml.lifecycleMu.Unlock()
+	subjects := append([]string(nil), ml.resolvedSubjects...)
+	overlaps := append([]subjectOverlap(nil), ml.subjectOverlaps...)
+	return subjects, overlaps, ml.reconcileError
 }
 
 // ConfigSchema returns the configuration schema for this service.
@@ -697,8 +986,8 @@ func (ml *MessageLogger) ConfigSchema() ConfigSchema {
 		"monitor_subjects": {
 			PropertySchema: component.PropertySchema{
 				Type:        "array",
-				Description: "NATS subjects to monitor for messages",
-				Default:     []string{"process.>", "input.>", "events.>"},
+				Description: "NATS subjects to monitor; '*' discovers accepted Registry declarations and explicit subjects are unioned",
+				Default:     []string{"*"},
 			},
 			Category: "monitoring",
 		},

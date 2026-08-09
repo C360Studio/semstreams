@@ -116,6 +116,34 @@ type componentGeneration struct {
 	Generation         uint64
 }
 
+// generationSnapshot is the framework-internal defensive read view of one
+// admitted generation. Registry read methods require the root internal access
+// token; downstream adopters cannot obtain this otherwise-unexported type.
+type generationSnapshot struct {
+	record componentGeneration
+}
+
+func (s generationSnapshot) Name() string               { return s.record.InstanceName }
+func (s generationSnapshot) Factory() string            { return s.record.FactoryIdentity }
+func (s generationSnapshot) Discoverable() Discoverable { return s.record.Component }
+func (s generationSnapshot) ID() uint64                 { return s.record.Generation }
+
+func (s generationSnapshot) Inputs() []Port {
+	return cloneResolvedPorts(s.record.InputPorts)
+}
+
+func (s generationSnapshot) Outputs() []Port {
+	return cloneResolvedPorts(s.record.OutputPorts)
+}
+
+func (s generationSnapshot) InputDeclarationFacts() []PortFacts {
+	return clonePortFactsSlice(s.record.InputFacts)
+}
+
+func (s generationSnapshot) OutputDeclarationFacts() []PortFacts {
+	return clonePortFactsSlice(s.record.OutputFacts)
+}
+
 // declarationUpdateProof is an opaque, generation-bound proof that a proposed
 // live update preserves the declaration admitted for an instance. Callers
 // cannot manufacture or inspect it; they can only ask the originating Registry
@@ -130,6 +158,10 @@ type replacementReservation struct {
 	expectedGeneration uint64
 	resources          []string
 	canceled           bool
+}
+
+type generationObserver struct {
+	pending chan []componentGeneration
 }
 
 // DeclarationChangeRequiresReplacementError reports a live update whose
@@ -154,7 +186,7 @@ type Registry struct {
 
 	nextGeneration uint64
 	nextObserverID uint64
-	observers      map[uint64]chan []componentGeneration
+	observers      map[uint64]generationObserver
 
 	// NATS-backed capability discovery (new)
 	remoteCapabilities map[string]*CapabilityAnnouncement
@@ -172,7 +204,7 @@ func NewRegistry(opts ...func(*Registry)) *Registry {
 		factories:    make(map[string]*Registration),
 		generations:  make(map[string]componentGeneration),
 		reservations: make(map[string]replacementReservation),
-		observers:    make(map[uint64]chan []componentGeneration),
+		observers:    make(map[uint64]generationObserver),
 		logger:       slog.Default(),
 	}
 
@@ -892,26 +924,124 @@ func (r *Registry) generationsSnapshot() []componentGeneration {
 	return r.generationsLocked()
 }
 
+// Snapshot returns one defensive admitted-generation view to a root-internal
+// framework consumer.
+func (r *Registry) Snapshot(
+	_ componentadmission.Access, instanceName string,
+) (
+	//revive:disable-next-line:unexported-return Framework callers consume this internal-token-gated opaque snapshot.
+	generationSnapshot,
+	bool,
+) {
+	generation, ok := r.generation(instanceName)
+	if !ok {
+		return generationSnapshot{}, false
+	}
+	return generationSnapshot{record: generation}, true
+}
+
+// Snapshots returns a deterministic defensive complete admission set to a
+// root-internal framework consumer.
+//
+//revive:disable:unexported-return Framework callers range this internal-token-gated opaque snapshot set.
+func (r *Registry) Snapshots(
+	_ componentadmission.Access,
+) []generationSnapshot {
+	generations := r.generationsSnapshot()
+	result := make([]generationSnapshot, len(generations))
+	for index, generation := range generations {
+		result[index] = generationSnapshot{record: generation}
+	}
+	return result
+}
+
+// ObserveSnapshots delivers latest-state defensive complete admission sets to
+// a root-internal framework consumer.
+func (r *Registry) ObserveSnapshots(
+	ctx context.Context, _ componentadmission.Access,
+) <-chan []generationSnapshot {
+	return observeRegistryState(ctx, r, func(generations []componentGeneration) []generationSnapshot {
+		snapshots := make([]generationSnapshot, len(generations))
+		for index, generation := range generations {
+			snapshots[index] = generationSnapshot{record: generation}
+		}
+		return snapshots
+	})
+}
+
+//revive:enable:unexported-return
+
 // observeGenerations is a framework-internal, process-local latest-state view.
 // It initially delivers one complete set (including empty), coalesces slow
 // readers to the newest complete set, and releases its channel on cancellation.
 func (r *Registry) observeGenerations(ctx context.Context) <-chan []componentGeneration {
-	updates := make(chan []componentGeneration, 1)
+	return observeRegistryState(ctx, r, func(generations []componentGeneration) []componentGeneration {
+		return generations
+	})
+}
+
+func observeRegistryState[T any](
+	ctx context.Context, r *Registry, project func([]componentGeneration) T,
+) <-chan T {
+	updates := make(chan T)
+	pending := make(chan []componentGeneration, 1)
 	r.mu.Lock()
 	r.nextObserverID++
 	id := r.nextObserverID
-	r.observers[id] = updates
-	updates <- r.generationsLocked()
+	initial := r.generationsLocked()
+	r.observers[id] = generationObserver{pending: pending}
 	r.mu.Unlock()
 
 	go func() {
-		<-ctx.Done()
-		r.mu.Lock()
-		if observer, ok := r.observers[id]; ok {
+		defer close(updates)
+		defer func() {
+			r.mu.Lock()
 			delete(r.observers, id)
-			close(observer)
+			r.mu.Unlock()
+		}()
+
+		// The registration-time state is an ordering guarantee, not a
+		// coalescible update. A consumer must always observe it first.
+		select {
+		case updates <- project(initial):
+		case <-ctx.Done():
+			return
 		}
-		r.mu.Unlock()
+
+		for {
+			var latest []componentGeneration
+			select {
+			case latest = <-pending:
+			case <-ctx.Done():
+				return
+			}
+
+			// While the consumer is slow, replace the unsent state with the
+			// newest complete set. Registry mutations only touch pending and
+			// therefore never block on this delivery.
+			for {
+				// Drain every update that was already pending before allowing a
+				// ready consumer to receive. Without this priority pass, Go's
+				// randomized select can expose an older state when both the send
+				// and a newer buffered update are ready.
+			drainPending:
+				for {
+					select {
+					case latest = <-pending:
+					default:
+						break drainPending
+					}
+				}
+				select {
+				case latest = <-pending:
+				case updates <- project(latest):
+					goto delivered
+				case <-ctx.Done():
+					return
+				}
+			}
+		delivered:
+		}
 	}()
 	return updates
 }
@@ -933,14 +1063,14 @@ func (r *Registry) notifyObserversLocked() {
 	for _, observer := range r.observers {
 		snapshot := r.generationsLocked()
 		select {
-		case observer <- snapshot:
+		case observer.pending <- snapshot:
 		default:
 			select {
-			case <-observer:
+			case <-observer.pending:
 			default:
 			}
 			select {
-			case observer <- snapshot:
+			case observer.pending <- snapshot:
 			default:
 			}
 		}
@@ -1324,42 +1454,50 @@ func (r *Registry) InitNATS(ctx context.Context, client *natsclient.Client, node
 	return nil
 }
 
-// publishCapabilities publishes a component's capabilities to NATS.
-// Subject format: {type}.capabilities.{instanceName}
-func (r *Registry) publishCapabilities(ctx context.Context, instanceName string, component Discoverable) error {
+type capabilityPublication struct {
+	client       *natsclient.Client
+	instanceName string
+	subject      string
+	data         []byte
+}
+
+// prepareCapabilityPublication captures the complete immutable publish input
+// before any asynchronous work begins.
+func (r *Registry) prepareCapabilityPublication(
+	generation componentGeneration,
+) (*capabilityPublication, error) {
 	r.mu.RLock()
 	natsClient := r.natsClient
 	nodeID := r.nodeID
+	registration := r.factories[generation.FactoryIdentity]
+	if natsClient == nil {
+		r.mu.RUnlock()
+		return nil, nil
+	}
+	if registration == nil {
+		r.mu.RUnlock()
+		return nil, errs.WrapInvalid(
+			fmt.Errorf("no registration found for component %s", generation.InstanceName),
+			"Registry", "prepareCapabilityPublication", "lookup registration")
+	}
+	componentName := registration.Name
+	componentType := registration.Type
+	componentVersion := registration.Version
 	r.mu.RUnlock()
 
-	if natsClient == nil {
-		return errs.WrapInvalid(
-			fmt.Errorf("NATS client not initialized"),
-			"Registry", "publishCapabilities", "check NATS client")
-	}
-
-	// Find registration for this component
-	registration := r.getRegistrationForInstance(instanceName)
-	if registration == nil {
-		return errs.WrapInvalid(
-			fmt.Errorf("no registration found for component %s", instanceName),
-			"Registry", "publishCapabilities", "lookup registration")
-	}
-
-	// Build capability announcement
-	inputPorts, err := r.portsToCapabilities(component.InputPorts())
+	inputPorts, err := portsToCapabilities(generation.InputPorts, generation.InputFacts)
 	if err != nil {
-		return errs.Wrap(err, "Registry", "publishCapabilities", "resolve input port capabilities")
+		return nil, errs.Wrap(err, "Registry", "prepareCapabilityPublication", "resolve input port capabilities")
 	}
-	outputPorts, err := r.portsToCapabilities(component.OutputPorts())
+	outputPorts, err := portsToCapabilities(generation.OutputPorts, generation.OutputFacts)
 	if err != nil {
-		return errs.Wrap(err, "Registry", "publishCapabilities", "resolve output port capabilities")
+		return nil, errs.Wrap(err, "Registry", "prepareCapabilityPublication", "resolve output port capabilities")
 	}
 	announcement := CapabilityAnnouncement{
-		InstanceName: instanceName,
-		Component:    registration.Name,
-		Type:         registration.Type,
-		Version:      registration.Version,
+		InstanceName: generation.InstanceName,
+		Component:    componentName,
+		Type:         componentType,
+		Version:      componentVersion,
 		InputPorts:   inputPorts,
 		OutputPorts:  outputPorts,
 		Timestamp:    time.Now(),
@@ -1367,14 +1505,20 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 		NodeID:       nodeID,
 	}
 
-	// Publish to subject: {type}.capabilities.{instanceName}
-	subject := fmt.Sprintf("%s.capabilities.%s", registration.Type, instanceName)
 	data, err := json.Marshal(announcement)
 	if err != nil {
-		return errs.Wrap(err, "Registry", "publishCapabilities", "marshal announcement")
+		return nil, errs.Wrap(err, "Registry", "prepareCapabilityPublication", "marshal announcement")
 	}
+	return &capabilityPublication{
+		client:       natsClient,
+		instanceName: generation.InstanceName,
+		subject:      fmt.Sprintf("%s.capabilities.%s", componentType, generation.InstanceName),
+		data:         append([]byte(nil), data...),
+	}, nil
+}
 
-	_, err = natsClient.PublishToStreamWithAck(ctx, subject, data)
+func publishCapabilities(ctx context.Context, publication *capabilityPublication) error {
+	_, err := publication.client.PublishToStreamWithAck(ctx, publication.subject, publication.data)
 	if err != nil {
 		return errs.Wrap(err, "Registry", "publishCapabilities", "publish to NATS")
 	}
@@ -1383,37 +1527,39 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 }
 
 func (r *Registry) publishGenerationCapabilities(generation componentGeneration) {
-	r.mu.RLock()
-	enabled := r.natsClient != nil
-	r.mu.RUnlock()
-	if !enabled {
+	publication, err := r.prepareCapabilityPublication(generation)
+	if err != nil {
+		r.logger.Debug("failed to prepare capabilities", "component", generation.InstanceName, "error", err)
+		return
+	}
+	if publication == nil {
 		return
 	}
 	go func() {
-		if err := r.publishCapabilities(context.Background(), generation.InstanceName, generation.Component); err != nil {
-			r.logger.Debug("failed to publish capabilities", "component", generation.InstanceName, "error", err)
+		if err := publishCapabilities(context.Background(), publication); err != nil {
+			r.logger.Debug("failed to publish capabilities", "component", publication.instanceName, "error", err)
 		}
 	}()
 }
 
-// portsToCapabilities converts Port slice to PortCapability slice.
-func (r *Registry) portsToCapabilities(ports []Port) ([]PortCapability, error) {
+// portsToCapabilities projects retained ports and their admission-time facts.
+func portsToCapabilities(ports []Port, facts []PortFacts) ([]PortCapability, error) {
+	if len(ports) != len(facts) {
+		return nil, fmt.Errorf("retained port/fact count mismatch: %d ports, %d facts", len(ports), len(facts))
+	}
 	capabilities := make([]PortCapability, 0, len(ports))
-	for _, port := range ports {
-		facts, err := port.Facts()
-		if err != nil {
-			return nil, err
-		}
+	for index, port := range ports {
+		portFacts := facts[index]
 		capability := PortCapability{
 			Name:        port.Name,
 			Description: port.Description,
-			Type:        string(facts.InteractionPattern()),
+			Type:        string(portFacts.InteractionPattern()),
 		}
-		subjects := facts.NATSSubjects()
+		subjects := portFacts.NATSSubjects()
 		if len(subjects) > 0 {
 			capability.Subject = subjects[0]
 		}
-		if contract, ok := facts.Interface(); ok {
+		if contract, ok := portFacts.Interface(); ok {
 			capability.Interface = contract.Type
 		}
 
@@ -1499,18 +1645,18 @@ func (r *Registry) StopHeartbeat() {
 
 // republishAllCapabilities republishes capabilities for all registered instances.
 func (r *Registry) republishAllCapabilities(ctx context.Context) {
-	r.mu.RLock()
-	instances := make(map[string]Discoverable, len(r.generations))
-	for name, generation := range r.generations {
-		instances[name] = generation.Component
-	}
-	r.mu.RUnlock()
-
-	// Publish each instance (non-fatal errors)
-	for name, component := range instances {
-		if err := r.publishCapabilities(ctx, name, component); err != nil {
+	for _, generation := range r.generationsSnapshot() {
+		publication, err := r.prepareCapabilityPublication(generation)
+		if err != nil {
+			r.logger.Debug("failed to prepare capabilities", "component", generation.InstanceName, "error", err)
+			continue
+		}
+		if publication == nil {
+			return
+		}
+		if err := publishCapabilities(ctx, publication); err != nil {
 			// Log warning but continue - NATS publish is non-fatal
-			r.logger.Debug("failed to publish capabilities", "component", name, "error", err)
+			r.logger.Debug("failed to publish capabilities", "component", generation.InstanceName, "error", err)
 		}
 	}
 }

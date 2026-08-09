@@ -90,7 +90,7 @@ func mutationPortWith(direction component.Direction, family, interfaceType, vers
 func addMutationProvider(t *testing.T, flow *FlowGraph, name string, port component.Port) {
 	t.Helper()
 	provider := createMockComponentWithPorts(name, "processor", []component.Port{port}, nil)
-	if err := flow.AddComponentNode(name, provider); err != nil {
+	if err := addTestComponentNode(flow, name, provider); err != nil {
 		t.Fatalf("AddComponentNode(%s): %v", name, err)
 	}
 }
@@ -98,7 +98,7 @@ func addMutationProvider(t *testing.T, flow *FlowGraph, name string, port compon
 func addMutationRequester(t *testing.T, flow *FlowGraph, name string, port component.Port) {
 	t.Helper()
 	requester := createMockComponentWithPorts(name, "processor", nil, []component.Port{port})
-	if err := flow.AddComponentNode(name, requester); err != nil {
+	if err := addTestComponentNode(flow, name, requester); err != nil {
 		t.Fatalf("AddComponentNode(%s): %v", name, err)
 	}
 }

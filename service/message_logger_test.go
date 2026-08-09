@@ -27,8 +27,10 @@ func TestMessageLogger_ConfigSchema(t *testing.T) {
 	// Verify monitor_subjects property
 	monitorSubjects := schema.ConfigSchema.Properties["monitor_subjects"]
 	assert.Equal(t, "array", monitorSubjects.Type)
-	assert.Equal(t, "NATS subjects to monitor for messages", monitorSubjects.Description)
-	expectedDefault := []string{"process.>", "input.>", "events.>"}
+	assert.Equal(t,
+		"NATS subjects to monitor; '*' discovers accepted Registry declarations and explicit subjects are unioned",
+		monitorSubjects.Description)
+	expectedDefault := []string{"*"}
 	assert.Equal(t, expectedDefault, monitorSubjects.Default)
 
 	// Verify max_entries property
@@ -193,91 +195,27 @@ func TestUniqueStringsPreservesFirstOccurrence(t *testing.T) {
 	require.Equal(t, []string{"graph.mutation.>", "raw.>"}, got)
 }
 
-// TestDiscoverSubjectsFromComponents tests subject discovery from component configs
-func TestDiscoverSubjectsFromComponents(t *testing.T) {
-	t.Run("empty_components", func(t *testing.T) {
-		subjects, metadata := discoverSubjectsFromComponents(nil)
-		assert.Empty(t, subjects)
-		assert.Empty(t, metadata)
-	})
+func TestResolveLoggerSubjectsDeduplicatesOnlyAcceptedContainmentPairs(t *testing.T) {
+	desired := map[string]struct{}{
+		"agent.toolcall.proposed.>": {}, "agent.toolcall.proposed.*": {},
+		"agent.toolcall.approved.>": {}, "agent.toolcall.approved.*": {},
+		"agent.toolcall.rejected.>": {}, "agent.toolcall.rejected.*": {},
+		"unrelated.>": {}, "unrelated.*": {},
+	}
 
-	t.Run("discovers_subjects_from_ports", func(t *testing.T) {
-		components := map[string]json.RawMessage{
-			"udp": json.RawMessage(`{
-				"ports": {
-					"inputs": [],
-					"outputs": [
-						{"name": "udp_out", "config": {"kind": "jetstream", "subjects": ["raw.udp.messages"]}}
-					]
-				}
-			}`),
-			"json_generic": json.RawMessage(`{
-				"ports": {
-					"inputs": [
-						{"name": "generic_in", "config": {"kind": "jetstream", "stream_name": "RAW", "subjects": ["raw.udp.messages"]}}
-					],
-					"outputs": [
-						{"name": "generic_out", "config": {"kind": "jetstream", "subjects": ["generic.messages"], "interface": {"type": "core.json.v1"}}}
-					]
-				}
-			}`),
-		}
-
-		subjects, metadata := discoverSubjectsFromComponents(components)
-
-		// Should discover unique subjects
-		assert.Contains(t, subjects, "raw.udp.messages")
-		assert.Contains(t, subjects, "generic.messages")
-
-		// Check metadata for raw.udp.messages (could be from either component due to map iteration order)
-		rawMeta, ok := metadata["raw.udp.messages"]
-		assert.True(t, ok, "should have metadata for raw.udp.messages")
-		assert.Equal(t, "jetstream", rawMeta.PortType)
-
-		// Check metadata for generic.messages
-		genericMeta, ok := metadata["generic.messages"]
-		assert.True(t, ok, "should have metadata for generic.messages")
-		assert.Equal(t, "json_generic", genericMeta.Component)
-		assert.Equal(t, "generic_out", genericMeta.PortName)
-		assert.Equal(t, "jetstream", genericMeta.PortType)
-		assert.Equal(t, "core.json.v1", genericMeta.Interface)
-	})
-
-	t.Run("skips_invalid_json", func(t *testing.T) {
-		components := map[string]json.RawMessage{
-			"invalid": json.RawMessage(`{not valid json`),
-			"valid": json.RawMessage(`{
-				"ports": {
-					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "valid.subject"}}]
-				}
-			}`),
-		}
-
-		subjects, metadata := discoverSubjectsFromComponents(components)
-
-		// Should still discover from valid component
-		assert.Len(t, subjects, 1)
-		assert.Contains(t, subjects, "valid.subject")
-		assert.Len(t, metadata, 1)
-	})
-
-	t.Run("skips_ports_without_NATS_subjects", func(t *testing.T) {
-		components := map[string]json.RawMessage{
-			"test": json.RawMessage(`{
-				"ports": {
-					"inputs": [{"name": "in", "config": {"kind": "network", "protocol": "udp", "port": 14550}}],
-					"outputs": [{"name": "out", "config": {"kind": "nats", "subject": "real.subject"}}]
-				}
-			}`),
-		}
-
-		subjects, metadata := discoverSubjectsFromComponents(components)
-
-		// Should only have the non-empty subject
-		assert.Len(t, subjects, 1)
-		assert.Contains(t, subjects, "real.subject")
-		assert.Len(t, metadata, 1)
-	})
+	subjects, overlaps := resolveLoggerSubjects(desired)
+	require.Equal(t, []string{
+		"agent.toolcall.approved.>",
+		"agent.toolcall.proposed.>",
+		"agent.toolcall.rejected.>",
+		"unrelated.*",
+		"unrelated.>",
+	}, subjects)
+	require.Equal(t, []subjectOverlap{
+		{Broader: "agent.toolcall.proposed.>", Covered: "agent.toolcall.proposed.*", Resolution: "covered subscription omitted"},
+		{Broader: "agent.toolcall.approved.>", Covered: "agent.toolcall.approved.*", Resolution: "covered subscription omitted"},
+		{Broader: "agent.toolcall.rejected.>", Covered: "agent.toolcall.rejected.*", Resolution: "covered subscription omitted"},
+	}, overlaps)
 }
 
 // TestMessageLoggerConfig_SampleRate tests sample rate config field

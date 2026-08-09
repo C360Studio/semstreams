@@ -13,13 +13,16 @@ SHA-256 `58e44190937c247a30ae5ce55621da27cddd113da6da858d64a2e9bc51bdd7fb`.
 the rejected dynamic-route seam and prior no-restart-status non-goal.
 **Status:** owner-accepted but not yet an implementation handoff; the wording-only revision needs refreshed independent
 identity confirmation.
+**Slice C census amendment (2026-08-09):** OWNER-APPROVED. Four shipped files whose enabled factories had no
+production registration were retired without aliases, synthetic factories, or substitutes. The production-loader and
+real-factory census now covers 21 shipped configurations and is pending Slice C independent review.
 **Downstream holdouts:** the ten paused projects remain parity evidence after the framework contract is accepted. They
 do not shape or block it.
 **Suspended work:** `semantic-tier-split` remains suspended, frozen, and non-executable.
 
 The accepted surface inventory, same-class collision tables, adopter seam inventory, measurements, negative searches,
-and open evidence questions are incorporated verbatim as Appendix A when this draft is materialized. They remain
-unchanged; this design does not re-census or reinterpret that checkpoint.
+and open evidence questions are incorporated verbatim as Appendix A when this draft is materialized. That checkpoint
+remains historical; the 2026-08-09 amendment in §5.4 supersedes only its shipped message-logger census premise.
 
 ## 1. Decision scope
 
@@ -343,13 +346,13 @@ The former static-mux/OpenAPI mismatch is resolved by the service-composition co
 service set cannot change while the process runs, so route binding and OpenAPI generation observe the same immutable
 composition. No dynamic mux or route-removal machinery is required.
 
-Conditional on the outer service being enabled and started in `"*"` mode, the complete logger census covers all 25
-shipped component configurations, every enabled component, both port directions, and the `nats`, `nats-request`, and
-`jetstream` kinds:
+Conditional on the outer service being enabled and started in `"*"` mode, the complete logger census covers all 21
+production-constructible shipped component configurations, every enabled component, both port directions, and the
+`nats`, `nats-request`, and `jetstream` kinds:
 
-- raw configuration contains 389 subject rows, 245 summed per-configuration exact keys, and 51 distinct global
+- raw configuration contains 385 subject rows, 243 summed per-configuration exact keys, and 51 distinct global
   strings;
-- effective generation declarations contain 565 subject rows, 380 summed per-configuration exact keys, and 66
+- effective generation declarations contain 561 subject rows, 378 summed per-configuration exact keys, and 66
   distinct global strings;
 - the delta is 176 factory-default rows across nine configurations, 135 net-new per-configuration exact keys, 15
   net-new global strings, and zero removals;
@@ -358,7 +361,7 @@ shipped component configurations, every enabled component, both port directions,
 - five loop/dispatch default families duplicate exact strings in eight configurations, so 40 added rows collapse
   during exact-key deduplication;
 - one governance `user.response.*` row overlaps an existing raw exact key, producing one further exact-key collapse;
-- each of the nine affected configurations gains 15 exact keys, while the other 16 configurations are unchanged; and
+- each of the nine affected configurations gains 15 exact keys, while the other 12 configurations are unchanged; and
 - no added declaration is bare `*`, bare `>`, `_INBOX`, a reply subject, or an undeclared subject. NATS-request adds
   only its request subject.
 
@@ -371,6 +374,22 @@ shipped component configurations, every enabled component, both port directions,
 The started logger must handle those overlaps deliberately so the same message is not captured twice. Runtime subject
 inspection must expose the resolved union and its overlap handling rather than presenting only the pre-deduplicated
 declarations.
+
+The 21-config scope is the owner-approved correction to the earlier 25-config premise. Exactly these four configs were
+retired because their enabled `graph`/`graph-processor` factories have no production registration:
+
+- `configs/http-gateway-semantic-search.json`;
+- `configs/semantic-basic.json`;
+- `configs/examples/bm25-semantic-search.json`; and
+- `configs/examples/pathrag-graph-traversal.json`.
+
+No alias, synthetic factory, substitute config, or census exclusion replaces them. The production-loader and
+real-factory completeness pass also bound three owner-approved prerequisite repairs: documented WebSocket duration
+decoding and explicit `ws_control` in `configs/cloud-federation.json@1.0.2`; explicit `ALIAS_INDEX` in
+`configs/hello-world.json@1.1.1`; and core-NATS declarations matching the mission-command implementation in
+`configs/lifecycle-flow.json@1.1.1`. The frozen reproducible evidence is
+`service/testdata/message_logger_subject_census.json` at baseline
+`f2b7c4506ae78b1b8ace9fbc581994a2d14f1d55`.
 
 Subscription behavior:
 
@@ -943,8 +962,8 @@ A later implementation proposal must prove:
   cancellation;
 - message-logger performs no raw component-config port parsing;
 - for an outer-enabled, started logger in `"*"` mode, an exact migration test constructs effective generations through
-  registered factories for every enabled component in all 25 shipped configurations and proves 389 raw rows/245
-  per-config keys/51 global strings become 565 effective rows/380 keys/66 strings; the 176-row/135-key/15-string delta
+  registered factories for every enabled component in all 21 shipped configurations and proves 385 raw rows/243
+  per-config keys/51 global strings become 561 effective rows/378 keys/66 strings; the 176-row/135-key/15-string delta
   has zero removals or forbidden broadening; exact-key deduplication accounts for the 40 loop/dispatch and one
   governance collapses; and the three wildcard-containment overlaps are detected, resolved without duplicate capture,
   and exposed through runtime inspection;

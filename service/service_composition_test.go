@@ -86,6 +86,64 @@ func TestConfigureRejectsExplicitlyDisabledMandatoryServices(t *testing.T) {
 	}
 }
 
+func TestOmittedOrDisabledMessageLoggerCreatesNoRuntimeSurface(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		services types.ServiceConfigs
+	}{
+		{name: "omitted", services: types.ServiceConfigs{}},
+		{name: "disabled", services: types.ServiceConfigs{
+			"message-logger": {Enabled: false, Config: json.RawMessage(`{}`)},
+		}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			registry := NewServiceRegistry()
+			for _, name := range []string{"component-manager", "metrics"} {
+				serviceName := name
+				if err := registry.Register(serviceName, func(json.RawMessage, *Dependencies) (Service, error) {
+					return &MockService{name: serviceName}, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			constructorCalls := 0
+			if err := registry.Register("message-logger", func(json.RawMessage, *Dependencies) (Service, error) {
+				constructorCalls++
+				return &MessageLogger{entries: make([]MessageLogEntry, 1)}, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			manager := NewServiceManager(registry)
+			if err := manager.ConfigureFromServices(testCase.services, &Dependencies{}); err != nil {
+				t.Fatal(err)
+			}
+			if constructorCalls != 0 {
+				t.Fatalf("message-logger constructor called %d times", constructorCalls)
+			}
+			if _, exists := manager.GetService("message-logger"); exists {
+				t.Fatal("message-logger instance exists")
+			}
+			if _, err := manager.sealComposition(); err != nil {
+				t.Fatal(err)
+			}
+			manager.httpMux = http.NewServeMux()
+			if err := manager.registerServiceHandlers(); err != nil {
+				t.Fatal(err)
+			}
+			response := httptest.NewRecorder()
+			manager.httpMux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/messagelogger/subjects", nil))
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("message-logger route status = %d, want 404", response.Code)
+			}
+			for path := range manager.generateOpenAPIDocument().Paths {
+				if len(path) >= len("/messagelogger/") && path[:len("/messagelogger/")] == "/messagelogger/" {
+					t.Fatalf("message-logger OpenAPI path exists: %s", path)
+				}
+			}
+		})
+	}
+}
+
 func TestPendingServiceChangesClassifications(t *testing.T) {
 	boot := types.ServiceConfigs{
 		"add-disabled":      {Enabled: false, Config: json.RawMessage(`{"a":1}`)},

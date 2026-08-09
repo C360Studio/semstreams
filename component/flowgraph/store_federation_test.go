@@ -41,8 +41,8 @@ func storeOrphans(res *FlowAnalysisResult) []OrphanedPort {
 
 func TestStoreFederation_ProviderToConsumerEdge(t *testing.T) {
 	graph := NewFlowGraph()
-	require.NoError(t, graph.AddComponentNode("objectstore", storeProvider("objectstore", "objectstore")))
-	require.NoError(t, graph.AddComponentNode("graph-embedding", federationConsumer("graph-embedding")))
+	require.NoError(t, addTestComponentNode(graph, "objectstore", storeProvider("objectstore", "objectstore")))
+	require.NoError(t, addTestComponentNode(graph, "graph-embedding", federationConsumer("graph-embedding")))
 	require.NoError(t, graph.ConnectComponentsByPatterns())
 
 	edges := graph.GetEdges()
@@ -58,7 +58,7 @@ func TestStoreFederation_ProviderToConsumerEdge(t *testing.T) {
 
 func TestStoreFederation_LoneProviderNotOrphaned(t *testing.T) {
 	graph := NewFlowGraph()
-	require.NoError(t, graph.AddComponentNode("objectstore", storeProvider("objectstore", "objectstore")))
+	require.NoError(t, addTestComponentNode(graph, "objectstore", storeProvider("objectstore", "objectstore")))
 	require.NoError(t, graph.ConnectComponentsByPatterns())
 
 	assert.Empty(t, graph.GetEdges(), "no consumer → no edge")
@@ -71,9 +71,9 @@ func TestStoreFederation_FanIn(t *testing.T) {
 	// Two providers + one federation consumer → the consumer connects to BOTH
 	// (advisory: it may resolve any registered instance at runtime).
 	graph := NewFlowGraph()
-	require.NoError(t, graph.AddComponentNode("objectstore", storeProvider("objectstore", "objectstore")))
-	require.NoError(t, graph.AddComponentNode("filestore", storeProvider("filestore", "filestore-media")))
-	require.NoError(t, graph.AddComponentNode("graph-embedding", federationConsumer("graph-embedding")))
+	require.NoError(t, addTestComponentNode(graph, "objectstore", storeProvider("objectstore", "objectstore")))
+	require.NoError(t, addTestComponentNode(graph, "filestore", storeProvider("filestore", "filestore-media")))
+	require.NoError(t, addTestComponentNode(graph, "graph-embedding", federationConsumer("graph-embedding")))
 	require.NoError(t, graph.ConnectComponentsByPatterns())
 
 	edges := graph.GetEdges()

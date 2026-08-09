@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.1.1",
   "platform": {
     "org": "demo",
     "id": "hello-world",
@@ -207,6 +207,13 @@
                 "kind": "kv-write"
               },
               "name": "incoming_index"
+            },
+            {
+              "config": {
+                "bucket": "ALIAS_INDEX",
+                "kind": "kv-write"
+              },
+              "name": "alias_index"
             },
             {
               "config": {
