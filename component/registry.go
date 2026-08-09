@@ -3,16 +3,19 @@ package component
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
-	"maps"
 	"math"
+	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/pkg/errs"
 	"github.com/c360studio/semstreams/types"
@@ -98,21 +101,66 @@ type PortCapability struct {
 	Description string `json:"description,omitempty"`
 }
 
+// componentGeneration is the immutable declaration captured for one admitted
+// component generation. It describes admitted shape only; it carries no
+// lifecycle, health, readiness, grouping, or orchestration state.
+type componentGeneration struct {
+	InstanceName       string
+	FactoryIdentity    string
+	Component          Discoverable
+	InputPorts         []Port
+	OutputPorts        []Port
+	InputFacts         []PortFacts
+	OutputFacts        []PortFacts
+	ExclusiveResources []string
+	Generation         uint64
+}
+
+// declarationUpdateProof is an opaque, generation-bound proof that a proposed
+// live update preserves the declaration admitted for an instance. Callers
+// cannot manufacture or inspect it; they can only ask the originating Registry
+// to confirm it before committing owner-local retained configuration.
+type declarationUpdateProof struct {
+	registry     *Registry
+	instanceName string
+	generation   uint64
+}
+
+type replacementReservation struct {
+	expectedGeneration uint64
+	resources          []string
+	canceled           bool
+}
+
+// DeclarationChangeRequiresReplacementError reports a live update whose
+// normalized declaration differs from the admitted generation.
+type DeclarationChangeRequiresReplacementError struct {
+	Component string
+	Code      string
+}
+
+func (e *DeclarationChangeRequiresReplacementError) Error() string {
+	return fmt.Sprintf("component %s declaration change requires replacement", e.Component)
+}
+
 // Registry manages component factories and instances
 // It provides thread-safe registration and lookup of both factories (for creation)
 // and instances (for discovery and management).
 type Registry struct {
-	factories       map[string]*Registration // Factory registry by name
-	instances       map[string]Discoverable  // Instance registry by name
-	resourceTracker map[string]string        // Resource ID -> Component instance name mapping
-	mu              sync.RWMutex             // Protects all maps
+	factories    map[string]*Registration          // Factory registry by name
+	generations  map[string]componentGeneration    // Admitted generation by instance name
+	reservations map[string]replacementReservation // Invisible replacement claims by instance name
+	mu           sync.RWMutex                      // Protects all registry state
+
+	nextGeneration uint64
+	nextObserverID uint64
+	observers      map[uint64]chan []componentGeneration
 
 	// NATS-backed capability discovery (new)
 	remoteCapabilities map[string]*CapabilityAnnouncement
 	nodeID             string
 	natsClient         *natsclient.Client // NATS client for capability operations
 	heartbeatCancel    context.CancelFunc // Cancel heartbeat goroutine
-	instanceFactories  map[string]string  // instance name → factory name mapping
 	logger             *slog.Logger       // Logger for non-fatal operations
 }
 
@@ -121,11 +169,11 @@ type Registry struct {
 // This maintains backwards compatibility with existing callers.
 func NewRegistry(opts ...func(*Registry)) *Registry {
 	r := &Registry{
-		factories:         make(map[string]*Registration),
-		instances:         make(map[string]Discoverable),
-		resourceTracker:   make(map[string]string),
-		instanceFactories: make(map[string]string),
-		logger:            slog.Default(),
+		factories:    make(map[string]*Registration),
+		generations:  make(map[string]componentGeneration),
+		reservations: make(map[string]replacementReservation),
+		observers:    make(map[uint64]chan []componentGeneration),
+		logger:       slog.Default(),
 	}
 
 	// Apply optional configuration
@@ -185,26 +233,44 @@ func (r *Registry) RegisterFactory(name string, registration *Registration) erro
 func (r *Registry) CreateComponent(
 	instanceName string, config types.ComponentConfig, deps Dependencies,
 ) (Discoverable, error) {
+	prepared, err := r.prepareComponent("CreateComponent", instanceName, config, deps)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.admitPrepared(prepared); err != nil {
+		return nil, errs.Wrap(err, "Registry", "CreateComponent", "instance registration")
+	}
+	r.publishGenerationCapabilities(prepared)
+	return prepared.Component, nil
+}
+
+func (r *Registry) prepareComponent(
+	operation, instanceName string, config types.ComponentConfig, deps Dependencies,
+) (componentGeneration, error) {
 	// Security: Validate instance name
 	if err := ValidateComponentName(instanceName); err != nil {
-		return nil, errs.Wrap(err, "Registry", "CreateComponent", "instance name validation")
+		return componentGeneration{}, errs.Wrap(err, "Registry", operation, "instance name validation")
+	}
+	if !config.Enabled {
+		return componentGeneration{}, errs.WrapInvalid(
+			errs.ErrInvalidConfig, "Registry", operation, "disabled component admission")
 	}
 	if config.Type == "" {
-		return nil, errs.WrapInvalid(
-			errs.ErrInvalidConfig, "Registry", "CreateComponent", "component type validation")
+		return componentGeneration{}, errs.WrapInvalid(
+			errs.ErrInvalidConfig, "Registry", operation, "component type validation")
 	}
 	// Security: Validate factory name
 	if err := ValidateComponentName(config.Name); err != nil {
-		return nil, errs.Wrap(err, "Registry", "CreateComponent", "factory name validation")
+		return componentGeneration{}, errs.Wrap(err, "Registry", operation, "factory name validation")
 	}
 	if deps.NATSClient == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "CreateComponent", "NATS client validation")
+		return componentGeneration{}, errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", operation, "NATS client validation")
 	}
 
 	// CRITICAL SECURITY: Comprehensive validation before factory execution
 	// This prevents injection attacks, resource exhaustion, and malformed input
 	if err := ValidateFactoryConfig(config.Config); err != nil {
-		return nil, errs.Wrap(err, "Registry", "CreateComponent", "config security validation")
+		return componentGeneration{}, errs.Wrap(err, "Registry", operation, "config security validation")
 	}
 
 	// Look up factory by the component/factory name (e.g., "udp", "websocket")
@@ -214,89 +280,218 @@ func (r *Registry) CreateComponent(
 
 	if !exists {
 		msg := fmt.Errorf("unknown component factory '%s'", config.Name)
-		return nil, errs.WrapInvalid(msg, "Registry", "CreateComponent", "factory lookup")
+		return componentGeneration{}, errs.WrapInvalid(msg, "Registry", operation, "factory lookup")
 	}
 
 	// Validate that the factory type matches the requested type
 	if registration.Type != string(config.Type) {
 		msg := fmt.Errorf("component '%s' is type '%s', not '%s'",
 			config.Name, registration.Type, config.Type)
-		return nil, errs.WrapInvalid(msg, "Registry", "CreateComponent", "type validation")
+		return componentGeneration{}, errs.WrapInvalid(msg, "Registry", operation, "type validation")
 	}
 
 	// Create the component using the factory with service pattern
 	// Pass the component-specific config (config.Config) to the factory
 	component, err := registration.Factory(config.Config, deps)
 	if err != nil {
-		return nil, errs.Wrap(err, "Registry", "CreateComponent", "factory execution")
+		return componentGeneration{}, errs.Wrap(err, "Registry", operation, "factory execution")
 	}
 
 	// Defensive check: factory should never return (nil, nil)
 	if component == nil {
-		return nil, errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "CreateComponent",
+		return componentGeneration{}, errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", operation,
 			"factory returned nil component without error")
 	}
 
-	// Track which factory created this instance
-	r.mu.Lock()
-	r.instanceFactories[instanceName] = config.Name
-	r.mu.Unlock()
-
-	// Register the instance with the unique instance name
-	if err := r.RegisterInstance(instanceName, component); err != nil {
-		return nil, errs.Wrap(err, "Registry", "CreateComponent", "instance registration")
+	prepared, err := captureComponentGeneration(instanceName, config.Name, component)
+	if err != nil {
+		return componentGeneration{}, errs.Wrap(err, "Registry", operation, "capture declaration")
 	}
-
-	return component, nil
+	return prepared, nil
 }
 
-// RegisterInstance registers a component instance with the given name
-// This allows the instance to be discovered and managed.
-// Returns an error if an instance with the same name is already registered.
-func (r *Registry) RegisterInstance(name string, component Discoverable) error {
-	if name == "" {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "RegisterInstance", "instance name validation")
-	}
-	if component == nil {
-		return errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "RegisterInstance", "component validation")
-	}
-
+func (r *Registry) admitPrepared(prepared componentGeneration) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.instances[name]; exists {
-		msg := fmt.Errorf("instance '%s' is already registered", name)
-		return errs.WrapInvalid(msg, "Registry", "RegisterInstance", "duplicate instance check")
+	_, exists := r.generations[prepared.InstanceName]
+	if exists {
+		return errs.WrapInvalid(
+			fmt.Errorf("instance '%s' is already registered", prepared.InstanceName),
+			"Registry", "admitPrepared", "duplicate instance check")
 	}
+	if _, reserved := r.reservations[prepared.InstanceName]; reserved {
+		return errs.WrapInvalid(
+			fmt.Errorf("instance '%s' still has a replacement reservation", prepared.InstanceName),
+			"Registry", "admitPrepared", "active replacement reservation check")
+	}
+	if err := r.checkResourceConflictsLocked(prepared.InstanceName, prepared.ExclusiveResources); err != nil {
+		return errs.Wrap(err, "Registry", "admitPrepared", "resource conflict check")
+	}
+	r.nextGeneration++
+	prepared.Generation = r.nextGeneration
+	r.generations[prepared.InstanceName] = prepared
+	r.notifyObserversLocked()
+	return nil
+}
 
-	resources, err := exclusivePortResources(component)
+// ReplaceComponent prepares a complete candidate off-Registry, reserves its
+// exclusive resources while the candidate initializes, and atomically replaces
+// the admitted generation. The old generation remains visible until commit.
+// cleanup is invoked if initialization or the causal commit fails.
+func (r *Registry) ReplaceComponent(
+	_ componentadmission.Access,
+	instanceName string,
+	config types.ComponentConfig,
+	deps Dependencies,
+	prepare func(Discoverable) (cleanup func() error, err error),
+) (Discoverable, error) {
+	prepared, err := r.prepareComponent("ReplaceComponent", instanceName, config, deps)
 	if err != nil {
-		return errs.Wrap(err, "Registry", "RegisterInstance", "resolve port facts")
+		return nil, err
 	}
-	// Check for resource conflicts before registering.
-	if err := r.checkResourceConflicts(resources); err != nil {
-		return errs.Wrap(err, "Registry", "RegisterInstance", "resource conflict check")
+	reservation, err := r.reserveReplacement(prepared)
+	if err != nil {
+		return nil, errs.Wrap(err, "Registry", "ReplaceComponent", "reserve replacement")
 	}
-
-	// Register the instance
-	r.instances[name] = component
-
-	// Track component resources
-	for _, resourceID := range resources {
-		r.resourceTracker[resourceID] = name
+	var cleanup func() error
+	if prepare != nil {
+		cleanup, err = prepare(prepared.Component)
+		if err != nil {
+			prepareErr := fmt.Errorf("prepare replacement component: %w", err)
+			return nil, r.abortReplacement(instanceName, reservation.expectedGeneration, prepareErr, cleanup)
+		}
 	}
-
-	// Publish capabilities to NATS if initialized
-	if r.natsClient != nil {
-		// Non-blocking, non-fatal - local registration takes priority
-		go func() {
-			if err := r.publishCapabilities(context.Background(), name, component); err != nil {
-				// Log warning but don't fail registration - NATS publish is non-fatal
-				r.logger.Debug("failed to publish capabilities", "component", name, "error", err)
-			}
-		}()
+	if err := r.commitReplacement(&prepared, reservation); err != nil {
+		commitErr := errs.Wrap(err, "Registry", "ReplaceComponent", "commit replacement")
+		return nil, r.abortReplacement(instanceName, reservation.expectedGeneration, commitErr, cleanup)
 	}
+	r.publishGenerationCapabilities(prepared)
+	return prepared.Component, nil
+}
 
+func (r *Registry) abortReplacement(
+	instanceName string,
+	expectedGeneration uint64,
+	cause error,
+	cleanup func() error,
+) error {
+	if cleanup != nil {
+		if err := cleanup(); err != nil {
+			return errors.Join(cause, fmt.Errorf("cleanup replacement candidate: %w", err))
+		}
+	}
+	r.releaseReplacement(instanceName, expectedGeneration)
+	return cause
+}
+
+func (r *Registry) reserveReplacement(prepared componentGeneration) (replacementReservation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, exists := r.generations[prepared.InstanceName]
+	if !exists {
+		return replacementReservation{}, errs.WrapInvalid(
+			fmt.Errorf("instance '%s' is not registered", prepared.InstanceName),
+			"Registry", "reserveReplacement", "replacement target check")
+	}
+	if _, reserved := r.reservations[prepared.InstanceName]; reserved {
+		return replacementReservation{}, errs.WrapInvalid(
+			fmt.Errorf("instance '%s' already has a replacement in progress", prepared.InstanceName),
+			"Registry", "reserveReplacement", "single replacement check")
+	}
+	if err := r.checkResourceConflictsLocked(prepared.InstanceName, prepared.ExclusiveResources); err != nil {
+		return replacementReservation{}, err
+	}
+	reservation := replacementReservation{
+		expectedGeneration: current.Generation,
+		resources:          append([]string(nil), prepared.ExclusiveResources...),
+	}
+	r.reservations[prepared.InstanceName] = reservation
+	return reservation, nil
+}
+
+func (r *Registry) commitReplacement(
+	prepared *componentGeneration, reservation replacementReservation,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reserved, ok := r.reservations[prepared.InstanceName]
+	if !ok || reserved.expectedGeneration != reservation.expectedGeneration || reserved.canceled {
+		return errs.WrapInvalid(
+			fmt.Errorf("replacement reservation for instance '%s' is no longer active", prepared.InstanceName),
+			"Registry", "commitReplacement", "reservation check")
+	}
+	current, ok := r.generations[prepared.InstanceName]
+	if !ok || current.Generation != reservation.expectedGeneration {
+		return errs.WrapInvalid(
+			fmt.Errorf("instance '%s' changed while replacement was prepared", prepared.InstanceName),
+			"Registry", "commitReplacement", "causal generation check")
+	}
+	r.nextGeneration++
+	prepared.Generation = r.nextGeneration
+	r.generations[prepared.InstanceName] = *prepared
+	delete(r.reservations, prepared.InstanceName)
+	r.notifyObserversLocked()
+	return nil
+}
+
+func (r *Registry) releaseReplacement(instanceName string, expectedGeneration uint64) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if reservation, ok := r.reservations[instanceName]; ok &&
+		reservation.expectedGeneration == expectedGeneration {
+		delete(r.reservations, instanceName)
+	}
+}
+
+// ValidateDeclarationUpdate proves that a proposed live configuration has the
+// exact normalized declaration facts retained for the current generation.
+func (r *Registry) ValidateDeclarationUpdate(
+	_ componentadmission.Access, instanceName string, config types.ComponentConfig, deps Dependencies,
+) (
+	//revive:disable-next-line:unexported-return Callers only relay this opaque proof through an internal-token-gated seam.
+	declarationUpdateProof,
+	error,
+) {
+	proposed, err := r.prepareComponent("ValidateDeclarationUpdate", instanceName, config, deps)
+	if err != nil {
+		return declarationUpdateProof{}, err
+	}
+	r.mu.RLock()
+	current, ok := r.generations[instanceName]
+	r.mu.RUnlock()
+	if !ok {
+		return declarationUpdateProof{}, errs.WrapInvalid(
+			fmt.Errorf("instance '%s' is not registered", instanceName),
+			"Registry", "ValidateDeclarationUpdate", "generation lookup")
+	}
+	if current.FactoryIdentity != proposed.FactoryIdentity ||
+		!reflect.DeepEqual(current.InputFacts, proposed.InputFacts) ||
+		!reflect.DeepEqual(current.OutputFacts, proposed.OutputFacts) {
+		return declarationUpdateProof{}, &DeclarationChangeRequiresReplacementError{
+			Component: instanceName,
+			Code:      "declaration_change_requires_replacement",
+		}
+	}
+	return declarationUpdateProof{registry: r, instanceName: instanceName, generation: current.Generation}, nil
+}
+
+// ConfirmDeclarationUpdate verifies that a declaration-neutral proof still
+// names the currently admitted generation.
+func (r *Registry) ConfirmDeclarationUpdate(
+	_ componentadmission.Access, proof declarationUpdateProof,
+) error {
+	if proof.registry != r {
+		return errs.WrapInvalid(errs.ErrInvalidConfig, "Registry", "ConfirmDeclarationUpdate", "proof registry check")
+	}
+	r.mu.RLock()
+	current, ok := r.generations[proof.instanceName]
+	r.mu.RUnlock()
+	if !ok || current.Generation != proof.generation {
+		return errs.WrapInvalid(
+			fmt.Errorf("instance '%s' changed after declaration validation", proof.instanceName),
+			"Registry", "ConfirmDeclarationUpdate", "causal generation check")
+	}
 	return nil
 }
 
@@ -310,17 +505,16 @@ func (r *Registry) UnregisterInstance(name string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Get component before removing to clean up resources
-	if _, exists := r.instances[name]; exists {
-		for resourceID, owner := range r.resourceTracker {
-			if owner == name {
-				delete(r.resourceTracker, resourceID)
-			}
-		}
+	_, exists := r.generations[name]
+	if reservation, reserved := r.reservations[name]; reserved {
+		reservation.canceled = true
+		r.reservations[name] = reservation
 	}
-
-	delete(r.instances, name)
-	delete(r.instanceFactories, name)
+	if !exists {
+		return
+	}
+	delete(r.generations, name)
+	r.notifyObserversLocked()
 }
 
 // ListComponents returns all registered component instances
@@ -331,8 +525,10 @@ func (r *Registry) ListComponents() map[string]Discoverable {
 	defer r.mu.RUnlock()
 
 	// Return a copy to prevent external modification
-	result := make(map[string]Discoverable, len(r.instances))
-	maps.Copy(result, r.instances)
+	result := make(map[string]Discoverable, len(r.generations))
+	for name, generation := range r.generations {
+		result[name] = generation.Component
+	}
 
 	return result
 }
@@ -403,7 +599,7 @@ func (r *Registry) Component(name string) Discoverable {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	return r.instances[name]
+	return r.generations[name].Component
 }
 
 // ListFactories returns all registered component factories
@@ -580,31 +776,224 @@ func ValidatePortNumber(port int) error {
 	return nil
 }
 
-// checkResourceConflicts checks if any of the component's ports conflict with existing resources
-func (r *Registry) checkResourceConflicts(resources []string) error {
-	for _, resourceID := range resources {
-		if existingInstance, exists := r.resourceTracker[resourceID]; exists {
-			msg := fmt.Errorf("resource conflict: %s already used by component '%s'", resourceID, existingInstance)
-			return errs.WrapInvalid(msg, "Registry", "checkResourceConflicts", "exclusive resource check")
+func (r *Registry) checkResourceConflictsLocked(instanceName string, resources []string) error {
+	for existingName, generation := range r.generations {
+		if existingName == instanceName {
+			continue
+		}
+		for _, existingResource := range generation.ExclusiveResources {
+			for _, resource := range resources {
+				if resource == existingResource {
+					msg := fmt.Errorf("resource conflict: %s already used by component '%s'", resource, existingName)
+					return errs.WrapInvalid(msg, "Registry", "checkResourceConflicts", "exclusive resource check")
+				}
+			}
+		}
+	}
+	for reservedName, reservation := range r.reservations {
+		if reservedName == instanceName {
+			continue
+		}
+		for _, reservedResource := range reservation.resources {
+			for _, resource := range resources {
+				if resource == reservedResource {
+					msg := fmt.Errorf("resource conflict: %s reserved by component '%s'", resource, reservedName)
+					return errs.WrapInvalid(msg, "Registry", "checkResourceConflicts", "exclusive resource reservation check")
+				}
+			}
 		}
 	}
 	return nil
 }
 
-func exclusivePortResources(discoverable Discoverable) ([]string, error) {
-	allPorts := append([]Port(nil), discoverable.InputPorts()...)
-	allPorts = append(allPorts, discoverable.OutputPorts()...)
-	resources := make([]string, 0, len(allPorts))
-	for _, port := range allPorts {
-		facts, err := port.Facts()
-		if err != nil {
-			return nil, err
-		}
+func captureComponentGeneration(
+	instanceName, factoryIdentity string, discoverable Discoverable,
+) (componentGeneration, error) {
+	inputs, inputFacts, err := cloneAndProjectPorts(discoverable.InputPorts())
+	if err != nil {
+		return componentGeneration{}, err
+	}
+	outputs, outputFacts, err := cloneAndProjectPorts(discoverable.OutputPorts())
+	if err != nil {
+		return componentGeneration{}, err
+	}
+	resources := make([]string, 0, len(inputFacts)+len(outputFacts))
+	for _, facts := range append(append([]PortFacts(nil), inputFacts...), outputFacts...) {
 		if facts.IsExclusive() {
 			resources = append(resources, facts.ResourceID())
 		}
 	}
-	return resources, nil
+	sort.Strings(resources)
+	resources = compactStrings(resources)
+	return componentGeneration{
+		InstanceName:       instanceName,
+		FactoryIdentity:    factoryIdentity,
+		Component:          discoverable,
+		InputPorts:         inputs,
+		OutputPorts:        outputs,
+		InputFacts:         inputFacts,
+		OutputFacts:        outputFacts,
+		ExclusiveResources: resources,
+	}, nil
+}
+
+func cloneAndProjectPorts(ports []Port) ([]Port, []PortFacts, error) {
+	cloned := make([]Port, len(ports))
+	facts := make([]PortFacts, len(ports))
+	for index, port := range ports {
+		resolved, projected, err := resolveAndProjectPort(PortDefinition{
+			Name:        port.Name,
+			Required:    port.Required,
+			Description: port.Description,
+			Config:      port.Config,
+		}, port.Direction)
+		if err != nil {
+			return nil, nil, err
+		}
+		cloned[index] = resolved
+		facts[index] = projected
+	}
+	return cloned, facts, nil
+}
+
+func compactStrings(values []string) []string {
+	if len(values) < 2 {
+		return values
+	}
+	write := 1
+	for read := 1; read < len(values); read++ {
+		if values[read] == values[write-1] {
+			continue
+		}
+		values[write] = values[read]
+		write++
+	}
+	return values[:write]
+}
+
+// generation returns a defensive clone of one admitted generation for
+// package-internal verification. Generation inspection is deliberately not an
+// adopter-facing Registry API until a runtime consumer exists.
+func (r *Registry) generation(instanceName string) (componentGeneration, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	generation, ok := r.generations[instanceName]
+	if !ok {
+		return componentGeneration{}, false
+	}
+	return cloneComponentGeneration(generation), true
+}
+
+// generationsSnapshot returns a deterministic defensive clone of the complete current
+// admission set.
+func (r *Registry) generationsSnapshot() []componentGeneration {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.generationsLocked()
+}
+
+// observeGenerations is a framework-internal, process-local latest-state view.
+// It initially delivers one complete set (including empty), coalesces slow
+// readers to the newest complete set, and releases its channel on cancellation.
+func (r *Registry) observeGenerations(ctx context.Context) <-chan []componentGeneration {
+	updates := make(chan []componentGeneration, 1)
+	r.mu.Lock()
+	r.nextObserverID++
+	id := r.nextObserverID
+	r.observers[id] = updates
+	updates <- r.generationsLocked()
+	r.mu.Unlock()
+
+	go func() {
+		<-ctx.Done()
+		r.mu.Lock()
+		if observer, ok := r.observers[id]; ok {
+			delete(r.observers, id)
+			close(observer)
+		}
+		r.mu.Unlock()
+	}()
+	return updates
+}
+
+func (r *Registry) generationsLocked() []componentGeneration {
+	names := make([]string, 0, len(r.generations))
+	for name := range r.generations {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	result := make([]componentGeneration, 0, len(names))
+	for _, name := range names {
+		result = append(result, cloneComponentGeneration(r.generations[name]))
+	}
+	return result
+}
+
+func (r *Registry) notifyObserversLocked() {
+	for _, observer := range r.observers {
+		snapshot := r.generationsLocked()
+		select {
+		case observer <- snapshot:
+		default:
+			select {
+			case <-observer:
+			default:
+			}
+			select {
+			case observer <- snapshot:
+			default:
+			}
+		}
+	}
+}
+
+func cloneComponentGeneration(generation componentGeneration) componentGeneration {
+	clone := generation
+	clone.InputPorts = cloneResolvedPorts(generation.InputPorts)
+	clone.OutputPorts = cloneResolvedPorts(generation.OutputPorts)
+	clone.InputFacts = clonePortFactsSlice(generation.InputFacts)
+	clone.OutputFacts = clonePortFactsSlice(generation.OutputFacts)
+	clone.ExclusiveResources = append([]string(nil), generation.ExclusiveResources...)
+	return clone
+}
+
+func cloneResolvedPorts(ports []Port) []Port {
+	cloned := make([]Port, len(ports))
+	for index, port := range ports {
+		resolved, _, err := resolveAndProjectPort(PortDefinition{
+			Name: port.Name, Required: port.Required, Description: port.Description, Config: port.Config,
+		}, port.Direction)
+		if err != nil {
+			panic(fmt.Sprintf("clone retained port %q: %v", port.Name, err))
+		}
+		cloned[index] = resolved
+	}
+	return cloned
+}
+
+func clonePortFactsSlice(facts []PortFacts) []PortFacts {
+	cloned := make([]PortFacts, len(facts))
+	for index, fact := range facts {
+		cloned[index] = clonePortFacts(fact)
+	}
+	return cloned
+}
+
+func clonePortFacts(facts PortFacts) PortFacts {
+	clone := facts
+	clone.interfaceContract = cloneInterfaceContract(facts.interfaceContract)
+	clone.connectionIDs = append([]string(nil), facts.connectionIDs...)
+	clone.natsSubjects = append([]string(nil), facts.natsSubjects...)
+	if facts.stream != nil {
+		stream := *facts.stream
+		stream.subjects = append([]string(nil), facts.stream.subjects...)
+		clone.stream = &stream
+	}
+	if facts.network != nil {
+		network := *facts.network
+		clone.network = &network
+	}
+	return clone
 }
 
 // Config helper functions for components
@@ -993,6 +1382,20 @@ func (r *Registry) publishCapabilities(ctx context.Context, instanceName string,
 	return nil
 }
 
+func (r *Registry) publishGenerationCapabilities(generation componentGeneration) {
+	r.mu.RLock()
+	enabled := r.natsClient != nil
+	r.mu.RUnlock()
+	if !enabled {
+		return
+	}
+	go func() {
+		if err := r.publishCapabilities(context.Background(), generation.InstanceName, generation.Component); err != nil {
+			r.logger.Debug("failed to publish capabilities", "component", generation.InstanceName, "error", err)
+		}
+	}()
+}
+
 // portsToCapabilities converts Port slice to PortCapability slice.
 func (r *Registry) portsToCapabilities(ports []Port) ([]PortCapability, error) {
 	capabilities := make([]PortCapability, 0, len(ports))
@@ -1097,9 +1500,10 @@ func (r *Registry) StopHeartbeat() {
 // republishAllCapabilities republishes capabilities for all registered instances.
 func (r *Registry) republishAllCapabilities(ctx context.Context) {
 	r.mu.RLock()
-	// Clone instances map to avoid holding lock during publish
-	instances := make(map[string]Discoverable, len(r.instances))
-	maps.Copy(instances, r.instances)
+	instances := make(map[string]Discoverable, len(r.generations))
+	for name, generation := range r.generations {
+		instances[name] = generation.Component
+	}
 	r.mu.RUnlock()
 
 	// Publish each instance (non-fatal errors)
@@ -1118,11 +1522,11 @@ func (r *Registry) getRegistrationForInstance(instanceName string) *Registration
 	defer r.mu.RUnlock()
 
 	// Look up factory name for this instance
-	factoryName, exists := r.instanceFactories[instanceName]
+	generation, exists := r.generations[instanceName]
 	if !exists {
 		return nil
 	}
 
 	// Return the registration for this factory
-	return r.factories[factoryName]
+	return r.factories[generation.FactoryIdentity]
 }

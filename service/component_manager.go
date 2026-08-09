@@ -17,6 +17,7 @@ import (
 	"github.com/c360studio/semstreams/component"
 	"github.com/c360studio/semstreams/component/flowgraph"
 	"github.com/c360studio/semstreams/config"
+	"github.com/c360studio/semstreams/internal/componentadmission"
 	"github.com/c360studio/semstreams/model"
 	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/payloadregistry"
@@ -52,7 +53,6 @@ type ComponentManager struct {
 	platform         types.PlatformMeta                     // Platform identity for components
 	components       map[string]*component.ManagedComponent // Track managed components
 	startOrder       []string                               // Track start order for reverse stop
-	resources        map[string][]string                    // resourceID → component names
 
 	// storeRegistry is the shared {StorageInstance → store} resolver (ADR-063),
 	// populated from storage components' store-provide ports at Start and cleared
@@ -87,6 +87,7 @@ type ComponentManager struct {
 
 	// Thread safety for component operations
 	mu          sync.RWMutex
+	instanceOps [componentOperationStripeCount]sync.Mutex
 	initialized atomic.Bool
 	initMu      sync.Mutex
 	started     atomic.Bool
@@ -96,6 +97,63 @@ type ComponentManager struct {
 	shutdown chan struct{}
 	done     chan struct{}
 	wg       sync.WaitGroup
+}
+
+const componentOperationStripeCount = 64
+
+type replacementStartError struct {
+	component string
+	err       error
+}
+
+func (e *replacementStartError) Error() string {
+	return fmt.Sprintf("replacement for component %s was admitted but failed to start: %v", e.component, e.err)
+}
+
+func (e *replacementStartError) Unwrap() error { return e.err }
+
+type replacementRetirementError struct {
+	component string
+	err       error
+}
+
+func (e *replacementRetirementError) Error() string {
+	return fmt.Sprintf("replacement for component %s was aborted because the old generation failed to stop: %v", e.component, e.err)
+}
+
+func (e *replacementRetirementError) Unwrap() error { return e.err }
+
+func restartFailureAction(err error) string {
+	var startFailure *replacementStartError
+	if errors.As(err, &startFailure) {
+		return "replacement_admitted_start_failed"
+	}
+	var retirementFailure *replacementRetirementError
+	if errors.As(err, &retirementFailure) {
+		return "replacement_aborted_old_retirement_failed"
+	}
+	return "component_continues_with_old_config"
+}
+
+func (cm *ComponentManager) lockInstanceOperation(instanceName string) func() {
+	operationMu := &cm.instanceOps[componentOperationStripe(instanceName)]
+	operationMu.Lock()
+	return operationMu.Unlock
+}
+
+func componentOperationStripe(instanceName string) uint64 {
+	// FNV-1a gives stable distribution without retaining caller-controlled
+	// identities. Collisions only serialize unrelated component mutations.
+	const (
+		offset64 = uint64(14695981039346656037)
+		prime64  = uint64(1099511628211)
+	)
+	hash := offset64
+	for index := 0; index < len(instanceName); index++ {
+		hash ^= uint64(instanceName[index])
+		hash *= prime64
+	}
+	return hash % componentOperationStripeCount
 }
 
 // ComponentManagerOption removed - we now use Dependencies pattern instead
@@ -193,7 +251,6 @@ func NewComponentManager(rawConfig json.RawMessage, deps *Dependencies) (Service
 		platform:             platform,
 		components:           make(map[string]*component.ManagedComponent),
 		startOrder:           make([]string, 0),
-		resources:            make(map[string][]string),
 		storeRegistry:        storeregistry.New(),
 		storeProvided:        make(map[string][]string),
 		configManager:        configManager,
@@ -251,9 +308,6 @@ func (cm *ComponentManager) Initialize() error {
 	// Reset component tracking
 	if cm.components == nil {
 		cm.components = make(map[string]*component.ManagedComponent)
-	}
-	if cm.resources == nil {
-		cm.resources = make(map[string][]string)
 	}
 	cm.startOrder = make([]string, 0)
 
@@ -943,6 +997,14 @@ func (cm *ComponentManager) GetRegistry() *component.Registry {
 func (cm *ComponentManager) CreateComponent(
 	ctx context.Context, instanceName string, cfg types.ComponentConfig, deps component.Dependencies,
 ) error {
+	unlock := cm.lockInstanceOperation(instanceName)
+	defer unlock()
+	return cm.createComponent(ctx, instanceName, cfg, deps)
+}
+
+func (cm *ComponentManager) createComponent(
+	ctx context.Context, instanceName string, cfg types.ComponentConfig, deps component.Dependencies,
+) error {
 	// Check for cancellation before expensive operation
 	select {
 	case <-ctx.Done():
@@ -960,31 +1022,18 @@ func (cm *ComponentManager) CreateComponent(
 		return fmt.Errorf("component type cannot be empty")
 	}
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
-
 	// Check if component already exists
+	cm.mu.RLock()
 	if _, exists := cm.components[instanceName]; exists {
+		cm.mu.RUnlock()
 		return fmt.Errorf("component '%s' already exists", instanceName)
 	}
+	cm.mu.RUnlock()
 
 	// Create component with the new factory pattern
 	comp, err := cm.registry.CreateComponent(instanceName, cfg, deps)
 	if err != nil {
 		return err
-	}
-
-	// Check for port conflicts using existing abstractions
-	if err := cm.checkPortConflicts(comp); err != nil {
-		// Rollback component creation
-		cm.registry.UnregisterInstance(instanceName)
-		return fmt.Errorf("port conflict for component '%s': %w", instanceName, err)
-	}
-
-	// Register resource usage
-	if err := cm.registerPorts(instanceName, comp); err != nil {
-		cm.registry.UnregisterInstance(instanceName)
-		return fmt.Errorf("resolve ports for component '%s': %w", instanceName, err)
 	}
 
 	// Track as managed component. Retain the effective config so a later
@@ -999,17 +1048,15 @@ func (cm *ComponentManager) CreateComponent(
 	// Initialize if supported
 	if lifecycle, ok := component.AsLifecycleComponent(comp); ok {
 		if err := lifecycle.Initialize(); err != nil {
-			// Release the port ownership registered just above (the component
-			// never makes it into cm.components, so unregisterPorts-by-name
-			// can't find it) and remove from registry on init failure (gh#417).
-			cm.unregisterPortsForComp(instanceName)
 			cm.registry.UnregisterInstance(instanceName)
 			return fmt.Errorf("failed to initialize component '%s': %w", instanceName, err)
 		}
 		mc.State = component.StateInitialized
 	}
 
+	cm.mu.Lock()
 	cm.components[instanceName] = mc
+	cm.mu.Unlock()
 
 	// Invalidate FlowGraph cache when components change
 	cm.invalidateFlowGraph()
@@ -1023,25 +1070,16 @@ func (cm *ComponentManager) RemoveComponent(instanceName string) error {
 		return fmt.Errorf("instance name cannot be empty")
 	}
 
-	cm.mu.Lock()
-	defer cm.mu.Unlock()
+	unlock := cm.lockInstanceOperation(instanceName)
+	defer unlock()
 
 	// Get the managed component
+	cm.mu.RLock()
 	mc, exists := cm.components[instanceName]
+	cm.mu.RUnlock()
 	if !exists {
 		return fmt.Errorf("component '%s' not found", instanceName)
 	}
-
-	// Cancel context if running
-	if mc.Cancel != nil {
-		mc.Cancel()
-		// Clean up references to prevent resource leaks
-		mc.Cancel = nil
-		mc.Context = nil
-	}
-
-	// Clear this component's stores from the shared registry before Stop (ADR-063).
-	cm.deregisterProvidedStores(instanceName)
 
 	// Stop it if it supports stopping
 	if lifecycle, ok := component.AsLifecycleComponent(mc.Component); ok {
@@ -1051,10 +1089,16 @@ func (cm *ComponentManager) RemoveComponent(instanceName string) error {
 		}
 	}
 
-	// Unregister ports before removal
-	cm.unregisterPorts(instanceName)
+	// Stop succeeded, so owner-local runtime resources can now be retired.
+	if mc.Cancel != nil {
+		mc.Cancel()
+		mc.Cancel = nil
+		mc.Context = nil
+	}
+	cm.deregisterProvidedStores(instanceName)
 
 	// Remove from tracking
+	cm.mu.Lock()
 	delete(cm.components, instanceName)
 
 	// Invalidate FlowGraph cache when components change
@@ -1067,6 +1111,7 @@ func (cm *ComponentManager) RemoveComponent(instanceName string) error {
 			break
 		}
 	}
+	cm.mu.Unlock()
 
 	// Remove from registry
 	cm.registry.UnregisterInstance(instanceName)
@@ -1104,78 +1149,6 @@ func (cm *ComponentManager) GetManagedComponents() map[string]*component.Managed
 	}
 
 	return result
-}
-
-// checkPortConflicts checks for conflicts with existing port registrations
-func (cm *ComponentManager) checkPortConflicts(comp component.Discoverable) error {
-	allPorts := append([]component.Port(nil), comp.InputPorts()...)
-	allPorts = append(allPorts, comp.OutputPorts()...)
-
-	for _, port := range allPorts {
-		facts, err := port.Facts()
-		if err != nil {
-			return err
-		}
-		if facts.IsExclusive() {
-			if owners, exists := cm.resources[facts.ResourceID()]; exists && len(owners) > 0 {
-				return fmt.Errorf("exclusive resource %s already used by %v",
-					facts.ResourceID(), owners)
-			}
-		}
-	}
-	return nil
-}
-
-// registerPorts registers all ports from a component to track resource usage
-func (cm *ComponentManager) registerPorts(name string, comp component.Discoverable) error {
-	allPorts := append([]component.Port(nil), comp.InputPorts()...)
-	allPorts = append(allPorts, comp.OutputPorts()...)
-	resourceIDs := make([]string, 0, len(allPorts))
-	for _, port := range allPorts {
-		facts, err := port.Facts()
-		if err != nil {
-			return err
-		}
-		resourceIDs = append(resourceIDs, facts.ResourceID())
-	}
-	for _, resourceID := range resourceIDs {
-		cm.resources[resourceID] = append(cm.resources[resourceID], name)
-	}
-	return nil
-}
-
-// unregisterPorts removes all port registrations for a component still tracked
-// in cm.components. Caller must hold cm.mu.
-func (cm *ComponentManager) unregisterPorts(name string) {
-	mc, exists := cm.components[name]
-	if !exists || mc.Component == nil {
-		return
-	}
-	cm.unregisterPortsForComp(name)
-}
-
-// unregisterPortsForComp releases every cm.resources ownership entry recorded
-// for name. Scanning the tracker avoids reinterpreting component ports that may
-// have changed since registration. Caller must hold cm.mu.
-func (cm *ComponentManager) unregisterPortsForComp(name string) {
-	for resourceID := range cm.resources {
-		cm.removeFromSlice(resourceID, name)
-	}
-}
-
-// removeFromSlice removes a component name from the resource owners slice
-func (cm *ComponentManager) removeFromSlice(resourceID, name string) {
-	owners := cm.resources[resourceID]
-	for i, owner := range owners {
-		if owner == name {
-			cm.resources[resourceID] = append(owners[:i], owners[i+1:]...)
-			break
-		}
-	}
-
-	if len(cm.resources[resourceID]) == 0 {
-		delete(cm.resources, resourceID)
-	}
 }
 
 // healthCheck performs a health check for the ComponentManager
@@ -1382,7 +1355,7 @@ func (cm *ComponentManager) restartDependentsOf(ctx context.Context, dep string,
 		if err := cm.restartComponentWithNewConfig(ctx, name, compConfig, existing); err != nil {
 			cm.logger.Error("failed to restart dependent component on dep change",
 				"component", name, "dep", dep, "error", err,
-				"action", "component_continues_with_old_config")
+				"action", restartFailureAction(err))
 			// Others still get their shot — no early return.
 		}
 	}
@@ -1452,8 +1425,7 @@ func (cm *ComponentManager) handleComponentConfigUpdate(
 				cm.logger.Error("Failed to restart component with new config",
 					"component", name,
 					"error", err,
-					"action", "component_continues_with_old_config")
-				// Component continues running with old config - system remains operational
+					"action", restartFailureAction(err))
 			} else {
 				cm.recordAcceptedComponentConfig(name, cfg)
 			}
@@ -1817,18 +1789,36 @@ func (cm *ComponentManager) reconcileAgainstConfig(
 	return pendingStart, created+edited+stopped > 0, nil
 }
 
-// recreateComponentWithNewConfig stops, removes, and re-creates a component
-// with new configuration WITHOUT starting it. It is the shared teardown+rebuild
-// core of the dynamic restart path (which then starts via the detached
-// startSingleComponent) and the boot-boundary drain (which barrier-starts the
-// rebuilt component instead).
+// recreateComponentWithNewConfig prepares and initializes a complete
+// replacement off-Registry, atomically commits its generation, and only then
+// retires the old runtime. Preparation failure leaves the old component,
+// declaration, resources, and retained config untouched.
 func (cm *ComponentManager) recreateComponentWithNewConfig(
 	ctx context.Context, name string, cfg types.ComponentConfig, existingComp *component.ManagedComponent,
 ) error {
-	// Check for nil component
-	if existingComp == nil {
+	unlock := cm.lockInstanceOperation(name)
+	defer unlock()
+	return cm.recreateComponentWithNewConfigLocked(ctx, name, cfg, existingComp)
+}
+
+func (cm *ComponentManager) recreateComponentWithNewConfigLocked(
+	ctx context.Context, name string, cfg types.ComponentConfig, existingComp *component.ManagedComponent,
+) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	// The caller may have snapshotted before waiting for this instance's
+	// operation lock. Re-read under the lock and operate on the authoritative
+	// generation, never the stale pointer.
+	cm.mu.RLock()
+	current := cm.components[name]
+	cm.mu.RUnlock()
+	if current == nil {
 		return fmt.Errorf("cannot restart component %s: component not found", name)
 	}
+	existingComp = current
 	if existingComp.Config.Name == "rule-processor" {
 		return fmt.Errorf(
 			"cannot restart rule processor %s in process: pack ownership is bound before ComponentManager.Start",
@@ -1836,40 +1826,56 @@ func (cm *ComponentManager) recreateComponentWithNewConfig(
 		)
 	}
 
-	// Deregister the OLD instance's stores before Stop closes them, so the
-	// new instance can re-register the same StorageInstance without colliding
-	// (ADR-063: this is what makes reconfig swap the live handle).
-	cm.deregisterProvidedStores(name)
-
-	// Step 1: Gracefully stop the existing component
-	if lifecycle, ok := component.AsLifecycleComponent(existingComp.Component); ok {
-		if err := lifecycle.Stop(30 * time.Second); err != nil {
-			return fmt.Errorf("failed to stop existing component: %w", err)
+	deps := cm.buildComponentDependencies()
+	state := component.StateCreated
+	replacement, err := cm.registry.ReplaceComponent(
+		componentadmission.Access{}, name, cfg, deps,
+		func(candidate component.Discoverable) (func() error, error) {
+			var cleanup func() error
+			if lifecycle, ok := component.AsLifecycleComponent(candidate); ok {
+				cleanup = func() error {
+					if stopErr := lifecycle.Stop(30 * time.Second); stopErr != nil {
+						cm.logger.Warn("replacement candidate cleanup failed", "component", name, "error", stopErr)
+						return stopErr
+					}
+					return nil
+				}
+				if err := lifecycle.Initialize(); err != nil {
+					return cleanup, fmt.Errorf("initialize replacement: %w", err)
+				}
+				state = component.StateInitialized
+			}
+			if lifecycle, ok := component.AsLifecycleComponent(existingComp.Component); ok {
+				if stopErr := lifecycle.Stop(30 * time.Second); stopErr != nil {
+					return cleanup, &replacementRetirementError{component: name, err: stopErr}
+				}
+			}
+			return cleanup, nil
+		})
+	if err != nil {
+		var retirementErr *replacementRetirementError
+		if errors.As(err, &retirementErr) {
+			cm.updateComponentState(name, component.StateFailed, retirementErr)
 		}
+		return fmt.Errorf("prepare replacement component: %w", err)
 	}
 
-	// Step 2: Cancel the component's context
+	// The old runtime stopped during reserved preparation and the Registry now
+	// exposes the committed replacement. Retire remaining owner-local handles.
 	if existingComp.Cancel != nil {
 		existingComp.Cancel()
 	}
+	cm.deregisterProvidedStores(name)
 
-	// Step 3: Remove from tracking and unregister from registry
 	cm.mu.Lock()
-	cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
-	delete(cm.components, name)
+	cm.components[name] = &component.ManagedComponent{
+		Component: replacement,
+		State:     state,
+		Config:    cloneComponentConfig(cfg),
+	}
 	cm.removeFromStartOrder(name)
 	cm.mu.Unlock()
 
-	// Unregister from registry to allow re-registration (thread-safe)
-	cm.registry.UnregisterInstance(name)
-
-	// Step 4: Create new component with new config
-	deps := cm.buildComponentDependencies()
-	if err := cm.CreateComponent(ctx, name, cfg, deps); err != nil {
-		return fmt.Errorf("failed to create component with new config: %w", err)
-	}
-
-	// Invalidate FlowGraph cache (always safe to do)
 	cm.invalidateFlowGraph()
 	return nil
 }
@@ -1878,14 +1884,16 @@ func (cm *ComponentManager) recreateComponentWithNewConfig(
 func (cm *ComponentManager) restartComponentWithNewConfig(
 	ctx context.Context, name string, cfg types.ComponentConfig, existingComp *component.ManagedComponent,
 ) error {
-	if err := cm.recreateComponentWithNewConfig(ctx, name, cfg, existingComp); err != nil {
+	unlock := cm.lockInstanceOperation(name)
+	defer unlock()
+	if err := cm.recreateComponentWithNewConfigLocked(ctx, name, cfg, existingComp); err != nil {
 		return err
 	}
 
 	// Start the new component if the system is running
 	if cm.started.Load() {
 		if err := cm.startSingleComponent(ctx, name); err != nil {
-			return fmt.Errorf("failed to start restarted component: %w", err)
+			return &replacementStartError{component: name, err: err}
 		}
 	}
 
@@ -1896,9 +1904,11 @@ func (cm *ComponentManager) restartComponentWithNewConfig(
 
 // createAndStartComponent creates and optionally starts a new component
 func (cm *ComponentManager) createAndStartComponent(ctx context.Context, name string, cfg types.ComponentConfig) error {
+	unlock := cm.lockInstanceOperation(name)
+	defer unlock()
 	// Step 1: Create the component
 	deps := cm.buildComponentDependencies()
-	if err := cm.CreateComponent(ctx, name, cfg, deps); err != nil {
+	if err := cm.createComponent(ctx, name, cfg, deps); err != nil {
 		return fmt.Errorf("failed to create component: %w", err)
 	}
 
@@ -1924,6 +1934,14 @@ func (cm *ComponentManager) createAndStartComponent(ctx context.Context, name st
 func (cm *ComponentManager) stopAndRemoveComponent(
 	ctx context.Context, name string, existingComp *component.ManagedComponent,
 ) error {
+	unlock := cm.lockInstanceOperation(name)
+	defer unlock()
+	return cm.stopAndRemoveComponentLocked(ctx, name, existingComp)
+}
+
+func (cm *ComponentManager) stopAndRemoveComponentLocked(
+	ctx context.Context, name string, existingComp *component.ManagedComponent,
+) error {
 	// Check for cancellation before stopping
 	select {
 	case <-ctx.Done():
@@ -1931,23 +1949,26 @@ func (cm *ComponentManager) stopAndRemoveComponent(
 	default:
 	}
 
-	// Check for nil component
-	if existingComp == nil {
+	// Re-read after acquiring the per-instance operation lock. Watcher and
+	// reconciliation callers intentionally snapshot without holding that lock,
+	// so their pointer can name a retired generation by the time they enter.
+	cm.mu.RLock()
+	current := cm.components[name]
+	cm.mu.RUnlock()
+	if current == nil {
 		return fmt.Errorf("cannot stop component %s: component not found", name)
 	}
-
-	// Clear this component's stores from the shared registry before Stop (ADR-063).
-	cm.deregisterProvidedStores(name)
+	existingComp = current
 
 	// Step 1: Gracefully stop the component
 	if lifecycle, ok := component.AsLifecycleComponent(existingComp.Component); ok {
 		if err := lifecycle.Stop(30 * time.Second); err != nil {
-			cm.logger.Warn("Component stop returned error, continuing with removal",
-				"component", name,
-				"error", err)
-			// Continue with removal even if stop failed
+			cm.updateComponentState(name, component.StateFailed, err)
+			return fmt.Errorf("failed to stop component '%s': %w", name, err)
 		}
 	}
+
+	cm.deregisterProvidedStores(name)
 
 	// Step 2: Cancel the component's context
 	if existingComp.Cancel != nil {
@@ -1956,7 +1977,6 @@ func (cm *ComponentManager) stopAndRemoveComponent(
 
 	// Step 3: Remove from tracking and unregister from registry
 	cm.mu.Lock()
-	cm.unregisterPorts(name) // free exclusive port ownership (gh#417)
 	delete(cm.components, name)
 	cm.removeFromStartOrder(name)
 	cm.mu.Unlock()

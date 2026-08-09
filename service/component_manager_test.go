@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/c360studio/semstreams/natsclient"
 	"github.com/c360studio/semstreams/types"
 )
 
@@ -325,7 +326,7 @@ func TestComponentManagerComponent(t *testing.T) {
 	}
 
 	// Register the component in the registry
-	cm.registry.RegisterInstance("test-get", mockComp)
+	admitTestRegistryComponent(t, cm.registry, "test-get", mockComp)
 
 	// Get existing component
 	comp := cm.Component("test-get")
@@ -361,9 +362,9 @@ func TestComponentManagerListComponents(t *testing.T) {
 	}
 
 	// Register components in the registry
-	cm.registry.RegisterInstance("comp1", comp1)
-	cm.registry.RegisterInstance("comp2", comp2)
-	cm.registry.RegisterInstance("comp3", comp3)
+	admitTestRegistryComponent(t, cm.registry, "comp1", comp1)
+	admitTestRegistryComponent(t, cm.registry, "comp2", comp2)
+	admitTestRegistryComponent(t, cm.registry, "comp3", comp3)
 
 	// List should contain all (returns map[string]component.Discoverable)
 	list := cm.ListComponents()
@@ -559,4 +560,20 @@ func createTestComponentManager(_ *testing.T) *ComponentManager {
 		registry:    component.NewRegistry(),
 	}
 	return cm
+}
+
+func admitTestRegistryComponent(
+	t *testing.T, registry *component.Registry, name string, instance component.Discoverable,
+) {
+	t.Helper()
+	require.NoError(t, registry.RegisterWithConfig(component.RegistrationConfig{
+		Name: name, Type: "processor",
+		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
+			return instance, nil
+		},
+	}))
+	_, err := registry.CreateComponent(name, types.ComponentConfig{
+		Name: name, Type: types.ComponentTypeProcessor, Enabled: true, Config: json.RawMessage(`{}`),
+	}, component.Dependencies{NATSClient: new(natsclient.Client)})
+	require.NoError(t, err)
 }

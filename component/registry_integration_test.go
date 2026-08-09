@@ -130,6 +130,23 @@ func failingFactory(_ json.RawMessage, _ Dependencies) (Discoverable, error) {
 	return nil, fmt.Errorf("factory failure")
 }
 
+func admitMockComponent(t *testing.T, registry *Registry, instanceName string, mock *MockComponent) {
+	t.Helper()
+	factoryName := "factory-" + instanceName
+	if err := registry.RegisterFactory(factoryName, &Registration{
+		Name: factoryName, Type: mock.componentType,
+		Factory: func(json.RawMessage, Dependencies) (Discoverable, error) { return mock, nil },
+	}); err != nil {
+		t.Fatalf("register %s: %v", factoryName, err)
+	}
+	_, err := registry.CreateComponent(instanceName, types.ComponentConfig{
+		Name: factoryName, Type: types.ComponentType(mock.componentType), Enabled: true, Config: json.RawMessage(`{}`),
+	}, Dependencies{NATSClient: new(natsclient.Client)})
+	if err != nil {
+		t.Fatalf("admit %s: %v", instanceName, err)
+	}
+}
+
 func TestNewRegistry(t *testing.T) {
 	registry := NewRegistry()
 
@@ -141,8 +158,8 @@ func TestNewRegistry(t *testing.T) {
 		t.Error("factories map not initialized")
 	}
 
-	if registry.instances == nil {
-		t.Error("instances map not initialized")
+	if registry.generations == nil {
+		t.Error("generations map not initialized")
 	}
 
 	// Should start empty
@@ -150,8 +167,8 @@ func TestNewRegistry(t *testing.T) {
 		t.Error("factories should start empty")
 	}
 
-	if len(registry.instances) != 0 {
-		t.Error("instances should start empty")
+	if len(registry.generations) != 0 {
+		t.Error("generations should start empty")
 	}
 }
 
@@ -442,88 +459,11 @@ func TestCreateComponentFactoryFailure(t *testing.T) {
 	}
 }
 
-func TestRegisterInstance(t *testing.T) {
-	registry := NewRegistry()
-	component := NewMockComponent("test", "input")
-
-	// Successful registration
-	err := registry.RegisterInstance("test-instance", component)
-	if err != nil {
-		t.Fatalf("Failed to register instance: %v", err)
-	}
-
-	// Verify instance was registered
-	retrieved := registry.Component("test-instance")
-	if retrieved == nil {
-		t.Error("Instance not found after registration")
-	}
-
-	if retrieved != component {
-		t.Error("Retrieved component is not the same as registered")
-	}
-
-	// Duplicate registration should fail
-	err = registry.RegisterInstance("test-instance", component)
-	if err == nil {
-		t.Error("Expected error for duplicate instance registration")
-	}
-}
-
-func TestRegisterInstanceValidation(t *testing.T) {
-	registry := NewRegistry()
-	component := NewMockComponent("test", "input")
-
-	tests := []struct {
-		name         string
-		instanceName string
-		component    Discoverable
-		expectError  bool
-		errorMsg     string
-	}{
-		{
-			name:         "empty name",
-			instanceName: "",
-			component:    component,
-			expectError:  true,
-			errorMsg:     "instance name",
-		},
-		{
-			name:         "nil component",
-			instanceName: "test",
-			component:    nil,
-			expectError:  true,
-			errorMsg:     "component",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := registry.RegisterInstance(tt.instanceName, tt.component)
-
-			if tt.expectError {
-				if err == nil {
-					t.Error("Expected error but got none")
-				} else if !strings.Contains(err.Error(), tt.errorMsg) {
-					t.Errorf("Expected error containing '%s', got '%s'", tt.errorMsg, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("Unexpected error: %v", err)
-				}
-			}
-		})
-	}
-}
-
 func TestUnregisterInstance(t *testing.T) {
 	registry := NewRegistry()
 	component := NewMockComponent("test", "input")
 
-	// Register instance
-	err := registry.RegisterInstance("test-instance", component)
-	if err != nil {
-		t.Fatalf("Failed to register instance: %v", err)
-	}
+	admitMockComponent(t, registry, "test-instance", component)
 
 	// Verify it exists
 	if registry.Component("test-instance") == nil {
@@ -558,8 +498,8 @@ func TestListComponents(t *testing.T) {
 	comp1 := NewMockComponent("comp1", "input")
 	comp2 := NewMockComponent("comp2", "output")
 
-	_ = registry.RegisterInstance("instance1", comp1)
-	_ = registry.RegisterInstance("instance2", comp2)
+	admitMockComponent(t, registry, "instance1", comp1)
+	admitMockComponent(t, registry, "instance2", comp2)
 
 	// List components
 	components = registry.ListComponents()
@@ -595,7 +535,7 @@ func TestGetComponent(t *testing.T) {
 	}
 
 	// Register and retrieve
-	_ = registry.RegisterInstance("test-instance", component)
+	admitMockComponent(t, registry, "test-instance", component)
 	retrieved = registry.Component("test-instance")
 
 	if retrieved == nil {
@@ -712,16 +652,17 @@ func TestConcurrentAccess(t *testing.T) {
 		}(i)
 	}
 
-	// Concurrent instance registration
+	// Concurrent admission through the sole identity-bearing path.
 	for i := 10; i < 20; i++ {
 		wg.Add(1)
 		go func(id int) {
 			defer wg.Done()
 
 			instanceName := fmt.Sprintf("manual-%d", id)
-			component := NewMockComponent(instanceName, "input")
-
-			err := registry.RegisterInstance(instanceName, component)
+			rawConfig, _ := json.Marshal(map[string]any{"name": instanceName, "type": "input"})
+			_, err := registry.CreateComponent(instanceName, types.ComponentConfig{
+				Type: types.ComponentTypeInput, Name: "test", Enabled: true, Config: rawConfig,
+			}, Dependencies{NATSClient: testClient.Client})
 			if err != nil {
 				errors <- err
 			}

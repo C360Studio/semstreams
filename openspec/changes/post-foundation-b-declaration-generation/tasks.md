@@ -37,24 +37,49 @@ shipped-config checks, schema drift check, contract tests, and strict OpenSpec v
 
 ## B. Registry generation snapshots and resource admission
 
-- [ ] B.1 Add failing tests for exactly one `InputPorts`/`OutputPorts` capture per successful generation, defensive
+- [x] B.1 Add failing tests for exactly one `InputPorts`/`OutputPorts` capture per successful generation, defensive
   cloning, factory identity, and no record on failed admission.
-- [ ] B.2 Retain component, factory identity, cloned effective ports, normalized facts, exclusive-resource facts, and
+- [x] B.2 Retain component, factory identity, cloned effective ports, normalized facts, exclusive-resource facts, and
   local generation as one immutable record.
-- [ ] B.3 Make Registry sole declaration-derived exclusive-resource admission owner; remove ComponentManager parallel
+- [x] B.3 Make Registry sole declaration-derived exclusive-resource admission owner; remove ComponentManager parallel
   resource tracker and bookkeeping.
-- [ ] B.4 Remove/internalize identity-free direct admission with no alias or shim.
-- [ ] B.5 Add internal framework-only, complete-set, latest-state, non-blocking coalescing observation, including
+- [x] B.4 Remove/internalize identity-free direct admission with no alias or shim.
+- [x] B.5 Add internal framework-only, complete-set, latest-state, non-blocking coalescing observation, including
   initial empty state and cancellation; create no cross-repo API/contract or ADR promise and use no KV, JetStream,
   durable store, or durable replay.
-- [ ] B.6 Prove normalized-fact equality before declaration-neutral component/config mutation.
-- [ ] B.7 Reject declaration-changing live updates before mutation with typed
+- [x] B.6 Prove normalized-fact equality before declaration-neutral component/config mutation.
+- [x] B.7 Reject declaration-changing live updates before mutation with typed
   `declaration_change_requires_replacement`, or prepare full replacement off-Registry.
-- [ ] B.8 Make replacement/removal atomically update component, factory identity, declaration, and resource
+- [x] B.8 Make replacement/removal atomically update component, factory identity, declaration, and resource
   projections; failed preparation changes nothing.
-- [ ] B.9 Keep admitted start failures inspectable without implying readiness, grouping, cohort membership, provider
+- [x] B.9 Keep admitted start failures inspectable without implying readiness, grouping, cohort membership, provider
   phase, or orchestration progress.
-- [ ] B.10 Obtain independent review for Slice B.
+- [x] B.10 Obtain independent review for Slice B.
+
+Slice B evidence: Registry admission-capture tests first failed on the absent generation record, then pass with exactly
+one admission capture of each port lane, validated factory identity, defensive declaration/fact clones, no disabled,
+invalid, conflicting, or failed-preparation record, atomic replacement/removal, and package-internal complete-set
+add/replace/remove observation with initial empty state, coalescing, and cancellation. Generation snapshot/observer
+reads are not exported; cross-package proof/replacement coordination requires a root `internal` access token and the
+proof type is unexported. This exactly-once evidence is scoped to Registry admission capture; Slice C still owns
+eliminating pre-existing capability/heartbeat and other consumer re-reads.
+
+Replacement tests prove exclusive resources are reserved before initialization, a conflicting candidate is never
+initialized, old state stays visible until causal commit, and canceled reservations remain quarantined until candidate
+cleanup succeeds. Blocked cleanup rejects successor and same-name admission; failed cleanup is surfaced and retains the
+quarantine. Remove/initialize-failure paths admit a successor claimant after successful cleanup. ComponentManager
+live-PUT tests prove normalized-fact equality before mutation, generation-bound proof, typed
+`declaration_change_requires_replacement` refusal before
+component or retained-config mutation, and per-instance serialization across proof, live apply, retained-config commit,
+replacement, and removal. Stale watcher snapshots are re-read after sequencing, so replacement/removal acts on the
+authoritative managed generation. Old-generation Stop failure aborts replacement before commit, cleans the candidate,
+retains the old Registry generation as failed, and prevents a new Start; removal Stop failure likewise leaves the old
+component and Registry record admitted. Start-failure tests distinguish that pre-commit preservation from an admitted
+replacement whose Start failed; the admitted replacement remains inspectable while lifecycle state reports failure
+separately.
+Focused component and service race tests pass repeatedly; full revive-backed `task lint` passes. Component
+integration-tagged and service test binaries compiled in the Slice B pass, and strict OpenSpec validation passes.
+Independent `semstreams-reviewer` verdict: `REVIEW PASS / APPROVE`; all Slice B findings are closed.
 
 ## C. Consumer migrations and message logger
 

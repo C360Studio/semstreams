@@ -289,6 +289,8 @@ func TestComponentManagerStart_FailsClosedOnComponentStartError(t *testing.T) {
 	ok := newBarrierTestComponent("healthy-comp")
 
 	cm := newBarrierTestManager(t, failing, ok)
+	admitTestRegistryComponent(t, cm.registry, "failing-comp", failing)
+	admitTestRegistryComponent(t, cm.registry, "healthy-comp", ok)
 	defer func() { _ = cm.Stop(2 * time.Second) }()
 
 	err := cm.Start(context.Background())
@@ -304,6 +306,9 @@ func TestComponentManagerStart_FailsClosedOnComponentStartError(t *testing.T) {
 	assert.ErrorIs(t, status["failing-comp"].LastError, boom)
 	require.Contains(t, status, "healthy-comp")
 	assert.Equal(t, component.StateStarted, status["healthy-comp"].State)
+
+	assert.Same(t, failing, cm.registry.Component("failing-comp"),
+		"start failure must not erase honestly admitted shape")
 }
 
 // TestComponentManagerStart_JoinsMultipleFailures pins the "multiple boot-time

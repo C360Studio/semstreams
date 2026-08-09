@@ -171,7 +171,7 @@ func TestConfigManager_KVUpdates(t *testing.T) {
 	}
 
 	// Update config via KV
-	newConfig := json.RawMessage(`{"enabled": false, "port": 9090}`)
+	newConfig := json.RawMessage(`{"enabled":false,"config":{"port":9090}}`)
 	_, err = cm.kv.Put(ctx, "services.metrics", newConfig)
 	require.NoError(t, err)
 

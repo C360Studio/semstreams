@@ -1,12 +1,15 @@
 package service
 
 import (
+	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/c360studio/semstreams/component"
+	"github.com/stretchr/testify/require"
 )
 
 type portFactsDiscoverable struct {
@@ -17,6 +20,15 @@ type portFactsDiscoverable struct {
 
 func (c portFactsDiscoverable) InputPorts() []component.Port  { return c.inputs }
 func (c portFactsDiscoverable) OutputPorts() []component.Port { return c.outputs }
+
+func newPortOwnershipCM(t *testing.T) *ComponentManager {
+	t.Helper()
+	serviceInstance, err := NewComponentManager(json.RawMessage(`{}`), &Dependencies{
+		Logger: slog.Default(), ComponentRegistry: component.NewRegistry(),
+	})
+	require.NoError(t, err)
+	return serviceInstance.(*ComponentManager)
+}
 
 func TestComponentManagerPortReportingUsesCanonicalFactsWithoutDroppingKinds(t *testing.T) {
 	manager := newPortOwnershipCM(t)
@@ -59,24 +71,6 @@ func TestComponentManagerPortReportingRejectsInvalidMutablePort(t *testing.T) {
 	}
 	if _, err := manager.extractComponentPortInfo(instance); err == nil {
 		t.Fatal("manager reporting accepted an invalid mutable port")
-	}
-}
-
-func TestComponentManagerPortRegistrationIsAtomicOnInvalidFacts(t *testing.T) {
-	manager := newPortOwnershipCM(t)
-	instance := portFactsDiscoverable{
-		baseDiscoverable: baseDiscoverable{name: "broken"},
-		inputs: []component.Port{
-			{Name: "valid", Direction: component.DirectionInput, Config: component.NATSPort{Subject: "events.valid"}},
-			{Name: "broken", Direction: component.DirectionInput, Config: component.NATSPort{}},
-		},
-	}
-
-	if err := manager.registerPorts("broken", instance); err == nil {
-		t.Fatal("registerPorts accepted an invalid mutable port")
-	}
-	if len(manager.resources) != 0 {
-		t.Fatalf("failed registration retained resource ownership: %#v", manager.resources)
 	}
 }
 

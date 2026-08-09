@@ -277,7 +277,6 @@ func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
 		t.Fatalf("new NATS client: %v", err)
 	}
 	cm.natsClient = client
-	cm.resources = make(map[string][]string)
 	cm.started.Store(true)
 	cm.initialized.Store(true)
 
@@ -362,14 +361,13 @@ func TestDynamicProviderDuplicateFailsAndRemainsVisible(t *testing.T) {
 	}
 }
 
-func TestRestartedProviderDuplicateFailsWithoutReplacingIncumbent(t *testing.T) {
+func TestRestartedProviderDuplicateLeavesAdmittedReplacementFailed(t *testing.T) {
 	cm := newStoreRegistryTestManager()
 	client, err := natsclient.NewClient("nats://localhost:4222")
 	if err != nil {
 		t.Fatalf("new NATS client: %v", err)
 	}
 	cm.natsClient = client
-	cm.resources = make(map[string][]string)
 	cm.started.Store(true)
 	cm.initialized.Store(true)
 
@@ -406,7 +404,16 @@ func TestRestartedProviderDuplicateFailsWithoutReplacingIncumbent(t *testing.T) 
 	if err := cm.registry.RegisterFactory("restart-provider", &component.Registration{
 		Name: "restart-provider",
 		Type: string(types.ComponentTypeStorage),
-		Factory: func(json.RawMessage, component.Dependencies) (component.Discoverable, error) {
+		Factory: func(raw json.RawMessage, _ component.Dependencies) (component.Discoverable, error) {
+			var cfg struct {
+				Version string `json:"version"`
+			}
+			if err := json.Unmarshal(raw, &cfg); err != nil {
+				return nil, err
+			}
+			if cfg.Version == "old" {
+				return old, nil
+			}
 			return &stopObservingProvider{
 				barrierStoreProvider: &barrierStoreProvider{
 					barrierTestComponent: newBarrierTestComponent("rival"),
@@ -421,12 +428,27 @@ func TestRestartedProviderDuplicateFailsWithoutReplacingIncumbent(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("register restart provider factory: %v", err)
 	}
+	if _, err := cm.registry.CreateComponent(
+		"rival", oldCfg, component.Dependencies{NATSClient: client},
+	); err != nil {
+		t.Fatalf("admit old rival generation: %v", err)
+	}
 	newCfg := oldCfg
 	newCfg.Config = json.RawMessage(`{"version":"new"}`)
 
 	err = cm.restartComponentWithNewConfig(context.Background(), "rival", newCfg, cm.components["rival"])
 	if err == nil {
 		t.Fatal("restarted duplicate provider did not return an error")
+	}
+	var committedStartFailure *replacementStartError
+	if !errors.As(err, &committedStartFailure) {
+		t.Fatalf("restart error = %T %v, want committed replacement start failure", err, err)
+	}
+	if got := restartFailureAction(err); got != "replacement_admitted_start_failed" {
+		t.Fatalf("restart failure action = %q, want honest post-commit diagnostic", got)
+	}
+	if got := restartFailureAction(errors.New("prepare failed")); got != "component_continues_with_old_config" {
+		t.Fatalf("pre-commit failure action = %q", got)
 	}
 	status := cm.GetComponentStatus()
 	if got := status["rival"].State; got != component.StateFailed {
@@ -441,6 +463,9 @@ func TestRestartedProviderDuplicateFailsWithoutReplacingIncumbent(t *testing.T) 
 	rivalComp, ok := cm.components["rival"].Component.(*stopObservingProvider)
 	if !ok {
 		t.Fatalf("restarted rival component type = %T", cm.components["rival"].Component)
+	}
+	if cm.registry.Component("rival") != rivalComp {
+		t.Fatal("post-commit start failure diagnostic claimed old generation despite admitted replacement")
 	}
 	if !rivalComp.stopped {
 		t.Fatal("restarted rejected rival lifecycle Stop was not called")
