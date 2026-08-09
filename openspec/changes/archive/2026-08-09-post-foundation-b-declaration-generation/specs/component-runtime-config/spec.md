@@ -10,14 +10,14 @@ The manager MUST probe the anonymous method pair directly and MUST NOT require o
 interface. A component implementing only the method pair, including rule processor, MUST be reached rather than
 silently skipped. When a component implements both contracts, `UpdateConfig` MUST be used.
 
-#### Scenario: A method-pair component is hot-applied over HTTP
+#### Scenario: a method-pair component is hot-applied over HTTP
 
 - **GIVEN** a running component that implements the reconfig method pair but not `UpdateConfig`
 - **WHEN** a valid `PUT config/<component>` request is received
 - **THEN** the manager calls the component's `ValidateConfigUpdate` then `ApplyConfigUpdate`
 - **AND** the running component reflects the change without a restart
 
-#### Scenario: An UpdateConfig component keeps its existing path
+#### Scenario: an UpdateConfig component keeps its existing path
 
 - **GIVEN** a running component that implements `UpdateConfig(ctx, json.RawMessage)`
 - **WHEN** a valid `PUT config/<component>` request is received

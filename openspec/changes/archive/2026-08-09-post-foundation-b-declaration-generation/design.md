@@ -1,7 +1,7 @@
 # Design — Post-Foundation-B declaration generation
 
-**Status:** OWNER-ACCEPTED / DESIGN PASS — implementation active. Slices A, B, C, and D are complete and independently
-approved; Slice E is complete through E.9 with final independent approval. E.10 remains merged-tree/archive work.
+**Status:** IMPLEMENTED / MERGED / VERIFIED. Slices A through E are complete and independently approved; E.10 closed
+against merged `main` at `8e6ce734126e51debd1e8f203aa7a753001fc164` before archive.
 **Repository baseline:** `ee3b43ce67f3ee6b39547317529da7ce1a783233`.
 
 The accepted inventory and owner-accepted design below are incorporated by reference as the sole authority for this
@@ -37,9 +37,9 @@ framework design.
 ## Part III — Ordered implementation slices
 
 The exact implementation order, current task truth, and independent review checkpoints live in [tasks.md](./tasks.md).
-Slices A, B, C, and D are complete and independently approved. Slice E is complete through E.9 with final independent
-approval; E.10 remains merged-tree/archive work. The bounded owner-approved Slice C census correction and its completed
-independent review are recorded above and in the accepted design artifact.
+Slices A through E are complete and independently approved. E.10 reproduced all accepted negative searches on the
+merged tree before archive. The bounded owner-approved Slice C census correction and its completed independent review
+are recorded above and in the accepted design artifact.
 
 Decision-skill outcomes already bound by the accepted design:
 
