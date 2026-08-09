@@ -15,7 +15,8 @@ the rejected dynamic-route seam and prior no-restart-status non-goal.
 identity confirmation.
 **Slice C census amendment (2026-08-09):** OWNER-APPROVED. Four shipped files whose enabled factories had no
 production registration were retired without aliases, synthetic factories, or substitutes. The production-loader and
-real-factory census now covers 21 shipped configurations and is pending Slice C independent review.
+real-factory census now covers 21 shipped configurations. Independent task C.9 review returned `APPROVE`; all findings
+are closed.
 **Downstream holdouts:** the ten paused projects remain parity evidence after the framework contract is accepted. They
 do not shape or block it.
 **Suspended work:** `semantic-tier-split` remains suspended, frozen, and non-executable.

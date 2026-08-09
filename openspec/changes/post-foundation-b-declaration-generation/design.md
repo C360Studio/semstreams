@@ -1,8 +1,7 @@
 # Design — Post-Foundation-B declaration generation
 
-**Status:** OWNER-ACCEPTED / DESIGN PASS — implementation active. Slices A and B are complete and independently
-approved. Slice C implementation is complete through C.8 and awaits C.9 independent review; Slices D and E remain
-unchecked.
+**Status:** OWNER-ACCEPTED / DESIGN PASS — implementation active. Slices A, B, C, and D are complete and independently
+approved; Slice E remains unchecked.
 **Repository baseline:** `ee3b43ce67f3ee6b39547317529da7ce1a783233`.
 
 The accepted inventory and owner-accepted design below are incorporated by reference as the sole authority for this
@@ -27,14 +26,14 @@ or reinterpreted here.
 The reviewed identity above remains the historical design baseline. On 2026-08-09 the owner approved a bounded Slice C
 census amendment: retire exactly four configurations whose enabled factories have no production registration, add no
 alias/synthetic factory/substitute, repair three production-constructibility prerequisites at their owners, and freeze
-the mechanically recomputed 21-config census. Independent review of this amendment remains task C.9.
+the mechanically recomputed 21-config census. Independent review completed under task C.9 with verdict `APPROVE` and
+all findings closed.
 
 ## Part III — Ordered implementation slices
 
 The exact implementation order, current task truth, and independent review checkpoints live in [tasks.md](./tasks.md).
-Slices A and B are complete and independently approved. Slice C is implemented through C.8 and awaits C.9; Slices D
-and E remain unchecked. The bounded owner-approved Slice C census correction is recorded above and in the accepted
-design artifact.
+Slices A, B, C, and D are complete and independently approved; Slice E remains unchecked. The bounded owner-approved
+Slice C census correction and its completed independent review are recorded above and in the accepted design artifact.
 
 Decision-skill outcomes already bound by the accepted design:
 

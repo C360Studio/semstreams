@@ -97,7 +97,7 @@ func uniqueStrings(values []string) []string {
 // Simple struct - no UnmarshalJSON, no Enabled field
 type MessageLoggerConfig struct {
 	// Subjects to monitor
-	// Use "*" to auto-discover subjects from flow component configs
+	// Use "*" to discover subjects from accepted Registry declarations
 	// Example: ["*"] or ["*", "debug.>"] or ["raw.udp.messages", "processed.>"]
 	MonitorSubjects []string `json:"monitor_subjects"`
 

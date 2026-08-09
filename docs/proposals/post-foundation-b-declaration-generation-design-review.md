@@ -8,8 +8,8 @@ SHA-256 `be8e4c2c6fbcfbcd966038448011cf98112e62e52147b088a0a794808ec9b814`.
 
 **Later Slice C census amendment (2026-08-09):** The owner retired four configurations whose enabled factories had no
 production registration and approved a mechanically recomputed 21-config census of 385/243/51 raw and 561/378/66
-effective. The historical `DESIGN PASS` below applies to its recorded identity; independent review of the amendment
-remains C.9.
+effective. The historical `DESIGN PASS` below applies to its recorded identity. Independent review completed under
+task C.9 with verdict `APPROVE`; all findings are closed.
 
 The owner accepts the complete design, and independent review confirms the exact identity above.
 

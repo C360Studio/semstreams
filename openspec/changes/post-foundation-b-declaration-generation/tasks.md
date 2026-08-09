@@ -1,7 +1,6 @@
 # Tasks — Post-Foundation-B declaration generation
 
-Implementation is active. Slices A, B, and C are complete and independently approved; Slices D and E remain
-unchecked.
+Implementation is active. Slices A, B, C, and D are complete and independently approved; Slice E remains unchecked.
 
 Each slice receives independent SemStreams review before the next starts. Later slices MUST NOT reopen
 owner-accepted rulings absent implementation evidence of an internal contradiction.
@@ -134,18 +133,100 @@ strict OpenSpec validation (37/37), diff checks, and negative `flow-validation-`
 
 ## D. Stream-planning invariant and removal searches
 
-- [ ] D.1 Preserve preconstruction `PortConfig` provisioning intent and separate accepted runtime Registry declaration
+- [x] D.1 Preserve preconstruction `PortConfig` provisioning intent and separate accepted runtime Registry declaration
   fact.
-- [ ] D.2 Prove both consume canonical resolution/facts and import none of the other's policy.
-- [ ] D.3 Add structural 61 default-only JetStream-output census: 61 explicitly covered by `AGENT` / `agent.>`, zero
+- [x] D.2 Prove both consume canonical resolution/facts and import none of the other's policy.
+- [x] D.3 Add structural 61 default-only JetStream-output census: 61 explicitly covered by `AGENT` / `agent.>`, zero
   uncovered.
-- [ ] D.4 Reject any future uncovered default-only output rather than guessing a stream from runtime snapshots.
-- [ ] D.5 Run exact production searches proving absence of identity-free admission, ComponentManager resource
+- [x] D.4 Reject any future uncovered default-only output rather than guessing a stream from runtime snapshots.
+- [x] D.5 Run exact production searches proving absence of identity-free admission, ComponentManager resource
   tracking/re-reads, dynamic service mutation surfaces, retired service fields/helpers, compatibility shims, durable
   declaration stores, group/cohort/readiness fields, and speculative restart-success state.
-- [ ] D.6 Confirm no index, hierarchy, research, retention, readiness, `GRAPH_STATUS`, service-state bucket/stream,
+- [x] D.6 Confirm no index, hierarchy, research, retention, readiness, `GRAPH_STATUS`, service-state bucket/stream,
   scheduler, or dynamic mux work entered diff.
-- [ ] D.7 Obtain independent review for Slice D.
+- [x] D.7 Obtain independent review for Slice D.
+
+Slice D evidence: `service/stream_planning_census_test.go` extends the production-loader/real-factory 21-config census
+without changing either runtime owner. Raw configured outputs are resolved through canonical `PortDefinition` and
+`PortFacts`; admitted effective outputs come from defensive Registry generation snapshots. Coverage is read only from
+explicit `config.streams` declarations. The guard proves exactly 61 default-only JetStream output rows, split 45
+`agentic-loop` and 16 `agentic-dispatch`, and every row is covered only by `AGENT` / `agent.>`, leaving zero uncovered.
+The synthetic `future.events` row has no explicit coverage and fails with a structural uncovered-default error; the
+subject-family test also proves a `future.>` declaration is not falsely treated as covered by `future.*`.
+
+Developer-reported historical RED — **UNVERIFIED**, because no retained artifact preserves the preimplementation run:
+the absent structural implementation returned 0/0/0 instead of 61/61/0 and failed to reject the synthetic future row.
+The current green is verified by the retained tests: the focused tests and existing message-logger census pass under
+`go test -race -count=1`; canonical component/config port-facts and stream-planning tests pass under race as well.
+`task lint`, strict OpenSpec validation (37/37), `git diff --check`, and the schema/spec drift check pass.
+
+D.5 is reproducible with the following exact production searches; each returns zero matches:
+
+```bash
+rg -n 'func \([^)]*\*Registry\) RegisterInstance\(|RegisterInstance(Legacy|Compat)' \
+  component -g '*.go' -g '!**/*_test.go'
+rg -n -e 'checkPortConflicts|registerPorts|unregisterPorts' \
+  -e 'registeredPorts|resourceTracker|portResources' \
+  -e '\.InputPorts\(\)|\.OutputPorts\(\)' \
+  service -g 'component_manager*.go' -g '!**/*_test.go'
+rg -n -e 'RuntimeConfigurable' \
+  -e 'func \([^)]*\*Manager\) (StartService|StopService|RemoveService)\(' \
+  -e 'serviceConfigUpdates|watchServiceConfig|applyServiceConfig|diffService' \
+  -e 'Subscribe\([^)]*"services\.\*"' \
+  service -g '*.go' -g '!**/*_test.go'
+rg -n 'Name[[:space:]]+string' types/service.go
+rg -n 'json:"(log_level|enabled)"|LogLevel|Runtime:[[:space:]]*true' \
+  service/message_logger.go service/metrics.go
+rg -n -e 'RegisterInstance(Legacy|Compat)|StartService(Legacy|Compat)' \
+  -e 'StopService(Legacy|Compat)|RemoveService(Legacy|Compat)' \
+  -e 'RuntimeConfigurableCompat|ServiceConfigName' \
+  component service types config cmd -g '*.go' -g '!**/*_test.go'
+rg -n -e 'DeclarationSnapshot(KV|Stream|Bucket|Store)' \
+  -e 'declaration[_-](snapshot|generation)[_-](kv|stream|bucket|store)' \
+  -e 'DECLARATION_(SNAPSHOT|GENERATION|STORE|BUCKET|STREAM)' \
+  component service config graph -g '*.go' -g '!**/*_test.go'
+rg -n '(Group|Cohort|ProviderPhase|Ready|Readiness|Healthy|Started|Enabled)[[:space:]]+(bool|string)' \
+  component/registry.go
+rg -n 'restart_blocked|restart_success|restart_succeeded|will_succeed|config_error' \
+  service -g 'service_manager*.go' -g '!**/*_test.go'
+```
+
+D.6 is reproducible with the following exact added-line searches; both return zero matches:
+
+```bash
+git diff -U0 -- docs/proposals/post-foundation-b-declaration-generation-design-review.md \
+  docs/proposals/post-foundation-b-declaration-generation-design.md \
+  openspec/changes/post-foundation-b-declaration-generation/design.md service/message_logger.go | \
+  rg -e '^\+.*(GRAPH_STATUS|KeyGraph|Bucket[A-Za-z]*Status|Readiness|Scheduler)' \
+    -e '^\+.*(DynamicMux|Hierarchy|Research|Retention|service[_-]?state)'
+rg -n -e 'GRAPH_STATUS|KeyGraph|Bucket[A-Za-z]*Status|Readiness|Scheduler' \
+  -e 'DynamicMux|Hierarchy|Research|Retention|service[_-]?state' \
+  service/stream_planning_census_test.go
+```
+
+The only Go changes are the structural test and the corrected message-logger config comment. Three tracked
+design/review files only propagate the already-approved C.9 review status, and this task file records Slice D truth.
+Independent `semstreams-reviewer` verdict: `APPROVE`; all findings are closed. The reviewer independently reproduced
+the 61/61/0 census, exercised the subject-family inclusion helper across 160 valid patterns and 1,092 concrete
+subjects, ran the exact D.5/D.6 searches, and confirmed no exported or runtime surface entered the slice.
+
+## Slice D owner-ruling conformance
+
+| Owner ruling | Evidence | Deviation |
+|---|:---:|:---:|
+| R4: default-only JetStream coverage is exactly 61/61/0 | D1 | None |
+| R7: provisioning intent and runtime declaration remain distinct | D2 | None |
+| R10: classification is shared while owner policy remains local | D3 | None |
+| Future uncovered defaults fail without Registry-derived guessing | D4 | None |
+| No exported/runtime surface or named non-goal entered | D5 | None |
+
+- **D1:** `service/stream_planning_census_test.go:34-64,111-197`.
+- **D2:** `config/stream_bounds.go:245-299`; `component/registry.go:841-888`;
+  `service/stream_planning_census_test.go:123-165`.
+- **D3:** `config/stream_bounds.go:254-281`; `component/registry.go:872-888`;
+  `service/stream_planning_census_test.go:199-271`.
+- **D4:** `service/stream_planning_census_test.go:66-100,179-212`.
+- **D5:** added-line D.5/D.6 searches recorded above; `git status --short` file set.
 
 ## E. Verification, E2E, and downstream holdouts
 
@@ -176,7 +257,7 @@ strict OpenSpec validation (37/37), diff checks, and negative `flow-validation-`
 | Preserve strict graph-index validation and declare `ALIAS_INDEX` | C7 | None |
 | Describe mission-command's actual core-NATS behavior | C8 | None |
 | Remove live usage references while preserving historical evidence | C9 | None |
-| Keep C.9 unchecked until independent approval and D/E untouched | C10 | None |
+| Keep C.9 unchecked until independent approval and do not begin D before C review | C10 | None |
 
 - **C1:** artifact ruling at `service/testdata/message_logger_subject_census.json:8-18`; absence guard at
   `service/message_logger_census_test.go:76-120`.
@@ -196,5 +277,5 @@ strict OpenSpec validation (37/37), diff checks, and negative `flow-validation-`
 - **C9:** live links end at `gateway/http/README.md:467-470`; historical rows remain at
   `docs/proposals/foundation-b-port-language-worklist.tsv:274,380-383` and
   `docs/adr/065-predicate-index-composite-key-sharding.md:373`.
-- **C10:** C.9 changed only after independent approval; D/E remain unchecked at
-  `openspec/changes/post-foundation-b-declaration-generation/tasks.md:138-164`.
+- **C10:** C.9 changed only after independent approval; Slice D began afterward and received its own independent
+  review before Slice E at `openspec/changes/post-foundation-b-declaration-generation/tasks.md:134-230`.
