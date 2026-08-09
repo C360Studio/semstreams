@@ -1,6 +1,7 @@
 # Tasks — Post-Foundation-B declaration generation
 
-Implementation is active. Slices A, B, C, and D are complete and independently approved; Slice E remains unchecked.
+Implementation is active. Slices A, B, C, and D are complete and independently approved. Slice E verification is
+complete through E.9; E.10 remains unchecked for merged-tree closeout and archive.
 
 Each slice receives independent SemStreams review before the next starts. Later slices MUST NOT reopen
 owner-accepted rulings absent implementation evidence of an internal contradiction.
@@ -230,19 +231,75 @@ subjects, ran the exact D.5/D.6 searches, and confirmed no exported or runtime s
 
 ## E. Verification, E2E, and downstream holdouts
 
-- [ ] E.1 Run `task lint` and `task build`.
-- [ ] E.2 Run `go test -race ./...`.
-- [ ] E.3 Run `task test:integration`.
-- [ ] E.4 Run `task schema:generate` and prove no unintended `schemas/` or `specs/` drift.
-- [ ] E.5 Run `go test ./test/contract/...` and `task openspec:validate`.
-- [ ] E.6 Run breaking relevant tiers independently: `task e2e:core`, `task e2e:agentic`,
+- [x] E.1 Run `task lint` and `task build`.
+- [x] E.2 Run `go test -race ./...`.
+- [x] E.3 Run `task test:integration`.
+- [x] E.4 Run `task schema:generate` and prove no unintended `schemas/` or `specs/` drift.
+- [x] E.5 Run `go test ./test/contract/...` and `task openspec:validate`.
+- [x] E.6 Run breaking relevant tiers independently: `task e2e:core`, `task e2e:agentic`,
   `task e2e:semantic`; then `task e2e:all`.
-- [ ] E.7 Record every command, baseline, result, and intentionally excluded gate.
-- [ ] E.8 Obtain `semstreams-reviewer` approval on complete implementation and OpenSpec diff.
-- [ ] E.9 Perform read-only parity census of `semdev`, `semmachina`, `semsource`, `semboids`, `semdragon`,
-  `semstreams-ui`, `semteams`, `semconnect`, `semlink`, `semops` only after framework gates. Do not implement
-  downstream here; differences are migration evidence and do not reopen/block framework ruling.
+- [x] E.7 Record every command, baseline, result, and intentionally excluded gate.
+- [x] E.8 Obtain `semstreams-reviewer` approval on complete implementation and OpenSpec diff.
+- [x] E.9 Publish the owner-approved communicate-only downstream migration notice after framework gates. Do not perform
+  an exhaustive parity audit or implement downstream migrations here; downstream teams own tag adoption, compilation,
+  explicit migration fixes, flow validation, and product E2E.
 - [ ] E.10 Re-run all negative searches on merged tree and archive only when task truth/evidence complete.
+
+Slice E.1-E.7 evidence baseline: clean `13157ff0633655de593771bda61ed925b40442c8`. Docker commands required
+sandbox escalation for environment permission; this was not a code failure.
+
+| Task | Exact command | Verified result |
+|:---:|---|---|
+| E.1 | `task lint` | PASS in about 4.11s |
+| E.1 | `task build` | PASS in about 2.82s |
+| E.2 | `go test -race ./...` | PASS in about 56.05s |
+| E.3 | `task test:integration` | PASS in about 119.58s; Docker/NATS actively polled |
+| E.4 | `task schema:generate` | PASS in about 1.43s; only the existing nonfatal missing meta-schema warning |
+| E.4 | `git diff --exit-code -- schemas specs` | PASS; no schema or OpenAPI drift |
+| E.5 | `go test ./test/contract/...` | PASS in about 2.86s |
+| E.5 | `task openspec:validate` | PASS; 37/37 strict validations |
+| E.6 | `task e2e:core` | PASS; 3/3 scenarios |
+| E.6 | `task e2e:agentic` | PASS in about 556ms |
+| E.6 | `task e2e:semantic` | PASS, exit 0; 48/48 in 10m56s |
+| E.6 | `task e2e:all` | PASS, exit 0; every tier green |
+| E.7 | `git diff --check` | PASS |
+| E.7 | `git status --short` | Clean verification worktree |
+
+Integration's longest packages all completed: `natsclient` 103.112s, `service` 73.843s, `graph-index` 70.326s,
+`graph-ingest` 67.586s, `storage/objectstore` 67.129s, `rule` 65.218s, and `agentic-loop` 54.109s. No package
+remained stalled beyond twice its expected duration.
+
+The independent agentic tier recorded one governance decision, one tool execution, ten trajectory facts, ten loop
+triples, and six model triples. The independent semantic tier resolved 89 embeddings with zero failed and zero
+pending, passed known answers 7/7, and proved exact batch reconciliation.
+
+The semantic recorder is deliberately non-gating. It observed one cold-chain degraded-floor violation under
+`answer_synthesis_timeout` in each semantic pass: the independent semantic run and the semantic tier inside
+`task e2e:all`. The hard known-answer gate remained 7/7, no answer was fabricated, fallback worked, and both commands
+exited successfully. The all-tier run passed core 3/3, structural 38/38, statistical 41/41, semantic 48/48 in 10m49s,
+and agentic PASS.
+
+E.9 closure follows the owner's communicate-only scope ruling. The published
+`docs/operations/37-port-and-declaration-generation-cutover.md` records every intentional break, adopter action, the
+related GS-01 mapping, and the absence of compatibility shims. A quick read-only sizing check found retired flat
+`PortDefinition` usage in `semsource` and `semteams`; `semsource` also has pre-existing graph-foundation
+`OpenCatalogBucket` and `pkg/ownership` debt. These examples are not exhaustive and do not block the framework change.
+
+E.8 final independent review found and closed one production blocker: explicit-only message-logger subscriptions
+inherited a context canceled immediately after successful `Start`, silently suppressing later delivery. The corrected
+implementation separates subscription and retry lifetimes; a Docker-backed real-NATS integration regression proves a
+live callback and capture after `Start`, canceled no-capture behavior after `Stop` even when unsubscribe initially
+fails, and successful retained-handle unsubscribe on the second `Stop`. The review also replaced current flowgraph
+guidance for the deleted `AddComponentNode` API with the supported root-owned `ComponentManager.GetFlowGraph` boundary.
+A final medium finding about callback/test ordering was corrected and independently confirmed closed. Final
+`semstreams-reviewer` disposition: `APPROVE`.
+
+Focused post-review verification passed under race for the new integration regression and for `./service` plus
+`./component/flowgraph`; focused vet, `git diff --check`, and strict OpenSpec validation (37/37) also pass. E.10 remains
+excluded until merged-tree negative searches and archive readiness are due. The final fixed tree also passed
+`task lint`, `task build`, `go test -race ./...`, and `task test:integration`, with `natsclient` longest at 97.474s.
+It also passed `task schema:generate` with no `schemas/` or `specs/` drift, `go test ./test/contract/...`, and
+`task e2e:core` 3/3. No commit or push is part of this evidence update.
 
 ## Slice C owner-ruling conformance
 

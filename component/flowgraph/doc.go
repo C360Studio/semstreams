@@ -35,23 +35,20 @@
 //	│  - ValidationStatus: healthy/warnings                                   │
 //	└─────────────────────────────────────────────────────────────────────────┘
 //
-// # Usage
+// # Supported Construction Boundary
 //
-// Build and analyze a flow graph:
+// The framework service root builds flow graphs from complete, admitted
+// [component.Registry] generation snapshots. In production,
+// service.ComponentManager owns that construction and exposes the resulting
+// graph and connectivity validation. Component authors declare ports and use
+// the supported component admission lifecycle; they do not assemble graph
+// nodes directly.
 //
-//	graph := flowgraph.NewFlowGraph()
+// Direct downstream graph assembly is retired. Registry-to-node ingestion is
+// an internal framework seam so every consumer sees the same retained
+// declaration and normalized facts captured at admission.
 //
-//	// Add components
-//	for name, comp := range components {
-//	    if err := graph.AddComponentNode(name, comp); err != nil {
-//	        return err
-//	    }
-//	}
-//
-//	// Build edges by matching connection patterns
-//	if err := graph.ConnectComponentsByPatterns(); err != nil {
-//	    return err
-//	}
+// Once the framework has built the graph, analyze connectivity:
 //
 //	// Analyze connectivity
 //	result := graph.AnalyzeConnectivity()

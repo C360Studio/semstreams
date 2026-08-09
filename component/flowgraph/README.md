@@ -74,24 +74,25 @@ an error.
 
 ## Usage Example
 
-### Basic Flow Analysis
+### Supported Construction Boundary
+
+Production flow graphs are built by the framework service root from complete, admitted Registry
+generation snapshots. `service.ComponentManager` owns that construction and its cache. Component
+authors declare ports and use the normal component admission lifecycle; they do not construct a
+`FlowGraph` or add nodes directly.
+
+Direct downstream graph assembly is retired. Registry-to-node ingestion remains an internal
+framework seam so flow validation consumes the same retained declaration and normalized facts as
+the other Registry-backed runtime views.
+
+### Flow Analysis
+
+Obtain the graph through the running component manager, then use its read and analysis methods:
 
 ```go
-import "github.com/c360studio/semstreams/component/flowgraph"
-
-// Create a new flow graph
-graph := flowgraph.NewFlowGraph()
-
-// Add components from your flow configuration
-for name, comp := range components {
-    if err := graph.AddComponentNode(name, comp); err != nil {
-        return fmt.Errorf("failed to add component %s: %w", name, err)
-    }
-}
-
-// Build edges by matching connection patterns
-if err := graph.ConnectComponentsByPatterns(); err != nil {
-    return fmt.Errorf("flow graph connection failed: %w", err)
+graph, err := componentManager.GetFlowGraph()
+if err != nil {
+    return fmt.Errorf("build admitted component flow graph: %w", err)
 }
 
 // Analyze connectivity
@@ -183,22 +184,16 @@ read-only.
 
 ## Integration with Flow Service
 
-The flow service uses flowgraph during initialization to validate component configurations:
+The service layer requests a Registry-backed graph from `ComponentManager`; it does not rebuild
+nodes from component instances:
 
 ```go
-// In service initialization
-graph := flowgraph.NewFlowGraph()
-
-// Add all components
-for name, comp := range service.components {
-    graph.AddComponentNode(name, comp)
+graph, err := componentManager.GetFlowGraph()
+if err != nil {
+    return fmt.Errorf("build admitted component flow graph: %w", err)
 }
 
-// Validate connections
-graph.ConnectComponentsByPatterns()
 result := graph.AnalyzeConnectivity()
-
-// Validate JetStream requirements
 jsWarnings := graph.ValidateStreamRequirements()
 
 // Fail startup if critical issues detected

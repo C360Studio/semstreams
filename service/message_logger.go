@@ -224,14 +224,15 @@ type MessageLogger struct {
 	}
 
 	// Lifecycle management
-	transitionMu   sync.Mutex // Serializes complete Start and Stop transitions.
-	lifecycleMu    sync.Mutex // Protects lifecycle fields and subscription state.
-	observerCancel context.CancelFunc
-	observerDone   chan struct{}
-	retryCancel    context.CancelFunc
-	retryDone      chan struct{}
-	logger         *slog.Logger
-	running        bool // Track if service is running (replaces config.Enabled)
+	transitionMu       sync.Mutex // Serializes complete Start and Stop transitions.
+	lifecycleMu        sync.Mutex // Protects lifecycle fields and subscription state.
+	observerCancel     context.CancelFunc
+	observerDone       chan struct{}
+	subscriptionCancel context.CancelFunc
+	retryCancel        context.CancelFunc
+	retryDone          chan struct{}
+	logger             *slog.Logger
+	running            bool // Track if service is running (replaces config.Enabled)
 }
 
 // NewMessageLogger creates a new MessageLogger service
@@ -522,16 +523,19 @@ func retainedAcceptedOverlap(subject string, retained map[string]struct{}) (stri
 }
 
 func (ml *MessageLogger) runExplicitRetry(
-	ctx context.Context, done chan<- struct{}, desired []string,
+	retryCtx context.Context,
+	subscriptionCtx context.Context,
+	done chan<- struct{},
+	desired []string,
 ) {
 	defer close(done)
 	for {
 		select {
 		case <-ml.retryAfter(messageLoggerReconcileRetryDelay):
-			if ml.reconcileSubjects(ctx, desired, map[string]portMetadata{}, nil) == nil {
+			if ml.reconcileSubjects(subscriptionCtx, desired, map[string]portMetadata{}, nil) == nil {
 				return
 			}
-		case <-ctx.Done():
+		case <-retryCtx.Done():
 			return
 		}
 	}
@@ -617,18 +621,22 @@ func (ml *MessageLogger) Start(ctx context.Context) error {
 			return observerCtx.Err()
 		}
 	} else {
-		retryCtx, cancel := context.WithCancel(ctx)
-		done := make(chan struct{})
-		retry := ml.reconcileSubjects(retryCtx, ml.explicitSubjects, map[string]portMetadata{}, nil) != nil
+		subscriptionCtx, subscriptionCancel := context.WithCancel(ctx)
+		ml.lifecycleMu.Lock()
+		ml.subscriptionCancel = subscriptionCancel
+		ml.lifecycleMu.Unlock()
+		retry := ml.reconcileSubjects(subscriptionCtx, ml.explicitSubjects, map[string]portMetadata{}, nil) != nil
 		if retry {
+			retryCtx, retryCancel := context.WithCancel(ctx)
+			done := make(chan struct{})
 			ml.lifecycleMu.Lock()
-			ml.retryCancel = cancel
+			ml.retryCancel = retryCancel
 			ml.retryDone = done
 			ml.lifecycleMu.Unlock()
-			go ml.runExplicitRetry(retryCtx, done, ml.explicitSubjects)
-		} else {
-			cancel()
-			close(done)
+			go func() {
+				defer retryCancel()
+				ml.runExplicitRetry(retryCtx, subscriptionCtx, done, ml.explicitSubjects)
+			}()
 		}
 	}
 
@@ -650,10 +658,12 @@ func (ml *MessageLogger) Stop(timeout time.Duration) error {
 	ml.running = false
 	observerCancel := ml.observerCancel
 	observerDone := ml.observerDone
+	subscriptionCancel := ml.subscriptionCancel
 	retryCancel := ml.retryCancel
 	retryDone := ml.retryDone
 	ml.observerCancel = nil
 	ml.observerDone = nil
+	ml.subscriptionCancel = nil
 	ml.retryCancel = nil
 	ml.retryDone = nil
 	ml.lifecycleMu.Unlock()
@@ -663,6 +673,9 @@ func (ml *MessageLogger) Stop(timeout time.Duration) error {
 	}
 	if retryCancel != nil {
 		retryCancel()
+	}
+	if subscriptionCancel != nil {
+		subscriptionCancel()
 	}
 	var stopErrors []error
 	if err := waitForMessageLoggerShutdown(observerDone, timeout, "declaration observer"); err != nil {

@@ -83,6 +83,11 @@ SemStreams is the direct consumer. The ten paused downstream projects remain lat
 `semmachina`, `semsource`, `semboids`, `semdragon`, `semstreams-ui`, `semteams`, `semconnect`, `semlink`, and `semops`.
 They do not shape or block the framework contract, and this change implements none of their migrations.
 
+For Slice E.9, the owner narrowed downstream closure to a communicate-only migration notice rather than an exhaustive
+parity audit. Downstream teams receive the intentional break map, then own dependency updates, compilation fixes, flow
+validation, and product E2E. Quick `semsource` and `semteams` examples are sizing evidence only and do not block this
+change.
+
 ## Non-goals
 
 - No `Ports() PortConfig`, `Registration.DefaultPorts`, static declaration factory, or second component-config
